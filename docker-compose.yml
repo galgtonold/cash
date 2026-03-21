@@ -1,0 +1,34 @@
+services:
+  notebook:
+    build: .
+    ports:
+      - "8888:8888"
+    volumes:
+      - ./notebooks:/app/notebooks
+      - cash-cache:/app/.cash
+    environment:
+      - CASH_BACKEND=file
+      - CASH_DEBUG=0
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  notebook-redis:
+    build: .
+    ports:
+      - "8889:8888"
+    volumes:
+      - ./notebooks:/app/notebooks
+    environment:
+      - CASH_BACKEND=redis
+      - CASH_REDIS_URL=redis://redis:6379
+    depends_on:
+      - redis
+
+volumes:
+  cash-cache:
+  redis-data:

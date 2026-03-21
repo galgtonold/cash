@@ -1,0 +1,160 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cash-lib"
+version = "0.5.0b1"
+description = "Smart caching library for Python with automatic dependency tracking, Jupyter notebook integration, and statement-level granularity."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+authors = [
+  {name = "Cash Contributors"},
+]
+keywords = [
+    "cache",
+    "caching",
+    "jupyter",
+    "notebook",
+    "memoization",
+    "dependency-tracking",
+    "ipython",
+    "data-science",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: Jupyter",
+    "Framework :: IPython",
+]
+dependencies = []
+
+[project.optional-dependencies]
+memory = ["psutil>=5.0,<7"]
+pandas = ["pandas"]
+ipynbname = ["ipynbname>=0.1"]
+redis = ["redis>=4.0,<6"]
+s3 = ["boto3>=1.26,<2"]
+sqlite = []  # uses stdlib sqlite3
+cloudpickle = ["cloudpickle>=2.0,<4"]
+polars = ["polars"]
+notebook = ["ipython>=8.0,<9"]
+viz = [
+    "matplotlib>=3.5,<4",
+    "ipywidgets>=7.0,<9",
+]
+all = [
+    "pandas",
+    "psutil>=5.0,<7",
+    "redis>=4.0,<6",
+    "boto3>=1.26,<2",
+    "cloudpickle>=2.0,<4",
+    "polars",
+    "matplotlib>=3.5",
+    "ipywidgets>=7.0",
+    "ipynbname>=0.1",
+]
+docs = [
+    "mkdocs>=1.5",
+    "mkdocs-material>=9.0",
+    "mkdocstrings[python]>=0.24",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-subtests",
+    "pytest-timeout",
+    "pytest-xdist",
+    "nbclient",
+    "jupyter_client",
+    "ipykernel",
+    "pandas",
+    "nest_asyncio",
+    "traitlets",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/cash-caching/cash"
+"Documentation" = "https://github.com/cash-caching/cash/tree/main/docs"
+"Bug Tracker" = "https://github.com/cash-caching/cash/issues"
+"Changelog" = "https://github.com/cash-caching/cash/blob/main/CHANGELOG.md"
+
+[project.scripts]
+cash = "cash.__main__:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+timeout = 30
+filterwarnings = [
+    "ignore:Passing individual keyword arguments to compute_cache_key:DeprecationWarning",
+    "ignore:set_tracking_dicts\\(\\) is deprecated:DeprecationWarning",
+]
+markers = [
+    "core: Core caching flow (basic variable tracking, cache hit/miss)",
+    "loops: For/while loop caching and mutation patterns",
+    "control: If/else/elif branch caching and condition changes",
+    "upstream: Upstream simulation, dependency propagation, restore",
+    "files: File dependency tracking (CSV, open, etc.)",
+    "modules: Module import caching, reload detection, transitive deps",
+    "mutations: Mutation detection (append, extend, subscript, etc.)",
+    "skip_optimization: Skip optimization (already-executed detection)",
+    "badges: Badge/metrics display integration",
+    "restore: Disk restore after kernel restart",
+    "libraries: Real-world library integration (pandas, sklearn, etc.)",
+    "stress: Comprehensive stress/regression tests",
+    "slow: Tests that take longer than usual",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501", "E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["cash"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[tool.coverage.run]
+source = ["cash"]
+omit = [
+    "tests/*",
+    "examples/*",
+    "*/ui/dashboard.py",
+    "*/ui/debugger.py",
+    "*/ui/visualizer.py",
+    "*/ui/explorer.py",
+    "*/backends/redis_backend.py",
+    "*/backends/s3_backend.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+fail_under = 70

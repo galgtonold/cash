@@ -1,0 +1,140 @@
+[I 2026-02-08 23:31:32.428 ServerApp] jupyter_lsp | extension was successfully linked.
+[I 2026-02-08 23:31:32.437 ServerApp] jupyter_mcp_server | extension was successfully linked.
+[I 2026-02-08 23:31:32.437 ServerApp] jupyter_mcp_tools | extension was successfully linked.
+[I 2026-02-08 23:31:32.446 ServerApp] jupyter_server_fileid | extension was successfully linked.
+[I 2026-02-08 23:31:32.454 ServerApp] jupyter_server_nbmodel | extension was successfully linked.
+[I 2026-02-08 23:31:32.463 ServerApp] jupyter_server_terminals | extension was successfully linked.
+[I 2026-02-08 23:31:32.472 ServerApp] jupyter_server_ydoc | extension was successfully linked.
+[I 2026-02-08 23:31:32.481 ServerApp] jupyterlab | extension was successfully linked.
+[I 2026-02-08 23:31:33.007 ServerApp] notebook_shim | extension was successfully linked.
+[I 2026-02-08 23:31:33.256 ServerApp] notebook_shim | extension was successfully loaded.
+[I 2026-02-08 23:31:33.259 ServerApp] jupyter_lsp | extension was successfully loaded.
+[02/08/26 23:31:33] INFO     Jupyter MCP Server Extension      extension.py:196
+                             settings initialized                              
+                    INFO     Registered MCP handlers at /mcp/  extension.py:232
+                    INFO       - MCP protocol: /mcp            extension.py:233
+                             (SSE-based)                                       
+                    INFO       - Health check: /mcp/healthz    extension.py:234
+                    INFO       - List tools: /mcp/tools/list   extension.py:235
+                    INFO       - Call tool: /mcp/tools/call    extension.py:236
+[I 2026-02-08 23:31:33.658 ServerApp] jupyter_mcp_server | extension was successfully loaded.
+[I 2026-02-08 23:31:33.658 ServerApp] Registered jupyter_mcp_tools server extension
+[I 2026-02-08 23:31:33.658 ServerApp] jupyter_mcp_tools | extension was successfully loaded.
+[I 2026-02-08 23:31:33.659 FileIdExtension] Configured File ID manager: ArbitraryFileIdManager
+[I 2026-02-08 23:31:33.659 FileIdExtension] ArbitraryFileIdManager : Configured root dir: C:/Users/Philipp/My Drive/Cloud/PycharmProjects/cash
+[I 2026-02-08 23:31:33.659 FileIdExtension] ArbitraryFileIdManager : Configured database path: C:\Users\Philipp\AppData\Roaming\jupyter\file_id_manager.db
+[I 2026-02-08 23:31:33.660 FileIdExtension] ArbitraryFileIdManager : Successfully connected to database file.
+[I 2026-02-08 23:31:33.661 FileIdExtension] ArbitraryFileIdManager : Creating File ID tables and indices with journal_mode = DELETE
+[I 2026-02-08 23:31:33.662 FileIdExtension] Attached event listeners.
+[I 2026-02-08 23:31:33.662 ServerApp] jupyter_server_fileid | extension was successfully loaded.
+[I 2026-02-08 23:31:33.663 ServerApp] jupyter_server_nbmodel | extension was successfully loaded.
+[I 2026-02-08 23:31:33.664 ServerApp] jupyter_server_terminals | extension was successfully loaded.
+[I 2026-02-08 23:31:33.670 ServerApp] jupyter_server_ydoc | extension was successfully loaded.
+[I 2026-02-08 23:31:33.679 LabApp] JupyterLab extension loaded from C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyterlab
+[I 2026-02-08 23:31:33.679 LabApp] JupyterLab application directory is C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\share\jupyter\lab
+[I 2026-02-08 23:31:33.680 LabApp] Extension Manager is 'pypi'.
+[I 2026-02-08 23:31:34.121 ServerApp] jupyterlab | extension was successfully loaded.
+[I 2026-02-08 23:31:34.124 ServerApp] Serving notebooks from local directory: C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash
+[I 2026-02-08 23:31:34.124 ServerApp] Jupyter Server 2.17.0 is running at:
+[I 2026-02-08 23:31:34.124 ServerApp] http://localhost:8888/lab?token=...
+[I 2026-02-08 23:31:34.124 ServerApp]     http://127.0.0.1:8888/lab?token=...
+[I 2026-02-08 23:31:34.125 ServerApp] Use Control-C to stop this server and shut down all kernels (twice to skip confirmation).
+[02/08/26 23:31:34] INFO     Running auto-enrollment for       extension.py:181
+                             document 'notebook.ipynb'                         
+                    INFO     Auto-enrolling document               enroll.py:48
+                             'notebook.ipynb' without kernel                   
+                             (notebook-only mode)                              
+                    INFO     Auto-enrollment result: Successfully  enroll.py:58
+                             enrolled notebook 'default' at path               
+                             'notebook.ipynb' without kernel.                  
+                    INFO     Auto-enrollment completed for     extension.py:188
+                             document 'notebook.ipynb'                         
+[I 2026-02-08 23:31:36.334 ServerApp] Skipped non-installed server(s): basedpyright, bash-language-server, dockerfile-language-server-nodejs, javascript-typescript-langserver, jedi-language-server, julia-language-server, pyrefly, pyright, python-language-server, python-lsp-server, r-languageserver, sql-language-server, texlab, typescript-language-server, unified-language-server, vscode-css-languageserver-bin, vscode-html-languageserver-bin, vscode-json-languageserver-bin, yaml-language-server
+[W 2026-02-08 23:31:55.275 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-08 23:31:55.282 ServerApp] 403 GET /api/contents/examples/large_scale_projects/09_yelp_reviews.ipynb (@::1) 6.65ms referer=None
+[W 2026-02-08 23:31:55.285 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-08 23:31:55.287 ServerApp] 403 GET /api/contents/examples/large_scale_projects (@::1) 2.37ms referer=None
+[I 2026-02-08 23:31:57.619 ServerApp] 302 GET /?token=[secret] (@::1) 0.47ms
+[I 2026-02-08 23:31:57.623 LabApp] 302 GET /lab?token=[secret] (@::1) 0.62ms
+[I 2026-02-08 23:31:57.769 ServerApp] 302 GET /?token=[secret] (@::1) 0.36ms
+[I 2026-02-08 23:31:57.771 LabApp] 302 GET /lab?token=[secret] (@::1) 0.49ms
+[W 2026-02-08 23:32:00.365 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-08 23:32:00.366 ServerApp] 403 GET /api/contents/examples/large_scale_projects/09_yelp_reviews.ipynb (@::1) 1.82ms referer=None
+[W 2026-02-08 23:32:00.370 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-08 23:32:00.371 ServerApp] 403 GET /api/contents/examples/large_scale_projects (@::1) 1.88ms referer=None
+[W 2026-02-09 00:50:18.474 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-09 00:50:18.477 ServerApp] 403 GET /api/contents/examples/large_scale_projects/10_us_flights.ipynb (@::1) 3.28ms referer=None
+[W 2026-02-09 00:50:18.480 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-09 00:50:18.482 ServerApp] 403 GET /api/contents/examples/large_scale_projects (@::1) 2.08ms referer=None
+[I 2026-02-09 00:50:21.121 ServerApp] 302 GET /?token=[secret] (@::1) 0.51ms
+[I 2026-02-09 00:50:21.123 LabApp] 302 GET /lab?token=[secret] (@::1) 0.52ms
+[I 2026-02-09 00:50:21.132 ServerApp] 302 GET /?token=[secret] (@::1) 0.33ms
+[I 2026-02-09 00:50:21.134 LabApp] 302 GET /lab?token=[secret] (@::1) 0.40ms
+[W 2026-02-09 00:50:33.323 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-09 00:50:33.325 ServerApp] 403 GET /api/contents/examples/large_scale_projects/10_us_flights.ipynb (@::1) 2.55ms referer=None
+[W 2026-02-09 00:50:33.329 ServerApp] wrote error: 'Forbidden'
+    Traceback (most recent call last):
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 1857, in _execute
+        result = method(*self.path_args, **self.path_kwargs)
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\tornado\web.py", line 3376, in wrapper
+        url = self.get_login_url()
+      File "C:\Users\Philipp\My Drive\Cloud\PycharmProjects\cash\.venv\Lib\site-packages\jupyter_server\base\handlers.py", line 786, in get_login_url
+        raise web.HTTPError(403)
+    tornado.web.HTTPError: HTTP 403: Forbidden
+[W 2026-02-09 00:50:33.331 ServerApp] 403 GET /api/contents/examples/large_scale_projects (@::1) 2.73ms referer=None

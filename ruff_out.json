@@ -1,0 +1,53 @@
+﻿[
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 24,
+      "row": 269
+    },
+    "filename": "C:\\Users\\Philipp\\My Drive\\Cloud\\PycharmProjects\\cash\\tests\\test_notebook\\test_critical_paths.py",
+    "fix": null,
+    "location": {
+      "column": 14,
+      "row": 269
+    },
+    "message": "Undefined name `contextlib`",
+    "noqa_row": 269,
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  },
+  {
+    "cell": null,
+    "code": "SIM117",
+    "end_location": {
+      "column": 60,
+      "row": 124
+    },
+    "filename": "C:\\Users\\Philipp\\My Drive\\Cloud\\PycharmProjects\\cash\\tests\\test_notebook\\test_file_tracker_unit.py",
+    "fix": null,
+    "location": {
+      "column": 9,
+      "row": 122
+    },
+    "message": "Use a single `with` statement with multiple contexts instead of nested `with` statements",
+    "noqa_row": 122,
+    "url": "https://docs.astral.sh/ruff/rules/multiple-with-statements"
+  },
+  {
+    "cell": null,
+    "code": "F821",
+    "end_location": {
+      "column": 24,
+      "row": 150
+    },
+    "filename": "C:\\Users\\Philipp\\My Drive\\Cloud\\PycharmProjects\\cash\\tests\\test_notebook_integration\\test_round3_cross_cell_patterns.py",
+    "fix": null,
+    "location": {
+      "column": 14,
+      "row": 150
+    },
+    "message": "Undefined name `contextlib`",
+    "noqa_row": 150,
+    "url": "https://docs.astral.sh/ruff/rules/undefined-name"
+  }
+]
