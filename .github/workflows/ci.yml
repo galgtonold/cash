@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      
+      - name: Run unit tests
+        run: |
+          pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config.py tests/test_backend_enhancements.py --tb=short -q
+      
+      - name: Run integration tests
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
+        run: |
+          pytest tests/test_notebook_integration/ --tb=short -q
+        timeout-minutes: 15
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install ruff
+      
+      - name: Run ruff check
+        run: ruff check src/cash/ --select E,F,W --ignore E501,E402
+      
+      - name: Run ruff format check
+        run: ruff format --check src/cash/ || true

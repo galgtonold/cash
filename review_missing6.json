@@ -1,0 +1,384 @@
+{
+  "assessments": {
+    "naming_quality": 68,
+    "abstraction_fitness": 72,
+    "dependency_health": 78,
+    "low_level_elegance": 42,
+    "mid_level_elegance": 62,
+    "type_safety": 58
+  },
+  "findings": [
+    {
+      "dimension": "naming_quality",
+      "summary": "Generic 'process' verb used at two abstraction levels (CashMagics._process_statement \u00e2\u2020\u2019 StatementProcessor.process) with no semantic differentiation",
+      "related_files": [
+        "src/cash/notebook/magics.py",
+        "src/cash/notebook/statement_processor.py"
+      ],
+      "evidence": [
+        "magics.py:2246 _process_statement delegates to statement_processor.process()",
+        "Both share identical docstring 'Process a single statement: Analyze -> Check Cache -> Execute/Restore'"
+      ],
+      "suggestion": "Rename StatementProcessor.process() to execute_cached() or run_with_cache() to distinguish the engine from the orchestrator delegation",
+      "confidence": "high",
+      "identifier": "naming_process_verb_collision"
+    },
+    {
+      "dimension": "naming_quality",
+      "summary": "_capture_variables is a 300+ line method that does variable capture, lineage update, mutation tracking, module dep tracking, and granular preservation \u00e2\u20ac\u201d name implies only the first responsibility",
+      "related_files": [
+        "src/cash/notebook/statement_processor.py"
+      ],
+      "evidence": [
+        "Line 930: def _capture_variables \u00e2\u20ac\u201d handles lineage hash computation, executed_cell_codes update, variable_hashes update, module attribute dependency tracking, granular preserved vars fixup, from_import_sources tracking"
+      ],
+      "suggestion": "Either split into focused helpers (_capture_vars, _update_lineage, _track_module_deps) or rename to _capture_and_track_outputs to signal the dual responsibility",
+      "confidence": "high",
+      "identifier": "naming_capture_variables_misleading"
+    },
+    {
+      "dimension": "naming_quality",
+      "summary": "_ensure_state_for_inputs obscures that it performs expensive upstream re-execution, cache restoration, and full notebook simulation",
+      "related_files": [
+        "src/cash/notebook/magics.py"
+      ],
+      "evidence": [
+        "magics.py:609 \u00e2\u20ac\u201d calls _restore_variable (disk I/O), _check_and_reexecute_upstream_cells (full notebook simulation + possible re-execution)"
+      ],
+      "suggestion": "Rename to _restore_and_reexecute_upstream or _prepare_upstream_state to signal the expensive operations",
+      "confidence": "high",
+      "identifier": "naming_ensure_state_hides_cost"
+    },
+    {
+      "dimension": "naming_quality",
+      "summary": "_simulate_and_find_changes also performs virtual restores from cache and builds a full execution trace, not just 'finding changes'",
+      "related_files": [
+        "src/cash/notebook/upstream.py"
+      ],
+      "evidence": [
+        "upstream.py:610 \u00e2\u20ac\u201d returns (stale_stmts, restored_info) tuple; performs _update_virtual_lineage and _try_virtual_restore inside the simulation loop"
+      ],
+      "suggestion": "Rename to _simulate_upstream_and_plan_restoration or split into simulation + planning phases",
+      "confidence": "medium",
+      "identifier": "naming_simulate_and_find_changes_understates"
+    },
+    {
+      "dimension": "naming_quality",
+      "summary": "_builtin_type_hash returns Optional[str] (None means 'not handled') but name implies it always produces a hash",
+      "related_files": [
+        "src/cash/core.py"
+      ],
+      "evidence": [
+        "core.py: static method returns None for generators and for types without special handling \u00e2\u20ac\u201d callers must check 'if builtin_hash is not None'"
+      ],
+      "suggestion": "Rename to _try_builtin_type_hash or _builtin_type_hash_or_none to signal the fallback semantics",
+      "confidence": "medium",
+      "identifier": "naming_builtin_type_hash_nullable"
+    },
+    {
+      "dimension": "naming_quality",
+      "summary": "'hash' used inconsistently: source_hash (code digest), lineage hash (dependency chain), variable_hashes (content hashes), _cash_hash (cache key) \u00e2\u20ac\u201d no naming convention distinguishes these",
+      "related_files": [
+        "src/cash/notebook/statement_processor.py",
+        "src/cash/notebook/upstream.py",
+        "src/cash/notebook/_protocols.py"
+      ],
+      "evidence": [
+        "variable_lineage stores 'lineage hash', source_hash is sha256 of code, _cash_hash is a cache key string, variable_hashes maps to sets of content hashes, executed_cell_hashes maps to code hashes"
+      ],
+      "suggestion": "Adopt a naming convention: *_code_hash for code digests, *_lineage_hash for dependency chains, *_content_hash for value digests",
+      "confidence": "high",
+      "identifier": "naming_hash_vocabulary_drift"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "summary": "CashMagics is a 3097-line god-class handling orchestration, hashing, memory sizing, badge rendering, benchmarking, provenance, audit, export/import, and upstream delegation",
+      "related_files": [
+        "src/cash/notebook/magics.py"
+      ],
+      "evidence": [
+        "_compute_hash (line 400, 80 lines), _calculate_memory_size (line 484, 50 lines), _recursive_getsizeof (line 539), _run_benchmark (line 3028), _record_provenance (line 1399), _record_audit_entries (line 1420), cash_export (line 2488), cash_import (line 2592) \u00e2\u20ac\u201d each is a distinct responsibility"
+      ],
+      "suggestion": "Extract into focused classes: HashComputer (_compute_hash, _recursive_getsizeof), MemorySizer (_calculate_memory_size), SessionTracker (_update_session_stats, _record_provenance, _record_audit_entries). CashMagics should only orchestrate cell execution flow.",
+      "confidence": "high",
+      "identifier": "abstraction_god_class_cashmagics"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "summary": "_process_statement in CashMagics is a pure pass-through to StatementProcessor.process() with zero added logic",
+      "related_files": [
+        "src/cash/notebook/magics.py"
+      ],
+      "evidence": [
+        "magics.py:2246-2252 \u00e2\u20ac\u201d entire body is 'return self._statement_processor.process(code, ttl, silent, render_badge, annotation=annotation, occurrence_index=occurrence_index)'"
+      ],
+      "suggestion": "Remove _process_statement and have callers call self._statement_processor.process() directly, or inline the delegation",
+      "confidence": "high",
+      "identifier": "abstraction_pass_through_process_statement"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "summary": "CashMagics.__init__ creates 6 convenience aliases to TrackingState fields, creating two access paths to the same data with no abstraction benefit",
+      "related_files": [
+        "src/cash/notebook/magics.py"
+      ],
+      "evidence": [
+        "magics.py:74-80 \u00e2\u20ac\u201d self._variable_hashes = self._tracking_state.variable_hashes, self._variable_sources = self._tracking_state.variable_sources, etc."
+      ],
+      "suggestion": "Access tracking state through self._tracking_state.field_name consistently, or keep aliases but add a comment explaining they exist for backward compatibility",
+      "confidence": "medium",
+      "identifier": "abstraction_tracking_state_aliases"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "summary": "Type-specific hashing is implemented in both CashMagics._compute_hash (magics.py:400) and Cash._builtin_type_hash (core.py:460) with partially overlapping type coverage",
+      "related_files": [
+        "src/cash/core.py",
+        "src/cash/notebook/magics.py"
+      ],
+      "evidence": [
+        "Both handle DataFrame, Series, ndarray with different strategies. _compute_hash uses shape+sample, _builtin_type_hash uses hash_pandas_object. Changes to one don't propagate to the other."
+      ],
+      "suggestion": "Extract a shared TypeHasher class or module (e.g., cash.hashing) that both core.py and magics.py delegate to, with a single strategy per type",
+      "confidence": "high",
+      "identifier": "abstraction_parallel_hashing_hierarchies"
+    },
+    {
+      "dimension": "abstraction_fitness",
+      "summary": "AsyncBackendWrapper re-implements list_entries and cleanup_expired as pure 1:1 pass-throughs because CacheBackend ABC requires all abstract methods",
+      "related_files": [
+        "src/cash/backends/backend.py"
+      ],
+      "evidence": [
+        "backend.py: AsyncBackendWrapper.list_entries returns self.backend.list_entries(), cleanup_expired returns self.backend.cleanup_expired(is_expired) \u00e2\u20ac\u201d no async wrapping needed for read-only methods"
+      ],
+      "suggestion": "Make list_entries and cleanup_expired non-abstract with default implementations in CacheBackend that delegate to a protected _store, or use a mixin for wrapper backends",
+      "confidence": "medium",
+      "identifier": "abstraction_async_wrapper_boilerplate"
+    },
+    {
+      "dimension": "dependency_health",
+      "summary": "psutil is a required core dependency but only used for memory-pressure eviction in InMemoryBackend \u00e2\u20ac\u201d should be optional with graceful degradation",
+      "related_files": [
+        "pyproject.toml",
+        "src/cash/backends/backend.py"
+      ],
+      "evidence": [
+        "pyproject.toml dependencies includes 'psutil' unconditionally",
+        "backend.py imports psutil at module level and uses it only in _check_and_evict() and _evict() methods of InMemoryBackend"
+      ],
+      "suggestion": "Make psutil optional: import with try/except, disable memory-pressure eviction when unavailable. Move to an optional extra like 'memory = [\"psutil\"]'",
+      "confidence": "high",
+      "identifier": "dep_psutil_required_not_optional"
+    },
+    {
+      "dimension": "dependency_health",
+      "summary": "ipynbname is a required core dependency but only used as a fallback in get_notebook_path() \u00e2\u20ac\u201d primary discovery paths (VS Code, Jupyter API) don't need it",
+      "related_files": [
+        "pyproject.toml",
+        "src/cash/utils.py"
+      ],
+      "evidence": [
+        "utils.py: ipynbname is imported inside a try/except block at line ~115, used only when __vsc_ipynb_file__ is not available",
+        "Already has graceful degradation (try/except), so making it optional requires zero code changes"
+      ],
+      "suggestion": "Move ipynbname to an optional dependency group (e.g., 'notebook = [\"ipython>=8.0\", \"ipynbname\"]') since the code already handles its absence gracefully",
+      "confidence": "high",
+      "identifier": "dep_ipynbname_required_not_optional"
+    },
+    {
+      "dimension": "dependency_health",
+      "summary": "Core dependencies ipynbname and psutil have no version constraints, risking breakage on major version bumps",
+      "related_files": [
+        "pyproject.toml"
+      ],
+      "evidence": [
+        "dependencies = ['ipynbname', 'psutil'] \u00e2\u20ac\u201d no >=, ~=, or < constraints",
+        "Optional deps correctly use minimum pins: redis>=4.0, boto3>=1.26, cloudpickle>=2.0"
+      ],
+      "suggestion": "Add minimum version pins: 'psutil>=5.0' and 'ipynbname>=0.2' (or whatever minimum versions are tested against)",
+      "confidence": "medium",
+      "identifier": "dep_no_version_pins_core"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "CashMagics.__init__ accepts shell: Any despite ShellProtocol existing for this exact purpose",
+      "related_files": [
+        "src/cash/notebook/magics.py",
+        "src/cash/notebook/_protocols.py"
+      ],
+      "evidence": [
+        "magics.py:44: def __init__(self, shell: Any, cash_instance: Cash) -> None",
+        "_protocols.py defines ShellProtocol with user_ns and run_cell"
+      ],
+      "suggestion": "Change shell parameter type to ShellProtocol and import from _protocols.py",
+      "confidence": "high",
+      "tier": "T2",
+      "identifier": "type_safety::magics_shell_any"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "_last_cell_metrics and _session_stats are public-facing structured data stored as bare dict literals with no type definition",
+      "related_files": [
+        "src/cash/notebook/magics.py"
+      ],
+      "evidence": [
+        "magics.py:130-143: _last_cell_metrics = {'statements': [], 'total_time': 0.0, ...}",
+        "magics.py:146-153: _session_stats = {'cells_executed': 0, ...}",
+        "These are returned by %cash_status to users"
+      ],
+      "suggestion": "Define TypedDicts (CellMetrics, SessionStats) in _protocols.py and use them for these fields",
+      "confidence": "high",
+      "tier": "T2",
+      "identifier": "type_safety::metrics_untyped_dicts"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "AnalyticsManager public methods return bare Dict without type parameters",
+      "related_files": [
+        "src/cash/analytics.py"
+      ],
+      "evidence": [
+        "analytics.py:122: def get_session_stats(self) -> Dict:",
+        "analytics.py:127: def get_stats_for_session(self, session_id: str) -> Dict:",
+        "analytics.py:160: def get_global_stats(self) -> Dict:"
+      ],
+      "suggestion": "At minimum use Dict[str, Any]; ideally define TypedDicts for SessionStats and GlobalStats",
+      "confidence": "high",
+      "tier": "T2",
+      "identifier": "type_safety::analytics_bare_dict_returns"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "FileAccessTracker, PostImportHook, _PatchingLoader \u00e2\u20ac\u201d nearly all methods lack return type annotations",
+      "related_files": [
+        "src/cash/notebook/file_tracker.py"
+      ],
+      "evidence": [
+        "file_tracker.py:28: def _initialize_defaults(self):",
+        "file_tracker.py:68: def register(self, module_name: str, func_name: str, handler_factory: Callable):",
+        "file_tracker.py:117: def find_spec(self, fullname, path, target=None):",
+        "file_tracker.py:151: def create_module(self, spec):",
+        "file_tracker.py:154: def exec_module(self, module):"
+      ],
+      "suggestion": "Add return type annotations to all methods. register() -> None, find_spec() -> Optional[ModuleSpec], create_module() -> Optional[types.ModuleType], exec_module() -> None, etc.",
+      "confidence": "high",
+      "tier": "T2",
+      "identifier": "type_safety::file_tracker_untyped"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "_restore_from_cache lacks return type annotation",
+      "related_files": [
+        "src/cash/notebook/statement_processor.py"
+      ],
+      "evidence": [
+        "statement_processor.py:1538: def _restore_from_cache(self, cached_data: Any, metadata: Optional[Dict], silent: bool, process_start: float, render_badge: bool = True):"
+      ],
+      "suggestion": "Add -> None return type annotation (method modifies state but returns nothing)",
+      "confidence": "high",
+      "tier": "T1",
+      "identifier": "type_safety::restore_from_cache_no_return"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "_serialize_args has untyped args and kwargs parameters",
+      "related_files": [
+        "src/cash/core.py"
+      ],
+      "evidence": [
+        "core.py:434: def _serialize_args(self, func_name: str, args, kwargs) -> Optional[str]:"
+      ],
+      "suggestion": "Change to args: tuple, kwargs: dict[str, Any] or use the standard tuple/dict types",
+      "confidence": "high",
+      "tier": "T1",
+      "identifier": "type_safety::serialize_args_untyped_params"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "CacheBackend.lock() abstract method has no return type annotation",
+      "related_files": [
+        "src/cash/backends/backend.py"
+      ],
+      "evidence": [
+        "backend.py:100: def lock(self, key: str): \u00e2\u20ac\u201d returns contextlib.nullcontext() which is a ContextManager"
+      ],
+      "suggestion": "Add return type: -> contextlib.AbstractContextManager[None] or -> ContextManager[None]",
+      "confidence": "high",
+      "tier": "T2",
+      "identifier": "type_safety::cache_backend_lock_untyped"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "UpstreamChecker._simulation_cache uses 7-element Tuple with bare list/set/dict instead of a named structure",
+      "related_files": [
+        "src/cash/notebook/upstream.py"
+      ],
+      "evidence": [
+        "upstream.py:68: self._simulation_cache: List[Tuple[str, Dict[str, str], Set[str], list, set, set, dict]] = []"
+      ],
+      "suggestion": "Define a NamedTuple or dataclass (SimulationCacheEntry) with named fields for each of the 7 elements",
+      "confidence": "high",
+      "tier": "T3",
+      "identifier": "type_safety::simulation_cache_bare_tuple"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "process() annotation parameter typed as CacheAnnotation = None instead of Optional[CacheAnnotation]",
+      "related_files": [
+        "src/cash/notebook/statement_processor.py"
+      ],
+      "evidence": [
+        "statement_processor.py:345: def process(self, code: str, ..., annotation: CacheAnnotation = None, ...)"
+      ],
+      "suggestion": "Change to annotation: Optional[CacheAnnotation] = None to accurately reflect nullability",
+      "confidence": "high",
+      "tier": "T1",
+      "identifier": "type_safety::process_annotation_not_optional"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "type: ignore[return-value] comments in purity.py lack explanatory context",
+      "related_files": [
+        "src/cash/notebook/purity.py"
+      ],
+      "evidence": [
+        "purity.py:38: return wrapper  # type: ignore[return-value]",
+        "purity.py:68: return wrapper  # type: ignore[return-value]"
+      ],
+      "suggestion": "Add context comment explaining the TypeVar erasure issue: # type: ignore[return-value]  # functools.wraps preserves F but mypy can't verify",
+      "confidence": "medium",
+      "tier": "T1",
+      "identifier": "type_safety::type_ignore_no_context"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "CacheDebugger.__init__ has completely untyped parameters",
+      "related_files": [
+        "src/cash/ui/debugger.py"
+      ],
+      "evidence": [
+        "ui/debugger.py:13: def __init__(self, shell, cash_instance=None):"
+      ],
+      "suggestion": "Add types: shell: ShellProtocol, cash_instance: Optional[CashInstanceProtocol] = None",
+      "confidence": "high",
+      "tier": "T2",
+      "identifier": "type_safety::debugger_fully_untyped"
+    },
+    {
+      "dimension": "type_safety",
+      "summary": "capture_rng_state() and restore_rng_state() use bare dict for structured RNG state",
+      "related_files": [
+        "src/cash/notebook/randomness.py"
+      ],
+      "evidence": [
+        "randomness.py:365: def capture_rng_state() -> dict:",
+        "The returned dict has known structure with 'random', 'numpy', 'torch' keys mapping to specific state objects"
+      ],
+      "suggestion": "Define a TypedDict (RngState) or use Dict[str, Any] at minimum; ideally a dataclass",
+      "confidence": "medium",
+      "tier": "T2",
+      "identifier": "type_safety::randomness_bare_dict"
+    }
+  ]
+}

@@ -1,0 +1,138 @@
+"""Protocol types and shared data structures for the notebook subsystem.
+
+These protocols define the minimal interfaces that the notebook subsystem
+requires from external objects (IPython shell, cache backend, etc.).
+Using protocols instead of ``Any`` provides:
+
+- Better IDE support (autocomplete, type checking)
+- Documentation of expected interfaces
+- Easier testing with mock objects
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any, Protocol, runtime_checkable
+
+
+@runtime_checkable
+class ShellProtocol(Protocol):
+    """Minimal interface for an IPython-like shell.
+
+    The notebook subsystem only requires ``user_ns`` (the user namespace
+    dict) and ``run_cell`` for upstream re-execution.
+    """
+
+    user_ns: dict[str, Any]
+
+    def run_cell(self, raw_cell: str, *, silent: bool = False) -> Any:
+        """Execute a code cell in the shell."""
+        ...
+
+@runtime_checkable
+class CacheBackendProtocol(Protocol):
+    """Minimal interface for a cache backend used by the notebook subsystem.
+
+    Matches the subset of :class:`cash.backends.backend.CacheBackend` that
+    ``StatementProcessor`` and ``UpstreamChecker`` actually use.
+    """
+
+    def get(self, key: str) -> tuple[dict[str, Any] | None, Any]:
+        """Retrieve a cached value and its metadata by key."""
+        ...
+
+    def set(
+        self, key: str, value: Any, metadata: dict[str, Any] | None = None, serializer: Any = None
+    ) -> None:
+        """Store a value with optional metadata and serializer."""
+        ...
+
+    def delete(self, key: str) -> None:
+        """Remove a cached entry by key."""
+        ...
+
+@runtime_checkable
+class CashInstanceProtocol(Protocol):
+    """Minimal interface for the ``Cash`` instance used by the notebook subsystem.
+
+    ``StatementProcessor`` and ``UpstreamChecker`` access the ``Cash``
+    object only through its ``.backend`` attribute.
+    """
+
+    backend: CacheBackendProtocol
+
+@dataclass
+class TrackingState:
+    """Shared mutable state for variable lineage and dependency tracking.
+
+    This dataclass is the **single owner** of the tracking dictionaries that
+    are shared between :class:`CashMagics`, :class:`StatementProcessor`, and
+    :class:`UpstreamChecker`.  By passing a single ``TrackingState`` instance
+    (rather than 6+ individual dicts) we:
+
+    * Document exactly which dicts are shared and what they contain.
+    * Give type checkers concrete types instead of ``dict[str, Any]``.
+    * Make it impossible to accidentally pass the wrong dict to the wrong slot.
+
+    All fields use ``default_factory`` so each ``TrackingState()`` starts empty.
+
+    **Initialization order**: ``CashMagics`` creates the ``TrackingState``
+    and passes the *same* instance to both ``StatementProcessor`` and
+    ``UpstreamChecker`` via ``set_tracking_state()``.  Because the three
+    components share mutable dict references, ``CashMagics`` **must** create
+    the instance before constructing the processors.
+
+    **Ownership summary** (W = writes, R = reads):
+
+    +------------------------------+-----------------+-------------------+-------------------+
+    | Field                        | CashMagics      | StatementProcessor| UpstreamChecker   |
+    +==============================+=================+===================+===================+
+    | executed_cell_codes          | —               | W (after exec)    | R (lineage check) |
+    | executed_cell_hashes         | —               | W (after exec)    | R (rarely)        |
+    | variable_lineage             | R (badge)       | W (after exec)    | R+W (reset/sync)  |
+    | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
+    | variable_hashes              | R (badge)       | W (after exec)    | —                 |
+    | variable_sources             | R (badge)       | W (after exec)    | —                 |
+    | current_session_hashes       | —               | W (after exec)    | —                 |
+    | vars_with_mutation_lineage   | —               | W / ControlStruct | R (skip lineage)  |
+    | executed_input_lineages      | —               | W (after exec)    | R (lineage check) |
+    +------------------------------+-----------------+-------------------+-------------------+
+    """
+
+    # Written by StatementProcessor after each statement execution.
+    # Read by UpstreamChecker to compare simulated vs. executed statement code.
+    executed_cell_codes: dict[str, str] = field(default_factory=dict)
+
+    # Written by StatementProcessor after each statement execution.
+    # Stores the SHA-256 of the defining statement code for fast change detection.
+    executed_cell_hashes: dict[str, str] = field(default_factory=dict)
+
+    # Written by StatementProcessor (and ControlStructureProcessor for mutations).
+    # Read by UpstreamChecker to detect stale variables; occasionally reset by
+    # UpstreamChecker when resynchronising simulation state with actual memory.
+    variable_lineage: dict[str, str] = field(default_factory=dict)
+
+    # Written by StatementProcessor (via FileAccessTracker) after each execution.
+    # Read by UpstreamChecker to detect stale file dependencies.
+    executed_file_deps: dict[str, set[str]] = field(default_factory=dict)
+
+    # Written by StatementProcessor; read by CashMagics for badge display.
+    # Accumulates all content hashes seen for a variable across executions.
+    variable_hashes: dict[str, set[str]] = field(default_factory=dict)
+
+    # Written by StatementProcessor; read by CashMagics for badge display.
+    # Records the cache key that last produced each variable.
+    variable_sources: dict[str, str] = field(default_factory=dict)
+
+    # Written by StatementProcessor after each execution.
+    # Tracks the most recent content hash within the current session.
+    current_session_hashes: dict[str, str] = field(default_factory=dict)
+
+    # Written by StatementProcessor and ControlStructureProcessor for in-place
+    # mutations (e.g., list.append, dict[k] = v).
+    # Read by UpstreamChecker to skip lineage-based staleness checks for these vars.
+    vars_with_mutation_lineage: set[str] = field(default_factory=set)
+
+    # Written by StatementProcessor; read by UpstreamChecker (Pass 1 lineage check).
+    # Stores the lineage snapshot of each input at the time of execution.
+    executed_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)

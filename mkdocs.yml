@@ -1,0 +1,80 @@
+site_name: Cash Documentation
+site_url: https://cash-lib.readthedocs.io/
+site_description: Smart caching library for Python with Jupyter notebook integration
+site_author: Cash Contributors
+repo_url: https://github.com/cash-caching/cash
+repo_name: cash
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: teal
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            show_source: true
+            show_root_heading: true
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quickstart.md
+    - Migration Guide: migration_guide.md
+  - User Guide:
+    - Notebook Caching: notebook_caching_api.md
+    - Magic Commands: api_reference.md
+    - Configuration: getting-started/configuration.md
+  - Tutorials:
+    - Getting Started: tutorials/getting_started.md
+    - Data Science Workflows: tutorials/data_science_workflows.md
+    - Production Transition: tutorials/production_transition.md
+    - Advanced Configuration: tutorials/advanced_configuration.md
+  - Technical Reference:
+    - Architecture: notebook_caching_technical.md
+    - Architecture Decisions: architecture_decisions.md
+  - Contributing: contributing.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/cash-caching/cash
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/cash-lib/

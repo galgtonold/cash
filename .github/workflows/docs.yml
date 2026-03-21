@@ -1,0 +1,47 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+      - ".readthedocs.yaml"
+      - "src/**/*.py"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "mkdocs.yml"
+
+jobs:
+  # Validate the docs build locally on every PR so broken docs don't reach main
+  build:
+    name: Build docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install docs dependencies
+        run: pip install -e ".[docs]"
+
+      - name: Build docs
+        run: python -m mkdocs build
+
+  # On merge to main, trigger ReadTheDocs to rebuild (webhook)
+  # Requires RTD_WEBHOOK_URL and RTD_WEBHOOK_TOKEN secrets configured in the repo.
+  trigger-rtd:
+    name: Trigger ReadTheDocs build
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Trigger ReadTheDocs webhook
+        run: |
+          curl -X POST \
+            -d "token=${{ secrets.RTD_WEBHOOK_TOKEN }}" \
+            "${{ secrets.RTD_WEBHOOK_URL }}"

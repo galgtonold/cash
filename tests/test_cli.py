@@ -1,0 +1,292 @@
+"""Tests for cash CLI (__main__.py)."""
+import pytest
+import pickle
+import time
+from unittest.mock import patch
+from cash.__main__ import main, cmd_version, cmd_info, cmd_inspect, cmd_clear, _format_bytes
+
+
+class TestCLIFormatBytes:
+    """Test _format_bytes helper."""
+
+    def test_bytes(self):
+        assert _format_bytes(500) == "500 B"
+
+    def test_kilobytes(self):
+        assert _format_bytes(2048) == "2.0 KB"
+
+    def test_megabytes(self):
+        assert _format_bytes(5 * 1024 * 1024) == "5.0 MB"
+
+    def test_gigabytes(self):
+        assert _format_bytes(2 * 1024 * 1024 * 1024) == "2.00 GB"
+
+
+class TestCLIVersion:
+    """Test version command."""
+
+    def test_version_outputs(self, capsys):
+        from types import SimpleNamespace
+        cmd_version(SimpleNamespace())
+        captured = capsys.readouterr()
+        assert "cash" in captured.out
+        assert "0.2.0" in captured.out
+
+
+class TestCLIInfo:
+    """Test info command."""
+
+    def test_info_shows_config(self, capsys):
+        from types import SimpleNamespace
+        cmd_info(SimpleNamespace())
+        captured = capsys.readouterr()
+        assert "Backend" in captured.out
+        assert "Cache dir" in captured.out
+
+
+class TestCLIInspect:
+    """Test inspect command."""
+
+    def test_inspect_cache_dir(self, tmp_path, capsys):
+        """Inspect a cache directory."""
+        # Create a fake cache dir
+        cache_dir = tmp_path / "test_cache"
+        cache_dir.mkdir()
+
+        # Create some fake cache files
+        meta = {'key': 'test_key', 'created_at': time.time(), 'outputs': ['x', 'y']}
+        with open(cache_dir / "abc123.meta", 'wb') as f:
+            pickle.dump(meta, f)
+        (cache_dir / "abc123.data").write_bytes(b"fake data")
+
+        from types import SimpleNamespace
+        cmd_inspect(SimpleNamespace(path=str(cache_dir)))
+        captured = capsys.readouterr()
+        assert "Total files:" in captured.out
+        assert "Cache entries:" in captured.out
+
+    def test_inspect_nonexistent(self, capsys, tmp_path, monkeypatch):
+        """Inspect nonexistent path should fail gracefully."""
+        monkeypatch.chdir(tmp_path)
+        from types import SimpleNamespace
+        with pytest.raises(SystemExit):
+            cmd_inspect(SimpleNamespace(path=None))
+
+
+class TestCLIClear:
+    """Test clear command."""
+
+    def test_clear_directory(self, tmp_path, capsys):
+        """Clear should remove a directory."""
+        cache_dir = tmp_path / "to_clear"
+        cache_dir.mkdir()
+        (cache_dir / "file.data").write_bytes(b"data")
+
+        from types import SimpleNamespace
+        cmd_clear(SimpleNamespace(path=str(cache_dir), all=False))
+        assert not cache_dir.exists()
+        captured = capsys.readouterr()
+        assert "Cleared" in captured.out
+
+    def test_clear_all(self, tmp_path, capsys, monkeypatch):
+        """Clear --all should remove .cash in current directory."""
+        monkeypatch.chdir(tmp_path)
+        cache_dir = tmp_path / ".cash"
+        cache_dir.mkdir()
+        (cache_dir / "file.data").write_bytes(b"data")
+
+        from types import SimpleNamespace
+        cmd_clear(SimpleNamespace(path=None, all=True))
+        assert not cache_dir.exists()
+
+    def test_clear_no_args(self, capsys):
+        """Clear without args should fail."""
+        from types import SimpleNamespace
+        with pytest.raises(SystemExit):
+            cmd_clear(SimpleNamespace(path=None, all=False))
+
+    def test_clear_all_no_cache(self, tmp_path, capsys, monkeypatch):
+        """Clear --all when no .cash dir exists."""
+        monkeypatch.chdir(tmp_path)
+        from types import SimpleNamespace
+        cmd_clear(SimpleNamespace(path=None, all=True))
+        captured = capsys.readouterr()
+        assert "No .cash directory" in captured.out
+
+    def test_clear_nonexistent_path(self, capsys):
+        """Clear nonexistent path should fail."""
+        from types import SimpleNamespace
+        with pytest.raises(SystemExit):
+            cmd_clear(SimpleNamespace(path="/nonexistent/path", all=False))
+
+    def test_clear_notebook_with_cache(self, tmp_path, capsys):
+        """Clear using a notebook path clears its .cash directory."""
+        # Create a fake notebook and cache
+        nb_path = tmp_path / "test.ipynb"
+        nb_path.write_text('{"cells":[]}')
+        cache_dir = tmp_path / ".cash"
+        cache_dir.mkdir()
+        (cache_dir / "data.meta").write_bytes(b"data")
+
+        from types import SimpleNamespace
+        cmd_clear(SimpleNamespace(path=str(nb_path), all=False))
+        assert not cache_dir.exists()
+        captured = capsys.readouterr()
+        assert "Cleared" in captured.out
+
+    def test_clear_notebook_without_cache(self, tmp_path, capsys):
+        """Clear using a notebook with no cache prints message."""
+        nb_path = tmp_path / "test.ipynb"
+        nb_path.write_text('{"cells":[]}')
+
+        from types import SimpleNamespace
+        cmd_clear(SimpleNamespace(path=str(nb_path), all=False))
+        captured = capsys.readouterr()
+        assert "No cache found" in captured.out
+
+
+class TestCLIMain:
+    """Test main entry point."""
+
+    def test_no_args_shows_help(self, capsys):
+        """Running with no args should show help."""
+        with patch('sys.argv', ['cash']):
+            with pytest.raises(SystemExit) as exc_info:
+                main()
+            assert exc_info.value.code == 0
+
+    def test_version_subcommand(self, capsys):
+        """Running 'version' subcommand."""
+        with patch('sys.argv', ['cash', 'version']):
+            main()
+        captured = capsys.readouterr()
+        assert "cash" in captured.out
+
+    def test_inspect_subcommand_with_dir(self, tmp_path, capsys):
+        """Running 'inspect' with a directory."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        with patch('sys.argv', ['cash', 'inspect', str(cache_dir)]):
+            main()
+        captured = capsys.readouterr()
+        assert "Cache directory:" in captured.out
+
+
+class TestCLIInspectNotebook:
+    """Test notebook inspection."""
+
+    def test_inspect_notebook(self, tmp_path, capsys):
+        """Inspect a notebook file."""
+        nb_path = tmp_path / "test.ipynb"
+        nb_content = {
+            "cells": [
+                {"cell_type": "code", "source": "%cash_on", "metadata": {}, "outputs": []},
+                {"cell_type": "markdown", "source": "# Title", "metadata": {}},
+                {"cell_type": "code", "source": "x = 1", "metadata": {}, "outputs": []},
+            ],
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        }
+        import json
+        nb_path.write_text(json.dumps(nb_content))
+
+        from cash.__main__ import _inspect_notebook
+        _inspect_notebook(str(nb_path))
+        captured = capsys.readouterr()
+        assert "Code cells: 2" in captured.out
+        assert "Markdown cells: 1" in captured.out
+        assert "Uses cash: Yes" in captured.out
+
+    def test_inspect_notebook_without_cash(self, tmp_path, capsys):
+        """Inspect notebook that doesn't use cash."""
+        nb_path = tmp_path / "test.ipynb"
+        nb_content = {
+            "cells": [
+                {"cell_type": "code", "source": "x = 1", "metadata": {}, "outputs": []},
+            ],
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        }
+        import json
+        nb_path.write_text(json.dumps(nb_content))
+
+        from cash.__main__ import _inspect_notebook
+        _inspect_notebook(str(nb_path))
+        captured = capsys.readouterr()
+        assert "Uses cash: No" in captured.out
+        assert "Cache: not found" in captured.out
+
+    def test_inspect_notebook_with_cache(self, tmp_path, capsys):
+        """Inspect notebook that has a .cash directory."""
+        nb_path = tmp_path / "test.ipynb"
+        nb_content = {
+            "cells": [{"cell_type": "code", "source": "x = 1", "metadata": {}, "outputs": []}],
+            "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"}},
+            "nbformat": 4,
+            "nbformat_minor": 5
+        }
+        import json
+        nb_path.write_text(json.dumps(nb_content))
+
+        cache_dir = tmp_path / ".cash"
+        cache_dir.mkdir()
+        (cache_dir / "data.meta").write_bytes(b"data")
+
+        from cash.__main__ import _inspect_notebook
+        _inspect_notebook(str(nb_path))
+        captured = capsys.readouterr()
+        assert "Cache directory:" in captured.out
+
+    def test_inspect_invalid_notebook(self, tmp_path, capsys):
+        """Inspect an invalid notebook file."""
+        nb_path = tmp_path / "bad.ipynb"
+        nb_path.write_text("not valid json for notebook")
+
+        from cash.__main__ import _inspect_notebook
+        _inspect_notebook(str(nb_path))
+        captured = capsys.readouterr()
+        assert "Error reading notebook" in captured.out
+
+    def test_inspect_cache_dir_with_metadata(self, tmp_path, capsys):
+        """Inspect cache dir that has readable metadata with timestamp."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        meta = {
+            'key': 'stmt:abc123def456',
+            'created_at': 1700000000.0,
+            'outputs': ['result', 'df']
+        }
+        with open(cache_dir / "entry1.meta", 'wb') as f:
+            pickle.dump(meta, f)
+
+        from cash.__main__ import _inspect_cache_dir
+        _inspect_cache_dir(str(cache_dir))
+        captured = capsys.readouterr()
+        assert "Total files: 1" in captured.out
+        assert "Cache entries: ~1" in captured.out
+        assert "Recent entries:" in captured.out
+        assert "result, df" in captured.out
+
+    def test_inspect_cache_dir_empty(self, tmp_path, capsys):
+        """Inspect empty cache directory."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+
+        from cash.__main__ import _inspect_cache_dir
+        _inspect_cache_dir(str(cache_dir))
+        captured = capsys.readouterr()
+        assert "Total files: 0" in captured.out
+
+    def test_inspect_cache_dir_corrupt_meta(self, tmp_path, capsys):
+        """Inspect cache dir with unreadable metadata files."""
+        cache_dir = tmp_path / "cache"
+        cache_dir.mkdir()
+        (cache_dir / "bad.meta").write_bytes(b"not a pickle")
+
+        from cash.__main__ import _inspect_cache_dir
+        _inspect_cache_dir(str(cache_dir))
+        captured = capsys.readouterr()
+        assert "could not read metadata" in captured.out
