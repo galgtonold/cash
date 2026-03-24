@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "cash-lib"
 version = "0.5.0b1"
-description = "Smart caching library for Python with automatic dependency tracking, Jupyter notebook integration, and statement-level granularity."
+description = "Smart caching for Python — automatic dependency tracking, persistent backends, and statement-level Jupyter notebook caching."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
@@ -15,12 +15,16 @@ authors = [
 keywords = [
     "cache",
     "caching",
+    "memoization",
     "jupyter",
     "notebook",
-    "memoization",
-    "dependency-tracking",
     "ipython",
     "data-science",
+    "machine-learning",
+    "dependency-tracking",
+    "incremental-computation",
+    "pandas",
+    "decorator",
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
