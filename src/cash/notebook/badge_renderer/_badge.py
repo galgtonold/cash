@@ -727,7 +727,8 @@ def _build_bug_report_url(metrics_list: list[dict[str, Any]], context: dict | No
         st = str(m.get('status', '')).replace('CacheStatus.', '')
         t = m.get('total_time') or m.get('execution_time') or 0.0
         saved = m.get('saved_time') or 0.0
-        outs = ', '.join(str(o) for o in (m.get('outputs') or []))
+        outs_raw = m.get('output_vars', []) or m.get('outputs', [])
+        outs = ', '.join(o for o in (outs_raw or []) if isinstance(o, str))
         outs_str = f' | {outs}' if outs else ''
         badge_lines.append(f"  {st:>8} | {t:>6.3f}s | saved {saved:>6.3f}s | {code}{outs_str}")
     badge_text = "\n".join(badge_lines) if badge_lines else "(no metrics)"

@@ -130,3 +130,63 @@ class TestLoopProducedVariableUpstream:
         assert 'last_item=300' in output, (
             f"Loop-produced variable should reflect updated loop code. Got: {output}"
         )
+
+    def test_upstream_loop_reexecution_uses_per_iteration_cache(self, nb_runner):
+        """When upstream re-executes a loop, it should use per-iteration caching
+        so cached iterations are restored rather than re-computed.
+
+        Scenario:
+        - Cell 1: for-loop with a slow body statement
+        - Cell 2: uses a loop-produced variable
+        - Cell 3: overwrites the loop-produced variable
+        - Re-running cell 2 should trigger upstream re-execution of the loop,
+          but individual iterations should be restored from cache (fast).
+        """
+        import time
+
+        nb_runner.create_notebook([
+            # Cell 1: loop with a slow body
+            (
+                "import time\n"
+                "data = {'a': 10, 'b': 20, 'c': 30}\n"
+                "results = {}\n"
+                "for key in ['a', 'b', 'c']:\n"
+                "    time.sleep(0.5)\n"
+                "    item_data = data[key]\n"
+                "    results[key] = item_data * 2\n"
+                "print(f'results={results}')"
+            ),
+            # Cell 2: use the loop-produced variable
+            (
+                "print(f'item_data={item_data}')"
+            ),
+            # Cell 3: overwrite the variable
+            (
+                "item_data = 999\n"
+                "print(f'overwritten={item_data}')"
+            ),
+        ])
+        nb_runner.start_kernel()
+
+        # Run all cells — this populates the per-iteration cache
+        nb_runner.run_all()
+        assert "results={'a': 20, 'b': 40, 'c': 60}" in nb_runner.get_output(1)
+        assert 'item_data=30' in nb_runner.get_output(2)
+        assert 'overwritten=999' in nb_runner.get_output(3)
+
+        # Re-run cell 2 — upstream should re-execute the loop but use
+        # cached per-iteration results (should be much faster than 1.5s)
+        start = time.time()
+        nb_runner.run_cell(2)
+        elapsed = time.time() - start
+        output = nb_runner.get_output(2)
+
+        assert 'item_data=30' in output, (
+            f"Loop-produced variable should be restored. Got: {output}"
+        )
+        # If per-iteration cache is used, this should take < 1s total
+        # (vs 1.5s+ if all 3 iterations recompute with 0.5s sleep each)
+        assert elapsed < 3.0, (
+            f"Upstream loop re-execution should use per-iteration cache. "
+            f"Took {elapsed:.1f}s (expected < 3s)"
+        )
