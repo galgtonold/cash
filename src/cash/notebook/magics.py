@@ -798,7 +798,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             self._statement_processor.process_statement,
             self._global_ttl,
             cell_id=self._current_cell_id,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            control_structure_callback=self._control_structure_processor.process,
         )
 
         return upstream_metrics, total_restore_time, total_execution_time

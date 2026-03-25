@@ -277,7 +277,8 @@ class UpstreamChecker:
         process_statement_callback: Callable[..., ProcessResult],
         global_ttl: int | None = None,
         cell_id: str | None = None,
-        progress_callback: Callable[..., None] | None = None
+        progress_callback: Callable[..., None] | None = None,
+        control_structure_callback: Callable[..., Any] | None = None
     ) -> UpstreamResult:
         """
         Check if any upstream statements have changed and re-execute them if needed.
@@ -291,6 +292,10 @@ class UpstreamChecker:
                      Used to correctly identify duplicate cells
             progress_callback: Optional callback(metrics_so_far, current_stmt_code)
                      Called after each upstream statement for progress reporting
+            control_structure_callback: Optional callback(ast_node, ttl, silent)
+                     for executing control structures with per-iteration caching.
+                     When provided, for-loops and other control structures are
+                     delegated to this callback instead of process_statement_callback.
 
         Returns:
             Tuple of (upstream_metrics, total_restore_time, total_execution_time)
@@ -343,7 +348,8 @@ class UpstreamChecker:
         all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
             cell_code, required_inputs, process_statement_callback, global_ttl,
             current_cell_outputs=current_cell_outputs,
-            progress_callback=progress_callback
+            progress_callback=progress_callback,
+            control_structure_callback=control_structure_callback,
         )
 
         return UpstreamResult(all_metrics, total_restore_time, total_execution_time)
@@ -712,7 +718,8 @@ class UpstreamChecker:
         process_statement_callback: Callable[..., ProcessResult],
         global_ttl: int | None,
         current_cell_outputs: set[str] | None = None,
-        progress_callback: Callable[..., None] | None = None
+        progress_callback: Callable[..., None] | None = None,
+        control_structure_callback: Callable[..., Any] | None = None
     ) -> UpstreamResult:
         """
         Check if upstream notebook content differs from executed state.
@@ -748,7 +755,8 @@ class UpstreamChecker:
                 executed_metrics = self._reexecute_statements(
                     statements_to_reexecute, process_statement_callback, global_ttl,
                     progress_callback=progress_callback,
-                    restored_info=restored_info
+                    restored_info=restored_info,
+                    control_structure_callback=control_structure_callback,
                 )
             total_execution_time = self._sum_execution_times(executed_metrics)
 
@@ -3276,7 +3284,8 @@ class UpstreamChecker:
         process_callback: Callable[..., ProcessResult],
         global_ttl: int | None,
         progress_callback: Callable[..., None] | None = None,
-        restored_info: list[ProcessResult] | None = None
+        restored_info: list[ProcessResult] | None = None,
+        control_structure_callback: Callable[..., Any] | None = None
     ) -> list[ProcessResult]:
         """Re-execute a list of statements and return their metrics."""
         executed_metrics = []
@@ -3293,12 +3302,27 @@ class UpstreamChecker:
                  print(f"Cash: Auto-executing upstream statement: {stmt_short}")
 
             try:
-                result = process_callback(stmt_code, global_ttl, silent=False, render_badge=False)
-                if self.debug:
-                    logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
-                if result:
-                    result['is_upstream'] = True  # Mark as upstream so badge categorizes correctly
-                    executed_metrics.append(result)
+                # Check if this is a control structure (for/if/try/with/while).
+                # If so, delegate to the control structure callback which handles
+                # per-iteration caching for loops instead of executing monolithically.
+                ctrl_node = self._try_parse_control_structure(stmt_code)
+                if ctrl_node is not None and control_structure_callback is not None:
+                    if self.debug:
+                        logger.debug("[UPSTREAM] Delegating control structure to per-iteration processor")
+                    ctrl_result = control_structure_callback(ctrl_node, ttl=global_ttl, silent=True)
+                    for m in ctrl_result.metrics:
+                        if m:
+                            m['is_upstream'] = True
+                            executed_metrics.append(m)
+                    if not ctrl_result.success:
+                        raise ctrl_result.error or RuntimeError("Error in upstream control structure")
+                else:
+                    result = process_callback(stmt_code, global_ttl, silent=False, render_badge=False)
+                    if self.debug:
+                        logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
+                    if result:
+                        result['is_upstream'] = True  # Mark as upstream so badge categorizes correctly
+                        executed_metrics.append(result)
             except (RuntimeError, NameError, KeyError, TypeError, ValueError) as e:
                 logger.error("[ERROR] Failed to auto-execute statement: %s", e)
 
@@ -3311,6 +3335,13 @@ class UpstreamChecker:
                     pass  # Don't let progress reporting break execution
 
         return executed_metrics
+
+    def _try_parse_control_structure(self, code: str) -> ast.AST | None:
+        """Parse code and return the AST node if it's a single control structure."""
+        tree = self._get_cached_ast(code)
+        if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
+            return tree.body[0]
+        return None
 
     def _code_exists_in_notebook(self, mem_code: str, notebook_cells: list[str]) -> bool:
         """Return True if the normalized form of *mem_code* appears as a top-level
