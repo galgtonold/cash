@@ -320,8 +320,15 @@ def render_for_loop_group(
 
     loop_label = _build_loop_label(group, loop_var_name, loop_var_values)
 
-    type_prefix = "⬆️" if is_upstream else icon
-    type_label = "Upstream" if is_upstream else "Loop"
+    if is_upstream:
+        type_prefix = "⬆️"
+        if computed_iters == 0:
+            type_label = "Restored"
+        else:
+            type_label = "Auto-exec"
+    else:
+        type_prefix = icon
+        type_label = "Loop"
 
     storage_display = _aggregate_storage(all_metrics, cached_iters, computed_iters)
 

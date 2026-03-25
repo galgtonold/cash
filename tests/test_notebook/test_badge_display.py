@@ -350,14 +350,14 @@ class TestRenderForLoopGroup:
         assert '3 iterations' in html
 
     def test_upstream_mode(self):
-        """Upstream groups show upstream icon and label."""
+        """Upstream groups show upstream icon and status-based label."""
         sg = self._make_stmt_group('compute()', [
             {'status': CacheStatus.RESTORED, 'total_time': 0.01, 'saved_time': 0.5},
         ])
         group = self._make_for_loop_group([sg])
         html = _badge.render_for_loop_group(group, is_upstream=True)
         assert '⬆️' in html
-        assert 'Upstream' in html
+        assert 'Restored' in html
 
     def test_current_mode(self):
         """Non-upstream groups show Loop label."""
@@ -607,8 +607,8 @@ class TestUpstreamLoopGrouping:
             magics._render_interactive_badge(metrics, display_id='test_upstream_loop')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            # Should show upstream loop group
-            assert 'Upstream' in html_str
+            # Should show upstream loop group (all cached → 'Restored')
+            assert 'Restored' in html_str
             assert '2' in html_str  # 2 iterations
             assert 'compute(item)' in html_str
 
