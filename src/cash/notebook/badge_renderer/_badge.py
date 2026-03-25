@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random as _rnd
 from typing import Any
+from urllib.parse import quote
 
 from cash.notebook.cache_status import CacheStatus
 
@@ -696,6 +697,109 @@ def _badge_style_parts(
 
 
 # ---------------------------------------------------------------------------
+# Bug report URL builder
+# ---------------------------------------------------------------------------
+
+_ISSUES_BASE = "https://github.com/galgtonold/cash/issues/new"
+
+def _build_bug_report_url(metrics_list: list[dict[str, Any]], context: dict | None = None) -> str:
+    """Build a pre-filled GitHub issue URL for incorrect caching reports.
+
+    The URL must stay under ~8000 chars (GitHub rejects longer ones).
+    Sections are added in priority order; lower-priority sections are
+    dropped when the budget is exhausted.
+    """
+    _MAX_URL = 7800  # leave margin below GitHub's ~8192 limit
+    ctx = context or {}
+    version = ctx.get('version', 'unknown')
+    python_version = ctx.get('python_version', '(unknown)')
+    backend = ctx.get('backend', '(unknown)')
+    notebook_source: list[str] = ctx.get('notebook_source', [])
+
+    # --- Badge content (text version — always included) ---
+    badge_lines: list[str] = []
+    for m in metrics_list:
+        if m.get('is_upstream'):
+            continue
+        code = (m.get('code') or '').strip()
+        if len(code) > 100:
+            code = code[:97] + '...'
+        st = str(m.get('status', '')).replace('CacheStatus.', '')
+        t = m.get('total_time') or m.get('execution_time') or 0.0
+        saved = m.get('saved_time') or 0.0
+        outs = ', '.join(str(o) for o in (m.get('outputs') or []))
+        outs_str = f' | {outs}' if outs else ''
+        badge_lines.append(f"  {st:>8} | {t:>6.3f}s | saved {saved:>6.3f}s | {code}{outs_str}")
+    badge_text = "\n".join(badge_lines) if badge_lines else "(no metrics)"
+
+    # --- Notebook source (from .ipynb — variable length, may be trimmed) ---
+    def _make_nb_source(max_chars_per_cell: int) -> str:
+        if not notebook_source:
+            return ""
+        parts = []
+        for i, cell in enumerate(notebook_source, 1):
+            snippet = cell.strip()
+            if len(snippet) > max_chars_per_cell:
+                snippet = snippet[:max_chars_per_cell - 3] + "..."
+            parts.append(f"# --- Cell {i} ---\n{snippet}")
+        return (
+            "<details><summary>Notebook source</summary>\n\n"
+            "```python\n"
+            + "\n\n".join(parts)
+            + "\n```\n\n</details>\n\n"
+        )
+
+    # --- Skeleton (always present) ---
+    skeleton = (
+        "**Describe the incorrect behavior:**\n"
+        "<!-- What did cash do wrong? What did you expect instead? -->\n\n"
+        "**Cash badge output:**\n"
+        "```\n"
+        "{badge}\n"
+        "```\n\n"
+        "**Expected behavior:**\n"
+        "<!-- e.g. 'Should have re-executed but was RESTORED from cache' -->\n\n"
+        "{nb_source}"
+        "**Environment:**\n"
+        f"- Cash version: {version}\n"
+        f"- Python: {python_version}\n"
+        f"- Backend: {backend}\n\n"
+        "**Additional context:**\n"
+        "<!-- Paste any relevant `%cash_debug on` output here -->"
+    )
+
+    url_prefix = f"{_ISSUES_BASE}?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body="
+
+    def _url_len(body: str) -> int:
+        return len(url_prefix) + len(quote(body))
+
+    # Try with full notebook source (300 chars/cell)
+    body = skeleton.format(badge=badge_text, nb_source=_make_nb_source(300))
+    if _url_len(body) <= _MAX_URL:
+        return url_prefix + quote(body)
+
+    # Try with shorter notebook source (150 chars/cell)
+    body = skeleton.format(badge=badge_text, nb_source=_make_nb_source(150))
+    if _url_len(body) <= _MAX_URL:
+        return url_prefix + quote(body)
+
+    # Try without notebook source
+    truncated_note = (
+        "> **Note:** Notebook source was too large to include. "
+        "Please paste the relevant cells below.\n\n"
+    )
+    body = skeleton.format(badge=badge_text, nb_source=truncated_note)
+    if _url_len(body) <= _MAX_URL:
+        return url_prefix + quote(body)
+
+    # Last resort: trim badge text too
+    if len(badge_text) > 500:
+        badge_text = badge_text[:500] + "\n  ... (truncated)"
+    body = skeleton.format(badge=badge_text, nb_source=truncated_note)
+    return url_prefix + quote(body)
+
+
+# ---------------------------------------------------------------------------
 # Main badge builder
 # ---------------------------------------------------------------------------
 
@@ -710,6 +814,7 @@ def render_interactive_badge(
     current_code: str | None = None,
     cell_total_time: float | None = None,
     timing_breakdown: dict[str, float] | None = None,
+    bug_report_context: dict | None = None,
 ) -> str:
     """Build the interactive HTML badge string for cell execution results.
 
@@ -808,6 +913,14 @@ def render_interactive_badge(
                     {details_rows}
                 </tbody>
             </table>
+            <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #f0f0f0; text-align: right;">
+                <a href="{_build_bug_report_url(metrics_list, bug_report_context)}" target="_blank" rel="noopener noreferrer"
+                   style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
+                          background: #fff5f5; border: 1px solid #f5c6c6; border-radius: 12px;
+                          color: #c0392b; font-size: 11px; font-weight: 500; text-decoration: none;"
+                   title="Open a pre-filled GitHub issue to report incorrect caching behaviour"
+                >🐛 Report incorrect caching</a>
+            </div>
         </div>
     </details>
     """

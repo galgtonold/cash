@@ -1265,6 +1265,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if not self._auto_cache_enabled:
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
+        # Record raw cell text for bug-report history (before any processing)
+        self._execution_history.append(raw_cell)
+
         # 1. Benchmark dispatch (one-shot)
         benchmark_config = getattr(self, '_benchmark_config', None)
         if benchmark_config and benchmark_config.get('active'):
@@ -1701,6 +1704,52 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
 
+    def _get_bug_report_context(self) -> dict:
+        """Collect runtime environment info for the pre-filled bug report URL."""
+        import sys
+        try:
+            from cash import __version__ as _v
+        except Exception:
+            _v = "unknown"
+        backend = getattr(self._cash_instance, 'backend', None)
+        backend_name = type(backend).__name__ if backend else 'unknown'
+        python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+
+        # --- Execution history (what IPython actually ran) ---
+        # Prefer input_hist_raw (untransformed magics like %cash_on) over
+        # input_hist_parsed / In (which transforms magics to get_ipython() calls).
+        # input_hist_raw lives on history_manager, not directly on the shell.
+        hm = getattr(self.shell, 'history_manager', None)
+        in_history = getattr(hm, 'input_hist_raw', None) if hm else None
+        if in_history is None:
+            in_history = getattr(self.shell, 'user_ns', {}).get('In', [])
+        # Filter empty strings and the 'pass' pseudo-cells that cash injects,
+        # then deduplicate consecutive identical cells (from re-running).
+        filtered: list[str] = []
+        for c in in_history:
+            if not c.strip() or c.strip() == 'pass':
+                continue
+            if filtered and c == filtered[-1]:
+                continue
+            filtered.append(c)
+        exec_history = filtered[-6:]
+
+        # --- Notebook source (actual .ipynb cell contents on disk) ---
+        notebook_cells: list[str] = []
+        try:
+            from .server_discovery import get_notebook_cells
+            notebook_cells = get_notebook_cells() or []
+        except Exception:
+            pass
+
+        return {
+            'version': _v,
+            'python_version': python_version,
+            'backend': backend_name,
+            'notebook_history': exec_history,
+            'notebook_source': notebook_cells,
+        }
+
     def _render_interactive_badge(self, metrics_list: list[ProcessResult], display_id: str | None = None, status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, update_existing: bool = True, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None, _from_thread: bool = False) -> None:
         """Render a clickable interactive badge with detailed execution history.
 
@@ -1718,6 +1767,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             current_code=current_code,
             cell_total_time=cell_total_time,
             timing_breakdown=timing_breakdown,
+            bug_report_context=self._get_bug_report_context(),
         )
         if not html:
             return
