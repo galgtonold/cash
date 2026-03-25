@@ -453,7 +453,15 @@ def _build_executed_subsection_html(upstream_executed: list[dict[str, Any]]) -> 
     exec_child_class = f"{exec_gid}_d {exec_gid}_a"
     exec_grouped = group_loop_iterations(upstream_executed)
     for e_item in exec_grouped:
-        rows += _render_grouped_item_rows(e_item, exec_child_class)
+        if e_item['type'] == 'for_loop_group':
+            rows += render_for_loop_group(
+                e_item,
+                is_upstream=True,
+                indent_level=1,
+                ancestor_classes=exec_child_class,
+            )
+        else:
+            rows += _render_grouped_item_rows(e_item, exec_child_class)
 
     return rows
 
