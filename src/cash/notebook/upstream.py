@@ -1472,24 +1472,40 @@ class UpstreamChecker:
         current_cell_outputs: set[str] | None,
         notebook_cells: list[str],
         broken_vars: set[str],
+        simulation_trace_codes: set[str] | None = None,
     ) -> None:
         """Classify a single variable and add to *broken_vars* if needed."""
         # Skip loop-derived vars when upstream is unchanged AND producing code
         # is on disk (not overridden by unsaved edit). FAST MODE can't track
         # per-iteration lineage, so we trust in-memory state.
         if var_name in vars_derived_from_loops and not upstream_has_modifications and not loop_derived_trust_overridden:
-            input_lineages_for_var = loop_var_input_lineages.get(var_name, {})
-            inputs_changed = self._check_loop_var_inputs_changed(
-                var_name, input_lineages_for_var, vars_derived_from_loops, loop_target_vars,
-            )
-            if not inputs_changed:
+            # Don't trust if the variable was overwritten by a downstream cell.
+            # Check that executed_cell_codes for this var matches an upstream statement.
+            overwritten_downstream = False
+            exec_code = self.executed_cell_codes.get(var_name)
+            if exec_code and simulation_trace_codes is not None:
+                if exec_code not in simulation_trace_codes:
+                    overwritten_downstream = True
+                    if self.debug:
+                        logger.debug(
+                            "[UPSTREAM_DEBUG] NOT trusting loop-derived '%s' — "
+                            "executed code '%.40s' not in upstream simulation",
+                            var_name, exec_code,
+                        )
+
+            if not overwritten_downstream:
+                input_lineages_for_var = loop_var_input_lineages.get(var_name, {})
+                inputs_changed = self._check_loop_var_inputs_changed(
+                    var_name, input_lineages_for_var, vars_derived_from_loops, loop_target_vars,
+                )
+                if not inputs_changed:
+                    if self.debug:
+                        source = "directly mutated by loop" if var_name in vars_mutated_by_loops else "transitively derived from loop mutation"
+                        logger.debug("[UPSTREAM_DEBUG] Skipping mismatch check for '%s' - %s, trusting in-memory state (upstream unchanged, inputs consistent)", var_name, source)
+                    return
                 if self.debug:
                     source = "directly mutated by loop" if var_name in vars_mutated_by_loops else "transitively derived from loop mutation"
-                    logger.debug("[UPSTREAM_DEBUG] Skipping mismatch check for '%s' - %s, trusting in-memory state (upstream unchanged, inputs consistent)", var_name, source)
-                return
-            if self.debug:
-                source = "directly mutated by loop" if var_name in vars_mutated_by_loops else "transitively derived from loop mutation"
-                logger.debug("[UPSTREAM_DEBUG] NOT trusting '%s' (%s) — loop input lineage changed, will check lineage", var_name, source)
+                    logger.debug("[UPSTREAM_DEBUG] NOT trusting '%s' (%s) — loop input lineage changed, will check lineage", var_name, source)
 
         actual_lineage = self.variable_lineage[var_name]
         if var_name not in virtual_lineage:
@@ -1631,6 +1647,7 @@ class UpstreamChecker:
         current_cell_outputs: set[str] | None,
         notebook_cells: list[str],
         broken_vars: set[str],
+        simulation_trace_codes: set[str] | None = None,
     ) -> None:
         """Classify each variable in *vars_to_check* and populate *broken_vars*.
 
@@ -1643,6 +1660,7 @@ class UpstreamChecker:
                 virtual_lineage, virtual_modules, vars_with_stale_files, vars_mutated_by_loops,
                 vars_tainted_by_upstream_mismatch, simulation_trace, required_inputs,
                 current_cell_outputs, notebook_cells, broken_vars,
+                simulation_trace_codes=simulation_trace_codes,
             )
 
         # Only required inputs matter here; temporary intermediates can stay missing.
@@ -1706,6 +1724,7 @@ class UpstreamChecker:
             virtual_lineage, virtual_modules, vars_with_stale_files, vars_mutated_by_loops,
             vars_tainted_by_upstream_mismatch, simulation_trace, required_inputs,
             current_cell_outputs, notebook_cells, broken_vars,
+            simulation_trace_codes=simulation_trace_codes,
         )
 
         if self.debug:
