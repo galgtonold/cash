@@ -480,9 +480,14 @@ class ControlStructureProcessor:
     # cost, execute the loop as a single unit.
     _OVERHEAD_FACTOR_THRESHOLD = 3.0
 
+    # Minimum number of iterations before single-unit mode is even considered.
+    # Loops with few iterations benefit greatly from per-iteration caching
+    # (granular invalidation, partial re-computation on changes) and the
+    # absolute overhead is small regardless.
+    _MIN_ITERATIONS_FOR_SINGLE_UNIT = 50
+
     # Minimum estimated overhead (in seconds) to trigger single-unit mode.
-    # Very short loops (< 5 iterations) are not worth optimizing.
-    _MIN_OVERHEAD_SEC = 0.2
+    _MIN_OVERHEAD_SEC = 1.0
 
     def _should_execute_loop_as_single_unit(
         self,
@@ -503,9 +508,12 @@ class ControlStructureProcessor:
         Heuristic: execute as single unit when ALL of:
         1. The loop is NOT nested inside another loop (parent_context is None)
            — nested loops in convergence studies benefit from per-iteration caching.
-        2. The estimated overhead (iterations × body_stmts × per_stmt_cost) is
-           significant (> 200ms).
-        3. No body statement performs file I/O — file dependencies need
+        2. The loop has many iterations (> _MIN_ITERATIONS_FOR_SINGLE_UNIT)
+           — small loops always benefit from per-iteration caching since the
+           absolute overhead is small and granular invalidation is valuable.
+        3. The estimated overhead (iterations × body_stmts × per_stmt_cost) is
+           significant (> 1s).
+        4. No body statement performs file I/O — file dependencies need
            per-iteration tracking.
 
         **Correctness tradeoff**: In fast-loop mode the loop executes as one
@@ -533,6 +541,11 @@ class ControlStructureProcessor:
             n_iterations = len(iterable)
         except TypeError:
             # Generators, iterators without __len__ — can't estimate
+            return False
+
+        # Small loops always benefit from per-iteration caching — the
+        # absolute overhead is small and granular invalidation is valuable.
+        if n_iterations <= self._MIN_ITERATIONS_FOR_SINGLE_UNIT:
             return False
 
         # Count body statements (including nested control structure bodies)

@@ -151,3 +151,47 @@ class TestFastModeCacheIntegration:
         assert 'FAST MODE' not in output2, (
             f"Financial pattern loop should be cached, not fast-moded. Output: {output2}"
         )
+
+    def test_extending_loop_iterable_uses_per_iteration(self, nb_runner):
+        """Adding elements to a loop iterable should still use per-iteration caching.
+
+        When a user extends the iterable (e.g., from 3 to 5 items), the loop
+        should not fall back to single-unit execution. Previously cached
+        iterations for unchanged values should ideally hit cache, and only
+        new values should compute.
+        """
+        nb_runner.create_notebook([
+            "import time",
+            (
+                "results = {}\n"
+                "for name in ['alpha', 'beta', 'gamma']:\n"
+                "    time.sleep(0.05)\n"
+                "    results[name] = len(name)\n"
+                "print(sorted(results.keys()))"
+            ),
+        ])
+        nb_runner.start_kernel()
+
+        # First run: computes 3 iterations
+        nb_runner.run_all()
+        output1 = nb_runner.get_output(2)
+        assert "'alpha'" in output1
+        assert "'gamma'" in output1
+
+        # Extend the iterable from 3 to 5 items
+        nb_runner.set_cell_source(2, (
+            "results = {}\n"
+            "for name in ['alpha', 'beta', 'gamma', 'delta', 'epsilon']:\n"
+            "    time.sleep(0.05)\n"
+            "    results[name] = len(name)\n"
+            "print(sorted(results.keys()))"
+        ))
+        nb_runner.run_cell(2)
+        output2 = nb_runner.get_output(2, filter_debug=False)
+        assert "'delta'" in output2
+        assert "'epsilon'" in output2
+        # Must NOT use fast/single-unit mode — per-iteration is better
+        assert 'FAST MODE' not in output2, (
+            f"Extended loop should use per-iteration caching, not fast mode. "
+            f"Output: {output2}"
+        )
