@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import random as _rnd
 from typing import Any
 from urllib.parse import quote
 
@@ -16,6 +15,8 @@ from ._components import (
 )
 from ._grouping import (
     _html_escape,
+    _reset_unique_ids,
+    _unique_id,
     group_loop_iterations,
 )
 from ._types import (
@@ -407,7 +408,7 @@ def _build_executed_subsection_html(upstream_executed: list[dict[str, Any]]) -> 
 
     exec_count = len(upstream_executed)
     exec_time_total = sum(m.get('total_time', 0.0) for m in upstream_executed)
-    exec_gid = f"uex_{_rnd.randint(100000, 999999)}"
+    exec_gid = _unique_id("uex")
     exec_time_display = f"{exec_time_total:.2f}s" if exec_time_total > _MIN_TIME_DISPLAY_S else "—"
 
     # Aggregate storage tiers from child items for summary display
@@ -438,6 +439,8 @@ def _build_executed_subsection_html(upstream_executed: list[dict[str, Any]]) -> 
         f"document.querySelectorAll('.{exec_gid}_a').forEach(function(r){{r.style.display='none'}});"
         f"arrow.textContent='\u25b6'"
         f"}}"
+        f"var s=window._cashBadgeExp=window._cashBadgeExp||{{}};"
+        f"s['{exec_gid}']=expanding;"
         f"}})()"
     )
 
@@ -474,7 +477,7 @@ def _build_skipped_subsection_html(skipped_list: list[dict[str, Any]]) -> str:
     skipped_count = len(skipped_list)
     skipped_time = sum(m.get('saved_time', 0.0) for m in skipped_list)
     skipped_grouped = group_loop_iterations(skipped_list)
-    skip_gid = f"skip_{_rnd.randint(100000, 999999)}"
+    skip_gid = _unique_id("skip")
     time_display = f"Saved {skipped_time:.2f}s" if skipped_time > _MIN_TIME_DISPLAY_S else "—"
 
     # Summary row with expand/collapse toggle
@@ -489,6 +492,8 @@ def _build_skipped_subsection_html(skipped_list: list[dict[str, Any]]) -> str:
         f"document.querySelectorAll('.{skip_gid}_a').forEach(function(r){{r.style.display='none'}});"
         f"arrow.textContent='\u25b6'"
         f"}}"
+        f"var s=window._cashBadgeExp=window._cashBadgeExp||{{}};"
+        f"s['{skip_gid}']=expanding;"
         f"}})()"
     )
 
@@ -839,6 +844,11 @@ def render_interactive_badge(
     if badge_mode != 'html':
         return ""
 
+    # Reset the deterministic ID counter so the same badge structure
+    # produces the same element IDs across re-renders (needed for
+    # preserving which sections the user has expanded/collapsed).
+    _reset_unique_ids()
+
     metrics_list = metrics_list or []
 
     # Partition metrics into groups
@@ -878,8 +888,28 @@ def render_interactive_badge(
         total_saved, summary_time, current_code, current_step, total_steps,
     )
 
+    # During execution, keep <details> expanded so users see live progress.
+    # For the final DONE render, let users control the state.
+    open_attr = "open" if status == "RUNNING" else ""
+
+    # Build a restore script that re-expands any inner sections the user
+    # had toggled open before the badge was re-rendered.
+    restore_script = """<script>(function(){
+var exp=window._cashBadgeExp||{};
+Object.keys(exp).forEach(function(gid){
+if(!exp[gid])return;
+var arrow=document.getElementById(gid+'_arrow');
+if(!arrow)return;
+var closed=['\\u25b6','\\u25b8'];
+if(closed.indexOf(arrow.textContent)>=0){
+document.querySelectorAll('.'+gid+'_d').forEach(function(r){r.style.display='table-row'});
+arrow.textContent=arrow.textContent==='\\u25b6'?'\\u25bc':'\\u25be';
+}
+});
+})();</script>"""
+
     return f"""
-    <details style="
+    <details {open_attr} style="
         display: inline-block;
         border: 1px solid {summary_border};
         border-radius: 4px;
@@ -932,6 +962,7 @@ def render_interactive_badge(
             </div>
         </div>
     </details>
+    {restore_script}
     """
 
 
