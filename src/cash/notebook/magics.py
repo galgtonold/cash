@@ -1527,7 +1527,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 t_badge = time.time()
                 self._maybe_progress_badge(
                     all_metrics, display_id=badge_display_id,
-                    step=unified_step, total=total_steps_unified, code=stmt_code,
+                    step=unified_step + 1, total=total_steps_unified, code=None,
                 )
                 badge_render_time += time.time() - t_badge
 

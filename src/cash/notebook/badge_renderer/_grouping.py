@@ -7,6 +7,7 @@ control groups, single statements) for hierarchical badge display.
 from __future__ import annotations
 
 import random as _rnd
+import threading as _threading
 from typing import Any
 
 from ._types import (
@@ -19,6 +20,14 @@ from ._types import (
 # Utility helpers (shared across rendering submodules)
 # ---------------------------------------------------------------------------
 
+# Counter-based unique ID generator — produces stable, deterministic IDs
+# within a single render pass.  Call ``_reset_unique_ids()`` at the start
+# of each ``render_interactive_badge()`` so the same badge structure always
+# generates the same element IDs (needed to preserve expanded/collapsed
+# state across progress-badge re-renders).
+_id_counter = 0
+_id_lock = _threading.Lock()
+
 def format_loop_var(value: Any) -> str:
     """Format a loop variable value for display in the badge.
 
@@ -30,9 +39,23 @@ def format_loop_var(value: Any) -> str:
     return text
 
 
+def _reset_unique_ids() -> None:
+    """Reset the counter so the next render pass starts from 1."""
+    global _id_counter
+    with _id_lock:
+        _id_counter = 0
+
+
 def _unique_id(prefix: str = "id") -> str:
-    """Generate a short unique CSS-safe identifier."""
-    return f"{prefix}_{_rnd.randint(100_000, 999_999)}"
+    """Generate a short deterministic CSS-safe identifier.
+
+    IDs are stable across re-renders as long as the badge structure
+    (number and order of grouped items) stays the same.
+    """
+    global _id_counter
+    with _id_lock:
+        _id_counter += 1
+        return f"{prefix}_{_id_counter}"
 
 
 def _html_escape(text: str) -> str:
