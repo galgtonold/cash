@@ -14,12 +14,12 @@ def bla(asdf):
 @cash.cache
 def dep(a):
     time.sleep(1)
-    return a + 2
+    return a + 3
 
 @cash.cache
 def fun(a, b):
     time.sleep(1)
-    return a + b + dep(a) + 1
+    return a + b + dep(a) + 2
 
 @cash.cache
 def super_fun(a):
