@@ -443,8 +443,9 @@ from cash import Cash
 """
         # Run setup code directly via kernel client, not via execute_cell
         # This avoids overwriting notebook cells
+        # Suppress output to avoid UnicodeEncodeError on Windows (cp1252 can't encode emojis)
         reply = self._run_async(
-            self.client.kc._async_execute_interactive(cash_setup, store_history=False)
+            self.client.kc._async_execute_interactive(cash_setup, store_history=False, output_hook=lambda msg: None)
         )
         if reply['content']['status'] != 'ok':
             error_name = reply['content'].get('ename', 'Unknown')
@@ -643,9 +644,9 @@ except Exception:
                 pass
         
         self._kernel_started = False
-        # Stop the per-instance event loop to avoid thread leaks
-        if self._loop.is_running():
-            self._loop.call_soon_threadsafe(self._loop.stop)
+        # Replace the event loop so a subsequent start_kernel() works.
+        # The old loop's thread is a daemon and will be cleaned up at exit.
+        self._loop, self._run_async = _make_async_runner()
     
     def __enter__(self) -> 'NotebookTestRunner':
         return self
