@@ -12,7 +12,7 @@ Thank you for your interest in contributing to Cash! This guide will help you ge
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/cash.git
+git clone https://github.com/galgtonold/cash.git
 cd cash
 
 # Create virtual environment
