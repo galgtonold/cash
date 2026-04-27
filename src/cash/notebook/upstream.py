@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..exceptions import AmbiguousCellError, UpstreamStateError
+from ..utils import resolve_file_dep_path
 from .server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .analysis import CodeAnalyzer
@@ -50,6 +51,11 @@ def _normalize_stmt(s: str) -> str:
     """Strip iteration-context comments and whitespace for code comparison."""
     s = re.sub(r'# __iteration_context__:.*?\n', '', s)
     return s.strip()
+
+# Sentinel placed in user_ns by the forward-probe optimisation so that
+# _check_input_lineage_skip sees the variable as "present".  Replaced by
+# the real cached value when _restore_from_cache runs.
+_FORWARD_PROBE_PLACEHOLDER = object()
 
 class _SimulationCacheEntry(NamedTuple):
     """Per-cell snapshot stored in the incremental simulation cache.
@@ -792,15 +798,16 @@ class UpstreamChecker:
         """Return True if any file dep for the cached cell at *idx* has changed."""
         for fpath, stored_mtime in cached_file_deps.items():
             try:
-                if not os.path.exists(fpath):
+                resolved = resolve_file_dep_path(fpath)
+                if resolved is None:
                     return True
-                current_mtime = os.path.getmtime(fpath)
+                current_mtime = os.path.getmtime(resolved)
                 if abs(current_mtime - stored_mtime) > 0.01:
                     if self.debug:
                         logger.debug(
                             "[UPSTREAM_DEBUG] File dependency changed: %s "
                             "(cached mtime=%s, current=%s)",
-                            fpath, stored_mtime, current_mtime,
+                            resolved, stored_mtime, current_mtime,
                         )
                     return True
             except OSError:
@@ -929,10 +936,14 @@ class UpstreamChecker:
             if self._check_lightweight_hash_cache(current_cell_idx, notebook_cells):
                 cache_had_hash_mismatch = True
 
-            if first_changed_cell > 0 and first_changed_cell <= len(self._simulation_cache):
-                (virtual_lineage, virtual_modules,
-                 simulation_trace, vars_mutated_by_loops,
-                 vars_with_stale_files) = self._restore_cached_state(first_changed_cell)
+        # Restore cached state for cells before the first change, regardless of
+        # what type of change was detected (code hash OR file dep staleness).
+        # Without this, stale file deps would cause ALL cached state to be lost,
+        # even for cells before the stale cell.
+        if first_changed_cell > 0 and self._simulation_cache and first_changed_cell <= len(self._simulation_cache):
+            (virtual_lineage, virtual_modules,
+             simulation_trace, vars_mutated_by_loops,
+             vars_with_stale_files) = self._restore_cached_state(first_changed_cell)
 
         new_cache_entries = list(self._simulation_cache[:first_changed_cell]) if self._simulation_cache else []
 
@@ -2433,6 +2444,21 @@ class UpstreamChecker:
         if not broken_vars:
             return [], [], 0.0
 
+        # Optimization: probe the current cell's statements to see if cache
+        # hits would restore broken variables, making upstream re-execution
+        # unnecessary.  For example, if df is broken but the current cell's
+        # first df-consuming statement is a disk cache hit that restores df,
+        # we don't need to re-execute upstream cells that produce df.
+        self._eliminate_broken_vars_via_current_cell_probe(
+            broken_vars, notebook_cells, current_cell_idx,
+            virtual_lineage, virtual_modules,
+        )
+
+        if not broken_vars:
+            if self.debug:
+                logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits — skipping upstream")
+            return [], [], 0.0
+
         return self._build_reexecution_plan(
             simulation_trace, broken_vars, vars_tainted, simulation_trace_codes,
             virtual_lineage, virtual_modules, vars_derived_from_loops,
@@ -2649,15 +2675,16 @@ class UpstreamChecker:
     ) -> bool:
         """Return True if all historical file dependencies are still fresh."""
         for fpath, stored_mtime in hist_files.items():
-            if not os.path.exists(fpath):
+            resolved = resolve_file_dep_path(fpath)
+            if resolved is None:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
-            current_mtime = os.path.getmtime(fpath)
+            current_mtime = os.path.getmtime(resolved)
             delta = abs(current_mtime - stored_mtime)
             if delta > 0.01:
                 if debug:
-                    logger.debug("[UPSTREAM] Forward prop failed: Stale file %s (delta=%.4fs)", fpath, delta)
+                    logger.debug("[UPSTREAM] Forward prop failed: Stale file %s (delta=%.4fs)", resolved, delta)
                 return False
         return True
 
@@ -2783,12 +2810,15 @@ class UpstreamChecker:
         return input_lineages_all
 
     @staticmethod
+    @staticmethod
     def _stat_file_deps(hist_files: dict[str, float]) -> dict[str, float]:
         """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files."""
         result: dict[str, float] = {}
         for fpath in hist_files:
             try:
-                result[fpath] = os.path.getmtime(fpath)
+                resolved = resolve_file_dep_path(fpath)
+                if resolved is not None:
+                    result[fpath] = os.path.getmtime(resolved)
             except OSError:
                 logger.debug("Cannot stat file dependency %s", fpath)
         return result
@@ -2841,8 +2871,9 @@ class UpstreamChecker:
         stmt_file_deps: dict[str, float] = {}
         for fpath in hist_files:
             try:
-                if os.path.exists(fpath):
-                    stmt_file_deps[fpath] = os.path.getmtime(fpath)
+                resolved = resolve_file_dep_path(fpath)
+                if resolved is not None:
+                    stmt_file_deps[fpath] = os.path.getmtime(resolved)
             except OSError:
                 logger.debug("Cannot stat historical file dependency %s", fpath)
         if self.debug:
@@ -3104,14 +3135,15 @@ class UpstreamChecker:
     ) -> tuple[set, float, float] | None:
         """Validate file deps for a virtual restore.  Returns failure tuple or None."""
         for fpath, stored_mtime in file_deps.items():
-            if not os.path.exists(fpath):
+            resolved = resolve_file_dep_path(fpath)
+            if resolved is None:
                 if self.debug:
                     print(f"[UPSTREAM] Restore failed: Miss file {fpath}")
                 return set(), time_module.time() - start_time, 0.0
-            current_mtime = os.path.getmtime(fpath)
+            current_mtime = os.path.getmtime(resolved)
             if abs(current_mtime - stored_mtime) > 0.01:
                 if self.debug:
-                    print(f"[UPSTREAM] Restore failed: Stale file {fpath} (delta={abs(current_mtime - stored_mtime):.4f}s)")
+                    print(f"[UPSTREAM] Restore failed: Stale file {resolved} (delta={abs(current_mtime - stored_mtime):.4f}s)")
                 return set(), time_module.time() - start_time, 0.0
         return None  # All deps fresh
 
@@ -3180,7 +3212,7 @@ class UpstreamChecker:
         metadata: dict,
         input_hashes: dict[str, str],
     ) -> None:
-        """Update executed_cell_codes, executed_cell_hashes, and executed_input_lineages."""
+        """Update executed_cell_codes, executed_cell_hashes, executed_input_lineages, and executed_file_deps."""
         if 'output_lineages' in metadata:
             for var, lin in metadata['output_lineages'].items():
                 if var in restored_vars:
@@ -3197,6 +3229,162 @@ class UpstreamChecker:
         if input_hashes and restored_vars:
             for var in restored_vars:
                 self.executed_input_lineages[var] = dict(input_hashes)
+
+        # Propagate file dependencies from cache metadata so that downstream
+        # statements (auto-executed by the statement processor) can inherit
+        # them.  Without this, the file-dep inheritance chain breaks after a
+        # kernel restart: _save_to_cache sees has_file_dependencies=False and
+        # the cost model stores metadata-only entries for fast-but-large
+        # intermediate transformations (e.g. sort_values on a read_csv df).
+        file_deps = metadata.get('file_dependencies', {})
+        if file_deps and hasattr(self, 'executed_file_deps'):
+            resolved_paths: set[str] = set()
+            for stored_path in file_deps:
+                resolved = resolve_file_dep_path(stored_path)
+                if resolved is not None:
+                    resolved_paths.add(resolved)
+            if resolved_paths:
+                for var in restored_vars:
+                    if var not in self.executed_file_deps:
+                        self.executed_file_deps[var] = set()
+                    self.executed_file_deps[var].update(resolved_paths)
+
+    def _eliminate_broken_vars_via_current_cell_probe(
+        self,
+        broken_vars: set[str],
+        notebook_cells: list[str],
+        current_cell_idx: int,
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+    ) -> None:
+        """Remove variables from *broken_vars* that would be restored by current cell cache hits.
+
+        When a broken variable (e.g. ``df``) is absent from memory but the
+        current cell contains a statement that both uses it as input AND
+        produces it as output (e.g. ``df['col'] = heavy_computation(df)``),
+        and that statement would be a cache hit on DISK, then the cache
+        restore will inject both the output variable and its data into
+        memory.  In that case we do NOT need upstream re-execution to
+        produce the broken variable — the cache restore will provide it.
+
+        This avoids expensive upstream re-execution for scenarios like
+        kernel restarts where heavy current-cell statements are on disk.
+        """
+        if not self.cash_instance or not broken_vars:
+            return
+
+        try:
+            current_cell_code = notebook_cells[current_cell_idx].replace('\r\n', '\n')
+            tree = ast.parse(current_cell_code)
+        except (IndexError, SyntaxError):
+            return
+
+        # Track which broken vars are resolved by forward cache hits.
+        # We simulate forward through the current cell's statements:
+        # if a statement (a) would cache-hit and (b) its outputs overlap
+        # with broken_vars, those outputs become available in memory.
+        resolved_by_cache = set()
+
+        for node in ast.iter_child_nodes(tree):
+            if not isinstance(node, ast.stmt):
+                continue
+            if is_control_structure(node):
+                continue  # Control structures are too complex to probe
+
+            try:
+                stmt_code = ast.unparse(node)
+            except (ValueError, TypeError):
+                continue
+
+            inputs, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
+            if not outputs:
+                continue
+
+            # Check if this statement uses any broken variable
+            uses_broken = inputs & (broken_vars - resolved_by_cache)
+            if not uses_broken:
+                # Statement doesn't need any broken vars — skip probe
+                continue
+
+            # Build input hashes from virtual lineage (same as simulation)
+            input_hashes: dict[str, str] = {}
+            for inp in inputs:
+                if inp in virtual_lineage:
+                    input_hashes[inp] = virtual_lineage[inp]
+                elif inp in self.variable_lineage:
+                    input_hashes[inp] = self.variable_lineage[inp]
+
+            # Probe the cache (read-only — don't restore anything yet)
+            try:
+                cache_key, _, _, _, _ = compute_cache_key(
+                    stmt_code,
+                    inputs,
+                    ctx=CacheKeyContext(
+                        variable_lineage=self.variable_lineage,
+                        user_ns=self.shell.user_ns,
+                        function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                        virtual_lineage=input_hashes,
+                        virtual_modules=virtual_modules,
+                        compute_hash_fn=self.compute_hash_fn,
+                        debug=False,
+                        debug_print_fn=print,
+                    ),
+                    outputs=outputs,
+                )
+
+                metadata, cached_data = self.cash_instance.backend.get(cache_key)
+                if metadata and cached_data is not None:
+                    # Verify file deps are still valid
+                    file_deps = metadata.get('file_dependencies', {})
+                    deps_valid = True
+                    for fpath, stored_mtime in file_deps.items():
+                        resolved = resolve_file_dep_path(fpath)
+                        if resolved is None:
+                            deps_valid = False
+                            break
+                        try:
+                            current_mtime = os.path.getmtime(resolved)
+                            if abs(current_mtime - stored_mtime) > 0.01:
+                                deps_valid = False
+                                break
+                        except OSError:
+                            deps_valid = False
+                            break
+
+                    if deps_valid:
+                        # Cache hit! This statement's restore will put its
+                        # outputs (including any broken vars) into memory.
+                        produced = outputs & (broken_vars - resolved_by_cache)
+                        if produced:
+                            resolved_by_cache.update(produced)
+                            # Populate variable_lineage and user_ns so the
+                            # statement processor's _check_input_lineage_skip
+                            # doesn't bail out before computing the cache key.
+                            # The placeholder will be overwritten by the real
+                            # cached value when _restore_from_cache runs.
+                            for var in produced:
+                                if var in virtual_lineage:
+                                    self.variable_lineage[var] = virtual_lineage[var]
+                                if var not in self.shell.user_ns:
+                                    self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
+                            if self.debug:
+                                logger.debug(
+                                    "[UPSTREAM] Forward probe: cache hit for '%s' "
+                                    "resolves broken vars: %s",
+                                    stmt_code[:50], produced,
+                                )
+
+            except (KeyError, TypeError, ValueError, OSError):
+                continue
+
+        if resolved_by_cache:
+            broken_vars -= resolved_by_cache
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM] Forward probe eliminated %d broken vars: %s. "
+                    "Remaining: %s",
+                    len(resolved_by_cache), resolved_by_cache, broken_vars,
+                )
 
     def _try_virtual_restore(self, stmt_code: str, outputs: set[str], inputs: set[str], input_hashes: dict[str, str], virtual_modules: set[str] | None = None, expected_lineages: dict[str, str] | None = None) -> tuple[set[str], float, float]:
         """Attempt to restore a statement using virtual input hashes.
