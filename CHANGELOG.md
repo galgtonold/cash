@@ -7,11 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0b1] - Beta Release
 
+### Added
+- **Bug-report button** in the badge header with a budget-aware URL builder that auto-fills a GitHub issue with the failing cell, environment info, and the most recent metrics (without exceeding GitHub's URL length cap).
+- **Per-iteration caching for upstream loop re-execution.** When upstream simulation has to re-run a loop, each iteration is now cached individually instead of treating the whole loop as one cache unit. Editing a loop body or extending the iterable only re-runs the affected iterations.
+- **Forward-probe skip optimization in upstream simulation.** Before scheduling upstream cells to repair broken variables, Cash now probes the current cell to see whether its disk cache hits would restore the same variables. If so, the upstream re-execution is skipped entirely.
+- **File-dependency path fallback.** When a project is moved (e.g. Google Drive path change, repo cloned to a new machine), absolute paths in cache metadata no longer cause full recomputation. `cash.utils.resolve_file_dep_path()` resolves stale paths via CWD-relative basename and suffix matches, and the resolver is wired into all cache-validation paths (`statement_processor`, `magics` restore, `upstream` checks).
+- **`uncacheable_reasons` on metrics.** The badge and text-mode output now explain *why* a statement was not cached (`@cash:no-cache annotation`, `Input variable missing lineage`, ...).
+- **Storage tier display in COMPUTED badges.** Each computed row now shows where the value landed (`RAM`, `RAM+DISK`, ...) with a hover explanation. Falls back to friendly labels (`- no outputs`, `- trivial`) when storage info is genuinely unavailable.
+- **`%cash_help` magic** for a quick-reference command card.
+- **`%cash_feedback` magic** that points at the issue tracker and discussions.
+- **Welcome message on `%cash_on`** with actionable next steps.
+- Expanded documentation with tutorials and use-case guides.
+
 ### Changed
-- Version bumped to 0.5.0b1 for public beta release
-- Development status updated from Alpha to Beta
-- Added `%cash_help` magic for quick-reference command card
-- Expanded documentation with tutorials and use-case guides
+- Version bumped to 0.5.0b1 for public beta release.
+- Development status updated from Alpha to Beta.
+- `[pandas]` / `[all]` / `[dev]` extras now require `pyarrow>=13.0` so DataFrame hashing produces stable, cross-platform results.
+- `TieredBackend.set()` now propagates the resolved storage destinations back to the caller's metadata dict (previously the badge couldn't tell where a value landed).
+- Status-based labels for upstream auto-execution loop groups in the badge.
+- Upstream auto-exec loop groups render with full per-iteration detail in the badge.
+- Cached simulation state is restored before the first changed cell regardless of whether the change was a code-hash mismatch or a stale file dependency (previously a stale file dep dropped *all* cached state).
+
+### Fixed
+- **Downstream overwrites of loop-produced variables** are now detected by upstream simulation; previously they could mask staleness.
+- **Single-unit fallback for small loops with expensive iterations** is no longer triggered, so per-iteration caching stays effective.
+- **Progress step lag** in the badge during long-running cells.
+- **Bug report `RichOutput` repr** crash fixed.
+- Internal `__iteration_context__` / `control_context` comments are stripped from the bug-report URL so reported code matches what the user wrote.
+- Drop the inline `_cashBadgeExp` expand/collapse persistence script that caused state drift when cells were re-rendered mid-execution.
 
 ## [0.3.0] - Decorator–Notebook Bridge
 
