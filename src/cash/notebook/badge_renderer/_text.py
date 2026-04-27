@@ -6,6 +6,7 @@ from collections import defaultdict
 from typing import Any
 
 from cash.notebook.cache_status import CacheStatus
+from cash.utils import safe_text
 
 from ._types import _HEADER_MAX_LEN, _MIN_TIME_DISPLAY_S
 
@@ -163,4 +164,4 @@ def print_text_badge(
 
     output.extend(_text_badge_decorator_lines(metrics_list))
 
-    print("\n".join(output))
+    print(safe_text("\n".join(output)))

@@ -25,7 +25,7 @@ from IPython.display import HTML, display, publish_display_data
 
 from ..core import Cash
 from ..exceptions import AmbiguousCellError
-from ..utils import resolve_file_dep_path
+from ..utils import resolve_file_dep_path, safe_text
 from . import badge_renderer as _badge
 from ._protocols import ShellProtocol
 from .analysis import CodeAnalyzer
@@ -268,7 +268,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._auto_cache_enabled = True
         self._global_ttl = ttl
         ttl_msg = f" (TTL: {ttl}s)" if ttl else ""
-        print(f"✅ Cash enabled.{ttl_msg} Your computations will be cached automatically.")
+        print(safe_text(f"✅ Cash enabled.{ttl_msg} Your computations will be cached automatically."))
         print("   Run %cash_help for available commands.")
         # Report existing cache state if available
         try:

@@ -352,3 +352,78 @@ class TestResolveFileDepPath:
         result = resolve_file_dep_path(stale_path)
         assert result is not None
         assert os.path.basename(result) == "report.xlsx"
+
+
+class TestSafeText:
+    """Tests for safe_text / stdout_supports_unicode — Windows cp1252 fallback."""
+
+    def test_utf8_stream_passes_through(self):
+        """A UTF-8 stream returns the input unchanged, even with emojis."""
+        import io
+        from cash.utils import safe_text
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", write_through=True)
+        assert safe_text("✅ Cash enabled.", stream=stream) == "✅ Cash enabled."
+
+    def test_cp1252_stream_replaces_emojis(self):
+        """A cp1252 stream gets emojis replaced with ASCII fallbacks."""
+        import io
+        from cash.utils import safe_text
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
+        result = safe_text("✅ Cash enabled.", stream=stream)
+        # Result must be encodable as cp1252 — that's the whole point.
+        result.encode("cp1252")
+        assert "Cash enabled." in result
+        assert "✅" not in result
+
+    def test_cp1252_no_unicode_error_on_print(self, capsys):
+        """The original crash: printing safe_text(...) on cp1252 must not raise."""
+        import io
+        import sys
+        from cash.utils import safe_text
+
+        cp1252_stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
+        original_stdout = sys.stdout
+        try:
+            sys.stdout = cp1252_stream
+            sys.stdout.write(safe_text("✅ ⚙️ ⚡ ⚠️ Cash status\n"))
+            sys.stdout.flush()
+        finally:
+            sys.stdout = original_stdout
+        # If we reach here, no UnicodeEncodeError was raised.
+
+    def test_unknown_emoji_dropped_not_crash(self):
+        """Characters without an ASCII fallback are dropped, never crash."""
+        import io
+        from cash.utils import safe_text
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
+        # 🦄 has no fallback in our table — should be dropped, not crash.
+        result = safe_text("hello 🦄 world", stream=stream)
+        result.encode("cp1252")
+        assert "hello" in result and "world" in result
+
+    def test_ascii_input_passes_through(self):
+        """Pure-ASCII input is identity, regardless of stream encoding."""
+        import io
+        from cash.utils import safe_text
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
+        assert safe_text("Cash enabled.", stream=stream) == "Cash enabled."
+
+    def test_stdout_supports_unicode_utf8(self):
+        """UTF-8 streams are reported as Unicode-capable."""
+        import io
+        from cash.utils import stdout_supports_unicode
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="utf-8", write_through=True)
+        assert stdout_supports_unicode(stream) is True
+
+    def test_stdout_supports_unicode_cp1252(self):
+        """cp1252 streams are reported as not Unicode-capable."""
+        import io
+        from cash.utils import stdout_supports_unicode
+
+        stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252", write_through=True)
+        assert stdout_supports_unicode(stream) is False

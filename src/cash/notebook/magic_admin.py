@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.core.magic import line_magic
 
+from cash.utils import safe_text
+
 if TYPE_CHECKING:
     from .magics import CashMagics
 
@@ -626,11 +628,11 @@ class CashAdminMagicsMixin:
         if as_json:
             print(self._provenance.to_json(var_name))
         else:
-            print(self._provenance.format_provenance(
+            print(safe_text(self._provenance.format_provenance(
                 var_name,
                 show_graph=show_graph,
                 show_timeline=show_time,
-            ))
+            )))
 
     # ------------------------------------------------------------------
     # Audit logging
