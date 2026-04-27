@@ -14,8 +14,12 @@ Previously: 0 tests. This file fills a critical coverage gap.
 """
 
 import pytest
+import os
 import time
-from unittest.mock import MagicMock
+import json
+import tempfile
+import shutil
+from unittest.mock import MagicMock, patch
 from traitlets.config import Configurable
 from cash import Cash
 from cash.backends.backend import InMemoryBackend
@@ -559,3 +563,136 @@ class TestGetRedundantImportNames:
         tree = ast.parse("import os.path")
         names = processor._get_redundant_import_names(tree)
         assert names == {'os'}
+
+
+# ===========================================================================
+# Accumulator Init Skip Tests
+# (Merged from test_accumulator_init_skip.py)
+# ===========================================================================
+
+class TestAccumulatorInitSkip:
+    """Test that accumulator initialization statements are skipped when appropriate.
+
+    When adding a new item to a cached loop:
+    1. The backwards scan may schedule the init statement (e.g., ``results = {}``)
+    2. But if ``results`` already exists in memory with cached values,
+       we should NOT re-run the init statement (it would reset the dict)
+    """
+
+    @pytest.mark.xfail(reason="Known failure: accumulator init skip logic")
+    def test_skip_empty_dict_init_when_has_data(self, cash_magics, mock_shell):
+        """
+        If results = {} is scheduled but results already has data,
+        the init should be skipped when re-running the loop.
+
+        Scenario:
+        1. Run loop with 4 items (ABCD) - all cached
+        2. Edit loop code to add 5th item (E)
+        3. Run downstream cell - triggers upstream re-execution
+        4. All 5 items should be present (not just E)
+        """
+        import json, tempfile, shutil
+        from unittest.mock import patch
+
+        magics = cash_magics
+        shell = mock_shell
+
+        loop_code_v1 = 'results = {}\nfor x in ["A", "B", "C", "D"]:\n    results[x] = x * 2\n'
+        loop_code_v2 = 'results = {}\nfor x in ["A", "B", "C", "D", "E"]:\n    results[x] = x * 2\n'
+        keys_code = "keys = list(results.keys())"
+
+        temp_dir = tempfile.mkdtemp()
+        notebook_path = os.path.join(temp_dir, 'test.ipynb')
+
+        notebook_v1 = {
+            "cells": [
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": loop_code_v1},
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": keys_code},
+            ],
+            "metadata": {}, "nbformat": 4, "nbformat_minor": 4
+        }
+
+        with open(notebook_path, 'w', encoding='utf-8') as f:
+            json.dump(notebook_v1, f)
+
+        def get_cells_v1(_path=None):
+            with open(notebook_path, encoding='utf-8') as nf:
+                data = json.load(nf)
+                return [cell['source'] for cell in data['cells'] if cell['cell_type'] == 'code']
+
+        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+            mock_get_cells.side_effect = get_cells_v1
+            mock_get_ids.return_value = []
+
+            magics.cash_on("")
+            magics.cash("", loop_code_v1)
+
+            assert 'results' in shell.user_ns
+            assert shell.user_ns['results'] == {'A': 'AA', 'B': 'BB', 'C': 'CC', 'D': 'DD'}
+
+            magics.cash("", keys_code)
+            assert shell.user_ns['keys'] == ['A', 'B', 'C', 'D']
+
+        notebook_v2 = {
+            "cells": [
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": loop_code_v2},
+                {"cell_type": "code", "execution_count": None, "metadata": {}, "outputs": [], "source": keys_code},
+            ],
+            "metadata": {}, "nbformat": 4, "nbformat_minor": 4
+        }
+
+        with open(notebook_path, 'w', encoding='utf-8') as f:
+            json.dump(notebook_v2, f)
+
+        def get_cells_v2(_path=None):
+            with open(notebook_path, encoding='utf-8') as nf:
+                data = json.load(nf)
+                return [cell['source'] for cell in data['cells'] if cell['cell_type'] == 'code']
+
+        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+            mock_get_cells.side_effect = get_cells_v2
+            mock_get_ids.return_value = []
+
+            magics.cash("", keys_code)
+
+            results = shell.user_ns.get('results', {})
+            assert 'A' in results, f"Missing 'A' in results: {results}"
+            assert 'B' in results, f"Missing 'B' in results: {results}"
+            assert 'C' in results, f"Missing 'C' in results: {results}"
+            assert 'D' in results, f"Missing 'D' in results: {results}"
+            assert 'E' in results, f"Missing 'E' in results: {results}"
+
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def test_init_runs_if_no_existing_data(self, cash_magics, mock_shell):
+        """If results doesn't exist yet, the init SHOULD run."""
+        magics = cash_magics
+        shell = mock_shell
+
+        if 'results' in shell.user_ns:
+            del shell.user_ns['results']
+
+        magics.cash_on("")
+        magics.cash("", 'results = {}\nfor x in [\'A\', \'B\']:\n    results[x] = x * 2\n')
+        assert shell.user_ns['results'] == {'A': 'AA', 'B': 'BB'}
+
+    def test_init_runs_if_existing_data_empty(self, cash_magics, mock_shell):
+        """If results exists but is empty, the init SHOULD run."""
+        magics = cash_magics
+        shell = mock_shell
+
+        shell.user_ns['results'] = {}
+        magics.cash_on("")
+        magics.cash("", 'results = {}\nfor x in [\'A\', \'B\']:\n    results[x] = x * 2\n')
+        assert shell.user_ns['results'] == {'A': 'AA', 'B': 'BB'}
+
+    def test_list_accumulator(self, cash_magics, mock_shell):
+        """List accumulators should also work."""
+        magics = cash_magics
+        shell = mock_shell
+
+        magics.cash_on("")
+        magics.cash("", "results = []\nfor x in ['A', 'B', 'C', 'D']:\n    results.append(x)\n")
+        assert shell.user_ns['results'] == ['A', 'B', 'C', 'D']
