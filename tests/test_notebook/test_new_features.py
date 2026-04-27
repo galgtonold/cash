@@ -183,6 +183,98 @@ os.makedirs('backups', exist_ok=True)"""
 # Automatic Purity Analysis Tests
 # ===========================================================================
 
+# ===========================================================================
+# Helper functions for purity analysis tests
+# Defined at module level so inspect.getsource() works under pytest
+# (pytest's assertion rewriting breaks getsource for nested functions)
+# ===========================================================================
+
+def _pure_compute(x, y):
+    return x + y
+
+def _pure_transform(data):
+    result = data * 2
+    adjusted = result + 1
+    return adjusted
+
+def _pure_classify(x):
+    if x > 0:
+        return 'positive'
+    elif x < 0:
+        return 'negative'
+    else:
+        return 'zero'
+
+def _impure_noisy(x):
+    print(f"computing {x}")
+    return x * 2
+
+def _impure_load(path):
+    f = open(path)  # noqa: SIM115
+    return f.read()
+
+def _impure_mutate_global():
+    global counter
+    counter += 1
+    return counter
+
+def _impure_outer():
+    x = 0
+    def inner():
+        nonlocal x
+        x += 1
+        return x
+    return inner
+
+def _impure_modify(obj):
+    obj.value = 42
+    return obj
+
+def _impure_update_dict(d, key, val):
+    d[key] = val
+    return d
+
+def _impure_run_command(cmd):
+    return os.system(cmd)
+
+def _impure_add_item(lst, item):
+    lst.append(item)
+    return lst
+
+def _impure_gen(n):
+    for i in range(n):
+        yield i
+
+@pure
+def _pure_side_effecty():
+    print("hello")
+    return 42
+
+@stateful
+def _stateful_pure_looking():
+    return 42
+
+def _pure_simple(x):
+    return x + 1
+
+def _impure_logged(x):
+    import logging
+    logging.info(f"processing {x}")
+    return x
+
+def _pure_sum_range(n):
+    total = 0
+    for i in range(n):
+        total += i
+    return total
+
+def _pure_squares(data):
+    return [x ** 2 for x in data]
+
+def _impure_save_data(df):
+    df.to_csv('output.csv')
+
+
 class TestAutoPurityAnalysis:
     """Tests for automatic purity detection of user-defined functions."""
 
@@ -192,112 +284,59 @@ class TestAutoPurityAnalysis:
 
     def test_pure_math_function(self):
         """Simple math function should be detected as pure."""
-        def compute(x, y):
-            return x + y
-        assert analyze_function_purity(compute) is True
+        assert analyze_function_purity(_pure_compute) is True
 
     def test_pure_with_locals(self):
         """Function with local variables should be pure."""
-        def transform(data):
-            result = data * 2
-            adjusted = result + 1
-            return adjusted
-        assert analyze_function_purity(transform) is True
+        assert analyze_function_purity(_pure_transform) is True
 
     def test_pure_with_conditionals(self):
         """Function with if/else should be pure."""
-        def classify(x):
-            if x > 0:
-                return 'positive'
-            elif x < 0:
-                return 'negative'
-            else:
-                return 'zero'
-        assert analyze_function_purity(classify) is True
+        assert analyze_function_purity(_pure_classify) is True
 
     def test_impure_print(self):
         """Function with print() is impure."""
-        def noisy(x):
-            print(f"computing {x}")
-            return x * 2
-        assert analyze_function_purity(noisy) is False
+        assert analyze_function_purity(_impure_noisy) is False
 
     def test_impure_open(self):
         """Function with open() is impure."""
-        def load(path):
-            f = open(path)  # noqa: SIM115
-            return f.read()
-        assert analyze_function_purity(load) is False
+        assert analyze_function_purity(_impure_load) is False
 
     def test_impure_global(self):
         """Function with global statement is impure."""
-        def mutate_global():
-            global counter
-            counter += 1
-            return counter
-        assert analyze_function_purity(mutate_global) is False
+        assert analyze_function_purity(_impure_mutate_global) is False
 
     def test_impure_nonlocal(self):
         """Function with nonlocal statement is impure."""
-        # We define an outer+inner function scenario
-        def outer():
-            x = 0
-            def inner():
-                nonlocal x
-                x += 1
-                return x
-            return inner
-        # outer itself is impure because inner has nonlocal
-        assert analyze_function_purity(outer) is False
+        assert analyze_function_purity(_impure_outer) is False
 
     def test_impure_attribute_assign(self):
         """Function that modifies object attributes is impure."""
-        def modify(obj):
-            obj.value = 42
-            return obj
-        assert analyze_function_purity(modify) is False
+        assert analyze_function_purity(_impure_modify) is False
 
     def test_impure_subscript_assign(self):
         """Function that modifies dict/list items is impure."""
-        def update_dict(d, key, val):
-            d[key] = val
-            return d
-        assert analyze_function_purity(update_dict) is False
+        assert analyze_function_purity(_impure_update_dict) is False
 
     def test_impure_os_system(self):
         """Function calling os.system is impure."""
-        def run_command(cmd):
-            return os.system(cmd)
-        assert analyze_function_purity(run_command) is False
+        assert analyze_function_purity(_impure_run_command) is False
 
     def test_impure_list_append(self):
         """Function calling list.append is impure (mutating method)."""
-        def add_item(lst, item):
-            lst.append(item)
-            return lst
-        assert analyze_function_purity(add_item) is False
+        assert analyze_function_purity(_impure_add_item) is False
 
     def test_impure_generator(self):
         """Generator function is not pure (in caching sense)."""
-        def gen(n):
-            for i in range(n):
-                yield i
-        assert analyze_function_purity(gen) is False
+        assert analyze_function_purity(_impure_gen) is False
 
     def test_explicit_pure_decorator(self):
         """@pure decorated function is pure regardless of analysis."""
-        @pure
-        def side_effecty():
-            print("hello")
-            return 42
-        assert analyze_function_purity(side_effecty) is True
+        assert analyze_function_purity(_pure_side_effecty) is True
 
     def test_explicit_stateful_decorator(self):
         """@stateful decorated function is impure."""
-        @stateful
-        def pure_looking():
-            return 42
-        assert analyze_function_purity(pure_looking) is False
+        assert analyze_function_purity(_stateful_pure_looking) is False
 
     def test_builtin_not_analyzable(self):
         """Built-in functions can't be analyzed (no source), return False."""
@@ -305,50 +344,32 @@ class TestAutoPurityAnalysis:
 
     def test_lambda_not_analyzable(self):
         """Lambdas defined in test can't always get clean source, but if they can, analyze."""
-        # Lambdas at module level may or may not be analyzable depending on inspect
         f = lambda x: x * 2  # noqa: E731
-        # This may return True or False depending on whether inspect can get source
         result = analyze_function_purity(f)
         assert isinstance(result, bool)
 
     def test_caching_works(self):
         """Repeated calls should use cache."""
-        def simple(x):
-            return x + 1
-        # First call
-        result1 = analyze_function_purity(simple)
-        # Second call should use cache
-        result2 = analyze_function_purity(simple)
+        result1 = analyze_function_purity(_pure_simple)
+        result2 = analyze_function_purity(_pure_simple)
         assert result1 == result2
 
     def test_impure_logging(self):
         """Function calling logging methods is impure."""
-        def logged(x):
-            import logging
-            logging.info(f"processing {x}")
-            return x
-        assert analyze_function_purity(logged) is False
+        assert analyze_function_purity(_impure_logged) is False
 
     def test_pure_with_loop(self):
         """Function with loop but no side effects is pure."""
-        def sum_range(n):
-            total = 0
-            for i in range(n):
-                total += i
-            return total
-        assert analyze_function_purity(sum_range) is True
+        assert analyze_function_purity(_pure_sum_range) is True
 
     def test_pure_with_list_comprehension(self):
         """Function with list comprehension is pure."""
-        def squares(data):
-            return [x ** 2 for x in data]
-        assert analyze_function_purity(squares) is True
+        assert analyze_function_purity(_pure_squares) is True
 
     def test_impure_file_write(self):
         """Function that writes to file via to_csv is impure."""
-        def save_data(df):
-            df.to_csv('output.csv')
-        assert analyze_function_purity(save_data) is False
+        assert analyze_function_purity(_impure_save_data) is False
+        assert analyze_function_purity(_impure_save_data) is False
 
 
 # ===========================================================================

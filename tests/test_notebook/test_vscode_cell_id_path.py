@@ -202,6 +202,9 @@ class TestEarlyCellIdCapture:
             m._upstream_checker = MagicMock()
             m._original_run_cell = MagicMock()
             m._global_ttl = None
+            m._execution_history = []
+            m._control_structure_processor = MagicMock()
+            m._cash_instance = MagicMock()
         return m
 
     def test_captures_cellid_from_parent_metadata(self, magics_fixture):
