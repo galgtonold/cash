@@ -25,6 +25,7 @@ from IPython.display import HTML, display, publish_display_data
 
 from ..core import Cash
 from ..exceptions import AmbiguousCellError
+from ..utils import resolve_file_dep_path
 from . import badge_renderer as _badge
 from ._protocols import ShellProtocol
 from .analysis import CodeAnalyzer
@@ -884,14 +885,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         cached value is stale and must be recomputed.
         """
         for fpath, stored_mtime in metadata.get('file_dependencies', {}).items():
-            if not os.path.exists(fpath):
+            resolved = resolve_file_dep_path(fpath)
+            if resolved is None:
                 if self._debug:
                     print(f"[STATE] Cannot restore '{var_name}': file dependency missing: {fpath}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            delta = abs(os.path.getmtime(fpath) - stored_mtime)
+            delta = abs(os.path.getmtime(resolved) - stored_mtime)
             if delta > 0.01:
                 if self._debug:
-                    print(f"[STATE] Cannot restore '{var_name}': file dependency changed: {fpath} (delta={delta:.4f}s)")
+                    print(f"[STATE] Cannot restore '{var_name}': file dependency changed: {resolved} (delta={delta:.4f}s)")
                 raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
 
     def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:

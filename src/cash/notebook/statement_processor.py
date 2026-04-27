@@ -23,7 +23,7 @@ from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.server_discovery import get_notebook_path
-from cash.utils import normalize_path
+from cash.utils import normalize_path, resolve_file_dep_path
 
 __all__ = [
     "StatementCacheMetadata",
@@ -406,6 +406,8 @@ class StatementProcessor:
             on cache status.
         """
         effective_ttl, force_persist, skip_cache = self._parse_annotation(annotation, ttl)
+        if skip_cache and annotation and annotation.no_cache:
+            metrics['uncacheable_reasons'].append('@cash:no-cache annotation')
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -854,6 +856,7 @@ class StatementProcessor:
 
         # Input lineage check: skip cache if any input lacks lineage.
         if not skip_cache and self._check_input_lineage_skip(inputs):
+            metrics['uncacheable_reasons'].append('Input variable missing lineage')
             skip_cache = True
 
         return skip_cache
@@ -1807,20 +1810,22 @@ class StatementProcessor:
         """Return None if any direct file dep in *metadata* is missing or modified."""
         file_deps = metadata.get('file_dependencies', {})
         for fpath, stored_mtime in file_deps.items():
-            if not os.path.exists(fpath):
+            resolved = resolve_file_dep_path(fpath)
+            if resolved is None:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
                 return None
-            mtime_delta = abs(os.path.getmtime(fpath) - stored_mtime)
+            mtime_delta = abs(os.path.getmtime(resolved) - stored_mtime)
             if mtime_delta > 0.01:
                 if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency changed: %s (delta=%.4fs)", fpath, mtime_delta)
+                    logger.debug("[CACHE DEBUG] File dependency changed: %s (delta=%.4fs)", resolved, mtime_delta)
                 return None
         return cached_data
 
     def _input_file_changed(self, input_var: str, fpath: str) -> bool:
         """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached."""
-        if not os.path.exists(fpath):
+        resolved = resolve_file_dep_path(fpath)
+        if resolved is None:
             if self.debug:
                 logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
             return True
@@ -1833,10 +1838,10 @@ class StatementProcessor:
         source_file_deps = source_meta.get('file_dependencies', {})
         if fpath not in source_file_deps:
             return False
-        mtime_delta = abs(os.path.getmtime(fpath) - source_file_deps[fpath])
+        mtime_delta = abs(os.path.getmtime(resolved) - source_file_deps[fpath])
         if mtime_delta > 0.01:
             if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' source file changed: %s (delta=%.4fs)", input_var, fpath, mtime_delta)
+                logger.debug("[CACHE DEBUG] Input '%s' source file changed: %s (delta=%.4fs)", input_var, resolved, mtime_delta)
             return True
         return False
 

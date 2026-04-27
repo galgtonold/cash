@@ -1,5 +1,6 @@
 """Tests for utility functions (utils.py) and data sources (data_source.py)."""
 import json
+import os
 import time
 from unittest.mock import patch, MagicMock
 
@@ -282,3 +283,72 @@ class TestGetNotebookPathEdgeCases:
 
         cells = _read_notebook_code_cells(str(nb_path), include_ids=True)
         assert cells[0] == (None, "x = 1")
+
+
+class TestResolveFileDepPath:
+    """Tests for resolve_file_dep_path — fallback file dependency resolution."""
+
+    def test_existing_path_returned_as_is(self, tmp_path):
+        """When the stored path exists, it is returned unchanged."""
+        from cash.utils import resolve_file_dep_path
+
+        f = tmp_path / "data.csv"
+        f.write_text("a,b\n1,2\n")
+        result = resolve_file_dep_path(str(f))
+        assert result == str(f)
+
+    def test_nonexistent_path_returns_none(self, tmp_path):
+        """When the stored path doesn't exist and basename not in CWD, returns None."""
+        from cash.utils import resolve_file_dep_path
+
+        result = resolve_file_dep_path("/nonexistent/dir/some_unique_file_xyz.csv")
+        assert result is None
+
+    def test_basename_fallback_in_cwd(self, tmp_path, monkeypatch):
+        """When stored path is stale, finds file via basename in CWD."""
+        from cash.utils import resolve_file_dep_path
+
+        # Create file in tmp_path (our fake CWD)
+        f = tmp_path / "data.csv"
+        f.write_text("a,b\n1,2\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        # Use a path that doesn't exist but has the same basename
+        stale_path = "/old/google/drive/path/data.csv"
+        result = resolve_file_dep_path(stale_path)
+        assert result is not None
+        assert os.path.basename(result) == "data.csv"
+        assert os.path.exists(result)
+
+    def test_suffix_fallback_with_subdirectory(self, tmp_path, monkeypatch):
+        """When stored path has subdir structure, matches via suffix relative to CWD."""
+        from cash.utils import resolve_file_dep_path
+
+        # Create examples/data.csv under tmp_path
+        (tmp_path / "examples").mkdir()
+        f = tmp_path / "examples" / "data.csv"
+        f.write_text("a,b\n1,2\n")
+
+        monkeypatch.chdir(tmp_path)
+
+        # Stale path with different root but same suffix
+        stale_path = "C:/Users/old/project/examples/data.csv"
+        result = resolve_file_dep_path(stale_path)
+        assert result is not None
+        assert result.endswith("data.csv")
+        assert os.path.exists(result)
+
+    def test_windows_backslash_paths(self, tmp_path, monkeypatch):
+        """Handles Windows-style backslash paths in stored deps."""
+        from cash.utils import resolve_file_dep_path
+
+        f = tmp_path / "report.xlsx"
+        f.write_text("fake data")
+
+        monkeypatch.chdir(tmp_path)
+
+        stale_path = "C:\\Users\\Old\\My Drive\\project\\report.xlsx"
+        result = resolve_file_dep_path(stale_path)
+        assert result is not None
+        assert os.path.basename(result) == "report.xlsx"
