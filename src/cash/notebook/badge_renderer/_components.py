@@ -60,11 +60,7 @@ def render_control_body_html(body_stmts: list[str]) -> str:
 # ---------------------------------------------------------------------------
 
 def _build_toggle_js(gid: str, closed_arrow: str, open_arrow: str) -> str:
-    """Build the JS onclick handler for expand/collapse.
-
-    Also saves expanded/collapsed state to ``window._cashBadgeExp`` so it
-    can be restored when the badge HTML is re-rendered during execution.
-    """
+    """Build the JS onclick handler for expand/collapse."""
     return (
         f"event.stopPropagation();"
         f"(function(){{"
@@ -77,8 +73,6 @@ def _build_toggle_js(gid: str, closed_arrow: str, open_arrow: str) -> str:
         f"document.querySelectorAll('.{gid}_a').forEach(function(r){{r.style.display='none'}});"
         f"if(arrow)arrow.textContent='{closed_arrow}'"
         f"}}"
-        f"var s=window._cashBadgeExp=window._cashBadgeExp||{{}};"
-        f"s['{gid}']=expanding;"
         f"}})()"
     )
 
