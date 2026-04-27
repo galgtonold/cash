@@ -90,10 +90,10 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/cash-caching/cash"
-"Documentation" = "https://github.com/cash-caching/cash/tree/main/docs"
-"Bug Tracker" = "https://github.com/cash-caching/cash/issues"
-"Changelog" = "https://github.com/cash-caching/cash/blob/main/CHANGELOG.md"
+"Homepage" = "https://github.com/galgtonold/cash"
+"Documentation" = "https://github.com/galgtonold/cash/tree/main/docs"
+"Bug Tracker" = "https://github.com/galgtonold/cash/issues"
+"Changelog" = "https://github.com/galgtonold/cash/blob/main/CHANGELOG.md"
 
 [project.scripts]
 cash = "cash.__main__:main"

@@ -12,7 +12,7 @@ Thank you for your interest in contributing to Cash! This guide will help you ge
 ### Clone and Install
 
 ```bash
-git clone https://github.com/your-org/cash.git
+git clone https://github.com/galgtonold/cash.git
 cd cash
 python -m venv .venv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows

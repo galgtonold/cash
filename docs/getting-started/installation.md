@@ -31,7 +31,7 @@ pip install cash-lib[all]
 For contributing to Cash:
 
 ```bash
-git clone https://github.com/your-org/cash.git
+git clone https://github.com/galgtonold/cash.git
 cd cash
 pip install -e ".[dev]"
 ```
