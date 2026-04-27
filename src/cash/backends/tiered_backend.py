@@ -76,6 +76,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         if not self.backends:
             return
 
+        # Keep a reference to the original dict so we can propagate storage info back
+        original_metadata = metadata
         metadata = dict(metadata) if metadata is not None else {}
         stored_destinations = []
 
@@ -110,6 +112,10 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:
              metadata['storage'] = stored_destinations
+
+        # Propagate storage info back to the caller's original metadata dict
+        if original_metadata is not None:
+            original_metadata['storage'] = stored_destinations
 
         # Log visibility
         if stored_destinations:

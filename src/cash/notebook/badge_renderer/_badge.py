@@ -156,7 +156,17 @@ def _computed_storage_display_html(m: dict[str, Any]) -> str:
         storage_str = "+".join(storage_val) if isinstance(storage_val, list) else str(storage_val)
         storage_tooltip = _build_storage_tooltip(storage_val)
         return f"<span title='{storage_tooltip}' style='cursor:help;'>→ {storage_str}</span>"
-    return "-"
+    # Provide a reason for why no storage info is available
+    exec_time = m.get('total_time', 0.0) or m.get('execution_time', 0.0)
+    outputs = m.get('evaluated_vars', []) or m.get('outputs', [])
+    if not outputs:
+        tooltip = "No variable outputs to cache (e.g. print-only statement). Stdout is still cached."
+        return f"<span title='{tooltip}' style='cursor:help; color: #999;'>- no outputs</span>"
+    if exec_time < 0.01:
+        tooltip = "Execution was too fast for disk promotion. Stored in RAM only on next run."
+        return f"<span title='{tooltip}' style='cursor:help; color: #999;'>- trivial</span>"
+    tooltip = "No storage info available. This may indicate a backend configuration issue."
+    return f"<span title='{tooltip}' style='cursor:help; color: #999;'>-</span>"
 
 
 def _render_current_badge_row(m: dict[str, Any], status: str, code_snippet: str) -> str:
@@ -439,8 +449,6 @@ def _build_executed_subsection_html(upstream_executed: list[dict[str, Any]]) -> 
         f"document.querySelectorAll('.{exec_gid}_a').forEach(function(r){{r.style.display='none'}});"
         f"arrow.textContent='\u25b6'"
         f"}}"
-        f"var s=window._cashBadgeExp=window._cashBadgeExp||{{}};"
-        f"s['{exec_gid}']=expanding;"
         f"}})()"
     )
 
@@ -492,8 +500,6 @@ def _build_skipped_subsection_html(skipped_list: list[dict[str, Any]]) -> str:
         f"document.querySelectorAll('.{skip_gid}_a').forEach(function(r){{r.style.display='none'}});"
         f"arrow.textContent='\u25b6'"
         f"}}"
-        f"var s=window._cashBadgeExp=window._cashBadgeExp||{{}};"
-        f"s['{skip_gid}']=expanding;"
         f"}})()"
     )
 
@@ -735,6 +741,9 @@ def _build_bug_report_url(metrics_list: list[dict[str, Any]], context: dict | No
         if m.get('is_upstream'):
             continue
         code = (m.get('code') or '').strip()
+        # Strip __iteration_context__ / control_context comments from display
+        if '# __iteration_context__:' in code or '# control_context:' in code:
+            code = '\n'.join(line for line in code.split('\n') if not line.startswith('# __iteration_context__:') and not line.startswith('# control_context:')).strip()
         if len(code) > 100:
             code = code[:97] + '...'
         st = str(m.get('status', '')).replace('CacheStatus.', '')
@@ -888,28 +897,8 @@ def render_interactive_badge(
         total_saved, summary_time, current_code, current_step, total_steps,
     )
 
-    # During execution, keep <details> expanded so users see live progress.
-    # For the final DONE render, let users control the state.
-    open_attr = "open" if status == "RUNNING" else ""
-
-    # Build a restore script that re-expands any inner sections the user
-    # had toggled open before the badge was re-rendered.
-    restore_script = """<script>(function(){
-var exp=window._cashBadgeExp||{};
-Object.keys(exp).forEach(function(gid){
-if(!exp[gid])return;
-var arrow=document.getElementById(gid+'_arrow');
-if(!arrow)return;
-var closed=['\\u25b6','\\u25b8'];
-if(closed.indexOf(arrow.textContent)>=0){
-document.querySelectorAll('.'+gid+'_d').forEach(function(r){r.style.display='table-row'});
-arrow.textContent=arrow.textContent==='\\u25b6'?'\\u25bc':'\\u25be';
-}
-});
-})();</script>"""
-
     return f"""
-    <details {open_attr} style="
+    <details style="
         display: inline-block;
         border: 1px solid {summary_border};
         border-radius: 4px;
@@ -962,7 +951,6 @@ arrow.textContent=arrow.textContent==='\\u25b6'?'\\u25bc':'\\u25be';
             </div>
         </div>
     </details>
-    {restore_script}
     """
 
 

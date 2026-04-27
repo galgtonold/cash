@@ -39,9 +39,19 @@ def _text_badge_metric_line(m: dict[str, Any]) -> tuple[str, bool, str, float, f
         return line, is_upstream, 'skipped', saved_time, exec_time
     if status == CacheStatus.COMPUTED:
         skipped_reason = m.get('skipped_reason', '')
-        if skipped_reason:
+        uncacheable_reasons = m.get('uncacheable_reasons', [])
+        storage_val = m.get('storage', [])
+        if uncacheable_reasons:
+            tag = '🚫 NOT CACHED' if not is_upstream else '⬆️ NOT CACHED'
+            reason_text = ", ".join(uncacheable_reasons)
+            line = f"  {tag}: {code_snippet}  ({exec_time:.2f}s) — {reason_text}"
+        elif skipped_reason:
             tag = '⚠️ NOT CACHED' if not is_upstream else '⬆️ NOT CACHED'
             line = f"  {tag}: {code_snippet}  ({exec_time:.2f}s) — {skipped_reason}"
+        elif storage_val:
+            storage_str = "+".join(storage_val) if isinstance(storage_val, list) else str(storage_val)
+            tag = '⚙️ COMPUTED' if not is_upstream else '⬆️ COMPUTED'
+            line = f"  {tag}: {code_snippet}  ({exec_time:.2f}s) → {storage_str}"
         else:
             tag = '⚙️ COMPUTED' if not is_upstream else '⬆️ COMPUTED'
             line = f"  {tag}: {code_snippet}  ({exec_time:.2f}s)"
