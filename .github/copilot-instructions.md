@@ -1,13 +1,23 @@
-﻿# Copilot Instructions for Cash
+﻿# Agent Instructions for Cash
+
+> **Scope:** This file is the single source of truth for AI coding assistants working in this repo —
+> GitHub Copilot, Claude Code (loaded via `CLAUDE.md` → this file), Cursor, Codex, etc.
+> If you change conventions, change them here, not in the per-tool config.
 
 ## Project Overview
 Cash is a smart caching library for Python with two primary use cases:
 1. **Decorator-based caching** (`@cash.cache`) for functions with automatic dependency tracking
 2. **Jupyter notebook caching** via IPython magics (`%cash_on`) with statement-level granularity
 
-**Current Status:** Pre-release (v0.2.0) - See `.github/ROADMAP.md` for production roadmap and priorities.
+**Current Status:** Public Beta (v0.5.0b1). See [`.github/planning/INITIAL_RELEASE_ROADMAP.md`](planning/INITIAL_RELEASE_ROADMAP.md) for the active release plan and [`.github/planning/BETA_ROADMAP.md`](planning/BETA_ROADMAP.md) for the broader beta roadmap.
 
-**Development Priority:** Focus on Phase 1 (Core Stability & API Cleanup) before adding new features. All new work should align with roadmap objectives.
+**Development Priority:** Focus on the active phase in `INITIAL_RELEASE_ROADMAP.md`. New features go into `BETA_ROADMAP.md` Phase 2+ unless they unblock the release.
+
+## Commit messages
+- **Never include `Co-Authored-By: Claude ...`** or any other AI-attribution trailer in commit messages. Author the commit normally.
+- Use Conventional-Commits-ish prefixes (`feat:`, `fix:`, `test:`, `chore:`, `build:`, `docs:`, `refactor:`) plus an optional scope (`feat(badge): ...`).
+- Subject ≤ 72 chars. Body wraps at 72. Lead with *why*, not *what*.
+- One logical change per commit. If a diff touches three concerns, split it.
 
 ## Architecture
 
@@ -241,9 +251,65 @@ When returning from `process()` in `statement_processor.py`, include:
 - **Zombie processes**: After killing Python processes, may need to reconfigure environment
 
 ## Project Management
-- **Roadmap**: See `.github/ROADMAP.md` for production-ready goals, priorities, and success metrics
-- **Before adding features**: Check if it's on the roadmap and aligns with current phase priorities
-- **Technical debt**: Log all TODOs/FIXMEs in code AND in roadmap Decision Log
-- **Breaking changes**: Document in roadmap and plan migration path before implementing
-- **Memory** Use `WORKING_MEMORY.md` for deep dives, investigations, and root cause analyses of complex issues. Link to relevant sections in PRs and roadmap when addressing bugs or adding features. Clean up old investigations once resolved to keep it focused on current work.
-- **Version control**: Commit your changes in logical chunks with clear messages.
+- **Roadmaps**: All planning docs live in `.github/planning/` (gitignored).
+  - `INITIAL_RELEASE_ROADMAP.md` — active release plan
+  - `BETA_ROADMAP.md` — broader beta roadmap, Phase 2+ features
+  - `COMMUNITY_OUTREACH.md`, `VIDEO_SCRIPT.md` — launch materials
+- **Before adding features**: Check the active roadmap. If it's not there and not a release blocker, propose it before building.
+- **Breaking changes**: Document in `CHANGELOG.md` under the upcoming version and call them out in the PR description.
+- **Version control**: Commit in logical chunks with clear messages (see *Commit messages* section above).
+
+## Release Process
+
+When the user asks to **cut a release** / **bump the version** / **prepare release X.Y.Z**:
+
+### 1. Pick the version
+- Beta: `0.5.0b1` → `0.5.0b2` → `0.5.0rc1` → `0.5.0`
+- Bug-fix: `0.5.0` → `0.5.1`
+- New feature, no breaks: `0.5.0` → `0.6.0`
+- Breaking change: `0.5.0` → `1.0.0` (only after we've earned `1.0`)
+
+### 2. Auto-generate the CHANGELOG entry from `git log`
+**Do not write the changelog by hand.** Derive it from commits since the previous tag.
+
+```bash
+PREV=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+RANGE=${PREV:+$PREV..HEAD}
+git log --no-merges --pretty=format:"%h %s" $RANGE
+```
+
+Then group the commits by their Conventional-Commits prefix into Keep-a-Changelog sections:
+
+| Commit prefix | CHANGELOG section |
+|---|---|
+| `feat:` / `feat(...)`: | **Added** |
+| `fix:` / `fix(...)`: | **Fixed** |
+| `refactor:`, `perf:`, `build:`, `chore:` (with user-visible impact) | **Changed** |
+| `BREAKING CHANGE:` in body, or `!` in prefix (`feat!:`) | **Breaking** (top of section) |
+| `test:`, `ci:`, `chore:` (no user-visible impact) | **Omit** unless they materially change behaviour |
+| `docs:` | Mention only if user-facing docs changed |
+
+Rewrite each line so it reads as a user-facing change, not a commit subject. Strip the prefix, expand abbreviations, write in past tense or imperative as is consistent with the rest of the file. Add a *why* clause when the commit subject doesn't explain it.
+
+Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`. Keep the prior `[0.5.0b1]`, `[0.3.0]`, ... sections intact.
+
+### 3. Bump version in `pyproject.toml`
+Edit the single `version = "..."` line. No other files need to change (we don't store the version in source).
+
+### 4. Verify
+- `pytest tests/test_notebook -x --timeout=30` (unit suite green)
+- `python -m build` (sdist + wheel build cleanly; inspect contents)
+- `pip install dist/cash_lib-X.Y.Z*.whl` in a fresh venv → `python -c "import cash; print(cash.__version__)"`
+
+### 5. Commit & tag
+```bash
+git add pyproject.toml CHANGELOG.md
+git commit -m "release: X.Y.Z"
+git tag vX.Y.Z
+```
+
+Push only after the user explicitly confirms — pushing the tag triggers the PyPI publish workflow.
+
+### 6. Verify post-publish
+- `pypi.org/project/cash-lib/X.Y.Z/` is live with correct metadata
+- `pip install cash-lib==X.Y.Z` resolves on a clean machine
