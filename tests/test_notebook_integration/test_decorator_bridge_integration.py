@@ -8,7 +8,11 @@ Tests that @cash.cache calls inside notebooks:
 4. Track custom type hashers
 """
 
+import importlib.util
+
 import pytest
+
+_POLARS_MISSING = importlib.util.find_spec("polars") is None
 
 pytestmark = [
     pytest.mark.integration,
@@ -177,6 +181,7 @@ class TestDecoratorNotebookRerun:
         assert 'Result: 15' in output2
 
 
+@pytest.mark.skipif(_POLARS_MISSING, reason="polars not installed")
 class TestDecoratorPolarsIntegration:
     """Test @cash.cache with polars DataFrames in notebooks."""
 

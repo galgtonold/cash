@@ -342,14 +342,14 @@ class Cash:
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
                 result = func(*args, **kwargs)
-                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.time() - call_start, args_hash='unhashable', cache_key='')
+                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
                 return (_CACHE_MISS, result, 'unhashable')
             cache_key = self._compute_cache_key(func_name, current_state_hash, dynamic_state_hash, args_hash)
             return (cache_key, current_state_hash, args_hash)
         except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
             logger.warning("Cache key generation failed for %s: %s", func_name, e)
             result = func(*args, **kwargs)
-            self._log_decorator_call(func_name, cache_hit=False, execution_time=time.time() - call_start, args_hash='error', cache_key='')
+            self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='error', cache_key='')
             return (_CACHE_MISS, result, 'error')
 
     def _try_get_cached(
@@ -366,7 +366,7 @@ class Cash:
         if cached_data is not None:
             try:
                 self._validate_ttl(metadata, ttl)
-                self._log_decorator_call(func_name, cache_hit=True, execution_time=time.time() - call_start, args_hash=args_hash, cache_key=cache_key)
+                self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
                 return cached_data
             except CacheExpiredError:
                 pass
@@ -385,7 +385,7 @@ class Cash:
 
         @functools.wraps(func)
         def wrapper(*args: Any, **kwargs: Any) -> Any:
-            call_start = time.time()
+            call_start = time.perf_counter()
 
             if func_name not in self._analyzed:
                 self._analyze_dependencies(func)
@@ -405,7 +405,7 @@ class Cash:
                 res = func(*args, **kwargs)
                 self._attach_lineage(res, cache_key)
                 self._store_in_cache(cache_key, func_name, res, metadata, ttl, current_state_hash, args_hash)
-                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.time() - call_start, args_hash=args_hash, cache_key=cache_key)
+                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
                 return res
 
             if self.use_locking:
@@ -685,7 +685,7 @@ class Cash:
                 if locked_data is not None:
                     try:
                         self._validate_ttl(locked_metadata, ttl)
-                        self._log_decorator_call(func_name, cache_hit=True, execution_time=time.time() - call_start, args_hash=args_hash, cache_key=cache_key)
+                        self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
                         return locked_data
                     except (TypeError, KeyError, CacheExpiredError):
                         logger.debug("Cache validation failed under lock for %s", func_name)
