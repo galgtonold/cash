@@ -2671,20 +2671,40 @@ class UpstreamChecker:
 
     @staticmethod
     def _validate_file_freshness(
-        hist_files: dict[str, float], debug: bool = False
+        hist_files: dict[str, Any], debug: bool = False
     ) -> bool:
-        """Return True if all historical file dependencies are still fresh."""
-        for fpath, stored_mtime in hist_files.items():
+        """Return True if all historical file dependencies are still fresh.
+
+        Tolerates both the new ``{path: {'mtime': ..., 'size': ...}}`` form and
+        the legacy bare-float form (``{path: mtime}``) used by older cache
+        entries.  When the size is recorded it is checked too — that catches
+        rewrites that happen within a single mtime tick on coarse-resolution
+        filesystems (HFS+/APFS, some ext4 configs).
+        """
+        for fpath, stored in hist_files.items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
-            current_mtime = os.path.getmtime(resolved)
-            delta = abs(current_mtime - stored_mtime)
+            if isinstance(stored, dict):
+                stored_mtime = float(stored.get('mtime', 0.0))
+                stored_size = stored.get('size')
+            else:
+                stored_mtime = float(stored)
+                stored_size = None
+            try:
+                cur_stat = os.stat(resolved)
+            except OSError:
+                return False
+            delta = abs(cur_stat.st_mtime - stored_mtime)
             if delta > 0.01:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Stale file %s (delta=%.4fs)", resolved, delta)
+                return False
+            if stored_size is not None and cur_stat.st_size != stored_size:
+                if debug:
+                    logger.debug("[UPSTREAM] Forward prop failed: Resized file %s (%d -> %d)", resolved, stored_size, cur_stat.st_size)
                 return False
         return True
 
@@ -3131,19 +3151,36 @@ class UpstreamChecker:
             raise
 
     def _check_file_deps_for_restore(
-        self, file_deps: dict[str, float], start_time: float
+        self, file_deps: dict[str, Any], start_time: float
     ) -> tuple[set, float, float] | None:
-        """Validate file deps for a virtual restore.  Returns failure tuple or None."""
-        for fpath, stored_mtime in file_deps.items():
+        """Validate file deps for a virtual restore.  Returns failure tuple or None.
+
+        Tolerates both the new ``{'mtime': ..., 'size': ...}`` and the legacy
+        bare-float forms — see :meth:`_validate_file_freshness`.
+        """
+        for fpath, stored in file_deps.items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
                 if self.debug:
                     print(f"[UPSTREAM] Restore failed: Miss file {fpath}")
                 return set(), time_module.time() - start_time, 0.0
-            current_mtime = os.path.getmtime(resolved)
-            if abs(current_mtime - stored_mtime) > 0.01:
+            if isinstance(stored, dict):
+                stored_mtime = float(stored.get('mtime', 0.0))
+                stored_size = stored.get('size')
+            else:
+                stored_mtime = float(stored)
+                stored_size = None
+            try:
+                cur_stat = os.stat(resolved)
+            except OSError:
+                return set(), time_module.time() - start_time, 0.0
+            if abs(cur_stat.st_mtime - stored_mtime) > 0.01:
                 if self.debug:
-                    print(f"[UPSTREAM] Restore failed: Stale file {resolved} (delta={abs(current_mtime - stored_mtime):.4f}s)")
+                    print(f"[UPSTREAM] Restore failed: Stale file {resolved} (delta={abs(cur_stat.st_mtime - stored_mtime):.4f}s)")
+                return set(), time_module.time() - start_time, 0.0
+            if stored_size is not None and cur_stat.st_size != stored_size:
+                if self.debug:
+                    print(f"[UPSTREAM] Restore failed: Resized file {resolved} ({stored_size} -> {cur_stat.st_size})")
                 return set(), time_module.time() - start_time, 0.0
         return None  # All deps fresh
 
@@ -3334,22 +3371,10 @@ class UpstreamChecker:
 
                 metadata, cached_data = self.cash_instance.backend.get(cache_key)
                 if metadata and cached_data is not None:
-                    # Verify file deps are still valid
+                    # Verify file deps are still valid (mtime + size, both
+                    # forms — see _validate_file_freshness for rationale).
                     file_deps = metadata.get('file_dependencies', {})
-                    deps_valid = True
-                    for fpath, stored_mtime in file_deps.items():
-                        resolved = resolve_file_dep_path(fpath)
-                        if resolved is None:
-                            deps_valid = False
-                            break
-                        try:
-                            current_mtime = os.path.getmtime(resolved)
-                            if abs(current_mtime - stored_mtime) > 0.01:
-                                deps_valid = False
-                                break
-                        except OSError:
-                            deps_valid = False
-                            break
+                    deps_valid = self._validate_file_freshness(file_deps, self.debug)
 
                     if deps_valid:
                         # Cache hit! This statement's restore will put its

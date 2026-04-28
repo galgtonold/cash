@@ -79,7 +79,9 @@ class StatementCacheMetadata(TypedDict, total=False):
     source_hash: str
     code: str
     key: str
-    file_dependencies: dict[str, float]
+    # path -> {"mtime": float, "size": int}.  Older cache entries may use
+    # the legacy bare-float form (path -> mtime); helpers below tolerate both.
+    file_dependencies: dict[str, dict[str, float]]
     force_persist: bool
     output_lineages: dict[str, str]
     storage: list[str]
@@ -1571,7 +1573,7 @@ class StatementProcessor:
             'source_hash': source_hash,
             'code': code,
             'key': cache_key,
-            'file_dependencies': {f: os.path.getmtime(f) for f in file_dependencies if os.path.exists(f)},
+            'file_dependencies': self._snapshot_file_deps(file_dependencies),
             'force_persist': force_persist,
             'output_lineages': self._build_output_lineages(outputs),
         }
@@ -1668,11 +1670,17 @@ class StatementProcessor:
         file_deps = metadata.get('file_dependencies', {})
         if not file_deps:
             return
+        # `executed_file_mtimes` historically holds {path: float}; flatten the
+        # new {'mtime': ..., 'size': ...} form back to a bare mtime here.
+        mtime_map = {
+            path: self._split_file_dep_value(stored)[0]
+            for path, stored in file_deps.items()
+        }
         for var_name in restored_vars:
             self.executed_file_deps.setdefault(var_name, set()).update(file_deps.keys())
             if not hasattr(self, 'executed_file_mtimes'):
                 self.executed_file_mtimes = {}
-            self.executed_file_mtimes.setdefault(var_name, {}).update(file_deps)
+            self.executed_file_mtimes.setdefault(var_name, {}).update(mtime_map)
 
     def _replay_cached_outputs(
         self,
@@ -1806,19 +1814,59 @@ class StatementProcessor:
             return None
         return cached_data
 
+    @staticmethod
+    def _snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, float]]:
+        """Return ``{path: {'mtime': mtime, 'size': size}}`` for paths that exist."""
+        snapshot: dict[str, dict[str, float]] = {}
+        for f in paths:
+            try:
+                st = os.stat(f)
+            except OSError:
+                continue
+            snapshot[f] = {'mtime': st.st_mtime, 'size': st.st_size}
+        return snapshot
+
+    @staticmethod
+    def _split_file_dep_value(value: Any) -> tuple[float, int | None]:
+        """Return ``(mtime, size_or_None)`` for either the new or legacy form.
+
+        New form: ``{'mtime': ..., 'size': ...}``.
+        Legacy:   bare float (mtime only).  Cache entries from ≤0.5.0 use
+        the legacy form; we still honour them but skip the size check.
+        """
+        if isinstance(value, dict):
+            return float(value.get('mtime', 0.0)), value.get('size')
+        return float(value), None
+
     def _invalidate_if_direct_file_changed(self, metadata: StatementCacheMetadata, cached_data: Any) -> Any:
         """Return None if any direct file dep in *metadata* is missing or modified."""
         file_deps = metadata.get('file_dependencies', {})
-        for fpath, stored_mtime in file_deps.items():
+        for fpath, stored in file_deps.items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
                 return None
-            mtime_delta = abs(os.path.getmtime(resolved) - stored_mtime)
+            stored_mtime, stored_size = self._split_file_dep_value(stored)
+            try:
+                cur_stat = os.stat(resolved)
+            except OSError:
+                return None
+            mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
             if mtime_delta > 0.01:
                 if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency changed: %s (delta=%.4fs)", resolved, mtime_delta)
+                    logger.debug("[CACHE DEBUG] File dependency mtime changed: %s (delta=%.4fs)", resolved, mtime_delta)
+                return None
+            # Filesystems with coarse mtime granularity (HFS+/APFS, some
+            # ext4 configs) can produce identical mtimes for back-to-back
+            # writes.  Falling back to size catches that case for the
+            # common "rewrote the CSV" scenario.
+            if stored_size is not None and cur_stat.st_size != stored_size:
+                if self.debug:
+                    logger.debug(
+                        "[CACHE DEBUG] File dependency size changed: %s (was %d, now %d)",
+                        resolved, stored_size, cur_stat.st_size,
+                    )
                 return None
         return cached_data
 
@@ -1838,10 +1886,19 @@ class StatementProcessor:
         source_file_deps = source_meta.get('file_dependencies', {})
         if fpath not in source_file_deps:
             return False
-        mtime_delta = abs(os.path.getmtime(resolved) - source_file_deps[fpath])
+        stored_mtime, stored_size = self._split_file_dep_value(source_file_deps[fpath])
+        try:
+            cur_stat = os.stat(resolved)
+        except OSError:
+            return True
+        mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
         if mtime_delta > 0.01:
             if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' source file changed: %s (delta=%.4fs)", input_var, resolved, mtime_delta)
+                logger.debug("[CACHE DEBUG] Input '%s' source file mtime changed: %s (delta=%.4fs)", input_var, resolved, mtime_delta)
+            return True
+        if stored_size is not None and cur_stat.st_size != stored_size:
+            if self.debug:
+                logger.debug("[CACHE DEBUG] Input '%s' source file size changed: %s (was %d, now %d)", input_var, resolved, stored_size, cur_stat.st_size)
             return True
         return False
 

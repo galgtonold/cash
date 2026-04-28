@@ -884,16 +884,32 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Called before restoring a cached variable — if files have changed the
         cached value is stale and must be recomputed.
         """
-        for fpath, stored_mtime in metadata.get('file_dependencies', {}).items():
+        for fpath, stored in metadata.get('file_dependencies', {}).items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
                 if self._debug:
                     print(f"[STATE] Cannot restore '{var_name}': file dependency missing: {fpath}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            delta = abs(os.path.getmtime(resolved) - stored_mtime)
+            # Tolerate both the new {'mtime': ..., 'size': ...} form and the
+            # legacy bare-float form left over from older cache entries.
+            if isinstance(stored, dict):
+                stored_mtime = float(stored.get('mtime', 0.0))
+                stored_size = stored.get('size')
+            else:
+                stored_mtime = float(stored)
+                stored_size = None
+            try:
+                cur_stat = os.stat(resolved)
+            except OSError:
+                raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
+            delta = abs(cur_stat.st_mtime - stored_mtime)
             if delta > 0.01:
                 if self._debug:
-                    print(f"[STATE] Cannot restore '{var_name}': file dependency changed: {resolved} (delta={delta:.4f}s)")
+                    print(f"[STATE] Cannot restore '{var_name}': file dependency mtime changed: {resolved} (delta={delta:.4f}s)")
+                raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
+            if stored_size is not None and cur_stat.st_size != stored_size:
+                if self._debug:
+                    print(f"[STATE] Cannot restore '{var_name}': file dependency size changed: {resolved}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
 
     def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:
