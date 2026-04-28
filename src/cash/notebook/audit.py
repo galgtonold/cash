@@ -9,7 +9,6 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from typing import Any
-from typing import Any
 
 __all__ = ["AuditEntry", "AuditLogger"]
 

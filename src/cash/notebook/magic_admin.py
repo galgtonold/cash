@@ -753,20 +753,22 @@ class CashAdminMagicsMixin:
         """Execute a benchmark run and report results."""
         import statistics
 
+        # Use perf_counter, not time.time — the latter has ~16ms resolution
+        # on Windows and produces zero-duration measurements for fast cells.
         uncached_times: list[float] = []
         if compare_mode:
             for _i in range(iterations):
-                start = time.time()
+                start = time.perf_counter()
                 self.shell.run_cell(cell_code, silent=True)
-                uncached_times.append(time.time() - start)
+                uncached_times.append(time.perf_counter() - start)
 
         cached_times: list[float] = []
         for _i in range(iterations):
             if cold_start:
                 self._clear_cache_for_cold_start()
-            start = time.time()
+            start = time.perf_counter()
             self._execute_cell(cell_code)
-            cached_times.append(time.time() - start)
+            cached_times.append(time.perf_counter() - start)
 
         print(f"\n{'='*50}")
         print(f"Benchmark Results ({iterations} iterations)")
@@ -781,6 +783,10 @@ class CashAdminMagicsMixin:
                 speedup = mean_uncached / mean_cached
                 savings_pct = (1 - mean_cached / mean_uncached) * 100
                 print(f"\n  Speedup: {speedup:.1f}x ({savings_pct:.0f}% faster with caching)")
+            else:
+                # Both runs measured below timer resolution.  Tell the user the
+                # result is unreliable rather than silently omit the line.
+                print("\n  Speedup: n/a (timings below timer resolution)")
 
         print(f"{'='*50}")
 

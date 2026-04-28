@@ -14,7 +14,6 @@ from ._components import (
     render_for_loop_group,
 )
 from ._grouping import (
-    _html_escape,
     _reset_unique_ids,
     _unique_id,
     group_loop_iterations,

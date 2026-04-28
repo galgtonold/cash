@@ -6,12 +6,10 @@ control groups, single statements) for hierarchical badge display.
 
 from __future__ import annotations
 
-import random as _rnd
 import threading as _threading
 from typing import Any
 
 from ._types import (
-    ForLoopGroup,
     GroupedBadgeItem,
     LoopGroup,
 )
