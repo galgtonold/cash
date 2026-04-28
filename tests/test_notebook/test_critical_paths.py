@@ -245,6 +245,37 @@ class TestFileDependencyTracking:
         cash_magics.cash("", code)
         assert mock_shell.user_ns['row_count'] == 3
 
+    def test_size_change_invalidates_cache_with_same_mtime(self, cash_magics, mock_shell, tmp_path):
+        """Same mtime + different size must still invalidate.
+
+        Regression test for the macOS / coarse-mtime-filesystem bug where
+        two back-to-back rewrites of the same CSV produced identical mtimes
+        and the cache stayed valid even though the content changed.  We
+        force the post-rewrite mtime to match the original via os.utime to
+        simulate that filesystem behaviour deterministically — the
+        invalidator must still notice via the size delta.
+        """
+        import os as _os
+
+        csv_path = tmp_path / "data.csv"
+        csv_path.write_text("a,b\n1,2\n")
+        original_mtime = _os.stat(csv_path).st_mtime
+        path_str = str(csv_path).replace('\\', '/')
+
+        code = f"import pandas as pd\ndf = pd.read_csv('{path_str}')\nrow_count = len(df)"
+        cash_magics.cash("", code)
+        assert mock_shell.user_ns['row_count'] == 1
+
+        # Rewrite with different content but pin the mtime to its original
+        # value, simulating a filesystem with coarse mtime granularity.
+        csv_path.write_text("a,b\n1,2\n3,4\n5,6\n")
+        _os.utime(csv_path, (original_mtime, original_mtime))
+        assert _os.stat(csv_path).st_mtime == original_mtime  # sanity
+
+        cash_magics.cash("", code)
+        # If the invalidator only checked mtime, this would still be 1.
+        assert mock_shell.user_ns['row_count'] == 3
+
 
 # ============================================================================
 # Error Recovery Edge Cases
