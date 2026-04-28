@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Bug report `RichOutput` repr** crash fixed.
 - Internal `__iteration_context__` / `control_context` comments are stripped from the bug-report URL so reported code matches what the user wrote.
 - Drop the inline `_cashBadgeExp` expand/collapse persistence script that caused state drift when cells were re-rendered mid-execution.
+- **Windows console emoji crash.** `import cash; %load_ext cash; %cash_on` no longer raises `UnicodeEncodeError` from a vanilla `python.exe` shell on Windows (cp1252). A new `cash.utils.safe_text()` helper passes UTF-8 streams through unchanged and downgrades each emoji to a short ASCII fallback when the active stream cannot encode it (`✅` → `[OK]`, `⚙️` → `[run]`, ...). Jupyter kernels are UTF-8 so notebook users were unaffected.
+- **`@cash:no-cache` annotation crash.** The fast path on a cached-skip annotation referenced `metrics` before it was defined, raising `UnboundLocalError` on first hit; the dict is now initialised before the append.
+- **Decorator `execution_time` always 0 on Windows.** `@cash.cache` recorded per-call timings with `time.time()`, which has ~16 ms resolution on Windows and produced zero-duration entries that broke the call log; switched to `time.perf_counter()` (nanosecond resolution everywhere).
+- **`%cash_benchmark --compare` dropped the `Speedup` line on coarse timers.** Same Windows resolution issue caused `mean_uncached` to round to 0; switched to `perf_counter`, and now print `Speedup: n/a (timings below timer resolution)` instead of silently omitting the line.
+- **File-dep cache invalidation missed same-mtime rewrites.** On filesystems with coarse mtime granularity (HFS+/APFS, some ext4 configs) two back-to-back rewrites of the same file produce identical mtimes and the cache stayed valid. `file_dependencies` metadata now records both mtime and size, and all five validation paths check both. Existing on-disk caches load fine — they just lose the size check until they're re-written.
 
 ## [0.3.0] - Decorator–Notebook Bridge
 
