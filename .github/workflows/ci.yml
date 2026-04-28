@@ -31,12 +31,11 @@ jobs:
       - name: Run unit tests
         run: |
           pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config.py tests/test_backend_enhancements.py --tb=short -q
-      
-      - name: Run integration tests
-        if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.12'
-        run: |
-          pytest tests/test_notebook_integration/ --tb=short -q
-        timeout-minutes: 15
+
+      # Integration tests spin up ~3.4k real Jupyter kernels and don't fit in
+      # a per-push CI budget.  They run nightly via the separate
+      # `integration-nightly.yml` workflow (and on demand via workflow_dispatch).
+      # Re-enable here only after the suite is fast enough for ~10 minutes.
 
   lint:
     runs-on: ubuntu-latest

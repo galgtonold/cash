@@ -406,8 +406,6 @@ class StatementProcessor:
             on cache status.
         """
         effective_ttl, force_persist, skip_cache = self._parse_annotation(annotation, ttl)
-        if skip_cache and annotation and annotation.no_cache:
-            metrics['uncacheable_reasons'].append('@cash:no-cache annotation')
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -418,6 +416,8 @@ class StatementProcessor:
             'code': code.strip(),
             'uncacheable_reasons': []
         }
+        if skip_cache and annotation and annotation.no_cache:
+            metrics['uncacheable_reasons'].append('@cash:no-cache annotation')
 
         if self.debug:
             logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
