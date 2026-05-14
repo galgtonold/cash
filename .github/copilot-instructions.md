@@ -111,8 +111,19 @@ def test_programmatic(nb_runner):
 ### Bug Reproduction Workflow
 When debugging notebook-related bugs:
 1. Create a reproduction test notebook
-2. use the jupyter MCP to run the notebook and observe the behavior
-3. Once the issue is reproduced, write an integration test using `nb_runner` that program
+2. Use the built-in VS Code notebook tools (`edit_notebook_file`, `run_notebook_cell`, `read_notebook_cell_output`, `configure_python_notebook`) to execute cells and observe behavior. **DO NOT use the external Jupyter MCP server** — use the VS Code built-in notebook editing/execution tools only.
+3. Once the issue is reproduced, write an integration test using `nb_runner` that programmatically verifies the fix.
+
+### Interactive Notebook Testing Workflow
+When performing interactive user-testing (cell-by-cell execution with edits):
+- Use `edit_notebook_file` (with `editType: "insert"`) to add cells
+- Use `edit_notebook_file` (with `editType: "edit"`) to modify cell source
+- Use `edit_notebook_file` (with `editType: "delete"`) to remove cells
+- Use `configure_python_notebook` to set up the Python kernel
+- Use `run_notebook_cell` to execute individual cells
+- Use `read_notebook_cell_output` to inspect cell results
+- Use `copilot_getNotebookSummary` to get cell IDs and status
+- **NEVER use open_browser_page or any MCP jupyter tools for notebook work**
 
 
 ### Pre-Completion Checklist
