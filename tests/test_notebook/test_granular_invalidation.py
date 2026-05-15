@@ -544,7 +544,11 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {'compute'}}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         # 'result' should be invalidated (uses compute)
         assert 'result' not in sp.variable_lineage
@@ -577,7 +581,11 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: None}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         # Both should be invalidated
         assert 'result' not in sp.variable_lineage
@@ -599,7 +607,11 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {'compute'}}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         # Should still be invalidated (no granular info about which attrs are used)
         assert 'result' not in sp.variable_lineage
@@ -621,7 +633,11 @@ class TestGranularInvalidation:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: set()}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         # 'result' should be preserved (nothing actually changed)
         assert 'result' in sp.variable_lineage
@@ -640,7 +656,10 @@ class TestGranularInvalidation:
 
         changed_modules = {module_name: module_file}
         # Don't pass per_module_changed_symbols
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         # Should still invalidate (backward compatible)
         assert 'result' not in sp.variable_lineage
@@ -692,7 +711,11 @@ class TestGranularInvalidation:
             mod_b_name: {'CONST_B'},
         }
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         # var_x uses func_a which changed → invalidated
         assert 'var_x' not in sp.variable_lineage
@@ -780,7 +803,11 @@ class TestGranularEndToEnd:
             assert 'compute' in changed_syms
 
             # Invalidate with granular info
-            magics._invalidate_module_lineages(changed_modules, per_mod_syms)
+            magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_mod_syms,
+        )
 
             # Re-run import
             sp.process_statement(f"import {module_name}", silent=True)
@@ -838,7 +865,11 @@ class TestGranularEndToEnd:
             )
 
             changed_modules, per_mod_syms = ft.check_and_reload_changed_modules(shell.user_ns)
-            magics._invalidate_module_lineages(changed_modules, per_mod_syms)
+            magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_mod_syms,
+        )
             sp.process_statement(f"import {module_name}", silent=True)
 
             # compute didn't change → may be SKIPPED/RESTORED or COMPUTED
@@ -932,7 +963,11 @@ class TestGranularEdgeCases:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {'compute'}}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         assert 'a' not in sp.variable_lineage
         assert 'b' not in sp.variable_lineage
@@ -957,7 +992,11 @@ class TestGranularEdgeCases:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {'compute'}}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         # Should be invalidated because one of its deps (compute) changed
         assert 'mixed' not in sp.variable_lineage
@@ -978,7 +1017,11 @@ class TestGranularEdgeCases:
         changed_modules = {module_name: module_file}
         per_module_changed_symbols = {module_name: {'compute'}}
 
-        magics._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+            per_module_changed_symbols,
+        )
 
         assert 'result' not in sp.module_attribute_deps
 

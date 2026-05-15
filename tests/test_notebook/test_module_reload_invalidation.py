@@ -98,7 +98,10 @@ class TestModuleReloadInvalidation:
 
         # Simulate module reload
         changed_modules = {module_name: module_file}
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         # Lineage should have changed
         new_lineage = sp.variable_lineage[module_name]
@@ -124,7 +127,10 @@ class TestModuleReloadInvalidation:
 
         # Trigger invalidation
         changed_modules = {module_name: module_file}
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         # Dependent variable 'result' should have been cleared
         assert 'result' not in sp.variable_lineage
@@ -146,7 +152,10 @@ class TestModuleReloadInvalidation:
         sp.executed_input_lineages['unrelated'] = {}
 
         changed_modules = {module_name: module_file}
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         # Unrelated variable should be preserved
         assert sp.variable_lineage['unrelated'] == "unrelated_hash"
@@ -159,7 +168,10 @@ class TestModuleReloadInvalidation:
         sp = magics._statement_processor
 
         changed_modules = {module_name: module_file}
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         assert module_name in sp.recently_reloaded_modules
 
@@ -251,7 +263,10 @@ class TestModuleReloadInvalidation:
 
         # Simulate full reload flow: invalidate lineages (which sets recently_reloaded_modules
         # AND clears executed_cell_codes/variable_lineage for the module)
-        magics._invalidate_module_lineages({module_name: module_file})
+        magics._module_invalidator.invalidate(
+            {module_name: module_file},
+            magics._statement_processor,
+        )
 
         # Now import should NOT be skipped (module was reloaded)
         metrics2 = sp.process_statement(code, silent=True)
@@ -301,7 +316,11 @@ class TestModuleReloadInvalidation:
             assert module_name in changed
 
             # Invalidate lineages
-            magics._invalidate_module_lineages(changed, per_mod_syms)
+            magics._module_invalidator.invalidate(
+            changed,
+            magics._statement_processor,
+            per_mod_syms,
+        )
 
             # Re-run the import (should not be skipped because of recently_reloaded_modules)
             sp.process_statement(import_code, silent=True)
@@ -326,7 +345,10 @@ class TestModuleReloadInvalidation:
         assert module_name not in sp.variable_lineage
 
         changed_modules = {module_name: module_file}
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         # Should set new lineage regardless
         assert module_name in sp.variable_lineage
@@ -338,7 +360,10 @@ class TestModuleReloadInvalidation:
 
         changed_modules = {"nonexistent_module": "/path/that/does/not/exist.py"}
         # Should not raise
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         # Should get a random hash as fallback
         assert "nonexistent_module" in sp.variable_lineage
@@ -584,7 +609,10 @@ class TestTransitiveDependencyTracking:
 
         # Invalidate — the new lineage should include helpers.py content
         changed_modules = {"metrics": info["metrics_file"]}
-        magics._invalidate_module_lineages(changed_modules)
+        magics._module_invalidator.invalidate(
+            changed_modules,
+            magics._statement_processor,
+        )
 
         new_lineage = sp.variable_lineage["metrics"]
         assert new_lineage != old_lineage
