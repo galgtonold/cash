@@ -1,0 +1,365 @@
+"""Tests for cacheability.py — the merged pure-AST analysis module.
+
+All assertions target :class:`StatementAnalysis` fields or
+``skip_reasons()``.  No direct visitor or detector API remains; this
+file replaces ``test_mutation_detector.py`` and ``test_side_effects.py``.
+"""
+from __future__ import annotations
+
+import ast
+
+import pytest
+
+from cash.notebook.cacheability import (
+    MutationInfo,
+    SideEffectInfo,
+    StatementAnalysis,
+    analyze_statement,
+)
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _analyze(code: str) -> StatementAnalysis:
+    return analyze_statement(code, None)
+
+
+def _analyze_with_tree(code: str) -> StatementAnalysis:
+    tree = ast.parse(code)
+    return analyze_statement(code, tree)
+
+
+# ---------------------------------------------------------------------------
+# Mutation detection — all_mutated_vars
+# ---------------------------------------------------------------------------
+
+class TestAllMutatedVars:
+    """Behaviour previously tested through MutationDetector.detect_mutations /
+    get_mutated_variables."""
+
+    def test_list_append(self):
+        a = _analyze("lst.append(42)")
+        assert 'lst' in a.all_mutated_vars
+
+    def test_list_extend(self):
+        a = _analyze("data.extend([1, 2, 3])")
+        assert 'data' in a.all_mutated_vars
+
+    def test_list_sort(self):
+        a = _analyze("items.sort(key=lambda x: x.name)")
+        assert 'items' in a.all_mutated_vars
+
+    def test_list_insert(self):
+        a = _analyze("lst.insert(0, 'first')")
+        assert 'lst' in a.all_mutated_vars
+
+    def test_dict_update(self):
+        a = _analyze("config.update({'key': 'value'})")
+        assert 'config' in a.all_mutated_vars
+
+    def test_dict_setitem(self):
+        a = _analyze("d['key'] = value")
+        assert 'd' in a.all_mutated_vars
+
+    def test_dict_pop(self):
+        a = _analyze("d.pop('key')")
+        assert 'd' in a.all_mutated_vars
+
+    def test_set_add(self):
+        a = _analyze("seen.add(item)")
+        assert 'seen' in a.all_mutated_vars
+
+    def test_augmented_add(self):
+        a = _analyze("counter += 1")
+        assert 'counter' in a.all_mutated_vars
+
+    def test_augmented_multiply(self):
+        a = _analyze("arr *= 2")
+        assert 'arr' in a.all_mutated_vars
+
+    def test_pandas_fillna_inplace(self):
+        a = _analyze("df.fillna(0, inplace=True)")
+        assert 'df' in a.all_mutated_vars
+
+    def test_pandas_dropna_inplace(self):
+        a = _analyze("df.dropna(inplace=True)")
+        assert 'df' in a.all_mutated_vars
+
+    def test_pandas_sort_inplace(self):
+        a = _analyze("df.sort_values('col', inplace=True)")
+        assert 'df' in a.all_mutated_vars
+
+    def test_pandas_no_inplace(self):
+        """Without inplace=True, it's not a mutation."""
+        a = _analyze("df.fillna(0)")
+        assert 'df' not in a.all_mutated_vars
+
+    def test_pandas_inplace_false(self):
+        """Explicit inplace=False is not a mutation."""
+        a = _analyze("df.fillna(0, inplace=False)")
+        assert 'df' not in a.all_mutated_vars
+
+    def test_subscript_assign(self):
+        a = _analyze("arr[0] = 100")
+        assert 'arr' in a.all_mutated_vars
+
+    def test_nested_subscript(self):
+        a = _analyze("matrix[0][1] = 42")
+        assert 'matrix' in a.all_mutated_vars
+
+    def test_attribute_assign(self):
+        a = _analyze("obj.name = 'new_name'")
+        assert 'obj' in a.all_mutated_vars
+
+    def test_del_subscript(self):
+        a = _analyze("del d['key']")
+        assert 'd' in a.all_mutated_vars
+
+    def test_multiple_mutations(self):
+        code = "lst.append(1)\nlst.append(2)\nd['key'] = 'val'\ncounter += 1"
+        a = _analyze(code)
+        assert {'lst', 'd', 'counter'} <= a.all_mutated_vars
+
+    def test_pure_assignment(self):
+        a = _analyze("x = 42")
+        assert len(a.all_mutated_vars) == 0
+
+    def test_function_call_no_mutation(self):
+        a = _analyze("result = sorted(lst)")
+        assert len(a.all_mutated_vars) == 0
+
+    def test_method_call_with_assignment(self):
+        """Result captured — original isn't mutated."""
+        a = _analyze("new_df = df.fillna(0)")
+        assert 'df' not in a.all_mutated_vars
+
+    def test_syntax_error_returns_empty(self):
+        a = _analyze("def :")
+        assert len(a.all_mutated_vars) == 0
+
+    def test_pre_parsed_tree(self):
+        code = "lst.append(42)"
+        a = _analyze_with_tree(code)
+        assert 'lst' in a.all_mutated_vars
+
+
+# ---------------------------------------------------------------------------
+# Top-level mutation detection
+# ---------------------------------------------------------------------------
+
+class TestTopLevelMutatedVars:
+    """Behaviour previously in MutationDetector.get_top_level_mutated_variables."""
+
+    def test_top_level_append_detected(self):
+        a = _analyze("lst.append(1)")
+        assert 'lst' in a.top_level_mutated_vars
+
+    def test_mutation_inside_function_not_top_level(self):
+        code = "def foo():\n    lst.append(1)"
+        a = _analyze(code)
+        # all_mutated_vars walks the full tree
+        assert 'lst' in a.all_mutated_vars
+        # top_level_mutated_vars skips function/class bodies
+        assert 'lst' not in a.top_level_mutated_vars
+
+    def test_mutation_inside_class_not_top_level(self):
+        code = "class Foo:\n    def method(self):\n        self.val = 1"
+        a = _analyze(code)
+        assert 'self' not in a.top_level_mutated_vars
+
+    def test_mixed_top_level_and_nested(self):
+        code = "d['x'] = 1\ndef foo():\n    lst.append(2)"
+        a = _analyze(code)
+        assert 'd' in a.top_level_mutated_vars
+        assert 'lst' not in a.top_level_mutated_vars
+        assert 'lst' in a.all_mutated_vars
+
+
+# ---------------------------------------------------------------------------
+# Side-effect detection
+# ---------------------------------------------------------------------------
+
+class TestSideEffects:
+    """Behaviour previously in SideEffectDetector."""
+
+    def test_open_write_mode(self):
+        a = _analyze("with open('out.txt', 'w') as f: f.write('x')")
+        kinds = [e.kind for e in a.side_effects]
+        assert 'file_write' in kinds
+
+    def test_open_append_mode(self):
+        a = _analyze("open('log.txt', 'a')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_open_read_mode_not_detected(self):
+        a = _analyze("f = open('data.csv', 'r')")
+        assert not any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_os_remove(self):
+        a = _analyze("import os; os.remove('file.txt')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_os_makedirs(self):
+        a = _analyze("import os; os.makedirs('new_dir')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_shutil_copy(self):
+        a = _analyze("import shutil; shutil.copy('a', 'b')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_pandas_to_csv(self):
+        a = _analyze("df.to_csv('output.csv')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_pandas_to_parquet(self):
+        a = _analyze("df.to_parquet('data.parquet')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_json_dump(self):
+        a = _analyze("import json; json.dump(data, f)")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_pickle_dump(self):
+        a = _analyze("import pickle; pickle.dump(obj, f)")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_savefig(self):
+        a = _analyze("plt.savefig('plot.png')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_numpy_save(self):
+        a = _analyze("np.save('arr.npy', data)")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_write_method(self):
+        a = _analyze("f.write('content')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_subprocess_run(self):
+        a = _analyze("import subprocess; subprocess.run(['ls'])")
+        assert any(e.kind == 'system' for e in a.side_effects)
+
+    def test_subprocess_popen(self):
+        a = _analyze("subprocess.Popen(['cmd'])")
+        assert any(e.kind == 'system' for e in a.side_effects)
+
+    def test_os_system(self):
+        a = _analyze("os.system('rm -f file')")
+        assert any(e.kind == 'system' for e in a.side_effects)
+
+    def test_requests_post(self):
+        a = _analyze("requests.post('https://api.example.com', data=payload)")
+        assert any(e.kind == 'network' for e in a.side_effects)
+
+    def test_requests_delete(self):
+        a = _analyze("requests.delete(url)")
+        assert any(e.kind == 'network' for e in a.side_effects)
+
+    def test_no_side_effects_for_pure_code(self):
+        a = _analyze("x = 1 + 2")
+        assert len(a.side_effects) == 0
+
+    def test_syntax_error_returns_empty(self):
+        a = _analyze("def (:")
+        assert len(a.side_effects) == 0
+
+    def test_pre_parsed_tree(self):
+        code = "df.to_csv('output.csv')"
+        tree = ast.parse(code)
+        a = analyze_statement(code, tree)
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_line_numbers_captured(self):
+        code = "df.to_csv('out.csv')\nx = 1"
+        a = _analyze(code)
+        assert a.side_effects[0].line == 1
+
+    def test_multiple_effects_detected(self):
+        code = "os.remove('a')\ndf.to_csv('b')"
+        a = _analyze(code)
+        assert len(a.side_effects) >= 2
+
+
+# ---------------------------------------------------------------------------
+# called_names
+# ---------------------------------------------------------------------------
+
+class TestCalledNames:
+    """Bare-name function-call targets for stateful-call detection."""
+
+    def test_simple_call(self):
+        a = _analyze("foo()")
+        assert 'foo' in a.called_names
+
+    def test_multiple_calls(self):
+        a = _analyze("foo()\nbar(x)")
+        assert {'foo', 'bar'} <= a.called_names
+
+    def test_method_call_not_included(self):
+        """obj.method() — func is an Attribute, not a Name."""
+        a = _analyze("obj.method()")
+        assert 'method' not in a.called_names
+        assert 'obj' not in a.called_names
+
+    def test_nested_call(self):
+        a = _analyze("result = foo(bar(x))")
+        assert 'foo' in a.called_names
+        assert 'bar' in a.called_names
+
+
+# ---------------------------------------------------------------------------
+# skip_reasons
+# ---------------------------------------------------------------------------
+
+class TestSkipReasons:
+    """skip_reasons(outputs) produces the right human-readable strings."""
+
+    def test_pure_code_no_reasons(self):
+        a = _analyze("x = 1 + 2")
+        assert a.skip_reasons(set()) == []
+
+    def test_mutation_not_in_outputs_generates_reason(self):
+        a = _analyze("lst.append(1)")
+        reasons = a.skip_reasons(set())
+        assert any('lst' in r for r in reasons)
+
+    def test_mutation_on_output_does_not_generate_reason(self):
+        """If 'lst' is an output (e.g. lst = []; lst.append(1)), no skip reason."""
+        a = _analyze("lst.append(1)")
+        reasons = a.skip_reasons({'lst'})
+        assert reasons == []
+
+    def test_side_effect_generates_reason(self):
+        a = _analyze("df.to_csv('out.csv')")
+        reasons = a.skip_reasons(set())
+        assert any('Side effect' in r for r in reasons)
+        assert any('file_write' in r for r in reasons)
+
+    def test_both_mutation_and_side_effect(self):
+        code = "lst.append(1)\ndf.to_csv('out.csv')"
+        a = _analyze(code)
+        reasons = a.skip_reasons(set())
+        assert any('lst' in r for r in reasons)
+        assert any('Side effect' in r for r in reasons)
+
+
+# ---------------------------------------------------------------------------
+# Immutability of StatementAnalysis
+# ---------------------------------------------------------------------------
+
+class TestImmutability:
+    """StatementAnalysis is frozen — fields are immutable."""
+
+    def test_frozen(self):
+        a = _analyze("x = 1")
+        with pytest.raises(Exception):
+            a.all_mutated_vars = frozenset({'x'})  # type: ignore[misc]
+
+    def test_fields_are_frozenset_and_tuple(self):
+        a = _analyze("lst.append(1)\ndf.to_csv('out.csv')")
+        assert isinstance(a.top_level_mutated_vars, frozenset)
+        assert isinstance(a.all_mutated_vars, frozenset)
+        assert isinstance(a.side_effects, tuple)
+        assert isinstance(a.called_names, frozenset)

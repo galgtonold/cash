@@ -10,7 +10,7 @@ by lineage alone.
 import pytest
 from unittest.mock import MagicMock
 from cash.notebook.magics import CashMagics
-from cash.notebook.mutation_detector import MutationDetector
+from cash.notebook.cacheability import analyze_statement
 from cash.core import Cash
 from cash.backends.backend import InMemoryBackend
 from traitlets.config.configurable import Configurable
@@ -41,7 +41,11 @@ def processor_fixture():
     shell.user_ns.clear()
 
 
-# --- Tests for MutationDetector.get_top_level_mutated_variables ---
+# --- Tests for analyze_statement(...).top_level_mutated_vars ---
+
+def _top_level(code: str) -> set:
+    return set(analyze_statement(code, None).top_level_mutated_vars)
+
 
 class TestTopLevelMutationDetection:
     """Tests for the top-level-only mutation detection."""
@@ -55,7 +59,7 @@ class Foo:
     def add(self, x):
         self.val += x
 """
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == set(), f"Expected no top-level mutations, got {result}"
 
     def test_function_body_mutations_excluded(self):
@@ -67,25 +71,25 @@ def process(items):
     result.extend(items)
     return result
 """
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == set(), f"Expected no top-level mutations, got {result}"
 
     def test_top_level_append_detected(self):
         """Top-level list.append() should be detected."""
         code = "data.append(42)"
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == {'data'}
 
     def test_top_level_augmented_assign_detected(self):
         """Top-level augmented assignment (x += 1) should be detected."""
         code = "counter += 1"
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == {'counter'}
 
     def test_top_level_subscript_assign_detected(self):
         """Top-level dict subscript assignment should be detected."""
         code = "config['key'] = 'value'"
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == {'config'}
 
     def test_mixed_top_level_and_class(self):
@@ -100,7 +104,7 @@ class MyClass:
 obj = MyClass()
 results.append(obj)
 """
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == {'results'}
 
     def test_async_function_body_excluded(self):
@@ -110,21 +114,21 @@ async def update(state):
     state['status'] = 'done'
     state.update({'ts': 123})
 """
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == set()
 
     def test_empty_code(self):
         """Empty code returns empty set."""
-        assert MutationDetector.get_top_level_mutated_variables("") == set()
+        assert _top_level("") == set()
 
     def test_syntax_error_returns_empty(self):
         """Syntax errors return empty set gracefully."""
-        assert MutationDetector.get_top_level_mutated_variables("def (") == set()
+        assert _top_level("def (") == set()
 
     def test_pure_assignment_no_mutation(self):
         """Simple assignments are not mutations."""
         code = "x = 10\ny = x + 5"
-        result = MutationDetector.get_top_level_mutated_variables(code)
+        result = _top_level(code)
         assert result == set()
 
 

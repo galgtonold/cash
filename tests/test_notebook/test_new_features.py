@@ -2,181 +2,20 @@
 Tests for new features:
 1. Size-aware caching threshold (P0)
 2. Narrow file dependency propagation (P1)
-3. Side-effect detection
-4. Automatic purity analysis for user-defined functions
+3. Automatic purity analysis for user-defined functions
+
+Side-effect detection tests live in test_cacheability.py.
 """
 
 import os
 from unittest.mock import MagicMock
 
-from cash.notebook.side_effects import SideEffectDetector
 from cash.notebook.purity import (
     analyze_function_purity,
     clear_purity_cache,
     pure,
     stateful,
 )
-
-
-# ===========================================================================
-# Side-Effect Detection Tests
-# ===========================================================================
-
-class TestSideEffectDetector:
-    """Tests for SideEffectDetector that identifies I/O operations."""
-
-    def test_no_side_effects_simple(self):
-        """Simple computation has no side effects."""
-        code = "x = 1 + 2"
-        assert SideEffectDetector.has_side_effects(code) is False
-
-    def test_no_side_effects_function_call(self):
-        """Regular function calls are not side effects."""
-        code = "result = sorted([3, 1, 2])"
-        assert SideEffectDetector.has_side_effects(code) is False
-
-    def test_no_side_effects_assignment(self):
-        """Variable assignment is not a side effect."""
-        code = "df = df.sort_values('col')"
-        assert SideEffectDetector.has_side_effects(code) is False
-
-    def test_open_write_mode(self):
-        """open() with write mode is a side effect."""
-        code = "f = open('output.txt', 'w')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_open_read_mode_no_side_effect(self):
-        """open() with read mode is NOT a side effect."""
-        code = "f = open('data.txt', 'r')"
-        assert SideEffectDetector.has_side_effects(code) is False
-
-    def test_open_default_mode_no_side_effect(self):
-        """open() without mode argument defaults to read (not a side effect)."""
-        code = "f = open('data.txt')"
-        assert SideEffectDetector.has_side_effects(code) is False
-
-    def test_open_append_mode(self):
-        """open() with append mode is a side effect."""
-        code = "f = open('log.txt', 'a')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_open_keyword_mode(self):
-        """open() with mode= keyword argument."""
-        code = "f = open('out.txt', mode='w')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_os_system(self):
-        """os.system() is a system side effect."""
-        code = "os.system('ls')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'system'
-
-    def test_subprocess_run(self):
-        """subprocess.run() is a system side effect."""
-        code = "subprocess.run(['echo', 'hello'])"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'system'
-
-    def test_to_csv(self):
-        """DataFrame.to_csv() is a file write side effect."""
-        code = "df.to_csv('output.csv')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_to_parquet(self):
-        """DataFrame.to_parquet() is a file write side effect."""
-        code = "df.to_parquet('data.parquet')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_savefig(self):
-        """matplotlib savefig() is a file write side effect."""
-        code = "plt.savefig('chart.png')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_json_dump(self):
-        """json.dump() is a file write side effect."""
-        code = "json.dump(data, f)"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_os_makedirs(self):
-        """os.makedirs() is a file write side effect."""
-        code = "os.makedirs('output_dir', exist_ok=True)"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_requests_post(self):
-        """requests.post() is a network side effect."""
-        code = "requests.post('https://api.example.com', data=payload)"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'network'
-
-    def test_multiple_side_effects(self):
-        """Multiple side effects in one code block."""
-        code = """df.to_csv('output.csv')
-os.makedirs('backups', exist_ok=True)"""
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 2
-
-    def test_syntax_error_returns_empty(self):
-        """Syntax errors return empty list."""
-        code = "def invalid syntax"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert effects == []
-
-    def test_get_side_effect_reasons(self):
-        """get_side_effect_reasons returns human-readable reasons."""
-        code = "df.to_csv('out.csv')"
-        reasons = SideEffectDetector.get_side_effect_reasons(code)
-        assert len(reasons) == 1
-        assert 'to_csv' in reasons[0]
-        assert 'file_write' in reasons[0]
-
-    def test_write_method(self):
-        """file.write() is detected as a side effect."""
-        code = "f.write('hello')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_numpy_save(self):
-        """np.save() / arr.save() is a side effect."""
-        code = "np.save('data.npy', arr)"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) >= 1
-
-    def test_shutil_rmtree(self):
-        """shutil.rmtree() is a file write (destructive) side effect."""
-        code = "shutil.rmtree('old_dir')"
-        effects = SideEffectDetector.detect_side_effects(code)
-        assert len(effects) == 1
-        assert effects[0].kind == 'file_write'
-
-    def test_read_csv_not_side_effect(self):
-        """pd.read_csv() is NOT a side effect (read-only)."""
-        code = "df = pd.read_csv('data.csv')"
-        assert SideEffectDetector.has_side_effects(code) is False
-
-    def test_display_not_side_effect(self):
-        """display() is NOT treated as side effect (output is captured)."""
-        code = "display(df)"
-        assert SideEffectDetector.has_side_effects(code) is False
 
 
 # ===========================================================================

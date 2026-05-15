@@ -267,14 +267,13 @@ from ..analytics import AnalyticsManager
 from .analysis import CodeAnalyzer
 from .annotations import CacheAnnotation
 from .function_tracker import FunctionTracker
-from .mutation_detector import MutationDetector
+from .cacheability import StatementAnalysis, analyze_statement
 from .purity import analyze_function_purity
 from .randomness import (
     RandomnessDetector,
     capture_rng_state,
     restore_rng_state,
 )
-from .side_effects import SideEffectDetector
 
 
 class StatementProcessor:
@@ -603,8 +602,8 @@ class StatementProcessor:
         )
 
         # Detect in-place mutations (detection-only; do not modify lineage).
-        mutated_vars = MutationDetector.get_mutated_variables(code, tree=tree)
-        pure_mutations = mutated_vars - outputs
+        _post_analysis = analyze_statement(code, tree)
+        pure_mutations = _post_analysis.all_mutated_vars - outputs
         if pure_mutations:
             self.vars_with_mutation_lineage.update(pure_mutations)
             if self.debug:
@@ -650,41 +649,14 @@ class StatementProcessor:
             return False
         return False
 
-    def _detect_stateful_call(self, code: str, tree: ast.Module | None) -> bool:
-        """Return True if the code calls any @stateful function."""
+    def _detect_stateful_call(self, analysis: StatementAnalysis) -> bool:
+        """Return True if any bare-name call target resolves to a @stateful callable."""
         try:
-            tree_check = tree if tree is not None else ast.parse(code)
-            called_names: set[str] = set()
-            for node in ast.walk(tree_check):
-                if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
-                    called_names.add(node.func.id)
-            for name in called_names:
+            for name in analysis.called_names:
                 if self._check_callable_stateful(name):
                     return True
         except (TypeError, AttributeError):
             logger.debug("%s Error checking function purity for statement", _LOG_PURITY)
-        return False
-
-    def _check_mutation_skip(self, code: str, outputs: set[str], metrics: ProcessResult, tree: ast.Module | None) -> bool:
-        """Return True (and update metrics) if in-place mutations require skipping cache."""
-        mutated_vars_early = MutationDetector.get_top_level_mutated_variables(code, tree=tree)
-        pure_mutations_early = mutated_vars_early - outputs
-        if pure_mutations_early:
-            mutation_reason = f"In-place mutation on: {', '.join(sorted(pure_mutations_early))}"
-            metrics['uncacheable_reasons'].append(mutation_reason)
-            if self.debug:
-                logger.debug("%s Skipping cache for mutating statement: %s", _LOG_MUTATION, mutation_reason)
-            return True
-        return False
-
-    def _check_side_effect_skip(self, code: str, metrics: ProcessResult, tree: ast.Module | None) -> bool:
-        """Return True (and update metrics) if side-effects require skipping cache."""
-        side_effect_reasons = SideEffectDetector.get_side_effect_reasons(code, tree=tree)
-        if side_effect_reasons:
-            metrics['uncacheable_reasons'].extend(side_effect_reasons)
-            if self.debug:
-                logger.debug("%s Skipping cache: %s", _LOG_SIDE_EFFECT, side_effect_reasons)
-            return True
         return False
 
     def _handle_cache_hit(
@@ -840,21 +812,23 @@ class StatementProcessor:
 
         Returns updated skip_cache flag (True if caching should be skipped).
         """
+        analysis = analyze_statement(code, tree)
+
         # PURITY CHECK: @stateful functions must never be skipped.
-        if not skip_cache and self._detect_stateful_call(code, tree):
+        if not skip_cache and self._detect_stateful_call(analysis):
             metrics['uncacheable_reasons'].append("Calls @stateful function")
             skip_cache = True
             if self.debug:
                 logger.debug("%s Skipping cache for statement calling @stateful function", _LOG_PURITY)
 
-        # MUTATION DETECTION: statements with in-place mutations must not be
-        # skipped — re-execution is needed to update the mutated variable.
-        if not skip_cache and self._check_mutation_skip(code, outputs, metrics, tree):
-            skip_cache = True
-
-        # Side-effect detection: I/O operations make caching incorrect.
-        if not skip_cache and self._check_side_effect_skip(code, metrics, tree):
-            skip_cache = True
+        # MUTATION + SIDE-EFFECT: delegate skip-reason computation to the analysis.
+        if not skip_cache:
+            reasons = analysis.skip_reasons(outputs)
+            if reasons:
+                metrics['uncacheable_reasons'].extend(reasons)
+                skip_cache = True
+                if self.debug:
+                    logger.debug("%s Skipping cache: %s", _LOG_MUTATION, reasons)
 
         # Input lineage check: skip cache if any input lacks lineage.
         if not skip_cache and self._check_input_lineage_skip(inputs):
