@@ -1110,7 +1110,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 self.shell.user_ns,
             )
             if changed_modules:
-                self._invalidate_module_lineages(changed_modules, per_module_changed_symbols)
+                self._module_invalidator.invalidate(
+                    changed_modules,
+                    self._statement_processor,
+                    per_module_changed_symbols,
+                )
 
                 mod_names = ', '.join(sorted(changed_modules.keys()))
                 notification = {
@@ -2109,21 +2113,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         }
 
         self._cash_finalize_and_badge(final_metrics, buffered_result_outputs, badge_display_id, total_cell_time)
-
-    def _invalidate_module_lineages(
-        self,
-        changed_modules: dict[str, str],
-        per_module_changed_symbols: dict[str, set[str] | None] | None = None,
-    ) -> None:
-        """Invalidate lineage for changed modules and dependent variables.
-
-        Delegates to :class:`~cash.notebook.module_invalidator.ModuleInvalidator`.
-        """
-        self._module_invalidator.invalidate(
-            changed_modules,
-            self._statement_processor,
-            per_module_changed_symbols,
-        )
 
     def _show_clean_error(
         self,
