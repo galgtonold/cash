@@ -3766,7 +3766,7 @@ class UpstreamChecker:
 
         Excludes loop target variables and built-ins.
         """
-        from .mutation_detector import MutationDetector
+        from .cacheability import analyze_statement
 
         mutated_vars: set[str] = set()
 
@@ -3777,14 +3777,14 @@ class UpstreamChecker:
                     self._recurse_control_structure_mutations(body_node, loop_targets)
                 )
             else:
-                # Use MutationDetector for precise in-place mutation detection.
+                # Use analyze_statement for precise in-place mutation detection.
                 # This catches: .append(), .update(), [key]=val, +=, obj.attr=val
                 try:
                     stmt_code = ast.unparse(body_node)
-                    detected = MutationDetector.get_mutated_variables(stmt_code)
+                    detected = analyze_statement(stmt_code, None).all_mutated_vars
                     mutated_vars.update(detected)
                 except (SyntaxError, ValueError, TypeError):
-                    logger.debug("MutationDetector failed for AST node in loop body")
+                    logger.debug("analyze_statement failed for AST node in loop body")
 
         # Filter out built-ins and loop targets
         return mutated_vars - _BUILTIN_NAMES - loop_targets

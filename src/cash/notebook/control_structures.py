@@ -1317,7 +1317,7 @@ class ControlStructureProcessor:
         (subscript assignment, method calls like ``.append()``, augmented
         assigns, attribute assignments).
         """
-        from .mutation_detector import MutationDetector
+        from .cacheability import analyze_statement
 
         mutated_vars: set = set()
         for body_node in body_nodes:
@@ -1327,7 +1327,7 @@ class ControlStructureProcessor:
             else:
                 stmt_code = ast.unparse(body_node)
                 try:
-                    detected = MutationDetector.get_mutated_variables(stmt_code)
+                    detected = analyze_statement(stmt_code, None).all_mutated_vars
                     mutated_vars.update(detected)
                 except (SyntaxError, ValueError, AttributeError, TypeError) as exc:
                     logger.debug("[CONTROL] Failed to detect mutations in: %s: %s", stmt_code[:60], exc)

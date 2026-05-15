@@ -20,7 +20,7 @@ import json
 import pytest
 from unittest.mock import patch
 
-from cash.notebook.mutation_detector import MutationDetector
+from cash.notebook.cacheability import analyze_statement
 from cash.notebook.analysis import CodeAnalyzer
 
 
@@ -481,51 +481,51 @@ for x in ["A", "B"]:
 # ============================================================================
 
 class TestMutationDetectorAccuracy:
-    """Test that MutationDetector accurately identifies loop mutations."""
+    """Test that analyze_statement accurately identifies loop mutations."""
 
     def test_subscript_assignment_detected(self):
         """d[k] = v should be detected as mutating d."""
-        mutated = MutationDetector.get_mutated_variables("results[x] = x * 2")
+        mutated = analyze_statement("results[x] = x * 2", None).all_mutated_vars
         assert 'results' in mutated
 
     def test_method_call_append_detected(self):
         """lst.append(x) should be detected as mutating lst."""
-        mutated = MutationDetector.get_mutated_variables("results.append(x)")
+        mutated = analyze_statement("results.append(x)", None).all_mutated_vars
         assert 'results' in mutated
 
     def test_method_call_update_detected(self):
         """d.update({...}) should be detected as mutating d."""
-        mutated = MutationDetector.get_mutated_variables("d.update({x: y})")
+        mutated = analyze_statement("d.update({x: y})", None).all_mutated_vars
         assert 'd' in mutated
 
     def test_augmented_assign_detected(self):
         """total += x should be detected as mutating total."""
-        mutated = MutationDetector.get_mutated_variables("total += x")
+        mutated = analyze_statement("total += x", None).all_mutated_vars
         assert 'total' in mutated
 
     def test_attribute_assign_detected(self):
         """obj.attr = val should be detected as mutating obj."""
-        mutated = MutationDetector.get_mutated_variables("obj.attr = val")
+        mutated = analyze_statement("obj.attr = val", None).all_mutated_vars
         assert 'obj' in mutated
 
     def test_read_only_not_detected(self):
         """Reading a variable should NOT be detected as mutation."""
-        mutated = MutationDetector.get_mutated_variables("y = df[df['col'] > 0]")
+        mutated = analyze_statement("y = df[df['col'] > 0]", None).all_mutated_vars
         assert 'df' not in mutated
 
     def test_simple_assignment_not_detected(self):
         """Simple assignment is NOT a mutation (it's a rebinding)."""
-        mutated = MutationDetector.get_mutated_variables("x = 42")
+        mutated = analyze_statement("x = 42", None).all_mutated_vars
         assert 'x' not in mutated
 
     def test_function_call_not_mutation(self):
         """Calling a function on a variable isn't necessarily a mutation."""
-        mutated = MutationDetector.get_mutated_variables("y = len(results)")
+        mutated = analyze_statement("y = len(results)", None).all_mutated_vars
         assert 'results' not in mutated
 
     def test_del_subscript_detected(self):
         """del d[k] should be detected as mutating d."""
-        mutated = MutationDetector.get_mutated_variables("del d[k]")
+        mutated = analyze_statement("del d[k]", None).all_mutated_vars
         assert 'd' in mutated
 
     def test_loop_body_mutation_detection(self):
@@ -538,7 +538,7 @@ class TestMutationDetectorAccuracy:
 stats = {'mean': ticker_data['Price'].mean()}
 ticker_stats[ticker] = stats"""
 
-        mutated = MutationDetector.get_mutated_variables(code)
+        mutated = analyze_statement(code, None).all_mutated_vars
         assert 'ticker_stats' in mutated
         assert 'df' not in mutated  # df is only read, not mutated
         assert 'ticker_data' not in mutated  # new assignment, not mutation
