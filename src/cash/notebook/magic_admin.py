@@ -602,21 +602,21 @@ class CashAdminMagicsMixin:
         parts = line.strip().split()
 
         if not parts or parts[0] == '--all':
-            tracked = sorted(self._provenance.tracked_variables)
+            tracked = sorted(self._session.provenance.tracked_variables)
             if not tracked:
                 print("No provenance data recorded yet.")
             else:
                 print(f"Tracked variables ({len(tracked)}):")
                 for var in tracked:
-                    latest = self._provenance.get_latest(var)
+                    latest = self._session.provenance.get_latest(var)
                     status_icon = {"computed": "[C]", "restored": "[R]", "skipped": "[S]"}.get(
                         latest.status if latest else "", "[?]")
-                    history_count = len(self._provenance.get_history(var))
+                    history_count = len(self._session.provenance.get_history(var))
                     print(f"  {status_icon} {var} ({history_count} records)")
             return
 
         if parts[0] == '--clear':
-            self._provenance.clear()
+            self._session.provenance.clear()
             print("Provenance data cleared.")
             return
 
@@ -626,9 +626,9 @@ class CashAdminMagicsMixin:
         as_json = '--json' in parts
 
         if as_json:
-            print(self._provenance.to_json(var_name))
+            print(self._session.provenance.to_json(var_name))
         else:
-            print(safe_text(self._provenance.format_provenance(
+            print(safe_text(self._session.provenance.format_provenance(
                 var_name,
                 show_graph=show_graph,
                 show_timeline=show_time,
@@ -653,7 +653,7 @@ class CashAdminMagicsMixin:
         """
         parts = line.strip().split()
         if not parts:
-            status = "enabled" if self._audit.enabled else "disabled"
+            status = "enabled" if self._session.audit.enabled else "disabled"
             print(f"Audit logging: {status}")
             return
 
@@ -662,14 +662,14 @@ class CashAdminMagicsMixin:
         if cmd == 'on':
             self._audit_cmd_on(parts)
         elif cmd == 'off':
-            self._audit.disable()
+            self._session.audit.disable()
             print("Audit logging disabled.")
         elif cmd == 'show':
             self._audit_cmd_show(parts)
         elif cmd == 'summary':
             self._audit_cmd_summary()
         elif cmd == 'clear':
-            self._audit.clear()
+            self._session.audit.clear()
             print("Audit entries cleared.")
         else:
             print(f"Unknown audit command: {cmd}")
@@ -682,7 +682,7 @@ class CashAdminMagicsMixin:
             idx = parts.index('--file')
             if idx + 1 < len(parts):
                 file_path = parts[idx + 1]
-        self._audit.enable(file_path)
+        self._session.audit.enable(file_path)
         msg = "Audit logging enabled"
         if file_path:
             msg += f" (logging to {file_path})"
@@ -696,12 +696,12 @@ class CashAdminMagicsMixin:
             if not p.startswith('--'):
                 operation = p
                 break
-        entries = self._audit.get_entries(operation=operation, limit=50)
-        print(self._audit.format_entries(entries, as_json=as_json))
+        entries = self._session.audit.get_entries(operation=operation, limit=50)
+        print(self._session.audit.format_entries(entries, as_json=as_json))
 
     def _audit_cmd_summary(self: CashMagics) -> None:
         """Handle '%cash_audit summary'."""
-        summary = self._audit.get_summary()
+        summary = self._session.audit.get_summary()
         if summary['total'] == 0:
             print("No audit entries recorded.")
             return

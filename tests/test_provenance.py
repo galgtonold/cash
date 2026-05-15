@@ -238,7 +238,7 @@ class TestCashProvenanceMagic:
 
     def test_list_with_data(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._provenance.record("x", "x = 1", [], status="computed")
+        magics._session.provenance.record("x", "x = 1", [], status="computed")
         magics.cash_provenance("--all")
         output = capsys.readouterr().out
         assert "x" in output
@@ -246,7 +246,7 @@ class TestCashProvenanceMagic:
 
     def test_show_variable(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._provenance.record("result", "result = calc()", ["data"],
+        magics._session.provenance.record("result", "result = calc()", ["data"],
                                   status="computed", duration_ms=50.0)
         magics.cash_provenance("result")
         output = capsys.readouterr().out
@@ -255,15 +255,15 @@ class TestCashProvenanceMagic:
 
     def test_clear(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._provenance.record("x", "x = 1", [])
+        magics._session.provenance.record("x", "x = 1", [])
         magics.cash_provenance("--clear")
         output = capsys.readouterr().out
         assert "cleared" in output
-        assert len(magics._provenance.tracked_variables) == 0
+        assert len(magics._session.provenance.tracked_variables) == 0
 
     def test_json_output(self, magics_fixture, capsys):
         magics, _, _ = magics_fixture
-        magics._provenance.record("x", "x = 1", [])
+        magics._session.provenance.record("x", "x = 1", [])
         magics.cash_provenance("x --json")
         output = capsys.readouterr().out
         data = json.loads(output)
