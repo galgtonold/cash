@@ -1602,9 +1602,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Update session-wide statistics
         self._update_session_stats(all_metrics)
 
-        self._record_provenance(all_metrics)
-
-        self._record_audit_entries(all_metrics)
+        self._record_observability(all_metrics)
 
         if self._debug:
             print(f"[TIMING_PROXY] PROXY TOTAL: {hook_total*1000:.1f}ms")
@@ -1677,43 +1675,45 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             elif status == CacheStatus.SKIPPED:
                 stats['statements_skipped'] += 1
 
-    def _record_provenance(self, all_metrics: list[ProcessResult]) -> None:
-        """Record provenance entries for each statement in *all_metrics*."""
+    def _record_observability(self, all_metrics: list[ProcessResult]) -> None:
+        """Record provenance + audit entries for each statement in *all_metrics*.
+
+        Walks the metrics list once and fans out to both trackers, sharing
+        the per-statement field extraction.  Provenance records one entry
+        per output variable; audit records one entry per output variable
+        (or a single placeholder keyed by code-prefix when a statement has
+        no string-named outputs).
+        """
         for m in all_metrics:
-            outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('outputs', [])
             code = m.get('code', '')
             status = m.get('status', 'computed')
-            duration = m.get('execution_time', 0.0) * 1000  # convert to ms
+            duration_ms = m.get('execution_time', 0.0) * 1000
+            outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('outputs', [])
             inputs_list = list(m.get('inputs', []))
-            # Filter to only string variable names (outputs may contain rich display dicts)
+            # Outputs may contain rich-display dicts; provenance/audit only
+            # care about string variable names.
             var_names = [o for o in (outputs or []) if isinstance(o, str)]
+
+            provenance_status = str(status).lower() if status else 'computed'
             for out_var in var_names:
                 self._session.provenance.record(
                     variable=out_var,
                     code=code,
                     inputs=inputs_list,
-                    status=str(status).lower() if status else 'computed',
-                    duration_ms=duration,
+                    status=provenance_status,
+                    duration_ms=duration_ms,
                     lineage_hash=self._tracking_state.variable_lineage.get(out_var, ''),
                     file_deps=list(self._tracking_state.executed_file_deps.get(out_var, [])),
                 )
 
-    def _record_audit_entries(self, all_metrics: list[ProcessResult]) -> None:
-        """Record audit log entries for each statement in *all_metrics*."""
-        for m in all_metrics:
-            status = m.get('status', 'unknown')
-            code = m.get('code', '')
-            duration = m.get('execution_time', 0.0) * 1000
-            outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('outputs', [])
-            var_names_audit = [o for o in (outputs or []) if isinstance(o, str)]
-            op = _OP_MAP.get(status, 'cache_operation')
-            for out_var in (var_names_audit or [code[:30]]):
+            audit_op = _OP_MAP.get(status, 'cache_operation')
+            for out_var in (var_names or [code[:30]]):
                 self._session.audit.log(
-                    operation=op,
+                    operation=audit_op,
                     variable=out_var,
                     code=code,
                     status='success',
-                    duration_ms=duration,
+                    duration_ms=duration_ms,
                 )
 
     def _print_text_badge(self, metrics_list: list[ProcessResult], cell_total_time: float | None = None) -> None:
