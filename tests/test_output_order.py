@@ -47,12 +47,12 @@ class TestOutputOrdering(unittest.TestCase):
         }
         # Mock provenance tracker and its dependencies
         from cash.notebook.provenance import ProvenanceTracker
-        self.magics._provenance = ProvenanceTracker()
+        self.magics._session.provenance = ProvenanceTracker()
         self.magics._tracking_state.variable_lineage.clear()
         self.magics._tracking_state.executed_file_deps.clear()
         # Mock audit logger
         from cash.notebook.audit import AuditLogger
-        self.magics._audit = AuditLogger()
+        self.magics._session.audit = AuditLogger()
 
     @patch('cash.notebook.magics.publish_display_data')
     @patch('builtins.print')
