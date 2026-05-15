@@ -52,7 +52,7 @@ redis = ["redis>=4.0,<6"]
 s3 = ["boto3>=1.26,<2"]
 sqlite = []  # uses stdlib sqlite3
 cloudpickle = ["cloudpickle>=2.0,<4"]
-polars = ["polars"]
+polars = ["polars>=1.0,<3"]
 notebook = ["ipython>=8.0,<9"]
 viz = [
     "matplotlib>=3.5,<4",
