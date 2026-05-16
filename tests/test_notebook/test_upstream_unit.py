@@ -8,6 +8,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.notebook_simulator import NotebookSimulator
 
 
 class TestUpstreamCheckerImport:
@@ -20,43 +21,44 @@ class TestUpstreamCheckerImport:
         assert hasattr(UpstreamChecker, "check_and_reexecute")
 
     def test_has_update_virtual_lineage(self):
-        assert hasattr(UpstreamChecker, "_update_virtual_lineage")
+        # Lives on the extracted simulator now.
+        assert hasattr(NotebookSimulator, "_update_virtual_lineage")
 
     def test_has_extracted_helpers(self):
-        """Verify the extracted helper methods exist."""
+        """Verify the extracted helper methods exist on the simulator."""
         expected_helpers = [
             "_validate_file_freshness",
             "_resolve_input_lineage",
             "_compute_module_source_hash",
         ]
         for name in expected_helpers:
-            assert hasattr(UpstreamChecker, name), (
-                f"UpstreamChecker missing helper method {name}"
+            assert hasattr(NotebookSimulator, name), (
+                f"NotebookSimulator missing helper method {name}"
             )
 
 
 class TestValidateFileFreshness:
-    """Test the static _validate_file_freshness helper."""
+    """Test the static _validate_file_freshness helper on the simulator."""
 
     def test_empty_files_is_fresh(self):
-        assert UpstreamChecker._validate_file_freshness({}) is True
+        assert NotebookSimulator._validate_file_freshness({}) is True
 
     def test_missing_file_is_stale(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        assert UpstreamChecker._validate_file_freshness({missing: 0.0}) is False
+        assert NotebookSimulator._validate_file_freshness({missing: 0.0}) is False
 
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         import os
         mtime = os.path.getmtime(str(test_file))
-        assert UpstreamChecker._validate_file_freshness({str(test_file): mtime}) is True
+        assert NotebookSimulator._validate_file_freshness({str(test_file): mtime}) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         # Use a very old mtime
-        assert UpstreamChecker._validate_file_freshness({str(test_file): 0.0}) is False
+        assert NotebookSimulator._validate_file_freshness({str(test_file): 0.0}) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
@@ -69,7 +71,7 @@ class TestValidateFileFreshness:
             str(f1): os.path.getmtime(str(f1)),
             str(f2): os.path.getmtime(str(f2)),
         }
-        assert UpstreamChecker._validate_file_freshness(files) is True
+        assert NotebookSimulator._validate_file_freshness(files) is True
 
     def test_multiple_files_one_stale(self, tmp_path):
         """If any file is stale, the result should be False."""
@@ -82,7 +84,7 @@ class TestValidateFileFreshness:
             str(f1): os.path.getmtime(str(f1)),
             str(f2): 0.0,  # Stale
         }
-        assert UpstreamChecker._validate_file_freshness(files) is False
+        assert NotebookSimulator._validate_file_freshness(files) is False
 
 
 class TestUpstreamCheckerSetTrackingState:
@@ -97,8 +99,8 @@ class TestUpstreamCheckerSetTrackingState:
         assert not hasattr(UpstreamChecker, "set_tracking_dicts")
 
     def test_iter_body_nodes_exists(self):
-        """Static helper for iterating control structure bodies."""
-        assert hasattr(UpstreamChecker, "_iter_body_nodes")
+        """Static helper for iterating control structure bodies (on simulator)."""
+        assert hasattr(NotebookSimulator, "_iter_body_nodes")
 
 
 class TestUpstreamASTCache:

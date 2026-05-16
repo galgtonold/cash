@@ -202,3 +202,26 @@ All persistent lineage state lives behind one seam: `LineageStore` (in `cash.not
 - `virtual_lineage` is *not* owned by the store — it is transient per-simulation state, passed by parameter into `resolve(virtual=...)`.
 - `executed_input_lineages`, `executed_cell_codes`, `vars_with_mutation_lineage` remain separate — they carry different invariants (skip-check state, not current lineage) and may be folded in later if a natural seam emerges.
 - The decorator path (`src/cash/core.py`) sets `_cash_lineage_hash` on cached function returns directly; that subsystem is out of scope for this ADR.
+
+---
+
+## ADR-009: Extract `NotebookSimulator` from `UpstreamChecker`
+
+**Status:** Accepted
+**Date:** 2026-05-15
+**Context:** `UpstreamChecker` had grown to 96 methods / ~3800 lines, conflating two distinct concerns: **orchestration** (when to run what, callbacks into `process_statement`, badge metrics, two-phase coordination) and **simulation** (AST passes, virtual lineage tracking, cache probing, broken-var classification, re-execution-plan construction). Simulator behavior could only be tested by constructing the full orchestrator, which required a `Cash` instance, a backend, and a real-or-mocked IPython shell. The test suite for upstream behavior was scattered across 13 files (6 unit + 7 integration) because there was no clean test surface to attach to.
+
+### Decision
+Extract the simulator's transitive method closure (76 methods reachable from `_simulate_and_find_changes`) into a new `NotebookSimulator` class in `cash.notebook.notebook_simulator`. `UpstreamChecker` owns one via composition (`self.simulator`) and delegates to it. Shared mutable state (`TrackingState` dicts) is passed by reference so both views observe each other's writes. Simulator-owned caches (`_simulation_cache`, `_ast_cache`, `_simulation_cell_hashes`, `_cell_id_to_last_index`) move with the simulator.
+
+### Rationale
+- **Locality.** The simulator's helpers (~76 methods) live next to each other and the data they touch. Future changes to simulation logic don't risk perturbing the orchestrator and vice versa.
+- **Test surface.** `NotebookSimulator` can be constructed with a `TrackingState()` and a `SimpleNamespace(user_ns={})` — no `Cash`, no backend, no IPython kernel. See `tests/test_notebook/test_notebook_simulator.py` for the new surface.
+- **AI navigability.** Searching for "simulation" now finds one file with one class, not 76 methods scattered across a 3800-line class definition.
+- **The 2-phase orchestrator stays intact.** `check_and_reexecute` still has Phase 1 (`_check_lineage_based`) and Phase 2 (`_check_notebook_based`); the 4-step pipeline inside Phase 2 is unchanged. We only split the *implementation*, not the algorithm.
+
+### Consequences
+- `UpstreamChecker` is now ~25 methods and ~840 lines (down from ~3800).
+- The pre-existing duplicate `_handle_lineage_mismatch` definition (Phase 1's 7-param body was shadowed by Phase 2's 14-param body in the original class) is removed. Observable behavior preserved: the 7-arg call site in `_check_lineage_based` was always inside a `try/except (TypeError, ...)`, so it has been silently no-op'd for the entire history of the file. Filed as a latent bug for future work.
+- A transitional `__getattr__` / `__setattr__` pair on `UpstreamChecker` forwards method calls and known shared-state assignments to the simulator. This preserves the existing test API (`checker._update_virtual_lineage(...)`, `checker.executed_file_deps = {}`) without rewriting dozens of tests. Tests should migrate to `checker.simulator.<method>` over time; once they have, the shim can be removed.
+- A handful of class-level method-existence tests (`hasattr(UpstreamChecker, '_validate_file_freshness')`) were updated to point at `NotebookSimulator`. Those are *the* tests that should always look at the new home.
