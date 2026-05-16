@@ -179,3 +179,26 @@ All cache key computation goes through a single function: `compute_cache_key()` 
 - All call sites automatically pick up changes
 - Input lineage priority order is documented and enforced in one location
 - Testing is centralized in `tests/test_notebook/test_virtual_restore_modules.py`
+
+---
+
+## ADR-008: Unified Lineage State via `LineageStore`
+
+**Status:** Accepted
+**Date:** 2026-05-15
+**Context:** ADR-007 made cache-key *computation* a single seam, but the *lineage state* it reads (`variable_lineage`) was still mutated by several producers and paired with a separate `_cash_lineage_hash` attribute that had to be written in lockstep.
+
+### Decision
+All persistent lineage state lives behind one seam: `LineageStore` (in `cash.notebook.lineage_store`), held as `TrackingState.lineage`. Writes go through `record(var, hash, value=...)` (fresh computation / restore) or `reset_to(var, hash)` (downstream-advancement resync). Reads use `LineageStore.resolve(var, value=, virtual=, compute_hash_fn=)`, which is the canonical implementation of the priority ladder (virtual → store → `_cash_lineage_hash` → compute_hash → str fallback). `cache_key._resolve_input_lineage` delegates here.
+
+### Rationale
+- **Past bugs**: In ~6 sites the dict entry `variable_lineage[var] = h` and the value attribute `val._cash_lineage_hash = h` were written separately. Forgetting one (or guarding them differently, as at the old `upstream.py:3230–3235`) silently desynced the two views, producing cache misses after restore.
+- **Named resync**: `reset_to` distinguishes downstream-advancement corrections from fresh writes — a distinction that previously lived only in comments.
+- **Single read ladder**: extends ADR-007's "single source of truth" principle from cache-key computation to lineage resolution.
+
+### Consequences
+- New lineage writes call `state.lineage.record(...)` or `state.lineage.reset_to(...)`. Direct dict mutation (`state.variable_lineage[var] = h`) still works during migration because the store wraps the same dict, but is discouraged.
+- `_cash_lineage_hash` is set by the store when `value` is passed to `record`. Standalone attribute writes outside the store are a code smell.
+- `virtual_lineage` is *not* owned by the store — it is transient per-simulation state, passed by parameter into `resolve(virtual=...)`.
+- `executed_input_lineages`, `executed_cell_codes`, `vars_with_mutation_lineage` remain separate — they carry different invariants (skip-check state, not current lineage) and may be folded in later if a natural seam emerges.
+- The decorator path (`src/cash/core.py`) sets `_cash_lineage_hash` on cached function returns directly; that subsystem is out of scope for this ADR.

@@ -231,6 +231,7 @@ class UpstreamChecker:
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
+        self.lineage = state.lineage
         self.executed_file_deps = state.executed_file_deps
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
@@ -569,7 +570,7 @@ class UpstreamChecker:
                         "resetting '%s' lineage from %s to virtual %s",
                         var_name, actual_hash[:8], virtual_hash[:8],
                     )
-                self.variable_lineage[var_name] = virtual_hash
+                self.lineage.reset_to(var_name, virtual_hash)
 
     def _handle_downstream_advancement_fallback(
         self,
@@ -1594,7 +1595,7 @@ class UpstreamChecker:
                       "Lineage is ahead due to downstream advancement. "
                       "Resetting lineage from %s to virtual %s.",
                       var_name, actual_lineage[:8], final_virtual_hash[:8])
-            self.variable_lineage[var_name] = final_virtual_hash
+            self.lineage.reset_to(var_name, final_virtual_hash)
             return True
 
         return False
@@ -3227,12 +3228,24 @@ class UpstreamChecker:
                     pass
             self.shell.user_ns[var] = val
             restored_vars.add(var)
-            if var in self.variable_lineage and 'output_lineages' in metadata:
-                self.variable_lineage[var] = metadata['output_lineages'].get(var)
-            try:
-                val._cash_lineage_hash = metadata['output_lineages'].get(var)
-            except (AttributeError, TypeError):
-                logger.debug("Cannot attach _cash_lineage_hash to restored variable %s", var)
+            if 'output_lineages' in metadata:
+                new_lineage = metadata['output_lineages'].get(var)
+                if var in self.lineage and new_lineage is not None:
+                    # ``record(value=...)`` coordinates the dict entry and
+                    # ``_cash_lineage_hash`` so they cannot drift. Previously
+                    # these were two separate writes.
+                    self.lineage.record(var, new_lineage, value=val)
+                else:
+                    # Variable wasn't tracked in the lineage store before, but
+                    # we still want the attribute attached so future cache-key
+                    # computation finds it via the ladder fallback.
+                    try:
+                        val._cash_lineage_hash = new_lineage
+                    except (AttributeError, TypeError):
+                        logger.debug(
+                            "Cannot attach _cash_lineage_hash to restored variable %s",
+                            var,
+                        )
         return restored_vars
 
     def _record_restored_cell_hash(self, var: str, stored_hash: str) -> None:

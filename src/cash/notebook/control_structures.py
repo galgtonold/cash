@@ -893,9 +893,9 @@ class ControlStructureProcessor:
             exc_lineage = hashlib.sha256(
                 f"__exception__:{exc_class_name}:{class_lineage}:{caught_exception!s}:{caught_exception!r}".encode()
             ).hexdigest()
-            self.statement_processor.variable_lineage[matched_handler.name] = exc_lineage
-            with contextlib.suppress(AttributeError, TypeError):
-                caught_exception._cash_lineage_hash = exc_lineage
+            self.statement_processor.lineage.record(
+                matched_handler.name, exc_lineage, value=caught_exception,
+            )
         except (ValueError, AttributeError, TypeError) as exc:
             logger.debug("[CONTROL] Failed to compute exception lineage for handler variable: %s", exc)
 
@@ -1373,13 +1373,10 @@ class ControlStructureProcessor:
 
                 new_lineage = hashlib.sha256(':'.join(lineage_components).encode()).hexdigest()
 
-                self.statement_processor.variable_lineage[var_name] = new_lineage
+                self.statement_processor.lineage.record(var_name, new_lineage, value=val)
 
                 if hasattr(self.statement_processor, 'vars_with_mutation_lineage'):
                     self.statement_processor.vars_with_mutation_lineage.add(var_name)
-
-                with contextlib.suppress(AttributeError, TypeError):
-                    val._cash_lineage_hash = new_lineage
 
                 if self.debug:
                     logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...",

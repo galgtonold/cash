@@ -56,49 +56,18 @@ def _resolve_input_lineage(
 ) -> str | None:
     """Resolve lineage hash for a single input variable.
 
-    Priority: virtual_lineage → variable_lineage → _cash_lineage_hash → compute_hash_fn → str fallback.
+    Delegates to :class:`LineageStore.resolve` so the priority ladder
+    (virtual → store → ``_cash_lineage_hash`` → compute_hash → str) has a
+    single canonical implementation. See ``CONTEXT.md`` entry: *LineageStore*.
     """
-    if var_name in virtual_lineage:
-        lineage = virtual_lineage[var_name]
-        if debug:
-            debug_print_fn(f"[CACHE_KEY] Input '{var_name}' using virtual_lineage: {lineage[:16]}...")
-        return lineage
-
-    if var_name in variable_lineage:
-        lineage = variable_lineage[var_name]
-        if debug:
-            debug_print_fn(f"[CACHE_KEY] Input '{var_name}' using variable_lineage: {lineage[:16]}...")
-        return lineage
-
-    if val is None:
-        return None
-
-    return _compute_val_lineage(var_name, val, compute_hash_fn, debug, debug_print_fn)
-
-
-def _compute_val_lineage(
-    var_name: str,
-    val: object,
-    compute_hash_fn: Callable[[object], str] | None,
-    debug: bool,
-    debug_print_fn: Callable[..., Any],
-) -> str | None:
-    """Compute lineage hash from the value itself (no lineage dict available)."""
-    try:
-        if hasattr(val, '_cash_lineage_hash'):
-            lineage = val._cash_lineage_hash
-            if debug:
-                debug_print_fn(f"[CACHE_KEY] Input '{var_name}' using _cash_lineage_hash: {lineage[:16]}...")
-            return lineage
-        if compute_hash_fn is not None:
-            lineage = compute_hash_fn(val)
-            if debug:
-                debug_print_fn(f"[CACHE_KEY] Input '{var_name}' using compute_hash: {lineage[:16]}...")
-            return lineage
-        return hashlib.sha256(str(val).encode('utf-8')).hexdigest()
-    except (AttributeError, TypeError, RecursionError):
-        logger.debug("[CACHE_KEY] Failed to compute lineage for input '%s'", var_name)
-        return None
+    from cash.notebook.lineage_store import LineageStore
+    store = LineageStore(backing=variable_lineage)
+    result = store.resolve(
+        var_name, value=val, virtual=virtual_lineage, compute_hash_fn=compute_hash_fn,
+    )
+    if debug and result is not None:
+        debug_print_fn(f"[CACHE_KEY] Input '{var_name}' resolved to: {result[:16]}...")
+    return result
 
 class CacheKeyResult(NamedTuple):
     """Result of :func:`compute_cache_key`."""

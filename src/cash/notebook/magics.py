@@ -922,9 +922,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         output_lineages = metadata.get('output_lineages', {})
         if var_name in output_lineages:
-            self._tracking_state.variable_lineage[var_name] = output_lineages[var_name]
-            with contextlib.suppress(AttributeError, TypeError, KeyError):
-                self.shell.user_ns[var_name]._cash_lineage_hash = output_lineages[var_name]
+            self._tracking_state.lineage.record(
+                var_name,
+                output_lineages[var_name],
+                value=self.shell.user_ns.get(var_name),
+            )
 
         stored_code = metadata.get('code', metadata.get('cell_code'))
         if stored_code:
