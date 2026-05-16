@@ -328,6 +328,32 @@ class NotebookSimulator:
     def _schedule_loop_var_contexts(self, *args, **kwargs):
         return self._planner._schedule_loop_var_contexts(*args, **kwargs)
 
+    # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
+
+    def set_current_cell_id(self, cell_id: str | None) -> None:
+        self._virtual_lineage._current_cell_id = cell_id
+
+    def get_cached_ast(self, code: str):
+        return self._virtual_lineage._get_cached_ast(code)
+
+    def last_index_for_cell(self, cell_id: str) -> int | None:
+        return self._virtual_lineage._cell_id_to_last_index.get(cell_id)
+
+    def record_cell_id_index(self, cell_id: str, idx: int) -> None:
+        self._virtual_lineage._cell_id_to_last_index[cell_id] = idx
+
+    def simulation_cache_entry(self, idx: int) -> _SimulationCacheEntry | None:
+        cache = self._virtual_lineage._simulation_cache
+        if 0 <= idx < len(cache):
+            return cache[idx]
+        return None
+
+    def simulation_cache_size(self) -> int:
+        return len(self._virtual_lineage._simulation_cache)
+
+    def simulate_upstream(self, *args, **kwargs):
+        return self._simulate_and_find_changes(*args, **kwargs)
+
     def _simulate_and_find_changes(
         self,
         current_cell_idx: int,

@@ -195,7 +195,7 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG]   cell_id: %s", cell_id)
 
         self._current_cell_id = cell_id
-        self.simulator._current_cell_id = cell_id
+        self.simulator.set_current_cell_id(cell_id)
         # Keep simulator's function_tracker in sync. CashMagics sets
         # ``upstream_checker.function_tracker`` after construction (see
         # magics.py); we propagate it lazily so the simulator picks up the
@@ -243,7 +243,7 @@ class UpstreamChecker:
         is a control structure, or CodeAnalyzer fails).
         """
         try:
-            tree = self.simulator._get_cached_ast(last_executed_code)
+            tree = self.simulator.get_cached_ast(last_executed_code)
             if tree and len(tree.body) == 1 and isinstance(
                 tree.body[0], (ast.For, ast.While, ast.If, ast.With, ast.Try)
             ):
@@ -338,15 +338,15 @@ class UpstreamChecker:
 
         Returns ``None`` when no suitable cache entry can be found.
         """
-        known_cell_idx = None
-        if cell_id and cell_id in self.simulator._cell_id_to_last_index:
-            known_cell_idx = self.simulator._cell_id_to_last_index[cell_id]
-        elif self.last_cell_index is not None:
+        known_cell_idx: int | None = None
+        if cell_id is not None:
+            known_cell_idx = self.simulator.last_index_for_cell(cell_id)
+        if known_cell_idx is None and self.last_cell_index is not None:
             known_cell_idx = self.last_cell_index
 
         if known_cell_idx is not None and known_cell_idx > 0:
             target_idx = known_cell_idx - 1
-            if target_idx < len(self.simulator._simulation_cache):
+            if target_idx < self.simulator.simulation_cache_size():
                 return target_idx
         return None
 
@@ -389,7 +389,7 @@ class UpstreamChecker:
         Uses the simulation cache's pre-cell virtual lineage to reset any
         "ahead" lineage caused by a prior downstream execution.
         """
-        if not (required_inputs and current_cell_outputs and self.simulator._simulation_cache):
+        if not (required_inputs and current_cell_outputs and self.simulator.simulation_cache_size()):
             return
 
         overlap_vars = required_inputs & current_cell_outputs
@@ -400,8 +400,10 @@ class UpstreamChecker:
         if cache_idx is None:
             return
 
-        cached_virtual_lineage = self.simulator._simulation_cache[cache_idx].virtual_lineage
-        self._reset_advanced_lineages(overlap_vars, cached_virtual_lineage, cache_idx)
+        entry = self.simulator.simulation_cache_entry(cache_idx)
+        if entry is None:
+            return
+        self._reset_advanced_lineages(overlap_vars, entry.virtual_lineage, cache_idx)
 
     def _handle_unsaved_cell(
         self,
@@ -488,7 +490,7 @@ class UpstreamChecker:
         if current_cell_idx is not None:
             self.last_cell_index = current_cell_idx
             if cell_id:
-                self.simulator._cell_id_to_last_index[cell_id] = current_cell_idx
+                self.simulator.record_cell_id_index(cell_id, current_cell_idx)
 
         return notebook_cells, current_cell_idx
 
@@ -551,7 +553,7 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)
                 logger.debug("[UPSTREAM_DEBUG] Will simulate %s upstream cells", current_cell_idx)
 
-            statements_to_reexecute, restored_info, total_restore_time = self.simulator._simulate_and_find_changes(
+            statements_to_reexecute, restored_info, total_restore_time = self.simulator.simulate_upstream(
                 current_cell_idx,
                 notebook_cells,
                 required_inputs,
@@ -659,7 +661,7 @@ class UpstreamChecker:
         0..2's trace segments, so cell 2's cache entry is NOT synced for
         ``df``.
         """
-        if not self.simulator._simulation_cache:
+        if not self.simulator.simulation_cache_size():
             return
 
         updated = False
@@ -668,7 +670,10 @@ class UpstreamChecker:
         # variable's lineage if the code that produced the current runtime
         # lineage (from executed_cell_codes) is among these statements.
         cumulative_stmt_codes = set()
-        for idx, entry in enumerate(self.simulator._simulation_cache):
+        for idx in range(self.simulator.simulation_cache_size()):
+            entry = self.simulator.simulation_cache_entry(idx)
+            if entry is None:
+                continue
             cell_trace = entry.trace_segment
             for trace_entry in cell_trace:
                 # trace_entry format: (stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)
@@ -747,7 +752,7 @@ class UpstreamChecker:
 
     def _try_parse_control_structure(self, code: str) -> ast.AST | None:
         """Parse code and return the AST node if it's a single control structure."""
-        tree = self.simulator._get_cached_ast(code)
+        tree = self.simulator.get_cached_ast(code)
         if tree and len(tree.body) == 1 and is_control_structure(tree.body[0]):
             return tree.body[0]
         return None
