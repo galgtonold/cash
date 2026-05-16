@@ -26,6 +26,7 @@ from .simulator_types import (
     IncrementalStartResult as _IncrementalStartResult,
     SimulationCacheEntry as _SimulationCacheEntry,
     TraceEntry as _TraceEntry,
+    apply_collected_mutations,
 )
 from .virtual_lineage import (
     VirtualLineage,
@@ -93,6 +94,7 @@ class NotebookSimulator:
 
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors UpstreamChecker.set_tracking_state)."""
+        self._tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -109,6 +111,17 @@ class NotebookSimulator:
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""
         self._virtual_lineage.reset_caches()
+
+    def _apply_phase_mutations(self) -> None:
+        """Drain phase RestoreCollectors and apply buffered ops to TrackingState.
+
+        Phases buffer mutations as ``CacheRestore`` / ``LineageReset`` ops and
+        usually drain themselves at method boundaries (so direct callers and
+        mid-simulation reads see writes immediately). This safety-net drain
+        catches anything left over after the full pipeline runs.
+        """
+        apply_collected_mutations(self._virtual_lineage._restores, self._tracking_state)
+        apply_collected_mutations(self._classifier._restores, self._tracking_state)
 
     # --- Class-level static-method aliases (tests access on the class) ---
     _validate_file_freshness = VirtualLineage._validate_file_freshness
@@ -199,6 +212,7 @@ class NotebookSimulator:
         )
 
         if not broken_vars:
+            self._apply_phase_mutations()
             return [], [], 0.0
 
         # Optimization: probe the current cell's statements to see if cache
@@ -214,12 +228,15 @@ class NotebookSimulator:
         if not broken_vars:
             if self.debug:
                 logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits â€” skipping upstream")
+            self._apply_phase_mutations()
             return [], [], 0.0
 
-        return self._planner._build_reexecution_plan(
+        result = self._planner._build_reexecution_plan(
             simulation_trace, broken_vars, vars_tainted, simulation_trace_codes,
             virtual_lineage, virtual_modules, vars_derived_from_loops,
             vars_mutated_by_loops, upstream_has_modifications,
             stmt_lookup_times, notebook_cells,
         )
+        self._apply_phase_mutations()
+        return result
 

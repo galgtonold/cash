@@ -103,6 +103,108 @@ class RestoreOp:
 
 
 @dataclass
+class CacheRestore:
+    """A var-restore mutation buffered by VirtualLineage during simulation.
+
+    Captures one restore event. The orchestrator applies it to TrackingState
+    after the phase completes.
+    """
+    var_name: str
+    lineage_hash: str | None
+    code: str | None = None
+    code_hash: str | None = None
+    input_lineages: dict[str, str] | None = None
+    file_deps: set[str] | None = None
+
+
+@dataclass
+class LineageReset:
+    """A LineageStore.reset_to mutation buffered by MismatchClassifier.
+
+    Used when a current-cell output's lineage advances downstream after
+    a mismatch resolution.
+    """
+    var_name: str
+    lineage_hash: str
+
+
+class RestoreCollector:
+    """Buffer of TrackingState mutations from a phase, drained by the orchestrator.
+
+    Phases call ``record_restore()`` / ``record_lineage_reset()`` instead of
+    writing directly. After each phase, ``NotebookSimulator`` calls
+    ``drain()`` to flush ops to TrackingState. This concentrates all
+    phase-emitted mutations in one auditable site.
+    """
+
+    def __init__(self) -> None:
+        self._restores: list[CacheRestore] = []
+        self._resets: list[LineageReset] = []
+
+    def record_restore(
+        self,
+        var_name: str,
+        lineage_hash: str | None,
+        *,
+        code: str | None = None,
+        code_hash: str | None = None,
+        input_lineages: dict[str, str] | None = None,
+        file_deps: set[str] | None = None,
+    ) -> None:
+        self._restores.append(CacheRestore(
+            var_name=var_name, lineage_hash=lineage_hash,
+            code=code, code_hash=code_hash,
+            input_lineages=input_lineages, file_deps=file_deps,
+        ))
+
+    def record_lineage_reset(self, var_name: str, lineage_hash: str) -> None:
+        self._resets.append(LineageReset(var_name=var_name, lineage_hash=lineage_hash))
+
+    def drain(self) -> tuple[list[CacheRestore], list[LineageReset]]:
+        """Return all buffered ops and clear the collector."""
+        restores, resets = self._restores, self._resets
+        self._restores, self._resets = [], []
+        return restores, resets
+
+    def __len__(self) -> int:
+        return len(self._restores) + len(self._resets)
+
+
+def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None:
+    """Apply buffered phase mutations to *state* (a TrackingState).
+
+    Single auditable site for phase-emitted writes. Called by
+    NotebookSimulator after each phase, and by phase methods themselves
+    at well-defined boundaries where mid-phase visibility is required
+    (e.g. so subsequent statements see import lineages in cache-key
+    computation).
+
+    Preserves legacy ``executed_cell_hashes`` normalisation: bare-str
+    entries are promoted to a set so subsequent ``.add`` calls succeed.
+    """
+    restores, resets = collector.drain()
+    for op in restores:
+        if op.lineage_hash is not None:
+            state.variable_lineage[op.var_name] = op.lineage_hash
+        if op.code is not None:
+            state.executed_cell_codes[op.var_name] = op.code
+        if op.code_hash is not None:
+            existing = state.executed_cell_hashes.get(op.var_name)
+            if existing is None:
+                state.executed_cell_hashes[op.var_name] = {op.code_hash}
+            elif isinstance(existing, str):
+                state.executed_cell_hashes[op.var_name] = {existing, op.code_hash}
+            else:
+                existing.add(op.code_hash)
+        if op.input_lineages is not None:
+            state.executed_input_lineages[op.var_name] = dict(op.input_lineages)
+        if op.file_deps:
+            state.executed_file_deps.setdefault(op.var_name, set()).update(op.file_deps)
+    for op in resets:
+        state.lineage.reset_to(op.var_name, op.lineage_hash)
+
+
+@dataclass
 class SimulationResult:
     """Output of VirtualLineage.simulate (introduced in Task 2 of the simulator split).
 
