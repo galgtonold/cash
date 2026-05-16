@@ -52,8 +52,13 @@ def magics_fixture():
 # ---------------------------------------------------------------------------
 
 def _snapshot_tracking_state(simulator):
-    """Deep-copy the parts of tracking_state the simulator can write."""
-    state = simulator  # simulator *is* the TrackingState proxy (shares dicts)
+    """Deep-copy the TrackingState fields the simulator can write.
+
+    NotebookSimulator holds references to the same underlying dicts as
+    TrackingState (wired via set_tracking_state), so reading these
+    attributes off the simulator is equivalent to reading them off the
+    TrackingState.
+    """
     return {
         "variable_lineage": copy.deepcopy(simulator.variable_lineage),
         "executed_cell_codes": copy.deepcopy(simulator.executed_cell_codes),
@@ -130,11 +135,10 @@ def test_simulate_and_find_changes_return_types(magics_fixture):
         current_cell_outputs={"x"},
     )
 
-    # Return-type contract must hold regardless of outcome.
-    assert isinstance(stmts, list), f"stmts must be list, got {type(stmts)}"
-    assert isinstance(restored, list), f"restored must be list, got {type(restored)}"
-    assert isinstance(t, float), f"total_t must be float, got {type(t)}"
-    assert t >= 0.0, "restore time must be non-negative"
+    # No upstream modification — early-exit returns the empty triple.
+    assert stmts == []
+    assert restored == []
+    assert t == 0.0
 
 
 def test_reset_caches_clears_simulator_state(magics_fixture):
