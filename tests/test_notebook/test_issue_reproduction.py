@@ -43,7 +43,7 @@ class TestIssueReproduction(unittest.TestCase):
         mock_get_cells.return_value = [cell1_code, cell2_code]
         
         # 2. Setup Memory Lineage (Actual)
-        with patch.object(self.checker.simulator, '_update_virtual_lineage') as mock_update:
+        with patch.object(self.checker.simulator._virtual_lineage, '_update_virtual_lineage') as mock_update:
             # Side effect for _update_virtual_lineage(stmt, lineage, modules)
             # Returns (outputs, lookup_time, files_stale, file_deps)
             def side_effect(stmt, lineage, modules, occurrence_index=0):
@@ -75,7 +75,7 @@ class TestIssueReproduction(unittest.TestCase):
             required_inputs = {'ticker_stats'}
             
             # We also need _try_virtual_restore to work so it reports success if attempted
-            with patch.object(self.checker.simulator, '_try_virtual_restore') as mock_restore:
+            with patch.object(self.checker.simulator._virtual_lineage, '_try_virtual_restore') as mock_restore:
                 mock_restore.return_value = ({'stats', 'ticker_stats'}, 0.1, 0.1)
                 
                 # Mock ast.parse to valid body

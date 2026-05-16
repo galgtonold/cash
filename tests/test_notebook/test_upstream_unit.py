@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook.notebook_simulator import NotebookSimulator
+from cash.notebook.virtual_lineage import VirtualLineage
 
 
 class TestUpstreamCheckerImport:
@@ -21,19 +22,19 @@ class TestUpstreamCheckerImport:
         assert hasattr(UpstreamChecker, "check_and_reexecute")
 
     def test_has_update_virtual_lineage(self):
-        # Lives on the extracted simulator now.
-        assert hasattr(NotebookSimulator, "_update_virtual_lineage")
+        # Lives on the extracted VirtualLineage phase now.
+        assert hasattr(VirtualLineage, "_update_virtual_lineage")
 
     def test_has_extracted_helpers(self):
-        """Verify the extracted helper methods exist on the simulator."""
+        """Verify the extracted helper methods exist on VirtualLineage."""
         expected_helpers = [
             "_validate_file_freshness",
             "_resolve_input_lineage",
             "_compute_module_source_hash",
         ]
         for name in expected_helpers:
-            assert hasattr(NotebookSimulator, name), (
-                f"NotebookSimulator missing helper method {name}"
+            assert hasattr(VirtualLineage, name), (
+                f"VirtualLineage missing helper method {name}"
             )
 
 
@@ -112,9 +113,9 @@ class TestUpstreamASTCache:
         checker = UpstreamChecker(mock_shell)
 
         code = "x = 1 + 2"
-        tree1 = checker.simulator._get_cached_ast(code)
+        tree1 = checker.simulator._virtual_lineage._get_cached_ast(code)
         assert tree1 is not None
-        tree2 = checker.simulator._get_cached_ast(code)
+        tree2 = checker.simulator._virtual_lineage._get_cached_ast(code)
         assert tree2 is tree1
 
     def test_ast_cache_syntax_error(self):
@@ -122,19 +123,19 @@ class TestUpstreamASTCache:
         mock_shell.user_ns = {}
         checker = UpstreamChecker(mock_shell)
 
-        tree = checker.simulator._get_cached_ast("def :")
+        tree = checker.simulator._virtual_lineage._get_cached_ast("def :")
         assert tree is None
 
     def test_ast_cache_eviction(self):
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
         checker = UpstreamChecker(mock_shell)
-        checker.simulator._ast_cache_max_size = 4
+        checker.simulator._virtual_lineage._ast_cache_max_size = 4
 
         for i in range(6):
-            checker.simulator._get_cached_ast(f"x_{i} = {i}")
+            checker.simulator._virtual_lineage._get_cached_ast(f"x_{i} = {i}")
 
-        assert len(checker.simulator._ast_cache) <= 6
+        assert len(checker.simulator._virtual_lineage._ast_cache) <= 6
 
 
 class TestUpdateTrackingAfterRestoreFileDeps:
@@ -162,7 +163,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
             'file_dependencies': {csv_path: csv_file.stat().st_mtime},
         }
-        checker.simulator._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
 
         assert 'df' in checker.executed_file_deps
         assert csv_path in checker.executed_file_deps['df']
@@ -175,7 +176,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'code': 'x = 42',
             'source_hash': 'hash1',
         }
-        checker.simulator._update_tracking_after_restore({'x'}, metadata, {})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({'x'}, metadata, {})
 
         assert 'x' not in checker.executed_file_deps
 
@@ -197,7 +198,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
                 'source_hash': 'hash1',
                 'file_dependencies': {stale_path: 0.0},
             }
-            checker.simulator._update_tracking_after_restore({'df'}, metadata, {})
+            checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
 
             assert 'df' in checker.executed_file_deps
             # The resolved path should be the actual file, not the stale path
@@ -216,7 +217,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
             'file_dependencies': {'/no/such/file/ever_unique_xyz.csv': 0.0},
         }
-        checker.simulator._update_tracking_after_restore({'df'}, metadata, {})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
 
         # No resolved path → nothing added
         assert 'df' not in checker.executed_file_deps or len(checker.executed_file_deps['df']) == 0
@@ -234,7 +235,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
             'file_dependencies': {csv_path: csv_file.stat().st_mtime},
         }
-        checker.simulator._update_tracking_after_restore({'df', 'df2'}, metadata, {})
+        checker.simulator._virtual_lineage._update_tracking_after_restore({'df', 'df2'}, metadata, {})
 
         assert csv_path in checker.executed_file_deps['df']
         assert csv_path in checker.executed_file_deps['df2']
@@ -319,7 +320,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {'df': 'lineage_hash_abc'}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
             broken, cells, 1, virtual_lineage, set(),
         )
 
@@ -341,7 +342,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {'df': 'lineage_hash_abc'}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
             broken, cells, 1, virtual_lineage, set(),
         )
 
@@ -364,7 +365,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {'df': 'lineage_hash_abc'}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker.simulator._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
             broken, cells, 1, virtual_lineage, set(),
         )
 

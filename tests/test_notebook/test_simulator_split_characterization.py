@@ -158,6 +158,6 @@ def test_reset_caches_clears_simulator_state(magics_fixture):
 
     simulator.reset_caches()
 
-    assert simulator._simulation_cache == []
-    assert simulator._simulation_cell_hashes == {}
-    assert simulator._ast_cache == {}
+    assert simulator._virtual_lineage._simulation_cache == []
+    assert simulator._virtual_lineage._simulation_cell_hashes == {}
+    assert simulator._virtual_lineage._ast_cache == {}
