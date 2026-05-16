@@ -274,46 +274,6 @@ class NotebookSimulator:
     def _update_stale_file_deps(self, *args, **kwargs):
         return self._virtual_lineage._update_stale_file_deps(*args, **kwargs)
 
-    # --- Method forwarders for moved Phase-2 classifier methods --------
-    def _check_loop_var_inputs_changed(self, *args, **kwargs):
-        return self._classifier._check_loop_var_inputs_changed(*args, **kwargs)
-    def _collect_non_module_inputs(self, *args, **kwargs):
-        return self._classifier._collect_non_module_inputs(*args, **kwargs)
-    def _find_mismatched_data_inputs(self, *args, **kwargs):
-        return self._classifier._find_mismatched_data_inputs(*args, **kwargs)
-    def _check_code_matches_loop_trust(self, *args, **kwargs):
-        return self._classifier._check_code_matches_loop_trust(*args, **kwargs)
-    def _check_var_extension_valid(self, *args, **kwargs):
-        return self._classifier._check_var_extension_valid(*args, **kwargs)
-    def _handle_mismatch_code_matches(self, *args, **kwargs):
-        return self._classifier._handle_mismatch_code_matches(*args, **kwargs)
-    def _classify_one_broken_var(self, *args, **kwargs):
-        return self._classifier._classify_one_broken_var(*args, **kwargs)
-    def _handle_mismatch_prereqs(self, *args, **kwargs):
-        return self._classifier._handle_mismatch_prereqs(*args, **kwargs)
-    def _handle_lineage_mismatch(self, *args, **kwargs):
-        return self._classifier._handle_lineage_mismatch(*args, **kwargs)
-    def _classify_broken_vars(self, *args, **kwargs):
-        return self._classifier._classify_broken_vars(*args, **kwargs)
-    def _run_pass2_identify_broken_vars(self, *args, **kwargs):
-        return self._classifier._run_pass2_identify_broken_vars(*args, **kwargs)
-    def _check_tainted_input_valid(self, *args, **kwargs):
-        return self._classifier._check_tainted_input_valid(*args, **kwargs)
-    def _all_tainted_inputs_valid(self, *args, **kwargs):
-        return self._classifier._all_tainted_inputs_valid(*args, **kwargs)
-    def _resolve_tainted_stmt(self, *args, **kwargs):
-        return self._classifier._resolve_tainted_stmt(*args, **kwargs)
-    def _check_inp_lineage_skip(self, *args, **kwargs):
-        return self._classifier._check_inp_lineage_skip(*args, **kwargs)
-    def _should_add_input_to_needed(self, *args, **kwargs):
-        return self._classifier._should_add_input_to_needed(*args, **kwargs)
-    def _cascade_failed_restore_inputs(self, *args, **kwargs):
-        return self._classifier._cascade_failed_restore_inputs(*args, **kwargs)
-    def _backward_scan_pass(self, *args, **kwargs):
-        return self._classifier._backward_scan_pass(*args, **kwargs)
-    def _check_missing_required_inputs(self, *args, **kwargs):
-        return self._classifier._check_missing_required_inputs(*args, **kwargs)
-
     # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
 
     def set_current_cell_id(self, cell_id: str | None) -> None:

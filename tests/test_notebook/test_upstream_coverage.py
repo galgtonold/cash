@@ -151,7 +151,7 @@ class TestHandleLineageMismatch:
             simulation_trace = []
         if notebook_cells is None:
             notebook_cells = []
-        checker.simulator._handle_lineage_mismatch(
+        checker.simulator._classifier._handle_lineage_mismatch(
             var_name=var_name,
             actual_lineage=actual,
             final_virtual_hash=virtual,
