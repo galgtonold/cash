@@ -809,10 +809,15 @@ class MismatchClassifier:
         """Mark required inputs that exist in virtual lineage but are absent from memory."""
         utility_vars = {'ip', 'cash_magics', 'get_ipython', '__builtins__', 'In', 'Out'}
         for var_name in (required_inputs or []):
-            if var_name not in virtual_lineage or var_name in self.variable_lineage:
+            if var_name not in virtual_lineage:
                 continue
-            # Skip if this is a module â€” BUT only if it's actually in memory!
-            # After a kernel restart, imported modules may be missing.
+            # Modules need their own freshness check: simulating an `import`
+            # statement writes the module's lineage into ``variable_lineage``
+            # via ``_propagate_import_lineage`` — but after a real kernel
+            # restart the module object itself is not in ``user_ns``. The
+            # generic ``var_name in self.variable_lineage`` short-circuit
+            # below would otherwise hide the missing-module case and the
+            # import would never get scheduled for upstream re-execute.
             if var_name in virtual_modules:
                 if var_name in self.shell.user_ns:
                     if self.debug:
@@ -821,6 +826,8 @@ class MismatchClassifier:
                 if self.debug:
                     logger.debug("[UPSTREAM_DEBUG] Module '%s' is not in memory. Marking as broken for re-import.", var_name)
                 broken_vars.add(var_name)
+                continue
+            if var_name in self.variable_lineage:
                 continue
 
             if var_name in utility_vars or var_name.startswith('_'):
