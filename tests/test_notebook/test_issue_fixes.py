@@ -182,12 +182,14 @@ class TestNotebookPathCacheInvalidation:
         """%cash_on should clear the upstream checker's simulation and AST caches."""
         magics = cash_magics
 
-        # Populate the simulation cache with fake data
-        magics._upstream_checker._simulation_cache = [
+        # Populate the simulation cache with fake data. Caches now live on
+        # the simulator (extracted from UpstreamChecker).
+        simulator = magics._upstream_checker.simulator
+        simulator._simulation_cache = [
             _SimulationCacheEntry("fake_hash", {"x": "lineage1"}, set(), [], set(), set(), {}),
             _SimulationCacheEntry("fake_hash2", {"y": "lineage2"}, set(), [], set(), set(), {}),
         ]
-        magics._upstream_checker._ast_cache = {
+        simulator._ast_cache = {
             "x = 1": None,
             "y = 2": None,
         }
@@ -195,8 +197,8 @@ class TestNotebookPathCacheInvalidation:
         # Enable auto-caching (this should clear the caches)
         magics.cash_on("")
 
-        assert magics._upstream_checker._simulation_cache == []
-        assert magics._upstream_checker._ast_cache == {}
+        assert simulator._simulation_cache == []
+        assert simulator._ast_cache == {}
 
     def test_upstream_checker_reset_caches(self):
         """UpstreamChecker.reset_caches() should clear simulation and AST caches."""
