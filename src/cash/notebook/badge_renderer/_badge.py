@@ -22,6 +22,8 @@ from ._types import (
     _BADGE_COLOR_DEFAULT,
     _BADGE_COLOR_RESTORED,
     _CODE_SNIPPET_MAX_LEN,
+    _FONT_MONO,
+    _FONT_SANS,
     _HEADER_MAX_LEN,
     _MIN_TIME_DISPLAY_MS,
     _MIN_TIME_DISPLAY_S,
@@ -70,7 +72,7 @@ def _render_upstream_badge_row(m: dict[str, Any], code_snippet: str) -> str:
         return f"""
                 <tr style="border-bottom: 1px solid #eee; background-color: #fff3e0;">
                     <td style="padding: 4px; text-align: left; color: #e65100;">🔄 Changed</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #bf360c;">{changed_names}</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #bf360c;">{changed_names}</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #e65100;">Re-executing dependents</td>
                     <td style="padding: 4px; text-align: left;">-</td>
                 </tr>
@@ -81,7 +83,7 @@ def _render_upstream_badge_row(m: dict[str, Any], code_snippet: str) -> str:
         return f"""
                 <tr style="border-bottom: 1px solid #eee; background-color: #fff3e0;">
                     <td style="padding: 4px; text-align: left; color: #e65100;">🔄 Reloaded</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #bf360c;">{mod_names or code_snippet}</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #bf360c;">{mod_names or code_snippet}</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #e65100;">Re-executing dependents</td>
                     <td style="padding: 4px; text-align: left;">-</td>
                 </tr>
@@ -91,7 +93,7 @@ def _render_upstream_badge_row(m: dict[str, Any], code_snippet: str) -> str:
         return f"""
                 <tr style="border-bottom: 1px solid #eee; background-color: #fffde7;">
                     <td style="padding: 4px; text-align: left; color: #f57f17;">⚠️ Warning</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #795548;">{code_snippet}</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #795548;">{code_snippet}</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #f57f17;">Cache may be unreliable</td>
                     <td style="padding: 4px; text-align: left;">-</td>
                 </tr>
@@ -108,7 +110,7 @@ def _render_upstream_badge_row(m: dict[str, Any], code_snippet: str) -> str:
         return f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color: #006644;">⬆️ Restored</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #666;">{code_snippet}</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #666;">{code_snippet}</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;"><span title='{source_tooltip}' style='cursor:help;'>{source_display}</span></td>
                     <td style="padding: 4px; text-align: left;">{time_display}</td>
                 </tr>
@@ -134,7 +136,7 @@ def _render_upstream_badge_row(m: dict[str, Any], code_snippet: str) -> str:
     return f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color: #996300;">⬆️ Executed</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;">{content_html}</td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};">{content_html}</td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">{up_storage_display}</td>
                     <td style="padding: 4px; text-align: left;">{exec_time:.2f}s</td>
                 </tr>
@@ -180,7 +182,7 @@ def _render_current_badge_row(m: dict[str, Any], status: str, code_snippet: str)
         return f"""
             <tr style="border-bottom: 1px solid #eee;">
                 <td style="padding: 4px; text-align: left; color: #006644;">⚡ Restored</td>
-                <td style="padding: 4px; text-align: left; font-family: monospace;">{restored_vars}<br>{code_part}</td>
+                <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};">{restored_vars}<br>{code_part}</td>
                 <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;"><span title='{source_tooltip}' style='cursor:help;'>{source_display}</span></td>
                 <td style="padding: 4px; text-align: left;">Saved {saved:.2f}s</td>
             </tr>
@@ -194,7 +196,7 @@ def _render_current_badge_row(m: dict[str, Any], status: str, code_snippet: str)
         return f"""
             <tr style="border-bottom: 1px solid #eee;">
                 <td style="padding: 4px; text-align: left; color: #996300;">⚙️ Executed</td>
-                <td style="padding: 4px; text-align: left; font-family: monospace;">{content_html}</td>
+                <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};">{content_html}</td>
                 <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">{storage_display}</td>
                 <td style="padding: 4px; text-align: left;">{exec_time:.2f}s</td>
             </tr>
@@ -209,7 +211,7 @@ def _render_current_badge_row(m: dict[str, Any], status: str, code_snippet: str)
         return f"""
             <tr style="border-bottom: 1px solid #eee;">
                 <td style="padding: 4px; text-align: left; color: #006644;">⏩ Skipped</td>
-                <td style="padding: 4px; text-align: left; font-family: monospace;">{content_html}</td>
+                <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};">{content_html}</td>
                 <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;" title="Already computed by upstream">✓ In RAM</td>
                 <td style="padding: 4px; text-align: left;">{exec_time:.2f}s</td>
             </tr>
@@ -298,8 +300,8 @@ def _render_grouped_item_rows(item: dict[str, Any], child_class: str) -> str:
             e_storage_display = "-"
         return f"""
                     <tr class="{child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
-                        <td style="padding: 2px 4px 2px 24px; text-align: left; color: #996300; white-space: nowrap; border-left: 2px solid #e0c060;">\u2b06\ufe0f</td>
-                        <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;">{e_content}</td>
+                        <td style="padding: 2px 4px 2px 24px; text-align: left; color: #996300; white-space: nowrap; border-left: 2px solid #ddd;">\u2b06\ufe0f</td>
+                        <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;">{e_content}</td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">{e_storage_display}</td>
                         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{e_time:.2f}s</td>
                     </tr>
@@ -310,7 +312,7 @@ def _render_grouped_item_rows(item: dict[str, Any], child_class: str) -> str:
         e_time_str = f"{e_total_time:.2f}s" if e_total_time > _MIN_TIME_DISPLAY_S else "-"
         return f"""
                     <tr class="{child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
-                        <td style="padding: 2px 4px 2px 24px; text-align: left; color: #996300; white-space: nowrap; border-left: 2px solid #e0c060;">\u2b06\ufe0f</td>
+                        <td style="padding: 2px 4px 2px 24px; text-align: left; color: #996300; white-space: nowrap; border-left: 2px solid #ddd;">\u2b06\ufe0f</td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 11px; color: #666;">\U0001f501 for loop ({len(all_e_metrics)} iterations)</td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">-</td>
                         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{e_time_str}</td>
@@ -331,8 +333,8 @@ def _render_grouped_item_rows(item: dict[str, Any], child_class: str) -> str:
         e_time_total = sum(m.get('total_time', 0.0) for m in e_cg_metrics)
         return f"""
                     <tr class="{child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
-                        <td style="padding: 2px 4px 2px 24px; text-align: left; color: #996300; white-space: nowrap; border-left: 2px solid #e0c060;">\u2b06\ufe0f</td>
-                        <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;"><span style='color:#666;font-size:10px;'>{ce_header}</span></td>
+                        <td style="padding: 2px 4px 2px 24px; text-align: left; color: #996300; white-space: nowrap; border-left: 2px solid #ddd;">\u2b06\ufe0f</td>
+                        <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span style='color:#666;font-size:10px;'>{ce_header}</span></td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">-</td>
                         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{e_time_total:.2f}s</td>
                     </tr>
@@ -357,7 +359,7 @@ def _render_skipped_item_row(s_item: dict[str, Any], skip_child_class: str) -> s
         return f"""
                     <tr class="{skip_child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
                         <td style="padding: 2px 4px 2px 24px; text-align: left; color: #006644; white-space: nowrap; border-left: 2px solid #ddd;">\u23e9</td>
-                        <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;"><span style="color: #666; font-size: 10px;">{s_snippet}</span></td>
+                        <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span style="color: #666; font-size: 10px;">{s_snippet}</span></td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">-</td>
                         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{s_time_str}</td>
                     </tr>
@@ -385,7 +387,7 @@ def _render_skipped_item_row(s_item: dict[str, Any], skip_child_class: str) -> s
         return f"""
                     <tr class="{skip_child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
                         <td style="padding: 2px 4px 2px 24px; text-align: left; color: #006644; white-space: nowrap; border-left: 2px solid #ddd;">\u23e9</td>
-                        <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;"><span style="color: #666; font-size: 10px;">{cs_header}</span></td>
+                        <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span style="color: #666; font-size: 10px;">{cs_header}</span></td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">-</td>
                         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{s_time_str}</td>
                     </tr>
@@ -402,7 +404,7 @@ def _render_skipped_item_row(s_item: dict[str, Any], skip_child_class: str) -> s
         return f"""
                     <tr class="{skip_child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
                         <td style="padding: 2px 4px 2px 24px; text-align: left; color: #006644; white-space: nowrap; border-left: 2px solid #ddd;">\u23e9</td>
-                        <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;"><span style="color: #666; font-size: 10px;">{cs_header}</span></td>
+                        <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span style="color: #666; font-size: 10px;">{cs_header}</span></td>
                         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">-</td>
                         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{s_time_str}</td>
                     </tr>
@@ -454,7 +456,7 @@ def _build_executed_subsection_html(upstream_executed: list[dict[str, Any]]) -> 
     rows = f"""
             <tr style="border-bottom: 1px solid #eee; cursor: pointer;" onclick="{exec_toggle_js}">
                 <td style="padding: 4px; text-align: left; color: #996300;">\u2b06\ufe0f Auto-exec</td>
-                <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px;"><span id="{exec_gid}_arrow" style="color:#999; font-size:10px;">\u25b6</span> <span style="color: #666; font-style: italic;">{exec_count} upstream statement{'s' if exec_count != 1 else ''} auto-executed</span></td>
+                <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span id="{exec_gid}_arrow" style="color:#999; font-size:10px;">\u25b6</span> <span style="color: #666; font-style: italic;">{exec_count} upstream statement{'s' if exec_count != 1 else ''} auto-executed</span></td>
                 <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;">{exec_storage_summary}</td>
                 <td style="padding: 4px; text-align: left;">{exec_time_display}</td>
             </tr>
@@ -505,7 +507,7 @@ def _build_skipped_subsection_html(skipped_list: list[dict[str, Any]]) -> str:
     rows = f"""
             <tr style="border-bottom: 1px solid #eee; cursor: pointer;" onclick="{skip_toggle_js}">
                 <td style="padding: 4px; text-align: left; color: #006644;">\u23e9 Skipped</td>
-                <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px;"><span id="{skip_gid}_arrow" style="color:#999; font-size:10px;">\u25b6</span> <span style="color: #666; font-style: italic;">{skipped_count} intermediate dependency step{'s' if skipped_count != 1 else ''}</span></td>
+                <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span id="{skip_gid}_arrow" style="color:#999; font-size:10px;">\u25b6</span> <span style="color: #666; font-style: italic;">{skipped_count} intermediate dependency step{'s' if skipped_count != 1 else ''}</span></td>
                 <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;">-</td>
                 <td style="padding: 4px; text-align: left;">{time_display}</td>
             </tr>
@@ -605,7 +607,7 @@ def _build_overhead_section_html(
         rows += f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color:#888;">↻ Upstream check</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #999; font-size: 10px;">Lineage simulation (excl. restore)</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #999; font-size: 10px;">Lineage simulation (excl. restore)</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">-</td>
                     <td style="padding: 4px; text-align: left;">{upstream_check:.3f}s</td>
                 </tr>
@@ -615,7 +617,7 @@ def _build_overhead_section_html(
         rows += f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color:#888;">🏷️ Badge init</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #999; font-size: 10px;">Initial badge render</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #999; font-size: 10px;">Initial badge render</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">-</td>
                     <td style="padding: 4px; text-align: left;">{badge_init:.3f}s</td>
                 </tr>
@@ -625,7 +627,7 @@ def _build_overhead_section_html(
         rows += f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color:#888;">📊 Progress updates</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #999; font-size: 10px;">Badge progress renders</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #999; font-size: 10px;">Badge progress renders</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">-</td>
                     <td style="padding: 4px; text-align: left;">{badge_progress:.3f}s</td>
                 </tr>
@@ -635,7 +637,7 @@ def _build_overhead_section_html(
         rows += f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color:#888;">⚙️ Other</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #999; font-size: 10px;">AST parsing, output handling</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #999; font-size: 10px;">AST parsing, output handling</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">-</td>
                     <td style="padding: 4px; text-align: left;">{other_overhead:.3f}s</td>
                 </tr>
@@ -904,7 +906,7 @@ def render_interactive_badge(
         background-color: {summary_bg};
         padding: 0;
         margin-top: 5px;
-        font-family: sans-serif;
+        font-family: {_FONT_SANS};
         font-size: 12px;
         color: {summary_color};
         max-width: 100%;
@@ -915,8 +917,11 @@ def render_interactive_badge(
             font-weight: bold;
             list-style: none;
             outline: none;
+            display: inline-flex;
+            align-items: baseline;
+            gap: 6px;
         ">
-            {icon} {label} <span style="font-weight: normal; opacity: 0.8; font-family: monospace;">{subtext}</span>
+            <span>{icon} {label}</span><span style="font-weight: normal; opacity: 0.8; font-family: {_FONT_MONO};">{subtext}</span>
         </summary>
 
         <div style="
@@ -1009,7 +1014,7 @@ def render_status_badge(
         background-color: {color};
         color: white;
         border-radius: 4px;
-        font-family: monospace;
+        font-family: {_FONT_MONO};
         font-size: 11px;
         margin-bottom: 4px;
         box-shadow: 0 1px 2px rgba(0,0,0,0.2);

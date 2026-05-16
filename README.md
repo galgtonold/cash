@@ -18,7 +18,7 @@ That's the install. The next time you re-run the notebook, every statement that 
 
 📺 **Watch the 90-second demo:** _[demo video coming soon — see [VIDEO_SCRIPT.md](.github/planning/VIDEO_SCRIPT.md)]_
 
-<!-- TODO: Add hero screenshot here. 1200×600px PNG showing a notebook with a mix of green COMPUTED and blue RESTORED badges, plus the "Cash saved 16.5s this run" summary. -->
+<!-- TODO: Add hero screenshot here. 1200×600px PNG showing a notebook with a mix of green CACHED (⚡ RESTORED) and ochre EXECUTED (⚙️ COMPUTED) badges, plus the "Cash saved 16.5s this run" summary. Brand colors: green #006644 on #e6fffa, ochre #996300 on #fffbe6 — see the Cash design system. -->
 
 ![Cash badge demo placeholder](docs/assets/badge-demo.png)
 

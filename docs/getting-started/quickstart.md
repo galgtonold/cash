@@ -55,9 +55,9 @@ Want to see what Cash is doing?
 
 You'll see status badges for each statement:
 
-- 🟢 **COMPUTED** — Executed and cached (first run)
-- 🔵 **RESTORED** — Loaded from cache (cache hit!)
-- ⚪ **SKIPPED** — Already in memory, no action needed
+- ⚙️ **EXECUTED** — Ochre chip. Cash ran the statement and cached the result (first run).
+- ⚡ **CACHED** — Green chip. The result was restored from cache (cache hit!).
+- ⏩ **SKIPPED** — Green chip. Already in memory from an earlier statement, no work needed.
 
 ## Decorator-based Caching
 

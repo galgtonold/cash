@@ -57,17 +57,17 @@ summary = df.groupby('category').agg({
 print(summary)
 ```
 
-On first run, you'll see **COMPUTED** badges — Cash executed each statement and cached the results.
+On first run, you'll see ochre **⚙️ EXECUTED** badges — Cash ran each statement and cached the results. (Internally the cache status is `COMPUTED`; the chip label reads `EXECUTED`.)
 
 ## Step 4: Experience the Cache
 
 Now **re-run the notebook** (Kernel → Restart & Run All, or click Run All).
 
-This time you'll see **RESTORED** badges with timing:
+This time you'll see green **⚡ CACHED** badges with timing — the result was restored from cache (internal status: `RESTORED`):
 
 ```
-[RESTORED ⚡] df = pd.DataFrame({...}) — 0.01s (saved 0.15s)
-[RESTORED ⚡] summary = df.groupby(...) — 0.01s (saved 0.08s)
+⚡ CACHED (Saved 0.15s)   df = pd.DataFrame({...})
+⚡ CACHED (Saved 0.08s)   summary = df.groupby(...)
 ```
 
 The results loaded instantly from cache instead of being recomputed.
@@ -86,8 +86,8 @@ print(summary)
 
 Re-run the notebook:
 
-- **Cell 2**: `[RESTORED ⚡]` — unchanged, loaded from cache
-- **Cell 3**: `[COMPUTED]` — code changed, recomputed
+- **Cell 2**: ⚡ **CACHED** (green chip) — unchanged, loaded from cache
+- **Cell 3**: ⚙️ **EXECUTED** (ochre chip) — code changed, recomputed
 
 Cash knew that only Cell 3 changed, so only Cell 3 recomputed.
 
