@@ -12,7 +12,10 @@ Using protocols instead of ``Any`` provides:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
+
+if TYPE_CHECKING:
+    from cash.notebook.lineage_store import LineageStore
 
 
 @runtime_checkable
@@ -136,3 +139,13 @@ class TrackingState:
     # Written by StatementProcessor; read by UpstreamChecker (Pass 1 lineage check).
     # Stores the lineage snapshot of each input at the time of execution.
     executed_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # The single seam for reading/writing variable lineage. Wraps
+    # ``variable_lineage`` as its backing dict so callers that still mutate
+    # the dict directly during migration stay in sync. See ``CONTEXT.md``
+    # entry: *LineageStore*.
+    lineage: "LineageStore" = field(init=False)
+
+    def __post_init__(self) -> None:
+        from cash.notebook.lineage_store import LineageStore
+        self.lineage = LineageStore(backing=self.variable_lineage)

@@ -372,6 +372,7 @@ class StatementProcessor:
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
+        self.lineage = state.lineage
         self.variable_hashes = state.variable_hashes
         self.variable_sources = state.variable_sources
         self.current_session_hashes = state.current_session_hashes
@@ -1098,10 +1099,9 @@ class StatementProcessor:
             lineage_str = f"{source_hash}:{':'.join(sorted(input_lineage_hashes))}{file_hash_component}{func_lineage_component}{module_lineage_component}"
             output_lineage_hash = hashlib.sha256(lineage_str.encode('utf-8')).hexdigest()
 
-            self.variable_lineage[var_name] = output_lineage_hash
-
-            with contextlib.suppress(AttributeError, TypeError):  # Immutable/frozen objects cannot carry lineage attrs
-                value._cash_lineage_hash = output_lineage_hash
+            # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
+            # are written together and cannot drift.
+            self.lineage.record(var_name, output_lineage_hash, value=value)
 
             self._apply_granular_module_update(var_name, value, output_lineage_hash)
 
@@ -1618,9 +1618,7 @@ class StatementProcessor:
         if metadata:
             output_lineages = metadata.get('output_lineages', {})
             if var_name in output_lineages:
-                self.variable_lineage[var_name] = output_lineages[var_name]
-                with contextlib.suppress(AttributeError, TypeError):
-                    value._cash_lineage_hash = output_lineages[var_name]
+                self.lineage.record(var_name, output_lineages[var_name], value=value)
 
             stored_code, stored_hash = _get_statement_code_and_hash(metadata)
             if stored_hash:

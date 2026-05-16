@@ -14,6 +14,8 @@ This is **not** a tutorial. It's a glossary that disambiguates words we already 
 
 **Lineage** — A hash chain that captures *how* a variable was produced: `hash(code + sorted(input_lineages) + file_deps)`. Two variables with the same value but different lineage are not cache-equivalent. Lineage flows through the dependency graph; cache keys are computed from it.
 
+**LineageStore** — The single seam through which a variable's persistent lineage is read and written. Lives in [`lineage_store.py`](src/cash/notebook/lineage_store.py); held by `TrackingState.lineage`. Owns the `variable_lineage` dict and coordinates the paired `_cash_lineage_hash` attribute write so the two can never drift. Owns the priority ladder for lineage resolution (virtual → store → `_cash_lineage_hash` → compute_hash → str fallback). **Does not** own transient simulation state (`virtual_lineage` is passed in per-call) or skip-check state (`executed_input_lineages` etc. — different invariants).
+
 **Upstream simulation** — Before running a cell, cash simulates all upstream cells to detect stale variables. Lives in [`upstream.py`](src/cash/notebook/upstream.py).
 
 ---
