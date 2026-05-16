@@ -53,15 +53,13 @@ class TestRenderControlBodyHtml:
 
 
 class TestExtractBodyStatements:
-    """Tests for ControlStructureProcessor._extract_body_statements via AST."""
+    """Tests for control_structure_helpers.extract_body_statements."""
 
     def _parse_and_extract(self, code):
         """Helper to parse code and extract body statements."""
-        from cash.notebook.control_structures import ControlStructureProcessor
+        from cash.notebook.control_structure_helpers import extract_body_statements
         node = ast.parse(code).body[0]
-        # Create a minimal processor just for the extraction method
-        proc = object.__new__(ControlStructureProcessor)
-        return proc._extract_body_statements(node)
+        return extract_body_statements(node)
 
     def test_if_else(self):
         code = "if x > 0:\n    y = 1\n    z = 2\nelse:\n    y = -1"
@@ -107,9 +105,6 @@ class TestExtractBodyStatements:
 
     def test_non_control_returns_empty(self):
         """Non-control structure returns empty list."""
-        code = "x = 1"
-        node = ast.parse(code).body[0]
-        from cash.notebook.control_structures import ControlStructureProcessor
-        proc = object.__new__(ControlStructureProcessor)
-        result = proc._extract_body_statements(node)
-        assert result == []
+        from cash.notebook.control_structure_helpers import extract_body_statements
+        node = ast.parse("x = 1").body[0]
+        assert extract_body_statements(node) == []

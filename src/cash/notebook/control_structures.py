@@ -33,7 +33,6 @@ import ast
 import contextlib
 import hashlib
 import logging
-import sys
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -195,11 +194,6 @@ class ControlStructureProcessor:
         self._if_handler = IfHandler(shell, statement_processor, debug, dispatcher=self)
         self._try_handler = TryHandler(shell, statement_processor, debug, dispatcher=self)
 
-    @staticmethod
-    def _flush_metrics_output(metrics: dict[str, Any]) -> None:
-        """Thin wrapper around :func:`control_structure_helpers.flush_metrics_output`."""
-        _helpers.flush_metrics_output(metrics)
-
     def process(
         self,
         node: ast.AST,
@@ -236,16 +230,6 @@ class ControlStructureProcessor:
         return self._execute_as_single_unit(node, ttl, silent)
 
     # ------------------------------------------------------------------
-    # Try/except/else/finally per-statement processing
-    # ------------------------------------------------------------------
-
-    def _tag_control_metrics(
-        self, result: Any, ctx_hash: str, ctx_label: str, all_metrics: list
-    ) -> None:
-        """Thin wrapper around :func:`control_structure_helpers.tag_control_metrics`."""
-        _helpers.tag_control_metrics(result, ctx_hash, ctx_label, all_metrics)
-
-    # ------------------------------------------------------------------
     # Single-unit execution (for while/with and break/continue loops)
     # ------------------------------------------------------------------
 
@@ -274,14 +258,16 @@ class ControlStructureProcessor:
 
             # After execution, update lineage for mutated variables
             if metrics.get('status') in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
-                self._update_lineage_after_execution(node, code)
+                _helpers.update_lineage_after_execution(
+                    self.shell, self.statement_processor, node, code, debug=self.debug,
+                )
 
             # Annotate metrics with control structure body statements
             # so the badge can show individual statements instead of the
             # entire block as one opaque line.
             cs_type = get_control_structure_type(node)
             metrics['control_type'] = cs_type
-            body_stmts = self._extract_body_statements(node)
+            body_stmts = _helpers.extract_body_statements(node)
             if body_stmts:
                 metrics['body_statements'] = body_stmts
 
@@ -293,7 +279,7 @@ class ControlStructureProcessor:
             error = metrics.get('error') if metrics.get('status') == CacheStatus.ERROR else None
             if error is not None:
                 # Try to extract the actual error line from the <cash> traceback
-                cash_lineno = self._extract_cash_frame_lineno(error)
+                cash_lineno = _helpers.extract_cash_frame_lineno(error)
                 if cash_lineno is not None:
                     # ast.unparse produces code starting at line 1;
                     # the node in the cell starts at node.lineno.
@@ -316,68 +302,4 @@ class ControlStructureProcessor:
                 metrics=[],
                 error=e
             )
-
-    # ------------------------------------------------------------------
-    # Error helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _extract_cash_frame_lineno(exc: Exception) -> int | None:
-        """Thin wrapper around :func:`control_structure_helpers.extract_cash_frame_lineno`."""
-        return _helpers.extract_cash_frame_lineno(exc)
-
-    # ------------------------------------------------------------------
-    # Lineage management
-    # ------------------------------------------------------------------
-
-    def _update_lineage_after_execution(self, node: ast.AST, code: str) -> None:
-        """Thin wrapper around :func:`control_structure_helpers.update_lineage_after_execution`."""
-        _helpers.update_lineage_after_execution(
-            self.shell, self.statement_processor, node, code, debug=self.debug
-        )
-
-    def _get_body_nodes(self, node: ast.AST) -> list[ast.AST]:
-        """Thin wrapper around :func:`control_structure_helpers.get_body_nodes`."""
-        return _helpers.get_body_nodes(node)
-
-    def _get_expression_iterable_lineage(self, iter_node: ast.AST) -> str | None:
-        """Thin wrapper around :func:`control_structure_helpers.get_expression_iterable_lineage`."""
-        return _helpers.get_expression_iterable_lineage(self.shell, self.statement_processor, iter_node)
-
-    def _get_iterable_lineage(self, iter_node: ast.AST) -> str | None:
-        """Thin wrapper around :func:`control_structure_helpers.get_iterable_lineage`."""
-        return _helpers.get_iterable_lineage(self.shell, self.statement_processor, iter_node)
-
-    def _extract_while_stmts(self, node: ast.While) -> list[str]:
-        """Thin wrapper around :func:`control_structure_helpers.extract_while_stmts`."""
-        return _helpers.extract_while_stmts(node)
-
-    def _extract_with_stmts(self, node: ast.With) -> list[str]:
-        """Thin wrapper around :func:`control_structure_helpers.extract_with_stmts`."""
-        return _helpers.extract_with_stmts(node)
-
-    def _extract_try_stmts(self, node: ast.Try) -> list[str]:
-        """Thin wrapper around :func:`control_structure_helpers.extract_try_stmts`."""
-        return _helpers.extract_try_stmts(node)
-
-    def _extract_body_statements(self, node: ast.AST) -> list[str]:
-        """Thin wrapper around :func:`control_structure_helpers.extract_body_statements`."""
-        return _helpers.extract_body_statements(node)
-
-    def _extract_if_body_statements(self, node: ast.If, statements: list[str],
-                                     is_elif: bool = False) -> None:
-        """Thin wrapper around :func:`control_structure_helpers.extract_if_body_statements`."""
-        _helpers.extract_if_body_statements(node, statements, is_elif)
-
-    def _find_potentially_mutated_variables(self, body_nodes: list) -> set[str]:
-        """Thin wrapper around :func:`control_structure_helpers.find_potentially_mutated_variables`."""
-        return _helpers.find_potentially_mutated_variables(body_nodes)
-
-    def _update_mutated_variable_lineages(self, mutated_vars: set[str],
-                                           iterable_lineage: str | None,
-                                           loop_code: str) -> None:
-        """Thin wrapper around :func:`control_structure_helpers.update_mutated_variable_lineages`."""
-        _helpers.update_mutated_variable_lineages(
-            self.shell, self.statement_processor, mutated_vars, iterable_lineage, loop_code, debug=self.debug
-        )
 

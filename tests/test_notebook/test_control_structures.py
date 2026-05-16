@@ -548,19 +548,18 @@ class TestOutputFlushing:
         for m in result.metrics:
             assert m.get('_output_flushed') is True
 
-    def test_flush_metrics_output_static_method(self):
-        """_flush_metrics_output should print stdout/stderr and mark as flushed."""
-        from cash.notebook.control_structures import ControlStructureProcessor
+    def test_flush_metrics_output_helper(self):
+        """flush_metrics_output should print stdout/stderr and mark as flushed."""
+        from cash.notebook.control_structure_helpers import flush_metrics_output
 
         metrics = {'stdout': 'hello\n', 'stderr': 'warn\n'}
-        # The static method should set the flag
         import io
         import sys
         old_stdout, old_stderr = sys.stdout, sys.stderr
         sys.stdout = io.StringIO()
         sys.stderr = io.StringIO()
         try:
-            ControlStructureProcessor._flush_metrics_output(metrics)
+            flush_metrics_output(metrics)
             assert sys.stdout.getvalue() == 'hello\n'
             assert sys.stderr.getvalue() == 'warn\n'
         finally:
@@ -569,10 +568,10 @@ class TestOutputFlushing:
 
     def test_flush_no_output_still_marks_flushed(self):
         """Metrics with no stdout/stderr should still be marked as flushed."""
-        from cash.notebook.control_structures import ControlStructureProcessor
+        from cash.notebook.control_structure_helpers import flush_metrics_output
 
         metrics = {'stdout': '', 'stderr': ''}
-        ControlStructureProcessor._flush_metrics_output(metrics)
+        flush_metrics_output(metrics)
         assert metrics['_output_flushed'] is True
 
 
