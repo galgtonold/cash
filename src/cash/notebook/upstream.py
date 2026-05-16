@@ -19,6 +19,7 @@ from .cache_key import CacheKeyContext, compute_cache_key
 from .cache_status import CacheStatus
 from .notebook_simulator import (
     NotebookSimulator,
+    _BUILTIN_NAMES,
     _FORWARD_PROBE_PLACEHOLDER,
     _IncrementalStartResult,
     _SimulationCacheEntry,
@@ -40,20 +41,6 @@ class UpstreamResult(NamedTuple):
     execution_time: float
 
 logger = logging.getLogger(__name__)
-
-# Canonical set of Python built-in and IPython-special names that should
-# be skipped during lineage/upstream tracking.  Extracted here so the
-# several call sites inside UpstreamChecker share a single definition.
-_BUILTIN_NAMES: frozenset[str] = frozenset({
-    'get_ipython', '__builtins__', 'print', 'range',
-    'len', 'enumerate', 'zip', 'map', 'filter',
-    'sorted', 'reversed', 'list', 'dict', 'set',
-    'str', 'int', 'float', 'bool', 'type', 'isinstance',
-    'hasattr', 'getattr', 'setattr', 'open', 'sum', 'min', 'max',
-    'ValueError', 'TypeError', 'KeyError', 'IndexError',
-    'AttributeError', 'RuntimeError', 'Exception',
-    'True', 'False', 'None',
-})
 
 class UpstreamChecker:
     """
