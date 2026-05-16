@@ -232,13 +232,10 @@ def update_mutated_variable_lineages(
 
             new_lineage = hashlib.sha256(':'.join(lineage_components).encode()).hexdigest()
 
-            statement_processor.variable_lineage[var_name] = new_lineage
+            statement_processor.lineage.record(var_name, new_lineage, value=val)
 
             if hasattr(statement_processor, 'vars_with_mutation_lineage'):
                 statement_processor.vars_with_mutation_lineage.add(var_name)
-
-            with contextlib.suppress(AttributeError, TypeError):
-                val._cash_lineage_hash = new_lineage
 
             if debug:
                 logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...",
