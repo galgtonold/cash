@@ -200,7 +200,7 @@ class UpstreamChecker:
         # ``upstream_checker.function_tracker`` after construction (see
         # magics.py); we propagate it lazily so the simulator picks up the
         # latest reference.
-        self.simulator.function_tracker = self.function_tracker
+        self.simulator._virtual_lineage.function_tracker = self.function_tracker
 
         # Phase 1 — Lineage-based staleness check (diagnostic-only).
         # Detects when variables are inconsistent with each other based on

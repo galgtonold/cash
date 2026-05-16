@@ -217,7 +217,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {}
         virtual_modules = set()
 
-        self.checker.simulator._update_virtual_lineage(
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "import pandas as pd", virtual_lineage, virtual_modules
         )
 
@@ -232,7 +232,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {}
         virtual_modules = set()
 
-        self.checker.simulator._update_virtual_lineage(
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "from numpy import array", virtual_lineage, virtual_modules
         )
 
@@ -246,7 +246,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {'x': 'abc123'}
         virtual_modules = set()
 
-        self.checker.simulator._update_virtual_lineage(
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "y = x + 1", virtual_lineage, virtual_modules
         )
 
@@ -262,7 +262,7 @@ class TestModuleLineagePropagation(unittest.TestCase):
         virtual_lineage = {}
         virtual_modules = set()
 
-        self.checker.simulator._update_virtual_lineage(
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "import pandas as pd", virtual_lineage, virtual_modules
         )
 
@@ -318,7 +318,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 1: Simulate import (sets variable_lineage['np'])
         virtual_lineage = {}
         virtual_modules = set()
-        self.checker.simulator._update_virtual_lineage(
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "import numpy as np", virtual_lineage, virtual_modules
         )
         np_lineage_from_import = self.checker.variable_lineage['np']
@@ -332,7 +332,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.cash_instance.backend.get_metadata.return_value = {'output_lineages': {}}
 
         # Step 4: Simulate downstream statement
-        self.checker.simulator._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
         sim_key = self._get_cache_key_from_calls()
 
         # Step 5: Compute what runtime (_analyze_and_hash) would produce
@@ -368,7 +368,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
             {'variables': {'result': 42}}
         )
 
-        restored, _, _ = self.checker.simulator._try_virtual_restore(
+        restored, _, _ = self.checker.simulator._virtual_lineage._try_virtual_restore(
             code, outputs, inputs, input_hashes, virtual_modules
         )
 
@@ -410,7 +410,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         self.cash_instance.backend.get_metadata.reset_mock()
         self.cash_instance.backend.get_metadata.return_value = {'output_lineages': {}}
 
-        self.checker.simulator._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
 
         sim_key = self._get_cache_key_from_calls()
 
@@ -430,7 +430,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
         # Step 1: Simulate import to propagate lineage
         virtual_lineage = {}
         virtual_modules = set()
-        self.checker.simulator._update_virtual_lineage(
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(
             "import numpy as np", virtual_lineage, virtual_modules
         )
         np_lineage = self.checker.variable_lineage['np']
@@ -445,7 +445,7 @@ class TestSimulationRuntimeKeyMatch(unittest.TestCase):
 
         # Step 4: Simulate downstream statement
         code = "result = np.mean(df)"
-        self.checker.simulator._update_virtual_lineage(code, virtual_lineage, virtual_modules)
+        self.checker.simulator._virtual_lineage._update_virtual_lineage(code, virtual_lineage, virtual_modules)
         sim_key = self._get_cache_key_from_calls()
 
         # Step 5: Compute runtime key
