@@ -104,12 +104,18 @@ class RestoreOp:
 
 @dataclass
 class SimulationResult:
-    """Output of VirtualLineage.simulate."""
+    """Output of VirtualLineage.simulate (introduced in Task 2 of the simulator split).
+
+    VirtualLineage gathers all data the downstream phases need from the
+    forward pass and packs it here. Notably, ``loop_var_input_lineages``
+    is computed by the planner between Pass 1 and Pass 2 in current code
+    and is surfaced here for Task 3's MismatchClassifier to consume.
+    """
 
     virtual_lineage: dict[str, str]
     virtual_modules: set[str]
     simulation_trace: list[TraceEntry]
-    new_cache_entries: set[str]
+    new_cache_entries: list[Any]
     vars_mutated_by_loops: set[str]
     vars_with_stale_files: set[str]
     vars_derived_from_loops: set[str]
