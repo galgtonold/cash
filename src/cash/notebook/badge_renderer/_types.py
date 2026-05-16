@@ -65,3 +65,17 @@ GroupedBadgeItem = SingleMetric | ForLoopGroup | ControlGroup | ControlGroupSing
 # ---------------------------------------------------------------------------
 _BADGE_COLOR_RESTORED = "#006644"
 _BADGE_COLOR_DEFAULT = "#996300"
+
+# ---------------------------------------------------------------------------
+# Cash design tokens — system-native font stacks. Cash never ships a webfont;
+# the host (Jupyter / browser) provides the typography. See the Cash design
+# system's colors_and_type.css for the canonical token values.
+# ---------------------------------------------------------------------------
+_FONT_SANS = (
+    '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, '
+    'sans-serif, "Apple Color Emoji", "Segoe UI Emoji"'
+)
+_FONT_MONO = (
+    'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, '
+    '"Liberation Mono", monospace'
+)

@@ -18,6 +18,7 @@ from ._types import (
     ForLoopGroup,
     LoopGroup,
     _CODE_SNIPPET_MAX_LEN,
+    _FONT_MONO,
     _HEADER_MAX_LEN,
     _MIN_TIME_DISPLAY_S,
 )
@@ -360,7 +361,7 @@ def render_for_loop_group(
     html = f"""
     <tr class="{row_class}" style="{row_display} border-bottom: 1px solid #eee; cursor: pointer; {bg_style}" onclick="{toggle_js}">
         <td style="padding: 4px 4px 4px {pad_left}px; text-align: left; color: {color}; white-space: nowrap; {border_style}">{type_prefix} {type_label}</td>
-        <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px; color: #333;"><span id="{gid}_arrow" style="color:{arrow_color}; font-size:{arrow_size};">{arrow_closed}</span> {content_summary}</td>
+        <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px; color: #333;"><span id="{gid}_arrow" style="color:{arrow_color}; font-size:{arrow_size};">{arrow_closed}</span> {content_summary}</td>
         <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">{storage_display}</td>
         <td style="padding: 4px; text-align: left; white-space: nowrap; color: #333;">{time_str}</td>
     </tr>
@@ -441,7 +442,7 @@ def render_loop_stmt_row(
     html = f"""
     <tr class="{parent_direct_class}" style="display: none; border-bottom: 1px solid #f0f0f0; cursor: pointer;" onclick="{toggle_js}">
         <td style="padding: 4px 4px 4px {pad_left}px; text-align: left; color: {s_color}; white-space: nowrap; border-left: 2px solid #ddd;">{s_icon}</td>
-        <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px;"><span id="{sid}_arrow" style="color:#bbb; font-size:9px;">▸</span> <span style="color: #666; font-size: 10px;">{code_preview}</span> <span style="color:#999; font-style: italic;">({s_text})</span></td>
+        <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span id="{sid}_arrow" style="color:#bbb; font-size:9px;">▸</span> <span style="color: #666; font-size: 10px;">{code_preview}</span> <span style="color:#999; font-style: italic;">({s_text})</span></td>
         <td style="padding: 4px; text-align: left; font-size: 10px; color: #888;">{st_storage}</td>
         <td style="padding: 4px; text-align: left; white-space: nowrap;">{time_cell}</td>
     </tr>
@@ -536,7 +537,7 @@ def render_control_group(item: ControlGroup, is_upstream: bool = False) -> str:
     html = f"""
     <tr style="border-bottom: 1px solid #eee; cursor: pointer;" onclick="{toggle_js}">
         <td style="padding: 4px; text-align: left; color: {color}; white-space: nowrap;">{icon} {label}</td>
-        <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px;"><span id="{gid}_arrow" style="color:#999; font-size:10px;">▶</span> {content_summary}</td>
+        <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span id="{gid}_arrow" style="color:#999; font-size:10px;">▶</span> {content_summary}</td>
         <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">{ctrl_storage_display}</td>
         <td style="padding: 4px; text-align: left; white-space: nowrap;">{time_str}</td>
     </tr>
@@ -605,7 +606,7 @@ def _ctrl_single_body_rows_html(
             html += f"""
             <tr class="{child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
                 <td style="padding: 2px 4px 2px 24px; text-align: left; color: {sc}; white-space: nowrap; border-left: 2px solid #ddd;">{si}</td>
-                <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;"><span style="color: #666; font-size: 10px;">{safe}</span></td>
+                <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span style="color: #666; font-size: 10px;">{safe}</span></td>
                 <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">{storage_display}</td>
                 <td style="padding: 2px 4px; text-align: left; white-space: nowrap;"></td>
             </tr>"""
@@ -668,7 +669,7 @@ def render_control_group_single(item: ControlGroupSingle, is_upstream: bool = Fa
     html = f"""
     <tr style="border-bottom: 1px solid #eee; cursor: pointer;" onclick="{toggle_js}">
         <td style="padding: 4px; text-align: left; color: {color}; white-space: nowrap;">{icon} {label}</td>
-        <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px;"><span id="{gid}_arrow" style="color:#999; font-size:10px;">▶</span> {content_summary}</td>
+        <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span id="{gid}_arrow" style="color:#999; font-size:10px;">▶</span> {content_summary}</td>
         <td style="padding: 4px; text-align: left; font-size: 10px; color: #666;">{storage_display}</td>
         <td style="padding: 4px; text-align: left; white-space: nowrap;">{time_str}</td>
     </tr>
@@ -722,7 +723,7 @@ def render_decorator_calls(calls: list[dict[str, Any]]) -> str:
                 html += f"""
                 <tr style="border-bottom: 1px solid #eee;">
                     <td style="padding: 4px; text-align: left; color: {c_color};">{c_icon} @cache</td>
-                    <td style="padding: 4px; text-align: left; font-family: monospace;"><span style="color: #1a73e8;">{safe_name}()</span> <span style="color: #888; font-size: 10px;">{status_text}</span></td>
+                    <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO};"><span style="color: #1a73e8;">{safe_name}()</span> <span style="color: #888; font-size: 10px;">{status_text}</span></td>
                     <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;">-</td>
                     <td style="padding: 4px; text-align: left;">{ct:.3f}s</td>
                 </tr>
@@ -801,7 +802,7 @@ def _render_control_stmt_row(m: dict[str, Any], child_class: str) -> str:
     return f"""
     <tr class="{child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
         <td style="padding: 2px 4px 2px 24px; text-align: left; color: {sc}; white-space: nowrap; border-left: 2px solid #ddd;">{si}</td>
-        <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;">{vars_part}<span style="color: #666; font-size: 10px;">{stmt_preview}</span></td>
+        <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;">{vars_part}<span style="color: #666; font-size: 10px;">{stmt_preview}</span></td>
         <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">{stor}</td>
         <td style="padding: 2px 4px; text-align: left; white-space: nowrap;">{time_cell}</td>
     </tr>"""
@@ -883,7 +884,7 @@ def _render_condensed_decorator_group(
     html = f"""
     <tr style="border-bottom: 1px solid #eee; cursor: pointer;" onclick="{toggle_js}">
         <td style="padding: 4px; text-align: left; color: {summary_color};">{summary_icon} @cache</td>
-        <td style="padding: 4px; text-align: left; font-family: monospace; font-size: 11px;"><span id="{gid}_arrow" style="color:#999; font-size:10px;">▶</span> <span style="color: #1a73e8;">{safe_name}()</span> <span style="color: #888; font-size: 10px;">{summary_text}</span></td>
+        <td style="padding: 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span id="{gid}_arrow" style="color:#999; font-size:10px;">▶</span> <span style="color: #1a73e8;">{safe_name}()</span> <span style="color: #888; font-size: 10px;">{summary_text}</span></td>
         <td style="padding: 4px; text-align: left; font-size: 10px; color: #555;">-</td>
         <td style="padding: 4px; text-align: left;">{total_time:.3f}s</td>
     </tr>
@@ -906,7 +907,7 @@ def _render_condensed_decorator_group(
         html += f"""
         <tr class="{child_class}" style="display: none; border-bottom: 1px solid #f0f0f0;">
             <td style="padding: 2px 4px 2px 24px; text-align: left; color: {c_color}; border-left: 2px solid #c8d8ee;">{c_icon}</td>
-            <td style="padding: 2px 4px; text-align: left; font-family: monospace; font-size: 11px;"><span style="color: #888;">call #{func_calls.index(c) + 1}</span></td>
+            <td style="padding: 2px 4px; text-align: left; font-family: {_FONT_MONO}; font-size: 11px;"><span style="color: #888;">call #{func_calls.index(c) + 1}</span></td>
             <td style="padding: 2px 4px; text-align: left; font-size: 10px; color: #888;">{'HIT' if hit else 'MISS'}</td>
             <td style="padding: 2px 4px; text-align: left;">{ct:.3f}s</td>
         </tr>
