@@ -268,6 +268,7 @@ from .analysis import CodeAnalyzer
 from .annotations import CacheAnnotation
 from .function_tracker import FunctionTracker
 from .cacheability import StatementAnalysis, analyze_statement
+from .cacheability_decision import decide_cacheability
 from .purity import analyze_function_purity
 from .randomness import (
     RandomnessDetector,
@@ -418,9 +419,6 @@ class StatementProcessor:
             'code': code.strip(),
             'uncacheable_reasons': []
         }
-        if skip_cache and annotation and annotation.no_cache:
-            metrics['uncacheable_reasons'].append('@cash:no-cache annotation')
-
         if self.debug:
             logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
@@ -431,7 +429,6 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
-        skip_cache = self._check_forbidden_functions_skip(code, skip_cache, metrics, _parsed_tree)
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
 
         early_result, skip_cache = self._check_redundant_import(
@@ -441,13 +438,27 @@ class StatementProcessor:
             return early_result
 
         # Compute the pure-AST StatementAnalysis once. Used both by the
-        # pre-execution skip-condition checks and (on the cache-miss path) by
+        # cacheability decision and (on the cache-miss path) by
         # _post_execute for in-place-mutation tracking.
         statement_analysis = analyze_statement(code, _parsed_tree)
 
-        skip_cache = self._check_skip_conditions(
-            code, skip_cache, inputs, outputs, metrics, _parsed_tree, statement_analysis,
-        )
+        if not skip_cache:
+            cacheable, reasons = decide_cacheability(
+                code=code,
+                tree=_parsed_tree,
+                inputs=inputs,
+                outputs=outputs,
+                annotation=annotation,
+                analysis=statement_analysis,
+                user_ns=self.shell.user_ns,
+                variable_lineage=self.variable_lineage,
+                is_stateful_call=self._check_callable_stateful,
+                scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                should_skip_variable=self._should_skip_variable,
+            )
+            if not cacheable:
+                metrics['uncacheable_reasons'].extend(reasons)
+                skip_cache = True
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
 
         if self.debug:
@@ -491,28 +502,6 @@ class StatementProcessor:
             force_persist = annotation.persist
             skip_cache = annotation.no_cache
         return effective_ttl, force_persist, skip_cache
-
-    def _check_forbidden_functions_skip(
-        self,
-        code: str,
-        skip_cache: bool,
-        metrics: ProcessResult,
-        tree: ast.Module | None,
-    ) -> bool:
-        """Return updated *skip_cache*; populates metrics if forbidden functions found."""
-        if skip_cache:
-            return skip_cache
-        try:
-            forbidden_reasons = CodeAnalyzer.scan_for_forbidden_functions(code, self.shell.user_ns, tree=tree)
-            if forbidden_reasons:
-                metrics['uncacheable_reasons'] = forbidden_reasons
-                if self.debug:
-                    logger.debug("%s Disabling cache due to forbidden functions: %s", _LOG_FORBIDDEN, forbidden_reasons)
-                return True
-        except (TypeError, AttributeError, SyntaxError) as e:
-            if self.debug:
-                logger.debug("%s Error scanning for forbidden functions: %s", _LOG_FORBIDDEN, e)
-        return skip_cache
 
     def _do_cache_lookup(
         self,
@@ -659,16 +648,6 @@ class StatementProcessor:
             return False
         return False
 
-    def _detect_stateful_call(self, analysis: StatementAnalysis) -> bool:
-        """Return True if any bare-name call target resolves to a @stateful callable."""
-        try:
-            for name in analysis.called_names:
-                if self._check_callable_stateful(name):
-                    return True
-        except (TypeError, AttributeError):
-            logger.debug("%s Error checking function purity for statement", _LOG_PURITY)
-        return False
-
     def _handle_cache_hit(
         self,
         cached_data: Any,
@@ -796,58 +775,6 @@ class StatementProcessor:
                 logger.debug("%s Error checking imports: %s", _LOG_OPTIMIZATION, e)
 
         return None, skip_cache
-
-    def _check_input_lineage_skip(self, inputs: set[str]) -> bool:
-        """Return True if any input variable lacks lineage tracking."""
-        builtin_names = set(dir(builtins))
-        for var_name in inputs:
-            if var_name in ['get_ipython', '__builtins__', 'print', '__name__', '__doc__']:
-                continue
-            if var_name in builtin_names:
-                continue
-            if var_name not in self.shell.user_ns:
-                if self.debug:
-                    logger.debug("%s Skipping cache: input '%s' missing from memory", _LOG_CACHE_KEY, var_name)
-                return True
-            if var_name not in self.variable_lineage:
-                val = self.shell.user_ns[var_name]
-                if not self._should_skip_variable(var_name, val):
-                    if self.debug:
-                        logger.debug("%s Skipping cache: input '%s' has no tracked lineage", _LOG_CACHE_KEY, var_name)
-                    return True
-        return False
-
-    def _check_skip_conditions(self, code: str, skip_cache: bool, inputs: set[str], outputs: set[str], metrics: ProcessResult, tree: ast.Module | None, analysis: StatementAnalysis) -> bool:
-        """Check purity, mutation, side-effect, and input lineage conditions.
-
-        ``analysis`` is the pure-AST :class:`StatementAnalysis` computed once
-        per :meth:`process_statement` (see caller). Computing it here would
-        duplicate three AST visitor walks on the hot path.
-
-        Returns updated skip_cache flag (True if caching should be skipped).
-        """
-        # PURITY CHECK: @stateful functions must never be skipped.
-        if not skip_cache and self._detect_stateful_call(analysis):
-            metrics['uncacheable_reasons'].append("Calls @stateful function")
-            skip_cache = True
-            if self.debug:
-                logger.debug("%s Skipping cache for statement calling @stateful function", _LOG_PURITY)
-
-        # MUTATION + SIDE-EFFECT: delegate skip-reason computation to the analysis.
-        if not skip_cache:
-            reasons = analysis.skip_reasons(outputs)
-            if reasons:
-                metrics['uncacheable_reasons'].extend(reasons)
-                skip_cache = True
-                if self.debug:
-                    logger.debug("%s Skipping cache: %s", _LOG_MUTATION, reasons)
-
-        # Input lineage check: skip cache if any input lacks lineage.
-        if not skip_cache and self._check_input_lineage_skip(inputs):
-            metrics['uncacheable_reasons'].append('Input variable missing lineage')
-            skip_cache = True
-
-        return skip_cache
 
     def _publish_rich_outputs(self, outputs: list) -> None:
         """Replay a list of rich display outputs."""

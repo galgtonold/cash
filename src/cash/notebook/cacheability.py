@@ -5,8 +5,10 @@ from __future__ import annotations
 **Boundary rule (baked here by design):** this module is pure-AST.
 It accepts ``(code, tree)`` and returns a :class:`StatementAnalysis`.
 The moment something needs runtime state — ``user_ns``, value
-introspection, purity-registry lookup, annotation parsing — it stays in
-``statement_processor``, not here.  This boundary prevents bloat.
+introspection, purity-registry lookup, annotation parsing — it belongs
+in ``cacheability_decision.py``, not here.  That sibling module owns
+the merge of AST findings with runtime context; see ``CONTEXT.md``
+entry *Cacheability decision*.
 
 Folds ``mutation_detector.py`` and ``side_effects.py`` into one module.
 Both AST-visitor classes and their supporting dataclasses live here;
