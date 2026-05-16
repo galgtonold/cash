@@ -21,7 +21,7 @@ import re
 import time as time_module
 import types
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any, NamedTuple
+from typing import TYPE_CHECKING, Any
 
 from ..exceptions import UpstreamStateError
 from ..utils import resolve_file_dep_path
@@ -61,78 +61,11 @@ def _normalize_stmt(s: str) -> str:
 # the real cached value when _restore_from_cache runs.
 _FORWARD_PROBE_PLACEHOLDER = object()
 
-class _SimulationCacheEntry(NamedTuple):
-    """Per-cell snapshot stored in the incremental simulation cache.
-
-    Using a NamedTuple instead of a raw tuple makes the 7 fields
-    self-documenting and allows attribute access instead of magic indices.
-    """
-
-    cell_code_hash: str
-    """SHA-256 hex digest of the cell's source code."""
-
-    virtual_lineage: dict[str, str]
-    """Snapshot of ``virtual_lineage`` after simulating this cell."""
-
-    virtual_modules: set[str]
-    """Snapshot of known module names after simulating this cell."""
-
-    trace_segment: list[Any]
-    """Simulation trace entries produced by this cell."""
-
-    vars_mutated_by_loops: set[str]
-    """Variables whose lineage was affected by loop mutations up to this cell."""
-
-    vars_with_stale_files: set[str]
-    """Variables depending on files whose mtime has changed."""
-
-    cell_file_deps: dict[str, float]
-    """``{filepath: mtime}`` for files read during this cell's simulation."""
-
-class _TraceEntry(NamedTuple):
-    """A single entry in the simulation trace."""
-
-    stmt_code: str
-    outputs: set
-    inputs: set
-    input_hashes: list
-    produced_lineages: dict
-    files_stale: bool
-
-
-class _IncrementalStartResult(NamedTuple):
-    """Result of :meth:`UpstreamChecker._find_incremental_start`.
-
-    Replaces a raw 9-element tuple with named fields so call sites are
-    self-documenting.
-    """
-
-    first_changed_cell: int
-    """Index of the first upstream cell that needs re-simulation."""
-
-    had_prior_cache: bool
-    """Whether a simulation cache existed before this call."""
-
-    cache_had_hash_mismatch: bool
-    """Whether any cached cell hash differed from the current notebook."""
-
-    simulation_trace: list[Any]
-    """Restored simulation trace entries from cached cells."""
-
-    virtual_lineage: dict[str, str]
-    """Restored variable lineage mapping from the cache boundary."""
-
-    virtual_modules: set[str]
-    """Restored set of known module names from the cache boundary."""
-
-    new_cache_entries: list[Any]
-    """Cache entries carried forward from unchanged cells."""
-
-    vars_mutated_by_loops: set[str]
-    """Variables whose lineage was affected by loop mutations."""
-
-    vars_with_stale_files: set[str]
-    """Variables depending on files whose mtime has changed."""
+from .simulator_types import (
+    IncrementalStartResult as _IncrementalStartResult,
+    SimulationCacheEntry as _SimulationCacheEntry,
+    TraceEntry as _TraceEntry,
+)
 
 
 class NotebookSimulator:
