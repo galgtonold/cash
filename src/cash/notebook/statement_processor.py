@@ -440,7 +440,14 @@ class StatementProcessor:
         if early_result is not None:
             return early_result
 
-        skip_cache = self._check_skip_conditions(code, skip_cache, inputs, outputs, metrics, _parsed_tree)
+        # Compute the pure-AST StatementAnalysis once. Used both by the
+        # pre-execution skip-condition checks and (on the cache-miss path) by
+        # _post_execute for in-place-mutation tracking.
+        statement_analysis = analyze_statement(code, _parsed_tree)
+
+        skip_cache = self._check_skip_conditions(
+            code, skip_cache, inputs, outputs, metrics, _parsed_tree, statement_analysis,
+        )
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
 
         if self.debug:
@@ -464,7 +471,7 @@ class StatementProcessor:
             code, result, inputs, outputs, accessed_files,
             execution_time, effective_ttl, cache_key, source_hash,
             captured, skip_cache, force_persist, metrics, process_start,
-            _parsed_tree,
+            _parsed_tree, statement_analysis,
         )
 
         return metrics
@@ -588,6 +595,7 @@ class StatementProcessor:
         metrics: ProcessResult,
         process_start: float,
         tree: ast.Module | None,
+        statement_analysis: StatementAnalysis,
     ) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics."""
         # Auto-track newly imported local modules so _capture_variables includes
@@ -603,8 +611,9 @@ class StatementProcessor:
         )
 
         # Detect in-place mutations (detection-only; do not modify lineage).
-        _post_analysis = analyze_statement(code, tree)
-        pure_mutations = _post_analysis.all_mutated_vars - outputs
+        # Reuses the StatementAnalysis from process_statement to avoid a
+        # second pass of AST visitors over the same tree.
+        pure_mutations = statement_analysis.all_mutated_vars - outputs
         if pure_mutations:
             self.vars_with_mutation_lineage.update(pure_mutations)
             if self.debug:
@@ -808,13 +817,15 @@ class StatementProcessor:
                     return True
         return False
 
-    def _check_skip_conditions(self, code: str, skip_cache: bool, inputs: set[str], outputs: set[str], metrics: ProcessResult, tree: ast.Module | None) -> bool:
+    def _check_skip_conditions(self, code: str, skip_cache: bool, inputs: set[str], outputs: set[str], metrics: ProcessResult, tree: ast.Module | None, analysis: StatementAnalysis) -> bool:
         """Check purity, mutation, side-effect, and input lineage conditions.
+
+        ``analysis`` is the pure-AST :class:`StatementAnalysis` computed once
+        per :meth:`process_statement` (see caller). Computing it here would
+        duplicate three AST visitor walks on the hot path.
 
         Returns updated skip_cache flag (True if caching should be skipped).
         """
-        analysis = analyze_statement(code, tree)
-
         # PURITY CHECK: @stateful functions must never be skipped.
         if not skip_cache and self._detect_stateful_call(analysis):
             metrics['uncacheable_reasons'].append("Calls @stateful function")
