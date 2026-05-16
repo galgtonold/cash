@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from cash.notebook.cache_status import CacheStatus
+from cash.notebook import control_structure_helpers as _helpers
 
 if TYPE_CHECKING:
     from .statement_processor import ProcessResult
@@ -188,19 +189,8 @@ class ControlStructureProcessor:
 
     @staticmethod
     def _flush_metrics_output(metrics: dict[str, Any]) -> None:
-        """Immediately print stdout/stderr from a metrics dict.
-
-        This is called after each body statement so that output streams
-        in real-time instead of being batched until the entire control
-        structure finishes.  The metrics dict is marked with
-        ``_output_flushed=True`` so that the caller in ``magics.py``
-        does not replay the same output a second time.
-        """
-        if metrics.get('stdout'):
-            print(metrics['stdout'], end='', flush=True)
-        if metrics.get('stderr'):
-            print(metrics['stderr'], end='', file=sys.stderr, flush=True)
-        metrics['_output_flushed'] = True
+        """Thin wrapper around :func:`control_structure_helpers.flush_metrics_output`."""
+        _helpers.flush_metrics_output(metrics)
 
     def process(
         self,
@@ -777,14 +767,8 @@ class ControlStructureProcessor:
     def _tag_control_metrics(
         self, result: Any, ctx_hash: str, ctx_label: str, all_metrics: list
     ) -> None:
-        """Tag and flush metrics from a nested control-structure result."""
-        for m in result.metrics:
-            if 'control_context' not in m:
-                m['control_context'] = ctx_hash
-                m['branch_label'] = ctx_label
-            if not m.get('_output_flushed'):
-                self._flush_metrics_output(m)
-        all_metrics.extend(result.metrics)
+        """Thin wrapper around :func:`control_structure_helpers.tag_control_metrics`."""
+        _helpers.tag_control_metrics(result, ctx_hash, ctx_label, all_metrics)
 
     def _execute_simple_branch(
         self,
@@ -1142,247 +1126,61 @@ class ControlStructureProcessor:
 
     @staticmethod
     def _extract_cash_frame_lineno(exc: Exception) -> int | None:
-        """Extract the line number from the ``<cash>`` frame in the traceback.
-
-        Returns None if no ``<cash>`` frame is found.
-        """
-        tb = getattr(exc, '__traceback__', None)
-        while tb is not None:
-            if tb.tb_frame.f_code.co_filename == '<cash>':
-                return tb.tb_lineno
-            tb = tb.tb_next
-        return None
+        """Thin wrapper around :func:`control_structure_helpers.extract_cash_frame_lineno`."""
+        return _helpers.extract_cash_frame_lineno(exc)
 
     # ------------------------------------------------------------------
     # Lineage management
     # ------------------------------------------------------------------
 
     def _update_lineage_after_execution(self, node: ast.AST, code: str) -> None:
-        """
-        Update lineage for variables that may have been mutated inside the
-        control structure body.
-
-        This ensures downstream statements have correct cache keys even when
-        variables were modified in-place (e.g., dict accumulation in loops).
-        """
-        body_nodes = self._get_body_nodes(node)
-        if not body_nodes:
-            return
-
-        mutated_vars = self._find_potentially_mutated_variables(body_nodes)
-
-        # Exclude loop target variables — they are not mutations
-        if isinstance(node, ast.For):
-            target_names = set(extract_target_names(node.target))
-            mutated_vars -= target_names
-
-        if mutated_vars:
-            iterable_lineage = None
-            if isinstance(node, ast.For):
-                iterable_lineage = self._get_iterable_lineage(node.iter)
-
-            self._update_mutated_variable_lineages(mutated_vars, iterable_lineage, code)
+        """Thin wrapper around :func:`control_structure_helpers.update_lineage_after_execution`."""
+        _helpers.update_lineage_after_execution(
+            self.shell, self.statement_processor, node, code, debug=self.debug
+        )
 
     def _get_body_nodes(self, node: ast.AST) -> list[ast.AST]:
-        """Get all body nodes from a control structure."""
-        body = []
-        if hasattr(node, 'body'):
-            body.extend(node.body)
-        if hasattr(node, 'orelse'):
-            body.extend(node.orelse)
-        if hasattr(node, 'handlers'):
-            for handler in node.handlers:
-                body.extend(handler.body)
-        if hasattr(node, 'finalbody'):
-            body.extend(node.finalbody)
-        return body
+        """Thin wrapper around :func:`control_structure_helpers.get_body_nodes`."""
+        return _helpers.get_body_nodes(node)
 
     def _get_expression_iterable_lineage(self, iter_node: ast.AST) -> str | None:
-        """Compute lineage for a complex iterable expression by analyzing its inputs."""
-        from .analysis import CodeAnalyzer
-        iter_code = ast.unparse(iter_node)
-        try:
-            inputs, _ = CodeAnalyzer.analyze_code_block(iter_code)
-            lineage_parts = []
-            for var_name in sorted(inputs):
-                if var_name in self.statement_processor.variable_lineage:
-                    lineage_parts.append(self.statement_processor.variable_lineage[var_name])
-                elif var_name in self.shell.user_ns:
-                    try:
-                        lineage_parts.append(
-                            self.statement_processor.compute_hash(self.shell.user_ns[var_name])
-                        )
-                    except (TypeError, ValueError, AttributeError) as exc:
-                        logger.debug("[CONTROL] Failed to hash input variable '%s' for iterable lineage: %s", var_name, exc)
-            if lineage_parts:
-                return hashlib.sha256(':'.join(lineage_parts).encode()).hexdigest()
-        except (SyntaxError, ValueError, AttributeError, TypeError) as exc:
-            logger.debug("[CONTROL] Failed to analyze iterable code for lineage: %s", exc)
-        return None
+        """Thin wrapper around :func:`control_structure_helpers.get_expression_iterable_lineage`."""
+        return _helpers.get_expression_iterable_lineage(self.shell, self.statement_processor, iter_node)
 
     def _get_iterable_lineage(self, iter_node: ast.AST) -> str | None:
-        """
-        Get the lineage hash of the iterable expression.
-        """
-        if isinstance(iter_node, ast.Name):
-            var_name = iter_node.id
-            if var_name in self.statement_processor.variable_lineage:
-                return self.statement_processor.variable_lineage[var_name]
-            if var_name in self.shell.user_ns:
-                try:
-                    return self.statement_processor.compute_hash(self.shell.user_ns[var_name])
-                except (TypeError, ValueError, AttributeError) as exc:
-                    logger.debug("[CONTROL] Failed to hash iterable variable '%s': %s", var_name, exc)
-        else:
-            return self._get_expression_iterable_lineage(iter_node)
-        return None
+        """Thin wrapper around :func:`control_structure_helpers.get_iterable_lineage`."""
+        return _helpers.get_iterable_lineage(self.shell, self.statement_processor, iter_node)
 
     def _extract_while_stmts(self, node: ast.While) -> list[str]:
-        """Extract while/else statements for badge display."""
-        stmts = [f"while {ast.unparse(node.test)}:"]
-        stmts.extend(f"  {ast.unparse(s)}" for s in node.body)
-        if node.orelse:
-            stmts.append("else:")
-            stmts.extend(f"  {ast.unparse(s)}" for s in node.orelse)
-        return stmts
+        """Thin wrapper around :func:`control_structure_helpers.extract_while_stmts`."""
+        return _helpers.extract_while_stmts(node)
 
     def _extract_with_stmts(self, node: ast.With) -> list[str]:
-        """Extract with-block statements for badge display."""
-        items_str = ', '.join(ast.unparse(item) for item in node.items)
-        stmts = [f"with {items_str}:"]
-        stmts.extend(f"  {ast.unparse(s)}" for s in node.body)
-        return stmts
+        """Thin wrapper around :func:`control_structure_helpers.extract_with_stmts`."""
+        return _helpers.extract_with_stmts(node)
 
     def _extract_try_stmts(self, node: ast.Try) -> list[str]:
-        """Extract try/except/else/finally statements for badge display."""
-        stmts = ["try:"]
-        stmts.extend(f"  {ast.unparse(s)}" for s in node.body)
-        for handler in getattr(node, 'handlers', []):
-            if handler.type:
-                hdr = f"except {ast.unparse(handler.type)}"
-                if handler.name:
-                    hdr += f" as {handler.name}"
-            else:
-                hdr = "except"
-            stmts.append(f"{hdr}:")
-            stmts.extend(f"  {ast.unparse(s)}" for s in handler.body)
-        if node.orelse:
-            stmts.append("else:")
-            stmts.extend(f"  {ast.unparse(s)}" for s in node.orelse)
-        if getattr(node, 'finalbody', None):
-            stmts.append("finally:")
-            stmts.extend(f"  {ast.unparse(s)}" for s in node.finalbody)
-        return stmts
+        """Thin wrapper around :func:`control_structure_helpers.extract_try_stmts`."""
+        return _helpers.extract_try_stmts(node)
 
     def _extract_body_statements(self, node: ast.AST) -> list[str]:
-        """Extract individual body statements from a control structure for badge display.
-
-        For if/else returns the statements from ALL branches grouped by branch.
-        For while/with/try returns the body statements directly.
-        The badge renderer can then show each statement as its own row.
-        """
-        statements: list[str] = []
-        if isinstance(node, ast.If):
-            self._extract_if_body_statements(node, statements)
-        elif isinstance(node, ast.While):
-            statements = self._extract_while_stmts(node)
-        elif isinstance(node, ast.With):
-            statements = self._extract_with_stmts(node)
-        elif isinstance(node, ast.Try):
-            statements = self._extract_try_stmts(node)
-        return statements
+        """Thin wrapper around :func:`control_structure_helpers.extract_body_statements`."""
+        return _helpers.extract_body_statements(node)
 
     def _extract_if_body_statements(self, node: ast.If, statements: list[str],
                                      is_elif: bool = False) -> None:
-        """Recursively extract if/elif/else branch statements."""
-        keyword = "elif" if is_elif else "if"
-        statements.append(f"{keyword} {ast.unparse(node.test)}:")
-        for stmt in node.body:
-            statements.append(f"  {ast.unparse(stmt)}")
-
-        if node.orelse:
-            # Check if the else is actually an elif (single If node in orelse)
-            if len(node.orelse) == 1 and isinstance(node.orelse[0], ast.If):
-                self._extract_if_body_statements(node.orelse[0], statements, is_elif=True)
-            else:
-                statements.append("else:")
-                for stmt in node.orelse:
-                    statements.append(f"  {ast.unparse(stmt)}")
+        """Thin wrapper around :func:`control_structure_helpers.extract_if_body_statements`."""
+        _helpers.extract_if_body_statements(node, statements, is_elif)
 
     def _find_potentially_mutated_variables(self, body_nodes: list) -> set[str]:
-        """
-        Find variables that are mutated inside the control structure body.
-
-        Uses ``MutationDetector`` for precise detection of in-place mutations
-        (subscript assignment, method calls like ``.append()``, augmented
-        assigns, attribute assignments).
-        """
-        from .cacheability import analyze_statement
-
-        mutated_vars: set = set()
-        for body_node in body_nodes:
-            if is_control_structure(body_node):
-                nested_body = self._get_body_nodes(body_node)
-                mutated_vars.update(self._find_potentially_mutated_variables(nested_body))
-            else:
-                stmt_code = ast.unparse(body_node)
-                try:
-                    detected = analyze_statement(stmt_code, None).all_mutated_vars
-                    mutated_vars.update(detected)
-                except (SyntaxError, ValueError, AttributeError, TypeError) as exc:
-                    logger.debug("[CONTROL] Failed to detect mutations in: %s: %s", stmt_code[:60], exc)
-
-        # Filter out built-ins
-        built_ins = {'print', 'len', 'range', 'enumerate', 'zip', 'map', 'filter',
-                     'sum', 'min', 'max', 'sorted', 'reversed', 'list', 'dict', 'set',
-                     'str', 'int', 'float', 'bool', 'type', 'isinstance', 'hasattr',
-                     'getattr', 'setattr', 'open', 'get_ipython', '__builtins__'}
-        return mutated_vars - built_ins
+        """Thin wrapper around :func:`control_structure_helpers.find_potentially_mutated_variables`."""
+        return _helpers.find_potentially_mutated_variables(body_nodes)
 
     def _update_mutated_variable_lineages(self, mutated_vars: set[str],
                                            iterable_lineage: str | None,
                                            loop_code: str) -> None:
-        """
-        Update the lineage of variables that were mutated inside a control structure.
-
-        The new lineage incorporates:
-        1. The control structure code itself
-        2. The variable's current value hash
-        3. The iterable's lineage (for loops)
-
-        This ensures downstream statements get fresh cache keys when the
-        control structure produces different results.
-        """
-        for var_name in mutated_vars:
-            if var_name not in self.shell.user_ns:
-                continue
-
-            val = self.shell.user_ns[var_name]
-
-            # Skip immutable scalar types
-            if isinstance(val, (int, float, complex, str, bytes, bool, type(None), frozenset, tuple)):
-                continue
-
-            try:
-                loop_code_hash = hashlib.sha256(loop_code.encode()).hexdigest()
-                value_hash = self.statement_processor.compute_hash(val)
-
-                lineage_components = [loop_code_hash, value_hash]
-                if iterable_lineage:
-                    lineage_components.append(iterable_lineage)
-
-                new_lineage = hashlib.sha256(':'.join(lineage_components).encode()).hexdigest()
-
-                self.statement_processor.lineage.record(var_name, new_lineage, value=val)
-
-                if hasattr(self.statement_processor, 'vars_with_mutation_lineage'):
-                    self.statement_processor.vars_with_mutation_lineage.add(var_name)
-
-                if self.debug:
-                    logger.debug("[CONTROL] Updated lineage for mutated var '%s': %s...",
-                                 var_name, new_lineage[:20])
-
-            except (TypeError, ValueError, AttributeError) as e:
-                if self.debug:
-                    logger.warning("[CONTROL] Failed to update lineage for '%s': %s", var_name, e)
+        """Thin wrapper around :func:`control_structure_helpers.update_mutated_variable_lineages`."""
+        _helpers.update_mutated_variable_lineages(
+            self.shell, self.statement_processor, mutated_vars, iterable_lineage, loop_code, debug=self.debug
+        )
 
