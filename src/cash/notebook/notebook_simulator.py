@@ -13,24 +13,22 @@ orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 ``process_statement_callback``.
 """
 
-import ast
-import hashlib
 import logging
-import os
 import re
-import time as time_module
 import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from ..exceptions import UpstreamStateError
-from ..utils import resolve_file_dep_path
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .analysis import CodeAnalyzer
-from .cache_key import CacheKeyContext, compute_cache_key
 from .cache_status import CacheStatus
-from .control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from .control_structures import is_control_structure
 from .server_discovery import get_notebook_cells
+from .simulator_types import (
+    IncrementalStartResult as _IncrementalStartResult,
+    SimulationCacheEntry as _SimulationCacheEntry,
+    TraceEntry as _TraceEntry,
+)
 from .virtual_lineage import (
     VirtualLineage,
     _BUILTIN_NAMES,
@@ -44,12 +42,6 @@ if TYPE_CHECKING:
 __all__ = ["NotebookSimulator"]
 
 logger = logging.getLogger(__name__)
-
-from .simulator_types import (
-    IncrementalStartResult as _IncrementalStartResult,
-    SimulationCacheEntry as _SimulationCacheEntry,
-    TraceEntry as _TraceEntry,
-)
 
 
 class NotebookSimulator:
