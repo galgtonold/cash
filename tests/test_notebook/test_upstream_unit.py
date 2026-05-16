@@ -164,6 +164,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'file_dependencies': {csv_path: csv_file.stat().st_mtime},
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
+        checker.simulator._apply_phase_mutations()
 
         assert 'df' in checker.executed_file_deps
         assert csv_path in checker.executed_file_deps['df']
@@ -177,6 +178,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'x'}, metadata, {})
+        checker.simulator._apply_phase_mutations()
 
         assert 'x' not in checker.executed_file_deps
 
@@ -199,6 +201,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
                 'file_dependencies': {stale_path: 0.0},
             }
             checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
+            checker.simulator._apply_phase_mutations()
 
             assert 'df' in checker.executed_file_deps
             # The resolved path should be the actual file, not the stale path
@@ -218,6 +221,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'file_dependencies': {'/no/such/file/ever_unique_xyz.csv': 0.0},
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
+        checker.simulator._apply_phase_mutations()
 
         # No resolved path → nothing added
         assert 'df' not in checker.executed_file_deps or len(checker.executed_file_deps['df']) == 0
@@ -236,6 +240,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'file_dependencies': {csv_path: csv_file.stat().st_mtime},
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'df', 'df2'}, metadata, {})
+        checker.simulator._apply_phase_mutations()
 
         assert csv_path in checker.executed_file_deps['df']
         assert csv_path in checker.executed_file_deps['df2']

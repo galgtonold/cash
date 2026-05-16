@@ -1590,9 +1590,6 @@ class VirtualLineage:
                 input_lineages=dict(input_hashes) if input_hashes else None,
                 file_deps=set(resolved_paths) if resolved_paths else None,
             )
-        # Drain so direct callers (tests, restore handler) see writes immediately.
-        # The orchestrator's _apply_phase_mutations also drains as a safety net.
-        apply_collected_mutations(self._restores, self._tracking_state)
 
     def _eliminate_broken_vars_via_current_cell_probe(
         self,
