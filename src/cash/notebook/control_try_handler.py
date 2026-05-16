@@ -266,9 +266,9 @@ class TryHandler:
             exc_lineage = hashlib.sha256(
                 f"__exception__:{exc_class_name}:{class_lineage}:{caught_exception!s}:{caught_exception!r}".encode()
             ).hexdigest()
-            self.statement_processor.variable_lineage[matched_handler.name] = exc_lineage
-            with contextlib.suppress(AttributeError, TypeError):
-                caught_exception._cash_lineage_hash = exc_lineage
+            self.statement_processor.lineage.record(
+                matched_handler.name, exc_lineage, value=caught_exception,
+            )
         except (ValueError, AttributeError, TypeError) as exc:
             logger.debug("[CONTROL] Failed to compute exception lineage for handler variable: %s", exc)
 

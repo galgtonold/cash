@@ -136,8 +136,11 @@ def test_exception_bound_to_handler_var(handler, mock_shell, mock_statement_proc
     node = _parse_try("try:\n    x = 1\nexcept ValueError as e:\n    y = 2")
     handler.process(node, None, True)
     assert mock_shell.user_ns.get('e') is err
-    # Exception should have a lineage entry computed
-    assert 'e' in mock_statement_processor.variable_lineage
+    # Exception should have a lineage entry recorded through the LineageStore seam
+    mock_statement_processor.lineage.record.assert_called_once()
+    args, kwargs = mock_statement_processor.lineage.record.call_args
+    assert args[0] == 'e'
+    assert kwargs.get('value') is err
 
 
 # ---------------------------------------------------------------------------
