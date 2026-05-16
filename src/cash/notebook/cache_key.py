@@ -11,11 +11,13 @@ import ast
 import hashlib
 import logging
 import types
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
 from collections.abc import Callable, Mapping
 from typing import Any, NamedTuple, Protocol, runtime_checkable
+
+from cash.notebook.lineage_store import LineageStore
 
 __all__ = ["CacheKeyContext", "CacheKeyResult", "compute_cache_key"]
 
@@ -44,30 +46,13 @@ class CacheKeyContext:
     compute_hash_fn: Callable[[object], str] | None = None
     debug: bool = False
     debug_print_fn: Callable[..., Any] | None = None
+    _lineage_store: LineageStore = field(init=False, repr=False, compare=False)
 
-def _resolve_input_lineage(
-    var_name: str,
-    val: object,
-    virtual_lineage: dict[str, str],
-    variable_lineage: dict[str, str],
-    compute_hash_fn: Callable[[object], str] | None,
-    debug: bool,
-    debug_print_fn: Callable[..., Any],
-) -> str | None:
-    """Resolve lineage hash for a single input variable.
-
-    Delegates to :class:`LineageStore.resolve` so the priority ladder
-    (virtual → store → ``_cash_lineage_hash`` → compute_hash → str) has a
-    single canonical implementation. See ``CONTEXT.md`` entry: *LineageStore*.
-    """
-    from cash.notebook.lineage_store import LineageStore
-    store = LineageStore(backing=variable_lineage)
-    result = store.resolve(
-        var_name, value=val, virtual=virtual_lineage, compute_hash_fn=compute_hash_fn,
-    )
-    if debug and result is not None:
-        debug_print_fn(f"[CACHE_KEY] Input '{var_name}' resolved to: {result[:16]}...")
-    return result
+    def __post_init__(self) -> None:
+        # Wrap once so per-input resolution doesn't allocate a new LineageStore
+        # per variable on the cache-key hot path. The store shares the backing
+        # dict, so external writes to ``variable_lineage`` remain visible.
+        self._lineage_store = LineageStore(backing=self.variable_lineage)
 
 class CacheKeyResult(NamedTuple):
     """Result of :func:`compute_cache_key`."""
@@ -110,6 +95,7 @@ def _process_input_var(
     user_ns: Mapping[str, Any],
     variable_lineage: dict[str, str],
     virtual_lineage: dict[str, str],
+    lineage_store: LineageStore,
     compute_hash_fn: Callable[[object], str] | None,
     function_tracker: FunctionTrackerProtocol | None,
     debug: bool,
@@ -131,12 +117,13 @@ def _process_input_var(
                 )
         return
 
-    lineage = _resolve_input_lineage(
-        var_name, val, virtual_lineage, variable_lineage,
-        compute_hash_fn, debug, debug_print_fn,
+    lineage = lineage_store.resolve(
+        var_name, value=val, virtual=virtual_lineage, compute_hash_fn=compute_hash_fn,
     )
     if lineage:
         input_hashes.append(lineage)
+        if debug:
+            debug_print_fn(f"[CACHE_KEY] Input '{var_name}' resolved to: {lineage[:16]}...")
 
     if val is not None and callable(val) and not isinstance(val, type) and function_tracker is not None:
         try:
@@ -293,7 +280,7 @@ def compute_cache_key(
             continue
         _process_input_var(
             var_name, virtual_modules, user_ns, variable_lineage, virtual_lineage,
-            compute_hash_fn, function_tracker, debug, debug_print_fn,
+            ctx._lineage_store, compute_hash_fn, function_tracker, debug, debug_print_fn,
             input_hashes, func_source_hashes, module_source_hashes,
         )
 
