@@ -314,16 +314,6 @@ class NotebookSimulator:
     def _check_missing_required_inputs(self, *args, **kwargs):
         return self._classifier._check_missing_required_inputs(*args, **kwargs)
 
-    # --- Method forwarders for moved Phase-3 planner methods -----------
-    def _build_reexecution_plan(self, *args, **kwargs):
-        return self._planner._build_reexecution_plan(*args, **kwargs)
-    def _dedup_sorted_indices(self, *args, **kwargs):
-        return self._planner._dedup_sorted_indices(*args, **kwargs)
-    def _is_loop_var_assignment_for_context(self, *args, **kwargs):
-        return self._planner._is_loop_var_assignment_for_context(*args, **kwargs)
-    def _schedule_loop_var_contexts(self, *args, **kwargs):
-        return self._planner._schedule_loop_var_contexts(*args, **kwargs)
-
     # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
 
     def set_current_cell_id(self, cell_id: str | None) -> None:
