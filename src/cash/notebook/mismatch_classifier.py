@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from ._protocols import TrackingState
 from .analysis import CodeAnalyzer
 from .cache_status import CacheStatus
+from .simulator_types import RestoreCollector, apply_collected_mutations
 from .virtual_lineage import VirtualLineage, _BUILTIN_NAMES, _normalize_stmt
 
 __all__ = ["MismatchClassifier"]
@@ -42,8 +43,12 @@ class MismatchClassifier:
         self.debug = debug
         self.set_tracking_state(tracking_state)
 
+        # Buffered TrackingState mutations; orchestrator drains after the phase.
+        self._restores = RestoreCollector()
+
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
+        self._tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -350,7 +355,10 @@ class MismatchClassifier:
                       "Lineage is ahead due to downstream advancement. "
                       "Resetting lineage from %s to virtual %s.",
                       var_name, actual_lineage[:8], final_virtual_hash[:8])
-            self.lineage.reset_to(var_name, final_virtual_hash)
+            self._restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
+            # Drain immediately: subsequent classification iterations read
+            # variable_lineage to decide on other vars.
+            apply_collected_mutations(self._restores, self._tracking_state)
             return True
 
         return False

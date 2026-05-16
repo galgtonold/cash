@@ -29,8 +29,10 @@ from .control_structures import extract_target_names, get_control_structure_type
 from .server_discovery import get_notebook_cells
 from .simulator_types import (
     IncrementalStartResult as _IncrementalStartResult,
+    RestoreCollector,
     SimulationCacheEntry as _SimulationCacheEntry,
     TraceEntry as _TraceEntry,
+    apply_collected_mutations,
 )
 
 if TYPE_CHECKING:
@@ -99,8 +101,12 @@ class VirtualLineage:
         self._simulation_cell_hashes: dict[int, str] = {}
         self._cell_id_to_last_index: dict[str, int] = {}
 
+        # Buffered TrackingState mutations; orchestrator drains after the phase.
+        self._restores = RestoreCollector()
+
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
+        self._tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -1160,12 +1166,14 @@ class VirtualLineage:
                 if out in virtual_modules and out not in self.variable_lineage:
                     lineage_val = output_lineages.get(out)
                     if lineage_val:
-                        self.variable_lineage[out] = lineage_val
+                        self._restores.record_restore(var_name=out, lineage_hash=lineage_val)
                         if self.debug:
                             logger.debug(
                                 "[LINEAGE_DEBUG] Propagated module '%s' lineage (from cache): %s...",
                                 out, lineage_val[:12],
                             )
+        # Mid-simulation drain: same reasoning as in _propagate_import_lineage.
+        apply_collected_mutations(self._restores, self._tracking_state)
         stmt_file_deps = self._stat_file_deps(hist_files)
         return ('hit', 0.0, stmt_file_deps)
 
@@ -1335,12 +1343,16 @@ class VirtualLineage:
         """
         for out in outputs:
             if out in virtual_modules and out not in self.variable_lineage:
-                self.variable_lineage[out] = lineage_hash
+                self._restores.record_restore(var_name=out, lineage_hash=lineage_hash)
                 if self.debug:
                     logger.debug(
                         "[LINEAGE_DEBUG] Propagated module '%s' lineage to variable_lineage: %s...",
                         out, lineage_hash[:12],
                     )
+        # Mid-simulation drain: subsequent statements' compute_cache_key reads
+        # variable_lineage to include module components, so the write must be
+        # visible before the next _update_virtual_lineage call.
+        apply_collected_mutations(self._restores, self._tracking_state)
 
     def _update_virtual_lineage(self, stmt_code: str, virtual_lineage: dict[str, str], virtual_modules: set[str] = None, occurrence_index: int = 0) -> tuple[set[str], float, bool, dict[str, float]]:
         """
@@ -1537,56 +1549,44 @@ class VirtualLineage:
                         )
         return restored_vars
 
-    def _record_restored_cell_hash(self, var: str, stored_hash: str) -> None:
-        """Add *stored_hash* to ``executed_cell_hashes[var]``, normalising legacy str values."""
-        if var not in self.executed_cell_hashes:
-            self.executed_cell_hashes[var] = set()
-        elif isinstance(self.executed_cell_hashes[var], str):
-            self.executed_cell_hashes[var] = {self.executed_cell_hashes[var]}
-        self.executed_cell_hashes[var].add(stored_hash)
-
     def _update_tracking_after_restore(
         self,
         restored_vars: set[str],
         metadata: dict,
         input_hashes: dict[str, str],
     ) -> None:
-        """Update executed_cell_codes, executed_cell_hashes, executed_input_lineages, and executed_file_deps."""
-        if 'output_lineages' in metadata:
-            for var, lin in metadata['output_lineages'].items():
-                if var in restored_vars:
-                    self.variable_lineage[var] = lin
+        """Buffer one CacheRestore per restored var.
 
+        The orchestrator drains the collector and applies writes to
+        executed_cell_codes, executed_cell_hashes, executed_input_lineages,
+        executed_file_deps, and variable_lineage.
+        """
+        output_lineages = metadata.get('output_lineages', {}) if 'output_lineages' in metadata else {}
         stored_code = metadata.get('code', metadata.get('cell_code'))
         stored_hash = metadata.get('source_hash', metadata.get('cell_hash'))
-        for var in restored_vars:
-            if stored_code:
-                self.executed_cell_codes[var] = stored_code
-            if stored_hash:
-                self._record_restored_cell_hash(var, stored_hash)
 
-        if input_hashes and restored_vars:
-            for var in restored_vars:
-                self.executed_input_lineages[var] = dict(input_hashes)
-
-        # Propagate file dependencies from cache metadata so that downstream
-        # statements (auto-executed by the statement processor) can inherit
-        # them.  Without this, the file-dep inheritance chain breaks after a
-        # kernel restart: _save_to_cache sees has_file_dependencies=False and
-        # the cost model stores metadata-only entries for fast-but-large
-        # intermediate transformations (e.g. sort_values on a read_csv df).
-        file_deps = metadata.get('file_dependencies', {})
-        if file_deps and hasattr(self, 'executed_file_deps'):
-            resolved_paths: set[str] = set()
-            for stored_path in file_deps:
+        # Resolve file deps once.
+        resolved_paths: set[str] = set()
+        file_deps_meta = metadata.get('file_dependencies', {})
+        if file_deps_meta:
+            for stored_path in file_deps_meta:
                 resolved = resolve_file_dep_path(stored_path)
                 if resolved is not None:
                     resolved_paths.add(resolved)
-            if resolved_paths:
-                for var in restored_vars:
-                    if var not in self.executed_file_deps:
-                        self.executed_file_deps[var] = set()
-                    self.executed_file_deps[var].update(resolved_paths)
+
+        for var in restored_vars:
+            lin = output_lineages.get(var) if output_lineages else None
+            self._restores.record_restore(
+                var_name=var,
+                lineage_hash=lin,  # may be None — apply step skips lineage write if so
+                code=stored_code if stored_code else None,
+                code_hash=stored_hash if stored_hash else None,
+                input_lineages=dict(input_hashes) if input_hashes else None,
+                file_deps=set(resolved_paths) if resolved_paths else None,
+            )
+        # Drain so direct callers (tests, restore handler) see writes immediately.
+        # The orchestrator's _apply_phase_mutations also drains as a safety net.
+        apply_collected_mutations(self._restores, self._tracking_state)
 
     def _eliminate_broken_vars_via_current_cell_probe(
         self,
@@ -1691,7 +1691,14 @@ class VirtualLineage:
                             # cached value when _restore_from_cache runs.
                             for var in produced:
                                 if var in virtual_lineage:
-                                    self.variable_lineage[var] = virtual_lineage[var]
+                                    self._restores.record_restore(
+                                        var_name=var, lineage_hash=virtual_lineage[var],
+                                    )
+                                    # Drain so subsequent statements probing the
+                                    # cache see the placeholder lineage.
+                                    apply_collected_mutations(
+                                        self._restores, self._tracking_state,
+                                    )
                                 if var not in self.shell.user_ns:
                                     self.shell.user_ns[var] = _FORWARD_PROBE_PLACEHOLDER
                             if self.debug:
