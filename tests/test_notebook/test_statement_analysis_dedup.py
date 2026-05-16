@@ -2,9 +2,9 @@
 ``process_statement`` call.
 
 Before this fix, the same ``StatementAnalysis`` was computed twice — once in
-``_check_skip_conditions`` (pre-execution, l.816) and again in ``_post_execute``
-(post-execution, l.606). Both passed identical ``(code, tree)`` args, so three
-AST visitors ran twice per statement on the hot path.
+the pre-execution cacheability decision and again in ``_post_execute``. Both
+passed identical ``(code, tree)`` args, so three AST visitors ran twice per
+statement on the hot path.
 """
 from __future__ import annotations
 
