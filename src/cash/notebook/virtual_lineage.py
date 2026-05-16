@@ -1121,7 +1121,6 @@ class VirtualLineage:
         return input_lineages_all
 
     @staticmethod
-    @staticmethod
     def _stat_file_deps(hist_files: dict[str, float]) -> dict[str, float]:
         """Stat each path in *hist_files* and return ``{path: mtime}`` for existing files."""
         result: dict[str, float] = {}
