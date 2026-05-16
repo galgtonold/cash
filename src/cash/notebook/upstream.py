@@ -268,29 +268,15 @@ class UpstreamChecker:
         # latest reference.
         self.simulator.function_tracker = self.function_tracker
 
-        # Probe for notebook availability.  When no notebook file exists
-        # (e.g. unit tests with MockShell), Pass 2 will be a no-op so
-        # Pass 1 must handle re-execution itself.
-        has_notebook = False
-        try:
-            from .server_discovery import get_notebook_path
-            nb_path = get_notebook_path()
-            if nb_path:
-                nb_cells = get_notebook_cells(nb_path)
-                has_notebook = bool(nb_cells)
-        except (ImportError, OSError, ValueError):
-            logger.debug("[UPSTREAM] Failed to discover notebook path for upstream checking")
-
-        # Phase 1 â€” Lineage-based staleness check (in-memory consistency).
-        # Detects when variables are inconsistent with each other based on their
-        # recorded lineage hashes.  When a notebook file is available this phase
-        # is diagnostic-only; Phase 2 handles actual re-execution with full cell
-        # ordering context.  When no notebook exists (e.g. unit tests) this phase
-        # re-executes stale statements directly.
-        self._check_lineage_based(
-            required_inputs, process_statement_callback, global_ttl,
-            reexecute=not has_notebook
-        )
+        # Phase 1 — Lineage-based staleness check (diagnostic-only).
+        # Detects when variables are inconsistent with each other based on
+        # their recorded lineage hashes. This phase only LOGS mismatches;
+        # Phase 2 (``_check_notebook_based``) handles actual re-execution
+        # with full cell ordering context. The notebook subsystem requires
+        # a notebook file to function, so there is no "no-notebook"
+        # re-execution path here. (The decorator path — ``@cash.cache`` —
+        # does not use UpstreamChecker.)
+        self._check_lineage_based(required_inputs)
 
         # Compute current cell outputs so Phase 2 can distinguish read-only inputs
         # from variables the current cell also writes (downstream-advancement case).
@@ -363,84 +349,52 @@ class UpstreamChecker:
         )
         return hashlib.sha256(expected_lineage_str.encode('utf-8')).hexdigest()
 
-    # NOTE: A second ``def _handle_lineage_mismatch`` existed in the original
-    # ``upstream.py`` here, with a 7-param signature meant to handle the
-    # "no notebook file" re-execution path. It was *always* shadowed by the
-    # 14-param simulator version later in the file (the simulator's version
-    # now lives in :class:`NotebookSimulator`). Because the wrapping
-    # try/except in :meth:`_check_lineage_based` catches ``TypeError``,
-    # the 7-arg invocation has been silently failing for the entire history
-    # of this file. Removing the dead definition here preserves observable
-    # behaviour: calls to ``self._handle_lineage_mismatch(7 args)`` now go
-    # through ``__getattr__`` to the simulator's 14-param version and still
-    # TypeError into the same try/except. Filed as latent bug for future work.
+    def _check_lineage_based(self, required_inputs: set[str]) -> None:
+        """Phase 1 — diagnostic-only lineage staleness check.
 
-    def _check_lineage_based(
-        self,
-        required_inputs: set[str],
-        process_statement_callback,
-        global_ttl: int | None,
-        reexecute: bool = False
-    ) -> None:
-        """
-        Check if lineage of required inputs has changed based on their dependencies.
-        This handles transitive dependencies in memory without needing notebook files.
+        Walks each input, recomputes its expected lineage from
+        ``executed_cell_codes`` + current input lineages, and logs when the
+        result differs from the stored value. Phase 2
+        (:meth:`_check_notebook_based`) handles the actual re-execution
+        decision with full notebook context.
 
-        When *reexecute* is False (default â€” a notebook file is available),
-        this pass only LOGS mismatches.  Re-execution is handled entirely by
-        _check_notebook_based (Pass 2) which has full context (simulation
-        trace, virtual lineage, cell ordering) to correctly determine whether
-        a variable is truly stale.
+        Why this phase is diagnostic-only: Pass 1 uses the CURRENT lineage of
+        each input to compute expected output lineage. If an input was
+        redefined by a LATER cell (variable shadowing), its current lineage
+        reflects the later definition — not the version used when the output
+        was originally computed. Re-executing with the wrong input would
+        produce incorrect results that poison downstream computation. Phase 2's
+        simulation tracks cell ordering and input lineages per-cell, so it
+        handles both true staleness AND shadowing correctly.
 
-        When *reexecute* is True (no notebook file â€” e.g. unit tests with
-        MockShell), this pass re-executes stale statements directly because
-        Pass 2 will be a no-op.
-
-        Why not always re-execute here:
-        Pass 1 uses the CURRENT lineage of each input to compute expected output
-        lineage.  But if an input was redefined by a LATER cell (variable shadowing),
-        its current lineage reflects the later definition â€” not the version that was
-        used when the output was originally computed.  Re-executing with the wrong
-        input produces incorrect results that poison downstream computation.
-        Pass 2's simulation correctly tracks cell ordering and input lineages per-cell,
-        so it handles both true staleness AND shadowing correctly.
+        File and module lineage components are omitted here (Phase 2 owns
+        those) — that may produce false-positive mismatch *logs* for vars with
+        file/module deps, which is harmless.
         """
         for var_name in required_inputs:
             if var_name in _BUILTIN_NAMES:
                 continue
-
-            # Skip variables with mutation-updated lineage - their lineage is not
-            # derivable from executed_cell_codes (e.g., loop appends)
             if var_name in self.vars_with_mutation_lineage:
+                # Mutation-updated lineage is not derivable from executed_cell_codes.
                 continue
-
             if var_name not in self.executed_cell_codes:
                 continue
-
             if var_name not in self.variable_lineage:
                 continue
 
             last_executed_code = self.executed_cell_codes[var_name]
-
             try:
-                # NOTE: file_hash_component and module_lineage_component are omitted
-                # because they require complex state (notebook dir resolution, module
-                # file reading) that _check_lineage_based intentionally avoids.
-                # Variables with file or module dependencies may produce false-positive
-                # mismatch logs, but this is harmless because:
-                # - When reexecute=False, mismatches are only logged (Pass 2 handles them)
-                # - When reexecute=True, re-execution produces correct results
-                expected_lineage = self._compute_expected_var_lineage(var_name, last_executed_code)
+                expected_lineage = self._compute_expected_var_lineage(
+                    var_name, last_executed_code,
+                )
                 if expected_lineage is None:
                     continue
-
                 current_lineage = self.variable_lineage[var_name]
-
                 if expected_lineage != current_lineage:
-                    self.simulator._handle_lineage_mismatch(
-                        var_name, last_executed_code,
-                        expected_lineage, current_lineage,
-                        process_statement_callback, global_ttl, reexecute,
+                    logger.debug(
+                        "[UPSTREAM] Variable '%s' has lineage mismatch "
+                        "(expected=%s, actual=%s). Deferring to Phase 2.",
+                        var_name, expected_lineage[:8], current_lineage[:8],
                     )
             except (KeyError, TypeError, ValueError, SyntaxError, AttributeError):
                 logger.debug("[UPSTREAM] Error in lineage check for variable '%s'", var_name)
