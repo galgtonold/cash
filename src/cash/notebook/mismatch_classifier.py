@@ -356,9 +356,8 @@ class MismatchClassifier:
                       "Resetting lineage from %s to virtual %s.",
                       var_name, actual_lineage[:8], final_virtual_hash[:8])
             self._restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
-            # Drain immediately: subsequent classification iterations read
-            # variable_lineage to decide on other vars.
-            apply_collected_mutations(self._restores, self._tracking_state)
+            # Caller (_classify_broken_vars) drains between iterations so the
+            # reset is visible to subsequent classification iterations.
             return True
 
         return False
@@ -445,6 +444,9 @@ class MismatchClassifier:
                 current_cell_outputs, notebook_cells, broken_vars,
                 simulation_trace_codes=simulation_trace_codes,
             )
+            # Drain between iterations: a lineage reset buffered for this var
+            # must be visible when classifying the remaining vars.
+            apply_collected_mutations(self._restores, self._tracking_state)
 
         # Only required inputs matter here; temporary intermediates can stay missing.
         self._check_missing_required_inputs(
@@ -761,6 +763,12 @@ class MismatchClassifier:
             else:
                 restored_vars, restore_time, saved_time = self._virtual_lineage._try_virtual_restore(
                     stmt_code, outputs, inputs, input_hashes, virtual_modules, expected_lineages=produced_lineages,
+                )
+                # Drain so subsequent iterations of this reverse-trace loop see
+                # the lineage / file-dep writes buffered by the restore — next
+                # statements may depend on the just-restored variable's lineage.
+                apply_collected_mutations(
+                    self._virtual_lineage._restores, self._tracking_state,
                 )
             total_restore_time += restore_time
 
