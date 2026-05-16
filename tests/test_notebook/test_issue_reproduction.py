@@ -26,7 +26,7 @@ class TestIssueReproduction(unittest.TestCase):
         self.checker = UpstreamChecker(self.shell, debug=True)
         self.checker.set_tracking_state(TrackingState())
 
-    @patch('cash.notebook.notebook_simulator.CodeAnalyzer', MockCodeAnalyzer)
+    @patch('cash.notebook.reexecution_planner.CodeAnalyzer', MockCodeAnalyzer)
     @patch('cash.notebook.notebook_simulator.get_notebook_cells')
     def test_unused_broken_var_triggers_restore(self, mock_get_cells):
         print("\n=== TEST: Unused Broken Variable Triggering Restore ===")
