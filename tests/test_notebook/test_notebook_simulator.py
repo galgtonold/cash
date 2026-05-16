@@ -41,10 +41,10 @@ class TestConstructionWithoutOrchestrator:
 
     def test_owns_its_caches(self):
         sim = _make_simulator()
-        assert sim._simulation_cache == []
-        assert sim._ast_cache == {}
-        assert sim._simulation_cell_hashes == {}
-        assert sim._cell_id_to_last_index == {}
+        assert sim._virtual_lineage._simulation_cache == []
+        assert sim._virtual_lineage._ast_cache == {}
+        assert sim._virtual_lineage._simulation_cell_hashes == {}
+        assert sim._virtual_lineage._cell_id_to_last_index == {}
 
     def test_shares_tracking_state_refs(self):
         """Mutating the simulator's view must be visible through the original
@@ -95,31 +95,31 @@ class TestAstCacheEviction:
 
     def test_returns_none_for_syntax_error(self):
         sim = _make_simulator()
-        assert sim._get_cached_ast("def (:") is None
+        assert sim._virtual_lineage._get_cached_ast("def (:") is None
 
     def test_caches_parsed_tree(self):
         sim = _make_simulator()
-        tree1 = sim._get_cached_ast("x = 1")
-        tree2 = sim._get_cached_ast("x = 1")
+        tree1 = sim._virtual_lineage._get_cached_ast("x = 1")
+        tree2 = sim._virtual_lineage._get_cached_ast("x = 1")
         assert tree1 is tree2
 
     def test_evicts_when_over_capacity(self):
         sim = _make_simulator()
-        sim._ast_cache_max_size = 4
+        sim._virtual_lineage._ast_cache_max_size = 4
         for i in range(8):
-            sim._get_cached_ast(f"a{i} = {i}")
+            sim._virtual_lineage._get_cached_ast(f"a{i} = {i}")
         # Eviction removes the first quarter when at capacity, so a few
         # entries survive but not all 8.
-        assert 0 < len(sim._ast_cache) < 8
+        assert 0 < len(sim._virtual_lineage._ast_cache) < 8
 
 
 class TestResetCaches:
     def test_clears_all_simulator_caches(self):
         sim = _make_simulator()
-        sim._get_cached_ast("x = 1")
-        sim._simulation_cache.append(MagicMock())
-        sim._simulation_cell_hashes[0] = "h"
+        sim._virtual_lineage._get_cached_ast("x = 1")
+        sim._virtual_lineage._simulation_cache.append(MagicMock())
+        sim._virtual_lineage._simulation_cell_hashes[0] = "h"
         sim.reset_caches()
-        assert sim._ast_cache == {}
-        assert sim._simulation_cache == []
-        assert sim._simulation_cell_hashes == {}
+        assert sim._virtual_lineage._ast_cache == {}
+        assert sim._virtual_lineage._simulation_cache == []
+        assert sim._virtual_lineage._simulation_cell_hashes == {}
