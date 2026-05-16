@@ -185,11 +185,11 @@ class TestNotebookPathCacheInvalidation:
         # Populate the simulation cache with fake data. Caches now live on
         # the simulator (extracted from UpstreamChecker).
         simulator = magics._upstream_checker.simulator
-        simulator._simulation_cache = [
+        simulator._virtual_lineage._simulation_cache = [
             _SimulationCacheEntry("fake_hash", {"x": "lineage1"}, set(), [], set(), set(), {}),
             _SimulationCacheEntry("fake_hash2", {"y": "lineage2"}, set(), [], set(), set(), {}),
         ]
-        simulator._ast_cache = {
+        simulator._virtual_lineage._ast_cache = {
             "x = 1": None,
             "y = 2": None,
         }
@@ -197,8 +197,8 @@ class TestNotebookPathCacheInvalidation:
         # Enable auto-caching (this should clear the caches)
         magics.cash_on("")
 
-        assert simulator._simulation_cache == []
-        assert simulator._ast_cache == {}
+        assert simulator._virtual_lineage._simulation_cache == []
+        assert simulator._virtual_lineage._ast_cache == {}
 
     def test_upstream_checker_reset_caches(self):
         """UpstreamChecker.reset_caches() should clear simulation and AST caches."""
@@ -209,13 +209,13 @@ class TestNotebookPathCacheInvalidation:
         checker = UpstreamChecker(shell, debug=False)
 
         # Add some data to caches
-        checker.simulator._simulation_cache.append(_SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {}))
-        checker.simulator._ast_cache["code1"] = None
+        checker.simulator._virtual_lineage._simulation_cache.append(_SimulationCacheEntry("hash1", {"var": "lin"}, set(), [], set(), set(), {}))
+        checker.simulator._virtual_lineage._ast_cache["code1"] = None
 
         checker.reset_caches()
 
-        assert checker.simulator._simulation_cache == []
-        assert checker.simulator._ast_cache == {}
+        assert checker.simulator._virtual_lineage._simulation_cache == []
+        assert checker.simulator._virtual_lineage._ast_cache == {}
 
     def test_no_glob_fallback_for_notebook_discovery(self, tmp_path):
         """_read_notebook_code_cells should NOT use glob fallback (Issue 23).
@@ -401,7 +401,7 @@ class TestTransitiveLoopMutation:
         checker = UpstreamChecker(shell, cash_instance, debug=True)
         checker.variable_lineage = {}
         
-        restored, _, _ = checker.simulator._try_virtual_restore(
+        restored, _, _ = checker.simulator._virtual_lineage._try_virtual_restore(
             "my_list = compute_data()",
             {'my_list'}, {'compute_data'}, {},
         )
@@ -427,7 +427,7 @@ class TestTransitiveLoopMutation:
         checker = UpstreamChecker(shell, cash_instance, debug=False)
         checker.variable_lineage = {}
         
-        restored, _, _ = checker.simulator._try_virtual_restore(
+        restored, _, _ = checker.simulator._virtual_lineage._try_virtual_restore(
             "x = compute()",
             {'x'}, {'compute'}, {},
         )
