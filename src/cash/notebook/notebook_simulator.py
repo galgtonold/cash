@@ -15,10 +15,9 @@ orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 
 import logging
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from .analysis import CodeAnalyzer  # re-exported for test patching
 from .control_structures import is_control_structure  # re-exported for test patching
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
@@ -34,9 +33,6 @@ from .virtual_lineage import (
     _FORWARD_PROBE_PLACEHOLDER,
     _normalize_stmt,
 )
-
-if TYPE_CHECKING:
-    from .statement_processor import ProcessResult
 
 __all__ = ["NotebookSimulator"]
 
@@ -360,12 +356,14 @@ class NotebookSimulator:
         notebook_cells: list[str],
         required_inputs: set[str] | None = None,
         current_cell_outputs: set[str] | None = None
-    ) -> tuple[list[str], list[ProcessResult]]:
+    ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
 
         Returns:
-            Tuple of (list of statement codes that need re-execution,
-            list of dicts with info about restored statements).
+            Tuple of ``(statements_to_reexecute, restored_info, total_restore_time)``:
+            list of statement codes that need re-execution, list of dicts
+            with info about restored statements, and total disk-cache lookup
+            time (seconds) accumulated during simulation.
         """
         # Pass 1: Simulate ALL statements to build final virtual state
         stmt_lookup_times = {}  # stmt_code -> cache_lookup_time (disk I/O during simulation)
