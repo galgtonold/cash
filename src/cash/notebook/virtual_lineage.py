@@ -1532,10 +1532,16 @@ class VirtualLineage:
             if 'output_lineages' in metadata:
                 new_lineage = metadata['output_lineages'].get(var)
                 if var in self.lineage and new_lineage is not None:
-                    # ``record(value=...)`` coordinates the dict entry and
-                    # ``_cash_lineage_hash`` so they cannot drift. Previously
-                    # these were two separate writes.
-                    self.lineage.record(var, new_lineage, value=val)
+                    # Buffer a value-coupled restore so apply_collected_mutations
+                    # routes through lineage.record, attaching _cash_lineage_hash
+                    # to the live object. Drain immediately so the attribute is
+                    # visible before _update_tracking_after_restore runs.
+                    self._restores.record_restore(
+                        var_name=var,
+                        lineage_hash=new_lineage,
+                        value=val,
+                    )
+                    apply_collected_mutations(self._restores, self._tracking_state)
                 else:
                     # Variable wasn't tracked in the lineage store before, but
                     # we still want the attribute attached so future cache-key

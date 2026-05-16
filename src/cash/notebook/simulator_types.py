@@ -115,6 +115,9 @@ class CacheRestore:
     code_hash: str | None = None
     input_lineages: dict[str, str] | None = None
     file_deps: set[str] | None = None
+    value: Any = None
+    """When provided, apply uses lineage.record(...) instead of a direct dict
+    write so ``_cash_lineage_hash`` is attached to the live object."""
 
 
 @dataclass
@@ -150,11 +153,13 @@ class RestoreCollector:
         code_hash: str | None = None,
         input_lineages: dict[str, str] | None = None,
         file_deps: set[str] | None = None,
+        value: Any = None,
     ) -> None:
         self._restores.append(CacheRestore(
             var_name=var_name, lineage_hash=lineage_hash,
             code=code, code_hash=code_hash,
             input_lineages=input_lineages, file_deps=file_deps,
+            value=value,
         ))
 
     def record_lineage_reset(self, var_name: str, lineage_hash: str) -> None:
@@ -185,7 +190,10 @@ def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None
     restores, resets = collector.drain()
     for op in restores:
         if op.lineage_hash is not None:
-            state.variable_lineage[op.var_name] = op.lineage_hash
+            if op.value is not None:
+                state.lineage.record(op.var_name, op.lineage_hash, value=op.value)
+            else:
+                state.variable_lineage[op.var_name] = op.lineage_hash
         if op.code is not None:
             state.executed_cell_codes[op.var_name] = op.code
         if op.code_hash is not None:
