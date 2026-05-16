@@ -112,9 +112,9 @@ class TestUpstreamASTCache:
         checker = UpstreamChecker(mock_shell)
 
         code = "x = 1 + 2"
-        tree1 = checker._get_cached_ast(code)
+        tree1 = checker.simulator._get_cached_ast(code)
         assert tree1 is not None
-        tree2 = checker._get_cached_ast(code)
+        tree2 = checker.simulator._get_cached_ast(code)
         assert tree2 is tree1
 
     def test_ast_cache_syntax_error(self):
@@ -122,34 +122,32 @@ class TestUpstreamASTCache:
         mock_shell.user_ns = {}
         checker = UpstreamChecker(mock_shell)
 
-        tree = checker._get_cached_ast("def :")
+        tree = checker.simulator._get_cached_ast("def :")
         assert tree is None
 
     def test_ast_cache_eviction(self):
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
         checker = UpstreamChecker(mock_shell)
-        checker._ast_cache_max_size = 4
+        checker.simulator._ast_cache_max_size = 4
 
         for i in range(6):
-            checker._get_cached_ast(f"x_{i} = {i}")
+            checker.simulator._get_cached_ast(f"x_{i} = {i}")
 
-        assert len(checker._ast_cache) <= 6
+        assert len(checker.simulator._ast_cache) <= 6
 
 
 class TestUpdateTrackingAfterRestoreFileDeps:
     """Test that _update_tracking_after_restore propagates file dependencies."""
 
     def _make_checker(self, tmp_path):
+        from cash.notebook._protocols import TrackingState
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
-        checker = UpstreamChecker(mock_shell)
-        checker.variable_lineage = {}
-        checker.executed_cell_codes = {}
-        checker.executed_cell_hashes = {}
-        checker.executed_input_lineages = {}
-        checker.executed_file_deps = {}
-        return checker
+        # Pass a fresh TrackingState through the constructor so checker and
+        # simulator share the same (empty) dicts. Rebinding fields after
+        # construction would diverge the two views.
+        return UpstreamChecker(mock_shell, tracking_state=TrackingState())
 
     def test_file_deps_propagated_from_metadata(self, tmp_path):
         """File deps in cache metadata should be propagated to executed_file_deps."""
@@ -164,7 +162,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
             'file_dependencies': {csv_path: csv_file.stat().st_mtime},
         }
-        checker._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
+        checker.simulator._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
 
         assert 'df' in checker.executed_file_deps
         assert csv_path in checker.executed_file_deps['df']
@@ -177,7 +175,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'code': 'x = 42',
             'source_hash': 'hash1',
         }
-        checker._update_tracking_after_restore({'x'}, metadata, {})
+        checker.simulator._update_tracking_after_restore({'x'}, metadata, {})
 
         assert 'x' not in checker.executed_file_deps
 
@@ -199,7 +197,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
                 'source_hash': 'hash1',
                 'file_dependencies': {stale_path: 0.0},
             }
-            checker._update_tracking_after_restore({'df'}, metadata, {})
+            checker.simulator._update_tracking_after_restore({'df'}, metadata, {})
 
             assert 'df' in checker.executed_file_deps
             # The resolved path should be the actual file, not the stale path
@@ -218,7 +216,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
             'file_dependencies': {'/no/such/file/ever_unique_xyz.csv': 0.0},
         }
-        checker._update_tracking_after_restore({'df'}, metadata, {})
+        checker.simulator._update_tracking_after_restore({'df'}, metadata, {})
 
         # No resolved path → nothing added
         assert 'df' not in checker.executed_file_deps or len(checker.executed_file_deps['df']) == 0
@@ -236,7 +234,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'source_hash': 'hash1',
             'file_dependencies': {csv_path: csv_file.stat().st_mtime},
         }
-        checker._update_tracking_after_restore({'df', 'df2'}, metadata, {})
+        checker.simulator._update_tracking_after_restore({'df', 'df2'}, metadata, {})
 
         assert csv_path in checker.executed_file_deps['df']
         assert csv_path in checker.executed_file_deps['df2']
@@ -290,25 +288,23 @@ class TestForwardProbePopulatesState:
     placeholder values and lineages for resolved broken vars."""
 
     def _make_checker(self):
+        from cash.notebook._protocols import TrackingState
         from cash.notebook.upstream import _FORWARD_PROBE_PLACEHOLDER
 
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
-        checker = UpstreamChecker(mock_shell)
-        checker.variable_lineage = {}
-        checker.executed_cell_codes = {}
-        checker.executed_cell_hashes = {}
-        checker.executed_input_lineages = {}
-        checker.executed_file_deps = {}
-        checker.debug = False
-
-        # Provide a mock cash_instance with a backend that returns a hit
+        # Provide a mock cash_instance with a backend that returns a hit.
+        # Must be passed to the constructor so the simulator picks it up.
         mock_backend = MagicMock()
         mock_cash = MagicMock()
         mock_cash.backend = mock_backend
-        checker.cash_instance = mock_cash
-        checker.shell = mock_shell
 
+        checker = UpstreamChecker(
+            mock_shell,
+            cash_instance=mock_cash,
+            debug=False,
+            tracking_state=TrackingState(),
+        )
         return checker, mock_shell, mock_backend, _FORWARD_PROBE_PLACEHOLDER
 
     def test_placeholder_injected_into_user_ns(self):
@@ -323,7 +319,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {'df': 'lineage_hash_abc'}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator._eliminate_broken_vars_via_current_cell_probe(
             broken, cells, 1, virtual_lineage, set(),
         )
 
@@ -345,7 +341,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {'df': 'lineage_hash_abc'}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator._eliminate_broken_vars_via_current_cell_probe(
             broken, cells, 1, virtual_lineage, set(),
         )
 
@@ -368,7 +364,7 @@ class TestForwardProbePopulatesState:
         virtual_lineage = {'df': 'lineage_hash_abc'}
         cells = ["x = 10", "df['col'] = x * 2"]
 
-        checker._eliminate_broken_vars_via_current_cell_probe(
+        checker.simulator._eliminate_broken_vars_via_current_cell_probe(
             broken, cells, 1, virtual_lineage, set(),
         )
 

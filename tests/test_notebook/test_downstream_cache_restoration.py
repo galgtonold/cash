@@ -136,7 +136,7 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         # Then it tries to restore from cache using virtual lineage (which is wrong)
         
         # Run simulation
-        statements_to_reexec, restored_info, total_restore_time = self.checker._simulate_and_find_changes(
+        statements_to_reexec, restored_info, total_restore_time = self.checker.simulator._simulate_and_find_changes(
             current_cell_idx=4,  # cell_display
             notebook_cells=mock_get_cells.return_value,
             required_inputs={'df'}
@@ -184,7 +184,7 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         self.mock_backend.get = MagicMock(return_value=(None, None))
         
         # Run simulation for cell_2 (index 1)
-        statements_to_reexec, restored_info, total_restore_time = self.checker._simulate_and_find_changes(
+        statements_to_reexec, restored_info, total_restore_time = self.checker.simulator._simulate_and_find_changes(
             current_cell_idx=1,
             notebook_cells=mock_get_cells.return_value,
             required_inputs={'x'}

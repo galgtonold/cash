@@ -102,59 +102,6 @@ class UpstreamChecker:
         """
         self.simulator.reset_caches()
 
-    # Fields whose value is logically shared between UpstreamChecker and its
-    # NotebookSimulator. When a caller rebinds the field on the checker
-    # (common pattern in existing tests), __setattr__ mirrors the write to
-    # the simulator so both observe the same dict/object. The canonical
-    # owner is :class:`TrackingState`; this list mirrors that exactly.
-    _SHARED_STATE_FIELDS: frozenset[str] = frozenset({
-        # Tracking state (TrackingState fields)
-        "executed_cell_codes",
-        "executed_cell_hashes",
-        "variable_lineage",
-        "lineage",
-        "executed_file_deps",
-        "vars_with_mutation_lineage",
-        "executed_input_lineages",
-        # Constructor-set collaborators that tests sometimes rebind
-        "function_tracker",
-        "cash_instance",
-        "shell",
-        "debug",
-        "compute_hash_fn",
-    })
-
-    def __setattr__(self, name: str, value: Any) -> None:
-        object.__setattr__(self, name, value)
-        if name in self._SHARED_STATE_FIELDS:
-            simulator = self.__dict__.get("simulator")
-            if simulator is not None:
-                object.__setattr__(simulator, name, value)
-
-    def __getattr__(self, name: str) -> Any:
-        """Forward unknown attribute access to the simulator.
-
-        Transitional shim: existing tests (and a few internal call sites)
-        reach into methods that have moved to :class:`NotebookSimulator`.
-        Rather than touch dozens of test files in this refactor, we forward
-        unresolved attribute lookups to ``self.simulator``. Tests should
-        migrate to ``checker.simulator.<method>`` over time; once they have,
-        this method can be removed.
-
-        ``__getattr__`` only fires when normal attribute resolution fails,
-        so it does not hide attributes that legitimately live on the
-        UpstreamChecker.
-        """
-        if name == "simulator":
-            # Prevent recursion if simulator hasn't been initialised yet.
-            raise AttributeError(name)
-        simulator = self.__dict__.get("simulator")
-        if simulator is not None and hasattr(simulator, name):
-            return getattr(simulator, name)
-        raise AttributeError(
-            f"{type(self).__name__!s} has no attribute {name!r}"
-        )
-
     def _wire_state(self, state: TrackingState) -> None:
         """Internal: alias tracking dicts onto self for backward compatibility.
 
@@ -412,7 +359,7 @@ class UpstreamChecker:
 
         if known_cell_idx is not None and known_cell_idx > 0:
             target_idx = known_cell_idx - 1
-            if target_idx < len(self._simulation_cache):
+            if target_idx < len(self.simulator._simulation_cache):
                 return target_idx
         return None
 
@@ -455,7 +402,7 @@ class UpstreamChecker:
         Uses the simulation cache's pre-cell virtual lineage to reset any
         "ahead" lineage caused by a prior downstream execution.
         """
-        if not (required_inputs and current_cell_outputs and self._simulation_cache):
+        if not (required_inputs and current_cell_outputs and self.simulator._simulation_cache):
             return
 
         overlap_vars = required_inputs & current_cell_outputs
@@ -466,7 +413,7 @@ class UpstreamChecker:
         if cache_idx is None:
             return
 
-        cached_virtual_lineage = self._simulation_cache[cache_idx].virtual_lineage
+        cached_virtual_lineage = self.simulator._simulation_cache[cache_idx].virtual_lineage
         self._reset_advanced_lineages(overlap_vars, cached_virtual_lineage, cache_idx)
 
     def _handle_unsaved_cell(
@@ -725,7 +672,7 @@ class UpstreamChecker:
         0..2's trace segments, so cell 2's cache entry is NOT synced for
         ``df``.
         """
-        if not self._simulation_cache:
+        if not self.simulator._simulation_cache:
             return
 
         updated = False
@@ -734,7 +681,7 @@ class UpstreamChecker:
         # variable's lineage if the code that produced the current runtime
         # lineage (from executed_cell_codes) is among these statements.
         cumulative_stmt_codes = set()
-        for idx, entry in enumerate(self._simulation_cache):
+        for idx, entry in enumerate(self.simulator._simulation_cache):
             cell_trace = entry.trace_segment
             for trace_entry in cell_trace:
                 # trace_entry format: (stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale)

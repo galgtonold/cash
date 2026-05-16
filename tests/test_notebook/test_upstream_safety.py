@@ -58,7 +58,7 @@ class TestUpstreamSafety(unittest.TestCase):
         
         # Run Check - pass required_inputs to specify which variables matter
         # Current index after Cell 0
-        reexecute, restored_info, restore_time = self.checker._simulate_and_find_changes(1, [code_start], required_inputs={'x'})
+        reexecute, restored_info, restore_time = self.checker.simulator._simulate_and_find_changes(1, [code_start], required_inputs={'x'})
         print(f"Re-execute List (Valid Case): {reexecute}")
         
         # Expectation: Empty list (Valid Extension)
@@ -79,7 +79,7 @@ class TestUpstreamSafety(unittest.TestCase):
         # Memory still has Old Mod (derived from Old Start)
         # Verify Mismatch
         
-        reexecute_stale, restored_info, restore_time = self.checker._simulate_and_find_changes(1, [code_new_start], required_inputs={'x'})
+        reexecute_stale, restored_info, restore_time = self.checker.simulator._simulate_and_find_changes(1, [code_new_start], required_inputs={'x'})
         print(f"Re-execute List (Stale Case): {reexecute_stale}")
         
         # Expectation: Should detect mismatch and NOT be valid extension

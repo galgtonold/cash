@@ -67,7 +67,7 @@ class TestSkipOverwrittenVarUnit:
         ]
 
         # x is required but missing from memory (simulating kernel restart)
-        result, restored_info, restore_time = checker._simulate_and_find_changes(
+        result, restored_info, restore_time = checker.simulator._simulate_and_find_changes(
             current_cell_idx=2,
             notebook_cells=cells,
             required_inputs={'x'},
@@ -110,7 +110,7 @@ class TestSkipOverwrittenVarUnit:
             (f"cell_{i}", cell) for i, cell in enumerate(cells)
         ]
 
-        result, restored_info, restore_time = checker._simulate_and_find_changes(
+        result, restored_info, restore_time = checker.simulator._simulate_and_find_changes(
             current_cell_idx=2,
             notebook_cells=cells,
             required_inputs={'x'},
@@ -164,7 +164,7 @@ class TestSkipOverwrittenVarUnit:
             (f"cell_{i}", cell) for i, cell in enumerate(cells)
         ]
 
-        result, restored_info, restore_time = checker._simulate_and_find_changes(
+        result, restored_info, restore_time = checker.simulator._simulate_and_find_changes(
             current_cell_idx=3,
             notebook_cells=cells,
             required_inputs={'x'},
