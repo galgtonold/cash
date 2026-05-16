@@ -26,8 +26,8 @@ class TestIssueReproduction(unittest.TestCase):
         self.checker = UpstreamChecker(self.shell, debug=True)
         self.checker.set_tracking_state(TrackingState())
 
-    @patch('cash.notebook.upstream.CodeAnalyzer', MockCodeAnalyzer)
-    @patch('cash.notebook.upstream.get_notebook_cells')
+    @patch('cash.notebook.notebook_simulator.CodeAnalyzer', MockCodeAnalyzer)
+    @patch('cash.notebook.notebook_simulator.get_notebook_cells')
     def test_unused_broken_var_triggers_restore(self, mock_get_cells):
         print("\n=== TEST: Unused Broken Variable Triggering Restore ===")
         
@@ -43,7 +43,7 @@ class TestIssueReproduction(unittest.TestCase):
         mock_get_cells.return_value = [cell1_code, cell2_code]
         
         # 2. Setup Memory Lineage (Actual)
-        with patch.object(self.checker, '_update_virtual_lineage') as mock_update:
+        with patch.object(self.checker.simulator, '_update_virtual_lineage') as mock_update:
             # Side effect for _update_virtual_lineage(stmt, lineage, modules)
             # Returns (outputs, lookup_time, files_stale, file_deps)
             def side_effect(stmt, lineage, modules, occurrence_index=0):
@@ -75,7 +75,7 @@ class TestIssueReproduction(unittest.TestCase):
             required_inputs = {'ticker_stats'}
             
             # We also need _try_virtual_restore to work so it reports success if attempted
-            with patch.object(self.checker, '_try_virtual_restore') as mock_restore:
+            with patch.object(self.checker.simulator, '_try_virtual_restore') as mock_restore:
                 mock_restore.return_value = ({'stats', 'ticker_stats'}, 0.1, 0.1)
                 
                 # Mock ast.parse to valid body
@@ -94,7 +94,7 @@ class TestIssueReproduction(unittest.TestCase):
                     
                     # When unparsing stmt from cell1, return cell1_code
                     with patch('ast.unparse', return_value=cell1_code), \
-                         patch('cash.notebook.upstream.is_control_structure', return_value=False):
+                         patch('cash.notebook.notebook_simulator.is_control_structure', return_value=False):
                         # Execute Check for cell2
                         # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
                         all_metrics, _, _ = self.checker._check_notebook_based(

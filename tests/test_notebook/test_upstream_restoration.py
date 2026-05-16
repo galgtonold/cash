@@ -58,7 +58,7 @@ class TestUpstreamRestoration(unittest.TestCase):
         # virtual_lineage['x'] = ...
         
         # Test: Pass required_inputs={'x'} to specify which variables matter
-        reexecute_list, restored_info, restore_time = self.checker._simulate_and_find_changes(1, [code_new_base], required_inputs={'x'})
+        reexecute_list, restored_info, restore_time = self.checker.simulator._simulate_and_find_changes(1, [code_new_base], required_inputs={'x'})
         
         print(f"Re-execute list: {reexecute_list}")
         
