@@ -103,6 +103,28 @@ class TestUpstreamCheckerSetTrackingState:
         """Static helper for iterating control structure bodies (on simulator)."""
         assert hasattr(NotebookSimulator, "_iter_body_nodes")
 
+    def test_iter_body_nodes_recurses_into_nested_control_structures(self):
+        """Regression: recursion must resolve within VirtualLineage's own module.
+
+        After the VirtualLineage extraction the recursive calls inside
+        ``_iter_body_nodes`` still referenced the old ``UpstreamChecker`` class,
+        which isn't imported in ``virtual_lineage.py``. Any cell whose upstream
+        simulation walked into a nested control structure raised
+        ``NameError: UpstreamChecker is not defined`` and auto-caching fell
+        back to plain execution.
+        """
+        import ast
+
+        tree = ast.parse(
+            "for i in range(3):\n"
+            "    for j in range(3):\n"
+            "        x = i + j\n"
+        )
+        outer_for = tree.body[0]
+        nodes = list(VirtualLineage._iter_body_nodes(outer_for))
+        # Inner ``for`` plus the ``x = i + j`` assignment inside it.
+        assert any(isinstance(n, ast.Assign) for n in nodes)
+
 
 class TestUpstreamASTCache:
     """Test AST cache in UpstreamChecker."""
