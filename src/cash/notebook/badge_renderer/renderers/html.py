@@ -282,18 +282,38 @@ div.output:has(.c3-wrap) {{
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Pure-CSS row hover tooltip — absolutely positioned to the right of
-   its row, floating outside the badge in the notebook's whitespace.
-   No layout shifts (other rows stay put). The :has() rules above
-   force overflow:visible on common notebook output containers so the
-   tooltip isn't clipped at the cell boundary. */
+/* Row hover tooltip — two-mode design:
+   - When the inline JS at the bottom of the badge runs (Jupyter classic /
+     JupyterLab / most VS Code setups), it lifts the tooltip out of the
+     row and parks a single floating <div> on document.body, positioned
+     with getBoundingClientRect. That escapes every ancestor's
+     overflow:hidden and doesn't take any horizontal space.
+   - When the script is stripped (strict sandboxes), the original CSS
+     hover rule below fires and the tooltip expands inline below the row.
+   The .c3-floater class below mirrors .c3-rowtip's visual styling so
+   both modes look identical. */
 .c3-rowgrp {{ display: block; position: relative; }}
 .c3-rowtip {{
   display: none;
-  position: absolute;
-  left: calc(100% + 12px);
-  top: -2px;
-  z-index: 10000;
+  background: #f7f3e9;
+  border-top: 1px dashed #c8c3b3;
+  border-bottom: 1px solid #ececec;
+  padding: 10px 14px 12px 22px;
+  font-family: {theme.FONT_SANS};
+  font-size: 11px;
+  color: {theme.INK};
+  white-space: normal;
+  box-shadow: inset 4px 0 0 rgba(0,0,0,0.08);
+}}
+.c3-rowgrp:hover .c3-rowtip {{ display: block; }}
+
+/* JS-managed floater — single instance on document.body, positioned
+   absolutely-fixed at the hovered row's coordinates. Pointer-events:none
+   so moving the mouse over the floater doesn't break the row's hover. */
+.c3-floater {{
+  position: fixed;
+  z-index: 2147483647;
+  display: none;
   width: 360px;
   padding: 10px 12px;
   background: #ffffff;
@@ -304,9 +324,8 @@ div.output:has(.c3-wrap) {{
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  pointer-events: none;        /* don't intercept hover when moving past it */
+  pointer-events: none;
 }}
-.c3-rowgrp:hover > .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
@@ -672,6 +691,74 @@ a.c3-bug:hover {{
 # notebook output is a fresh DOM fragment we can re-emit it cheaply; the
 # browser deduplicates rule sets.
 _STYLE_BLOCK = f"<style>{_CSS}</style>"
+
+# Inline JS that turns each rowgrp's inline tooltip into a single
+# document.body-scoped floater. Idempotent, defensive: if document.body
+# isn't reachable (strict sandbox), the inline CSS tooltip is left in
+# place as a fallback. Vanilla ES5 so it parses everywhere.
+_SCRIPT_BLOCK = """<script>
+(function(){
+  var cs = document.currentScript;
+  if (!cs) return;
+  var wrap = cs.parentNode;
+  while (wrap && (!wrap.classList || !wrap.classList.contains('c3-wrap'))) {
+    wrap = wrap.parentNode;
+  }
+  if (!wrap || wrap.getAttribute('data-c3-hover-init')) return;
+  wrap.setAttribute('data-c3-hover-init', '1');
+
+  var floater = document.querySelector('body > div.c3-floater');
+  if (!floater) {
+    try {
+      floater = document.createElement('div');
+      floater.className = 'c3-floater';
+      document.body.appendChild(floater);
+    } catch (e) { return; }  // sandboxed, leave inline tooltip fallback in place
+  }
+
+  var grps = wrap.querySelectorAll('.c3-rowgrp');
+  for (var i = 0; i < grps.length; i++) {
+    (function(grp){
+      var tip = null;
+      for (var c = 0; c < grp.children.length; c++) {
+        if (grp.children[c].classList && grp.children[c].classList.contains('c3-rowtip')) {
+          tip = grp.children[c]; break;
+        }
+      }
+      if (!tip) return;
+      var html = tip.innerHTML;
+      tip.style.setProperty('display', 'none', 'important');  // disable CSS fallback
+
+      grp.addEventListener('mouseenter', function(){
+        floater.innerHTML = html;
+        var anchor = grp.querySelector('.c3-row');
+        if (!anchor) anchor = grp;
+        var rect = anchor.getBoundingClientRect();
+        var vw = window.innerWidth || document.documentElement.clientWidth;
+        var vh = window.innerHeight || document.documentElement.clientHeight;
+        var W = 360, H = floater.offsetHeight || 180;
+        var left, top;
+        if (rect.right + W + 16 < vw) {
+          left = rect.right + 12; top = rect.top - 2;
+        } else if (rect.left - W - 16 > 0) {
+          left = rect.left - W - 12; top = rect.top - 2;
+        } else {
+          left = Math.max(8, Math.min(rect.left, vw - W - 8));
+          top = rect.bottom + 4;
+        }
+        if (top + H > vh - 8) top = Math.max(8, vh - H - 8);
+        if (top < 8) top = 8;
+        floater.style.left = left + 'px';
+        floater.style.top = top + 'px';
+        floater.style.display = 'block';
+      });
+      grp.addEventListener('mouseleave', function(){
+        floater.style.display = 'none';
+      });
+    })(grps[i]);
+  }
+})();
+</script>"""
 
 
 # ---------------------------------------------------------------------------
@@ -1601,6 +1688,7 @@ def render_html(badge: InteractiveBadge) -> str:
         + _footer_html(badge.footer)
         + "</div>"
         + "</details>"
+        + _SCRIPT_BLOCK
         + "</div>"
     )
 
