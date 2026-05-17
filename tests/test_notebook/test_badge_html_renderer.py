@@ -227,6 +227,60 @@ def test_function_changed_renders_as_notification_row() -> None:
     assert "compute" in html
 
 
+def test_skipped_row_does_not_claim_storage() -> None:
+    """SKIPPED ('not re-run') rows must not show a filled RAM dot — the
+    value was never produced this run, so claiming it lives in RAM is a lie."""
+    metrics = [
+        {"code": "step1()", "status": str(CacheStatus.SKIPPED), "is_upstream": True,
+         "saved_time": 0.3},
+        {"code": "current()", "status": str(CacheStatus.COMPUTED), "total_time": 0.1},
+    ]
+    html = render_html(build_interactive_badge(metrics))
+    body = html.split("</style>", 1)[1]
+    # The skipped row's dots cell renders both dots as empty.
+    skip_row = body[body.find("step1()"):body.find("step1()") + 800]
+    assert 'c3-dot-solid' not in skip_row
+    assert 'c3-dot-empty' in skip_row
+
+
+def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
+    """Hovering a loop head or body line shows aggregate stats."""
+    metrics = [
+        {"code": "# __iteration_context__: a\ny = x*2",
+         "status": str(CacheStatus.COMPUTED), "total_time": 0.05,
+         "loop_vars": {"x": 1}},
+        {"code": "# __iteration_context__: b\ny = x*2",
+         "status": str(CacheStatus.COMPUTED), "total_time": 0.07,
+         "loop_vars": {"x": 2}},
+    ]
+    html = render_html(build_interactive_badge(metrics))
+    body = html.split("</style>", 1)[1]
+    # The loop head row contains a tooltip with the synthesised for-line.
+    head_block = body[body.find("c3-loop-head"):body.find("c3-loop-body")]
+    assert "c3-rowtip" in head_block
+    assert "Iterations" in head_block
+    # The body line (inside the <details>) also has its own tooltip.
+    body_block = body[body.find("c3-loop-body"):]
+    assert "c3-rowtip" in body_block
+
+
+def test_wrap_reserves_right_side_lane_for_tooltips() -> None:
+    """The outer wrap pads right-side so tooltips render inside its bounds."""
+    html = render_html(build_interactive_badge([]))
+    assert 'class="c3-wrap"' in html
+    assert "padding-right: 380px" in html
+    # Tooltip positions to the right of its row, inside the wrap's reserved lane.
+    assert "left: calc(100% + 10px)" in html
+
+
+def test_scoped_scrollbar_styling_present() -> None:
+    """We style scrollbars only on ancestors that contain a Cash badge."""
+    html = render_html(build_interactive_badge([]))
+    # :has() scoping — won't affect cells without our badge.
+    assert ":has(.c3-wrap)::-webkit-scrollbar" in html
+    assert "scrollbar-color:" in html
+
+
 def test_each_row_has_pure_css_hover_tooltip() -> None:
     """Tooltip is a sibling div inside .c3-row, revealed via :hover CSS."""
     metrics = [{

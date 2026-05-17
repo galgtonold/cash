@@ -55,6 +55,50 @@ from ._pytoken import highlight_python
 # ---------------------------------------------------------------------------
 
 _CSS = f"""
+/* Scoped scrollbar styling — applies only to scrollable elements that
+   *contain* a Cash badge. Uses :has() (Chromium 105+, Safari 15.4+,
+   Firefox 121+) so we don't repaint scrollbars in cells that don't
+   show our badge. Firefox uses scrollbar-color / scrollbar-width;
+   Chromium falls back to ::-webkit-scrollbar pseudo-elements. */
+:has(> .c3-wrap),
+:has(.c3-wrap) {{
+  scrollbar-width: thin;
+  scrollbar-color: #c5c1b5 transparent;
+}}
+:has(> .c3-wrap)::-webkit-scrollbar,
+:has(.c3-wrap)::-webkit-scrollbar {{
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}}
+:has(> .c3-wrap)::-webkit-scrollbar-thumb,
+:has(.c3-wrap)::-webkit-scrollbar-thumb {{
+  background: #c5c1b5;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}}
+:has(> .c3-wrap)::-webkit-scrollbar-thumb:hover,
+:has(.c3-wrap)::-webkit-scrollbar-thumb:hover {{
+  background: #a8a496;
+  background-clip: padding-box;
+}}
+:has(> .c3-wrap)::-webkit-scrollbar-corner,
+:has(.c3-wrap)::-webkit-scrollbar-corner {{ background: transparent; }}
+
+/* Outer wrap reserves horizontal whitespace on the right so hover
+   tooltips can render *inside* the wrap's own bounding box — they
+   never overflow into an ancestor that might have overflow:hidden.
+   The card itself is visually unchanged; the wrap's reserved area
+   is empty until something hovers. */
+.c3-wrap {{
+  display: inline-block;
+  position: relative;
+  margin-top: 5px;
+  padding-right: 380px;        /* reserved tooltip lane */
+  max-width: 100%;
+  box-sizing: border-box;
+}}
 .c3-card {{
   display: inline-flex;
   flex-direction: column;
@@ -62,16 +106,11 @@ _CSS = f"""
   border: 1px solid {theme.RULE};
   border-left: 3px solid;
   border-radius: 4px;
-  /* overflow: visible so per-row hover tooltips can paint past the
-     card boundary (they render to the right of the row). The card's
-     own descendants don't visually escape because each section (panel,
-     summary, footer) has its own background and stops at the border. */
   overflow: visible;
   font-family: {theme.FONT_SANS};
   font-size: 12px;
   color: {theme.INK};
   max-width: 100%;
-  margin-top: 5px;
   position: relative;
 }}
 .c3-card[data-kind="cached"] {{ border-left-color: {theme.RAIL_CACHED}; }}
@@ -230,22 +269,15 @@ _CSS = f"""
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Pure-CSS row hover tooltip. Renders **below** the row with a heavy
-   shadow so it reads as a floating overlay, not part of the table. We
-   used to position it to the right of the card via overflow:visible,
-   but Jupyter's .output_area and VS Code's cell iframe both clip
-   anything outside their bounds — the tooltip then disappeared
-   entirely. Below-row works in every notebook host; the overlap is
-   transient (mouse-out dismisses) and the elevated shadow makes the
-   floating nature obvious. */
+/* Pure-CSS row hover tooltip — renders in the wrap's reserved right-side
+   lane, so it never overflows an ancestor that has overflow:hidden. */
 .c3-rowtip {{
   display: none;
   position: absolute;
-  left: 12px;
-  top: calc(100% + 4px);
+  left: calc(100% + 10px);     /* row's right edge + small gap */
+  top: -2px;
   z-index: 1000;
-  width: 380px;
-  max-width: calc(100vw - 32px);
+  width: 360px;
   padding: 10px 12px;
   background: #ffffff;
   border: 1px solid #d2cfc6;
@@ -255,7 +287,7 @@ _CSS = f"""
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  pointer-events: none;        /* don't intercept mouse — keep row hover stable */
+  pointer-events: none;
 }}
 .c3-row:hover > .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
@@ -706,8 +738,12 @@ def _dots(
         kind = "cached"
         title = f"Restored from {source or 'cache'}"
     elif status is BadgeStatus.SKIPPED:
-        ram, disk, kind = "solid", "empty", "cached"
-        title = "In RAM (already computed by upstream)"
+        # 'SKIPPED' here means 'not re-executed' — the cache already had a
+        # downstream value that didn't need this step's output. The value
+        # was never produced this run, so neither RAM nor DISK has it now;
+        # show empty dots in a neutral color to avoid suggesting otherwise.
+        ram, disk, kind = "empty", "empty", "exec"
+        title = "Not re-run — downstream value was satisfied by cache"
     elif status in (BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED,
                     BadgeStatus.MODULE_RELOADED, BadgeStatus.ERROR):
         ram, disk, kind = "empty", "empty", "warn"
@@ -851,7 +887,7 @@ def _rowtip_html(row: StatementRow) -> str:
         dl_parts.append(f"<dt>Storage</dt><dd>{tier_dot_pair} {label}</dd>")
     elif row.status is BadgeStatus.SKIPPED:
         dl_parts.append(
-            f"<dt>Storage</dt><dd>{tier_dot_pair} in RAM (already computed)</dd>"
+            f"<dt>Storage</dt><dd>{tier_dot_pair} not re-run (cache covered downstream)</dd>"
         )
     elif row.skipped_reason:
         dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
@@ -995,6 +1031,48 @@ def _iter_drilldown_html(iterations: tuple[IterationRow, ...], loop_var_names: t
 # Loop / control / skipped renderers
 # ---------------------------------------------------------------------------
 
+def _loop_tip_html(
+    *,
+    title_code: str,
+    total: int,
+    cached: int,
+    computed: int,
+    total_time: float,
+    total_saved: float,
+    kind: str,
+) -> str:
+    """Hover tooltip for an aggregate loop row (head or body line)."""
+    status_label = (
+        "MIXED" if cached and computed
+        else "CACHED" if cached and not computed
+        else "COMPUTED"
+    )
+    pill = (
+        f'<span class="c3-rt-status" '
+        f'style="color:{theme.chip_fg(kind)};background:{theme.chip_bg(kind)};">'
+        f"{status_label}</span>"
+    )
+    time_html = f"{total_time:.3f}s"
+    if total_saved > theme.MIN_TIME_DISPLAY_S:
+        time_html += f' <span class="c3-rt-saved">· saved {total_saved:.2f}s</span>'
+    code_block = f'<pre class="c3-rt-code">{highlight_python(title_code)}</pre>'
+    counts = []
+    if total > 0:
+        counts.append(f"<dt>Iterations</dt><dd>{total}</dd>")
+    if cached:
+        counts.append(f"<dt>Cached</dt><dd>{cached}</dd>")
+    if computed:
+        counts.append(f"<dt>Computed</dt><dd>{computed}</dd>")
+    dl = f'<dl class="c3-rt-dl">{"".join(counts)}</dl>' if counts else ""
+    return (
+        '<div class="c3-rowtip">'
+        f'<div class="c3-rt-h">{pill}<span class="c3-rt-time">{time_html}</span></div>'
+        f"{code_block}"
+        f"{dl}"
+        "</div>"
+    )
+
+
 def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
     """Synthesise a kind across a group of iteration / row statuses."""
     cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
@@ -1059,6 +1137,11 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         else f"{iters_per_stmt} iters"
     )
 
+    head_tip = _loop_tip_html(
+        title_code=loop_header,
+        total=total, cached=cached, computed=(total - cached),
+        total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
+    )
     head_row = (
         f'<div class="c3-row c3-loop-head" data-kind="{head_kind}">'
         f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
@@ -1066,6 +1149,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
         f"{_tbar(head_total_time, max_time, head_kind)}"
         f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
+        f"{head_tip}"
         f"</div>"
     )
 
@@ -1088,6 +1172,11 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         else:
             stmt_rail = theme.RAIL_EXEC
         body_drill = _iter_drilldown_html(iters, g.loop_var_names)
+        body_tip = _loop_tip_html(
+            title_code=stmt.base_code or "…",
+            total=stmt_total, cached=stmt_cached, computed=(stmt_total - stmt_cached),
+            total_time=stmt_time, total_saved=stmt_saved, kind=stmt_kind,
+        )
         body_rows.append(
             f'<details class="c3-loop-body">'
             f'<summary class="c3-row" data-kind="{stmt_kind}" data-clickable="true" '
@@ -1097,6 +1186,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             f"{_iter_histogram_html(iters)}"
             f"{_tbar(stmt_time, max_time, stmt_kind)}"
             f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
+            f"{body_tip}"
             f"</summary>"
             f"{body_drill}"
             f"</details>"
@@ -1471,6 +1561,7 @@ def render_html(badge: InteractiveBadge) -> str:
 
     return (
         _STYLE_BLOCK
+        + '<div class="c3-wrap">'
         + f'<details class="c3-card" data-kind="{kind}">'
         + f'<summary class="c3-summary">'
         + f'<span class="c3-summary-label">{_esc(label)}</span>'
@@ -1485,6 +1576,7 @@ def render_html(badge: InteractiveBadge) -> str:
         + _footer_html(badge.footer)
         + "</div>"
         + "</details>"
+        + "</div>"
     )
 
 
