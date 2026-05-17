@@ -244,8 +244,11 @@ def test_skipped_row_does_not_claim_storage() -> None:
     assert 'c3-dot-empty' in skip_row
 
 
-def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
-    """Hovering a loop head or body line shows aggregate stats."""
+def test_loop_head_carries_aggregate_drawer_and_body_uses_per_iter_drill() -> None:
+    """Loop head click shows aggregate counts; loop body click shows the
+    per-iteration drill-down (under the threshold) or the counts drawer
+    (above it). Below threshold (2 iters), the body row uses the
+    per-iter table rather than the summary drawer."""
     metrics = [
         {"code": "# __iteration_context__: a\ny = x*2",
          "status": str(CacheStatus.COMPUTED), "total_time": 0.05,
@@ -256,13 +259,33 @@ def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
     ]
     html = render_html(build_interactive_badge(metrics))
     body = html.split("</style>", 1)[1]
-    # The loop head row contains a tooltip with the synthesised for-line.
+    # Head row: condensed-summary drawer with counts.
     head_block = body[body.find("c3-loop-head"):body.find("c3-loop-body")]
     assert "c3-rowtip" in head_block
     assert "Iterations" in head_block
-    # The body line (inside the <details>) also has its own tooltip.
+    # Body row (below the iter threshold): per-iter drill-down table, not
+    # a c3-rowtip summary.
     body_block = body[body.find("c3-loop-body"):]
+    assert "c3-iter-table" in body_block
+    assert "c3-iter-row" in body_block
+
+
+def test_loop_body_with_many_iterations_falls_back_to_condensed_drawer() -> None:
+    """Above the iter threshold the per-iter list would be unscannable,
+    so the body row switches to the condensed-counts drawer instead."""
+    metrics = [
+        {"code": f"# __iteration_context__: {i}\ny = x*2",
+         "status": str(CacheStatus.COMPUTED), "total_time": 0.01,
+         "loop_vars": {"x": i}}
+        for i in range(40)
+    ]
+    html = render_html(build_interactive_badge(metrics))
+    body = html.split("</style>", 1)[1]
+    body_block = body[body.find("c3-loop-body"):]
+    # Falls back to the summary drawer; no per-iter table for this body.
+    assert "c3-iter-table" not in body_block
     assert "c3-rowtip" in body_block
+    assert "Iterations" in body_block
 
 
 def test_rows_use_checkbox_hack_for_click_to_expand_no_js() -> None:

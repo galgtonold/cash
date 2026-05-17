@@ -48,6 +48,13 @@ from ..view import (
 )
 from ._pytoken import highlight_python
 
+# Threshold for the loop-body expansion view: at or below this many
+# iterations we show the full per-iteration drill-down (bullet · key ·
+# bar · time, one row per iteration); above it we fall back to the
+# condensed summary panel with counts. ~25 fits in a notebook cell
+# without forcing scroll on a typical screen.
+_ITER_INLINE_LIMIT = 25
+
 # ---------------------------------------------------------------------------
 # CSS — emitted once per badge inside a <style> block. Class names are
 # prefixed with ``c3-`` so they form a stable test contract and don't
@@ -1200,6 +1207,15 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             total_time=stmt_time, total_saved=stmt_saved, kind=stmt_kind,
         )
         body_rid = _uid("rx")
+        # Pick expansion content by iteration count: show the per-iteration
+        # drill-down for small loops (you want to see every value), fall
+        # back to the condensed counts panel when there'd be too many rows
+        # to scan. Threshold picked to match what fits comfortably in a
+        # notebook cell without scrolling.
+        if stmt_total <= _ITER_INLINE_LIMIT:
+            expansion = body_drill
+        else:
+            expansion = body_tip
         body_rows.append(
             f'<div class="c3-rowx c3-loop-body">'
             f'<input type="checkbox" class="c3-rxtog" id="{body_rid}">'
@@ -1210,8 +1226,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             f"{_tbar(stmt_time, max_time, stmt_kind)}"
             f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
             f"</label>"
-            f"{body_tip}"
-            f"{body_drill}"
+            f"{expansion}"
             f"</div>"
         )
 
