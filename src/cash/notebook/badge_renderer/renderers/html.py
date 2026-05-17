@@ -55,6 +55,22 @@ from ._pytoken import highlight_python
 # ---------------------------------------------------------------------------
 
 _CSS = f"""
+/* Force overflow:visible on the common notebook output containers when
+   they contain a Cash badge, so our hover tooltips can render past
+   their right edge without being clipped. Scoped via :has() — cells
+   without a Cash badge keep the host's default overflow. */
+.output_area:has(.c3-wrap),
+.output_subarea:has(.c3-wrap),
+.jp-OutputArea:has(.c3-wrap),
+.jp-OutputArea-output:has(.c3-wrap),
+.cell-output-ipywidget-background:has(.c3-wrap),
+.cell-output-html:has(.c3-wrap),
+.cell-output:has(.c3-wrap),
+.cell-output-text:has(.c3-wrap),
+div.output:has(.c3-wrap) {{
+  overflow: visible !important;
+}}
+
 /* Scoped scrollbar styling — applies only to scrollable elements that
    *contain* a Cash badge. Uses :has() (Chromium 105+, Safari 15.4+,
    Firefox 121+) so we don't repaint scrollbars in cells that don't
@@ -266,27 +282,31 @@ _CSS = f"""
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Pure-CSS row hover tooltip — renders **in flow** as a sibling row
-   below its anchor row. Pushes following rows down momentarily while
-   the mouse is over the row; mouse-out collapses cleanly. In-flow
-   expansion instead of an absolute overlay because every notebook
-   host (Jupyter classic, JupyterLab, VS Code, Colab) has *some*
-   ancestor with overflow:hidden — absolute-positioned tooltips
-   disappear in at least one of them. In-flow always works. */
-.c3-rowgrp {{ display: block; }}
+/* Pure-CSS row hover tooltip — absolutely positioned to the right of
+   its row, floating outside the badge in the notebook's whitespace.
+   No layout shifts (other rows stay put). The :has() rules above
+   force overflow:visible on common notebook output containers so the
+   tooltip isn't clipped at the cell boundary. */
+.c3-rowgrp {{ display: block; position: relative; }}
 .c3-rowtip {{
   display: none;
-  background: #f7f3e9;
-  border-top: 1px dashed #c8c3b3;
-  border-bottom: 1px solid #ececec;
-  padding: 10px 14px 12px 22px;
+  position: absolute;
+  left: calc(100% + 12px);
+  top: -2px;
+  z-index: 10000;
+  width: 360px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid #d2cfc6;
+  border-radius: 5px;
+  box-shadow: 0 12px 32px rgba(20,20,20,0.18), 0 3px 8px rgba(20,20,20,0.10);
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  box-shadow: inset 4px 0 0 rgba(0,0,0,0.08);
+  pointer-events: none;        /* don't intercept hover when moving past it */
 }}
-.c3-rowgrp:hover .c3-rowtip {{ display: block; }}
+.c3-rowgrp:hover > .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
