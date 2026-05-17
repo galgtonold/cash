@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from cash.notebook.badge_renderer import theme
 
 
@@ -24,16 +26,9 @@ def test_status_palette_uses_hex_colors() -> None:
         assert token.startswith("#") and len(token) in (4, 7)
 
 
-def test_legacy_underscore_aliases_no_longer_exist() -> None:
-    # Slice 1 removed the underscore-prefixed shim from _types.py.
-    # Imports must come from .theme directly going forward.
-    from cash.notebook.badge_renderer import _types
-    for name in (
-        "_FONT_SANS", "_FONT_MONO",
-        "_CODE_SNIPPET_MAX_LEN", "_HEADER_MAX_LEN",
-        "_MIN_TIME_DISPLAY_S", "_MIN_TIME_DISPLAY_MS",
-        "_BADGE_COLOR_RESTORED", "_BADGE_COLOR_DEFAULT",
-    ):
-        assert not hasattr(_types, name), (
-            f"{name} should live in .theme now, not ._types"
-        )
+def test_legacy_types_module_is_gone() -> None:
+    """``_types.py`` was retired in slice 7 alongside the rest of the
+    legacy renderer; the TypedDicts it held are replaced by BadgeView nodes."""
+    import importlib
+    with pytest.raises(ImportError):
+        importlib.import_module("cash.notebook.badge_renderer._types")

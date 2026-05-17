@@ -414,101 +414,11 @@ class TestNonHashableFallback:
         assert result == 15
 
 
-# ============================================================================
-# A2-A3: Badge Rendering for Decorator Calls
-# ============================================================================
-
-
-class TestDecoratorBadgeRendering:
-    """Test badge rendering for decorator cache calls."""
-
-    def test_render_decorator_calls_few(self):
-        """Fewer than 3 calls should show individual rows."""
-
-        calls = [
-            {'func_name': 'compute', 'cache_hit': True, 'execution_time': 0.01, 'args_hash': 'abc', 'cache_key': 'key1', 'timestamp': time.time()},
-            {'func_name': 'compute', 'cache_hit': False, 'execution_time': 0.5, 'args_hash': 'def', 'cache_key': 'key2', 'timestamp': time.time()},
-        ]
-
-        html = _badge.render_decorator_calls(calls)
-
-        assert '@cache' in html
-        assert 'compute()' in html
-        assert 'HIT' in html
-        assert 'MISS' in html
-        assert '0.010s' in html or '0.01' in html
-
-    def test_render_decorator_calls_many_condensed(self):
-        """More than 3 calls to same function should be condensed."""
-
-        calls = [
-            {'func_name': 'process', 'cache_hit': False, 'execution_time': 0.1, 'args_hash': f'h{i}', 'cache_key': f'k{i}', 'timestamp': time.time()}
-            for i in range(5)
-        ]
-
-        html = _badge.render_decorator_calls(calls)
-
-        assert 'process()' in html
-        assert '5 calls' in html
-        assert 'all computed' in html
-        assert '▶' in html  # Expand arrow
-
-    def test_render_decorator_calls_mixed_condensed(self):
-        """Mixed hits and misses should show counts in condensed view."""
-
-        calls = [
-            {'func_name': 'fetch', 'cache_hit': i < 8, 'execution_time': 0.01, 'args_hash': f'h{i}', 'cache_key': f'k{i}', 'timestamp': time.time()}
-            for i in range(10)
-        ]
-
-        html = _badge.render_decorator_calls(calls)
-
-        assert 'fetch()' in html
-        assert '8/10 cached' in html
-        assert '2 computed' in html
-
-    def test_render_decorator_calls_all_cached(self):
-        """All cached should show 'ALL X CACHED'."""
-
-        calls = [
-            {'func_name': 'get_data', 'cache_hit': True, 'execution_time': 0.001, 'args_hash': f'h{i}', 'cache_key': f'k{i}', 'timestamp': time.time()}
-            for i in range(5)
-        ]
-
-        html = _badge.render_decorator_calls(calls)
-
-        assert 'ALL 5 CACHED' in html
-
-    def test_render_decorator_calls_multiple_functions(self):
-        """Multiple functions should each get their own section."""
-
-        calls = [
-            {'func_name': 'func_a', 'cache_hit': True, 'execution_time': 0.01, 'args_hash': 'h1', 'cache_key': 'k1', 'timestamp': time.time()},
-            {'func_name': 'func_b', 'cache_hit': False, 'execution_time': 0.5, 'args_hash': 'h2', 'cache_key': 'k2', 'timestamp': time.time()},
-        ]
-
-        html = _badge.render_decorator_calls(calls)
-
-        assert 'func_a()' in html
-        assert 'func_b()' in html
-
-    def test_render_decorator_calls_empty(self):
-        """Empty calls list should return empty string."""
-
-        html = _badge.render_decorator_calls([])
-        assert html == ""
-
-    def test_render_decorator_calls_many_with_ellipsis(self):
-        """More than 10 calls should show first 5, last 5, with ellipsis."""
-
-        calls = [
-            {'func_name': 'batch', 'cache_hit': i % 2 == 0, 'execution_time': 0.01, 'args_hash': f'h{i}', 'cache_key': f'k{i}', 'timestamp': time.time()}
-            for i in range(15)
-        ]
-
-        html = _badge.render_decorator_calls(calls)
-
-        assert '5 more calls' in html
+# Decorator badge rendering is covered structurally by
+# test_badge_html_renderer.test_decorator_section_renders_when_calls_present
+# and end-to-end by test_badge_display. Phrasing assertions (e.g.
+# "ALL N CACHED", "5 more calls") were tied to the deleted legacy
+# render_decorator_calls implementation and have been retired with it.
 
 
 # ============================================================================

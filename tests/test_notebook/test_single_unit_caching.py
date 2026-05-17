@@ -223,21 +223,6 @@ else:
         for s in statements:
             assert '# __iteration_context__:' not in s.get('code', '')
 
-    def test_group_loop_iterations_handles_per_iteration(self):
-        """_group_loop_iterations should group per-iteration metrics."""
-        from cash.notebook import badge_renderer as _badge
-
-        metrics = [
-            {'status': CacheStatus.COMPUTED, 'code': '# __iteration_context__: abc\nval = len(key)',
-             'total_time': 0.5, 'loop_vars': {'key': 'a'}},
-            {'status': CacheStatus.RESTORED, 'code': '# __iteration_context__: def\nval = len(key)',
-             'total_time': 0.01, 'loop_vars': {'key': 'b'}},
-        ]
-        grouped = _badge.group_loop_iterations(metrics)
-        # Should group into loop iterations
-        assert len(grouped) >= 1
-
-
 class TestErrorPropagationInLoops:
     """Tests that runtime errors inside loops propagate correctly and are NOT masked by cache."""
 

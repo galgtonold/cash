@@ -4,7 +4,21 @@ import pytest
 from cash.backends.memory_backend import InMemoryBackend
 from cash.backends.file_backend import FileBackend
 from cash.backends.tiered_backend import TieredBackend
-from cash.notebook.badge_renderer._badge import _computed_storage_display_html
+from cash.notebook.badge_renderer.renderers.html import render_html
+from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+from cash.notebook.cache_status import CacheStatus
+
+
+def _storage_html_for(metric_extras: dict) -> str:
+    """Render a single COMPUTED metric to HTML and return that HTML for assertion.
+
+    The current-cell storage cell is what these tests care about — the
+    helper centralises the build/render boilerplate so each test reads as
+    a single dict literal + assertion.
+    """
+    metric = {'code': 'x = 1', 'status': str(CacheStatus.COMPUTED), 'total_time': 0.05}
+    metric.update(metric_extras)
+    return render_html(build_interactive_badge([metric]))
 
 
 class TestTieredBackendStoragePropagation:
@@ -57,55 +71,46 @@ class TestTieredBackendStoragePropagation:
         assert new_keys == {'storage'}
 
 
-class TestComputedStorageDisplayHtml:
-    """Test the _computed_storage_display_html function for various scenarios."""
+class TestComputedStorageDisplay:
+    """Storage cell rendering for COMPUTED rows, end-to-end through the BadgeView pipeline."""
 
     def test_uncacheable_reasons_shows_no_cache(self):
-        m = {'uncacheable_reasons': ['Side effect: print() (io)']}
-        html = _computed_storage_display_html(m)
+        html = _storage_html_for({'uncacheable_reasons': ['Side effect: print() (io)']})
         assert '🚫 No Cache' in html
         assert 'Side effect: print()' in html
 
     def test_skipped_reason_shows_not_cached(self):
-        m = {'skipped_reason': 'Object too large (500MB)'}
-        html = _computed_storage_display_html(m)
+        html = _storage_html_for({'skipped_reason': 'Object too large (500MB)'})
         assert '⚠️ Not Cached' in html
         assert 'Object too large' in html
 
     def test_storage_ram_shows_arrow(self):
-        m = {'storage': ['RAM']}
-        html = _computed_storage_display_html(m)
+        html = _storage_html_for({'storage': ['RAM']})
         assert '→ RAM' in html
 
     def test_storage_ram_disk_shows_both(self):
-        m = {'storage': ['RAM', 'DISK']}
-        html = _computed_storage_display_html(m)
+        html = _storage_html_for({'storage': ['RAM', 'DISK']})
         assert '→ RAM+DISK' in html
+
+    def test_priority_uncacheable_over_storage(self):
+        """uncacheable_reasons should take priority over storage values."""
+        html = _storage_html_for({'uncacheable_reasons': ['mutation'], 'storage': ['RAM']})
+        assert '🚫 No Cache' in html
+        assert '→ RAM' not in html
 
     def test_empty_storage_no_outputs_shows_reason(self):
         """Statements with no variable outputs should show 'no outputs'."""
-        m = {'evaluated_vars': [], 'total_time': 0.05}
-        html = _computed_storage_display_html(m)
+        html = _storage_html_for({'evaluated_vars': [], 'total_time': 0.05})
         assert 'no outputs' in html
-        assert 'title=' in html  # has hover tooltip
+        assert 'title=' in html
 
     def test_empty_storage_trivial_execution_shows_reason(self):
         """Fast statements with outputs should show 'trivial'."""
-        m = {'evaluated_vars': ['x'], 'total_time': 0.005}
-        html = _computed_storage_display_html(m)
+        html = _storage_html_for({'evaluated_vars': ['x'], 'total_time': 0.005})
         assert 'trivial' in html
         assert 'title=' in html
 
     def test_empty_storage_unknown_shows_dash(self):
-        """Fallback case: has outputs and non-trivial time but no storage."""
-        m = {'evaluated_vars': ['x'], 'total_time': 1.0}
-        html = _computed_storage_display_html(m)
-        assert '>-<' in html
-        assert 'title=' in html
-
-    def test_priority_uncacheable_over_storage(self):
-        """uncacheable_reasons should take priority over storage values."""
-        m = {'uncacheable_reasons': ['mutation'], 'storage': ['RAM']}
-        html = _computed_storage_display_html(m)
-        assert '🚫 No Cache' in html
-        assert '→ RAM' not in html
+        """Fallback: has outputs and non-trivial time but no storage."""
+        html = _storage_html_for({'evaluated_vars': ['x'], 'total_time': 1.0})
+        assert "style='cursor:help; color: #999;'>-</span>" in html
