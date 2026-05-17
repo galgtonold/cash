@@ -130,8 +130,10 @@ def test_skipped_bucket_renders_as_collapsible_with_count_and_saved() -> None:
     ]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-skipped" in html
-    assert "2 intermediate dependency steps" in html
+    assert "2 upstream steps not re-run" in html
     assert "saved 0.50s" in html
+    # Explanation tooltip on the disclosure makes the "why" discoverable.
+    assert "cache already covered" in html
 
 
 def test_decorator_section_renders_with_cache_tag() -> None:
