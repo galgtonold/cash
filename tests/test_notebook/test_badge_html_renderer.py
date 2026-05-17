@@ -264,20 +264,23 @@ def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
     assert "c3-rowtip" in body_block
 
 
-def test_tooltips_render_inline_below_their_row() -> None:
-    """Tooltips are siblings in a .c3-rowgrp wrapper, not absolute overlays.
+def test_tooltips_float_absolutely_right_of_row() -> None:
+    """Tooltips are absolute-positioned siblings inside .c3-rowgrp.
 
-    Absolute-positioned tooltips kept getting clipped by an ancestor's
-    overflow:hidden (Jupyter .output_area, VS Code cell iframe). In-flow
-    siblings inside .c3-rowgrp display:contents work in every host —
-    layout shifts on hover but the tooltip is reliably visible.
+    Layout shifts (the inline-expansion variant) annoyed during quick row
+    scanning, so we float right-of-row again — and force overflow:visible
+    on common notebook output containers via :has() so the float isn't
+    clipped at the cell boundary.
     """
     html = render_html(build_interactive_badge([]))
     assert 'class="c3-wrap"' in html
-    assert 'class="c3-rowgrp"' in html or 'c3-rowgrp' in html
-    assert "padding-right: 380px" not in html  # the failed wrap-extension is gone
-    # The hover rule lives on the rowgrp now.
-    assert ".c3-rowgrp:hover .c3-rowtip" in html
+    assert "padding-right: 380px" not in html  # no wrap-extension that ate cell width
+    assert "left: calc(100% + 12px)" in html   # tooltip floats right
+    assert "position: absolute" in html
+    # Forced overflow:visible on common notebook ancestors so the tip isn't clipped.
+    assert ".output_area:has(.c3-wrap)" in html
+    assert ".jp-OutputArea-output:has(.c3-wrap)" in html
+    assert "overflow: visible !important" in html
 
 
 def test_scoped_scrollbar_styling_present() -> None:
@@ -299,7 +302,7 @@ def test_each_row_has_pure_css_hover_tooltip() -> None:
     }]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-rowtip" in html
-    assert ":hover .c3-rowtip" in html        # CSS rule activating it
+    assert ":hover > .c3-rowtip" in html      # CSS rule activating it
     assert "<dt>Produced</dt>" in html        # vars surface in the tip
     assert "<dt>Storage</dt>" in html
 
