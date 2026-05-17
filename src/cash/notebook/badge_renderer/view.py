@@ -131,11 +131,18 @@ class ForLoopGroup:
 
 @dataclass(frozen=True)
 class ControlGroup:
-    """Grouped metrics for an ``if``/``elif``/``else`` branch."""
+    """Grouped metrics for an ``if``/``elif``/``else`` branch.
+
+    ``rows`` can contain any :data:`SectionItem` — a control body may
+    itself contain loops or further control groups. Renderers dispatch
+    on item type when walking the body. Type is intentionally loose
+    (``tuple[Any, ...]``) because the closed union :data:`SectionItem`
+    is defined below and would create a forward-reference cycle.
+    """
 
     branch_label: str
     header: str
-    rows: tuple[StatementRow, ...]
+    rows: tuple[Any, ...]
 
 
 @dataclass(frozen=True)

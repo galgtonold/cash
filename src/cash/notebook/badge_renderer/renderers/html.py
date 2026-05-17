@@ -812,7 +812,9 @@ def _item_total_time(item: SectionItem) -> float:
     if isinstance(item, ForLoopGroup):
         return sum(it.time_s for ls in item.stmts for it in ls.iterations)
     if isinstance(item, ControlGroup):
-        return sum(r.time_s for r in item.rows)
+        # Body rows can themselves be nested ControlGroups / ForLoopGroups
+        # after the recursive view-builder grouping; sum recursively.
+        return sum(_item_total_time(r) for r in item.rows)
     if isinstance(item, ControlGroupSingle):
         return item.row.time_s
     if isinstance(item, SkippedBucket):
@@ -1098,6 +1100,40 @@ def _loop_tip_html(
     )
 
 
+def _item_saved_time(item) -> float:
+    """Aggregate saved-time the same way _item_total_time aggregates time."""
+    if isinstance(item, StatementRow):
+        return item.saved_time_s
+    if isinstance(item, ForLoopGroup):
+        return sum(it.saved_time_s for ls in item.stmts for it in ls.iterations)
+    if isinstance(item, ControlGroup):
+        return sum(_item_saved_time(r) for r in item.rows)
+    if isinstance(item, ControlGroupSingle):
+        return item.row.saved_time_s
+    if isinstance(item, SkippedBucket):
+        return item.total_saved_time_s
+    return 0.0
+
+
+def _walk_statuses(items) -> "list[BadgeStatus]":
+    """Flatten the leaf statuses of any nested SectionItem tree."""
+    out: list[BadgeStatus] = []
+    for item in items:
+        if isinstance(item, StatementRow):
+            out.append(item.status)
+        elif isinstance(item, ForLoopGroup):
+            for ls in item.stmts:
+                for it in ls.iterations:
+                    out.append(it.status)
+        elif isinstance(item, ControlGroup):
+            out.extend(_walk_statuses(item.rows))
+        elif isinstance(item, ControlGroupSingle):
+            out.append(item.row.status)
+        # OverheadBreakdown / DecoratorCallGroup don't contribute statuses
+        # at the cell-summary level — skip.
+    return out
+
+
 def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
     """Synthesise a kind across a group of iteration / row statuses."""
     cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
@@ -1235,7 +1271,10 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
 
 def _control_group_html(cg: ControlGroup, max_time: float) -> str:
     rail = theme.rail_color(BadgeStatus.COMPUTED.value)
-    statuses = tuple(r.status for r in cg.rows)
+    # Walk nested items to gather every status — body rows may include
+    # ForLoopGroups, ControlGroupSingles, etc. that don't carry .status
+    # directly. We only need a kind for the aggregate visual treatment.
+    statuses = tuple(_walk_statuses(cg.rows))
     kind = _aggregate_kind(statuses)
     # The view-builder often puts the same string in both branch_label and
     # header (the metric's body_statements[0] is the if/for/while line
@@ -1246,15 +1285,21 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
         head_code = f"{cg.branch_label}: {cg.header}"
     else:
         head_code = cg.header or cg.branch_label
-    total_time = sum(r.time_s for r in cg.rows)
-    total_saved = sum(r.saved_time_s for r in cg.rows)
+    total_time = sum(_item_total_time(r) for r in cg.rows)
+    total_saved = sum(_item_saved_time(r) for r in cg.rows)
 
     cg_rid = _uid("rx")
-    # Body rows render as static rows (no further click-to-expand) so the
-    # body is plainly visible the moment the if/else is expanded. Each
-    # row keeps its rail, code, dots, bar, and time chip — just no nested
-    # checkbox/drawer machinery to navigate through.
-    body_rows = "".join(_static_statement_row_html(r, max_time) for r in cg.rows)
+    # Body rows render plainly when the control is expanded. StatementRows
+    # use the static (no further-click) helper; nested ForLoopGroups,
+    # ControlGroups, etc. dispatch through the normal section-item
+    # renderer so they keep their own click-to-expand behaviour.
+    body_parts = []
+    for r in cg.rows:
+        if isinstance(r, StatementRow):
+            body_parts.append(_static_statement_row_html(r, max_time))
+        else:
+            body_parts.append(_render_section_item(r, max_time, is_upstream=False))
+    body_rows = "".join(body_parts)
     head = (
         f'<div class="c3-rowx">'
         f'<input type="checkbox" class="c3-rxtog" id="{cg_rid}">'
@@ -1537,7 +1582,7 @@ def _sparkline_html(badge: InteractiveBadge) -> str:
         elif isinstance(item, StatementRow):
             kind = theme.kind_of(item.status.value)
         elif isinstance(item, ControlGroup):
-            kind = _aggregate_kind(tuple(r.status for r in item.rows))
+            kind = _aggregate_kind(tuple(_walk_statuses(item.rows)))
         elif isinstance(item, ControlGroupSingle):
             kind = theme.kind_of(item.row.status.value)
         else:

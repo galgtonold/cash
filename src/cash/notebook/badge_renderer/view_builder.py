@@ -84,9 +84,20 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
             branch_label = mlist[0].get("branch_label", "")
             body_stmts = mlist[0].get("body_statements", [])
             header = body_stmts[0] if body_stmts else branch_label
+            # Recursively group the body so nested loops or nested
+            # controls within this branch get their own grouping (not
+            # flattened into a row-per-iteration spam). Strip the
+            # control_context off the inner metrics so the recursion
+            # doesn't re-collect them at this same level.
+            inner_metrics = [
+                {k: v for k, v in m.items() if k != "control_context"}
+                for m in mlist
+            ]
+            sub_items = _group_loop_iterations(inner_metrics)
             pass1.append({
                 "type": "control_group",
                 "metrics": mlist,
+                "sub_items": sub_items,
                 "branch_label": branch_label,
                 "header": header,
             })
@@ -94,7 +105,15 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
 
     for m in metrics:
         code = m.get("code", "")
-        if "# __iteration_context__:" in code:
+        ctx = m.get("control_context")
+        has_iter = "# __iteration_context__:" in code
+        if ctx:
+            # Control context wins over iteration context — a loop *inside*
+            # an if/else gets bucketed under the control, then recursively
+            # sub-grouped at flush-time so the loop still looks like a loop.
+            _flush_loops()
+            control_groups.setdefault(ctx, []).append(m)
+        elif has_iter:
             _flush_controls()
             actual = "\n".join(
                 line for line in code.split("\n")
@@ -102,13 +121,10 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
                 and not line.startswith("# control_context:")
             )
             loop_stmt_groups.setdefault(actual, []).append(m)
-        elif m.get("control_context"):
-            _flush_loops()
-            control_groups.setdefault(m["control_context"], []).append(m)
         else:
             _flush_loops()
             _flush_controls()
-            if m.get("body_statements") and not m.get("control_context"):
+            if m.get("body_statements"):
                 pass1.append({"type": "control_group_single", "metric": m})
             else:
                 pass1.append({"type": "single", "metric": m})
@@ -303,11 +319,25 @@ def _section_item_from_grouped(item: dict[str, Any], *, is_upstream: bool) -> Se
         return ForLoopGroup(loop_var_names=loop_var_names, stmts=stmts)
 
     if kind == "control_group":
+        sub_items = item.get("sub_items")
+        if sub_items:
+            # Body was recursively grouped — translate each sub-item with
+            # the same dispatch we use at the top level. Loops nested in
+            # this control body therefore render as ForLoopGroups, not as
+            # a flat list of N per-iteration StatementRows.
+            rows: tuple[Any, ...] = tuple(
+                _section_item_from_grouped(g, is_upstream=is_upstream)
+                for g in sub_items
+            )
+        else:
+            rows = tuple(
+                _statement_row_from_metric(m, is_upstream=is_upstream)
+                for m in item.get("metrics", [])
+            )
         return ControlGroup(
             branch_label=str(item.get("branch_label", "")),
             header=str(item.get("header", "")),
-            rows=tuple(_statement_row_from_metric(m, is_upstream=is_upstream)
-                       for m in item.get("metrics", [])),
+            rows=rows,
         )
 
     if kind == "control_group_single":
