@@ -1,22 +1,32 @@
-"""HTML renderer for the BadgeView IR.
+"""HTML renderer for the BadgeView IR — v3 "code-first" design.
 
-One ``isinstance``-dispatched function per node type. All style decisions
-go through :mod:`..theme`; no hex codes inline (except for the few one-off
-backgrounds that haven't been promoted to named tokens yet).
+Walks an :class:`InteractiveBadge` tree and emits the v3 visual language
+from ``design/notebook-badges/Badge.v3.jsx``:
 
-This renderer is the structural successor to the f-string assembly in
-``_badge.py`` and ``_components.py``. It is intentionally not byte-equal
-to the legacy output — that's the swap's job to reconcile via the
-existing badge_display test suite.
+* code-line foreground (syntax-highlighted, monospace)
+* 5px state rail on the left of every row
+* tier dots (RAM / DISK) instead of arrows + text
+* per-row timing bar scaled to the cell-max
+* state-tinted time chip on the right
+* loop bodies render an inline mini-histogram of iteration times
+* expansions use ``<details>`` (works in classic Jupyter *and* VS Code)
+* hover detail is pure CSS :hover (no inline JS, survives notebook strip)
+
+Interactive layers that require JS (filter chips, fixed-position
+tooltips, keyboard nav) are deliberately omitted — they would silently
+break in VS Code's sanitized renderer. The visual language is preserved.
+
+Style is hoisted into a single per-badge ``<style>`` block so HTML output
+stays compact and the CSS class names form a stable contract for tests.
 """
 
 from __future__ import annotations
 
 import threading
-from typing import Any
 
 from .. import theme
 from ..view import (
+    BadgeHeader,
     BadgeStatus,
     BugReportLink,
     ControlBody,
@@ -36,6 +46,465 @@ from ..view import (
     StatementRow,
     StatusBadge,
 )
+from ._pytoken import highlight_python
+
+# ---------------------------------------------------------------------------
+# CSS — emitted once per badge inside a <style> block. Class names are
+# prefixed with ``c3-`` so they form a stable test contract and don't
+# collide with notebook-host styles.
+# ---------------------------------------------------------------------------
+
+_CSS = f"""
+.c3-card {{
+  display: inline-flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid {theme.RULE};
+  border-left: 3px solid;
+  border-radius: 4px;
+  overflow: hidden;
+  font-family: {theme.FONT_SANS};
+  font-size: 12px;
+  color: {theme.INK};
+  max-width: 100%;
+  margin-top: 5px;
+}}
+.c3-card[data-kind="cached"] {{ border-left-color: {theme.RAIL_CACHED}; }}
+.c3-card[data-kind="exec"]   {{ border-left-color: {theme.RAIL_EXEC}; }}
+.c3-card[data-kind="warn"]   {{ border-left-color: {theme.RAIL_WARN}; }}
+.c3-card[data-kind="mixed"]  {{ border-left-color: {theme.RAIL_MIXED}; }}
+
+/* Summary chip */
+.c3-summary {{
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  list-style: none;
+  outline: none;
+  min-height: 22px;
+}}
+.c3-summary::-webkit-details-marker {{ display: none; }}
+.c3-summary::marker {{ content: ""; }}
+.c3-card[open] > .c3-summary {{ border-bottom: 1px solid #efece4; }}
+.c3-card[data-kind="cached"][open] > .c3-summary {{ background: {theme.SUMMARY_BG_CACHED}; }}
+.c3-card[data-kind="exec"][open]   > .c3-summary {{ background: {theme.SUMMARY_BG_EXEC}; }}
+
+.c3-summary-label {{
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}}
+.c3-card[data-kind="cached"] .c3-summary-label {{ color: {theme.RAIL_CACHED}; }}
+.c3-card[data-kind="exec"]   .c3-summary-label {{ color: {theme.RAIL_EXEC}; }}
+.c3-card[data-kind="warn"]   .c3-summary-label {{ color: {theme.RAIL_WARN}; }}
+.c3-card[data-kind="mixed"]  .c3-summary-label {{ color: {theme.RAIL_MIXED}; }}
+.c3-summary-sep {{ color: {theme.INK_5}; font-size: 10px; }}
+.c3-summary-sub {{
+  font-family: {theme.FONT_MONO};
+  font-size: 11px;
+  color: {theme.INK_3};
+}}
+.c3-summary-spark {{
+  display: inline-flex;
+  align-items: flex-end;
+  height: 18px;
+  padding: 0 4px;
+  border-left: 1px solid #e8e5dc;
+  border-right: 1px solid #e8e5dc;
+  margin-left: 4px;
+}}
+.c3-spark {{
+  display: inline-flex;
+  align-items: flex-end;
+  height: 16px;
+  gap: 1px;
+}}
+.c3-spark-bar {{
+  width: 3px;
+  min-height: 2px;
+  border-radius: 0.5px;
+}}
+.c3-summary-chips {{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}}
+.c3-fchip {{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 5px;
+  background: #fff;
+  border: 1px solid #e2e2e0;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: {theme.INK_3};
+}}
+.c3-fchip-dot {{ width: 6px; height: 6px; border-radius: 50%; display: inline-block; }}
+.c3-fchip-exec   .c3-fchip-dot {{ background: {theme.BAR_EXEC}; }}
+.c3-fchip-cached .c3-fchip-dot {{ background: {theme.BAR_CACHED}; }}
+.c3-fchip-warn   .c3-fchip-dot {{ background: {theme.BAR_WARN}; }}
+.c3-fchip-count  {{ color: {theme.INK}; font-variant-numeric: tabular-nums; }}
+.c3-summary-caret {{
+  width: 7px; height: 7px;
+  border-right: 1.5px solid {theme.INK_4};
+  border-bottom: 1.5px solid {theme.INK_4};
+  transform: rotate(45deg) translate(-2px, -2px);
+  margin-left: 6px;
+  align-self: center;
+  transition: transform 0.15s ease;
+}}
+.c3-card[open] > .c3-summary > .c3-summary-caret {{
+  transform: rotate(-135deg) translate(-2px, -2px);
+}}
+
+/* Panel */
+.c3-panel {{
+  background: {theme.BG_PANEL};
+  max-height: 580px;
+  overflow-y: auto;
+  padding: 0;
+  min-width: 0;
+}}
+
+/* Upstream subsection — nested <details> */
+.c3-upstream {{
+  background: {theme.BG_UPSTREAM};
+  border-bottom: 1px solid #ececec;
+}}
+.c3-upstream > summary {{
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: {theme.INK_3};
+  list-style: none;
+}}
+.c3-upstream > summary::-webkit-details-marker {{ display: none; }}
+.c3-upstream > summary::marker {{ content: ""; }}
+.c3-upstream > summary:hover {{ background: #f0f2f4; }}
+.c3-upstream-label {{ font-weight: 600; letter-spacing: 0.02em; }}
+.c3-upstream-meta  {{
+  font-family: {theme.FONT_MONO};
+  font-size: 10px;
+  color: {theme.INK_4};
+  margin-left: auto;
+}}
+.c3-upstream-body {{ border-top: 1px solid #ececec; padding: 2px 0; }}
+.c3-upstream-caret {{
+  display: inline-block;
+  color: {theme.INK_5};
+  font-size: 9px;
+  width: 10px;
+  margin-right: 2px;
+}}
+.c3-upstream[open] .c3-upstream-caret::after {{ content: "▾"; }}
+.c3-upstream:not([open]) .c3-upstream-caret::after {{ content: "▸"; }}
+
+/* Row grid */
+.c3-row {{
+  display: grid;
+  grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px;
+  align-items: center;
+  border-bottom: 1px solid {theme.RULE_SOFT};
+  min-height: 26px;
+}}
+.c3-row:last-child {{ border-bottom: 0; }}
+.c3-row[data-clickable="true"] {{ cursor: pointer; }}
+.c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
+
+.c3-rail {{ width: 5px; align-self: stretch; }}
+.c3-rail-soft {{ opacity: 0.5; }}
+
+.c3-code {{
+  margin: 0;
+  padding: 5px 10px;
+  font-family: {theme.FONT_MONO};
+  font-size: 12px;
+  color: {theme.INK};
+  white-space: pre;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4;
+}}
+.c3-code-body  {{ color: {theme.INK_2}; }}
+.c3-code-group {{ font-style: italic; }}
+.c3-caret {{
+  display: inline-block;
+  color: {theme.INK_5};
+  font-size: 9px;
+  width: 10px;
+  margin-right: 2px;
+}}
+
+/* Python syntax tokens */
+.c3-kw  {{ color: #cf222e; }}
+.c3-str {{ color: #0a3069; }}
+.c3-com {{ color: #6e7781; font-style: italic; }}
+.c3-num {{ color: #0550ae; }}
+
+/* Tier dots cell */
+.c3-dots-cell {{ padding: 0 4px; text-align: left; }}
+.c3-dots {{ display: inline-flex; align-items: center; gap: 2px; }}
+.c3-dot {{
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1.5px solid {theme.RULE};
+  background: transparent;
+  vertical-align: middle;
+}}
+.c3-dot-solid   {{ background: currentColor; border-color: currentColor; }}
+.c3-dot-ring    {{ background: transparent;  border-color: currentColor; }}
+.c3-dot-blocked {{ background: transparent;  border-color: currentColor; border-style: dashed; }}
+.c3-dot-empty   {{ background: transparent;  border-color: #d2d4d8; }}
+.c3-dots-cached  {{ color: {theme.RAIL_CACHED}; }}
+.c3-dots-exec    {{ color: {theme.RAIL_EXEC}; }}
+.c3-dots-warn    {{ color: {theme.RAIL_WARN}; }}
+
+/* Timing bar */
+.c3-tbar-cell {{ padding: 0 8px; }}
+.c3-tbar {{
+  display: block;
+  height: 6px;
+  background: #f2efea;
+  border-radius: 3px;
+  overflow: hidden;
+  width: 100%;
+}}
+.c3-tbar-fill {{
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}}
+.c3-tbar-fill-cached {{ background: {theme.BAR_CACHED}; }}
+.c3-tbar-fill-exec   {{ background: {theme.BAR_EXEC}; }}
+.c3-tbar-fill-warn   {{ background: {theme.BAR_WARN}; }}
+
+/* Time chip */
+.c3-time-chip {{
+  padding: 3px 8px 3px 6px;
+  text-align: right;
+  display: block;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-family: {theme.FONT_MONO};
+  line-height: 1.3;
+  border-left: 1px solid #f0eee8;
+}}
+.c3-time-chip-exec   {{ color: {theme.CHIP_FG_EXEC};   background: {theme.CHIP_BG_EXEC}; }}
+.c3-time-chip-cached {{ color: {theme.CHIP_FG_CACHED}; background: {theme.CHIP_BG_CACHED}; }}
+.c3-time-chip-warn   {{ color: {theme.CHIP_FG_WARN};   background: {theme.CHIP_BG_WARN}; }}
+.c3-time-sub {{
+  display: block;
+  font-size: 9px;
+  color: {theme.RAIL_CACHED};
+  margin-top: 1px;
+}}
+.c3-notif-pill {{
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: {theme.RAIL_WARN};
+  padding: 1px 5px;
+  background: #fff;
+  border: 1px solid #f1c8c1;
+  border-radius: 3px;
+}}
+
+/* Loop heading line */
+.c3-loop-head .c3-code {{ font-weight: 500; }}
+.c3-loop-meta {{
+  font-family: {theme.FONT_MONO};
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: {theme.INK_3};
+  padding: 0 6px;
+  text-align: left;
+}}
+
+/* Inline iteration mini-histogram on loop body line */
+.c3-iter-cell {{ padding: 0 4px; display: flex; align-items: center; }}
+.c3-iter-strip {{
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 16px;
+  max-width: 100%;
+  overflow: hidden;
+}}
+.c3-iter-bar {{
+  width: 4px;
+  min-height: 3px;
+  border-radius: 0.5px;
+  flex-shrink: 0;
+}}
+
+/* Per-iteration drill-down (inside <details>) */
+.c3-iter-table {{
+  background: {theme.BG_DETAIL};
+  padding: 6px 12px 8px 30px;
+  border-bottom: 1px solid {theme.RULE_SOFT};
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}}
+.c3-iter-row {{
+  display: grid;
+  grid-template-columns: 12px 160px 1fr 70px;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+}}
+.c3-iter-bullet {{
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+}}
+.c3-iter-key {{
+  color: {theme.INK_3};
+  font-family: {theme.FONT_MONO};
+}}
+.c3-iter-key b {{ color: {theme.INK}; }}
+.c3-iter-bar-track {{
+  height: 4px;
+  background: #ececec;
+  border-radius: 2px;
+  overflow: hidden;
+}}
+.c3-iter-bar-track > span {{ display: block; height: 100%; border-radius: 2px; }}
+.c3-iter-time {{
+  color: {theme.INK_2};
+  text-align: right;
+  font-family: {theme.FONT_MONO};
+  font-variant-numeric: tabular-nums;
+}}
+
+/* Decorator inline detail */
+.c3-detail {{
+  background: {theme.BG_DETAIL};
+  padding: 10px 14px 10px 30px;
+  border-bottom: 1px solid #f0f0ef;
+  font-size: 11px;
+  color: {theme.INK_2};
+}}
+.c3-detail-h {{
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: {theme.INK_3};
+  margin-bottom: 6px;
+}}
+.c3-cache-tag {{
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: {theme.FONT_MONO};
+  font-size: 9px;
+  color: #1a73e8;
+  background: #e8f0fe;
+  border-radius: 3px;
+  margin-right: 4px;
+}}
+.c3-deco-fn      {{ margin-top: 6px; }}
+.c3-deco-fn-name {{
+  font-family: {theme.FONT_MONO};
+  font-size: 11px;
+  color: {theme.INK_2};
+  margin-bottom: 4px;
+}}
+.c3-deco-strip {{
+  display: flex; align-items: flex-end; gap: 2px; height: 20px;
+}}
+.c3-deco-bar {{ width: 6px; border-radius: 1px; }}
+
+/* Section divider (CURRENT CELL, DECORATOR CACHE, OVERHEAD) — kept low-key */
+.c3-section {{
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: {theme.INK_4};
+  padding: 8px 12px 4px;
+}}
+
+/* Skipped intermediate-dependency bucket (collapsible <details>) */
+.c3-skipped {{
+  background: {theme.BG_UPSTREAM};
+  border-top: 1px solid #ececec;
+  border-bottom: 1px solid #ececec;
+}}
+.c3-skipped > summary {{
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  color: {theme.INK_3};
+  list-style: none;
+}}
+.c3-skipped > summary::-webkit-details-marker {{ display: none; }}
+.c3-skipped > summary::marker {{ content: ""; }}
+.c3-skipped-meta {{
+  font-family: {theme.FONT_MONO};
+  font-size: 10px;
+  color: {theme.INK_4};
+  margin-left: auto;
+}}
+
+/* Footer */
+.c3-footer {{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 12px;
+  border-top: 1px solid #ececec;
+  background: {theme.BG_PANEL};
+}}
+.c3-hint {{
+  font-size: 9px;
+  color: {theme.INK_5};
+  font-family: {theme.FONT_MONO};
+  letter-spacing: 0.02em;
+}}
+.c3-bug {{
+  font-family: {theme.FONT_SANS};
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: {theme.BUG_FG};
+  text-decoration: none;
+  padding: 3px 6px;
+  border-radius: 3px;
+}}
+.c3-bug:hover {{
+  color: {theme.BUG_FG_HOVER};
+  background: #f5f5f5;
+}}
+.c3-bug-arrow {{
+  margin-left: 2px;
+  color: {theme.INK_5};
+  display: inline-block;
+}}
+"""
+
+
+# Emit the style block at most once per <details id>. Because each
+# notebook output is a fresh DOM fragment we can re-emit it cheaply; the
+# browser deduplicates rule sets.
+_STYLE_BLOCK = f"<style>{_CSS}</style>"
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -62,205 +531,347 @@ def _esc(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _snippet(code: str, max_len: int = theme.CODE_SNIPPET_MAX_LEN) -> str:
-    s = code.splitlines()[0][:max_len] if code else ""
-    if len(code) > max_len:
-        s += "…"
-    return _esc(s)
+def _fmt_time(t: float) -> str:
+    return f"{t:.2f}s" if t >= theme.MIN_TIME_DISPLAY_S else "0.00s"
 
 
-def _fmt_time_s(t: float) -> str:
-    return f"{t:.2f}s" if t > theme.MIN_TIME_DISPLAY_S else "-"
+def _snippet(code: str) -> str:
+    """First-line truncated snippet (raw, not yet escaped or highlighted)."""
+    if not code:
+        return ""
+    line = code.splitlines()[0]
+    if len(line) > theme.CODE_SNIPPET_MAX_LEN:
+        line = line[: theme.CODE_SNIPPET_MAX_LEN] + "…"
+    return line
 
 
-def _storage_display(tiers: tuple[str, ...]) -> str:
-    if not tiers:
-        return "-"
-    return f"→ {'+'.join(tiers)}"
-
-
-def _storage_with_reasons(row: StatementRow) -> str:
-    """Storage cell that also surfaces uncacheable / skipped / no-output reasons."""
-    if row.uncacheable_reasons:
-        reason = _esc(", ".join(row.uncacheable_reasons))
-        return f"<span title='Not cached: {reason}' style='cursor:help; color: #d9534f;'>🚫 No Cache</span>"
-    if row.skipped_reason:
-        return (
-            f"<span title='{_esc(row.skipped_reason)}' "
-            f"style='cursor:help; color: #e68a00;'>⚠️ Not Cached</span>"
-        )
-    if row.storage_tiers:
-        return _storage_display(row.storage_tiers)
-    # Empty storage on a COMPUTED row: explain why.
-    if row.status is BadgeStatus.COMPUTED:
-        if not row.output_vars:
-            tip = "No variable outputs to cache (e.g. print-only statement). Stdout is still cached."
-            return f"<span title='{tip}' style='cursor:help; color: #999;'>- no outputs</span>"
-        if row.time_s < theme.MIN_TIME_DISPLAY_S:
-            tip = "Execution was too fast for disk promotion. Stored in RAM only on next run."
-            return f"<span title='{tip}' style='cursor:help; color: #999;'>- trivial</span>"
-        tip = "No storage info available. This may indicate a backend configuration issue."
-        return f"<span title='{tip}' style='cursor:help; color: #999;'>-</span>"
-    return "-"
-
-
-def _source_label(row: StatementRow) -> str:
-    if row.status is BadgeStatus.RESTORED and row.source:
-        return f"← {row.source}"
-    return ""
+def _code_html(code: str) -> str:
+    """Highlighted single-line snippet ready for innerHTML."""
+    return highlight_python(_snippet(code))
 
 
 # ---------------------------------------------------------------------------
-# Row renderers
+# Tier-dots — semantic derivation from a StatementRow (or pseudo-row).
 # ---------------------------------------------------------------------------
 
-def _row_html(row: StatementRow) -> str:
-    visual = theme.upstream_row_visual if row.is_upstream else theme.row_visual
-    icon_label = visual(row.status.value)
-    type_cell, color = _icon_cell(icon_label, row)
-    code_cell = _code_cell(row)
-    storage_cell = _source_or_storage_cell(row)
-    time_cell = _time_cell(row)
+def _dots(
+    *,
+    status: BadgeStatus,
+    storage_tiers: tuple[str, ...],
+    source: str | None,
+    uncacheable_reasons: tuple[str, ...],
+) -> str:
+    """Two-dot tier indicator: RAM (left) / DISK (right)."""
+    if uncacheable_reasons:
+        ram, disk, kind = "blocked", "blocked", "warn"
+        title = "Uncacheable: " + ", ".join(uncacheable_reasons)
+    elif status is BadgeStatus.RESTORED:
+        from_ram = (source or "").upper() == "RAM"
+        ram, disk = ("ring", "empty") if from_ram else ("empty", "ring")
+        kind = "cached"
+        title = f"Restored from {source or 'cache'}"
+    elif status is BadgeStatus.SKIPPED:
+        ram, disk, kind = "solid", "empty", "cached"
+        title = "In RAM (already computed by upstream)"
+    elif status in (BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED,
+                    BadgeStatus.MODULE_RELOADED, BadgeStatus.ERROR):
+        ram, disk, kind = "empty", "empty", "warn"
+        title = "—"
+    elif storage_tiers:
+        ram = "solid" if "RAM" in storage_tiers else "empty"
+        disk = "solid" if "DISK" in storage_tiers else "empty"
+        kind = "exec"
+        title = "Cached to: " + "+".join(storage_tiers)
+    else:
+        ram, disk, kind = "empty", "empty", "exec"
+        title = "no storage info"
     return (
-        f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; text-align: left; color: {color};\">{type_cell}</td>"
-        f"<td style=\"padding: 4px; text-align: left; font-family: {theme.FONT_MONO};\">{code_cell}</td>"
-        f"<td style=\"padding: 4px; text-align: left; font-size: 10px; color: #555;\">{storage_cell}</td>"
-        f"<td style=\"padding: 4px; text-align: left;\">{time_cell}</td>"
-        f"</tr>"
+        f'<span class="c3-dots-cell"><span class="c3-dots c3-dots-{kind}" '
+        f'title="{_esc(title)}">'
+        f'<span class="c3-dot c3-dot-{ram}"></span>'
+        f'<span class="c3-dot c3-dot-{disk}"></span>'
+        f"</span></span>"
     )
 
 
-def _icon_cell(visual: tuple[str, str, str], row: StatementRow) -> tuple[str, str]:
-    icon_or_label, color, label = visual
-    # upstream_row_visual returns the full "⬆️ Restored" text in slot 0;
-    # row_visual returns just the icon. Detect and combine appropriately.
-    if " " in icon_or_label:
-        return icon_or_label, color
-    return f"{icon_or_label} {label}", color
+# ---------------------------------------------------------------------------
+# Per-cell maximum time (for timing-bar scaling)
+# ---------------------------------------------------------------------------
+
+def _max_time(badge: InteractiveBadge) -> float:
+    """Largest top-level row time across the whole badge. Used for bar scaling."""
+    max_t = 0.0
+    for section in badge.sections:
+        if section.kind is SectionKind.OVERHEAD:
+            continue
+        for item in section.items:
+            max_t = max(max_t, _item_total_time(item))
+    return max(max_t, 0.001)
 
 
-def _code_cell(row: StatementRow) -> str:
-    code = _snippet(row.code)
-    code_span = f'<span style="color: #666; font-size: 10px;">{code}</span>'
-    if row.output_vars:
-        vars_str = ", ".join(_esc(v) for v in row.output_vars)
-        return f"{vars_str}<br>{code_span}"
-    return code_span
+def _item_total_time(item: SectionItem) -> float:
+    if isinstance(item, StatementRow):
+        return item.time_s
+    if isinstance(item, ForLoopGroup):
+        return sum(it.time_s for ls in item.stmts for it in ls.iterations)
+    if isinstance(item, ControlGroup):
+        return sum(r.time_s for r in item.rows)
+    if isinstance(item, ControlGroupSingle):
+        return item.row.time_s
+    if isinstance(item, SkippedBucket):
+        return item.total_saved_time_s
+    return 0.0
 
 
-def _source_or_storage_cell(row: StatementRow) -> str:
-    if row.status is BadgeStatus.RESTORED and row.source:
-        return _source_label(row)
-    return _storage_with_reasons(row)
+# ---------------------------------------------------------------------------
+# Timing bar + time chip
+# ---------------------------------------------------------------------------
+
+def _tbar(time_s: float, max_time: float, kind: str) -> str:
+    pct = max(0.5, (time_s / max_time) * 100) if max_time > 0 else 0.5
+    return (
+        f'<span class="c3-tbar-cell"><span class="c3-tbar">'
+        f'<span class="c3-tbar-fill c3-tbar-fill-{kind}" '
+        f'style="width:{pct:.1f}%;"></span></span></span>'
+    )
 
 
-def _time_cell(row: StatementRow) -> str:
-    if row.status is BadgeStatus.RESTORED and row.time_s > 0:
-        return f"Saved {row.time_s:.2f}s"
-    if row.status is BadgeStatus.SKIPPED:
-        return f"Saved {row.time_s:.2f}s" if row.time_s > theme.MIN_TIME_DISPLAY_S else "-"
-    return _fmt_time_s(row.time_s)
+def _time_chip(time_s: float, saved_s: float, kind: str) -> str:
+    main = f"<span>{_fmt_time(time_s)}</span>"
+    sub = (
+        f'<span class="c3-time-sub">↑{saved_s:.2f}s</span>'
+        if saved_s > theme.MIN_TIME_DISPLAY_S else ""
+    )
+    return f'<span class="c3-time-chip c3-time-chip-{kind}">{main}{sub}</span>'
+
+
+def _notif_chip(label: str) -> str:
+    return (
+        '<span class="c3-time-chip c3-time-chip-warn">'
+        f'<span class="c3-notif-pill">{_esc(label)}</span></span>'
+    )
+
+
+# ---------------------------------------------------------------------------
+# Statement row
+# ---------------------------------------------------------------------------
+
+def _statement_row_html(row: StatementRow, max_time: float) -> str:
+    status = row.status
+    kind = theme.kind_of(status.value)
+    rail = theme.rail_color(status.value)
+    rail_soft = " c3-rail-soft" if row.is_upstream else ""
+
+    # Notification rows (WARNING / FUNCTION_CHANGED / MODULE_RELOADED) get a
+    # text pill in the time chip and skip the timing bar.
+    if status is BadgeStatus.FUNCTION_CHANGED:
+        label = "changed"
+        descriptor = ", ".join(row.changed_functions) or _snippet(row.code) or "—"
+        code_html = (
+            f'<pre class="c3-code"># <span class="c3-com">function source changed: </span>'
+            f"{_esc(descriptor)}</pre>"
+        )
+        bar = '<span class="c3-tbar-cell"></span>'
+        chip = _notif_chip(label)
+    elif status is BadgeStatus.MODULE_RELOADED:
+        label = "reloaded"
+        descriptor = ", ".join(row.changed_modules) or _snippet(row.code) or "—"
+        code_html = (
+            f'<pre class="c3-code"># <span class="c3-com">module reloaded: </span>'
+            f"{_esc(descriptor)}</pre>"
+        )
+        bar = '<span class="c3-tbar-cell"></span>'
+        chip = _notif_chip(label)
+    elif status is BadgeStatus.WARNING:
+        label = "warn"
+        descriptor = _snippet(row.code) or "—"
+        code_html = f'<pre class="c3-code">{_code_html(descriptor)}</pre>'
+        bar = '<span class="c3-tbar-cell"></span>'
+        chip = _notif_chip(label)
+    else:
+        # Show output_vars (or restored_vars) as a leading comment line if present.
+        vars_hint = ""
+        names = row.restored_vars if status is BadgeStatus.RESTORED else row.output_vars
+        if names:
+            vars_hint = f'<span class="c3-com"># {_esc(", ".join(names))}</span> '
+        code_html = f'<pre class="c3-code">{vars_hint}{_code_html(row.code)}</pre>'
+        bar = _tbar(row.time_s, max_time, kind)
+        chip = _time_chip(row.time_s, row.saved_time_s, kind)
+
+    dots = _dots(
+        status=status,
+        storage_tiers=row.storage_tiers,
+        source=row.source,
+        uncacheable_reasons=row.uncacheable_reasons,
+    )
+
+    return (
+        f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
+        f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+        f"{code_html}"
+        f"{dots}"
+        f"{bar}"
+        f"{chip}"
+        f"</div>"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Iteration histogram (loop body marginalia)
+# ---------------------------------------------------------------------------
+
+def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
+    if not iterations:
+        return '<span class="c3-iter-cell"></span>'
+    max_t = max((it.time_s for it in iterations), default=0.001) or 0.001
+    bars = []
+    for it in iterations:
+        h = max(3, int((it.time_s / max_t) * 16))
+        kind = theme.kind_of(it.status.value)
+        bar_color = theme.bar_color(kind)
+        bindings = ", ".join(f"{name}={value!r}" for name, value in it.loop_bindings)
+        title = f"{bindings} · {it.status.value} · {it.time_s:.3f}s"
+        bars.append(
+            f'<span class="c3-iter-bar" '
+            f'style="height:{h}px;background:{bar_color};" '
+            f'title="{_esc(title)}"></span>'
+        )
+    return (
+        '<span class="c3-iter-cell"><span class="c3-iter-strip">'
+        + "".join(bars)
+        + "</span></span>"
+    )
+
+
+def _iter_drilldown_html(iterations: tuple[IterationRow, ...], loop_var_names: tuple[str, ...]) -> str:
+    if not iterations:
+        return ""
+    max_t = max((it.time_s for it in iterations), default=0.001) or 0.001
+    rows = []
+    for it in iterations:
+        kind = theme.kind_of(it.status.value)
+        bar_color = theme.bar_color(kind)
+        rail = theme.rail_color(it.status.value)
+        pct = max(1.0, (it.time_s / max_t) * 100)
+        bindings = ", ".join(f"<b>{_esc(str(v))}</b>" for _, v in it.loop_bindings) or "—"
+        var_label = ", ".join(loop_var_names) or "i"
+        rows.append(
+            f'<div class="c3-iter-row">'
+            f'<span class="c3-iter-bullet" style="background:{rail};"></span>'
+            f'<span class="c3-iter-key">{_esc(var_label)} = {bindings}</span>'
+            f'<span class="c3-iter-bar-track"><span style="width:{pct:.1f}%;background:{bar_color};"></span></span>'
+            f'<span class="c3-iter-time">{it.time_s:.3f}s</span>'
+            f"</div>"
+        )
+    return f'<div class="c3-iter-table">{"".join(rows)}</div>'
 
 
 # ---------------------------------------------------------------------------
 # Loop / control / skipped renderers
 # ---------------------------------------------------------------------------
 
-def _iteration_row_html(it: IterationRow) -> str:
-    icon, color, _label = theme.row_visual(it.status.value)
-    binding_str = ", ".join(f"{_esc(name)}={_esc(repr(val))}" for name, val in it.loop_bindings)
-    return (
-        f"<tr style=\"border-bottom: 1px solid #f0f0f0;\">"
-        f"<td style=\"padding: 2px 4px 2px 24px; color: {color}; border-left: 2px solid #ddd;\">{icon}</td>"
-        f"<td style=\"padding: 2px 4px; font-family: {theme.FONT_MONO}; font-size: 11px;\">"
-        f"<span style=\"color: #666; font-size: 10px;\">{binding_str}</span></td>"
-        f"<td style=\"padding: 2px 4px; font-size: 10px; color: #888;\">{_storage_display(it.storage_tiers)}</td>"
-        f"<td style=\"padding: 2px 4px;\">{_fmt_time_s(it.time_s)}</td>"
-        f"</tr>"
-    )
-
-
-def _aggregate_loop_status(
-    iterations: tuple[IterationRow, ...],
-    *,
-    is_upstream: bool,
-) -> tuple[str, str, str]:
-    """``(icon, color, label)`` summarising all iterations of a loop statement.
-
-    Mirrors the legacy 'all-restored / all-computed / mixed' classification
-    in :func:`._components.render_for_loop_group`.
-    """
-    if not iterations:
-        return ("\U0001f501", theme._COLOR_COMPUTED, "Executed")
-    cached = sum(1 for it in iterations
-                 if it.status in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
-    computed = sum(1 for it in iterations if it.status is BadgeStatus.COMPUTED)
+def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
+    """Synthesise a kind across a group of iteration / row statuses."""
+    cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
+    computed = sum(1 for s in statuses if s is BadgeStatus.COMPUTED)
     if computed == 0 and cached > 0:
-        return ("⬆️" if is_upstream else "⚡", theme._COLOR_RESTORED, "Restored")
-    if cached == 0:
-        return ("⬆️" if is_upstream else "\U0001f501", theme._COLOR_COMPUTED, "Executed")
-    return ("⬆️" if is_upstream else "\U0001f501", "#336699", "Mixed")
+        return "cached"
+    if cached == 0 and computed > 0:
+        return "exec"
+    return "exec"  # mixed -> exec coloring; rail picks blue via rail_color('mixed') below
 
 
-def _loop_statement_html(ls: LoopStatement, *, is_upstream: bool = False) -> str:
-    gid = _uid("loop_stmt")
-    n = len(ls.iterations)
-    total = sum(it.time_s for it in ls.iterations)
-    icon, color, label = _aggregate_loop_status(ls.iterations, is_upstream=is_upstream)
-    summary = (
-        f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; color: {color};\">{icon} {label}</td>"
-        f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO}; font-size: 11px;\">"
-        f"<span onclick=\"document.querySelectorAll('.{gid}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')\" "
-        f"style=\"cursor:pointer; color: #1a73e8;\">\U0001f501 for loop "
-        f"<span style='color:#666;'>{_snippet(ls.base_code)}</span> "
-        f"<span style='color:#888;'>({n} iterations)</span></span></td>"
-        f"<td style=\"padding: 4px; font-size: 10px; color: #888;\">-</td>"
-        f"<td style=\"padding: 4px;\">{_fmt_time_s(total)}</td>"
-        f"</tr>"
+def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool) -> str:
+    rows: list[str] = []
+    rail_soft = " c3-rail-soft" if is_upstream else ""
+
+    for stmt in g.stmts:
+        iters = stmt.iterations
+        statuses = tuple(it.status for it in iters)
+        cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
+        total = len(iters)
+        total_time = sum(it.time_s for it in iters)
+        total_saved = sum(it.saved_time_s for it in iters)
+        kind = _aggregate_kind(statuses)
+        # Mixed gets a blue rail to differentiate
+        if cached > 0 and (total - cached) > 0:
+            rail = theme.RAIL_MIXED
+        else:
+            rail = theme.rail_color(BadgeStatus.RESTORED.value) if kind == "cached" else theme.RAIL_EXEC
+
+        var_decl = ", ".join(g.loop_var_names) or "i"
+        # Sample values from the first iter binding
+        values_preview = ""
+        if iters and iters[0].loop_bindings:
+            sample = [str(v) for _, v in iters[0].loop_bindings]
+            values_preview = ", ".join(sample)
+        loop_header = f"for {var_decl} in [{values_preview}…]:" if values_preview else f"for {var_decl} in …:"
+        body_line = stmt.base_code or "…"
+
+        meta = (
+            f"{total}× cached" if cached == total else
+            f"{cached}/{total} cached" if cached > 0 else
+            f"{total} iters"
+        )
+
+        # Head row: shows the for-line, meta count, timing bar, time chip.
+        head = (
+            f'<div class="c3-row c3-loop-head" data-kind="{kind}">'
+            f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+            f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
+            f'<span class="c3-loop-meta">{_esc(meta)}</span>'
+            f"{_tbar(total_time, max_time, kind)}"
+            f"{_time_chip(total_time, total_saved, kind)}"
+            f"</div>"
+        )
+
+        # Body line: code preview + inline iteration histogram, inside a
+        # <details> so users can drill into per-iteration rows.
+        body_kind = kind
+        body_rail = rail
+        body_total_time = total_time
+        body_drill = _iter_drilldown_html(iters, g.loop_var_names)
+        body = (
+            f'<details class="c3-loop-body">'
+            f'<summary class="c3-row" data-kind="{body_kind}" data-clickable="true" style="cursor:pointer;list-style:none;">'
+            f'<span class="c3-rail c3-rail-soft" style="background:{body_rail};"></span>'
+            f'<pre class="c3-code c3-code-body">    {_code_html(body_line)}</pre>'
+            f"{_iter_histogram_html(iters)}"
+            f"{_tbar(body_total_time, max_time, body_kind)}"
+            f"{_time_chip(body_total_time, total_saved, body_kind)}"
+            f"</summary>"
+            f"{body_drill}"
+            f"</details>"
+        )
+        rows.append(head + body)
+    return "".join(rows)
+
+
+def _control_group_html(cg: ControlGroup, max_time: float) -> str:
+    rail = theme.rail_color(BadgeStatus.COMPUTED.value)
+    statuses = tuple(r.status for r in cg.rows)
+    kind = _aggregate_kind(statuses)
+    head_code = f"{cg.branch_label}: {cg.header}" if cg.branch_label else cg.header
+    total_time = sum(r.time_s for r in cg.rows)
+    total_saved = sum(r.saved_time_s for r in cg.rows)
+
+    head = (
+        f'<details class="c3-control">'
+        f'<summary class="c3-row" data-kind="{kind}" data-clickable="true" style="list-style:none;cursor:pointer;">'
+        f'<span class="c3-rail" style="background:{rail};"></span>'
+        f'<pre class="c3-code">{_code_html(head_code)}</pre>'
+        f'<span class="c3-loop-meta">{len(cg.rows)} stmt{"s" if len(cg.rows) != 1 else ""}</span>'
+        f"{_tbar(total_time, max_time, kind)}"
+        f"{_time_chip(total_time, total_saved, kind)}"
+        f"</summary>"
+        + "".join(_statement_row_html(r, max_time) for r in cg.rows)
+        + "</details>"
     )
-    iter_rows = "".join(
-        _wrap_hidden(_iteration_row_html(it), gid) for it in ls.iterations
-    )
-    return summary + iter_rows
+    return head
 
 
-def _wrap_hidden(row_html: str, class_name: str) -> str:
-    """Inject a class onto an existing <tr> so the toggle JS can find it."""
-    return row_html.replace(
-        "<tr ", f"<tr class=\"{class_name}\" ", 1,
-    ).replace(
-        "border-bottom: 1px solid #f0f0f0;\">",
-        "border-bottom: 1px solid #f0f0f0; display: none;\">",
-        1,
-    )
-
-
-def _for_loop_group_html(g: ForLoopGroup, *, is_upstream: bool = False) -> str:
-    return "".join(_loop_statement_html(ls, is_upstream=is_upstream) for ls in g.stmts)
-
-
-def _control_group_html(cg: ControlGroup) -> str:
-    gid = _uid("ctrl")
-    header_html = (
-        f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; color: {theme._COLOR_COMPUTED};\">\U0001f500</td>"
-        f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO}; font-size: 11px;\">"
-        f"<span onclick=\"document.querySelectorAll('.{gid}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')\" "
-        f"style=\"cursor:pointer; color: #1a73e8;\">{_esc(cg.branch_label)} {_esc(cg.header[:theme.HEADER_MAX_LEN])}</span></td>"
-        f"<td style=\"padding: 4px; font-size: 10px; color: #888;\">-</td>"
-        f"<td style=\"padding: 4px;\">-</td>"
-        f"</tr>"
-    )
-    rows = "".join(
-        _wrap_hidden(_row_html(r), gid) for r in cg.rows
-    )
-    return header_html + rows
-
-
-def _control_group_single_html(cgs: ControlGroupSingle) -> str:
-    return _row_html(cgs.row)
+def _control_group_single_html(cgs: ControlGroupSingle, max_time: float) -> str:
+    return _statement_row_html(cgs.row, max_time)
 
 
 def _control_body_html(cb: ControlBody) -> str:
@@ -268,127 +879,268 @@ def _control_body_html(cb: ControlBody) -> str:
         return ""
     inner = "\n".join(_esc(s) for s in cb.body_stmts)
     return (
-        f"<tr><td colspan='4' style='padding:4px;'>"
-        f"<details><summary style='cursor:pointer; color:#666; font-size:10px;'>body</summary>"
-        f"<pre style='font-family:{theme.FONT_MONO}; font-size:11px; color:#333;'>{inner}</pre>"
-        f"</details></td></tr>"
+        f'<details class="c3-control-body" style="padding:6px 12px 6px 30px;">'
+        f'<summary style="cursor:pointer;font-size:10px;color:{theme.INK_4};list-style:none;">body</summary>'
+        f'<pre style="font-family:{theme.FONT_MONO};font-size:11px;color:{theme.INK};margin:4px 0 0;">{inner}</pre>'
+        f"</details>"
     )
 
 
-def _skipped_bucket_html(sb: SkippedBucket) -> str:
+def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
     if not sb.items:
         return ""
-    gid = _uid("skip")
-    saved = f"Saved {sb.total_saved_time_s:.2f}s" if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
-    header = (
-        f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; color: {theme._COLOR_SKIPPED};\">⏩</td>"
-        f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO}; font-size: 11px;\">"
-        f"<span onclick=\"document.querySelectorAll('.{gid}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')\" "
-        f"style=\"cursor:pointer; color: #666; font-style: italic;\">"
-        f"{len(sb.items)} intermediate dependency step{'s' if len(sb.items) != 1 else ''}</span></td>"
-        f"<td style=\"padding: 4px;\">-</td>"
-        f"<td style=\"padding: 4px;\">{saved}</td>"
-        f"</tr>"
+    n = len(sb.items)
+    label = f"{n} intermediate dependency step{'s' if n != 1 else ''}"
+    saved = (
+        f"saved {sb.total_saved_time_s:.2f}s"
+        if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
     )
-    body = "".join(_wrap_hidden(_render_section_item(i), gid) for i in sb.items)
-    return header + body
-
-
-# ---------------------------------------------------------------------------
-# Decorator / overhead
-# ---------------------------------------------------------------------------
-
-def _decorator_call_html(c: DecoratorCall) -> str:
-    icon, color, label = theme.row_visual(c.status.value)
-    status_text = "HIT" if c.status is BadgeStatus.RESTORED else "MISS"
+    body = "".join(_render_section_item(i, max_time, is_upstream=True) for i in sb.items)
     return (
-        f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; color: {color};\">{icon} @cache</td>"
-        f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO};\">"
-        f"<span style=\"color: {theme._COLOR_DECORATOR};\">{_esc(c.func_name)}()</span> "
-        f"<span style=\"color: #888; font-size: 10px;\">{status_text}</span></td>"
-        f"<td style=\"padding: 4px; font-size: 10px; color: #555;\">-</td>"
-        f"<td style=\"padding: 4px;\">{c.time_s:.3f}s</td>"
-        f"</tr>"
+        f'<details class="c3-skipped">'
+        f'<summary>'
+        f'<span class="c3-upstream-caret"></span>'
+        f'<span>{_esc(label)}</span>'
+        f'<span class="c3-skipped-meta">{_esc(saved)}</span>'
+        f"</summary>"
+        f"{body}"
+        f"</details>"
     )
 
 
-def _decorator_group_html(g: DecoratorCallGroup) -> str:
+# ---------------------------------------------------------------------------
+# Decorator section
+# ---------------------------------------------------------------------------
+
+def _decorator_call_row_html(c: DecoratorCall, max_time: float) -> str:
+    kind = theme.kind_of(c.status.value)
+    rail = theme.rail_color(c.status.value)
+    short_name = c.func_name.split(".")[-1] if "." in c.func_name else c.func_name
+    status_text = "HIT" if c.status is BadgeStatus.RESTORED else "MISS"
+    code = (
+        f'<span class="c3-cache-tag">@cache</span> '
+        f'<span class="c3-kw">{_esc(short_name)}</span>() '
+        f'<span class="c3-com">{status_text}</span>'
+    )
+    return (
+        f'<div class="c3-row" data-kind="{kind}">'
+        f'<span class="c3-rail" style="background:{rail};"></span>'
+        f'<pre class="c3-code">{code}</pre>'
+        f'<span class="c3-dots-cell"></span>'
+        f"{_tbar(c.time_s, max_time, kind)}"
+        f"{_time_chip(c.time_s, 0.0, kind)}"
+        f"</div>"
+    )
+
+
+def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
     if not g.condensed:
-        return "".join(_decorator_call_html(c) for c in g.calls)
+        return "".join(_decorator_call_row_html(c, max_time) for c in g.calls)
     n = len(g.calls)
     hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
     misses = n - hits
     total_time = sum(c.time_s for c in g.calls)
-    gid = _uid("dec")
-    summary = (
-        f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; color: {theme._COLOR_DECORATOR};\">⚡ @cache</td>"
-        f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO};\">"
-        f"<span onclick=\"document.querySelectorAll('.{gid}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')\" "
-        f"style=\"cursor:pointer; color: {theme._COLOR_DECORATOR};\">{_esc(g.func_name)}() "
-        f"<span style='color:#888;'>×{n} ({hits} hit, {misses} miss)</span></span></td>"
-        f"<td style=\"padding: 4px; font-size: 10px; color: #555;\">-</td>"
-        f"<td style=\"padding: 4px;\">{total_time:.3f}s</td>"
-        f"</tr>"
+    kind = "cached" if misses == 0 else "exec"
+    rail = theme.RAIL_CACHED if misses == 0 else theme.RAIL_EXEC
+    short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name
+    summary_label = (
+        f"all {n} cached" if misses == 0
+        else f"{n} calls, all computed" if hits == 0
+        else f"{hits}/{n} cached, {misses} computed"
     )
-    body = "".join(_wrap_hidden(_decorator_call_html(c), gid) for c in g.calls)
-    return summary + body
+    # Per-call mini-strip for the breakdown
+    max_call_t = max((c.time_s for c in g.calls), default=0.001) or 0.001
+    strip = "".join(
+        f'<span class="c3-deco-bar" style="height:{max(3, int((c.time_s / max_call_t) * 18))}px;'
+        f'background:{theme.BAR_CACHED if c.status is BadgeStatus.RESTORED else theme.BAR_EXEC};" '
+        f'title="call #{i + 1} · {"HIT" if c.status is BadgeStatus.RESTORED else "MISS"} · {c.time_s:.3f}s"></span>'
+        for i, c in enumerate(g.calls)
+    )
+    head = (
+        f'<details class="c3-deco-group">'
+        f'<summary class="c3-row" data-kind="{kind}" data-clickable="true" style="list-style:none;cursor:pointer;">'
+        f'<span class="c3-rail" style="background:{rail};"></span>'
+        f'<pre class="c3-code"><span class="c3-cache-tag">@cache</span> '
+        f'<span class="c3-kw">{_esc(short)}</span>() '
+        f'<span class="c3-com">{_esc(summary_label)}</span></pre>'
+        f'<span class="c3-dots-cell"></span>'
+        f"{_tbar(total_time, max_time, kind)}"
+        f"{_time_chip(total_time, 0.0, kind)}"
+        f"</summary>"
+        f'<div class="c3-detail">'
+        f'<div class="c3-detail-h"><span class="c3-cache-tag">@cache</span> '
+        f"{hits} of {n} cached · {total_time:.2f}s total</div>"
+        f'<div class="c3-deco-fn">'
+        f'<div class="c3-deco-fn-name">{_esc(short)}()</div>'
+        f'<div class="c3-deco-strip">{strip}</div>'
+        f"</div>"
+        f"</div>"
+        f"</details>"
+    )
+    return head
 
 
-def _overhead_html(ob: OverheadBreakdown) -> str:
+# ---------------------------------------------------------------------------
+# Overhead section
+# ---------------------------------------------------------------------------
+
+def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
     rows = []
     for e in ob.entries:
         rows.append(
-            f"<tr style=\"border-bottom: 1px solid #eee;\">"
-            f"<td style=\"padding: 4px; color:#888;\">{e.label}</td>"
-            f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO}; color: #999; font-size: 10px;\">overhead</td>"
-            f"<td style=\"padding: 4px; font-size: 10px; color: #666;\">-</td>"
-            f"<td style=\"padding: 4px;\">{e.time_s:.3f}s</td>"
-            f"</tr>"
+            f'<div class="c3-row" data-kind="exec">'
+            f'<span class="c3-rail c3-rail-soft" style="background:{theme.INK_4};"></span>'
+            f'<pre class="c3-code c3-code-body">{_esc(e.label)}</pre>'
+            f'<span class="c3-dots-cell"></span>'
+            f"{_tbar(e.time_s, max_time, 'exec')}"
+            f"{_time_chip(e.time_s, 0.0, 'exec')}"
+            f"</div>"
         )
     return "".join(rows)
 
 
 # ---------------------------------------------------------------------------
-# Section / dispatch
+# Section dispatch
 # ---------------------------------------------------------------------------
 
-def _section_header_html(section: Section) -> str:
-    if not section.header:
-        return ""
-    return (
-        f"<tr><td colspan='4' style='background:#f5f5f5; font-weight:bold; "
-        f"font-size:10px; padding:4px; color:#666; border-bottom:1px solid #eee;'>"
-        f"{_esc(section.header)}</td></tr>"
-    )
-
-
-def _render_section_item(item: SectionItem, *, is_upstream: bool = False) -> str:
+def _render_section_item(item: SectionItem, max_time: float, *, is_upstream: bool) -> str:
     if isinstance(item, StatementRow):
-        return _row_html(item)
+        return _statement_row_html(item, max_time)
     if isinstance(item, ForLoopGroup):
-        return _for_loop_group_html(item, is_upstream=is_upstream)
+        return _for_loop_group_html(item, max_time, is_upstream=is_upstream)
     if isinstance(item, ControlGroup):
-        return _control_group_html(item)
+        return _control_group_html(item, max_time)
     if isinstance(item, ControlGroupSingle):
-        return _control_group_single_html(item)
+        return _control_group_single_html(item, max_time)
     if isinstance(item, ControlBody):
         return _control_body_html(item)
     if isinstance(item, SkippedBucket):
-        return _skipped_bucket_html(item)
+        return _skipped_bucket_html(item, max_time)
     if isinstance(item, DecoratorCallGroup):
-        return _decorator_group_html(item)
+        return _decorator_group_html(item, max_time)
     if isinstance(item, OverheadBreakdown):
-        return _overhead_html(item)
+        return _overhead_html(item, max_time)
     raise TypeError(f"Unsupported BadgeView node: {type(item).__name__}")
 
 
-def _section_html(section: Section) -> str:
-    is_upstream = section.kind is SectionKind.UPSTREAM
-    return _section_header_html(section) + "".join(
-        _render_section_item(i, is_upstream=is_upstream) for i in section.items
+def _section_label(kind: SectionKind, header: str) -> str:
+    if kind is SectionKind.UPSTREAM:
+        return ""  # rendered via <details class="c3-upstream"> wrapper instead
+    if kind is SectionKind.CURRENT and not header:
+        return ""
+    return f'<div class="c3-section">{_esc(header)}</div>'
+
+
+# ---------------------------------------------------------------------------
+# Summary chip (header + sparkline + filter counts)
+# ---------------------------------------------------------------------------
+
+def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
+    """``(kind, label, sub)`` for the collapsed pill."""
+    # RUNNING placeholder
+    if header.current_step or header.total_steps or header.current_code:
+        if header.total_steps:
+            sub = f"({header.current_step}/{header.total_steps})"
+        elif header.current_step:
+            sub = f"(step {header.current_step})"
+        else:
+            sub = "…"
+        return "exec", "PROCESSING", sub
+
+    if header.computed_count == 0 and (header.restored_count > 0 or header.skipped_count > 0):
+        if header.restored_count > 0:
+            label = "CACHED"
+            sub = (
+                f"saved {header.total_saved_s:.2f}s"
+                if header.total_saved_s > theme.MIN_TIME_DISPLAY_S else f"{header.total_exec_s:.2f}s"
+            )
+        else:
+            label = "SKIPPED"
+            sub = "already computed"
+        return "cached", label, sub
+
+    label = "EXECUTED"
+    if header.total_saved_s > theme.MIN_TIME_DISPLAY_S:
+        sub = f"{header.total_exec_s:.2f}s · saved {header.total_saved_s:.2f}s"
+    else:
+        sub = f"{header.total_exec_s:.2f}s"
+    return "exec", label, sub
+
+
+def _sparkline_html(badge: InteractiveBadge) -> str:
+    """Per-current-statement aggregate, one bar each."""
+    bars = []
+    current = next((s for s in badge.sections if s.kind is SectionKind.CURRENT), None)
+    if current is None:
+        return ""
+    times: list[tuple[float, str]] = []
+    for item in current.items:
+        t = _item_total_time(item)
+        if isinstance(item, ForLoopGroup):
+            statuses = tuple(it.status for ls in item.stmts for it in ls.iterations)
+            kind = _aggregate_kind(statuses)
+        elif isinstance(item, StatementRow):
+            kind = theme.kind_of(item.status.value)
+        elif isinstance(item, ControlGroup):
+            kind = _aggregate_kind(tuple(r.status for r in item.rows))
+        elif isinstance(item, ControlGroupSingle):
+            kind = theme.kind_of(item.row.status.value)
+        else:
+            continue
+        if t == 0 and kind == "warn":
+            t = 0.01
+        times.append((t, kind))
+    if not times:
+        return ""
+    max_t = max(t for t, _ in times) or 0.001
+    for t, kind in times:
+        h = max(2, int((t / max_t) * 16))
+        bars.append(
+            f'<span class="c3-spark-bar" style="height:{h}px;background:{theme.bar_color(kind)};"></span>'
+        )
+    return (
+        '<span class="c3-summary-spark"><span class="c3-spark">'
+        + "".join(bars)
+        + "</span></span>"
+    )
+
+
+def _filter_chips_html(header: BadgeHeader) -> str:
+    """Static (non-interactive) state counters in the summary chip."""
+    parts = []
+    if header.computed_count:
+        parts.append(
+            f'<span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>'
+            f'exec<span class="c3-fchip-count">{header.computed_count}</span></span>'
+        )
+    if header.restored_count or header.skipped_count:
+        cached = header.restored_count + header.skipped_count
+        parts.append(
+            f'<span class="c3-fchip c3-fchip-cached"><span class="c3-fchip-dot"></span>'
+            f'cached<span class="c3-fchip-count">{cached}</span></span>'
+        )
+    if not parts:
+        return ""
+    return '<span class="c3-summary-chips">' + "".join(parts) + "</span>"
+
+
+# ---------------------------------------------------------------------------
+# Footer
+# ---------------------------------------------------------------------------
+
+def _footer_html(footer: BugReportLink | None) -> str:
+    bug = ""
+    if footer is not None:
+        bug = (
+            f'<a class="c3-bug" href="{footer.url}" target="_blank" rel="noopener noreferrer" '
+            f'title="Open a pre-filled GitHub issue to report incorrect caching behaviour">'
+            f'Report incorrect caching<span class="c3-bug-arrow"> →</span></a>'
+        )
+    return (
+        f'<div class="c3-footer">'
+        f'<span class="c3-hint">hover for detail · click to expand</span>'
+        f"{bug}"
+        f"</div>"
     )
 
 
@@ -396,113 +1148,75 @@ def _section_html(section: Section) -> str:
 # Top-level
 # ---------------------------------------------------------------------------
 
-def _summary_parts(badge: InteractiveBadge) -> tuple[str, str, str, str, str, str]:
-    """``(bg, color, border, icon, label, subtext)`` for the collapsed pill."""
-    h = badge.header
-    if h.status is BadgeStatus.WARNING and h.total_steps == 0 and h.current_step == 0 and h.current_code is None:
-        # Fall through to default; otherwise WARNING is also the RUNNING placeholder.
-        pass
-    if h.current_step or h.total_steps or h.current_code:
-        bg = theme.SUMMARY_BG_RUNNING
-        color = theme.SUMMARY_COLOR_RUNNING
-        border = theme.SUMMARY_BORDER_RUNNING
-        icon = "⏳"
-        if h.total_steps:
-            label = f"Processing ({h.current_step}/{h.total_steps})"
-        elif h.current_step:
-            label = f"Processing (step {h.current_step})"
-        else:
-            label = "Processing..."
-        subtext = ""
-        if h.current_code:
-            preview = h.current_code.splitlines()[0][:60]
-            if len(h.current_code) > 60:
-                preview += "..."
-            subtext = f"- {_esc(preview)}"
-        return bg, color, border, icon, label, subtext
+def render_html(badge: InteractiveBadge) -> str:
+    """Render an :class:`InteractiveBadge` to v3-design HTML."""
+    _reset_ids()
+    kind, label, sub = _summary_meta(badge.header)
+    max_time = _max_time(badge)
 
-    if h.computed_count == 0 and (h.restored_count > 0 or h.skipped_count > 0):
-        bg = theme.SUMMARY_BG_CACHED
-        color = theme.BADGE_COLOR_RESTORED
-        border = theme.BADGE_COLOR_RESTORED
-        if h.restored_count > 0:
-            icon, label = "⚡", "CACHED"
-            subtext = f"(Saved {h.total_saved_s:.2f}s)" if h.total_saved_s > theme.MIN_TIME_DISPLAY_S else ""
-        else:
-            icon, label = "⏩", "SKIPPED"
-            subtext = "(Already computed)"
-    else:
-        bg = theme.SUMMARY_BG_EXECUTED
-        color = theme.BADGE_COLOR_DEFAULT
-        border = theme.BADGE_COLOR_DEFAULT
-        icon, label = "⚙️", "EXECUTED"
-        if h.total_saved_s > 0:
-            subtext = f"({h.total_exec_s:.2f}s, Saved {h.total_saved_s:.2f}s)"
-        else:
-            subtext = f"({h.total_exec_s:.2f}s)"
-    return bg, color, border, icon, label, subtext
+    body_html = ""
+    upstream = next((s for s in badge.sections if s.kind is SectionKind.UPSTREAM), None)
+    if upstream is not None and upstream.items:
+        rows = "".join(_render_section_item(i, max_time, is_upstream=True) for i in upstream.items)
+        n = sum(1 for i in upstream.items if not isinstance(i, SkippedBucket))
+        saved_blob = (
+            f"saved {badge.header.total_saved_s:.2f}s"
+            if badge.header.total_saved_s > theme.MIN_TIME_DISPLAY_S else "—"
+        )
+        body_html += (
+            f'<details class="c3-upstream" open>'
+            f'<summary>'
+            f'<span class="c3-upstream-caret"></span>'
+            f'<span class="c3-upstream-label">upstream context</span>'
+            f'<span class="c3-upstream-meta"><b>{n}</b> · {_esc(saved_blob)}</span>'
+            f"</summary>"
+            f'<div class="c3-upstream-body">{rows}</div>'
+            f"</details>"
+        )
 
+    for section in badge.sections:
+        if section.kind in (SectionKind.UPSTREAM,):
+            continue
+        body_html += _section_label(section.kind, section.header)
+        for item in section.items:
+            body_html += _render_section_item(item, max_time, is_upstream=False)
 
-def _footer_html(footer: BugReportLink) -> str:
+    sparkline = _sparkline_html(badge)
+    chips = _filter_chips_html(badge.header)
+
     return (
-        f"<div style='margin-top:8px; padding-top:6px; border-top:1px solid #f0f0f0; text-align:right;'>"
-        f"<a href=\"{footer.url}\" target=\"_blank\" rel=\"noopener noreferrer\" "
-        f"style=\"display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; "
-        f"background: #fff5f5; border: 1px solid #f5c6c6; border-radius: 12px; "
-        f"color: #c0392b; font-size: 11px; font-weight: 500; text-decoration: none;\" "
-        f"title=\"Open a pre-filled GitHub issue to report incorrect caching behaviour\">"
-        f"🐛 Report incorrect caching</a></div>"
+        _STYLE_BLOCK
+        + f'<details class="c3-card" data-kind="{kind}">'
+        + f'<summary class="c3-summary">'
+        + f'<span class="c3-summary-label">{_esc(label)}</span>'
+        + f'<span class="c3-summary-sep">·</span>'
+        + f'<span class="c3-summary-sub">{_esc(sub)}</span>'
+        + sparkline
+        + chips
+        + f'<span class="c3-summary-caret"></span>'
+        + "</summary>"
+        + f'<div class="c3-panel">'
+        + body_html
+        + _footer_html(badge.footer)
+        + "</div>"
+        + "</details>"
     )
 
 
-def render_html(badge: InteractiveBadge) -> str:
-    """Render an :class:`InteractiveBadge` to HTML."""
-    _reset_ids()
-    bg, color, border, icon, label, subtext = _summary_parts(badge)
-    body_rows = "".join(_section_html(s) for s in badge.sections)
-    footer = _footer_html(badge.footer) if badge.footer is not None else ""
-    return f"""
-    <details style="display: inline-block; border: 1px solid {border}; border-radius: 4px;
-        background-color: {bg}; padding: 0; margin-top: 5px;
-        font-family: {theme.FONT_SANS}; font-size: 12px; color: {color}; max-width: 100%;">
-        <summary style="cursor: pointer; padding: 4px 8px; font-weight: bold;
-            list-style: none; outline: none; display: inline-flex;
-            align-items: baseline; gap: 6px;">
-            <span>{icon} {label}</span>
-            <span style="font-weight: normal; opacity: 0.8; font-family: {theme.FONT_MONO};">{subtext}</span>
-        </summary>
-        <div style="padding: 5px 10px; background-color: #ffffff;
-            border-top: 1px solid {border}30; color: #333;
-            max-height: 500px; overflow-y: auto;">
-            <table style="width: 100%; min-width: 500px; border-collapse: collapse;
-                font-size: 11px; table-layout: auto; color: #333; background-color: #ffffff;">
-                <thead><tr style="border-bottom: 2px solid #ddd; color: #666;">
-                    <th style="text-align: left; padding: 4px;">TYPE</th>
-                    <th style="text-align: left; padding: 4px;">CONTENT</th>
-                    <th style="text-align: left; padding: 4px;">STORAGE</th>
-                    <th style="text-align: left; padding: 4px;">TIME</th>
-                </tr></thead>
-                <tbody>{body_rows}</tbody>
-            </table>
-            {footer}
-        </div>
-    </details>
-    """
-
-
 def render_status_badge_html(badge: StatusBadge) -> str:
-    """Render the compact, non-interactive status pill."""
+    """Render the compact non-interactive status pill (unchanged from v3 design)."""
     color = (theme.BADGE_COLOR_RESTORED
              if badge.status is BadgeStatus.RESTORED
              else theme.BADGE_COLOR_DEFAULT)
-    icon, _row_color, label = theme.row_visual(badge.status.value)
     storage_str = "+".join(badge.storage_tiers) if badge.storage_tiers else ""
-    saved_str = f" (Saved {badge.time_saved_s:.2f}s)" if badge.time_saved_s > 0 else ""
-    source_str = f" ← {badge.source}" if badge.source else ""
+    saved_str = f" · saved {badge.time_saved_s:.2f}s" if badge.time_saved_s > 0 else ""
+    source_str = f" · ← {badge.source}" if badge.source else ""
+    storage_segment = f" · {storage_str}" if storage_str else ""
     return (
-        f"<span style=\"display: inline-block; padding: 2px 8px; border-radius: 4px; "
-        f"background-color: {color}1A; color: {color}; font-family: {theme.FONT_MONO}; "
-        f"font-size: 11px; font-weight: 500;\">"
-        f"{icon} {label} {badge.execution_time_s:.3f}s{saved_str}{source_str} "
-        f"{storage_str}</span>"
+        f'<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
+        f'background:{color}1A;color:{color};font-family:{theme.FONT_MONO};'
+        f'font-size:11px;font-weight:500;">'
+        f"<b>{_esc(badge.status.value.upper())}</b>"
+        f"{source_str}{storage_segment} {badge.execution_time_s:.3f}s{saved_str}"
+        f"</span>"
     )

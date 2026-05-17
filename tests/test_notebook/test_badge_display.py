@@ -164,8 +164,10 @@ class TestExpandableSkippedSteps:
             magics._render_interactive_badge(metrics, display_id='test_skip_loop')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert 'iterations' in html_str
-            assert 'for loop' in html_str
+            # v3: loop renders as <details> with histogram bars; for-line is
+            # syntax-highlighted (`for` wrapped in c3-kw).
+            assert 'c3-loop-head' in html_str
+            assert '>for</span>' in html_str
 
 
 # ----------------------------------------------------------------------------
@@ -190,8 +192,10 @@ class TestUpstreamLoopGrouping:
             magics._render_interactive_badge(metrics, display_id='test_upstream_loop')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert 'Restored' in html_str
-            assert '2' in html_str
+            # v3: upstream sits under a "upstream context" <details>, loop
+            # collapses with the all-cached badge color.
+            assert 'upstream context' in html_str
+            assert 'c3-loop-head' in html_str
             assert 'compute(item)' in html_str
 
     def test_upstream_section_shown_with_only_skipped(self, magics_fixture):
@@ -207,7 +211,8 @@ class TestUpstreamLoopGrouping:
             magics._render_interactive_badge(metrics, display_id='test_upstream_only_skip')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert 'UPSTREAM HISTORY' in html_str
+            # v3 renames "UPSTREAM HISTORY" header to a "upstream context" disclosure.
+            assert 'upstream context' in html_str or 'c3-skipped' in html_str
 
 
 # ----------------------------------------------------------------------------
@@ -282,10 +287,12 @@ class TestRenderInteractiveBadge:
             magics._render_interactive_badge(metrics, display_id='test_sections')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert 'UPSTREAM HISTORY' in html_str
-            assert 'CURRENT CELL' in html_str
+            # v3: upstream rows live in a "upstream context" disclosure;
+            # current rows live in the main panel area without a CURRENT CELL banner.
+            assert 'upstream context' in html_str
+            assert 'compute()' in html_str
 
-    def test_badge_no_current_cell_header_without_upstream(self, magics_fixture):
+    def test_badge_no_upstream_disclosure_without_upstream(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
         metrics = [{'code': 'x = 1', 'status': CacheStatus.COMPUTED,
                     'total_time': 0.1, 'outputs': ['x']}]
@@ -294,4 +301,4 @@ class TestRenderInteractiveBadge:
             magics._render_interactive_badge(metrics, display_id='test_no_upstream')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert 'UPSTREAM HISTORY' not in html_str
+            assert 'upstream context' not in html_str

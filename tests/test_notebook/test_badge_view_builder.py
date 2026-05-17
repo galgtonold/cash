@@ -81,8 +81,12 @@ def test_single_restored_metric_no_upstream() -> None:
     assert row.status is BadgeStatus.RESTORED
     assert row.source == "RAM"
     assert row.storage_tiers == ("RAM", "DISK")
-    assert row.output_vars == ("x",)
+    # Restored rows separate restored_vars from output_vars (both fields exist).
+    assert row.restored_vars == ("x",)
     assert row.is_upstream is False
+    # time_s is now actual elapsed restore time; saved_time_s carries the saving.
+    assert row.time_s == pytest.approx(0.005)
+    assert row.saved_time_s == pytest.approx(0.3)
 
 
 def test_mixed_status_summary() -> None:
