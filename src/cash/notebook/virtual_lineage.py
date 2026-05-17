@@ -1965,13 +1965,13 @@ class VirtualLineage:
             for child in getattr(node, attr, []) or []:
                 yield child
                 if is_control_structure(child):
-                    yield from UpstreamChecker._iter_body_nodes(child)
+                    yield from VirtualLineage._iter_body_nodes(child)
         # ast.Try handlers
         for handler in getattr(node, 'handlers', []) or []:
             for child in handler.body:
                 yield child
                 if is_control_structure(child):
-                    yield from UpstreamChecker._iter_body_nodes(child)
+                    yield from VirtualLineage._iter_body_nodes(child)
 
     def _recurse_control_structure_mutations(
         self, body_node: ast.AST, loop_targets: set[str]
