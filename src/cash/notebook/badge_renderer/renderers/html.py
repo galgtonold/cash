@@ -483,12 +483,13 @@ label.c3-row {{ cursor: pointer; }}
   flex-shrink: 0;
 }}
 
-/* Per-iteration drill-down (inside <details>) */
+/* Per-iteration drill-down — collapsed by default, revealed when the
+   parent loop-body row's checkbox is checked. The display rule lives
+   with the click-to-expand rules above; here we only set layout. */
 .c3-iter-table {{
   background: {theme.BG_DETAIL};
   padding: 6px 12px 8px 30px;
   border-bottom: 1px solid {theme.RULE_SOFT};
-  display: flex;
   flex-direction: column;
   gap: 2px;
 }}
