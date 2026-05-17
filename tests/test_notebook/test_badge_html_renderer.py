@@ -264,30 +264,29 @@ def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
     assert "c3-rowtip" in body_block
 
 
-def test_tooltips_use_js_floater_with_css_fallback() -> None:
-    """Hover detail is a JS-positioned single floater on document.body.
+def test_rows_use_click_to_expand_drawer_no_js() -> None:
+    """Every row is a <details> — click to toggle the drawer, no JS, no hover.
 
-    Pure-CSS attempts kept failing in at least one notebook host (clipping
-    by ancestor overflow, layout-shift annoyance, or eating cell width).
-    Minimal vanilla JS appends one .c3-floater to document.body and
-    positions it via getBoundingClientRect on row hover. Falls back to
-    the inline .c3-rowtip CSS rule when the script is sandboxed.
+    Hover variants kept failing in at least one host (clipped, layout-shift,
+    or eating cell width). Click-to-expand via <details> works in every
+    notebook host, matches how loops already work, and is JS-free.
     """
-    html = render_html(build_interactive_badge([]))
-    assert 'class="c3-wrap"' in html
-    assert "padding-right: 380px" not in html      # no wrap-extension that ate cell width
+    metrics = [{"code": "y = expensive()", "status": str(CacheStatus.COMPUTED),
+                "total_time": 1.0, "evaluated_vars": ["y"], "storage": ["RAM"]}]
+    html = render_html(build_interactive_badge(metrics))
 
-    # JS block present and self-contained.
-    assert "<script>" in html
-    assert "document.createElement('div')" in html
-    assert "c3-floater" in html
-    assert "getBoundingClientRect" in html
-    assert "data-c3-hover-init" in html            # idempotent guard
+    # No <script> in the badge output at all.
+    assert "<script" not in html
+    assert "document.createElement" not in html
 
-    # CSS fallback survives the script being stripped.
-    assert ".c3-rowgrp:hover .c3-rowtip" in html
-    # Floater styling is also defined so the JS path can use it.
-    assert ".c3-floater" in html and "position: fixed" in html
+    # Each statement row is wrapped in <details class="c3-rowx">.
+    assert "c3-rowx" in html
+    assert '<summary class="c3-row"' in html
+
+    # The drawer (<.c3-rowtip>) is a sibling of the summary inside the details.
+    assert "c3-rowtip" in html
+    # Open state highlights the row so the user knows which drawer is theirs.
+    assert ".c3-rowx[open]" in html
 
 
 def test_scoped_scrollbar_styling_present() -> None:
@@ -309,8 +308,7 @@ def test_each_row_has_pure_css_hover_tooltip() -> None:
     }]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-rowtip" in html
-    assert ":hover .c3-rowtip" in html        # CSS fallback rule
-    assert "<dt>Produced</dt>" in html        # vars surface in the tip
+    assert "<dt>Produced</dt>" in html        # vars surface in the drawer
     assert "<dt>Storage</dt>" in html
 
 

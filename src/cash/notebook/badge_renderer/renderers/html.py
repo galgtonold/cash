@@ -55,22 +55,6 @@ from ._pytoken import highlight_python
 # ---------------------------------------------------------------------------
 
 _CSS = f"""
-/* Force overflow:visible on the common notebook output containers when
-   they contain a Cash badge, so our hover tooltips can render past
-   their right edge without being clipped. Scoped via :has() — cells
-   without a Cash badge keep the host's default overflow. */
-.output_area:has(.c3-wrap),
-.output_subarea:has(.c3-wrap),
-.jp-OutputArea:has(.c3-wrap),
-.jp-OutputArea-output:has(.c3-wrap),
-.cell-output-ipywidget-background:has(.c3-wrap),
-.cell-output-html:has(.c3-wrap),
-.cell-output:has(.c3-wrap),
-.cell-output-text:has(.c3-wrap),
-div.output:has(.c3-wrap) {{
-  overflow: visible !important;
-}}
-
 /* Scoped scrollbar styling — applies only to scrollable elements that
    *contain* a Cash badge. Uses :has() (Chromium 105+, Safari 15.4+,
    Firefox 121+) so we don't repaint scrollbars in cells that don't
@@ -282,50 +266,39 @@ div.output:has(.c3-wrap) {{
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Row hover tooltip — two-mode design:
-   - When the inline JS at the bottom of the badge runs (Jupyter classic /
-     JupyterLab / most VS Code setups), it lifts the tooltip out of the
-     row and parks a single floating <div> on document.body, positioned
-     with getBoundingClientRect. That escapes every ancestor's
-     overflow:hidden and doesn't take any horizontal space.
-   - When the script is stripped (strict sandboxes), the original CSS
-     hover rule below fires and the tooltip expands inline below the row.
-   The .c3-floater class below mirrors .c3-rowtip's visual styling so
-   both modes look identical. */
-.c3-rowgrp {{ display: block; position: relative; }}
+/* Click-to-expand row detail. Every row is wrapped in <details> so
+   clicking it toggles a per-row drawer with status, code, storage,
+   produced/restored vars, decorator hits, etc. Stays open until
+   clicked again — same interaction model as loops and the bug-report
+   footer. No JS, no overflow traps, no layout shifts on hover. */
+.c3-rowx, .c3-loop-body {{ display: block; }}
+.c3-rowx > summary,
+.c3-loop-body > summary {{
+  cursor: pointer;
+  list-style: none;
+}}
+.c3-rowx > summary::-webkit-details-marker,
+.c3-loop-body > summary::-webkit-details-marker {{ display: none; }}
+.c3-rowx > summary::marker,
+.c3-loop-body > summary::marker {{ content: ""; }}
+
 .c3-rowtip {{
-  display: none;
-  background: #f7f3e9;
-  border-top: 1px dashed #c8c3b3;
+  background: #fafaf6;
+  border-top: 1px dashed #cdc8b8;
   border-bottom: 1px solid #ececec;
   padding: 10px 14px 12px 22px;
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  box-shadow: inset 4px 0 0 rgba(0,0,0,0.08);
+  box-shadow: inset 4px 0 0 rgba(0,0,0,0.06);
 }}
-.c3-rowgrp:hover .c3-rowtip {{ display: block; }}
 
-/* JS-managed floater — single instance on document.body, positioned
-   absolutely-fixed at the hovered row's coordinates. Pointer-events:none
-   so moving the mouse over the floater doesn't break the row's hover. */
-.c3-floater {{
-  position: fixed;
-  z-index: 2147483647;
-  display: none;
-  width: 360px;
-  padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid #d2cfc6;
-  border-radius: 5px;
-  box-shadow: 0 12px 32px rgba(20,20,20,0.18), 0 3px 8px rgba(20,20,20,0.10);
-  font-family: {theme.FONT_SANS};
-  font-size: 11px;
-  color: {theme.INK};
-  white-space: normal;
-  pointer-events: none;
-}}
+/* All row summaries are clickable (cursor + hover bg already set on
+   .c3-row). When open, brighten the rail slightly so the user sees
+   which row's drawer they're reading. */
+.c3-rowx[open] > summary.c3-row,
+.c3-loop-body[open] > summary.c3-row {{ background: {theme.BG_HOVER}; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
@@ -692,74 +665,6 @@ a.c3-bug:hover {{
 # browser deduplicates rule sets.
 _STYLE_BLOCK = f"<style>{_CSS}</style>"
 
-# Inline JS that turns each rowgrp's inline tooltip into a single
-# document.body-scoped floater. Idempotent, defensive: if document.body
-# isn't reachable (strict sandbox), the inline CSS tooltip is left in
-# place as a fallback. Vanilla ES5 so it parses everywhere.
-_SCRIPT_BLOCK = """<script>
-(function(){
-  var cs = document.currentScript;
-  if (!cs) return;
-  var wrap = cs.parentNode;
-  while (wrap && (!wrap.classList || !wrap.classList.contains('c3-wrap'))) {
-    wrap = wrap.parentNode;
-  }
-  if (!wrap || wrap.getAttribute('data-c3-hover-init')) return;
-  wrap.setAttribute('data-c3-hover-init', '1');
-
-  var floater = document.querySelector('body > div.c3-floater');
-  if (!floater) {
-    try {
-      floater = document.createElement('div');
-      floater.className = 'c3-floater';
-      document.body.appendChild(floater);
-    } catch (e) { return; }  // sandboxed, leave inline tooltip fallback in place
-  }
-
-  var grps = wrap.querySelectorAll('.c3-rowgrp');
-  for (var i = 0; i < grps.length; i++) {
-    (function(grp){
-      var tip = null;
-      for (var c = 0; c < grp.children.length; c++) {
-        if (grp.children[c].classList && grp.children[c].classList.contains('c3-rowtip')) {
-          tip = grp.children[c]; break;
-        }
-      }
-      if (!tip) return;
-      var html = tip.innerHTML;
-      tip.style.setProperty('display', 'none', 'important');  // disable CSS fallback
-
-      grp.addEventListener('mouseenter', function(){
-        floater.innerHTML = html;
-        var anchor = grp.querySelector('.c3-row');
-        if (!anchor) anchor = grp;
-        var rect = anchor.getBoundingClientRect();
-        var vw = window.innerWidth || document.documentElement.clientWidth;
-        var vh = window.innerHeight || document.documentElement.clientHeight;
-        var W = 360, H = floater.offsetHeight || 180;
-        var left, top;
-        if (rect.right + W + 16 < vw) {
-          left = rect.right + 12; top = rect.top - 2;
-        } else if (rect.left - W - 16 > 0) {
-          left = rect.left - W - 12; top = rect.top - 2;
-        } else {
-          left = Math.max(8, Math.min(rect.left, vw - W - 8));
-          top = rect.bottom + 4;
-        }
-        if (top + H > vh - 8) top = Math.max(8, vh - H - 8);
-        if (top < 8) top = 8;
-        floater.style.left = left + 'px';
-        floater.style.top = top + 'px';
-        floater.style.display = 'block';
-      });
-      grp.addEventListener('mouseleave', function(){
-        floater.style.display = 'none';
-      });
-    })(grps[i]);
-  }
-})();
-</script>"""
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -1067,19 +972,19 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
     )
-    tooltip = _rowtip_html(row)
+    drawer = _rowtip_html(row)
 
     return (
-        f'<div class="c3-rowgrp">'
-        f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
+        f'<details class="c3-rowx">'
+        f'<summary class="c3-row" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
         f"{code_html}"
         f"{dots}"
         f"{bar}"
         f"{chip}"
-        f"</div>"
-        f"{tooltip}"
-        f"</div>"
+        f"</summary>"
+        f"{drawer}"
+        f"</details>"
     )
 
 
@@ -1249,16 +1154,16 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
     )
     head_row = (
-        f'<div class="c3-rowgrp">'
-        f'<div class="c3-row c3-loop-head" data-kind="{head_kind}">'
+        f'<details class="c3-rowx">'
+        f'<summary class="c3-row c3-loop-head" data-kind="{head_kind}">'
         f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
         f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
         f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
         f"{_tbar(head_total_time, max_time, head_kind)}"
         f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
-        f"</div>"
+        f"</summary>"
         f"{head_tip}"
-        f"</div>"
+        f"</details>"
     )
 
     # ---- one body line per stmt, each with its own per-stmt aggregates --
@@ -1285,23 +1190,18 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             total=stmt_total, cached=stmt_cached, computed=(stmt_total - stmt_cached),
             total_time=stmt_time, total_saved=stmt_saved, kind=stmt_kind,
         )
-        # Tooltip lives OUTSIDE <details> so it shows on hover regardless of
-        # whether the user has expanded the drill-down.
         body_rows.append(
-            f'<div class="c3-rowgrp">'
             f'<details class="c3-loop-body">'
-            f'<summary class="c3-row" data-kind="{stmt_kind}" data-clickable="true" '
-            f'style="cursor:pointer;list-style:none;">'
+            f'<summary class="c3-row" data-kind="{stmt_kind}">'
             f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
             f'<pre class="c3-code c3-code-body">    {_code_html(stmt.base_code or "…")}</pre>'
             f"{_iter_histogram_html(iters)}"
             f"{_tbar(stmt_time, max_time, stmt_kind)}"
             f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
             f"</summary>"
+            f"{body_tip}"
             f"{body_drill}"
             f"</details>"
-            f"{body_tip}"
-            f"</div>"
         )
 
     return head_row + "".join(body_rows)
@@ -1688,7 +1588,6 @@ def render_html(badge: InteractiveBadge) -> str:
         + _footer_html(badge.footer)
         + "</div>"
         + "</details>"
-        + _SCRIPT_BLOCK
         + "</div>"
     )
 
