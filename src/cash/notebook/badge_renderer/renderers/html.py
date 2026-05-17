@@ -567,6 +567,18 @@ label.c3-row {{ cursor: pointer; }}
 }}
 .c3-deco-bar {{ width: 6px; border-radius: 1px; }}
 
+/* Control structure (if / elif / else / try / except).
+   Head row is shown verbatim; body rows render inline beneath it (no
+   click-to-expand) so the if's body is always visible — same way it
+   reads in the source. */
+.c3-ctrl {{ display: block; }}
+.c3-ctrl-head {{ /* uses .c3-row grid via the markup */ }}
+.c3-ctrl-body {{
+  border-left: 2px solid #e8e1ce;
+  margin-left: 5px;        /* align under the head row's rail */
+  background: #fbfaf3;
+}}
+
 /* Overhead row — collapsed single-row variant. Section label sits inline
    with the breakdown so we never spend 3 rows showing 0.00s sub-categories. */
 .c3-ovh {{ background: #fbfbfa; }}
@@ -1288,42 +1300,50 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
     total_time = sum(_item_total_time(r) for r in cg.rows)
     total_saved = sum(_item_saved_time(r) for r in cg.rows)
 
-    cg_rid = _uid("rx")
-    # Body rows render plainly when the control is expanded. StatementRows
-    # use the static (no further-click) helper; nested ForLoopGroups,
-    # ControlGroups, etc. dispatch through the normal section-item
-    # renderer so they keep their own click-to-expand behaviour.
+    # Control body rows render INLINE as siblings of the head — same way
+    # the source code reads (if line then body, both visible). No click-
+    # to-expand on the control header; the body is the body. Body rows
+    # are wrapped in a .c3-ctrl-body container that's lightly tinted so
+    # the "which lines belong to this branch" relationship is obvious.
     body_parts = []
     for r in cg.rows:
-        if isinstance(r, StatementRow):
-            body_parts.append(_static_statement_row_html(r, max_time))
+        # body_statements metrics get wrapped as ControlGroupSingle by the
+        # view-builder; unwrap to the inner StatementRow for the static path.
+        if isinstance(r, ControlGroupSingle):
+            body_parts.append(_static_statement_row_html(r.row, max_time, indented=True))
+        elif isinstance(r, StatementRow):
+            body_parts.append(_static_statement_row_html(r, max_time, indented=True))
         else:
             body_parts.append(_render_section_item(r, max_time, is_upstream=False))
     body_rows = "".join(body_parts)
     head = (
-        f'<div class="c3-rowx">'
-        f'<input type="checkbox" class="c3-rxtog" id="{cg_rid}">'
-        f'<label class="c3-row" for="{cg_rid}" data-kind="{kind}">'
+        f'<div class="c3-ctrl">'
+        f'<div class="c3-row c3-ctrl-head" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{_code_html(head_code)}</pre>'
         f'<span class="c3-loop-meta">{len(cg.rows)} stmt{"s" if len(cg.rows) != 1 else ""}</span>'
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, total_saved, kind)}"
-        f"</label>"
-        f'<div class="c3-rowtip" style="padding:0;">{body_rows}</div>'
+        f"</div>"
+        f'<div class="c3-ctrl-body">{body_rows}</div>'
         f"</div>"
     )
     return head
 
 
-def _static_statement_row_html(row: StatementRow, max_time: float) -> str:
+def _static_statement_row_html(
+    row: StatementRow, max_time: float, *, indented: bool = False,
+) -> str:
     """A row with no click-to-expand wrapper — used inside control bodies
-    where the body is already revealed by expanding the parent."""
+    where the body is always visible (no click needed). ``indented`` adds
+    a 4-space prefix on the code line so the body reads as nested under
+    the branch header."""
     status = row.status
     kind = theme.kind_of(status.value)
     rail = theme.rail_color(status.value)
     rail_soft = " c3-rail-soft" if row.is_upstream else ""
-    code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
+    prefix = "    " if indented else ""
+    code_html = f'<pre class="c3-code">{prefix}{_code_html(row.code)}</pre>'
     dots = _dots(
         status=status,
         storage_tiers=row.storage_tiers,
