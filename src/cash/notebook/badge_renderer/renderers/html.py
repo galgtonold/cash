@@ -230,28 +230,32 @@ _CSS = f"""
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Pure-CSS row hover tooltip. Renders to the **right** of the row,
-   escaping the card via overflow:visible. Notebook cells generally
-   have ample horizontal whitespace; on truly narrow viewports the
-   tooltip will clip but never overlap the badge body. */
+/* Pure-CSS row hover tooltip. Renders **below** the row with a heavy
+   shadow so it reads as a floating overlay, not part of the table. We
+   used to position it to the right of the card via overflow:visible,
+   but Jupyter's .output_area and VS Code's cell iframe both clip
+   anything outside their bounds — the tooltip then disappeared
+   entirely. Below-row works in every notebook host; the overlap is
+   transient (mouse-out dismisses) and the elevated shadow makes the
+   floating nature obvious. */
 .c3-rowtip {{
   display: none;
   position: absolute;
-  left: calc(100% + 10px);     /* outside the card */
-  top: -2px;
+  left: 12px;
+  top: calc(100% + 4px);
   z-index: 1000;
-  width: 320px;
-  max-width: 90vw;
-  padding: 9px 11px;
-  background: #fff;
-  border: 1px solid #d9d6cf;
-  border-radius: 4px;
-  box-shadow: 0 6px 24px rgba(20,20,20,0.12), 0 2px 6px rgba(20,20,20,0.06);
+  width: 380px;
+  max-width: calc(100vw - 32px);
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid #d2cfc6;
+  border-radius: 5px;
+  box-shadow: 0 12px 32px rgba(20,20,20,0.18), 0 3px 8px rgba(20,20,20,0.10);
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  pointer-events: none;        /* let mouse cross the tip without flicker */
+  pointer-events: none;        /* don't intercept mouse — keep row hover stable */
 }}
 .c3-row:hover > .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
@@ -637,8 +641,24 @@ def _snippet(code: str) -> str:
 
 
 def _code_html(code: str) -> str:
-    """Highlighted single-line snippet ready for innerHTML."""
-    return highlight_python(_snippet(code))
+    """Highlighted single-line snippet for the inline row code cell.
+
+    When the source spans multiple lines (``def``, ``class``, multi-line
+    expressions), the row only shows the first line; we suffix a small,
+    italic ``… +N lines`` hint so users know there's more (full body is
+    visible in the hover tooltip).
+    """
+    if not code:
+        return ""
+    highlighted = highlight_python(_snippet(code))
+    n_extra = max(0, len(code.splitlines()) - 1)
+    if n_extra > 0:
+        plural = "s" if n_extra != 1 else ""
+        highlighted += (
+            f'<span class="c3-com" style="margin-left:6px;">'
+            f'… +{n_extra} line{plural}</span>'
+        )
+    return highlighted
 
 
 # ---------------------------------------------------------------------------
@@ -934,7 +954,7 @@ def _iter_drilldown_html(iterations: tuple[IterationRow, ...], loop_var_names: t
         bar_color = theme.bar_color(kind)
         rail = theme.rail_color(it.status.value)
         pct = max(1.0, (it.time_s / max_t) * 100)
-        bindings = ", ".join(f"<b>{_esc(str(v))}</b>" for _, v in it.loop_bindings) or "—"
+        bindings = ", ".join(f"<b>{_esc(repr(v))}</b>" for _, v in it.loop_bindings) or "—"
         var_label = ", ".join(loop_var_names) or "i"
         rows.append(
             f'<div class="c3-iter-row">'
@@ -995,13 +1015,15 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
     iters_per_stmt = len(g.stmts[0].iterations)
 
     # Sample 4 values from the first stmt's bindings for the header
-    # preview: ``for ticker in [TSLA, AAPL, MSFT, GOOG]:``.
+    # preview: ``for ticker in ['TSLA', 'AAPL', 'MSFT', 'GOOG']:``. Use
+    # ``repr()`` so strings keep their quotes, lists their brackets, etc. —
+    # matching what the user actually typed.
     var_decl = ", ".join(g.loop_var_names) or "i"
     sample_values: list[str] = []
     for it in g.stmts[0].iterations[:4]:
         if not it.loop_bindings:
             continue
-        sample_values.append(", ".join(_esc(str(v)) for _, v in it.loop_bindings))
+        sample_values.append(", ".join(_esc(repr(v)) for _, v in it.loop_bindings))
     if iters_per_stmt > len(sample_values):
         sample_values.append("…")
     values_preview = ", ".join(sample_values) if sample_values else "…"
@@ -1099,10 +1121,23 @@ def _control_body_html(cb: ControlBody) -> str:
 
 
 def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
+    """Render the collapsible bucket of upstream statements that were *not* re-run.
+
+    Semantically: each statement here produced data that some later upstream
+    cell now restores from cache, so re-executing it would be pure waste —
+    the downstream consumer already has the final value. See
+    ``virtual_lineage._collect_skipped_statement_metrics`` for the
+    dependency-walk that flags them.
+    """
     if not sb.items:
         return ""
     n = len(sb.items)
-    label = f"{n} intermediate dependency step{'s' if n != 1 else ''}"
+    label = f"{n} upstream step{'s' if n != 1 else ''} not re-run"
+    title = (
+        "These upstream statements weren't re-executed because their outputs "
+        "are only needed by downstream values that Cash restored from cache. "
+        "Running them again would do work the cache already covered."
+    )
     saved = (
         f"saved {sb.total_saved_time_s:.2f}s"
         if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
@@ -1110,7 +1145,7 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
     body = "".join(_render_section_item(i, max_time, is_upstream=True) for i in sb.items)
     return (
         f'<details class="c3-skipped">'
-        f'<summary>'
+        f'<summary title="{_esc(title)}">'
         f'<span class="c3-upstream-caret"></span>'
         f'<span>{_esc(label)}</span>'
         f'<span class="c3-skipped-meta">{_esc(saved)}</span>'

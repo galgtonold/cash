@@ -2,8 +2,8 @@
 
 These exercise ``_render_interactive_badge`` and ``_print_text_badge``
 through the ``CashMagics`` wrapper. They are deliberately concrete about
-*what users see* (CACHED label, intermediate dependency steps,
-UPSTREAM HISTORY header) and indifferent to the rendering implementation.
+*what users see* (CACHED label, upstream-step disclosure, etc.) and
+indifferent to the rendering implementation.
 
 Implementation-level tests for the BadgeView IR and its renderers live in
 ``test_badge_view_builder.py``, ``test_badge_html_renderer.py`` and
@@ -111,7 +111,7 @@ class TestExpandableSkippedSteps:
             html_str = _extract_html(mock_display)
             assert html_str is not None
             assert '<details' in html_str
-            assert 'intermediate dependency step' in html_str
+            assert 'upstream step' in html_str and 'not re-run' in html_str
             assert 'upstream_step_1' in html_str
             assert 'upstream_step_2' in html_str
             assert '0.50' in html_str
@@ -129,7 +129,7 @@ class TestExpandableSkippedSteps:
             magics._render_interactive_badge(metrics, display_id='test_count')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert '5 intermediate dependency steps' in html_str
+            assert '5 upstream steps not re-run' in html_str
 
     def test_single_skipped_step_grammar(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
@@ -144,8 +144,8 @@ class TestExpandableSkippedSteps:
             magics._render_interactive_badge(metrics, display_id='test_singular')
             html_str = _extract_html(mock_display)
             assert html_str is not None
-            assert '1 intermediate dependency step' in html_str
-            assert '1 intermediate dependency steps' not in html_str
+            assert '1 upstream step not re-run' in html_str
+            assert '1 upstream steps not re-run' not in html_str
 
     def test_skipped_loop_iterations_grouped(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
