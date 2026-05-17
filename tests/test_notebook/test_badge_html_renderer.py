@@ -277,7 +277,7 @@ def test_tooltips_render_inline_below_their_row() -> None:
     assert 'class="c3-rowgrp"' in html or 'c3-rowgrp' in html
     assert "padding-right: 380px" not in html  # the failed wrap-extension is gone
     # The hover rule lives on the rowgrp now.
-    assert ".c3-rowgrp:hover > .c3-rowtip" in html
+    assert ".c3-rowgrp:hover .c3-rowtip" in html
 
 
 def test_scoped_scrollbar_styling_present() -> None:
@@ -299,7 +299,7 @@ def test_each_row_has_pure_css_hover_tooltip() -> None:
     }]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-rowtip" in html
-    assert ":hover > .c3-rowtip" in html      # CSS rule activating it
+    assert ":hover .c3-rowtip" in html        # CSS rule activating it
     assert "<dt>Produced</dt>" in html        # vars surface in the tip
     assert "<dt>Storage</dt>" in html
 
