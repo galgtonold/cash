@@ -4,11 +4,6 @@ This module is the single seam between the runtime (which produces raw
 metric dicts) and the renderers (which consume :class:`BadgeView` nodes).
 All status-string parsing, loop/control grouping, partitioning, and
 bug-report URL construction live here — renderers never see a raw dict.
-
-Slice-3 scope: the view-builder consumes the legacy
-:func:`._grouping.group_loop_iterations` pipeline and translates each
-intermediate dict into the corresponding :mod:`.view` node. Slice 7 will
-inline the grouping logic and drop ``_grouping.py``.
 """
 
 from __future__ import annotations
@@ -18,7 +13,6 @@ from urllib.parse import quote
 
 from cash.notebook.cache_status import CacheStatus
 
-from ._grouping import group_loop_iterations
 from .theme import MIN_TIME_DISPLAY_MS
 from .view import (
     BadgeHeader,
@@ -45,6 +39,99 @@ from .view import (
 
 _NOTIFICATION_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WARNING"})
 _RESTORED_LIKE_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WARNING"})
+
+
+# ---------------------------------------------------------------------------
+# Loop / control grouping (inlined from the deprecated _grouping.py)
+# ---------------------------------------------------------------------------
+
+def _make_loop_group(base_code: str, metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    all_var_names: list[str] = []
+    var_values: dict[str, list[Any]] = {}
+    for m in metrics:
+        for k, v in (m.get("loop_vars") or {}).items():
+            if k not in var_values:
+                all_var_names.append(k)
+                var_values[k] = []
+            var_values[k].append(v)
+    return {
+        "type": "loop_group",
+        "base_code": base_code,
+        "metrics": metrics,
+        "all_loop_var_names": all_var_names,
+        "all_loop_var_values": var_values,
+    }
+
+
+def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Two-pass grouping: per-statement loop bodies, then wrap consecutive loops.
+
+    Returns intermediate dict items (``single``, ``for_loop_group``,
+    ``control_group``, ``control_group_single``) that
+    :func:`_section_item_from_grouped` translates into BadgeView nodes.
+    """
+    pass1: list[dict[str, Any]] = []
+    loop_stmt_groups: dict[str, list[dict[str, Any]]] = {}
+    control_groups: dict[str, list[dict[str, Any]]] = {}
+
+    def _flush_loops() -> None:
+        for base_code, mlist in loop_stmt_groups.items():
+            pass1.append(_make_loop_group(base_code, mlist))
+        loop_stmt_groups.clear()
+
+    def _flush_controls() -> None:
+        for _ctx_hash, mlist in control_groups.items():
+            branch_label = mlist[0].get("branch_label", "")
+            body_stmts = mlist[0].get("body_statements", [])
+            header = body_stmts[0] if body_stmts else branch_label
+            pass1.append({
+                "type": "control_group",
+                "metrics": mlist,
+                "branch_label": branch_label,
+                "header": header,
+            })
+        control_groups.clear()
+
+    for m in metrics:
+        code = m.get("code", "")
+        if "# __iteration_context__:" in code:
+            _flush_controls()
+            actual = "\n".join(
+                line for line in code.split("\n")
+                if not line.startswith("# __iteration_context__:")
+                and not line.startswith("# control_context:")
+            )
+            loop_stmt_groups.setdefault(actual, []).append(m)
+        elif m.get("control_context"):
+            _flush_loops()
+            control_groups.setdefault(m["control_context"], []).append(m)
+        else:
+            _flush_loops()
+            _flush_controls()
+            if m.get("body_statements") and not m.get("control_context"):
+                pass1.append({"type": "control_group_single", "metric": m})
+            else:
+                pass1.append({"type": "single", "metric": m})
+    _flush_loops()
+    _flush_controls()
+
+    # Pass 2: wrap consecutive loop_group items into a single for_loop_group.
+    result: list[dict[str, Any]] = []
+    pending: list[dict[str, Any]] = []
+
+    def _flush_pending() -> None:
+        if pending:
+            result.append({"type": "for_loop_group", "stmt_groups": list(pending)})
+            pending.clear()
+
+    for item in pass1:
+        if item["type"] == "loop_group":
+            pending.append(item)
+        else:
+            _flush_pending()
+            result.append(item)
+    _flush_pending()
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -222,7 +309,7 @@ def _skipped_bucket(skipped_metrics: list[dict[str, Any]]) -> SkippedBucket | No
     if not skipped_metrics:
         return None
     total_saved = sum(float(m.get("saved_time", 0.0)) for m in skipped_metrics)
-    grouped = group_loop_iterations(skipped_metrics)
+    grouped = _group_loop_iterations(skipped_metrics)
     items: list[StatementRow | ForLoopGroup] = []
     for g in grouped:
         node = _section_item_from_grouped(g, is_upstream=True)
@@ -448,9 +535,9 @@ def build_interactive_badge(
 
     if upstream_all or upstream_skipped:
         items: list[SectionItem] = []
-        for g in group_loop_iterations(upstream_restored_like):
+        for g in _group_loop_iterations(upstream_restored_like):
             items.append(_section_item_from_grouped(g, is_upstream=True))
-        for g in group_loop_iterations(upstream_executed):
+        for g in _group_loop_iterations(upstream_executed):
             items.append(_section_item_from_grouped(g, is_upstream=True))
         bucket = _skipped_bucket(upstream_skipped)
         if bucket is not None:
@@ -462,7 +549,7 @@ def build_interactive_badge(
         ))
 
     current_items: list[SectionItem] = []
-    for g in group_loop_iterations(current):
+    for g in _group_loop_iterations(current):
         current_items.append(_section_item_from_grouped(g, is_upstream=False))
     sections.append(Section(
         kind=SectionKind.CURRENT,

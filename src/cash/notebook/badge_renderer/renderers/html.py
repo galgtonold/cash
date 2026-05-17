@@ -80,7 +80,7 @@ def _storage_display(tiers: tuple[str, ...]) -> str:
 
 
 def _storage_with_reasons(row: StatementRow) -> str:
-    """Storage cell that also surfaces uncacheable / skipped reasons."""
+    """Storage cell that also surfaces uncacheable / skipped / no-output reasons."""
     if row.uncacheable_reasons:
         reason = _esc(", ".join(row.uncacheable_reasons))
         return f"<span title='Not cached: {reason}' style='cursor:help; color: #d9534f;'>🚫 No Cache</span>"
@@ -91,6 +91,16 @@ def _storage_with_reasons(row: StatementRow) -> str:
         )
     if row.storage_tiers:
         return _storage_display(row.storage_tiers)
+    # Empty storage on a COMPUTED row: explain why.
+    if row.status is BadgeStatus.COMPUTED:
+        if not row.output_vars:
+            tip = "No variable outputs to cache (e.g. print-only statement). Stdout is still cached."
+            return f"<span title='{tip}' style='cursor:help; color: #999;'>- no outputs</span>"
+        if row.time_s < theme.MIN_TIME_DISPLAY_S:
+            tip = "Execution was too fast for disk promotion. Stored in RAM only on next run."
+            return f"<span title='{tip}' style='cursor:help; color: #999;'>- trivial</span>"
+        tip = "No storage info available. This may indicate a backend configuration issue."
+        return f"<span title='{tip}' style='cursor:help; color: #999;'>-</span>"
     return "-"
 
 
