@@ -62,12 +62,17 @@ _CSS = f"""
   border: 1px solid {theme.RULE};
   border-left: 3px solid;
   border-radius: 4px;
-  overflow: hidden;
+  /* overflow: visible so per-row hover tooltips can paint past the
+     card boundary (they render to the right of the row). The card's
+     own descendants don't visually escape because each section (panel,
+     summary, footer) has its own background and stops at the border. */
+  overflow: visible;
   font-family: {theme.FONT_SANS};
   font-size: 12px;
   color: {theme.INK};
   max-width: 100%;
   margin-top: 5px;
+  position: relative;
 }}
 .c3-card[data-kind="cached"] {{ border-left-color: {theme.RAIL_CACHED}; }}
 .c3-card[data-kind="exec"]   {{ border-left-color: {theme.RAIL_EXEC}; }}
@@ -225,18 +230,19 @@ _CSS = f"""
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Pure-CSS row hover tooltip. Renders below the row by default; rows in
-   the bottom 25% of the badge flip it above via the .c3-tt-up modifier
-   (set by the view-builder when emitting late rows). */
+/* Pure-CSS row hover tooltip. Renders to the **right** of the row,
+   escaping the card via overflow:visible. Notebook cells generally
+   have ample horizontal whitespace; on truly narrow viewports the
+   tooltip will clip but never overlap the badge body. */
 .c3-rowtip {{
   display: none;
   position: absolute;
-  left: 8px;
-  top: calc(100% + 2px);
+  left: calc(100% + 10px);     /* outside the card */
+  top: -2px;
   z-index: 1000;
-  width: 360px;
-  max-width: calc(100vw - 32px);
-  padding: 8px 10px;
+  width: 320px;
+  max-width: 90vw;
+  padding: 9px 11px;
   background: #fff;
   border: 1px solid #d9d6cf;
   border-radius: 4px;
@@ -247,9 +253,7 @@ _CSS = f"""
   white-space: normal;
   pointer-events: none;        /* let mouse cross the tip without flicker */
 }}
-.c3-row:hover > .c3-rowtip,
-.c3-row:focus-within > .c3-rowtip {{ display: block; }}
-.c3-rowtip-up {{ top: auto; bottom: calc(100% + 2px); }}
+.c3-row:hover > .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
@@ -781,15 +785,30 @@ def _rowtip_html(row: StatementRow) -> str:
 
     dl_parts: list[str] = []
 
-    # Storage
+    # Storage — paired tier-dot indicator (matches the row's dots cell) plus
+    # a human-readable label, mirroring the v3 design tooltip.
+    tier_dot_pair = _dots(
+        status=row.status,
+        storage_tiers=row.storage_tiers,
+        source=row.source,
+        uncacheable_reasons=row.uncacheable_reasons,
+    )
     if row.uncacheable_reasons:
-        dl_parts.append(f"<dt>Uncacheable</dt><dd>{_esc(', '.join(row.uncacheable_reasons))}</dd>")
+        dl_parts.append(
+            f"<dt>Storage</dt><dd>{tier_dot_pair} uncacheable</dd>"
+            f"<dt>Reason</dt><dd>{_esc(', '.join(row.uncacheable_reasons))}</dd>"
+        )
     elif row.status is BadgeStatus.RESTORED and row.source:
-        dl_parts.append(f"<dt>Restored from</dt><dd>{_esc(row.source)}</dd>")
+        dl_parts.append(
+            f"<dt>Storage</dt><dd>{tier_dot_pair} ← {_esc(row.source)}</dd>"
+        )
     elif row.storage_tiers:
-        dl_parts.append(f"<dt>Storage</dt><dd>{'+'.join(_esc(t) for t in row.storage_tiers)}</dd>")
+        label = " · ".join(_esc(t) for t in row.storage_tiers)
+        dl_parts.append(f"<dt>Storage</dt><dd>{tier_dot_pair} {label}</dd>")
     elif row.status is BadgeStatus.SKIPPED:
-        dl_parts.append("<dt>Storage</dt><dd>in RAM (already computed)</dd>")
+        dl_parts.append(
+            f"<dt>Storage</dt><dd>{tier_dot_pair} in RAM (already computed)</dd>"
+        )
     elif row.skipped_reason:
         dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
 
@@ -1331,7 +1350,7 @@ def _footer_html(footer: BugReportLink | None) -> str:
         )
     return (
         f'<div class="c3-footer">'
-        f'<span class="c3-hint">hover for detail · click to expand</span>'
+        f'<span class="c3-hint">hover a row for detail</span>'
         f"{bug}"
         f"</div>"
     )
