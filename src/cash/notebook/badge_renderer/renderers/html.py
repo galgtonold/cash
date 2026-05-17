@@ -270,12 +270,18 @@ _CSS = f"""
    clicking it toggles a per-row drawer with status, code, storage,
    produced/restored vars, decorator hits, etc. Stays open until
    clicked again — same interaction model as loops and the bug-report
-   footer. No JS, no overflow traps, no layout shifts on hover. */
+   footer. No JS, no overflow traps, no layout shifts on hover.
+   The <summary> is a plain block; the actual row grid lives in a
+   child .c3-row div so summary's display value can't interfere with
+   the native click-to-toggle behavior (browsers were unreliable when
+   summary itself had display: grid). */
 .c3-rowx, .c3-loop-body {{ display: block; }}
 .c3-rowx > summary,
 .c3-loop-body > summary {{
+  display: block;
   cursor: pointer;
   list-style: none;
+  padding: 0;
 }}
 .c3-rowx > summary::-webkit-details-marker,
 .c3-loop-body > summary::-webkit-details-marker {{ display: none; }}
@@ -283,22 +289,21 @@ _CSS = f"""
 .c3-loop-body > summary::marker {{ content: ""; }}
 
 .c3-rowtip {{
-  background: #fafaf6;
-  border-top: 1px dashed #cdc8b8;
-  border-bottom: 1px solid #ececec;
-  padding: 10px 14px 12px 22px;
+  background: #f4efe1;             /* obviously distinct from panel bg */
+  border-top: 1px solid #c8c3b3;
+  border-bottom: 1px solid #c8c3b3;
+  padding: 12px 16px 14px 22px;
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  box-shadow: inset 4px 0 0 rgba(0,0,0,0.06);
+  box-shadow: inset 5px 0 0 #b69a4d, 0 1px 2px rgba(0,0,0,0.04);
 }}
 
-/* All row summaries are clickable (cursor + hover bg already set on
-   .c3-row). When open, brighten the rail slightly so the user sees
-   which row's drawer they're reading. */
-.c3-rowx[open] > summary.c3-row,
-.c3-loop-body[open] > summary.c3-row {{ background: {theme.BG_HOVER}; }}
+/* When the details is open, brighten the row so the user sees which
+   drawer they're reading. */
+.c3-rowx[open] > summary > .c3-row,
+.c3-loop-body[open] > summary > .c3-row {{ background: {theme.BG_HOVER}; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
@@ -976,12 +981,14 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
 
     return (
         f'<details class="c3-rowx">'
-        f'<summary class="c3-row" data-kind="{kind}" data-status="{status.value}">'
+        f"<summary>"
+        f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
         f"{code_html}"
         f"{dots}"
         f"{bar}"
         f"{chip}"
+        f"</div>"
         f"</summary>"
         f"{drawer}"
         f"</details>"
@@ -1155,12 +1162,14 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
     )
     head_row = (
         f'<details class="c3-rowx">'
-        f'<summary class="c3-row c3-loop-head" data-kind="{head_kind}">'
+        f"<summary>"
+        f'<div class="c3-row c3-loop-head" data-kind="{head_kind}">'
         f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
         f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
         f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
         f"{_tbar(head_total_time, max_time, head_kind)}"
         f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
+        f"</div>"
         f"</summary>"
         f"{head_tip}"
         f"</details>"
@@ -1192,12 +1201,14 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         )
         body_rows.append(
             f'<details class="c3-loop-body">'
-            f'<summary class="c3-row" data-kind="{stmt_kind}">'
+            f"<summary>"
+            f'<div class="c3-row" data-kind="{stmt_kind}">'
             f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
             f'<pre class="c3-code c3-code-body">    {_code_html(stmt.base_code or "…")}</pre>'
             f"{_iter_histogram_html(iters)}"
             f"{_tbar(stmt_time, max_time, stmt_kind)}"
             f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
+            f"</div>"
             f"</summary>"
             f"{body_tip}"
             f"{body_drill}"
@@ -1216,13 +1227,15 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
     total_saved = sum(r.saved_time_s for r in cg.rows)
 
     head = (
-        f'<details class="c3-control">'
-        f'<summary class="c3-row" data-kind="{kind}" data-clickable="true" style="list-style:none;cursor:pointer;">'
+        f'<details class="c3-loop-body">'  # reuse same summary CSS as loops
+        f"<summary>"
+        f'<div class="c3-row" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{_code_html(head_code)}</pre>'
         f'<span class="c3-loop-meta">{len(cg.rows)} stmt{"s" if len(cg.rows) != 1 else ""}</span>'
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, total_saved, kind)}"
+        f"</div>"
         f"</summary>"
         + "".join(_statement_row_html(r, max_time) for r in cg.rows)
         + "</details>"
@@ -1330,8 +1343,9 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         for i, c in enumerate(g.calls)
     )
     head = (
-        f'<details class="c3-deco-group">'
-        f'<summary class="c3-row" data-kind="{kind}" data-clickable="true" style="list-style:none;cursor:pointer;">'
+        f'<details class="c3-loop-body">'  # reuse same summary CSS
+        f"<summary>"
+        f'<div class="c3-row" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code"><span class="c3-cache-tag">@cache</span> '
         f'<span class="c3-kw">{_esc(short)}</span>() '
@@ -1339,6 +1353,7 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         f'<span class="c3-dots-cell"></span>'
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, 0.0, kind)}"
+        f"</div>"
         f"</summary>"
         f'<div class="c3-detail">'
         f'<div class="c3-detail-h"><span class="c3-cache-tag">@cache</span> '
@@ -1525,7 +1540,7 @@ def _footer_html(footer: BugReportLink | None) -> str:
         )
     return (
         f'<div class="c3-footer">'
-        f'<span class="c3-hint">hover a row for detail</span>'
+        f'<span class="c3-hint">click a row for detail</span>'
         f"{bug}"
         f"</div>"
     )
