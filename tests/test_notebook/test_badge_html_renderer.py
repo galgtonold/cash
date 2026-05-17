@@ -264,23 +264,30 @@ def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
     assert "c3-rowtip" in body_block
 
 
-def test_tooltips_float_absolutely_right_of_row() -> None:
-    """Tooltips are absolute-positioned siblings inside .c3-rowgrp.
+def test_tooltips_use_js_floater_with_css_fallback() -> None:
+    """Hover detail is a JS-positioned single floater on document.body.
 
-    Layout shifts (the inline-expansion variant) annoyed during quick row
-    scanning, so we float right-of-row again — and force overflow:visible
-    on common notebook output containers via :has() so the float isn't
-    clipped at the cell boundary.
+    Pure-CSS attempts kept failing in at least one notebook host (clipping
+    by ancestor overflow, layout-shift annoyance, or eating cell width).
+    Minimal vanilla JS appends one .c3-floater to document.body and
+    positions it via getBoundingClientRect on row hover. Falls back to
+    the inline .c3-rowtip CSS rule when the script is sandboxed.
     """
     html = render_html(build_interactive_badge([]))
     assert 'class="c3-wrap"' in html
-    assert "padding-right: 380px" not in html  # no wrap-extension that ate cell width
-    assert "left: calc(100% + 12px)" in html   # tooltip floats right
-    assert "position: absolute" in html
-    # Forced overflow:visible on common notebook ancestors so the tip isn't clipped.
-    assert ".output_area:has(.c3-wrap)" in html
-    assert ".jp-OutputArea-output:has(.c3-wrap)" in html
-    assert "overflow: visible !important" in html
+    assert "padding-right: 380px" not in html      # no wrap-extension that ate cell width
+
+    # JS block present and self-contained.
+    assert "<script>" in html
+    assert "document.createElement('div')" in html
+    assert "c3-floater" in html
+    assert "getBoundingClientRect" in html
+    assert "data-c3-hover-init" in html            # idempotent guard
+
+    # CSS fallback survives the script being stripped.
+    assert ".c3-rowgrp:hover .c3-rowtip" in html
+    # Floater styling is also defined so the JS path can use it.
+    assert ".c3-floater" in html and "position: fixed" in html
 
 
 def test_scoped_scrollbar_styling_present() -> None:
@@ -302,7 +309,7 @@ def test_each_row_has_pure_css_hover_tooltip() -> None:
     }]
     html = render_html(build_interactive_badge(metrics))
     assert "c3-rowtip" in html
-    assert ":hover > .c3-rowtip" in html      # CSS rule activating it
+    assert ":hover .c3-rowtip" in html        # CSS fallback rule
     assert "<dt>Produced</dt>" in html        # vars surface in the tip
     assert "<dt>Storage</dt>" in html
 
