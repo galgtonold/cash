@@ -17,10 +17,12 @@ from ._types import (
     ControlGroupSingle,
     ForLoopGroup,
     LoopGroup,
-    _CODE_SNIPPET_MAX_LEN,
-    _FONT_MONO,
-    _HEADER_MAX_LEN,
-    _MIN_TIME_DISPLAY_S,
+)
+from .theme import (
+    CODE_SNIPPET_MAX_LEN as _CODE_SNIPPET_MAX_LEN,
+    FONT_MONO as _FONT_MONO,
+    HEADER_MAX_LEN as _HEADER_MAX_LEN,
+    MIN_TIME_DISPLAY_S as _MIN_TIME_DISPLAY_S,
 )
 
 # ---------------------------------------------------------------------------

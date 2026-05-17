@@ -8,15 +8,7 @@ if TYPE_CHECKING:
     from ..statement_processor import ProcessResult
 
 # ---------------------------------------------------------------------------
-# Display constants
-# ---------------------------------------------------------------------------
-_CODE_SNIPPET_MAX_LEN = 120  # Characters to show before truncating code snippets
-_HEADER_MAX_LEN = 80         # Characters to show before truncating header lines
-_MIN_TIME_DISPLAY_S = 0.01   # Minimum time (seconds) worth displaying in badges
-_MIN_TIME_DISPLAY_MS = 0.001 # Minimum time (milliseconds) worth displaying
-
-# ---------------------------------------------------------------------------
-# Badge TypedDicts
+# Badge TypedDicts (deprecated by BadgeView — see ``view.py``; removed in slice 7)
 # ---------------------------------------------------------------------------
 
 class LoopGroup(TypedDict):
@@ -59,23 +51,3 @@ class SingleMetric(TypedDict):
     metric: ProcessResult
 
 GroupedBadgeItem = SingleMetric | ForLoopGroup | ControlGroup | ControlGroupSingle
-
-# ---------------------------------------------------------------------------
-# Simple status badge colors
-# ---------------------------------------------------------------------------
-_BADGE_COLOR_RESTORED = "#006644"
-_BADGE_COLOR_DEFAULT = "#996300"
-
-# ---------------------------------------------------------------------------
-# Cash design tokens — system-native font stacks. Cash never ships a webfont;
-# the host (Jupyter / browser) provides the typography. See the Cash design
-# system's colors_and_type.css for the canonical token values.
-# ---------------------------------------------------------------------------
-_FONT_SANS = (
-    '-apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, '
-    'sans-serif, "Apple Color Emoji", "Segoe UI Emoji"'
-)
-_FONT_MONO = (
-    'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, '
-    '"Liberation Mono", monospace'
-)
