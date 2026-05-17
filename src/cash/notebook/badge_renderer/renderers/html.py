@@ -1237,11 +1237,24 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
     rail = theme.rail_color(BadgeStatus.COMPUTED.value)
     statuses = tuple(r.status for r in cg.rows)
     kind = _aggregate_kind(statuses)
-    head_code = f"{cg.branch_label}: {cg.header}" if cg.branch_label else cg.header
+    # The view-builder often puts the same string in both branch_label and
+    # header (the metric's body_statements[0] is the if/for/while line
+    # itself). Just show the header — the branch keyword is already in it.
+    # Only prepend the branch label if it's a short keyword (else / except)
+    # that doesn't already appear in the header.
+    if cg.branch_label and cg.branch_label not in cg.header:
+        head_code = f"{cg.branch_label}: {cg.header}"
+    else:
+        head_code = cg.header or cg.branch_label
     total_time = sum(r.time_s for r in cg.rows)
     total_saved = sum(r.saved_time_s for r in cg.rows)
 
     cg_rid = _uid("rx")
+    # Body rows render as static rows (no further click-to-expand) so the
+    # body is plainly visible the moment the if/else is expanded. Each
+    # row keeps its rail, code, dots, bar, and time chip — just no nested
+    # checkbox/drawer machinery to navigate through.
+    body_rows = "".join(_static_statement_row_html(r, max_time) for r in cg.rows)
     head = (
         f'<div class="c3-rowx">'
         f'<input type="checkbox" class="c3-rxtog" id="{cg_rid}">'
@@ -1252,11 +1265,37 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, total_saved, kind)}"
         f"</label>"
-        f'<div class="c3-rowtip">'
-        + "".join(_statement_row_html(r, max_time) for r in cg.rows)
-        + "</div></div>"
+        f'<div class="c3-rowtip" style="padding:0;">{body_rows}</div>'
+        f"</div>"
     )
     return head
+
+
+def _static_statement_row_html(row: StatementRow, max_time: float) -> str:
+    """A row with no click-to-expand wrapper — used inside control bodies
+    where the body is already revealed by expanding the parent."""
+    status = row.status
+    kind = theme.kind_of(status.value)
+    rail = theme.rail_color(status.value)
+    rail_soft = " c3-rail-soft" if row.is_upstream else ""
+    code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
+    dots = _dots(
+        status=status,
+        storage_tiers=row.storage_tiers,
+        source=row.source,
+        uncacheable_reasons=row.uncacheable_reasons,
+    )
+    bar = _tbar(row.time_s, max_time, kind)
+    chip = _time_chip(row.time_s, row.saved_time_s, kind)
+    return (
+        f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
+        f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+        f"{code_html}"
+        f"{dots}"
+        f"{bar}"
+        f"{chip}"
+        f"</div>"
+    )
 
 
 def _control_group_single_html(cgs: ControlGroupSingle, max_time: float) -> str:
