@@ -268,25 +268,25 @@ _CSS = f"""
 
 /* Pure-CSS row hover tooltip — renders **in flow** as a sibling row
    below its anchor row. Pushes following rows down momentarily while
-   the mouse is over the row; mouse-out collapses cleanly. We use
-   in-flow expansion instead of an absolute overlay because every
-   notebook host (Jupyter classic, JupyterLab, VS Code, Colab) has
-   *some* ancestor with overflow:hidden, so absolute-positioned
-   tooltips disappear in at least one of them. In-flow always works. */
-.c3-rowgrp {{ display: contents; }}
+   the mouse is over the row; mouse-out collapses cleanly. In-flow
+   expansion instead of an absolute overlay because every notebook
+   host (Jupyter classic, JupyterLab, VS Code, Colab) has *some*
+   ancestor with overflow:hidden — absolute-positioned tooltips
+   disappear in at least one of them. In-flow always works. */
+.c3-rowgrp {{ display: block; }}
 .c3-rowtip {{
   display: none;
-  background: #fafbfa;
-  border-top: 1px dashed #d9d6cf;
+  background: #f7f3e9;
+  border-top: 1px dashed #c8c3b3;
   border-bottom: 1px solid #ececec;
   padding: 10px 14px 12px 22px;
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  box-shadow: inset 3px 0 0 rgba(0,0,0,0.06);
+  box-shadow: inset 4px 0 0 rgba(0,0,0,0.08);
 }}
-.c3-rowgrp:hover > .c3-rowtip {{ display: block; }}
+.c3-rowgrp:hover .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
