@@ -830,8 +830,8 @@ def _build_bug_report_url(metrics_list: list[dict[str, Any]], context: dict | No
 def render_interactive_badge(
     metrics_list: list[dict[str, Any]],
     badge_mode: str,
-    debug: bool = False,
-    display_id: str | None = None,
+    debug: bool = False,  # noqa: ARG001 — kept for caller compatibility
+    display_id: str | None = None,  # noqa: ARG001
     status: str = "DONE",
     current_step: int = 0,
     total_steps: int = 0,
@@ -842,120 +842,31 @@ def render_interactive_badge(
 ) -> str:
     """Build the interactive HTML badge string for cell execution results.
 
-    This is a pure function — it computes and returns the HTML string.
-    The caller is responsible for display / publish.
+    Pipeline: ``metrics_list → view_builder.build_interactive_badge → BadgeView
+    → renderers.html.render_html → HTML string``.
 
-    Returns:
-        The rendered HTML string, or an empty string if *badge_mode* is not
-        ``'html'``.
+    The view-builder owns partitioning / grouping / status mapping; the
+    renderer owns all styling decisions through :mod:`.theme`. The signature
+    is preserved for caller compatibility (``magics.py`` still calls in the
+    old shape).
     """
-    # In non-html badge mode, this function is a no-op
-    # (print mode uses _print_text_badge instead, off mode shows nothing)
-    if badge_mode != 'html':
+    if badge_mode != "html":
         return ""
 
-    # Reset the deterministic ID counter so the same badge structure
-    # produces the same element IDs across re-renders (needed for
-    # preserving which sections the user has expanded/collapsed).
-    _reset_unique_ids()
+    from .renderers.html import render_html
+    from .view_builder import build_interactive_badge
 
-    metrics_list = metrics_list or []
-
-    # Partition metrics into groups
-    upstream_list = [m for m in metrics_list if m.get('is_upstream', False) and m.get('status') != CacheStatus.SKIPPED]
-    # Sub-categorize upstream: restored (shown directly) vs re-executed (collapsible)
-    upstream_restored = [m for m in upstream_list if m.get('status') in (CacheStatus.RESTORED, 'FUNCTION_CHANGED', 'MODULE_RELOADED', 'WARNING')]
-    upstream_executed = [m for m in upstream_list if m.get('status') not in (CacheStatus.RESTORED, 'FUNCTION_CHANGED', 'MODULE_RELOADED', 'WARNING')]
-    # Skipped list: only upstream skipped (intermediate dependencies), not current cell skipped
-    skipped_list = [m for m in metrics_list if m.get('status') == CacheStatus.SKIPPED and m.get('is_upstream', False)]
-    # Current list: all non-upstream statements
-    current_list = [m for m in metrics_list if not m.get('is_upstream', False)]
-
-    # Compute summary statistics
-    total_saved, total_exec, restored_count, computed_count, skipped_count_stat = _compute_badge_stats(metrics_list)
-
-    # Use the actual cell total time if provided (more accurate than sum of metrics)
-    summary_time = cell_total_time if cell_total_time is not None else total_exec
-
-    # --- Build Details Table Rows ---
-    details_rows = ""
-
-    # 1. Upstream Rows (with loop grouping)
-    if upstream_list or skipped_list:
-        details_rows += "<tr><td colspan='4' style='background:#f5f5f5; font-weight:bold; font-size:10px; padding:4px; color:#666; border-bottom:1px solid #eee;'>UPSTREAM HISTORY</td></tr>"
-        details_rows += _build_upstream_section_html(upstream_restored, upstream_executed, skipped_list)
-
-    # 2. Completed Current Rows (with loop grouping) and decorator calls
-    details_rows += _build_current_cell_section_html(current_list, bool(upstream_list or skipped_list))
-
-    # 3. Overhead Breakdown (if available)
-    if timing_breakdown and cell_total_time is not None:
-        details_rows += _build_overhead_section_html(timing_breakdown, cell_total_time, metrics_list)
-
-    # --- Badge Style Logic ---
-    summary_bg, summary_color, summary_border, icon, label, subtext = _badge_style_parts(
-        status, computed_count, restored_count, skipped_count_stat,
-        total_saved, summary_time, current_code, current_step, total_steps,
+    view = build_interactive_badge(
+        metrics_list or [],
+        status=status,
+        current_step=current_step,
+        total_steps=total_steps,
+        current_code=current_code,
+        cell_total_time=cell_total_time,
+        timing_breakdown=timing_breakdown,
+        bug_report_context=bug_report_context,
     )
-
-    return f"""
-    <details style="
-        display: inline-block;
-        border: 1px solid {summary_border};
-        border-radius: 4px;
-        background-color: {summary_bg};
-        padding: 0;
-        margin-top: 5px;
-        font-family: {_FONT_SANS};
-        font-size: 12px;
-        color: {summary_color};
-        max-width: 100%;
-    ">
-        <summary style="
-            cursor: pointer;
-            padding: 4px 8px;
-            font-weight: bold;
-            list-style: none;
-            outline: none;
-            display: inline-flex;
-            align-items: baseline;
-            gap: 6px;
-        ">
-            <span>{icon} {label}</span><span style="font-weight: normal; opacity: 0.8; font-family: {_FONT_MONO};">{subtext}</span>
-        </summary>
-
-        <div style="
-            padding: 5px 10px;
-            background-color: #ffffff;
-            border-top: 1px solid {summary_border}30;
-            color: #333;
-            max-height: 500px;
-            overflow-y: auto;
-        ">
-            <table style="width: 100%; min-width: 500px; border-collapse: collapse; font-size: 11px; table-layout: auto; color: #333; background-color: #ffffff;">
-                <thead>
-                     <tr style="border-bottom: 2px solid #ddd; color: #666; background-color: #ffffff;">
-                        <th style="text-align: left; padding: 4px; white-space: nowrap;">TYPE</th>
-                        <th style="text-align: left; padding: 4px;">CONTENT</th>
-                        <th style="text-align: left; padding: 4px; white-space: nowrap;">STORAGE</th>
-                        <th style="text-align: left; padding: 4px; white-space: nowrap;">TIME</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {details_rows}
-                </tbody>
-            </table>
-            <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #f0f0f0; text-align: right;">
-                <a href="{_build_bug_report_url(metrics_list, bug_report_context)}" target="_blank" rel="noopener noreferrer"
-                   style="display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px;
-                          background: #fff5f5; border: 1px solid #f5c6c6; border-radius: 12px;
-                          color: #c0392b; font-size: 11px; font-weight: 500; text-decoration: none;"
-                   title="Open a pre-filled GitHub issue to report incorrect caching behaviour"
-                >🐛 Report incorrect caching</a>
-            </div>
-        </div>
-    </details>
-    """
+    return render_html(view)
 
 
 # ---------------------------------------------------------------------------

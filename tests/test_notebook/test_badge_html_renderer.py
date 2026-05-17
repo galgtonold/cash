@@ -93,12 +93,10 @@ def test_decorator_section_renders_when_calls_present() -> None:
     assert "HIT" in html and "MISS" in html
 
 
-def test_footer_present_when_bug_report_context_provided() -> None:
+def test_footer_always_includes_bug_report_link() -> None:
     metrics = [{"code": "x=1", "status": str(CacheStatus.COMPUTED), "total_time": 0.1}]
-    html_no = render_html(build_interactive_badge(metrics))
-    html_yes = render_html(build_interactive_badge(metrics, bug_report_context={"version": "1"}))
-    assert "Report incorrect caching" not in html_no
-    assert "Report incorrect caching" in html_yes
+    html = render_html(build_interactive_badge(metrics))
+    assert "Report incorrect caching" in html
 
 
 def test_overhead_section_appears_with_breakdown() -> None:

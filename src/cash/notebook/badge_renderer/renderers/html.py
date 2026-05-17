@@ -171,16 +171,40 @@ def _iteration_row_html(it: IterationRow) -> str:
     )
 
 
-def _loop_statement_html(ls: LoopStatement) -> str:
+def _aggregate_loop_status(
+    iterations: tuple[IterationRow, ...],
+    *,
+    is_upstream: bool,
+) -> tuple[str, str, str]:
+    """``(icon, color, label)`` summarising all iterations of a loop statement.
+
+    Mirrors the legacy 'all-restored / all-computed / mixed' classification
+    in :func:`._components.render_for_loop_group`.
+    """
+    if not iterations:
+        return ("\U0001f501", theme._COLOR_COMPUTED, "Executed")
+    cached = sum(1 for it in iterations
+                 if it.status in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
+    computed = sum(1 for it in iterations if it.status is BadgeStatus.COMPUTED)
+    if computed == 0 and cached > 0:
+        return ("⬆️" if is_upstream else "⚡", theme._COLOR_RESTORED, "Restored")
+    if cached == 0:
+        return ("⬆️" if is_upstream else "\U0001f501", theme._COLOR_COMPUTED, "Executed")
+    return ("⬆️" if is_upstream else "\U0001f501", "#336699", "Mixed")
+
+
+def _loop_statement_html(ls: LoopStatement, *, is_upstream: bool = False) -> str:
     gid = _uid("loop_stmt")
     n = len(ls.iterations)
     total = sum(it.time_s for it in ls.iterations)
+    icon, color, label = _aggregate_loop_status(ls.iterations, is_upstream=is_upstream)
     summary = (
         f"<tr style=\"border-bottom: 1px solid #eee;\">"
-        f"<td style=\"padding: 4px; color: {theme._COLOR_COMPUTED};\">\U0001f501</td>"
+        f"<td style=\"padding: 4px; color: {color};\">{icon} {label}</td>"
         f"<td style=\"padding: 4px; font-family: {theme.FONT_MONO}; font-size: 11px;\">"
         f"<span onclick=\"document.querySelectorAll('.{gid}').forEach(e=>e.style.display=e.style.display==='none'?'table-row':'none')\" "
-        f"style=\"cursor:pointer; color: #1a73e8;\">{_snippet(ls.base_code)} "
+        f"style=\"cursor:pointer; color: #1a73e8;\">\U0001f501 for loop "
+        f"<span style='color:#666;'>{_snippet(ls.base_code)}</span> "
         f"<span style='color:#888;'>({n} iterations)</span></span></td>"
         f"<td style=\"padding: 4px; font-size: 10px; color: #888;\">-</td>"
         f"<td style=\"padding: 4px;\">{_fmt_time_s(total)}</td>"
@@ -203,8 +227,8 @@ def _wrap_hidden(row_html: str, class_name: str) -> str:
     )
 
 
-def _for_loop_group_html(g: ForLoopGroup) -> str:
-    return "".join(_loop_statement_html(ls) for ls in g.stmts)
+def _for_loop_group_html(g: ForLoopGroup, *, is_upstream: bool = False) -> str:
+    return "".join(_loop_statement_html(ls, is_upstream=is_upstream) for ls in g.stmts)
 
 
 def _control_group_html(cg: ControlGroup) -> str:
@@ -331,11 +355,11 @@ def _section_header_html(section: Section) -> str:
     )
 
 
-def _render_section_item(item: SectionItem) -> str:
+def _render_section_item(item: SectionItem, *, is_upstream: bool = False) -> str:
     if isinstance(item, StatementRow):
         return _row_html(item)
     if isinstance(item, ForLoopGroup):
-        return _for_loop_group_html(item)
+        return _for_loop_group_html(item, is_upstream=is_upstream)
     if isinstance(item, ControlGroup):
         return _control_group_html(item)
     if isinstance(item, ControlGroupSingle):
@@ -352,8 +376,9 @@ def _render_section_item(item: SectionItem) -> str:
 
 
 def _section_html(section: Section) -> str:
+    is_upstream = section.kind is SectionKind.UPSTREAM
     return _section_header_html(section) + "".join(
-        _render_section_item(i) for i in section.items
+        _render_section_item(i, is_upstream=is_upstream) for i in section.items
     )
 
 
