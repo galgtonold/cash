@@ -375,9 +375,9 @@ def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup
 # ---------------------------------------------------------------------------
 
 _OVERHEAD_LABELS = {
-    "upstream_check": ("↻ Upstream check", "Lineage simulation (excl. restore)"),
-    "badge_init": ("🏷️ Badge init", "Initial badge render"),
-    "badge_progress": ("📊 Progress updates", "Badge progress renders"),
+    "upstream_check": "upstream",
+    "badge_init": "init",
+    "badge_progress": "progress",
 }
 
 def _overhead_section(
@@ -404,15 +404,14 @@ def _overhead_section(
         ("badge_progress", badge_progress),
     ):
         if value > MIN_TIME_DISPLAY_MS:
-            label, _detail = _OVERHEAD_LABELS[key]
-            entries.append(OverheadEntry(label=label, time_s=value))
+            entries.append(OverheadEntry(label=_OVERHEAD_LABELS[key], time_s=value))
     if other > MIN_TIME_DISPLAY_MS:
-        entries.append(OverheadEntry(label="⚙️ Other", time_s=other))
+        entries.append(OverheadEntry(label="other", time_s=other))
     if not entries:
         return None
     return Section(
         kind=SectionKind.OVERHEAD,
-        header="OVERHEAD",
+        header="",  # the single-row renderer carries its own label
         items=(OverheadBreakdown(entries=tuple(entries), total_s=overhead),),
     )
 

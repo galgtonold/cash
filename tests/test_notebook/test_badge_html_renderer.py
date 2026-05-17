@@ -169,16 +169,25 @@ def test_footer_always_renders_bug_report_link() -> None:
     assert "Report incorrect caching" in html
 
 
-def test_overhead_section_renders_breakdown_rows() -> None:
+def test_overhead_renders_as_single_collapsed_row() -> None:
+    """All sub-categories collapse into one row instead of N near-zero rows."""
     metrics = [{"code": "x=1", "status": str(CacheStatus.COMPUTED), "total_time": 1.0}]
     html = render_html(build_interactive_badge(
         metrics,
         timing_breakdown={"badge_init": 0.05, "upstream_check": 0.02},
         cell_total_time=1.1,
     ))
-    assert "OVERHEAD" in html
-    assert "Badge init" in html
-    assert "Upstream check" in html
+    body = html.split("</style>", 1)[1]   # strip <style> block (has the word 'OVERHEAD' in a comment)
+    # Exactly one overhead row.
+    assert body.count('class="c3-row c3-ovh"') == 1
+    # Lowercase 'overhead' label, no shouting OVERHEAD banner.
+    assert "overhead</span>" in body
+    assert "OVERHEAD" not in body
+    # Sub-category labels inline.
+    assert "upstream" in body and "init" in body
+    # No legacy decorative emojis in the rendered body.
+    for icon in ("🏷", "📊", "↻", "⚙"):
+        assert icon not in body, f"unexpected legacy emoji in overhead: {icon}"
 
 
 def test_running_state_summary_when_step_info_provided() -> None:
