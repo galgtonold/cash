@@ -156,7 +156,8 @@ def test_condensed_decorator_group_renders_breakdown_strip() -> None:
     metrics = [{"code": "loop", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,
                 "decorator_calls": calls}]
     html = render_html(build_interactive_badge(metrics))
-    assert "c3-deco-group" in html
+    # Condensed decorator group reuses the c3-loop-body <details> shell
+    # so the same summary-toggle CSS applies.
     assert "c3-deco-strip" in html
     assert "c3-deco-bar" in html
     assert "all 4 cached" in html
@@ -279,9 +280,11 @@ def test_rows_use_click_to_expand_drawer_no_js() -> None:
     assert "<script" not in html
     assert "document.createElement" not in html
 
-    # Each statement row is wrapped in <details class="c3-rowx">.
+    # Each statement row is wrapped in <details class="c3-rowx"> with the
+    # row grid living inside the summary (so the native click-to-toggle is
+    # not affected by the row's display:grid).
     assert "c3-rowx" in html
-    assert '<summary class="c3-row"' in html
+    assert "<summary><div class=\"c3-row\"" in html
 
     # The drawer (<.c3-rowtip>) is a sibling of the summary inside the details.
     assert "c3-rowtip" in html
