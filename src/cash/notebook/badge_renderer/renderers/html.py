@@ -266,30 +266,22 @@ _CSS = f"""
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Click-to-expand row detail. Every row is wrapped in <details> so
-   clicking it toggles a per-row drawer with status, code, storage,
-   produced/restored vars, decorator hits, etc. Stays open until
-   clicked again — same interaction model as loops and the bug-report
-   footer. No JS, no overflow traps, no layout shifts on hover.
-   The <summary> is a plain block; the actual row grid lives in a
-   child .c3-row div so summary's display value can't interfere with
-   the native click-to-toggle behavior (browsers were unreliable when
-   summary itself had display: grid). */
+/* Click-to-expand row detail via the checkbox-hack pattern.
+   <input type="checkbox" hidden> + <label for="..."> + sibling CSS.
+   Bulletproof across every browser since IE9 — no <details>/<summary>
+   quirks, no JS, no overflow traps, no layout shift on hover. */
 .c3-rowx, .c3-loop-body {{ display: block; }}
-.c3-rowx > summary,
-.c3-loop-body > summary {{
-  display: block;
-  cursor: pointer;
-  list-style: none;
-  padding: 0;
+.c3-rxtog {{
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0; height: 0;
+  margin: 0;
 }}
-.c3-rowx > summary::-webkit-details-marker,
-.c3-loop-body > summary::-webkit-details-marker {{ display: none; }}
-.c3-rowx > summary::marker,
-.c3-loop-body > summary::marker {{ content: ""; }}
-
+label.c3-row {{ cursor: pointer; }}
 .c3-rowtip {{
-  background: #f4efe1;             /* obviously distinct from panel bg */
+  display: none;
+  background: #f4efe1;
   border-top: 1px solid #c8c3b3;
   border-bottom: 1px solid #c8c3b3;
   padding: 12px 16px 14px 22px;
@@ -299,11 +291,13 @@ _CSS = f"""
   white-space: normal;
   box-shadow: inset 5px 0 0 #b69a4d, 0 1px 2px rgba(0,0,0,0.04);
 }}
-
-/* When the details is open, brighten the row so the user sees which
-   drawer they're reading. */
-.c3-rowx[open] > summary > .c3-row,
-.c3-loop-body[open] > summary > .c3-row {{ background: {theme.BG_HOVER}; }}
+.c3-rxtog:checked ~ .c3-rowtip {{ display: block; }}
+.c3-rxtog:checked ~ label.c3-row {{ background: {theme.BG_HOVER}; }}
+/* Loop body expansion (per-iteration drill-down + tooltip) uses its
+   own checkbox toggle but keeps the existing summary/drill-down
+   markup inside the label. */
+.c3-rxtog:checked ~ .c3-iter-table {{ display: flex; }}
+.c3-iter-table {{ display: none; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
@@ -677,6 +671,11 @@ _STYLE_BLOCK = f"<style>{_CSS}</style>"
 
 _id_counter = 0
 _id_lock = threading.Lock()
+# Per-process salt so checkbox-hack IDs don't collide across multiple
+# badges in one notebook page (each render bumps the counter, the salt
+# distinguishes the process / kernel session).
+import secrets as _secrets  # noqa: E402
+_ID_SALT = _secrets.token_hex(3)
 
 
 def _reset_ids() -> None:
@@ -689,7 +688,7 @@ def _uid(prefix: str = "id") -> str:
     global _id_counter
     with _id_lock:
         _id_counter += 1
-        return f"{prefix}_{_id_counter}"
+        return f"{prefix}-{_ID_SALT}-{_id_counter}"
 
 
 def _esc(text: str) -> str:
@@ -979,19 +978,19 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     )
     drawer = _rowtip_html(row)
 
+    rid = _uid("rx")
     return (
-        f'<details class="c3-rowx">'
-        f"<summary>"
-        f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
+        f'<div class="c3-rowx">'
+        f'<input type="checkbox" class="c3-rxtog" id="{rid}">'
+        f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
         f"{code_html}"
         f"{dots}"
         f"{bar}"
         f"{chip}"
-        f"</div>"
-        f"</summary>"
+        f"</label>"
         f"{drawer}"
-        f"</details>"
+        f"</div>"
     )
 
 
@@ -1160,19 +1159,19 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         total=total, cached=cached, computed=(total - cached),
         total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
     )
+    head_rid = _uid("rx")
     head_row = (
-        f'<details class="c3-rowx">'
-        f"<summary>"
-        f'<div class="c3-row c3-loop-head" data-kind="{head_kind}">'
+        f'<div class="c3-rowx">'
+        f'<input type="checkbox" class="c3-rxtog" id="{head_rid}">'
+        f'<label class="c3-row c3-loop-head" for="{head_rid}" data-kind="{head_kind}">'
         f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
         f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
         f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
         f"{_tbar(head_total_time, max_time, head_kind)}"
         f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
-        f"</div>"
-        f"</summary>"
+        f"</label>"
         f"{head_tip}"
-        f"</details>"
+        f"</div>"
     )
 
     # ---- one body line per stmt, each with its own per-stmt aggregates --
@@ -1199,20 +1198,20 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             total=stmt_total, cached=stmt_cached, computed=(stmt_total - stmt_cached),
             total_time=stmt_time, total_saved=stmt_saved, kind=stmt_kind,
         )
+        body_rid = _uid("rx")
         body_rows.append(
-            f'<details class="c3-loop-body">'
-            f"<summary>"
-            f'<div class="c3-row" data-kind="{stmt_kind}">'
+            f'<div class="c3-rowx c3-loop-body">'
+            f'<input type="checkbox" class="c3-rxtog" id="{body_rid}">'
+            f'<label class="c3-row" for="{body_rid}" data-kind="{stmt_kind}">'
             f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
             f'<pre class="c3-code c3-code-body">    {_code_html(stmt.base_code or "…")}</pre>'
             f"{_iter_histogram_html(iters)}"
             f"{_tbar(stmt_time, max_time, stmt_kind)}"
             f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
-            f"</div>"
-            f"</summary>"
+            f"</label>"
             f"{body_tip}"
             f"{body_drill}"
-            f"</details>"
+            f"</div>"
         )
 
     return head_row + "".join(body_rows)
@@ -1226,19 +1225,20 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
     total_time = sum(r.time_s for r in cg.rows)
     total_saved = sum(r.saved_time_s for r in cg.rows)
 
+    cg_rid = _uid("rx")
     head = (
-        f'<details class="c3-loop-body">'  # reuse same summary CSS as loops
-        f"<summary>"
-        f'<div class="c3-row" data-kind="{kind}">'
+        f'<div class="c3-rowx">'
+        f'<input type="checkbox" class="c3-rxtog" id="{cg_rid}">'
+        f'<label class="c3-row" for="{cg_rid}" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{_code_html(head_code)}</pre>'
         f'<span class="c3-loop-meta">{len(cg.rows)} stmt{"s" if len(cg.rows) != 1 else ""}</span>'
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, total_saved, kind)}"
-        f"</div>"
-        f"</summary>"
+        f"</label>"
+        f'<div class="c3-rowtip">'
         + "".join(_statement_row_html(r, max_time) for r in cg.rows)
-        + "</details>"
+        + "</div></div>"
     )
     return head
 
@@ -1342,10 +1342,11 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         f'title="call #{i + 1} · {"HIT" if c.status is BadgeStatus.RESTORED else "MISS"} · {c.time_s:.3f}s"></span>'
         for i, c in enumerate(g.calls)
     )
+    dec_rid = _uid("rx")
     head = (
-        f'<details class="c3-loop-body">'  # reuse same summary CSS
-        f"<summary>"
-        f'<div class="c3-row" data-kind="{kind}">'
+        f'<div class="c3-rowx">'
+        f'<input type="checkbox" class="c3-rxtog" id="{dec_rid}">'
+        f'<label class="c3-row" for="{dec_rid}" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code"><span class="c3-cache-tag">@cache</span> '
         f'<span class="c3-kw">{_esc(short)}</span>() '
@@ -1353,17 +1354,14 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         f'<span class="c3-dots-cell"></span>'
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, 0.0, kind)}"
-        f"</div>"
-        f"</summary>"
-        f'<div class="c3-detail">'
+        f"</label>"
+        f'<div class="c3-rowtip"><div class="c3-detail">'
         f'<div class="c3-detail-h"><span class="c3-cache-tag">@cache</span> '
         f"{hits} of {n} cached · {total_time:.2f}s total</div>"
         f'<div class="c3-deco-fn">'
         f'<div class="c3-deco-fn-name">{_esc(short)}()</div>'
         f'<div class="c3-deco-strip">{strip}</div>'
-        f"</div>"
-        f"</div>"
-        f"</details>"
+        f"</div></div></div></div>"
     )
     return head
 

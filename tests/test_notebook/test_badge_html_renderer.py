@@ -93,7 +93,7 @@ def test_for_loop_with_multiple_body_stmts_emits_one_header_row() -> None:
     html = render_html(build_interactive_badge(metrics))
     import re
     head_rows = re.findall(r'class="c3-row c3-loop-head"', html)
-    body_rows = re.findall(r'class="c3-loop-body"', html)
+    body_rows = re.findall(r'class="c3-rowx c3-loop-body"', html)
     assert len(head_rows) == 1, f"want 1 head row, got {len(head_rows)}"
     assert len(body_rows) == 5, f"want 5 body rows, got {len(body_rows)}"
     # Loop header shows the actual iteration values, not just a placeholder.
@@ -265,31 +265,31 @@ def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
     assert "c3-rowtip" in body_block
 
 
-def test_rows_use_click_to_expand_drawer_no_js() -> None:
-    """Every row is a <details> — click to toggle the drawer, no JS, no hover.
+def test_rows_use_checkbox_hack_for_click_to_expand_no_js() -> None:
+    """Every row uses the input+label checkbox-hack — bulletproof across
+    every browser, no <details>/<summary> quirks possible.
 
-    Hover variants kept failing in at least one host (clipped, layout-shift,
-    or eating cell width). Click-to-expand via <details> works in every
-    notebook host, matches how loops already work, and is JS-free.
+    <details>/<summary> failed to toggle on click in the user's host,
+    despite the spec saying it should. Switched to the canonical
+    checkbox-hack: hidden <input type=checkbox> + <label for=id> + CSS
+    sibling combinators (:checked ~ .c3-rowtip). Works since IE9.
     """
     metrics = [{"code": "y = expensive()", "status": str(CacheStatus.COMPUTED),
                 "total_time": 1.0, "evaluated_vars": ["y"], "storage": ["RAM"]}]
     html = render_html(build_interactive_badge(metrics))
 
-    # No <script> in the badge output at all.
+    # No JS at all.
     assert "<script" not in html
     assert "document.createElement" not in html
 
-    # Each statement row is wrapped in <details class="c3-rowx"> with the
-    # row grid living inside the summary (so the native click-to-toggle is
-    # not affected by the row's display:grid).
-    assert "c3-rowx" in html
-    assert "<summary><div class=\"c3-row\"" in html
+    # Hidden checkbox + label-for-id pattern.
+    assert 'class="c3-rxtog"' in html
+    assert '<input type="checkbox"' in html
+    assert '<label class="c3-row"' in html and 'for="rx-' in html
 
-    # The drawer (<.c3-rowtip>) is a sibling of the summary inside the details.
+    # Drawer is a sibling of the checkbox; revealed via :checked ~ .c3-rowtip.
     assert "c3-rowtip" in html
-    # Open state highlights the row so the user knows which drawer is theirs.
-    assert ".c3-rowx[open]" in html
+    assert ".c3-rxtog:checked ~ .c3-rowtip" in html
 
 
 def test_scoped_scrollbar_styling_present() -> None:
