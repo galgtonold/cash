@@ -75,6 +75,31 @@ def test_uncacheable_row_renders_blocked_dots() -> None:
     assert "Side effect: print()" in html  # tooltip text
 
 
+def test_for_loop_with_multiple_body_stmts_emits_one_header_row() -> None:
+    """The for-statement header should not duplicate per body statement.
+
+    A 5-stmt × 4-iter loop must render as one `for x in [...]:` head row
+    plus five body lines, not five duplicate `for x in [...]:` heads.
+    """
+    metrics = []
+    for body_id, code in enumerate(["a = 1", "b = 2", "c = 3", "d = 4", "e = 5"]):
+        for x in ("TSLA", "AAPL", "MSFT", "GOOG"):
+            metrics.append({
+                "code": f"# __iteration_context__: {body_id}_{x}\n{code}",
+                "status": str(CacheStatus.COMPUTED),
+                "total_time": 0.01,
+                "loop_vars": {"x": x},
+            })
+    html = render_html(build_interactive_badge(metrics))
+    import re
+    head_rows = re.findall(r'class="c3-row c3-loop-head"', html)
+    body_rows = re.findall(r'class="c3-loop-body"', html)
+    assert len(head_rows) == 1, f"want 1 head row, got {len(head_rows)}"
+    assert len(body_rows) == 5, f"want 5 body rows, got {len(body_rows)}"
+    # Loop header shows the actual iteration values, not just a placeholder.
+    assert "TSLA" in html and "GOOG" in html
+
+
 def test_loop_iterations_render_as_collapsible_details_with_histogram() -> None:
     metrics = [
         {"code": "# __iteration_context__:loop1\ny = x*2",

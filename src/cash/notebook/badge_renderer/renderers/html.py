@@ -944,69 +944,100 @@ def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
 
 
 def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool) -> str:
-    rows: list[str] = []
+    """Render one ForLoopGroup as **one** for-header row + N body-line rows.
+
+    A loop with several body statements (the common case) used to emit
+    one ``for ticker in [...]:`` header per statement, which read as
+    duplicated noise. Per the v3 design (Badge.v3.jsx :: LoopBlock) the
+    header is rendered once, aggregated across all stmts; each body
+    statement gets a single body-line row underneath with its own
+    inline iteration mini-histogram and a drill-down.
+    """
+    if not g.stmts:
+        return ""
     rail_soft = " c3-rail-soft" if is_upstream else ""
 
+    # ---- aggregate across every iteration of every body statement -----
+    all_iters = [it for stmt in g.stmts for it in stmt.iterations]
+    statuses = tuple(it.status for it in all_iters)
+    cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
+    total = len(all_iters)
+    head_kind = _aggregate_kind(statuses)
+    if cached > 0 and (total - cached) > 0:
+        head_rail = theme.RAIL_MIXED
+    elif head_kind == "cached":
+        head_rail = theme.RAIL_CACHED
+    else:
+        head_rail = theme.RAIL_EXEC
+    head_total_time = sum(it.time_s for it in all_iters)
+    head_total_saved = sum(it.saved_time_s for it in all_iters)
+
+    # Iterations-per-stmt — the loop's actual trip count.
+    iters_per_stmt = len(g.stmts[0].iterations)
+
+    # Sample 4 values from the first stmt's bindings for the header
+    # preview: ``for ticker in [TSLA, AAPL, MSFT, GOOG]:``.
+    var_decl = ", ".join(g.loop_var_names) or "i"
+    sample_values: list[str] = []
+    for it in g.stmts[0].iterations[:4]:
+        if not it.loop_bindings:
+            continue
+        sample_values.append(", ".join(_esc(str(v)) for _, v in it.loop_bindings))
+    if iters_per_stmt > len(sample_values):
+        sample_values.append("…")
+    values_preview = ", ".join(sample_values) if sample_values else "…"
+    loop_header = f"for {var_decl} in [{values_preview}]:"
+
+    head_meta = (
+        f"{iters_per_stmt}× cached" if cached == total and total > 0
+        else f"{cached}/{total} cached" if cached > 0
+        else f"{iters_per_stmt} iters"
+    )
+
+    head_row = (
+        f'<div class="c3-row c3-loop-head" data-kind="{head_kind}">'
+        f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
+        f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
+        f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
+        f"{_tbar(head_total_time, max_time, head_kind)}"
+        f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
+        f"</div>"
+    )
+
+    # ---- one body line per stmt, each with its own per-stmt aggregates --
+    body_rows: list[str] = []
     for stmt in g.stmts:
         iters = stmt.iterations
-        statuses = tuple(it.status for it in iters)
-        cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
-        total = len(iters)
-        total_time = sum(it.time_s for it in iters)
-        total_saved = sum(it.saved_time_s for it in iters)
-        kind = _aggregate_kind(statuses)
-        # Mixed gets a blue rail to differentiate
-        if cached > 0 and (total - cached) > 0:
-            rail = theme.RAIL_MIXED
+        if not iters:
+            continue
+        stmt_statuses = tuple(it.status for it in iters)
+        stmt_cached = sum(1 for s in stmt_statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
+        stmt_total = len(iters)
+        stmt_time = sum(it.time_s for it in iters)
+        stmt_saved = sum(it.saved_time_s for it in iters)
+        stmt_kind = _aggregate_kind(stmt_statuses)
+        if stmt_cached > 0 and (stmt_total - stmt_cached) > 0:
+            stmt_rail = theme.RAIL_MIXED
+        elif stmt_kind == "cached":
+            stmt_rail = theme.RAIL_CACHED
         else:
-            rail = theme.rail_color(BadgeStatus.RESTORED.value) if kind == "cached" else theme.RAIL_EXEC
-
-        var_decl = ", ".join(g.loop_var_names) or "i"
-        # Sample values from the first iter binding
-        values_preview = ""
-        if iters and iters[0].loop_bindings:
-            sample = [str(v) for _, v in iters[0].loop_bindings]
-            values_preview = ", ".join(sample)
-        loop_header = f"for {var_decl} in [{values_preview}…]:" if values_preview else f"for {var_decl} in …:"
-        body_line = stmt.base_code or "…"
-
-        meta = (
-            f"{total}× cached" if cached == total else
-            f"{cached}/{total} cached" if cached > 0 else
-            f"{total} iters"
-        )
-
-        # Head row: shows the for-line, meta count, timing bar, time chip.
-        head = (
-            f'<div class="c3-row c3-loop-head" data-kind="{kind}">'
-            f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
-            f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
-            f'<span class="c3-loop-meta">{_esc(meta)}</span>'
-            f"{_tbar(total_time, max_time, kind)}"
-            f"{_time_chip(total_time, total_saved, kind)}"
-            f"</div>"
-        )
-
-        # Body line: code preview + inline iteration histogram, inside a
-        # <details> so users can drill into per-iteration rows.
-        body_kind = kind
-        body_rail = rail
-        body_total_time = total_time
+            stmt_rail = theme.RAIL_EXEC
         body_drill = _iter_drilldown_html(iters, g.loop_var_names)
-        body = (
+        body_rows.append(
             f'<details class="c3-loop-body">'
-            f'<summary class="c3-row" data-kind="{body_kind}" data-clickable="true" style="cursor:pointer;list-style:none;">'
-            f'<span class="c3-rail c3-rail-soft" style="background:{body_rail};"></span>'
-            f'<pre class="c3-code c3-code-body">    {_code_html(body_line)}</pre>'
+            f'<summary class="c3-row" data-kind="{stmt_kind}" data-clickable="true" '
+            f'style="cursor:pointer;list-style:none;">'
+            f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
+            f'<pre class="c3-code c3-code-body">    {_code_html(stmt.base_code or "…")}</pre>'
             f"{_iter_histogram_html(iters)}"
-            f"{_tbar(body_total_time, max_time, body_kind)}"
-            f"{_time_chip(body_total_time, total_saved, body_kind)}"
+            f"{_tbar(stmt_time, max_time, stmt_kind)}"
+            f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
             f"</summary>"
             f"{body_drill}"
             f"</details>"
         )
-        rows.append(head + body)
-    return "".join(rows)
+
+    return head_row + "".join(body_rows)
 
 
 def _control_group_html(cg: ControlGroup, max_time: float) -> str:
