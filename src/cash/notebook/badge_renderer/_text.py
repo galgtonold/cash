@@ -8,7 +8,7 @@ from typing import Any
 from cash.notebook.cache_status import CacheStatus
 from cash.utils import safe_text
 
-from ._types import _HEADER_MAX_LEN
+from .theme import HEADER_MAX_LEN as _HEADER_MAX_LEN
 
 
 def _text_badge_metric_line(m: dict[str, Any]) -> tuple[str, bool, str, float, float]:

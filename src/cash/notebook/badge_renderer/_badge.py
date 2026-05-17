@@ -18,15 +18,15 @@ from ._grouping import (
     _unique_id,
     group_loop_iterations,
 )
-from ._types import (
-    _BADGE_COLOR_DEFAULT,
-    _BADGE_COLOR_RESTORED,
-    _CODE_SNIPPET_MAX_LEN,
-    _FONT_MONO,
-    _FONT_SANS,
-    _HEADER_MAX_LEN,
-    _MIN_TIME_DISPLAY_MS,
-    _MIN_TIME_DISPLAY_S,
+from .theme import (
+    BADGE_COLOR_DEFAULT as _BADGE_COLOR_DEFAULT,
+    BADGE_COLOR_RESTORED as _BADGE_COLOR_RESTORED,
+    CODE_SNIPPET_MAX_LEN as _CODE_SNIPPET_MAX_LEN,
+    FONT_MONO as _FONT_MONO,
+    FONT_SANS as _FONT_SANS,
+    HEADER_MAX_LEN as _HEADER_MAX_LEN,
+    MIN_TIME_DISPLAY_MS as _MIN_TIME_DISPLAY_MS,
+    MIN_TIME_DISPLAY_S as _MIN_TIME_DISPLAY_S,
 )
 
 # ---------------------------------------------------------------------------
