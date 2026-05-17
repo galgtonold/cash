@@ -70,17 +70,30 @@ class SectionKind(str, Enum):
 
 @dataclass(frozen=True)
 class StatementRow:
-    """A single non-loop, non-control statement row."""
+    """A single non-loop, non-control statement row.
+
+    ``time_s`` is always the *actual* elapsed time of the operation (cache
+    restore overhead for RESTORED rows, real compute time for COMPUTED).
+    ``saved_time_s`` is the wall-clock saving the cache produced — zero
+    for COMPUTED rows that paid the full price.
+    """
 
     status: BadgeStatus
     code: str
-    time_s: float                                # for RESTORED rows this is the saved time
+    time_s: float
+    saved_time_s: float = 0.0
     storage_tiers: tuple[str, ...] = ()          # e.g. ('RAM',), ('RAM', 'DISK')
     source: str | None = None                    # restore source, e.g. 'RAM', 'DISK'
-    output_vars: tuple[str, ...] = ()            # named outputs (vars assigned)
+    output_vars: tuple[str, ...] = ()            # what the row produced this time
+    restored_vars: tuple[str, ...] = ()          # vars hydrated from cache (RESTORED rows)
     uncacheable_reasons: tuple[str, ...] = ()    # populated when status==COMPUTED but not cached
     skipped_reason: str | None = None            # populated when the row was skipped at cache time
     is_upstream: bool = False                    # affects icon (⬆️ vs ⚡/⚙️)
+    # Notification-row metadata (FUNCTION_CHANGED / MODULE_RELOADED rows).
+    changed_functions: tuple[str, ...] = ()
+    changed_modules: tuple[str, ...] = ()
+    # Inline detail surfaced by the renderer (tooltip / drill-down).
+    decorator_calls: tuple["DecoratorCall", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -90,6 +103,7 @@ class IterationRow:
     status: BadgeStatus
     code: str
     time_s: float
+    saved_time_s: float = 0.0
     storage_tiers: tuple[str, ...] = ()
     loop_bindings: tuple[tuple[str, Any], ...] = ()
     """Resolved loop variables for this iteration (denormalised onto the row).

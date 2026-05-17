@@ -227,31 +227,43 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
     """Translate one metric dict into a :class:`StatementRow`."""
     status = map_status(m.get("status"))
 
-    # RESTORED rows show saved time; computed/skipped rows show actual time.
-    if status is BadgeStatus.RESTORED:
-        time_s = float(m.get("total_time", 0.0))
-    elif status is BadgeStatus.SKIPPED:
-        time_s = float(m.get("saved_time", 0.0))
-    else:
-        time_s = float(m.get("total_time", 0.0) or m.get("execution_time", 0.0))
+    time_s = float(m.get("total_time", 0.0) or m.get("execution_time", 0.0))
+    saved_time_s = float(m.get("saved_time", 0.0) or 0.0)
 
     output_vars = _tup_str(m.get("evaluated_vars") or m.get("output_vars") or m.get("outputs"))
-    if status is BadgeStatus.RESTORED:
-        # Restored rows show the restored variables prominently.
-        restored_vars = _tup_str(m.get("restored_vars"))
-        if restored_vars:
-            output_vars = restored_vars
+    restored_vars = _tup_str(m.get("restored_vars"))
+
+    raw_decorator = m.get("decorator_calls", []) or []
+    dec_calls = tuple(
+        DecoratorCall(
+            func_name=str(c.get("func_name", "?")),
+            status=BadgeStatus.RESTORED if c.get("cache_hit") else BadgeStatus.COMPUTED,
+            time_s=float(c.get("execution_time", 0.0)),
+        )
+        for c in raw_decorator
+    )
+
+    changed_modules = m.get("changed_modules") or {}
+    if isinstance(changed_modules, dict):
+        changed_modules_tup = tuple(sorted(str(k) for k in changed_modules.keys()))
+    else:
+        changed_modules_tup = _tup_str(changed_modules)
 
     return StatementRow(
         status=status,
         code=_strip_context_comments(str(m.get("code", ""))),
         time_s=time_s,
+        saved_time_s=saved_time_s,
         storage_tiers=_tup_str(m.get("storage")),
         source=m.get("source") or None,
         output_vars=output_vars,
+        restored_vars=restored_vars,
         uncacheable_reasons=_tup_str(m.get("uncacheable_reasons")),
         skipped_reason=m.get("skipped_reason") or None,
         is_upstream=is_upstream,
+        changed_functions=_tup_str(m.get("changed_functions")),
+        changed_modules=changed_modules_tup,
+        decorator_calls=dec_calls,
     )
 
 
@@ -262,6 +274,7 @@ def _iteration_row(m: dict[str, Any]) -> IterationRow:
         status=map_status(m.get("status")),
         code=_strip_context_comments(str(m.get("code", ""))),
         time_s=float(m.get("total_time", 0.0)),
+        saved_time_s=float(m.get("saved_time", 0.0) or 0.0),
         storage_tiers=_tup_str(m.get("storage")),
         loop_bindings=bindings,
     )

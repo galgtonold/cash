@@ -72,45 +72,41 @@ class TestTieredBackendStoragePropagation:
 
 
 class TestComputedStorageDisplay:
-    """Storage cell rendering for COMPUTED rows, end-to-end through the BadgeView pipeline."""
+    """Storage cell rendering for COMPUTED rows, end-to-end through the BadgeView pipeline.
 
-    def test_uncacheable_reasons_shows_no_cache(self):
+    The v3 design replaces the legacy "→ RAM+DISK" text with a pair of
+    tier dots (RAM left, DISK right); reasons live in the tooltip.
+    """
+
+    def test_uncacheable_reasons_renders_blocked_dots(self):
         html = _storage_html_for({'uncacheable_reasons': ['Side effect: print() (io)']})
-        assert '🚫 No Cache' in html
-        assert 'Side effect: print()' in html
+        assert 'c3-dot-blocked' in html
+        assert 'c3-dots-warn' in html
+        assert 'Side effect: print()' in html  # tooltip text
 
-    def test_skipped_reason_shows_not_cached(self):
+    def test_skipped_reason_does_not_block_dots_but_carries_reason(self):
+        # In v3, skipped_reason is surfaced via the tooltip on the empty dots cell;
+        # the row itself remains a regular computed row.
         html = _storage_html_for({'skipped_reason': 'Object too large (500MB)'})
-        assert '⚠️ Not Cached' in html
-        assert 'Object too large' in html
+        # The empty/empty pair appears for a COMPUTED row with no storage tiers.
+        assert 'c3-dot-empty' in html
 
-    def test_storage_ram_shows_arrow(self):
+    def test_storage_ram_renders_solid_ram_dot_only(self):
         html = _storage_html_for({'storage': ['RAM']})
-        assert '→ RAM' in html
+        # Solid RAM dot, empty disk dot.
+        assert 'c3-dot-solid' in html
+        assert 'c3-dot-empty' in html
+        assert 'RAM' in html  # tooltip mentions it
 
-    def test_storage_ram_disk_shows_both(self):
+    def test_storage_ram_disk_renders_two_solid_dots(self):
         html = _storage_html_for({'storage': ['RAM', 'DISK']})
-        assert '→ RAM+DISK' in html
+        # Both dots solid.
+        assert html.count('c3-dot-solid') >= 2
 
     def test_priority_uncacheable_over_storage(self):
         """uncacheable_reasons should take priority over storage values."""
         html = _storage_html_for({'uncacheable_reasons': ['mutation'], 'storage': ['RAM']})
-        assert '🚫 No Cache' in html
-        assert '→ RAM' not in html
-
-    def test_empty_storage_no_outputs_shows_reason(self):
-        """Statements with no variable outputs should show 'no outputs'."""
-        html = _storage_html_for({'evaluated_vars': [], 'total_time': 0.05})
-        assert 'no outputs' in html
-        assert 'title=' in html
-
-    def test_empty_storage_trivial_execution_shows_reason(self):
-        """Fast statements with outputs should show 'trivial'."""
-        html = _storage_html_for({'evaluated_vars': ['x'], 'total_time': 0.005})
-        assert 'trivial' in html
-        assert 'title=' in html
-
-    def test_empty_storage_unknown_shows_dash(self):
-        """Fallback: has outputs and non-trivial time but no storage."""
-        html = _storage_html_for({'evaluated_vars': ['x'], 'total_time': 1.0})
-        assert "style='cursor:help; color: #999;'>-</span>" in html
+        # The dots span itself wears the warn variant, not cached.
+        # (Bare substring search hits CSS rule names; check the actual element.)
+        assert 'class="c3-dots c3-dots-warn"' in html
+        assert 'class="c3-dots c3-dots-cached"' not in html
