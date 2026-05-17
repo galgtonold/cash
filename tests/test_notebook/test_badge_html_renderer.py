@@ -56,8 +56,10 @@ def test_computed_row_uses_exec_kind_and_renders_tier_dots() -> None:
     assert "EXECUTED" in html
     assert "1.23s" in html
     assert "c3-dot-solid" in html  # both RAM and DISK present
-    # Output vars appear as a comment hint in the code line.
-    assert "# y" in html
+    # Output vars are surfaced in the hover tooltip, not as a noisy prefix
+    # on the code line.
+    assert "<dt>Produced</dt>" in html
+    assert ">y</dd>" in html
 
 
 def test_uncacheable_row_renders_blocked_dots() -> None:
@@ -187,6 +189,66 @@ def test_function_changed_renders_as_notification_row() -> None:
     assert "c3-notif-pill" in html
     assert "changed" in html
     assert "compute" in html
+
+
+def test_each_row_has_pure_css_hover_tooltip() -> None:
+    """Tooltip is a sibling div inside .c3-row, revealed via :hover CSS."""
+    metrics = [{
+        "code": "y = expensive()",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 1.0,
+        "evaluated_vars": ["y"],
+        "storage": ["RAM"],
+    }]
+    html = render_html(build_interactive_badge(metrics))
+    assert "c3-rowtip" in html
+    assert ":hover > .c3-rowtip" in html      # CSS rule activating it
+    assert "<dt>Produced</dt>" in html        # vars surface in the tip
+    assert "<dt>Storage</dt>" in html
+
+
+def test_overhead_bars_share_cell_max_scale_with_user_rows() -> None:
+    """Overhead and statement bars must use the same denominator.
+
+    A 0.05s overhead row in a cell with a 5s statement should be a small
+    bar; if overhead had its own scale it'd be misleadingly full-width.
+    """
+    metrics = [{"code": "x=1", "status": str(CacheStatus.COMPUTED), "total_time": 5.0}]
+    html = render_html(build_interactive_badge(
+        metrics,
+        timing_breakdown={"badge_init": 0.05, "upstream_check": 0.02},
+        cell_total_time=5.1,
+    ))
+    import re
+    widths = [float(w) for w in re.findall(r"c3-tbar-fill[^>]*width:([0-9.]+)%", html)]
+    # The 5.0s statement should be the widest bar; overhead bars are well below.
+    assert max(widths) >= 99.0
+    overhead_widths = [w for w in widths if w < 50.0]
+    assert overhead_widths, "overhead bars are missing"
+    assert max(overhead_widths) < 30.0, f"overhead bars too wide: {overhead_widths}"
+
+
+def test_sqrt_scaling_keeps_small_rows_visible() -> None:
+    """A trivial row in a cell dominated by one slow row should still
+    have a non-zero bar — linear scaling would make it invisible."""
+    metrics = [
+        {"code": "slow = expensive()", "status": str(CacheStatus.COMPUTED), "total_time": 100.0},
+        {"code": "fast = quick()", "status": str(CacheStatus.COMPUTED), "total_time": 0.5},
+    ]
+    html = render_html(build_interactive_badge(metrics))
+    import re
+    widths = [float(w) for w in re.findall(r"c3-tbar-fill[^>]*width:([0-9.]+)%", html)]
+    widths.sort()
+    # 0.5/100 = 0.5% linear, but sqrt(0.005)*100 = ~7% — visible.
+    assert widths[0] > 5.0, f"small row got squashed: {widths}"
+    assert widths[-1] >= 99.0
+
+
+def test_bug_report_link_uses_important_to_beat_jupyter_anchor_style() -> None:
+    """Jupyter classic sets a global anchor color that needs explicit override."""
+    html = render_html(build_interactive_badge([]))
+    assert "a.c3-bug" in html  # explicit anchor selector for higher specificity
+    assert "!important" in html
 
 
 def test_summary_includes_sparkline_when_current_rows_exist() -> None:

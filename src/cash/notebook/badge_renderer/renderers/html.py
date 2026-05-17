@@ -167,13 +167,13 @@ _CSS = f"""
   transform: rotate(-135deg) translate(-2px, -2px);
 }}
 
-/* Panel */
+/* Panel — overflow is visible so pure-CSS hover tooltips can escape;
+   we trade per-badge scroll for the badge growing with its content. */
 .c3-panel {{
   background: {theme.BG_PANEL};
-  max-height: 580px;
-  overflow-y: auto;
   padding: 0;
   min-width: 0;
+  overflow: visible;
 }}
 
 /* Upstream subsection — nested <details> */
@@ -218,10 +218,91 @@ _CSS = f"""
   align-items: center;
   border-bottom: 1px solid {theme.RULE_SOFT};
   min-height: 26px;
+  position: relative;          /* tooltip anchor */
 }}
 .c3-row:last-child {{ border-bottom: 0; }}
 .c3-row[data-clickable="true"] {{ cursor: pointer; }}
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
+.c3-row:hover {{ background: {theme.BG_HOVER}; }}
+
+/* Pure-CSS row hover tooltip. Renders below the row by default; rows in
+   the bottom 25% of the badge flip it above via the .c3-tt-up modifier
+   (set by the view-builder when emitting late rows). */
+.c3-rowtip {{
+  display: none;
+  position: absolute;
+  left: 8px;
+  top: calc(100% + 2px);
+  z-index: 1000;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #d9d6cf;
+  border-radius: 4px;
+  box-shadow: 0 6px 24px rgba(20,20,20,0.12), 0 2px 6px rgba(20,20,20,0.06);
+  font-family: {theme.FONT_SANS};
+  font-size: 11px;
+  color: {theme.INK};
+  white-space: normal;
+  pointer-events: none;        /* let mouse cross the tip without flicker */
+}}
+.c3-row:hover > .c3-rowtip,
+.c3-row:focus-within > .c3-rowtip {{ display: block; }}
+.c3-rowtip-up {{ top: auto; bottom: calc(100% + 2px); }}
+.c3-rt-h {{
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+}}
+.c3-rt-status {{
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+}}
+.c3-rt-time {{
+  font-family: {theme.FONT_MONO};
+  font-size: 11px;
+  color: {theme.INK_2};
+  margin-left: auto;
+}}
+.c3-rt-saved {{ color: {theme.RAIL_CACHED}; }}
+.c3-rt-code {{
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  background: #f7f6f1;
+  border-radius: 3px;
+  font-family: {theme.FONT_MONO};
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 110px;
+  overflow: hidden;
+  color: {theme.INK};
+}}
+.c3-rt-dl {{
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 10px;
+}}
+.c3-rt-dl dt {{
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: {theme.INK_4};
+  padding-top: 1px;
+}}
+.c3-rt-dl dd {{
+  margin: 0;
+  color: {theme.INK};
+  font-family: {theme.FONT_MONO};
+  font-size: 10px;
+  word-break: break-word;
+}}
 
 .c3-rail {{ width: 5px; align-self: stretch; }}
 .c3-rail-soft {{ opacity: 0.5; }}
@@ -478,19 +559,25 @@ _CSS = f"""
   font-family: {theme.FONT_MONO};
   letter-spacing: 0.02em;
 }}
-.c3-bug {{
+/* !important here because Jupyter classic's notebook.css sets
+   a strong default anchor color that would repaint our subtle bug
+   link bright blue otherwise. */
+a.c3-bug,
+a.c3-bug:link,
+a.c3-bug:visited {{
   font-family: {theme.FONT_SANS};
   font-size: 10px;
   font-weight: 500;
   letter-spacing: 0.04em;
-  color: {theme.BUG_FG};
-  text-decoration: none;
+  color: {theme.BUG_FG} !important;
+  background: transparent !important;
+  text-decoration: none !important;
   padding: 3px 6px;
   border-radius: 3px;
 }}
-.c3-bug:hover {{
-  color: {theme.BUG_FG_HOVER};
-  background: #f5f5f5;
+a.c3-bug:hover {{
+  color: {theme.BUG_FG_HOVER} !important;
+  background: #f5f5f5 !important;
 }}
 .c3-bug-arrow {{
   margin-left: 2px;
@@ -599,13 +686,18 @@ def _dots(
 # ---------------------------------------------------------------------------
 
 def _max_time(badge: InteractiveBadge) -> float:
-    """Largest top-level row time across the whole badge. Used for bar scaling."""
+    """Largest single row time across the whole badge, including overhead.
+
+    Used as the denominator for sqrt-scaled timing bars so every row
+    (including overhead entries) shares one scale.
+    """
     max_t = 0.0
     for section in badge.sections:
-        if section.kind is SectionKind.OVERHEAD:
-            continue
         for item in section.items:
-            max_t = max(max_t, _item_total_time(item))
+            if isinstance(item, OverheadBreakdown):
+                max_t = max(max_t, *(e.time_s for e in item.entries), 0.0)
+            else:
+                max_t = max(max_t, _item_total_time(item))
     return max(max_t, 0.001)
 
 
@@ -628,7 +720,18 @@ def _item_total_time(item: SectionItem) -> float:
 # ---------------------------------------------------------------------------
 
 def _tbar(time_s: float, max_time: float, kind: str) -> str:
-    pct = max(0.5, (time_s / max_time) * 100) if max_time > 0 else 0.5
+    """Render a per-row timing bar.
+
+    Width uses square-root scaling against the cell-max so trivial rows
+    stay visible when one row dominates — a 1% row becomes a 10% bar, a
+    25% row becomes 50%, 100% stays 100%. Rows below the displayable
+    time threshold render as an empty track (no fill at all) so the eye
+    isn't fooled by a min-width clamp into thinking they're non-trivial.
+    """
+    if max_time <= 0 or time_s < theme.MIN_TIME_DISPLAY_S:
+        return '<span class="c3-tbar-cell"><span class="c3-tbar"></span></span>'
+    ratio = min(1.0, time_s / max_time)
+    pct = (ratio ** 0.5) * 100  # square-root scaling
     return (
         f'<span class="c3-tbar-cell"><span class="c3-tbar">'
         f'<span class="c3-tbar-fill c3-tbar-fill-{kind}" '
@@ -656,6 +759,65 @@ def _notif_chip(label: str) -> str:
 # Statement row
 # ---------------------------------------------------------------------------
 
+def _rowtip_html(row: StatementRow) -> str:
+    """Pure-CSS hover tooltip body for a :class:`StatementRow`."""
+    kind = theme.kind_of(row.status.value)
+    status_pill = (
+        f'<span class="c3-rt-status" '
+        f'style="color:{theme.chip_fg(kind)};background:{theme.chip_bg(kind)};">'
+        f"{_esc(row.status.value)}</span>"
+    )
+    is_notif = row.status in (
+        BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED, BadgeStatus.MODULE_RELOADED,
+    )
+    time_html = "—" if is_notif else f"{row.time_s:.3f}s"
+    if row.saved_time_s > theme.MIN_TIME_DISPLAY_S:
+        time_html += f' <span class="c3-rt-saved">· saved {row.saved_time_s:.2f}s</span>'
+
+    code_block = (
+        f'<pre class="c3-rt-code">{highlight_python(row.code)}</pre>'
+        if row.code else ""
+    )
+
+    dl_parts: list[str] = []
+
+    # Storage
+    if row.uncacheable_reasons:
+        dl_parts.append(f"<dt>Uncacheable</dt><dd>{_esc(', '.join(row.uncacheable_reasons))}</dd>")
+    elif row.status is BadgeStatus.RESTORED and row.source:
+        dl_parts.append(f"<dt>Restored from</dt><dd>{_esc(row.source)}</dd>")
+    elif row.storage_tiers:
+        dl_parts.append(f"<dt>Storage</dt><dd>{'+'.join(_esc(t) for t in row.storage_tiers)}</dd>")
+    elif row.status is BadgeStatus.SKIPPED:
+        dl_parts.append("<dt>Storage</dt><dd>in RAM (already computed)</dd>")
+    elif row.skipped_reason:
+        dl_parts.append(f"<dt>Skipped</dt><dd>{_esc(row.skipped_reason)}</dd>")
+
+    if row.restored_vars:
+        dl_parts.append(f"<dt>Restored</dt><dd>{_esc(', '.join(row.restored_vars))}</dd>")
+    elif row.output_vars:
+        dl_parts.append(f"<dt>Produced</dt><dd>{_esc(', '.join(row.output_vars))}</dd>")
+
+    if row.decorator_calls:
+        hits = sum(1 for c in row.decorator_calls if c.status is BadgeStatus.RESTORED)
+        n = len(row.decorator_calls)
+        dl_parts.append(f"<dt>@cache</dt><dd>{hits}/{n} cache hits</dd>")
+    if row.changed_functions:
+        dl_parts.append(f"<dt>Fn changed</dt><dd>{_esc(', '.join(row.changed_functions))}</dd>")
+    if row.changed_modules:
+        dl_parts.append(f"<dt>Modules reloaded</dt><dd>{_esc(', '.join(row.changed_modules))}</dd>")
+
+    dl = f'<dl class="c3-rt-dl">{"".join(dl_parts)}</dl>' if dl_parts else ""
+
+    return (
+        '<div class="c3-rowtip">'
+        f'<div class="c3-rt-h">{status_pill}<span class="c3-rt-time">{time_html}</span></div>'
+        f"{code_block}"
+        f"{dl}"
+        "</div>"
+    )
+
+
 def _statement_row_html(row: StatementRow, max_time: float) -> str:
     status = row.status
     kind = theme.kind_of(status.value)
@@ -668,7 +830,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         label = "changed"
         descriptor = ", ".join(row.changed_functions) or _snippet(row.code) or "—"
         code_html = (
-            f'<pre class="c3-code"># <span class="c3-com">function source changed: </span>'
+            f'<pre class="c3-code"><span class="c3-com">function source changed: </span>'
             f"{_esc(descriptor)}</pre>"
         )
         bar = '<span class="c3-tbar-cell"></span>'
@@ -677,7 +839,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         label = "reloaded"
         descriptor = ", ".join(row.changed_modules) or _snippet(row.code) or "—"
         code_html = (
-            f'<pre class="c3-code"># <span class="c3-com">module reloaded: </span>'
+            f'<pre class="c3-code"><span class="c3-com">module reloaded: </span>'
             f"{_esc(descriptor)}</pre>"
         )
         bar = '<span class="c3-tbar-cell"></span>'
@@ -689,12 +851,10 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         bar = '<span class="c3-tbar-cell"></span>'
         chip = _notif_chip(label)
     else:
-        # Show output_vars (or restored_vars) as a leading comment line if present.
-        vars_hint = ""
-        names = row.restored_vars if status is BadgeStatus.RESTORED else row.output_vars
-        if names:
-            vars_hint = f'<span class="c3-com"># {_esc(", ".join(names))}</span> '
-        code_html = f'<pre class="c3-code">{vars_hint}{_code_html(row.code)}</pre>'
+        # Code line shows just the highlighted code. Variable info, source,
+        # decorator stats, etc. all live in the hover tooltip rather than
+        # crowding the row with a redundant `# var` prefix.
+        code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
         bar = _tbar(row.time_s, max_time, kind)
         chip = _time_chip(row.time_s, row.saved_time_s, kind)
 
@@ -704,6 +864,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
     )
+    tooltip = _rowtip_html(row)
 
     return (
         f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
@@ -712,6 +873,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         f"{dots}"
         f"{bar}"
         f"{chip}"
+        f"{tooltip}"
         f"</div>"
     )
 
