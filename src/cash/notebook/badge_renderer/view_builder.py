@@ -466,7 +466,7 @@ def build_interactive_badge(
         current_items.append(_section_item_from_grouped(g, is_upstream=False))
     sections.append(Section(
         kind=SectionKind.CURRENT,
-        header="",
+        header="CURRENT CELL" if (upstream_all or upstream_skipped) else "",
         items=tuple(current_items),
     ))
 
@@ -482,10 +482,7 @@ def build_interactive_badge(
     if overhead is not None:
         sections.append(overhead)
 
-    footer: BugReportLink | None = None
-    if bug_report_context is not None:
-        footer = BugReportLink(url=build_bug_report_url(metrics, bug_report_context))
-
+    footer = BugReportLink(url=build_bug_report_url(metrics, bug_report_context))
     return InteractiveBadge(header=header, sections=tuple(sections), footer=footer)
 
 

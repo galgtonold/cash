@@ -54,7 +54,9 @@ def test_empty_metrics_produces_only_current_section() -> None:
     assert badge.header.status is BadgeStatus.COMPUTED
     assert tuple(s.kind for s in badge.sections) == (SectionKind.CURRENT,)
     assert badge.sections[0].items == ()
-    assert badge.footer is None
+    # Footer is always emitted; URL has the empty-metrics placeholder.
+    assert badge.footer is not None
+    assert "no%20metrics" in badge.footer.url
 
 
 def test_single_restored_metric_no_upstream() -> None:
@@ -229,12 +231,14 @@ def test_overhead_section_only_when_nontrivial() -> None:
 # Bug report
 # ---------------------------------------------------------------------------
 
-def test_bug_report_footer_only_when_context_provided() -> None:
+def test_bug_report_footer_is_always_emitted() -> None:
+    """Footer is part of the badge UX; context is optional metadata, not a gate."""
     metrics = [{"code": "x=1", "status": str(CacheStatus.COMPUTED), "total_time": 0.1}]
-    assert build_interactive_badge(metrics).footer is None
-    badge = build_interactive_badge(metrics, bug_report_context={"version": "1.0"})
+    badge = build_interactive_badge(metrics)
     assert badge.footer is not None
     assert badge.footer.url.startswith("https://github.com/galgtonold/cash/issues/new")
+    with_ctx = build_interactive_badge(metrics, bug_report_context={"version": "1.0"})
+    assert "1.0" in with_ctx.footer.url
 
 
 def test_bug_report_url_under_size_limit() -> None:
