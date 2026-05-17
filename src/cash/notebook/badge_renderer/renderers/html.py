@@ -519,7 +519,31 @@ _CSS = f"""
 }}
 .c3-deco-bar {{ width: 6px; border-radius: 1px; }}
 
-/* Section divider (CURRENT CELL, DECORATOR CACHE, OVERHEAD) — kept low-key */
+/* Overhead row — collapsed single-row variant. Section label sits inline
+   with the breakdown so we never spend 3 rows showing 0.00s sub-categories. */
+.c3-ovh {{ background: #fbfbfa; }}
+.c3-ovh-cell {{
+  padding: 5px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: {theme.FONT_SANS};
+  font-size: 10px;
+  color: {theme.INK_4};
+}}
+.c3-ovh-label {{
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 9px;
+  color: {theme.INK_4};
+  margin-right: 10px;
+}}
+.c3-ovh-parts {{ font-family: {theme.FONT_MONO}; font-size: 10px; }}
+.c3-ovh-part  {{ white-space: nowrap; }}
+.c3-ovh-time  {{ color: {theme.INK_3}; font-variant-numeric: tabular-nums; }}
+
+/* Section divider (current cell, decorator cache) — kept low-key */
 .c3-section {{
   font-size: 9px;
   font-weight: 700;
@@ -1232,18 +1256,32 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
 # ---------------------------------------------------------------------------
 
 def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
-    rows = []
-    for e in ob.entries:
-        rows.append(
-            f'<div class="c3-row" data-kind="exec">'
-            f'<span class="c3-rail c3-rail-soft" style="background:{theme.INK_4};"></span>'
-            f'<pre class="c3-code c3-code-body">{_esc(e.label)}</pre>'
-            f'<span class="c3-dots-cell"></span>'
-            f"{_tbar(e.time_s, max_time, 'exec')}"
-            f"{_time_chip(e.time_s, 0.0, 'exec')}"
-            f"</div>"
-        )
-    return "".join(rows)
+    """Render the whole overhead breakdown as a single dim row.
+
+    Up to four sub-categories used to render as four near-zero rows,
+    which dominated the badge visually for no information gain. Now:
+    one row, with an inline ``upstream 0.05s · init 0.02s · other 0.92s``
+    breakdown in the code cell, and the total in the time chip.
+    """
+    if not ob.entries:
+        return ""
+    parts = " · ".join(
+        f'<span class="c3-ovh-part">{_esc(e.label)}'
+        f'&nbsp;<span class="c3-ovh-time">{e.time_s:.3f}s</span></span>'
+        for e in ob.entries
+    )
+    return (
+        f'<div class="c3-row c3-ovh" data-kind="exec">'
+        f'<span class="c3-rail c3-rail-soft" style="background:{theme.INK_4};"></span>'
+        f'<div class="c3-ovh-cell">'
+        f'<span class="c3-ovh-label">overhead</span>'
+        f'<span class="c3-ovh-parts">{parts}</span>'
+        f"</div>"
+        f'<span class="c3-dots-cell"></span>'
+        f"{_tbar(ob.total_s, max_time, 'exec')}"
+        f"{_time_chip(ob.total_s, 0.0, 'exec')}"
+        f"</div>"
+    )
 
 
 # ---------------------------------------------------------------------------

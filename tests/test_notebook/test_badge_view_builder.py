@@ -226,9 +226,10 @@ def test_overhead_section_only_when_nontrivial() -> None:
     overhead_section = next(s for s in badge.sections if s.kind is SectionKind.OVERHEAD)
     breakdown = overhead_section.items[0]
     assert isinstance(breakdown, OverheadBreakdown)
+    # Labels are short, lowercase, emoji-free in the v3 collapsed layout.
     labels = {e.label for e in breakdown.entries}
-    assert "🏷️ Badge init" in labels
-    assert "↻ Upstream check" in labels
+    assert "init" in labels
+    assert "upstream" in labels
 
 
 # ---------------------------------------------------------------------------
