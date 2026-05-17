@@ -86,18 +86,15 @@ _CSS = f"""
 :has(> .c3-wrap)::-webkit-scrollbar-corner,
 :has(.c3-wrap)::-webkit-scrollbar-corner {{ background: transparent; }}
 
-/* Outer wrap reserves horizontal whitespace on the right so hover
-   tooltips can render *inside* the wrap's own bounding box — they
-   never overflow into an ancestor that might have overflow:hidden.
-   The card itself is visually unchanged; the wrap's reserved area
-   is empty until something hovers. */
+/* Outer wrap is a thin positioning anchor only — no reserved padding,
+   so the badge takes its natural width and doesn't trigger horizontal
+   scroll. Hover detail panels render *in flow* under their row (see
+   .c3-rowtip below), which sidesteps every ancestor-overflow trap. */
 .c3-wrap {{
   display: inline-block;
   position: relative;
   margin-top: 5px;
-  padding-right: 380px;        /* reserved tooltip lane */
   max-width: 100%;
-  box-sizing: border-box;
 }}
 .c3-card {{
   display: inline-flex;
@@ -269,27 +266,27 @@ _CSS = f"""
 .c3-row[data-clickable="true"]:hover {{ background: {theme.BG_HOVER}; }}
 .c3-row:hover {{ background: {theme.BG_HOVER}; }}
 
-/* Pure-CSS row hover tooltip — renders in the wrap's reserved right-side
-   lane, so it never overflows an ancestor that has overflow:hidden. */
+/* Pure-CSS row hover tooltip — renders **in flow** as a sibling row
+   below its anchor row. Pushes following rows down momentarily while
+   the mouse is over the row; mouse-out collapses cleanly. We use
+   in-flow expansion instead of an absolute overlay because every
+   notebook host (Jupyter classic, JupyterLab, VS Code, Colab) has
+   *some* ancestor with overflow:hidden, so absolute-positioned
+   tooltips disappear in at least one of them. In-flow always works. */
+.c3-rowgrp {{ display: contents; }}
 .c3-rowtip {{
   display: none;
-  position: absolute;
-  left: calc(100% + 10px);     /* row's right edge + small gap */
-  top: -2px;
-  z-index: 1000;
-  width: 360px;
-  padding: 10px 12px;
-  background: #ffffff;
-  border: 1px solid #d2cfc6;
-  border-radius: 5px;
-  box-shadow: 0 12px 32px rgba(20,20,20,0.18), 0 3px 8px rgba(20,20,20,0.10);
+  background: #fafbfa;
+  border-top: 1px dashed #d9d6cf;
+  border-bottom: 1px solid #ececec;
+  padding: 10px 14px 12px 22px;
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  pointer-events: none;
+  box-shadow: inset 3px 0 0 rgba(0,0,0,0.06);
 }}
-.c3-row:hover > .c3-rowtip {{ display: block; }}
+.c3-rowgrp:hover > .c3-rowtip {{ display: block; }}
 .c3-rt-h {{
   display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
 }}
@@ -966,12 +963,14 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     tooltip = _rowtip_html(row)
 
     return (
+        f'<div class="c3-rowgrp">'
         f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
         f"{code_html}"
         f"{dots}"
         f"{bar}"
         f"{chip}"
+        f"</div>"
         f"{tooltip}"
         f"</div>"
     )
@@ -1143,12 +1142,14 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
     )
     head_row = (
+        f'<div class="c3-rowgrp">'
         f'<div class="c3-row c3-loop-head" data-kind="{head_kind}">'
         f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
         f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
         f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
         f"{_tbar(head_total_time, max_time, head_kind)}"
         f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
+        f"</div>"
         f"{head_tip}"
         f"</div>"
     )
@@ -1177,7 +1178,10 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             total=stmt_total, cached=stmt_cached, computed=(stmt_total - stmt_cached),
             total_time=stmt_time, total_saved=stmt_saved, kind=stmt_kind,
         )
+        # Tooltip lives OUTSIDE <details> so it shows on hover regardless of
+        # whether the user has expanded the drill-down.
         body_rows.append(
+            f'<div class="c3-rowgrp">'
             f'<details class="c3-loop-body">'
             f'<summary class="c3-row" data-kind="{stmt_kind}" data-clickable="true" '
             f'style="cursor:pointer;list-style:none;">'
@@ -1186,10 +1190,11 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             f"{_iter_histogram_html(iters)}"
             f"{_tbar(stmt_time, max_time, stmt_kind)}"
             f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
-            f"{body_tip}"
             f"</summary>"
             f"{body_drill}"
             f"</details>"
+            f"{body_tip}"
+            f"</div>"
         )
 
     return head_row + "".join(body_rows)

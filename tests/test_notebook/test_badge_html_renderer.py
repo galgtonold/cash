@@ -264,13 +264,20 @@ def test_loop_head_and_body_rows_have_their_own_tooltips() -> None:
     assert "c3-rowtip" in body_block
 
 
-def test_wrap_reserves_right_side_lane_for_tooltips() -> None:
-    """The outer wrap pads right-side so tooltips render inside its bounds."""
+def test_tooltips_render_inline_below_their_row() -> None:
+    """Tooltips are siblings in a .c3-rowgrp wrapper, not absolute overlays.
+
+    Absolute-positioned tooltips kept getting clipped by an ancestor's
+    overflow:hidden (Jupyter .output_area, VS Code cell iframe). In-flow
+    siblings inside .c3-rowgrp display:contents work in every host —
+    layout shifts on hover but the tooltip is reliably visible.
+    """
     html = render_html(build_interactive_badge([]))
     assert 'class="c3-wrap"' in html
-    assert "padding-right: 380px" in html
-    # Tooltip positions to the right of its row, inside the wrap's reserved lane.
-    assert "left: calc(100% + 10px)" in html
+    assert 'class="c3-rowgrp"' in html or 'c3-rowgrp' in html
+    assert "padding-right: 380px" not in html  # the failed wrap-extension is gone
+    # The hover rule lives on the rowgrp now.
+    assert ".c3-rowgrp:hover > .c3-rowtip" in html
 
 
 def test_scoped_scrollbar_styling_present() -> None:
