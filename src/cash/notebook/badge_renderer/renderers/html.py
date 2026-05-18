@@ -940,6 +940,11 @@ def _rowtip_html(row: StatementRow) -> str:
         dl_parts.append(f"<dt>Fn changed</dt><dd>{_esc(', '.join(row.changed_functions))}</dd>")
     if row.changed_modules:
         dl_parts.append(f"<dt>Modules reloaded</dt><dd>{_esc(', '.join(row.changed_modules))}</dd>")
+    if row.cache_key_short:
+        # Short prefix of the statement's cache key — same prefix across
+        # re-runs means cash landed in the same slot; different prefix means
+        # the inputs/code/file deps changed enough to force a new key.
+        dl_parts.append(f'<dt>Key</dt><dd><code>{_esc(row.cache_key_short)}</code></dd>')
 
     dl = f'<dl class="c3-rt-dl">{"".join(dl_parts)}</dl>' if dl_parts else ""
 

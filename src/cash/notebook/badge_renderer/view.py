@@ -94,6 +94,10 @@ class StatementRow:
     changed_modules: tuple[str, ...] = ()
     # Inline detail surfaced by the renderer (tooltip / drill-down).
     decorator_calls: tuple["DecoratorCall", ...] = ()
+    # Short prefix of the statement's cache key, shown in the row's
+    # expanded detail. Lets a user see whether two re-runs of the same
+    # statement landed in the same cache slot.
+    cache_key_short: str = ""
 
 
 @dataclass(frozen=True)

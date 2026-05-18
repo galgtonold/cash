@@ -430,6 +430,11 @@ class StatementProcessor:
             _parsed_tree = None
 
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
+        # Expose the cache key on metrics so the badge can show a short
+        # prefix in the row-detail "Key" field. Lets users see at a glance
+        # when two runs of the same statement land in the same vs. a
+        # different cache slot.
+        metrics['cache_key'] = cache_key
 
         early_result, skip_cache = self._check_redundant_import(
             code, _parsed_tree, skip_cache, inputs, outputs, metrics, source_hash, cache_key, process_start,
