@@ -196,6 +196,108 @@ def cmd_clear(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+HOOK_FILENAME = "00-cash.py"
+HOOK_MARKER = "# cash-ipython-hook (managed by `cash autoload`)"
+
+HOOK_BODY_AVAILABLE = f'''{HOOK_MARKER}
+# Mode: available — `%cash_on` (and `cash.cache`) ready to use in every session.
+# Remove with `cash autoload off`.
+import cash  # auto-registers cash IPython magics
+'''
+
+HOOK_BODY_ACTIVE = f'''{HOOK_MARKER}
+# Mode: active — caching is enabled automatically in every IPython/Jupyter
+# session.  Run %cash_off in any session you want to opt out of, or remove
+# this file with `cash autoload off`.
+import cash  # auto-registers cash IPython magics
+
+try:
+    _ip = get_ipython()  # noqa: F821  (IPython injects this at startup)
+except NameError:
+    _ip = None
+if _ip is not None:
+    _ip.run_line_magic("cash_on", "")
+'''
+
+
+def _ipython_startup_dir(profile: str) -> Path:
+    """Return the IPython startup directory for ``profile``.
+
+    Uses :mod:`IPython.paths` when IPython is importable; falls back to the
+    documented default layout (``~/.ipython/profile_<name>/startup``) so the
+    installer remains usable on machines where IPython has not been imported
+    yet (it'll still be imported the moment Jupyter starts).
+    """
+    try:
+        from IPython.paths import get_ipython_dir
+        ipython_dir = Path(get_ipython_dir())
+    except ImportError:
+        ipython_dir = Path.home() / ".ipython"
+    return ipython_dir / f"profile_{profile}" / "startup"
+
+
+def _is_cash_hook(content: str) -> bool:
+    """True if the file content was written by a current or prior `cash autoload`."""
+    return "cash-ipython-hook" in content
+
+
+def cmd_autoload_on(args: argparse.Namespace) -> None:
+    """Write a startup file so cash is available (or active) in every kernel."""
+    startup_dir = _ipython_startup_dir(args.profile)
+    hook_path = startup_dir / HOOK_FILENAME
+
+    body = HOOK_BODY_ACTIVE if args.mode == "active" else HOOK_BODY_AVAILABLE
+
+    if hook_path.exists() and not args.force:
+        existing = hook_path.read_text(encoding="utf-8")
+        if existing == body:
+            print(f"Autoload already on (mode={args.mode}): {hook_path}")
+            return
+        print(f"Refusing to overwrite existing file: {hook_path}")
+        print("  Pass --force to replace it, or run `cash autoload off` first.")
+        sys.exit(1)
+
+    startup_dir.mkdir(parents=True, exist_ok=True)
+    hook_path.write_text(body, encoding="utf-8")
+
+    print(f"Autoload on (mode={args.mode}): {hook_path}")
+    if args.mode == "active":
+        print("  Every new IPython/Jupyter kernel will auto-import cash and run %cash_on.")
+        print("  Run %cash_off in a notebook to opt out for that session.")
+    else:
+        print("  Every new IPython/Jupyter kernel will auto-import cash so %cash_on works without a prior import.")
+    print("  Disable with: cash autoload off")
+
+
+def cmd_autoload_off(args: argparse.Namespace) -> None:
+    """Remove the startup file written by ``cash autoload on``."""
+    startup_dir = _ipython_startup_dir(args.profile)
+    hook_path = startup_dir / HOOK_FILENAME
+
+    if not hook_path.exists():
+        print(f"Autoload not installed at: {hook_path}")
+        return
+
+    content = hook_path.read_text(encoding="utf-8")
+    if not _is_cash_hook(content) and not args.force:
+        print(f"Refusing to remove unrecognized file: {hook_path}")
+        print("  Pass --force if you really want to delete it.")
+        sys.exit(1)
+
+    hook_path.unlink()
+    print(f"Autoload off: {hook_path}")
+
+
+def cmd_autoload(args: argparse.Namespace) -> None:
+    """Dispatch ``cash autoload on|off`` to the appropriate handler."""
+    if args.state == "on":
+        cmd_autoload_on(args)
+    elif args.state == "off":
+        cmd_autoload_off(args)
+    else:  # argparse choices guards against this
+        raise AssertionError(f"unexpected state {args.state!r}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog='cash',
@@ -221,6 +323,35 @@ def main() -> None:
     sub_clear.add_argument('path', nargs='?', default=None, help='Notebook or cache directory to clear')
     sub_clear.add_argument('--all', action='store_true', help='Clear all caches in current directory')
     sub_clear.set_defaults(func=cmd_clear)
+
+    # autoload on|off
+    sub_autoload = subparsers.add_parser(
+        'autoload',
+        help='Toggle whether cash auto-loads in every new IPython/Jupyter kernel',
+        description=(
+            'Install or remove an IPython startup hook so cash is loaded (and optionally '
+            'enabled) automatically in every new kernel — no `import cash` needed per notebook.'
+        ),
+    )
+    sub_autoload.add_argument(
+        'state', choices=['on', 'off'],
+        help='on: install the startup hook. off: remove it.',
+    )
+    sub_autoload.add_argument(
+        '--mode',
+        choices=['available', 'active'],
+        default='active',
+        help='(on only) available: just `import cash`. active (default): also run %%cash_on so caching is on by default.',
+    )
+    sub_autoload.add_argument(
+        '--profile', default='default',
+        help='IPython profile to target (default: "default")',
+    )
+    sub_autoload.add_argument(
+        '--force', action='store_true',
+        help='(on) overwrite a different file at this path. (off) remove a file lacking the cash marker.',
+    )
+    sub_autoload.set_defaults(func=cmd_autoload)
 
     args = parser.parse_args()
 

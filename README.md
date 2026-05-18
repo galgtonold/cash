@@ -113,6 +113,22 @@ For more, see [docs/](docs/).
 
 ---
 
+## Always-on caching across notebooks
+
+Tired of typing `import cash` + `%cash_on` at the top of every notebook? Install a one-time IPython startup hook:
+
+```bash
+cash autoload on            # every new kernel auto-imports cash AND runs %cash_on
+cash autoload on --mode=available   # only imports cash; you still call %cash_on per notebook
+cash autoload off           # remove the hook
+```
+
+`on` (active mode, default) makes cash transparent: open any notebook, caching is already on. The badge still appears per cell, and `%cash_off` opts a single session out. `--mode=available` is the lighter option — just makes `import cash` happen for you so `%cash_on` and `@cash.cache` are reachable without an explicit import.
+
+Under the hood the command writes a single file to `~/.ipython/profile_default/startup/00-cash.py`. It refuses to clobber an existing file there without `--force`, and `cash autoload off` refuses to remove a file it didn't write — so your own startup scripts are safe.
+
+---
+
 ## Most-used magic commands
 
 | Command | What it does |
