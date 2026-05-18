@@ -48,8 +48,9 @@ class TestNoRedundantUpstreamRestores:
             "print(f'Columns: {list(df.columns)}')\nprint(f'Shape: {df.shape}')",
         ])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
-        
+
         output1 = nb_runner.get_output(5)
         assert "'E'" in output1
 
@@ -94,8 +95,9 @@ class TestNoRedundantUpstreamRestores:
             "print(f'Columns: {list(df.columns)}')",
         ])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
-        
+
         assert "'SMA'" in nb_runner.get_output(5)
 
         nb_runner.run_cell(5)
@@ -119,6 +121,7 @@ class TestNoRedundantUpstreamRestores:
             "df_out = z * 3\nprint(f'result = {df_out}')",
         ])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
         assert "result = 360" in nb_runner.get_output(4)
 
@@ -178,6 +181,7 @@ class TestForwardSimulationConsistency:
             "print(f'result = {df[\"y\"].sum()}')",
         ])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(4)
 
@@ -228,6 +232,7 @@ class TestBackwardsScanOptimization:
             "print(f'x = {x}')",
         ])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
         nb_runner.run_all()
         assert "x = 122" in nb_runner.get_output(5)
 

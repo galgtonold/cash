@@ -122,6 +122,7 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
 
         nb_runner.create_notebook([cell_1, cell_2, cell_3])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
 
         # First pass: populate cache
         nb_runner.run_all()
@@ -178,6 +179,7 @@ print(f"Display: {df.shape}, cols={list(df.columns)}")"""
 
         nb_runner.create_notebook([cell_1, cell_2, cell_3, cell_4])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
 
         # Populate cache
         nb_runner.run_all()
@@ -238,6 +240,7 @@ class TestOutOfOrderEdgeCases:
             "c = b * 2\nprint(f'c={c}')",
         ])
         nb_runner.start_kernel()
+        nb_runner.enable_debug()  # needed for the "Auto-executing upstream" assertion below
 
         # Populate cache
         nb_runner.run_all()

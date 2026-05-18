@@ -706,14 +706,16 @@ class UpstreamChecker:
         total_upstream_steps = len(statements)
 
         for stmt_idx, stmt_code in enumerate(statements):
+            # The badge's "Upstream" section is the canonical user-facing
+            # signal that upstream re-execution happened — so we stay quiet
+            # on stdout in normal use. Debug mode emits both a logger entry
+            # and a stdout line for troubleshooting and integration tests.
             if self.debug:
-               logger.debug("[UPSTREAM] Auto-executing: %s...", stmt_code[:50])
-            else:
-                 # Clean output for user
-                 stmt_short = stmt_code.split('\n')[0][:40]
-                 if len(stmt_code) > 40:
-                     stmt_short += "..."
-                 print(f"Cash: Auto-executing upstream statement: {stmt_short}")
+                logger.debug("[UPSTREAM] Auto-executing: %s...", stmt_code[:50])
+                stmt_short = stmt_code.split('\n')[0][:40]
+                if len(stmt_code) > 40:
+                    stmt_short += "..."
+                print(f"Cash: Auto-executing upstream statement: {stmt_short}")
 
             try:
                 # Check if this is a control structure (for/if/try/with/while).
