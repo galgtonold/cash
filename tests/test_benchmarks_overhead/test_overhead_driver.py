@@ -27,3 +27,30 @@ def test_run_notebook_propagates_variable_state_between_cells():
     ]
     timings = run_notebook(cells, cash_enabled=False, cache_dir=None)
     assert len(timings) == 2  # second cell didn't raise
+
+
+def test_run_notebook_cash_on_captures_statement_metrics(tmp_path):
+    cells = [
+        CodeCell(index=0, notebook_cell_index=0, source="x = 1 + 1\n"),
+        CodeCell(index=1, notebook_cell_index=1, source="y = x * 2\n"),
+    ]
+    timings = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path)
+    assert len(timings) == 2
+    # Each cell has at least one statement metric captured
+    assert len(timings[0].statement_metrics) >= 1
+    m = timings[0].statement_metrics[0]
+    assert m.execution_time >= 0
+    assert m.total_time >= m.execution_time  # total includes execution
+    assert m.status in {"COMPUTED", "RESTORED", "SKIPPED", "UNKNOWN"}
+
+
+def test_run_notebook_cash_on_cold_then_warm_status_shifts(tmp_path):
+    """Same cells run twice against the same cache dir: second run should
+    have at least one RESTORED status (the cache is now populated)."""
+    cells = [CodeCell(index=0, notebook_cell_index=0, source="z = 7 * 6\n")]
+    first = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path)
+    second = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path)
+    first_statuses = [m.status for m in first[0].statement_metrics]
+    second_statuses = [m.status for m in second[0].statement_metrics]
+    assert "COMPUTED" in first_statuses
+    assert "RESTORED" in second_statuses
