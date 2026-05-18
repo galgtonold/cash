@@ -89,6 +89,34 @@ def test_single_restored_metric_no_upstream() -> None:
     assert row.saved_time_s == pytest.approx(0.3)
 
 
+def test_statement_row_exposes_cache_key_short_prefix() -> None:
+    """The badge surfaces an 8-char cache-key prefix in the row detail.
+
+    Lets a user see at a glance whether two re-runs of the same statement
+    landed in the same cache slot or whether something nudged the inputs
+    enough to force a new key.
+    """
+    metrics = [{
+        "code": "y = x * 2",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.01,
+        "cache_key": "stmt:a1b2c3d4e5f6789abcdef0123456789",
+    }]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    # First 8 chars after the "stmt:" prefix.
+    assert row.cache_key_short == "a1b2c3d4"
+
+
+def test_statement_row_cache_key_short_is_empty_when_metric_lacks_key() -> None:
+    metrics = [{"code": "y = 1", "status": str(CacheStatus.COMPUTED), "total_time": 0.001}]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.cache_key_short == ""
+
+
 def test_bare_expression_does_not_leak_richoutput_repr_into_output_vars() -> None:
     """Regression test: a bare-expression cell like ``panel.shape`` has no AST
     output vars, but ``metrics['outputs']`` holds the IPython

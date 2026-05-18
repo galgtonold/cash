@@ -274,6 +274,14 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
     else:
         changed_modules_tup = _tup_str(changed_modules)
 
+    # Short prefix of the statement cache key — first 8 hex chars after the
+    # ``stmt:`` prefix the runtime stamps onto cache keys. Empty for paths
+    # that don't expose the key (legacy notebooks, mock metrics).
+    raw_key = str(m.get("cache_key") or "")
+    if raw_key.startswith("stmt:"):
+        raw_key = raw_key[5:]
+    cache_key_short = raw_key[:8]
+
     return StatementRow(
         status=status,
         code=_strip_context_comments(str(m.get("code", ""))),
@@ -289,6 +297,7 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
+        cache_key_short=cache_key_short,
     )
 
 
