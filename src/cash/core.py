@@ -218,14 +218,27 @@ class Cash:
         if config.smart_persistence:
             threshold = config.smart_persistence_threshold
 
+            # Minimum compute time below which persistence is never worthwhile:
+            # the disk I/O alone costs more than just re-running the cell.
+            min_persist_compute_s = 0.1
+            small_result_bytes = 64 * 1024  # 64 KB
+
             def smart_persistence_policy(execution_time: float, size_bytes: int) -> bool:
-                # Skip disk for items faster than threshold
+                # Tiny computations: never persist. Disk I/O round-trip dominates.
+                if execution_time < min_persist_compute_s:
+                    return False
+                # Small results that took non-trivial compute: always persist.
+                # Disk write cost for < 64 KB is sub-millisecond, and on a cold
+                # restart we save the full execution_time — easy win.
+                if size_bytes < small_result_bytes:
+                    return True
+                # Medium-fast computations with bigger results: defer to the
+                # configurable ``smart_persistence_threshold`` (default 1.0 s)
+                # so users can opt out of persisting heavy intermediates.
                 if execution_time < threshold:
                     return False
-                # Always persist small items if they took > 0.1s
-                if size_bytes < 64 * 1024:  # 64KB
-                    return True
-                # For large items, check bandwidth trade-off
+                # Slow + large: check bandwidth trade-off (storing + restoring
+                # at ~100 MB/s should still be a net win vs. recomputing).
                 disk_bandwidth = 100 * 1024 * 1024  # 100MB/s
                 io_time = (size_bytes / disk_bandwidth) * 2
                 return execution_time > io_time
