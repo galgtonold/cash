@@ -680,6 +680,7 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
         decorator_calls=dec_calls,
         body_statements=_tup_str(m.get("body_statements")),
         cache_key_short=cache_key_short,
+        miss_reason=m.get("miss_reason") or None,
     )
 
 

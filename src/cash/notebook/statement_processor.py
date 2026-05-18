@@ -482,6 +482,16 @@ class StatementProcessor:
 
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
+        # Attribute the miss for the badge's row-detail drawer.
+        # ``_check_cache`` already set ``_last_miss_reason`` for TTL / file
+        # invalidations. If it's still None, this is the empty-key path —
+        # fall back to a backend search for a same-code prior entry.
+        if not skip_cache:
+            reason = getattr(self, '_last_miss_reason', None)
+            if reason is None:
+                reason = self._diagnose_miss(source_hash, inputs)
+            if reason:
+                metrics['miss_reason'] = reason
 
         self._post_execute(
             code, result, inputs, outputs, accessed_files,
@@ -1735,7 +1745,9 @@ class StatementProcessor:
     def _invalidate_if_ttl_expired(self, metadata: StatementCacheMetadata, cached_data: Any, ttl: int) -> Any:
         """Return None if the cache entry has exceeded *ttl* seconds, else return *cached_data*."""
         timestamp = metadata.get('timestamp', 0)
-        if time.time() - timestamp > ttl:
+        age = time.time() - timestamp
+        if age > ttl:
+            self._last_miss_reason = f"cache TTL expired ({age:.0f}s old, limit {ttl}s)"
             if self.debug:
                 logger.debug("[CACHE DEBUG] Cache expired (TTL)")
             return None
@@ -1771,6 +1783,7 @@ class StatementProcessor:
         for fpath, stored in file_deps.items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
+                self._last_miss_reason = f"file dependency missing: {fpath}"
                 if self.debug:
                     logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
                 return None
@@ -1778,9 +1791,11 @@ class StatementProcessor:
             try:
                 cur_stat = os.stat(resolved)
             except OSError:
+                self._last_miss_reason = f"file dependency unreadable: {resolved}"
                 return None
             mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
             if mtime_delta > 0.01:
+                self._last_miss_reason = f"file changed: {resolved}"
                 if self.debug:
                     logger.debug("[CACHE DEBUG] File dependency mtime changed: %s (delta=%.4fs)", resolved, mtime_delta)
                 return None
@@ -1789,6 +1804,7 @@ class StatementProcessor:
             # writes.  Falling back to size catches that case for the
             # common "rewrote the CSV" scenario.
             if stored_size is not None and cur_stat.st_size != stored_size:
+                self._last_miss_reason = f"file changed (size): {resolved}"
                 if self.debug:
                     logger.debug(
                         "[CACHE DEBUG] File dependency size changed: %s (was %d, now %d)",
@@ -1801,6 +1817,7 @@ class StatementProcessor:
         """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached."""
         resolved = resolve_file_dep_path(fpath)
         if resolved is None:
+            self._last_miss_reason = f"input file missing (via {input_var}): {fpath}"
             if self.debug:
                 logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
             return True
@@ -1820,10 +1837,12 @@ class StatementProcessor:
             return True
         mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
         if mtime_delta > 0.01:
+            self._last_miss_reason = f"file changed via input '{input_var}': {resolved}"
             if self.debug:
                 logger.debug("[CACHE DEBUG] Input '%s' source file mtime changed: %s (delta=%.4fs)", input_var, resolved, mtime_delta)
             return True
         if stored_size is not None and cur_stat.st_size != stored_size:
+            self._last_miss_reason = f"file changed (size) via input '{input_var}': {resolved}"
             if self.debug:
                 logger.debug("[CACHE DEBUG] Input '%s' source file size changed: %s (was %d, now %d)", input_var, resolved, stored_size, cur_stat.st_size)
             return True
@@ -1843,7 +1862,14 @@ class StatementProcessor:
         """Check cache for existing entry.
 
         Also checks file dependencies inherited from input variables.
+        Side-effect: sets ``self._last_miss_reason`` (a short human-readable
+        explanation) whenever the lookup ultimately misses, so the badge can
+        surface "why did this cell re-run?" in its expanded row detail.
         """
+        # Reset per-lookup miss attribution. The invalidator helpers may
+        # overwrite this with a more specific reason on the way out.
+        self._last_miss_reason = None
+
         t3 = time.time()
         metadata, cached_data = self.cash_instance.backend.get(cache_key)
         cache_check_time = time.time() - t3
@@ -1859,10 +1885,60 @@ class StatementProcessor:
                 cached_data = self._invalidate_if_input_file_changed(inputs, cached_data)
             if cached_data is not None and 'output_lineages' not in metadata:
                 cached_data = None
+                self._last_miss_reason = "cache entry uses an old format (missing lineage metadata)"
                 if self.debug:
                     logger.debug("[CACHE DEBUG] Cache entry missing lineage metadata (stale format), invalidating.")
 
         return metadata, cached_data, cache_check_time
+
+    def _diagnose_miss(self, source_hash: str, inputs: set[str] | None) -> str | None:
+        """Best-effort attribution for a cache miss when no key matched.
+
+        Walks the backend's entry list looking for any record with the same
+        ``source_hash`` (i.e. the same code, regardless of inputs/files). If
+        nothing matches, the cell is genuinely new. If one matches but the
+        cache key differed, the input lineage or file deps shifted since
+        the prior run.
+        """
+        backend = getattr(self.cash_instance, 'backend', None)
+        if backend is None or not hasattr(backend, 'list_entries'):
+            return None
+        try:
+            entries = backend.list_entries()
+        except (OSError, AttributeError, TypeError, ValueError):
+            return None
+
+        prior = [e for e in entries if e.get('source_hash') == source_hash]
+        if not prior:
+            return "first time seeing this code"
+
+        # Same code; one or more prior entries exist but their cache_keys
+        # don't match the one we just looked up. The input set or input
+        # lineages or file deps must have changed.
+        prior_input_sets = [set(e.get('inputs', [])) for e in prior]
+        current_inputs = set(inputs or [])
+        if not any(p == current_inputs for p in prior_input_sets):
+            largest_prior = max(prior_input_sets, key=len, default=set())
+            added = current_inputs - largest_prior
+            removed = largest_prior - current_inputs
+            bits = []
+            if added:
+                bits.append(f"added input(s): {', '.join(sorted(added))}")
+            if removed:
+                bits.append(f"removed input(s): {', '.join(sorted(removed))}")
+            if bits:
+                return "; ".join(bits)
+            return "input set changed since the last run"
+
+        # Same input variable names — lineages must differ (an upstream cell
+        # was re-run or its source code changed). We can't pinpoint which
+        # input without storing lineages in metadata, but we can name the
+        # candidates so the user can narrow it down.
+        if current_inputs:
+            sample = sorted(current_inputs)[:3]
+            extra = f" or {len(current_inputs) - 3} more" if len(current_inputs) > 3 else ""
+            return f"input lineage changed (one of: {', '.join(sample)}{extra})"
+        return "cache key differs from any prior run (possible file dependency change)"
 
     def _print_cache_debug(
         self,

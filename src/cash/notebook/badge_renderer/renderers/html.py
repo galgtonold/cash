@@ -1014,6 +1014,12 @@ def _rowtip_html(row: StatementRow) -> str:
         # re-runs means cash landed in the same slot; different prefix means
         # the inputs/code/file deps changed enough to force a new key.
         dl_parts.append(f'<dt>Key</dt><dd><code>{_esc(row.cache_key_short)}</code></dd>')
+    if row.miss_reason and row.status is BadgeStatus.COMPUTED:
+        # One-line attribution: why did this cell recompute instead of
+        # restoring from cache? Populated by statement_processor on the
+        # miss path; only shown on COMPUTED rows (a RESTORED row doesn't
+        # have a "miss").
+        dl_parts.append(f"<dt>Miss</dt><dd>{_esc(row.miss_reason)}</dd>")
 
     dl = f'<dl class="c3-rt-dl">{"".join(dl_parts)}</dl>' if dl_parts else ""
 

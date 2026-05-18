@@ -103,6 +103,11 @@ class StatementRow:
     # expanded detail. Lets a user see whether two re-runs of the same
     # statement landed in the same cache slot.
     cache_key_short: str = ""
+    # One-line attribution for COMPUTED rows: "first time seeing this code",
+    # "input lineage changed (one of: x, y)", "file changed: ...", etc.
+    # Populated by the runtime (statement_processor._diagnose_miss / the
+    # invalidator helpers) so the badge can answer "why did this re-run?"
+    miss_reason: str | None = None
 
 
 @dataclass(frozen=True)
