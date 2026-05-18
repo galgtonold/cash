@@ -9,7 +9,7 @@ You're building a churn prediction model. The workflow involves loading data, cl
 ### Cell 1: Setup
 
 ```python
-%load_ext cash
+import cash
 %cash_on
 ```
 

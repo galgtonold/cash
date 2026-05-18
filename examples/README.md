@@ -122,7 +122,7 @@ python examples/script_caching_demo.py
 
 ### Enable auto-caching
 ```python
-%load_ext cash
+import cash
 %cash_on
 ```
 

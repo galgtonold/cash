@@ -19,9 +19,11 @@ pip install cash-lib
 Create a new notebook and add this to the first cell:
 
 ```python
-%load_ext cash
+import cash
 %cash_on
 ```
+
+`import cash` auto-registers the IPython magics, so a second `%load_ext cash` line is not needed. (`%load_ext cash` also works if you prefer the IPython convention — and if you also want `@cash.cache` for decorator-style caching, you'll need `import cash` anyway, so it's the recommended entry point.)
 
 You'll see:
 

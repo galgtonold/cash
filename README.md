@@ -8,7 +8,7 @@
 > **Two lines. Zero config. Restart-and-run-all in seconds instead of minutes.**
 
 ```python
-%load_ext cash
+import cash
 %cash_on
 ```
 
@@ -68,9 +68,11 @@ pip install "cash-lib[all]"      # everything: pandas, polars, redis, s3, viz, .
 **Cell 1** — turn it on:
 
 ```python
-%load_ext cash
+import cash
 %cash_on
 ```
+
+(`import cash` auto-registers the magics. `%load_ext cash` also works if you prefer the IPython convention.)
 
 **Cell 2** — your normal data-loading code:
 
