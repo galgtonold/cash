@@ -57,5 +57,49 @@ def run_notebook(
 
 
 def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric]) -> None:
-    """Stub for cash setup — implemented in Task 5."""
-    raise NotImplementedError("Cash enablement implemented in Task 5")
+    """Initialise cash on ``shell`` and install a tee on
+    ``StatementProcessor.process_statement`` so each cell's per-statement
+    ``ProcessResult`` is appended to ``sink``.
+
+    The tee patches the class method (not the instance) so it fires for every
+    StatementProcessor the magics layer creates, including any per-cell
+    re-instantiations.
+    """
+    from cash.core import Cash
+    from cash.notebook.magics import CashMagics
+    from cash.notebook.statement_processor import StatementProcessor
+
+    # Patch process_statement() at class level so all instances (including those
+    # built later inside magics) are observed.  We store the original on the
+    # class so re-running this in the same subprocess is idempotent.
+    original = getattr(StatementProcessor, "_orig_process_stmt_for_bench", None)
+    if original is None:
+        original = StatementProcessor.process_statement
+        StatementProcessor._orig_process_stmt_for_bench = original  # type: ignore[attr-defined]
+
+    def _teed_process_statement(self, code, *args, **kwargs):
+        result = original(self, code, *args, **kwargs)
+        try:
+            status = result.get("status", "UNKNOWN")
+            # CacheStatus is an enum; convert to its string value when needed.
+            status_str = status.value if hasattr(status, "value") else str(status)
+            sink.append(StatementMetric(
+                code=str(result.get("code", code))[:200],
+                execution_time=float(result.get("execution_time", 0.0)),
+                total_time=float(result.get("total_time", 0.0)),
+                status=status_str,
+            ))
+        except Exception:  # noqa: BLE001 — tee must never break user code
+            pass
+        return result
+
+    StatementProcessor.process_statement = _teed_process_statement  # type: ignore[method-assign]
+
+    # Create a Cash instance pointed at the bench's cache dir and wire up the
+    # magics.  cash_on() doesn't accept a path argument; the dir is configured
+    # at Cash construction time.
+    cash_instance = Cash(cache_dir=str(cache_dir), register_magic=False)
+    magics = CashMagics(shell=shell, cash_instance=cash_instance)
+    shell.register_magics(magics)
+    # Enable auto-caching (no TTL needed for the benchmark).
+    magics.cash_on("")
