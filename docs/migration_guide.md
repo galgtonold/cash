@@ -33,7 +33,7 @@ def expensive_compute(data):
 
 **For notebooks (recommended):**
 ```python
-%load_ext cash
+import cash
 %cash_on
 # All cells are cached automatically - no decorator needed
 ```
@@ -66,7 +66,7 @@ result = slow_function(df)
 
 **Or in notebooks:**
 ```python
-%load_ext cash
+import cash
 %cash_on
 
 # Just write your code normally - it's cached automatically
@@ -97,7 +97,7 @@ else:
 
 **After (Cash notebook mode):**
 ```python
-%load_ext cash
+import cash
 %cash_on
 
 # That's it - just run your code

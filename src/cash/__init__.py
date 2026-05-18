@@ -108,7 +108,12 @@ def load_ipython_extension(ipython):
     """Register the ``%%cash`` IPython magic on behalf of the global singleton.
 
     Called automatically by IPython/Jupyter when the user runs
-    ``%load_ext cash`` or when cash is listed in ``ipython_config``.
+    ``%load_ext cash`` or when cash is listed in ``ipython_config``.  Most
+    users do not need to call this directly — plain ``import cash`` already
+    registers the magics via :func:`_auto_load_in_ipython`, and is the
+    recommended entry point because it also exposes ``@cash.cache`` for
+    decorator-style caching.
+
     Delegates to :meth:`Cash.register_magic` on the global instance so
     that the magic shares the same backend and tracking state as any
     ``cash.cache`` calls in the same session.
@@ -120,8 +125,10 @@ def _auto_load_in_ipython() -> None:
     """Auto-register magics when cash is imported inside an IPython session.
 
     This means ``import cash`` is sufficient in a Jupyter notebook — no
-    explicit ``%load_ext cash`` required.  The function is a no-op when
-    running outside IPython (e.g. plain Python scripts).
+    explicit ``%load_ext cash`` required, and the same single import enables
+    both the ``%cash_on`` magic and ``@cash.cache`` decorator API.  The
+    function is a no-op when running outside IPython (e.g. plain Python
+    scripts).
     """
     try:
         ip = get_ipython()  # type: ignore[name-defined]  # noqa: F821
