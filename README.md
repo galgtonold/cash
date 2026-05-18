@@ -129,6 +129,14 @@ Full list: [docs/api_reference.md](docs/api_reference.md).
 
 `TieredBackend` (RAM L1 + disk L2) is the default and the right choice for almost everyone. Other options if you need them: `InMemory`, `File`, `SQLite`, `Redis`, `S3`. See [docs/api_reference.md](docs/api_reference.md#backends).
 
+## Where does the cache live?
+
+Disk cache: **`./.cash/`** next to your notebook (whatever the kernel's working directory is). One sub-file per cached statement, named by its cache-key SHA. Override with the `CASH_CACHE_DIR` environment variable, or pass `cache_dir=` when constructing a `Cash()` instance.
+
+The default `TieredBackend` is **smart about what reaches disk**: cells that took **< 100 ms** stay RAM-only (disk I/O alone would cost more than rerunning), while 100 ms – 1 s cells with small results (< 64 KB) always persist so a fresh kernel can restore them. For heavier intermediates, the `smart_persistence_threshold` config knob (default 1 s) decides. Force-persist any cell with a `# @cash:persist` annotation when you know better than the heuristic.
+
+To wipe the cache: delete `.cash/` or run `%cash_repair --full`.
+
 ---
 
 ## Status
