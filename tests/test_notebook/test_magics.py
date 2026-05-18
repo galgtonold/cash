@@ -256,7 +256,7 @@ final_value = result * multiplier
             key = metadata['key']
             # backend.get now returns (metadata, data) where data is already a dict
             _, payload = self.backend.get(key)
-            self.assertEqual(payload['outputs'], [mock_output])
+            self.assertEqual(payload['rich_outputs'], [mock_output])
             
         # 2. Second run: Cache hit -> Replay
         # We need to patch publish_display_data in both modules where it can be called

@@ -551,7 +551,12 @@ class StatementProcessor:
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr
-        metrics['outputs'] = captured.outputs
+        # IPython rich-display capture (RichOutput objects). Distinct from
+        # ``metadata['outputs']`` and ``evaluated_vars`` (which hold variable
+        # NAMES from AST analysis). Keeping them under different keys avoids
+        # the F-01-style fallback chain that printed ``<RichOutput at 0x..>``
+        # into badge fields.
+        metrics['rich_outputs'] = captured.outputs
         if decorator_calls:
             metrics['decorator_calls'] = decorator_calls
 
@@ -695,11 +700,13 @@ class StatementProcessor:
             if isinstance(payload, dict) and 'variables' in payload:
                 metrics['stdout'] = payload.get('stdout', '')
                 metrics['stderr'] = payload.get('stderr', '')
-                metrics['outputs'] = payload.get('outputs', [])
+                # Read both the new key and the legacy 'outputs' key so old
+                # on-disk caches keep restoring their rich display data.
+                metrics['rich_outputs'] = payload.get('rich_outputs', payload.get('outputs', []))
             else:
                 metrics['stdout'] = ''
                 metrics['stderr'] = ''
-                metrics['outputs'] = []
+                metrics['rich_outputs'] = []
 
             return metrics
         except (CacheBackendError, CacheSerializationError, KeyError, TypeError, ValueError, AttributeError, OSError, pickle.UnpicklingError) as e:
@@ -1494,7 +1501,10 @@ class StatementProcessor:
             'variables': self._filter_safe_vars(captured_vars),
             'stdout': captured_output.stdout,
             'stderr': captured_output.stderr,
-            'outputs': captured_output.outputs,
+            # Rich-display output (RichOutput objects). The 'outputs' key in
+            # the sibling ``metadata`` dict holds variable NAMES — two distinct
+            # concepts; keep them on different keys here too.
+            'rich_outputs': captured_output.outputs,
             'rng_state': capture_rng_state(),
         }
 
@@ -1629,7 +1639,9 @@ class StatementProcessor:
                 restored_vars = payload['variables']
                 stdout = payload.get('stdout', '')
                 stderr = payload.get('stderr', '')
-                rich_outputs = payload.get('outputs', [])
+                # Prefer the new key but fall back to legacy 'outputs' so
+                # existing on-disk caches still hydrate their rich output.
+                rich_outputs = payload.get('rich_outputs', payload.get('outputs', []))
                 rng_state = payload.get('rng_state')
                 if rng_state:
                     if self.debug:

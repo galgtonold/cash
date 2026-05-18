@@ -1410,7 +1410,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             raise metrics['error']
 
         return self._flush_rich_outputs(
-            metrics.get('outputs', []), is_last_statement, buffered_result_outputs,
+            metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
         )
 
     def _handle_stmt_error(
@@ -1477,7 +1477,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 if metrics.get('stderr'):
                     print(metrics['stderr'], end='', file=sys.stderr)
             buffered_result_outputs = self._flush_rich_outputs(
-                metrics.get('outputs', []), is_last_statement, buffered_result_outputs,
+                metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
             )
         return buffered_result_outputs
 
@@ -1694,7 +1694,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             code = m.get('code', '')
             status = m.get('status', 'computed')
             duration_ms = m.get('execution_time', 0.0) * 1000
-            outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('outputs', [])
+            # NOTE: never fall back to ``m.get('rich_outputs')`` (or the legacy
+            # ``m.get('outputs')`` it replaced) — those hold IPython rich-display
+            # objects, NOT variable names. F-01 (commit e739134) fixed the same
+            # anti-pattern in the badge view; the audit path needs the same care.
+            outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('evaluated_vars', [])
             inputs_list = list(m.get('inputs', []))
             # Outputs may contain rich-display dicts; provenance/audit only
             # care about string variable names.
@@ -1884,7 +1888,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                         print(metrics['stdout'], end='')
                     if metrics.get('stderr'):
                         print(metrics['stderr'], end='', file=sys.stderr)
-                rich_outputs = metrics.get('outputs', [])
+                rich_outputs = metrics.get('rich_outputs', [])
                 if is_last_statement:
                     buffered_result_outputs.extend(rich_outputs)
                 else:
@@ -1932,7 +1936,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 elif self._badge_mode == 'print':
                     self._print_text_badge(final_metrics, cell_total_time=time.time() - cell_start)
                 raise metrics['error']
-            rich_outputs = metrics.get('outputs', [])
+            rich_outputs = metrics.get('rich_outputs', [])
             if is_last_statement:
                 buffered_result_outputs.clear()
                 buffered_result_outputs.extend(rich_outputs)
