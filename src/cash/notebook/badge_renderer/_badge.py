@@ -16,7 +16,7 @@ from typing import Any
 
 from cash.notebook.cache_status import CacheStatus
 
-from .theme import BADGE_COLOR_DEFAULT, BADGE_COLOR_RESTORED, FONT_MONO
+from .theme import FONT_MONO, RAIL_CACHED, RAIL_EXEC
 
 
 def render_interactive_badge(
@@ -78,7 +78,7 @@ def render_status_badge(
     storage:
         Cache backend storage label(s).
     """
-    color = BADGE_COLOR_RESTORED if status == CacheStatus.RESTORED else BADGE_COLOR_DEFAULT
+    color = RAIL_CACHED if status == CacheStatus.RESTORED else RAIL_EXEC
     parts = [f"<b>{status}</b>"]
     if source:
         parts.append(f"FROM: {source}")

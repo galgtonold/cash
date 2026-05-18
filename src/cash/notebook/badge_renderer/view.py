@@ -94,6 +94,11 @@ class StatementRow:
     changed_modules: tuple[str, ...] = ()
     # Inline detail surfaced by the renderer (tooltip / drill-down).
     decorator_calls: tuple["DecoratorCall", ...] = ()
+    # For single-unit control structures (``while``, ``with``, ``try``) the
+    # runtime records the original source lines (header + body) here so the
+    # renderer can show them expanded — header line as the row code, body
+    # lines as nested static rows — instead of one opaque multi-line row.
+    body_statements: tuple[str, ...] = ()
     # Short prefix of the statement's cache key, shown in the row's
     # expanded detail. Lets a user see whether two re-runs of the same
     # statement landed in the same cache slot.
@@ -131,6 +136,29 @@ class ForLoopGroup:
 
     loop_var_names: tuple[str, ...]
     stmts: tuple[LoopStatement, ...]
+    # Source-faithful header line ("for cat in df['category'].unique():"). The
+    # runtime captures this from the AST and stamps every body metric with
+    # it. Empty when the metric source predates the loop_header field;
+    # renderers fall back to constructing a header from loop_var_names +
+    # iteration values in that case.
+    loop_header: str = ""
+    # Loops or controls that live INSIDE this for-loop's body. The runtime
+    # records each metric's full enclosing-loop header chain; the view
+    # builder uses that to nest a child for-loop's items under its parent
+    # instead of rendering them as siblings. Renderers walk this after
+    # ``stmts`` so the body reads stmts-first then nested-loops/controls.
+    nested: tuple[Any, ...] = ()
+    # Set when the for-loop is rendered as the inner head-less wrapper
+    # under a hoisted outer (e.g. `for c in range(2): if cond: body` where
+    # the renderer draws the for-c header at the outer position and this
+    # node provides the iteration data without re-drawing the head).
+    suppress_head: bool = False
+    # Body of the for-loop in source order: a mixed tuple of
+    # ``LoopStatement`` (direct body stmts) and ``SectionItem`` (nested
+    # for-loops, control-groups). Renderer iterates this and dispatches
+    # by type. ``stmts`` and ``nested`` above remain populated for
+    # back-compat with callers that don't yet read ``body``.
+    body: tuple[Any, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -154,13 +182,6 @@ class ControlGroupSingle:
     """A single-statement control structure (e.g. standalone ``if`` with no body grouping)."""
 
     row: StatementRow
-
-
-@dataclass(frozen=True)
-class ControlBody:
-    """The expandable ``<details>`` body listing the source statements inside a control block."""
-
-    body_stmts: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -220,7 +241,6 @@ SectionItem = Union[
     ForLoopGroup,
     ControlGroup,
     ControlGroupSingle,
-    ControlBody,
     SkippedBucket,
     DecoratorCallGroup,
     OverheadBreakdown,
@@ -244,6 +264,10 @@ class BadgeHeader:
     restored_count: int = 0
     computed_count: int = 0
     skipped_count: int = 0
+    # Notification rows: WARNING + FUNCTION_CHANGED + MODULE_RELOADED + ERROR.
+    # Surfaced as a separate warn chip in the summary so e.g. a
+    # notification-only cell still gets a count badge instead of nothing.
+    warn_count: int = 0
     total_saved_s: float = 0.0
     total_exec_s: float = 0.0
     current_step: int = 0
@@ -297,7 +321,6 @@ __all__ = [
     "ForLoopGroup",
     "ControlGroup",
     "ControlGroupSingle",
-    "ControlBody",
     "SkippedBucket",
     "DecoratorCall",
     "DecoratorCallGroup",

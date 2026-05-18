@@ -116,6 +116,13 @@ class ForLoopHandler:
             iter_code = ast.unparse(node.iter)
             iterable = eval(iter_code, self.shell.user_ns, self.shell.user_ns)
 
+            # Pre-compute the original for-loop header line so each body
+            # metric can carry it (used by the badge renderer to show the
+            # source-faithful header `for cat in df['category'].unique():`
+            # instead of synthesising one from observed iteration values).
+            target_code = ast.unparse(node.target)
+            loop_header = f"for {target_code} in {iter_code}:"
+
             # Fast-loop heuristic: if per-iteration decomposition would be too
             # expensive relative to the computation, execute as a single unit.
             if self._should_execute_loop_as_single_unit(node, iterable, parent_context):
@@ -145,6 +152,23 @@ class ForLoopHandler:
             _helpers.update_lineage_after_execution(
                 self.shell, self.statement_processor, node, ast.unparse(node), debug=self.debug
             )
+
+            # Stamp every body metric with this for-loop's source header.
+            # ``loop_header`` itself = innermost enclosing for-loop (the
+            # first for-handler in the recursion to see this metric wins).
+            # ``loop_header_chain`` = full enclosing chain, outermost-first:
+            # we PREPEND this loop's header on each recursion frame so the
+            # outermost call ends up with the complete chain. Used by the
+            # view-builder to nest for-loop groups instead of rendering
+            # them as siblings.
+            for m in all_metrics:
+                if not isinstance(m, dict):
+                    continue
+                if "loop_header" not in m:
+                    m["loop_header"] = loop_header
+                chain = m.setdefault("loop_header_chain", [])
+                if not chain or chain[0] != loop_header:
+                    chain.insert(0, loop_header)
 
             return ControlStructureResult(
                 success=True,
@@ -201,7 +225,22 @@ class ForLoopHandler:
         context_hash = compute_context_hash(iteration_context)
         loop_vars = {k: v for k, v in iteration_context.items() if not k.startswith('__')}
         iteration_cached = True
-        for body_node in node.body:
+        # Track the AST body index of each emitted metric so the view-
+        # builder can render the for-loop's body in source order even
+        # when nested controls split the metric stream (some iterations
+        # produce control_context'd metrics, others don't; without the
+        # index the renderer would group all "before"/"after" stmts then
+        # show the control after them, instead of the source order
+        # before / if / after).
+        #
+        # ``body_index_chain`` is recorded outermost-first (analogous to
+        # ``loop_header_chain``): a metric in for-b inside for-a gets
+        # chain ``[idx_of_for-b_in_for-a, idx_in_for-b]``. The view-builder
+        # uses chain[depth] when sorting items inside a specific for-loop
+        # level. ``body_index`` itself is the *innermost* index (the
+        # tail of the chain).
+        for body_idx, body_node in enumerate(node.body):
+            before_count = len(all_metrics)
             if is_control_structure(body_node):
                 was_computed = self._execute_loop_body_nested_control(
                     body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
@@ -210,6 +249,17 @@ class ForLoopHandler:
                 was_computed = self._execute_loop_body_statement(
                     body_node, iteration_context, ttl, silent, all_metrics,
                 )
+            for m in all_metrics[before_count:]:
+                if not isinstance(m, dict):
+                    continue
+                chain = m.setdefault("body_index_chain", [])
+                # Prepend this loop's body_idx (outermost wins by being
+                # at index 0). Innermost handler runs first and ends up
+                # at the chain tail; outer handlers prepend their idx.
+                if not chain or chain[0] != body_idx:
+                    chain.insert(0, body_idx)
+                if "body_index" not in m:
+                    m["body_index"] = body_idx
             if was_computed:
                 iteration_cached = False
         return iteration_cached
