@@ -482,14 +482,13 @@ class StatementProcessor:
 
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
-        # Attribute the miss for the badge's row-detail drawer.
-        # ``_check_cache`` already set ``_last_miss_reason`` for TTL / file
-        # invalidations. If it's still None, this is the empty-key path —
-        # fall back to a backend search for a same-code prior entry.
+        # Attribute the miss for the badge's row-detail drawer when we can do
+        # it cheaply. ``_check_cache`` sets ``_last_miss_reason`` as a side
+        # effect for TTL / file invalidations (already-computed information).
+        # We *don't* fall back to a backend-wide scan for the empty-key path —
+        # that diagnostic was O(N²) in cache size and dominated cold-run cost.
         if not skip_cache:
             reason = getattr(self, '_last_miss_reason', None)
-            if reason is None:
-                reason = self._diagnose_miss(source_hash, inputs)
             if reason:
                 metrics['miss_reason'] = reason
 
@@ -1890,55 +1889,6 @@ class StatementProcessor:
                     logger.debug("[CACHE DEBUG] Cache entry missing lineage metadata (stale format), invalidating.")
 
         return metadata, cached_data, cache_check_time
-
-    def _diagnose_miss(self, source_hash: str, inputs: set[str] | None) -> str | None:
-        """Best-effort attribution for a cache miss when no key matched.
-
-        Walks the backend's entry list looking for any record with the same
-        ``source_hash`` (i.e. the same code, regardless of inputs/files). If
-        nothing matches, the cell is genuinely new. If one matches but the
-        cache key differed, the input lineage or file deps shifted since
-        the prior run.
-        """
-        backend = getattr(self.cash_instance, 'backend', None)
-        if backend is None or not hasattr(backend, 'list_entries'):
-            return None
-        try:
-            entries = backend.list_entries()
-        except (OSError, AttributeError, TypeError, ValueError):
-            return None
-
-        prior = [e for e in entries if e.get('source_hash') == source_hash]
-        if not prior:
-            return "first time seeing this code"
-
-        # Same code; one or more prior entries exist but their cache_keys
-        # don't match the one we just looked up. The input set or input
-        # lineages or file deps must have changed.
-        prior_input_sets = [set(e.get('inputs', [])) for e in prior]
-        current_inputs = set(inputs or [])
-        if not any(p == current_inputs for p in prior_input_sets):
-            largest_prior = max(prior_input_sets, key=len, default=set())
-            added = current_inputs - largest_prior
-            removed = largest_prior - current_inputs
-            bits = []
-            if added:
-                bits.append(f"added input(s): {', '.join(sorted(added))}")
-            if removed:
-                bits.append(f"removed input(s): {', '.join(sorted(removed))}")
-            if bits:
-                return "; ".join(bits)
-            return "input set changed since the last run"
-
-        # Same input variable names — lineages must differ (an upstream cell
-        # was re-run or its source code changed). We can't pinpoint which
-        # input without storing lineages in metadata, but we can name the
-        # candidates so the user can narrow it down.
-        if current_inputs:
-            sample = sorted(current_inputs)[:3]
-            extra = f" or {len(current_inputs) - 3} more" if len(current_inputs) > 3 else ""
-            return f"input lineage changed (one of: {', '.join(sample)}{extra})"
-        return "cache key differs from any prior run (possible file dependency change)"
 
     def _print_cache_debug(
         self,
