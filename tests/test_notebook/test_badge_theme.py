@@ -22,7 +22,13 @@ def test_display_limits_are_positive() -> None:
 
 
 def test_status_palette_uses_hex_colors() -> None:
-    for token in (theme.BADGE_COLOR_RESTORED, theme.BADGE_COLOR_DEFAULT):
+    # All family accents and shades are 6-digit hex strings.
+    for token in (
+        theme.RAIL_CACHED, theme.BAR_CACHED, theme.CHIP_BG_CACHED, theme.CHIP_FG_CACHED,
+        theme.RAIL_EXEC, theme.BAR_EXEC, theme.CHIP_BG_EXEC, theme.CHIP_FG_EXEC,
+        theme.RAIL_WARN, theme.BAR_WARN, theme.CHIP_BG_WARN, theme.CHIP_FG_WARN,
+        theme.RAIL_MIXED,
+    ):
         assert token.startswith("#") and len(token) in (4, 7)
 
 

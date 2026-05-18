@@ -18,7 +18,6 @@ from .view import (
     BadgeHeader,
     BadgeStatus,
     BugReportLink,
-    ControlBody,
     ControlGroup,
     ControlGroupSingle,
     DecoratorCall,
@@ -37,8 +36,12 @@ from .view import (
     StatusBadge,
 )
 
+# Statuses that don't represent a "ran" or "restored" data operation. They
+# are surfaced as warning rows in the badge but excluded from restored /
+# computed / skipped counts and partitioned alongside restored rows for
+# the upstream-context split (they don't carry their own work, they
+# annotate other work).
 _NOTIFICATION_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WARNING"})
-_RESTORED_LIKE_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WARNING"})
 
 
 # ---------------------------------------------------------------------------
@@ -46,24 +49,60 @@ _RESTORED_LIKE_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WAR
 # ---------------------------------------------------------------------------
 
 def _make_loop_group(base_code: str, metrics: list[dict[str, Any]]) -> dict[str, Any]:
+    # Collect ALL loop vars present in the metrics, in order. The runtime
+    # records ``loop_vars = {outer: ..., inner: ...}`` on the innermost
+    # statement's metrics, and these are exactly the variables the
+    # per-iteration drill-down should display. The synthesised loop
+    # header (when no source ``loop_header`` is available) uses only the
+    # outermost; the iter drill-down can show all of them at once.
     all_var_names: list[str] = []
     var_values: dict[str, list[Any]] = {}
     for m in metrics:
-        for k, v in (m.get("loop_vars") or {}).items():
+        lv = m.get("loop_vars") or {}
+        if not isinstance(lv, dict):
+            continue
+        for k, v in lv.items():
             if k not in var_values:
                 all_var_names.append(k)
                 var_values[k] = []
             var_values[k].append(v)
+    # Source-faithful header from the runtime (e.g. "for cat in df['category'].unique():").
+    # Picked from the first metric that carries it — the runtime stamps every
+    # body metric of the same loop with the same header.
+    loop_header = next(
+        (str(m["loop_header"]) for m in metrics if m.get("loop_header")),
+        "",
+    )
+    # Full enclosing chain (outermost → innermost). Same across all metrics
+    # in a loop_group since they share base_code and thus position.
+    chain = next(
+        (tuple(m["loop_header_chain"]) for m in metrics if m.get("loop_header_chain")),
+        (loop_header,) if loop_header else (),
+    )
+    # Source-order position inside the enclosing for-loop's body, recorded
+    # by the runtime as ``body_index``. Used by the view-builder to sort
+    # body stmts and nested controls in source order.
+    body_index = min(
+        (int(m["body_index"]) for m in metrics if "body_index" in m),
+        default=10_000,
+    )
     return {
         "type": "loop_group",
         "base_code": base_code,
         "metrics": metrics,
         "all_loop_var_names": all_var_names,
         "all_loop_var_values": var_values,
+        "loop_header": loop_header,
+        "loop_header_chain": chain,
+        "body_index": body_index,
     }
 
 
-def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _group_loop_iterations(
+    metrics: list[dict[str, Any]],
+    *,
+    synthesize_intermediate_loops: bool = True,
+) -> list[dict[str, Any]]:
     """Two-pass grouping: per-statement loop bodies, then wrap consecutive loops.
 
     Returns intermediate dict items (``single``, ``for_loop_group``,
@@ -80,9 +119,29 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
         loop_stmt_groups.clear()
 
     def _flush_controls() -> None:
-        for _ctx_hash, mlist in control_groups.items():
-            branch_label = mlist[0].get("branch_label", "")
-            body_stmts = mlist[0].get("body_statements", [])
+        # Pre-merge: if the same inner control fires N times across outer
+        # loop iterations, each firing arrives with a distinct ``ctx`` hash
+        # but the same ``branch_label`` (the if/elif/else/for line). Combine
+        # those into one bucket so the renderer shows a single control with
+        # an inner for-loop body, not N sibling control_groups. Buckets
+        # without a branch_label (rare: synthetic metrics) stay keyed by ctx.
+        merged: dict[str, list[dict[str, Any]]] = {}
+        for ctx_hash, mlist in control_groups.items():
+            branch_label = next(
+                (str(m.get("branch_label")) for m in mlist if m.get("branch_label")),
+                "",
+            )
+            key = branch_label or ctx_hash
+            merged.setdefault(key, []).extend(mlist)
+        for _key, mlist in merged.items():
+            branch_label = next(
+                (str(m.get("branch_label")) for m in mlist if m.get("branch_label")),
+                "",
+            )
+            body_stmts = next(
+                (m.get("body_statements") for m in mlist if m.get("body_statements")),
+                [],
+            )
             header = body_stmts[0] if body_stmts else branch_label
             # Recursively group the body so nested loops or nested
             # controls within this branch get their own grouping (not
@@ -93,13 +152,41 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
                 {k: v for k, v in m.items() if k != "control_context"}
                 for m in mlist
             ]
-            sub_items = _group_loop_iterations(inner_metrics)
+            # Synthesis inside a control's body is enabled iff the
+            # control's body actually CONTAINS for-loops (T10:
+            # ``if cond: for i: for j: body`` — the for-loops are in the
+            # if-body, so synthesising for-i around the for-j inside is
+            # correct). For T6 (``for c: if cond: body``) the chain's
+            # for-loops are OUTSIDE the control; synthesising them inside
+            # would duplicate the outer loops, so we disable.
+            body_haystack = "\n".join(
+                str(s)
+                for m in mlist
+                for s in (m.get("body_statements") or [])
+            )
+            chain_headers = []
+            for m in mlist:
+                ch = m.get("loop_header_chain")
+                if ch:
+                    chain_headers = list(ch)
+                    break
+            synth_inside = bool(chain_headers and any(
+                h in body_haystack for h in chain_headers
+            ))
+            sub_items = _group_loop_iterations(
+                inner_metrics, synthesize_intermediate_loops=synth_inside,
+            )
+            body_idx = min(
+                (int(m["body_index"]) for m in mlist if "body_index" in m),
+                default=10_000,
+            )
             pass1.append({
                 "type": "control_group",
                 "metrics": mlist,
                 "sub_items": sub_items,
                 "branch_label": branch_label,
                 "header": header,
+                "body_index": body_idx,
             })
         control_groups.clear()
 
@@ -111,7 +198,13 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
             # Control context wins over iteration context — a loop *inside*
             # an if/else gets bucketed under the control, then recursively
             # sub-grouped at flush-time so the loop still looks like a loop.
-            _flush_loops()
+            # BUT: if this control is itself nested inside a loop (has_iter),
+            # don't flush the outer loop's stmt_groups — otherwise the outer
+            # for-loop gets split into two halves around the control, one
+            # for iterations where the control's true-branch ran and one
+            # for iterations where it didn't.
+            if not has_iter:
+                _flush_loops()
             control_groups.setdefault(ctx, []).append(m)
         elif has_iter:
             _flush_controls()
@@ -131,22 +224,303 @@ def _group_loop_iterations(metrics: list[dict[str, Any]]) -> list[dict[str, Any]
     _flush_loops()
     _flush_controls()
 
+    # Pass 1.5: merge control_groups across the whole pass1 list that share
+    # the same branch_label. They represent the same inner control
+    # structure fired across different outer-loop iterations — each firing
+    # got flushed separately (often interleaved with sibling body
+    # statements that triggered _flush_controls), so without this pass T6
+    # ends up with N sibling if-blocks instead of one.
+    merged_pass1: list[dict[str, Any]] = []
+    by_label: dict[str, int] = {}
+    for item in pass1:
+        if item.get("type") == "control_group" and item.get("branch_label"):
+            label = str(item["branch_label"])
+            if label in by_label:
+                target = merged_pass1[by_label[label]]
+                target["metrics"].extend(item["metrics"])
+                inner = [
+                    {k: v for k, v in m.items() if k != "control_context"}
+                    for m in target["metrics"]
+                ]
+                # Synthesis is disabled for control-body re-grouping —
+                # same rationale as _flush_controls above (T6 duplication).
+                target["sub_items"] = _group_loop_iterations(
+                    inner, synthesize_intermediate_loops=False,
+                )
+                continue
+            by_label[label] = len(merged_pass1)
+        merged_pass1.append(item)
+    pass1 = merged_pass1
+
     # Pass 2: wrap consecutive loop_group items into a single for_loop_group.
-    result: list[dict[str, Any]] = []
+    # When loop_groups have DIFFERENT loop_headers (e.g. nested
+    # `for cat:` body stmts vs `for win:` body stmts in T2) they belong to
+    # different for-loops and must be flushed into separate for_loop_groups
+    # so each gets its own source-faithful header.
+    pass2: list[dict[str, Any]] = []
     pending: list[dict[str, Any]] = []
 
     def _flush_pending() -> None:
         if pending:
-            result.append({"type": "for_loop_group", "stmt_groups": list(pending)})
+            chain = next(
+                (p.get("loop_header_chain", ()) for p in pending if p.get("loop_header_chain")),
+                (),
+            )
+            pass2.append({
+                "type": "for_loop_group",
+                "stmt_groups": list(pending),
+                "loop_header_chain": tuple(chain),
+            })
             pending.clear()
+
+    def _pending_header() -> str:
+        return next((p.get("loop_header", "") for p in pending if p.get("loop_header")), "")
 
     for item in pass1:
         if item["type"] == "loop_group":
+            item_header = item.get("loop_header", "")
+            existing = _pending_header()
+            if pending and existing and item_header and existing != item_header:
+                _flush_pending()
             pending.append(item)
         else:
             _flush_pending()
-            result.append(item)
+            pass2.append(item)
     _flush_pending()
+
+    # Pass 2.5: hoist for-loops that surround a control_group out of the
+    # control's sub_items. When a control_group has chain (A, B, C) and
+    # its sub_items contain a for_loop_group with the same chain, that
+    # for_loop_group is the for-C loop that SURROUNDS the if (in source,
+    # `for c in range(2): if cond: body`). Without hoisting, the renderer
+    # would draw the if first and the for-c inside it (inverted). After
+    # hoisting, the for-c is the outer wrapper with the control as its
+    # nested child and the inner stmt rows marked head-suppressed so
+    # they render as the if-body without a duplicate "for c" header.
+    #
+    # SKIP hoisting if a real for_loop_group with the same chain already
+    # exists at the top level — in T13 (`for x: stmt; if cond: stmt; stmt`)
+    # the real for-x carries the body stmts and pass 3 will nest the
+    # control under it. Synthesising a duplicate outer would split the
+    # for-x in two.
+    existing_chains = {
+        _item_chain(s) for s in pass2
+        if s.get("type") == "for_loop_group" and _item_chain(s)
+    }
+    new_pass2: list[dict[str, Any]] = []
+    for item in pass2:
+        if (
+            item.get("type") == "control_group"
+            and _item_chain(item) in existing_chains
+        ):
+            # A real for_loop_group with this chain already exists as a
+            # sibling — pass 3 will nest the control under it. Mark any
+            # for_loop_group inside the control's sub_items with the same
+            # chain as head-suppressed so we don't draw a duplicate
+            # "for x in ...:" header inside the control body (T13).
+            ctrl_chain = _item_chain(item)
+            for sub in item.get("sub_items", []):
+                if (sub.get("type") == "for_loop_group"
+                        and _item_chain(sub) == ctrl_chain):
+                    sub["_suppress_head"] = True
+            new_pass2.append(item)
+        else:
+            new_pass2.append(_hoist_outer_for_loop(item))
+    pass2 = new_pass2
+
+    # Pass 3: nest by loop_header_chain so deep loops actually sit inside
+    # their parents instead of rendering as siblings. A for_loop_group
+    # with chain (A, B, C) belongs inside the for_loop_group with chain
+    # (A, B); a control_group with chain (A, B, C) belongs inside the
+    # for_loop_group at chain (A, B, C) (its hoisted outer-for parent).
+    return _nest_by_chain(pass2, synthesize=synthesize_intermediate_loops)
+
+
+def _hoist_outer_for_loop(item: dict[str, Any]) -> dict[str, Any]:
+    """If ``item`` is a control_group whose sub_items contain a for_loop_group
+    with the same chain (= the loop that SURROUNDS this control in source),
+    swap them: the for-loop becomes the outer wrapper, this control becomes
+    its nested child, and the original inner for-loop is marked
+    ``_suppress_head`` so its iteration rows render as the control's body
+    without a duplicate for-loop header.
+
+    Heuristic to tell T6 (``for c: if cond: body``) from T10
+    (``if cond: for i: for j: body``): if the wrapper's loop_header appears
+    as a substring in the control's recorded ``body_statements``, the
+    for-loop is INSIDE the control (T10) — don't hoist. Otherwise the
+    for-loop wraps the control (T6) — hoist.
+    """
+    if item.get("type") != "control_group":
+        return item
+    ctrl_chain = _item_chain(item)
+    if not ctrl_chain:
+        return item
+    sub_items = item.get("sub_items", [])
+    wrapper_idx = next(
+        (i for i, s in enumerate(sub_items)
+         if s.get("type") == "for_loop_group" and _item_chain(s) == ctrl_chain),
+        None,
+    )
+    if wrapper_idx is None:
+        return item
+    wrapper = sub_items[wrapper_idx]
+    wrapper_header = wrapper.get("loop_header") or (
+        wrapper["stmt_groups"][0].get("loop_header", "") if wrapper.get("stmt_groups") else ""
+    )
+    # If the wrapper's for-line appears in the control's recorded body
+    # source, the for-loop is INSIDE the control (e.g. T10) — keep it
+    # nested inside and skip hoisting.
+    if wrapper_header:
+        body_stmts = []
+        for m in item.get("metrics", []):
+            bs = m.get("body_statements") or []
+            body_stmts.extend(str(s) for s in bs)
+        haystack = "\n".join(body_stmts)
+        if wrapper_header in haystack:
+            return item
+    others = [s for i, s in enumerate(sub_items) if i != wrapper_idx]
+    inner = dict(wrapper)
+    inner["_suppress_head"] = True
+    item["sub_items"] = others + [inner]
+    # Outer wrapper carries the loop_header and chain but has no direct
+    # stmt_groups — the iteration data lives in the inner, head-suppressed
+    # copy now nested under the control.
+    return {
+        "type": "for_loop_group",
+        "stmt_groups": [],
+        "loop_header": wrapper.get("loop_header") or (
+            wrapper["stmt_groups"][0].get("loop_header", "") if wrapper.get("stmt_groups") else ""
+        ),
+        "loop_header_chain": list(ctrl_chain),
+        "nested": [item],
+        "_synthetic_outer": True,
+    }
+
+
+def _item_chain(item: dict[str, Any]) -> tuple[str, ...]:
+    if item.get("type") == "for_loop_group":
+        return tuple(item.get("loop_header_chain", ()))
+    if item.get("type") == "control_group":
+        metrics = item.get("metrics", [])
+        ch: tuple[str, ...] = ()
+        for m in metrics:
+            mch = m.get("loop_header_chain")
+            if mch:
+                ch = tuple(mch)
+                break
+        if not ch:
+            return ()
+        # If the chain's for-loops appear in the control's recorded
+        # body_statements, those for-loops are INSIDE the control's body,
+        # not the loops surrounding the control. The control then has no
+        # enclosing for-loop at the cell level — return empty chain so
+        # outer nesting/synthesis doesn't wrap it in those loops.
+        body_stmts: list[str] = []
+        for m in metrics:
+            for s in (m.get("body_statements") or []):
+                body_stmts.append(str(s))
+        haystack = "\n".join(body_stmts)
+        if haystack and any(header in haystack for header in ch):
+            return ()
+        return ch
+    return ()
+
+
+def _nest_by_chain(items: list[dict[str, Any]], *, synthesize: bool = True) -> list[dict[str, Any]]:
+    """Convert a flat list of for_loop_groups + controls into a nested tree
+    using each item's enclosing-loop chain. Items with empty chain stay at
+    the top level. When the chain skips levels (e.g. T10's
+    ``if cond: for i: for j: body`` has metrics with chain (for-i, for-j)
+    but no for_loop_group for ``for-i`` because its body is only a control
+    structure), synthesize the missing intermediate for_loop_groups so
+    every level of the chain has its own header in the rendered tree.
+
+    Synthetics are inserted at the position of their first child so the
+    rendered order matches source order (the missing outer wrap doesn't
+    leap-frog earlier siblings)."""
+    # Index existing real for_loop_groups by their chain.
+    by_chain: dict[tuple[str, ...], dict[str, Any]] = {}
+    for item in items:
+        if item.get("type") == "for_loop_group":
+            ch = _item_chain(item)
+            if ch:
+                by_chain[ch] = item
+                item.setdefault("nested", [])
+
+    result: list[dict[str, Any]] = []
+    for item in items:
+        chain = _item_chain(item)
+        if not chain:
+            result.append(item)
+            continue
+        if item.get("type") == "for_loop_group":
+            parent_chain = chain[:-1]
+        else:
+            # control_group, etc. live INSIDE their innermost enclosing
+            # for-loop — same chain.
+            parent_chain = chain
+
+        # Walk up the parent chain; for each prefix without an existing
+        # for_loop_group, synthesize one (when allowed). Build the
+        # synthetic chain outermost → innermost so we can nest them
+        # correctly.
+        synth_chain: list[tuple[tuple[str, ...], dict[str, Any]]] = []
+        pc = parent_chain
+        while pc:
+            if pc in by_chain and by_chain[pc] is not item:
+                break
+            if pc in by_chain and by_chain[pc] is item:
+                pc = pc[:-1]
+                continue
+            if not synthesize:
+                break
+            synth = {
+                "type": "for_loop_group",
+                "stmt_groups": [],
+                "loop_header": pc[-1],
+                "loop_header_chain": list(pc),
+                "nested": [],
+                "_synthetic_outer": True,
+            }
+            by_chain[pc] = synth
+            synth_chain.append((pc, synth))
+            pc = pc[:-1]
+
+        # synth_chain is innermost-first; reverse to outermost-first.
+        synth_chain.reverse()
+
+        # The outermost element to attach: either the first synthetic
+        # (if any were created) or the item itself.
+        outermost = synth_chain[0][1] if synth_chain else item
+
+        # Where does the outermost attach? Walk up from outermost's
+        # parent_chain to find an existing real for-loop ancestor.
+        outermost_parent_chain = (
+            synth_chain[0][0][:-1] if synth_chain
+            else parent_chain
+        )
+        outer_parent = None
+        ppc = outermost_parent_chain
+        while ppc:
+            if ppc in by_chain and by_chain[ppc] is not outermost:
+                outer_parent = by_chain[ppc]
+                break
+            ppc = ppc[:-1]
+
+        # Chain the synthetics: outermost.nested = [next] = ... = [innermost]
+        for i in range(len(synth_chain) - 1):
+            synth_chain[i][1]["nested"].append(synth_chain[i + 1][1])
+        # Finally attach the item to the innermost synthetic (if any).
+        if synth_chain:
+            synth_chain[-1][1]["nested"].append(item)
+
+        # Place outermost in the right spot.
+        if outer_parent is not None:
+            outer_parent["nested"].append(outermost)
+        else:
+            # If we created synthetics, the OUTERMOST takes the slot;
+            # the item itself moves into the synthetic tree.
+            result.append(outermost)
     return result
 
 
@@ -192,7 +566,12 @@ def _summary_status(restored: int, computed: int, skipped: int) -> BadgeStatus:
 # ---------------------------------------------------------------------------
 
 def _compute_stats(metrics: list[dict[str, Any]]) -> tuple[float, float, int, int, int]:
-    """``(total_saved, total_exec, restored_count, computed_count, skipped_count)``."""
+    """``(total_saved, total_exec, restored_count, computed_count, skipped_count)``.
+
+    ERROR rows are counted as computed (they consumed time and ran the
+    operation, just unsuccessfully) so the cell summary reflects that
+    something happened instead of silently dropping the failure.
+    """
     total_saved = 0.0
     total_exec = 0.0
     restored = computed = skipped = 0
@@ -207,7 +586,9 @@ def _compute_stats(metrics: list[dict[str, Any]]) -> tuple[float, float, int, in
         elif status == str(CacheStatus.SKIPPED):
             skipped += 1
             total_saved += m.get("saved_time", 0.0)
-        elif m.get("is_upstream", False) or status == str(CacheStatus.COMPUTED):
+        elif (m.get("is_upstream", False)
+                or status == str(CacheStatus.COMPUTED)
+                or status == str(CacheStatus.ERROR)):
             computed += 1
             total_exec += m.get("total_time", 0.0)
     return total_saved, total_exec, restored, computed, skipped
@@ -297,6 +678,7 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
+        body_statements=_tup_str(m.get("body_statements")),
         cache_key_short=cache_key_short,
     )
 
@@ -327,14 +709,61 @@ def _section_item_from_grouped(item: dict[str, Any], *, is_upstream: bool) -> Se
     if kind == "for_loop_group":
         stmt_groups = item.get("stmt_groups", [])
         loop_var_names = tuple(stmt_groups[0].get("all_loop_var_names", [])) if stmt_groups else ()
-        stmts = tuple(
-            LoopStatement(
-                base_code=str(sg.get("base_code", "")),
-                iterations=tuple(_iteration_row(m) for m in sg.get("metrics", [])),
-            )
-            for sg in stmt_groups
+        loop_header = str(item.get("loop_header", "")) or next(
+            (str(sg.get("loop_header", "")) for sg in stmt_groups if sg.get("loop_header")),
+            "",
         )
-        return ForLoopGroup(loop_var_names=loop_var_names, stmts=stmts)
+        # Sort body stmts (loop_groups) and nested children (control_groups,
+        # nested for_loop_groups) into source order. Each metric carries a
+        # ``body_index_chain`` set by the runtime; this for-loop sits at
+        # depth ``len(self_chain) - 1``, so its body items are sorted by
+        # ``chain[depth]``. Falls back to insertion order when an item has
+        # no chain (synthetic outer wrappers).
+        self_chain = tuple(item.get("loop_header_chain", []))
+        depth = max(0, len(self_chain) - 1)
+
+        def _body_idx(sub: dict[str, Any], pos: int) -> tuple[int, int]:
+            metrics = sub.get("metrics", []) or [
+                m for sg in sub.get("stmt_groups", []) for m in sg.get("metrics", [])
+            ]
+            for m in metrics:
+                chain = m.get("body_index_chain")
+                if chain and depth < len(chain):
+                    return (int(chain[depth]), pos)
+            if "body_index" in sub:
+                return (int(sub["body_index"]), pos)
+            return (10_000, pos)
+
+        ordered: list[tuple[tuple[int, int], str, dict[str, Any]]] = []
+        for pos, sg in enumerate(stmt_groups):
+            ordered.append((_body_idx(sg, pos), "stmt", sg))
+        for pos, child in enumerate(item.get("nested", []), start=len(stmt_groups)):
+            ordered.append((_body_idx(child, pos), "child", child))
+        ordered.sort(key=lambda t: t[0])
+
+        stmts_list: list[LoopStatement] = []
+        nested_list: list[Any] = []
+        body_list: list[Any] = []
+        for _, item_kind, sub in ordered:
+            if item_kind == "stmt":
+                ls = LoopStatement(
+                    base_code=str(sub.get("base_code", "")),
+                    iterations=tuple(_iteration_row(m) for m in sub.get("metrics", [])),
+                )
+                stmts_list.append(ls)
+                body_list.append(ls)
+            else:
+                child_item = _section_item_from_grouped(sub, is_upstream=is_upstream)
+                nested_list.append(child_item)
+                body_list.append(child_item)
+        return ForLoopGroup(
+            loop_var_names=loop_var_names,
+            stmts=tuple(stmts_list),
+            loop_header=loop_header,
+            nested=tuple(nested_list),
+            suppress_head=bool(item.get("_suppress_head", False)),
+            body=tuple(body_list),
+        )
 
     if kind == "control_group":
         sub_items = item.get("sub_items")
@@ -570,7 +999,7 @@ def build_interactive_badge(
                     and str(m.get("status")) != str(CacheStatus.SKIPPED)]
     upstream_restored_like = [
         m for m in upstream_all
-        if str(m.get("status")) in {str(CacheStatus.RESTORED), *_RESTORED_LIKE_STATUSES}
+        if str(m.get("status")) in {str(CacheStatus.RESTORED), *_NOTIFICATION_STATUSES}
     ]
     upstream_executed = [m for m in upstream_all if m not in upstream_restored_like]
     upstream_skipped = [m for m in metrics if str(m.get("status")) == str(CacheStatus.SKIPPED)
@@ -578,12 +1007,21 @@ def build_interactive_badge(
     current = [m for m in metrics if not m.get("is_upstream", False)]
 
     total_saved, total_exec, restored, computed, skipped_count = _compute_stats(metrics)
+    # Notification statuses (WARN / FUNCTION_CHANGED / MODULE_RELOADED / ERROR)
+    # don't count as restored/computed/skipped but should appear in the
+    # summary chip strip — otherwise a notification-only cell shows no chip.
+    warn_count = sum(
+        1 for m in metrics
+        if str(m.get("status")) in _NOTIFICATION_STATUSES
+        or str(m.get("status")) == str(CacheStatus.ERROR)
+    )
     summary_time = cell_total_time if cell_total_time is not None else total_exec
     header = BadgeHeader(
         status=BadgeStatus.WARNING if status == "RUNNING" else _summary_status(restored, computed, skipped_count),
         restored_count=restored,
         computed_count=computed,
         skipped_count=skipped_count,
+        warn_count=warn_count,
         total_saved_s=total_saved,
         total_exec_s=summary_time,
         current_step=current_step,

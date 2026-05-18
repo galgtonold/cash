@@ -9,12 +9,14 @@ from ``design/notebook-badges/Badge.v3.jsx``:
 * per-row timing bar scaled to the cell-max
 * state-tinted time chip on the right
 * loop bodies render an inline mini-histogram of iteration times
-* expansions use ``<details>`` (works in classic Jupyter *and* VS Code)
-* hover detail is pure CSS :hover (no inline JS, survives notebook strip)
+* expansions use ``<details>`` and the CSS checkbox-hack so they survive
+  Jupyter's HTML sanitiser and VS Code's renderer alike
 
-Interactive layers that require JS (filter chips, fixed-position
-tooltips, keyboard nav) are deliberately omitted — they would silently
-break in VS Code's sanitized renderer. The visual language is preserved.
+Interactive layers that require JS (hover-revealed tooltips, keyboard
+navigation, dynamic filter chips) are deliberately omitted — they would
+silently break in VS Code's sanitised renderer. All "click to expand"
+state is driven by hidden checkboxes + ``label[for]`` + CSS sibling
+selectors. Filter chips are static visual indicators only.
 
 Style is hoisted into a single per-badge ``<style>`` block so HTML output
 stays compact and the CSS class names form a stable contract for tests.
@@ -22,14 +24,13 @@ stays compact and the CSS class names form a stable contract for tests.
 
 from __future__ import annotations
 
-import threading
+from typing import Any
 
 from .. import theme
 from ..view import (
     BadgeHeader,
     BadgeStatus,
     BugReportLink,
-    ControlBody,
     ControlGroup,
     ControlGroupSingle,
     DecoratorCall,
@@ -103,6 +104,14 @@ _CSS = f"""
   margin-top: 5px;
   max-width: 100%;
 }}
+/* Neutralize host (Jupyter / VS Code) defaults — but only on the inline
+   row code block (.c3-code). The expanded rowtip code block (.c3-rt-code)
+   wants its own background, so we don't touch it. */
+.c3-code {{
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}}
 .c3-card {{
   display: inline-flex;
   flex-direction: column;
@@ -165,12 +174,17 @@ _CSS = f"""
   border-left: 1px solid #e8e5dc;
   border-right: 1px solid #e8e5dc;
   margin-left: 4px;
+  /* Cap so a 100-statement cell can't push the filter chips off the
+     edge — overflow clips the trailing bars rather than expanding. */
+  max-width: 200px;
+  overflow: hidden;
 }}
 .c3-spark {{
   display: inline-flex;
   align-items: flex-end;
   height: 16px;
   gap: 1px;
+  flex-shrink: 0;
 }}
 .c3-spark-bar {{
   width: 3px;
@@ -215,7 +229,7 @@ _CSS = f"""
   transform: rotate(-135deg) translate(-2px, -2px);
 }}
 
-/* Panel — overflow is visible so pure-CSS hover tooltips can escape;
+/* Panel — overflow is visible so click-to-expand tooltips can escape;
    we trade per-badge scroll for the badge growing with its content. */
 .c3-panel {{
   background: {theme.BG_PANEL};
@@ -230,8 +244,12 @@ _CSS = f"""
   border-bottom: 1px solid #ececec;
 }}
 .c3-upstream > summary {{
-  display: flex; align-items: center; gap: 6px;
-  padding: 6px 12px;
+  /* No gap, no right-padding: the bar-cell (80px) and saved-cell (76px)
+     on the right must butt up against each other so they align with the
+     row grid's contiguous tbar + chip columns below. Spacing on the left
+     comes from the caret's margin-right and the count's margin-left:auto. */
+  display: flex; align-items: center;
+  padding: 6px 0 6px 12px;
   cursor: pointer;
   user-select: none;
   font-size: 11px;
@@ -242,22 +260,48 @@ _CSS = f"""
 .c3-upstream > summary::marker {{ content: ""; }}
 .c3-upstream > summary:hover {{ background: #f0f2f4; }}
 .c3-upstream-label {{ font-weight: 600; letter-spacing: 0.02em; }}
-.c3-upstream-meta  {{
-  font-family: {theme.FONT_MONO};
-  font-size: 10px;
-  color: {theme.INK_4};
+.c3-upstream-count {{
+  font-family: {theme.FONT_MONO}; font-size: 10px; color: {theme.INK_4};
   margin-left: auto;
 }}
+/* Bar + saved cells sized so they line up under the row tbar + time
+   chip columns (80px and 76px in .c3-row grid-template-columns). */
+.c3-upstream-bar-cell {{ width: 80px; padding: 0 8px; box-sizing: border-box; }}
+.c3-upstream-bar {{
+  display: block;
+  height: 6px;
+  background: #f2efea;
+  border-radius: 3px;
+  overflow: hidden;
+  width: 100%;
+}}
+.c3-upstream-bar > span {{
+  display: block;
+  height: 100%;
+  background: {theme.BAR_CACHED};
+  border-radius: 3px;
+}}
+.c3-upstream-saved-cell {{
+  width: 76px; padding: 0 8px 0 6px; box-sizing: border-box;
+  text-align: right;
+  font-family: {theme.FONT_MONO}; font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}}
+.c3-upstream-saved {{ color: {theme.RAIL_CACHED}; font-weight: 600; }}
 .c3-upstream-body {{ border-top: 1px solid #ececec; padding: 2px 0; }}
+/* Reuse the outer-badge chevron style. */
 .c3-upstream-caret {{
+  width: 7px; height: 7px;
+  border-right: 1.5px solid {theme.INK_4};
+  border-bottom: 1.5px solid {theme.INK_4};
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
   display: inline-block;
-  color: {theme.INK_5};
-  font-size: 9px;
-  width: 10px;
   margin-right: 2px;
 }}
-.c3-upstream[open] .c3-upstream-caret::after {{ content: "▾"; }}
-.c3-upstream:not([open]) .c3-upstream-caret::after {{ content: "▸"; }}
+.c3-upstream[open] > summary .c3-upstream-caret {{
+  transform: rotate(45deg);
+}}
 
 /* Row grid */
 .c3-row {{
@@ -363,17 +407,29 @@ label.c3-row {{ cursor: pointer; }}
 .c3-rail-soft {{ opacity: 0.5; }}
 
 .c3-code {{
-  margin: 0;
-  padding: 5px 10px;
-  font-family: {theme.FONT_MONO};
-  font-size: 12px;
-  color: {theme.INK};
-  white-space: pre;
+  /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
+     (padding: 0; line-height: 1.21429; menlo-first font stack) would
+     otherwise win on specificity and compress every row. */
+  margin: 0 !important;
+  padding: 5px 10px !important;
+  font-family: {theme.FONT_MONO} !important;
+  font-size: 12px !important;
+  color: {theme.INK} !important;
+  white-space: pre !important;
   overflow: hidden;
   text-overflow: ellipsis;
-  line-height: 1.4;
+  line-height: 1.4 !important;
 }}
 .c3-code-body  {{ color: {theme.INK_2}; }}
+/* Faded suffix listing produced/restored variable names. Lives inline
+   so the parent .c3-code's overflow:hidden + ellipsis hides it first
+   when there's not enough room — never pushes the code itself off. */
+.c3-row-vars {{
+  margin-left: 10px;
+  color: {theme.INK_5};
+  font-size: 10.5px;
+  font-style: italic;
+}}
 .c3-code-group {{ font-style: italic; }}
 .c3-caret {{
   display: inline-block;
@@ -514,6 +570,7 @@ label.c3-row {{ cursor: pointer; }}
   color: {theme.INK_3};
   font-family: {theme.FONT_MONO};
 }}
+.c3-iter-more .c3-iter-key {{ color: {theme.INK_5}; font-style: italic; }}
 .c3-iter-key b {{ color: {theme.INK}; }}
 .c3-iter-bar-track {{
   height: 4px;
@@ -555,6 +612,14 @@ label.c3-row {{ cursor: pointer; }}
   border-radius: 3px;
   margin-right: 4px;
 }}
+.c3-deco-detail {{
+  display: none;
+  background: {theme.BG_DETAIL};
+  border-top: 1px solid {theme.RULE_SOFT};
+  padding: 8px 16px 10px 22px;
+  font-size: 11px;
+}}
+.c3-rxtog:checked ~ .c3-deco-detail {{ display: block; }}
 .c3-deco-fn      {{ margin-top: 6px; }}
 .c3-deco-fn-name {{
   font-family: {theme.FONT_MONO};
@@ -575,7 +640,10 @@ label.c3-row {{ cursor: pointer; }}
 .c3-ctrl-head {{ /* uses .c3-row grid via the markup */ }}
 .c3-ctrl-body {{
   border-left: 2px solid #e8e1ce;
-  margin-left: 5px;        /* align under the head row's rail */
+  /* Visual indent of one "tab" so nested loops/controls read at a
+     similar shift as Python's 4-space source indent — the previous
+     5px just aligned rails and looked unindented in deep nesting. */
+  margin-left: 24px;
   background: #fbfaf3;
 }}
 
@@ -689,26 +757,25 @@ _STYLE_BLOCK = f"<style>{_CSS}</style>"
 # Helpers
 # ---------------------------------------------------------------------------
 
-_id_counter = 0
-_id_lock = threading.Lock()
-# Per-process salt so checkbox-hack IDs don't collide across multiple
-# badges in one notebook page (each render bumps the counter, the salt
-# distinguishes the process / kernel session).
-import secrets as _secrets  # noqa: E402
-_ID_SALT = _secrets.token_hex(3)
+import uuid as _uuid  # noqa: E402
 
 
 def _reset_ids() -> None:
-    global _id_counter
-    with _id_lock:
-        _id_counter = 0
+    # Retained for callers that used to clear the counter before rendering.
+    # With per-checkbox UUIDs there is no shared mutable state to reset,
+    # but we keep the function so the API stays stable.
+    return None
 
 
 def _uid(prefix: str = "id") -> str:
-    global _id_counter
-    with _id_lock:
-        _id_counter += 1
-        return f"{prefix}-{_ID_SALT}-{_id_counter}"
+    """Return a globally-unique element id with the given prefix.
+
+    Uses a fresh UUID per call rather than a shared counter + salt so two
+    threads rendering badges concurrently cannot interleave salt
+    rotations and end up with colliding ``#rx-<salt>-<n>`` IDs on the
+    same badge.
+    """
+    return f"{prefix}-{_uuid.uuid4().hex[:10]}"
 
 
 def _esc(text: str) -> str:
@@ -720,13 +787,15 @@ def _fmt_time(t: float) -> str:
 
 
 def _snippet(code: str) -> str:
-    """First-line truncated snippet (raw, not yet escaped or highlighted)."""
+    """First-line snippet (raw, not yet escaped or highlighted).
+
+    No character cap: the row's ``.c3-code`` cell uses
+    ``overflow: hidden; text-overflow: ellipsis``, so the browser cuts
+    at the column edge rather than hard-truncating mid-word.
+    """
     if not code:
         return ""
-    line = code.splitlines()[0]
-    if len(line) > theme.CODE_SNIPPET_MAX_LEN:
-        line = line[: theme.CODE_SNIPPET_MAX_LEN] + "…"
-    return line
+    return code.splitlines()[0]
 
 
 def _code_html(code: str) -> str:
@@ -879,7 +948,7 @@ def _notif_chip(label: str) -> str:
 # ---------------------------------------------------------------------------
 
 def _rowtip_html(row: StatementRow) -> str:
-    """Pure-CSS hover tooltip body for a :class:`StatementRow`."""
+    """Pure-CSS click-to-expand tooltip body for a :class:`StatementRow`."""
     kind = theme.kind_of(row.status.value)
     status_pill = (
         f'<span class="c3-rt-status" '
@@ -963,37 +1032,40 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     rail = theme.rail_color(status.value)
     rail_soft = " c3-rail-soft" if row.is_upstream else ""
 
-    # Notification rows (WARNING / FUNCTION_CHANGED / MODULE_RELOADED) get a
-    # text pill in the time chip and skip the timing bar.
+    # Notification rows (WARNING / FUNCTION_CHANGED / MODULE_RELOADED / ERROR)
+    # get a text pill in the time chip and skip the timing bar. The row code
+    # shows just the descriptor (function names / module names / error type)
+    # — the pill conveys the kind, no need for a wordy prefix.
     if status is BadgeStatus.FUNCTION_CHANGED:
-        label = "changed"
         descriptor = ", ".join(row.changed_functions) or _snippet(row.code) or "—"
-        code_html = (
-            f'<pre class="c3-code"><span class="c3-com">function source changed: </span>'
-            f"{_esc(descriptor)}</pre>"
-        )
+        code_html = f'<pre class="c3-code">{_esc(descriptor)}</pre>'
         bar = '<span class="c3-tbar-cell"></span>'
-        chip = _notif_chip(label)
+        chip = _notif_chip("changed")
     elif status is BadgeStatus.MODULE_RELOADED:
-        label = "reloaded"
         descriptor = ", ".join(row.changed_modules) or _snippet(row.code) or "—"
-        code_html = (
-            f'<pre class="c3-code"><span class="c3-com">module reloaded: </span>'
-            f"{_esc(descriptor)}</pre>"
-        )
+        code_html = f'<pre class="c3-code">{_esc(descriptor)}</pre>'
         bar = '<span class="c3-tbar-cell"></span>'
-        chip = _notif_chip(label)
+        chip = _notif_chip("reloaded")
     elif status is BadgeStatus.WARNING:
-        label = "warn"
         descriptor = _snippet(row.code) or "—"
         code_html = f'<pre class="c3-code">{_code_html(descriptor)}</pre>'
         bar = '<span class="c3-tbar-cell"></span>'
-        chip = _notif_chip(label)
-    else:
-        # Code line shows just the highlighted code. Variable info, source,
-        # decorator stats, etc. all live in the hover tooltip rather than
-        # crowding the row with a redundant `# var` prefix.
+        chip = _notif_chip("warn")
+    elif status is BadgeStatus.ERROR:
         code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
+        bar = '<span class="c3-tbar-cell"></span>'
+        chip = _notif_chip("error")
+    else:
+        # Produced/restored variables get a faded ``← name1, name2`` suffix
+        # so a user can see what the row hydrated or computed without
+        # opening the click tooltip. Suffix overflows with the code if
+        # there isn't room (CSS ellipsis on the parent <pre> takes over).
+        names = row.restored_vars or row.output_vars
+        suffix = (
+            f'<span class="c3-row-vars">← {", ".join(_esc(n) for n in names)}</span>'
+            if names else ""
+        )
+        code_html = f'<pre class="c3-code">{_code_html(row.code)}{suffix}</pre>'
         bar = _tbar(row.time_s, max_time, kind)
         chip = _time_chip(row.time_s, row.saved_time_s, kind)
 
@@ -1048,24 +1120,77 @@ def _iter_histogram_html(iterations: tuple[IterationRow, ...]) -> str:
     )
 
 
-def _iter_drilldown_html(iterations: tuple[IterationRow, ...], loop_var_names: tuple[str, ...]) -> str:
+_ITER_VALUE_MAX = 40
+
+
+def _fmt_iter_value(v: Any) -> str:
+    """Compact repr for a per-iteration binding value.
+
+    Inline dicts/lists with many items render as multi-line junk in the
+    160px drill-down column. Collapse those to a count summary
+    (``{3 items}``); truncate other long reprs in the middle so both the
+    head and tail of the value stay visible.
+    """
+    if isinstance(v, dict):
+        n = len(v)
+        if n > 2:
+            return f"{{{n} items}}"
+    if isinstance(v, (list, tuple, set)) and len(v) > 4:
+        opener, closer = ("[", "]") if isinstance(v, list) else ("(", ")") if isinstance(v, tuple) else ("{", "}")
+        return f"{opener}{len(v)} items{closer}"
+    r = repr(v)
+    if len(r) <= _ITER_VALUE_MAX:
+        return r
+    keep = (_ITER_VALUE_MAX - 1) // 2
+    return f"{r[:keep]}…{r[-keep:]}"
+
+
+def _iter_drilldown_html(
+    iterations: tuple[IterationRow, ...],
+    loop_var_names: tuple[str, ...],
+    *,
+    max_rows: int = 0,
+) -> str:
     if not iterations:
         return ""
+    # When no iteration carries loop_bindings, the drill-down would be a
+    # column of `var = —` rows that adds no information — skip it.
+    if not any(it.loop_bindings for it in iterations):
+        return ""
     max_t = max((it.time_s for it in iterations), default=0.001) or 0.001
+    # Multi-var loops use Python tuple syntax: ``(cat, stats) = ('A', {...})``.
+    # Reads like the loop's actual `for cat, stats in ...:` line.
+    is_tuple = len(loop_var_names) > 1
+    var_label = (
+        f"({', '.join(loop_var_names)})" if is_tuple
+        else (loop_var_names[0] if loop_var_names else "i")
+    )
+    bound_iters = [it for it in iterations if it.loop_bindings]
+    total = len(bound_iters)
+    visible = bound_iters[: max_rows] if max_rows and total > max_rows else bound_iters
+    omitted = total - len(visible)
     rows = []
-    for it in iterations:
+    for it in visible:
         kind = theme.kind_of(it.status.value)
         bar_color = theme.bar_color(kind)
         rail = theme.rail_color(it.status.value)
         pct = max(1.0, (it.time_s / max_t) * 100)
-        bindings = ", ".join(f"<b>{_esc(repr(v))}</b>" for _, v in it.loop_bindings) or "—"
-        var_label = ", ".join(loop_var_names) or "i"
+        vals = [f"<b>{_esc(_fmt_iter_value(v))}</b>" for _, v in it.loop_bindings]
+        value_str = f"({', '.join(vals)})" if is_tuple else (vals[0] if vals else "—")
         rows.append(
             f'<div class="c3-iter-row">'
             f'<span class="c3-iter-bullet" style="background:{rail};"></span>'
-            f'<span class="c3-iter-key">{_esc(var_label)} = {bindings}</span>'
+            f'<span class="c3-iter-key">{_esc(var_label)} = {value_str}</span>'
             f'<span class="c3-iter-bar-track"><span style="width:{pct:.1f}%;background:{bar_color};"></span></span>'
             f'<span class="c3-iter-time">{it.time_s:.3f}s</span>'
+            f"</div>"
+        )
+    if omitted > 0:
+        rows.append(
+            f'<div class="c3-iter-row c3-iter-more">'
+            f'<span></span>'
+            f'<span class="c3-iter-key">… +{omitted} more iteration{"s" if omitted != 1 else ""}</span>'
+            f'<span></span><span></span>'
             f"</div>"
         )
     return f'<div class="c3-iter-table">{"".join(rows)}</div>'
@@ -1151,6 +1276,21 @@ def _walk_statuses(items) -> "list[BadgeStatus]":
     return out
 
 
+def _collect_iterations(items) -> "list[IterationRow]":
+    """Flatten all IterationRows reachable from a nested ForLoopGroup tree.
+    Used by the synthetic-outer for_loop_group head row to compute its
+    iter count from the nested data when it has no direct stmts."""
+    out: list[IterationRow] = []
+    for item in items:
+        if isinstance(item, ForLoopGroup):
+            for ls in item.stmts:
+                out.extend(ls.iterations)
+            out.extend(_collect_iterations(item.nested))
+        elif isinstance(item, ControlGroup):
+            out.extend(_collect_iterations(item.rows))
+    return out
+
+
 def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
     """Synthesise a kind across a group of iteration / row statuses."""
     cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
@@ -1172,12 +1312,17 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
     statement gets a single body-line row underneath with its own
     inline iteration mini-histogram and a drill-down.
     """
-    if not g.stmts:
+    if not g.stmts and not g.nested:
         return ""
     rail_soft = " c3-rail-soft" if is_upstream else ""
 
     # ---- aggregate across every iteration of every body statement -----
     all_iters = [it for stmt in g.stmts for it in stmt.iterations]
+    # Synthetic outer wrappers carry no direct stmts (the iteration data
+    # lives under a head-suppressed inner inside a hoisted control). Walk
+    # nested items to gather statuses for the head row.
+    if not all_iters and g.nested:
+        all_iters = list(_collect_iterations(g.nested))
     statuses = tuple(it.status for it in all_iters)
     cached = sum(1 for s in statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
     total = len(all_iters)
@@ -1192,22 +1337,42 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
     head_total_saved = sum(it.saved_time_s for it in all_iters)
 
     # Iterations-per-stmt — the loop's actual trip count.
-    iters_per_stmt = len(g.stmts[0].iterations)
+    iters_per_stmt = len(g.stmts[0].iterations) if g.stmts else total
 
     # Sample 4 values from the first stmt's bindings for the header
     # preview: ``for ticker in ['TSLA', 'AAPL', 'MSFT', 'GOOG']:``. Use
     # ``repr()`` so strings keep their quotes, lists their brackets, etc. —
     # matching what the user actually typed.
-    var_decl = ", ".join(g.loop_var_names) or "i"
-    sample_values: list[str] = []
-    for it in g.stmts[0].iterations[:4]:
-        if not it.loop_bindings:
-            continue
-        sample_values.append(", ".join(_esc(repr(v)) for _, v in it.loop_bindings))
-    if iters_per_stmt > len(sample_values):
-        sample_values.append("…")
-    values_preview = ", ".join(sample_values) if sample_values else "…"
-    loop_header = f"for {var_decl} in [{values_preview}]:"
+    # Prefer the source-faithful header captured by the runtime
+    # ("for cat in df['category'].unique():"). Fall back to synthesising
+    # one from observed iteration values for older metrics that predate
+    # the loop_header field.
+    if g.loop_header:
+        loop_header = g.loop_header
+    elif not g.stmts:
+        loop_header = "for …:"
+    else:
+        var_decl = ", ".join(g.loop_var_names) or "i"
+        header_var_set = set(g.loop_var_names)
+        sample_values: list[str] = []
+        seen_values: set[tuple[Any, ...]] = set()
+        for it in g.stmts[0].iterations:
+            if not it.loop_bindings:
+                continue
+            kept = tuple(v for name, v in it.loop_bindings if name in header_var_set)
+            if not kept:
+                continue
+            key = tuple(repr(v) for v in kept)
+            if key in seen_values:
+                continue
+            seen_values.add(key)
+            sample_values.append(", ".join(_esc(repr(v)) for v in kept))
+            if len(sample_values) >= 4:
+                break
+        if len(seen_values) > len(sample_values) or iters_per_stmt > len(sample_values):
+            sample_values.append("…")
+        values_preview = ", ".join(sample_values) if sample_values else "…"
+        loop_header = f"for {var_decl} in [{values_preview}]:"
 
     head_meta = (
         f"{iters_per_stmt}× cached" if cached == total and total > 0
@@ -1221,78 +1386,98 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
         total_time=head_total_time, total_saved=head_total_saved, kind=head_kind,
     )
     head_rid = _uid("rx")
-    head_row = (
-        f'<div class="c3-rowx">'
-        f'<input type="checkbox" class="c3-rxtog" id="{head_rid}">'
-        f'<label class="c3-row c3-loop-head" for="{head_rid}" data-kind="{head_kind}">'
-        f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
-        f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
-        f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
-        f"{_tbar(head_total_time, max_time, head_kind)}"
-        f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
-        f"</label>"
-        f"{head_tip}"
-        f"</div>"
-    )
-
-    # ---- one body line per stmt, each with its own per-stmt aggregates --
-    body_rows: list[str] = []
-    for stmt in g.stmts:
-        iters = stmt.iterations
-        if not iters:
-            continue
-        stmt_statuses = tuple(it.status for it in iters)
-        stmt_cached = sum(1 for s in stmt_statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
-        stmt_total = len(iters)
-        stmt_time = sum(it.time_s for it in iters)
-        stmt_saved = sum(it.saved_time_s for it in iters)
-        stmt_kind = _aggregate_kind(stmt_statuses)
-        if stmt_cached > 0 and (stmt_total - stmt_cached) > 0:
-            stmt_rail = theme.RAIL_MIXED
-        elif stmt_kind == "cached":
-            stmt_rail = theme.RAIL_CACHED
-        else:
-            stmt_rail = theme.RAIL_EXEC
-        body_drill = _iter_drilldown_html(iters, g.loop_var_names)
-        body_tip = _loop_tip_html(
-            title_code=stmt.base_code or "…",
-            total=stmt_total, cached=stmt_cached, computed=(stmt_total - stmt_cached),
-            total_time=stmt_time, total_saved=stmt_saved, kind=stmt_kind,
-        )
-        body_rid = _uid("rx")
-        # Pick expansion content by iteration count: show the per-iteration
-        # drill-down for small loops (you want to see every value), fall
-        # back to the condensed counts panel when there'd be too many rows
-        # to scan. Threshold picked to match what fits comfortably in a
-        # notebook cell without scrolling.
-        if stmt_total <= _ITER_INLINE_LIMIT:
-            expansion = body_drill
-        else:
-            expansion = body_tip
-        body_rows.append(
-            f'<div class="c3-rowx c3-loop-body">'
-            f'<input type="checkbox" class="c3-rxtog" id="{body_rid}">'
-            f'<label class="c3-row" for="{body_rid}" data-kind="{stmt_kind}">'
-            f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
-            f'<pre class="c3-code c3-code-body">    {_code_html(stmt.base_code or "…")}</pre>'
-            f"{_iter_histogram_html(iters)}"
-            f"{_tbar(stmt_time, max_time, stmt_kind)}"
-            f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
+    if getattr(g, "suppress_head", False):
+        # This for-loop is the head-suppressed inner copy under a hoisted
+        # outer wrapper (see view_builder._hoist_outer_for_loop). The outer
+        # already drew the loop header; here we only emit body stmt rows
+        # so the iteration data renders as the control's body.
+        head_row = ""
+    else:
+        head_row = (
+            f'<div class="c3-rowx">'
+            f'<input type="checkbox" class="c3-rxtog" id="{head_rid}">'
+            f'<label class="c3-row c3-loop-head" for="{head_rid}" data-kind="{head_kind}">'
+            f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
+            f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
+            f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
+            f"{_tbar(head_total_time, max_time, head_kind)}"
+            f"{_time_chip(head_total_time, head_total_saved, head_kind)}"
             f"</label>"
-            f"{expansion}"
+            f"{head_tip}"
             f"</div>"
         )
 
-    return head_row + "".join(body_rows)
+    # ---- body in source order: interleaves direct stmts (LoopStatement)
+    # and nested for-loops / controls (SectionItem subtypes). View-builder
+    # builds ``g.body`` from the runtime's body_index_chain so this loop's
+    # body reads top-to-bottom matching the user's source. Falls back to
+    # ``stmts + nested`` for older callers that don't set ``g.body``.
+    ordered_body = g.body or (tuple(g.stmts) + tuple(g.nested))
+    body_pieces: list[str] = []
+    for item in ordered_body:
+        if isinstance(item, LoopStatement):
+            iters = item.iterations
+            if not iters:
+                continue
+            stmt_statuses = tuple(it.status for it in iters)
+            stmt_cached = sum(1 for s in stmt_statuses if s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED))
+            stmt_total = len(iters)
+            stmt_time = sum(it.time_s for it in iters)
+            stmt_saved = sum(it.saved_time_s for it in iters)
+            stmt_kind = _aggregate_kind(stmt_statuses)
+            if stmt_cached > 0 and (stmt_total - stmt_cached) > 0:
+                stmt_rail = theme.RAIL_MIXED
+            elif stmt_kind == "cached":
+                stmt_rail = theme.RAIL_CACHED
+            else:
+                stmt_rail = theme.RAIL_EXEC
+            # Show every iteration when the count fits comfortably in a
+            # cell; cap to the first N + a "… +M more" row beyond that.
+            cap = 0 if stmt_total <= _ITER_INLINE_LIMIT else _ITER_INLINE_LIMIT
+            expansion = _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap)
+            body_rid = _uid("rx")
+            body_pieces.append(
+                f'<div class="c3-rowx c3-loop-body">'
+                f'<input type="checkbox" class="c3-rxtog" id="{body_rid}">'
+                f'<label class="c3-row" for="{body_rid}" data-kind="{stmt_kind}">'
+                f'<span class="c3-rail c3-rail-soft" style="background:{stmt_rail};"></span>'
+                f'<pre class="c3-code c3-code-body">{_code_html(item.base_code or "…")}</pre>'
+                f"{_iter_histogram_html(iters)}"
+                f"{_tbar(stmt_time, max_time, stmt_kind)}"
+                f"{_time_chip(stmt_time, stmt_saved, stmt_kind)}"
+                f"</label>"
+                f"{expansion}"
+                f"</div>"
+            )
+        else:
+            body_pieces.append(_render_section_item(item, max_time, is_upstream=is_upstream))
+
+    # Wrap the entire body in ONE shared .c3-ctrl-body so everything sits
+    # at the same indent level — matching Python's 4-space convention
+    # (head at L0, body at L1; deeper nesting falls to L2 via the inner
+    # for-loop/control's own wrapper).
+    inner = "".join(body_pieces)
+    if inner and not getattr(g, "suppress_head", False):
+        inner = f'<div class="c3-ctrl-body">{inner}</div>'
+    return head_row + inner
 
 
 def _control_group_html(cg: ControlGroup, max_time: float) -> str:
-    rail = theme.rail_color(BadgeStatus.COMPUTED.value)
     # Walk nested items to gather every status — body rows may include
     # ForLoopGroups, ControlGroupSingles, etc. that don't carry .status
     # directly. We only need a kind for the aggregate visual treatment.
     statuses = tuple(_walk_statuses(cg.rows))
     kind = _aggregate_kind(statuses)
+    # Rail tracks the body's aggregate kind: if every body row is cached,
+    # the if-block reads as cached (green), not exec — otherwise the
+    # control would look "computed" purely because of the if's bookkeeping
+    # while its actual body did no work.
+    if kind == "cached":
+        rail = theme.RAIL_CACHED
+    elif kind == "warn":
+        rail = theme.RAIL_WARN
+    else:
+        rail = theme.RAIL_EXEC
     # The view-builder often puts the same string in both branch_label and
     # header (the metric's body_statements[0] is the if/for/while line
     # itself). Just show the header — the branch keyword is already in it.
@@ -1340,15 +1525,16 @@ def _static_statement_row_html(
     row: StatementRow, max_time: float, *, indented: bool = False,
 ) -> str:
     """A row with no click-to-expand wrapper — used inside control bodies
-    where the body is always visible (no click needed). ``indented`` adds
-    a 4-space prefix on the code line so the body reads as nested under
-    the branch header."""
+    where the body is always visible. ``indented`` is preserved as a
+    flag for callers but no per-row prefix is added: the surrounding
+    ``.c3-ctrl-body`` wrapper already supplies one indent level so the
+    whole nested block reads at a single Python-like step inward."""
+    del indented  # margin-left on the wrapper supplies the indent
     status = row.status
     kind = theme.kind_of(status.value)
     rail = theme.rail_color(status.value)
     rail_soft = " c3-rail-soft" if row.is_upstream else ""
-    prefix = "    " if indented else ""
-    code_html = f'<pre class="c3-code">{prefix}{_code_html(row.code)}</pre>'
+    code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
     dots = _dots(
         status=status,
         storage_tiers=row.storage_tiers,
@@ -1369,19 +1555,48 @@ def _static_statement_row_html(
 
 
 def _control_group_single_html(cgs: ControlGroupSingle, max_time: float) -> str:
-    return _statement_row_html(cgs.row, max_time)
+    row = cgs.row
+    # While / with / try are processed as a single unit by the runtime
+    # (no per-iteration metrics), but the runtime records the original
+    # source lines on ``body_statements``. Render head + body lines like
+    # a for-loop so the structure reads at a glance instead of one opaque
+    # multi-line row.
+    if row.body_statements and len(row.body_statements) > 1:
+        return _multiline_control_html(row, max_time)
+    return _statement_row_html(row, max_time)
 
 
-def _control_body_html(cb: ControlBody) -> str:
-    if not cb.body_stmts:
-        return ""
-    inner = "\n".join(_esc(s) for s in cb.body_stmts)
-    return (
-        f'<details class="c3-control-body" style="padding:6px 12px 6px 30px;">'
-        f'<summary style="cursor:pointer;font-size:10px;color:{theme.INK_4};list-style:none;">body</summary>'
-        f'<pre style="font-family:{theme.FONT_MONO};font-size:11px;color:{theme.INK};margin:4px 0 0;">{inner}</pre>'
-        f"</details>"
+def _multiline_control_html(row: StatementRow, max_time: float) -> str:
+    """Render a single-unit control structure (``while``, ``with``, ``try``)
+    as a for-loop-style block: the first body statement becomes the head
+    (carrying the row's aggregate timing and status), subsequent lines
+    render as static body rows inside a ``.c3-ctrl-body`` wrapper so the
+    indent matches if-blocks and nested for-loops."""
+    head_line = row.body_statements[0]
+    body_lines = row.body_statements[1:]
+    status = row.status
+    kind = theme.kind_of(status.value)
+    rail = theme.rail_color(status.value)
+    rail_soft = " c3-rail-soft" if row.is_upstream else ""
+    head = (
+        f'<div class="c3-row c3-loop-head" data-kind="{kind}">'
+        f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+        f'<pre class="c3-code">{_code_html(head_line)}</pre>'
+        f'<span class="c3-loop-meta">{len(body_lines)} stmt{"s" if len(body_lines) != 1 else ""}</span>'
+        f"{_tbar(row.time_s, max_time, kind)}"
+        f"{_time_chip(row.time_s, row.saved_time_s, kind)}"
+        f"</div>"
     )
+    body_rows: list[str] = []
+    for line in body_lines:
+        body_rows.append(
+            f'<div class="c3-row" data-kind="{kind}">'
+            f'<span class="c3-rail c3-rail-soft" style="background:{theme.INK_5};"></span>'
+            f'<pre class="c3-code c3-code-body">{_code_html(line)}</pre>'
+            f'<span></span><span></span><span></span>'
+            f"</div>"
+        )
+    return head + f'<div class="c3-ctrl-body">{"".join(body_rows)}</div>'
 
 
 def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
@@ -1480,13 +1695,15 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         f"{_tbar(total_time, max_time, kind)}"
         f"{_time_chip(total_time, 0.0, kind)}"
         f"</label>"
-        f'<div class="c3-rowtip"><div class="c3-detail">'
+        # Inline detail block (own class so we don't share rowtip's
+        # row-properties styling) — revealed by the same checkbox-hack.
+        f'<div class="c3-deco-detail">'
         f'<div class="c3-detail-h"><span class="c3-cache-tag">@cache</span> '
         f"{hits} of {n} cached · {total_time:.2f}s total</div>"
         f'<div class="c3-deco-fn">'
         f'<div class="c3-deco-fn-name">{_esc(short)}()</div>'
         f'<div class="c3-deco-strip">{strip}</div>'
-        f"</div></div></div></div>"
+        f"</div></div></div>"
     )
     return head
 
@@ -1537,8 +1754,6 @@ def _render_section_item(item: SectionItem, max_time: float, *, is_upstream: boo
         return _control_group_html(item, max_time)
     if isinstance(item, ControlGroupSingle):
         return _control_group_single_html(item, max_time)
-    if isinstance(item, ControlBody):
-        return _control_body_html(item)
     if isinstance(item, SkippedBucket):
         return _skipped_bucket_html(item, max_time)
     if isinstance(item, DecoratorCallGroup):
@@ -1631,7 +1846,12 @@ def _sparkline_html(badge: InteractiveBadge) -> str:
 
 
 def _filter_chips_html(header: BadgeHeader) -> str:
-    """Static (non-interactive) state counters in the summary chip."""
+    """Static (non-interactive) state counters in the summary chip.
+
+    Three families: exec, cached, warn. A notification-only cell (e.g.
+    only FUNCTION_CHANGED rows) gets only the warn chip; without it the
+    summary would carry no counter at all.
+    """
     parts = []
     if header.computed_count:
         parts.append(
@@ -1643,6 +1863,11 @@ def _filter_chips_html(header: BadgeHeader) -> str:
         parts.append(
             f'<span class="c3-fchip c3-fchip-cached"><span class="c3-fchip-dot"></span>'
             f'cached<span class="c3-fchip-count">{cached}</span></span>'
+        )
+    if header.warn_count:
+        parts.append(
+            f'<span class="c3-fchip c3-fchip-warn"><span class="c3-fchip-dot"></span>'
+            f'warn<span class="c3-fchip-count">{header.warn_count}</span></span>'
         )
     if not parts:
         return ""
@@ -1684,16 +1909,30 @@ def render_html(badge: InteractiveBadge) -> str:
     if upstream is not None and upstream.items:
         rows = "".join(_render_section_item(i, max_time, is_upstream=True) for i in upstream.items)
         n = sum(1 for i in upstream.items if not isinstance(i, SkippedBucket))
-        saved_blob = (
-            f"saved {badge.header.total_saved_s:.2f}s"
-            if badge.header.total_saved_s > theme.MIN_TIME_DISPLAY_S else "—"
+        up_saved = sum(_item_saved_time(i) for i in upstream.items)
+        up_exec = sum(_item_total_time(i) for i in upstream.items)
+        # Scale the bar against the larger of saved or any badge-wide exec
+        # time, so a big saving reads as a near-full bar even when the
+        # restore overhead itself is invisibly small.
+        bar_scale = max(max_time, up_saved, up_exec, theme.MIN_TIME_DISPLAY_S)
+        bar_ratio = min(1.0, max(up_saved, up_exec) / bar_scale)
+        bar_pct = (bar_ratio ** 0.5) * 100
+        bar_html = (
+            f'<span class="c3-upstream-bar"><span style="width:{bar_pct:.1f}%;"></span></span>'
+            if bar_pct > 0 else '<span class="c3-upstream-bar"></span>'
+        )
+        saved_html = (
+            f'<span class="c3-upstream-saved">↑{up_saved:.2f}s</span>'
+            if up_saved > theme.MIN_TIME_DISPLAY_S else "—"
         )
         body_html += (
-            f'<details class="c3-upstream" open>'
+            f'<details class="c3-upstream">'
             f'<summary>'
             f'<span class="c3-upstream-caret"></span>'
             f'<span class="c3-upstream-label">upstream context</span>'
-            f'<span class="c3-upstream-meta"><b>{n}</b> · {_esc(saved_blob)}</span>'
+            f'<span class="c3-upstream-count"><b>{n}</b> step{"s" if n != 1 else ""}</span>'
+            f'<span class="c3-upstream-bar-cell">{bar_html}</span>'
+            f'<span class="c3-upstream-saved-cell">{saved_html}</span>'
             f"</summary>"
             f'<div class="c3-upstream-body">{rows}</div>'
             f"</details>"
@@ -1731,19 +1970,35 @@ def render_html(badge: InteractiveBadge) -> str:
 
 
 def render_status_badge_html(badge: StatusBadge) -> str:
-    """Render the compact non-interactive status pill (unchanged from v3 design)."""
-    color = (theme.BADGE_COLOR_RESTORED
-             if badge.status is BadgeStatus.RESTORED
-             else theme.BADGE_COLOR_DEFAULT)
-    storage_str = "+".join(badge.storage_tiers) if badge.storage_tiers else ""
-    saved_str = f" · saved {badge.time_saved_s:.2f}s" if badge.time_saved_s > 0 else ""
-    source_str = f" · ← {badge.source}" if badge.source else ""
-    storage_segment = f" · {storage_str}" if storage_str else ""
+    """Render the compact non-interactive status pill in v3 chip styling.
+
+    Uses the same time-chip foreground/background pair the row chip uses,
+    so the compact pill reads as a stand-alone version of the chip family
+    rather than a hand-tuned legacy badge. Storage tiers render as dot
+    indicators (matching the row tier dots) instead of text.
+    """
+    kind = theme.kind_of(badge.status.value)
+    label = badge.status.value.upper()
+    fg = theme.chip_fg(kind)
+    bg = theme.chip_bg(kind)
+    # Build storage dots if tiers are present (max 2: RAM + DISK).
+    tier_dots = ""
+    if badge.storage_tiers:
+        dot_color = theme.rail_color(badge.status.value)
+        dots_inner = "".join(
+            f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;'
+            f'background:{dot_color};margin-left:3px;vertical-align:middle;"></span>'
+            for _ in badge.storage_tiers[:2]
+        )
+        tier_dots = dots_inner
+    saved = f' · ↑{badge.time_saved_s:.2f}s' if badge.time_saved_s > 0 else ""
+    source = f' · {_esc(badge.source)}' if badge.source else ""
     return (
-        f'<span style="display:inline-block;padding:2px 8px;border-radius:4px;'
-        f'background:{color}1A;color:{color};font-family:{theme.FONT_MONO};'
-        f'font-size:11px;font-weight:500;">'
-        f"<b>{_esc(badge.status.value.upper())}</b>"
-        f"{source_str}{storage_segment} {badge.execution_time_s:.3f}s{saved_str}"
-        f"</span>"
+        f'<span style="display:inline-flex;align-items:center;gap:6px;'
+        f'padding:2px 8px;border-radius:4px;background:{bg};color:{fg};'
+        f'font-family:{theme.FONT_MONO};font-size:11px;font-weight:600;'
+        f'letter-spacing:0.04em;">'
+        f"{_esc(label)}{tier_dots}"
+        f'<span style="font-weight:500;color:{theme.INK_3};">'
+        f"{badge.execution_time_s:.3f}s{saved}{source}</span></span>"
     )

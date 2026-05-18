@@ -206,7 +206,8 @@ def test_status_badge_renders_compact_inline_pill() -> None:
     ))
     assert "RESTORED" in html
     assert "RAM" in html
-    assert "saved 0.50s" in html
+    # Saved-time is now formatted with the v3 ↑ glyph (matching row chips).
+    assert "0.50s" in html
 
 
 def test_syntax_highlighting_wraps_keywords() -> None:
@@ -270,9 +271,11 @@ def test_loop_head_carries_aggregate_drawer_and_body_uses_per_iter_drill() -> No
     assert "c3-iter-row" in body_block
 
 
-def test_loop_body_with_many_iterations_falls_back_to_condensed_drawer() -> None:
-    """Above the iter threshold the per-iter list would be unscannable,
-    so the body row switches to the condensed-counts drawer instead."""
+def test_loop_body_with_many_iterations_caps_drilldown() -> None:
+    """Above the iter inline limit the drilldown shows the first N rows
+    and a single ``… +M more iterations`` row, instead of cliff-falling
+    to a totally different "condensed counts" drawer (which lost the
+    per-iter view entirely)."""
     metrics = [
         {"code": f"# __iteration_context__: {i}\ny = x*2",
          "status": str(CacheStatus.COMPUTED), "total_time": 0.01,
@@ -282,10 +285,10 @@ def test_loop_body_with_many_iterations_falls_back_to_condensed_drawer() -> None
     html = render_html(build_interactive_badge(metrics))
     body = html.split("</style>", 1)[1]
     body_block = body[body.find("c3-loop-body"):]
-    # Falls back to the summary drawer; no per-iter table for this body.
-    assert "c3-iter-table" not in body_block
-    assert "c3-rowtip" in body_block
-    assert "Iterations" in body_block
+    # Drilldown table is still present — capped, not replaced.
+    assert "c3-iter-table" in body_block
+    assert "c3-iter-more" in body_block
+    assert "more iteration" in body_block
 
 
 def test_rows_use_checkbox_hack_for_click_to_expand_no_js() -> None:

@@ -34,39 +34,56 @@ MIN_TIME_DISPLAY_S = 0.01
 MIN_TIME_DISPLAY_MS = 0.001
 
 # ---------------------------------------------------------------------------
-# v3 state palette — single source of truth for the row-level look.
-# Mirrors design/notebook-badges/badge.css → Badge v3.
+# State palette — single source of truth for the row-level look.
 #
-# Three "kinds" cover every status:
-#   - cached  : RESTORED, SKIPPED       (green family)
-#   - exec    : COMPUTED, MIXED         (ochre family)
-#   - warn    : WARNING, ERROR,
-#               FUNCTION_CHANGED,
-#               MODULE_RELOADED         (red/amber family)
+# Every row maps to ONE of three "kinds". Each kind has ONE underlying hue
+# (PRIMARY) — every other shade in the family is the same hue at a
+# different lightness/alpha, so a row reads as a single visual family
+# even though rail / bar / chip-bg / chip-fg are slightly different
+# values. Picking distinct hex values per usage (not pure alpha) lets
+# the colours stay vivid against Jupyter / VS Code backgrounds without
+# bleeding through to neighbour rows.
+#
+# Mapping status → kind:
+#   - cached  : RESTORED, SKIPPED                                 (green)
+#   - exec    : COMPUTED, MIXED                                   (amber)
+#   - warn    : WARNING, ERROR, FUNCTION_CHANGED, MODULE_RELOADED (red)
+#
+# Family-shade ladder (consistent across families):
+#   RAIL / FG       — saturated, used on accents (left rail, chip text)
+#   BAR             — mid-tone, used on the per-row timing bar fill
+#   CHIP_BG         — very pale wash, used on chip + summary backgrounds
 # ---------------------------------------------------------------------------
 
-# Rail / accent / state-color (used on left rails and text accents)
-RAIL_CACHED = "#006644"
-RAIL_EXEC   = "#996300"
-RAIL_MIXED  = "#336699"
-RAIL_WARN   = "#c0392b"
-RAIL_NEUTRAL = "#888"
+# CACHED — single green hue family. Rail/FG = saturated; BAR = mid; BG = pale.
+RAIL_CACHED    = "#2a8a5e"
+BAR_CACHED     = "#86bfa3"
+CHIP_BG_CACHED = "#ecf6f0"
+CHIP_FG_CACHED = "#1f6646"
 
-# Timing-bar fills + state-tinted time-chip backgrounds (softer, pastel).
-BAR_CACHED = "#7ec19f"
-BAR_EXEC   = "#d3a76b"
-BAR_WARN   = "#e8a397"
-
-CHIP_BG_CACHED = "#f0f8f4"
-CHIP_BG_EXEC   = "#fdfaf0"
-CHIP_BG_WARN   = "#fdf3f0"
-CHIP_FG_CACHED = "#00563a"
+# EXEC — single amber hue family.
+RAIL_EXEC      = "#a87530"
+BAR_EXEC       = "#d3a76b"
+CHIP_BG_EXEC   = "#fbf3e5"
 CHIP_FG_EXEC   = "#7a5310"
-CHIP_FG_WARN   = "#a02c1a"
 
-# Summary chip background tints (lighter than chip-bg).
-SUMMARY_BG_CACHED = "#f1faf6"
-SUMMARY_BG_EXEC   = "#fdfaf0"
+# WARN — single red hue family.
+RAIL_WARN      = "#b53d29"
+BAR_WARN       = "#e8a397"
+CHIP_BG_WARN   = "#fbeae5"
+CHIP_FG_WARN   = "#8a2916"
+
+# MIXED rail: blue accent used only for the LEFT RAIL when a single row
+# combines cached + computed iterations. The bar/chip for a mixed row
+# still uses the EXEC family — the rail is the lone signal that this is
+# a hybrid state, so we don't introduce a fourth full kind.
+RAIL_MIXED     = "#336699"
+
+# Summary chip background equals CHIP_BG so the summary header and the
+# row chip read as the same wash. (Two near-identical near-white shades
+# used to live here; consolidated into one per family.)
+SUMMARY_BG_CACHED = CHIP_BG_CACHED
+SUMMARY_BG_EXEC   = CHIP_BG_EXEC
 
 # Neutrals — borders, dim text, table tints.
 INK         = "#222"
@@ -84,10 +101,6 @@ BG_DETAIL   = "#fafbfc"
 # Bug-report pill (subtle tertiary link in v3).
 BUG_FG = "#888"
 BUG_FG_HOVER = "#444"
-
-# Legacy aliases kept for back-compat with render_status_badge.
-BADGE_COLOR_RESTORED = RAIL_CACHED
-BADGE_COLOR_DEFAULT  = RAIL_EXEC
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ from cash.notebook.badge_renderer.view import (
     BadgeHeader,
     BadgeStatus,
     BugReportLink,
-    ControlBody,
     ControlGroup,
     ControlGroupSingle,
     DecoratorCall,
@@ -78,7 +77,6 @@ def test_fully_populated_tree_is_hashable() -> None:
     ctrl_row = StatementRow(status=BadgeStatus.RESTORED, code="z = 0", time_s=0.0)
     ctrl_group = ControlGroup(branch_label="if", header="if x > 0", rows=(ctrl_row,))
     ctrl_single = ControlGroupSingle(row=ctrl_row)
-    ctrl_body = ControlBody(body_stmts=("a = 1", "b = 2"))
     skipped = SkippedBucket(
         items=(StatementRow(status=BadgeStatus.SKIPPED, code="skip", time_s=0.0),),
         total_saved_time_s=0.3,
@@ -96,7 +94,7 @@ def test_fully_populated_tree_is_hashable() -> None:
     )
     current_section = Section(
         kind=SectionKind.CURRENT, header="",
-        items=(ctrl_group, ctrl_single, ctrl_body),
+        items=(ctrl_group, ctrl_single),
     )
     decorators_section = Section(
         kind=SectionKind.DECORATORS, header="DECORATOR CACHE",
