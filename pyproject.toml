@@ -90,6 +90,7 @@ dev = [
     "pyarrow>=13.0",
     "nest_asyncio",
     "traitlets",
+    "pyinstrument>=4.6,<6",
 ]
 
 [project.urls]
