@@ -117,6 +117,31 @@ def test_statement_row_cache_key_short_is_empty_when_metric_lacks_key() -> None:
     assert row.cache_key_short == ""
 
 
+def test_statement_row_carries_miss_reason_through_to_view() -> None:
+    """The runtime stamps ``miss_reason`` on COMPUTED metrics; the view
+    builder must surface it so the html renderer can show "why did this
+    cell re-run?" in the row's expanded detail.
+    """
+    metrics = [{
+        "code": "y = x * 2",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.01,
+        "miss_reason": "input lineage changed (one of: x, y)",
+    }]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.miss_reason == "input lineage changed (one of: x, y)"
+
+
+def test_statement_row_miss_reason_is_none_when_metric_lacks_it() -> None:
+    metrics = [{"code": "y = 1", "status": str(CacheStatus.COMPUTED), "total_time": 0.001}]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.miss_reason is None
+
+
 def test_bare_expression_does_not_leak_richoutput_repr_into_output_vars() -> None:
     """Regression test: a bare-expression cell like ``panel.shape`` has no AST
     output vars, but ``metrics['outputs']`` holds the IPython
