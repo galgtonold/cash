@@ -89,6 +89,32 @@ def test_single_restored_metric_no_upstream() -> None:
     assert row.saved_time_s == pytest.approx(0.3)
 
 
+def test_bare_expression_does_not_leak_richoutput_repr_into_output_vars() -> None:
+    """Regression test: a bare-expression cell like ``panel.shape`` has no AST
+    output vars, but ``metrics['outputs']`` holds the IPython
+    ``RichOutput`` capture. The badge must not fall back to that key — doing
+    so would print ``<IPython.utils.capture.RichOutput object at 0x..>``
+    inside the "Produced" field.
+    """
+    class _FakeRichOutput:
+        def __repr__(self) -> str:
+            return "<IPython.utils.capture.RichOutput object at 0xdead>"
+
+    metrics = [{
+        "code": "panel.shape",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.003,
+        "evaluated_vars": [],          # AST analyser found no var writes
+        "outputs": [_FakeRichOutput()], # captured.outputs (rich display data)
+    }]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    # The Produced field is empty because evaluated_vars is empty — the
+    # rich-output object must NOT bleed in through the legacy ``outputs`` key.
+    assert row.output_vars == ()
+
+
 def test_mixed_status_summary() -> None:
     metrics = [
         {"code": "x=1", "status": str(CacheStatus.RESTORED), "saved_time": 0.5, "total_time": 0.001},
