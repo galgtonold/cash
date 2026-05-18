@@ -1,11 +1,15 @@
 """Tests for the cache-miss attribution feature.
 
-When a cell is COMPUTED (cache miss), the runtime should stamp a one-line
-``miss_reason`` on the metric dict so the badge can answer "why did this
-cell re-run?" in its row-detail drawer.
+When the cache-check path detects TTL expiry or a file-dependency change,
+the runtime stamps a short ``miss_reason`` on the metric dict so the
+badge's row-detail drawer can answer "why did this cell re-run?".
 
-See ``StatementProcessor._diagnose_miss`` and the per-invalidator
-``self._last_miss_reason`` writes in ``statement_processor.py``.
+The earlier backend-walking fallback (``_diagnose_miss``) was removed
+because it was O(N²) in cache size and dominated cold-run wall time
+(see the 2026-05-18 overhead analysis). The remaining miss-reason path
+covers only the *cheap* attributions that the cache-check already
+computes as a side effect — TTL and file invalidations. On the empty-key
+"first time seeing this code" path, no miss reason is attached.
 """
 from __future__ import annotations
 
@@ -63,13 +67,14 @@ def _last_metric(shell, magics, code: str) -> dict:
 
 
 class TestMissReasonAttribution:
-    """End-to-end: the metric dict on a COMPUTED first-run carries a reason."""
-
-    def test_first_run_attributes_first_time_seeing_this_code(self, magics_fixture):
+    def test_first_run_has_no_miss_reason_attached(self, magics_fixture):
+        """The first execution of a statement is a cache miss with no cheap
+        reason available (no TTL, no file dep). Since the backend-walking
+        fallback was removed, miss_reason stays unset."""
         magics, shell, _backend, _cash = magics_fixture
         m = _last_metric(shell, magics, "x = 21")
         assert m["status"] == CacheStatus.COMPUTED
-        assert m.get("miss_reason") == "first time seeing this code"
+        assert m.get("miss_reason") is None
 
     def test_unchanged_re_run_is_restored_and_has_no_miss_reason(self, magics_fixture):
         magics, shell, _backend, _cash = magics_fixture
@@ -79,51 +84,14 @@ class TestMissReasonAttribution:
         # RESTORED rows don't have a miss to attribute.
         assert m.get("miss_reason") is None
 
-    def test_changed_input_lineage_is_attributed_to_input(self, magics_fixture):
+    def test_changed_input_has_no_miss_reason_attached(self, magics_fixture):
+        """Changing an upstream value invalidates the consumer's cache, but
+        without the O(N²) diagnostic we no longer label why."""
         magics, shell, _backend, _cash = magics_fixture
-        # Run the producer cell once, then the consumer once (both miss).
         magics.cash("", "a = 1")
         magics.cash("", "b = a + 1")
-        # Edit the producer so its lineage changes. The consumer was cached
-        # with the old `a` lineage; re-running it should now miss, and the
-        # reason should mention input lineage.
         magics.cash("", "a = 2")
         m = _last_metric(shell, magics, "b = a + 1")
         assert m["status"] == CacheStatus.COMPUTED
-        reason = m.get("miss_reason") or ""
-        assert "lineage" in reason or "input" in reason, (
-            f"expected an input-related miss reason, got: {reason!r}"
-        )
-
-
-class TestDiagnoseMissUnit:
-    """Direct unit tests for ``StatementProcessor._diagnose_miss``."""
-
-    def test_empty_backend_returns_first_time(self, magics_fixture):
-        magics, _shell, _backend, _cash = magics_fixture
-        proc = magics._statement_processor
-        reason = proc._diagnose_miss(source_hash="never-seen", inputs=set())
-        assert reason == "first time seeing this code"
-
-    def test_same_code_different_input_set_names_the_diff(self, magics_fixture):
-        magics, _shell, backend, _cash = magics_fixture
-        # Plant a fake entry with one input.
-        backend.set(
-            "stmt:abcd",
-            {"variables": {}, "stdout": "", "stderr": "", "rich_outputs": []},
-            {
-                "timestamp": 1.0,
-                "inputs": ["a"],
-                "outputs": ["b"],
-                "execution_time": 0.01,
-                "source_hash": "src-hash-xyz",
-                "code": "b = a + 1",
-                "key": "stmt:abcd",
-                "output_lineages": {"b": "lh1"},
-            },
-        )
-        proc = magics._statement_processor
-        # Same code (source_hash matches) but our current inputs include `c`
-        # which the prior didn't.
-        reason = proc._diagnose_miss(source_hash="src-hash-xyz", inputs={"a", "c"})
-        assert "added input(s): c" in (reason or "")
+        # No cheap reason fired for this kind of miss.
+        assert m.get("miss_reason") is None
