@@ -2,8 +2,27 @@
 import pytest
 import pickle
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
-from cash.__main__ import main, cmd_version, cmd_info, cmd_inspect, cmd_clear, _format_bytes
+from cash.__main__ import (
+    main,
+    cmd_version,
+    cmd_info,
+    cmd_inspect,
+    cmd_clear,
+    cmd_autoload,
+    _format_bytes,
+    HOOK_FILENAME,
+    HOOK_MARKER,
+)
+
+
+def _autoload_on(*, mode="active", profile="default", force=False):
+    return SimpleNamespace(state="on", mode=mode, profile=profile, force=force)
+
+
+def _autoload_off(*, profile="default", force=False):
+    return SimpleNamespace(state="off", mode="active", profile=profile, force=force)
 
 
 class TestCLIFormatBytes:
@@ -290,3 +309,120 @@ class TestCLIInspectNotebook:
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
         assert "could not read metadata" in captured.out
+
+
+@pytest.fixture
+def fake_ipython_dir(tmp_path, monkeypatch):
+    """Redirect the install/uninstall hook commands at a tmp_path-based
+    startup directory so we never touch the user's real IPython config."""
+    startup = tmp_path / "ipython" / "profile_default" / "startup"
+
+    def _fake(profile: str):
+        return tmp_path / "ipython" / f"profile_{profile}" / "startup"
+
+    monkeypatch.setattr("cash.__main__._ipython_startup_dir", _fake)
+    return startup
+
+
+class TestCLIAutoloadOn:
+    """Test `cash autoload on`."""
+
+    def test_active_creates_hook(self, fake_ipython_dir, capsys):
+        cmd_autoload(_autoload_on(mode="active"))
+
+        hook_path = fake_ipython_dir / HOOK_FILENAME
+        assert hook_path.exists(), "hook file should be created"
+        body = hook_path.read_text(encoding="utf-8")
+        assert HOOK_MARKER in body
+        assert "import cash" in body
+        assert 'run_line_magic("cash_on"' in body  # active mode runs %cash_on
+        captured = capsys.readouterr()
+        assert "mode=active" in captured.out
+
+    def test_available_omits_cash_on(self, fake_ipython_dir):
+        cmd_autoload(_autoload_on(mode="available"))
+
+        body = (fake_ipython_dir / HOOK_FILENAME).read_text(encoding="utf-8")
+        assert "import cash" in body
+        assert "run_line_magic" not in body  # available mode does NOT auto-enable
+
+    def test_is_idempotent(self, fake_ipython_dir, capsys):
+        """Re-running with the same mode should be a no-op, not an error."""
+        cmd_autoload(_autoload_on(mode="active"))
+        capsys.readouterr()  # clear
+
+        cmd_autoload(_autoload_on(mode="active"))
+        captured = capsys.readouterr()
+        assert "already on" in captured.out
+
+    def test_refuses_to_clobber_different_content(self, fake_ipython_dir):
+        """Without --force, must not overwrite a different file."""
+        fake_ipython_dir.mkdir(parents=True)
+        (fake_ipython_dir / HOOK_FILENAME).write_text("# user's own startup script\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit):
+            cmd_autoload(_autoload_on(mode="active"))
+        # File contents must be preserved
+        assert (fake_ipython_dir / HOOK_FILENAME).read_text(encoding="utf-8") == "# user's own startup script\n"
+
+    def test_force_overwrites(self, fake_ipython_dir):
+        """--force replaces an existing file."""
+        fake_ipython_dir.mkdir(parents=True)
+        (fake_ipython_dir / HOOK_FILENAME).write_text("# something else\n", encoding="utf-8")
+
+        cmd_autoload(_autoload_on(mode="available", force=True))
+        body = (fake_ipython_dir / HOOK_FILENAME).read_text(encoding="utf-8")
+        assert HOOK_MARKER in body
+        assert "import cash" in body
+
+    def test_can_switch_modes_with_force(self, fake_ipython_dir):
+        """Switching from active -> available requires --force (different content)."""
+        cmd_autoload(_autoload_on(mode="active"))
+        with pytest.raises(SystemExit):
+            cmd_autoload(_autoload_on(mode="available"))
+        cmd_autoload(_autoload_on(mode="available", force=True))
+        body = (fake_ipython_dir / HOOK_FILENAME).read_text(encoding="utf-8")
+        assert "run_line_magic" not in body
+
+    def test_custom_profile(self, fake_ipython_dir, tmp_path):
+        cmd_autoload(_autoload_on(mode="active", profile="research"))
+        custom = tmp_path / "ipython" / "profile_research" / "startup" / HOOK_FILENAME
+        assert custom.exists()
+        # Default profile should be untouched
+        assert not (fake_ipython_dir / HOOK_FILENAME).exists()
+
+
+class TestCLIAutoloadOff:
+    """Test `cash autoload off`."""
+
+    def test_removes_hook(self, fake_ipython_dir, capsys):
+        cmd_autoload(_autoload_on(mode="active"))
+        hook_path = fake_ipython_dir / HOOK_FILENAME
+        assert hook_path.exists()
+
+        cmd_autoload(_autoload_off())
+        assert not hook_path.exists()
+        captured = capsys.readouterr()
+        assert "Autoload off" in captured.out
+
+    def test_when_nothing_installed(self, fake_ipython_dir, capsys):
+        cmd_autoload(_autoload_off())
+        captured = capsys.readouterr()
+        assert "not installed" in captured.out
+
+    def test_refuses_unmarked_file(self, fake_ipython_dir):
+        """Don't delete a file that doesn't carry our marker — it's not ours."""
+        fake_ipython_dir.mkdir(parents=True)
+        unrelated = fake_ipython_dir / HOOK_FILENAME
+        unrelated.write_text("# user's own startup script\n", encoding="utf-8")
+
+        with pytest.raises(SystemExit):
+            cmd_autoload(_autoload_off())
+        assert unrelated.exists()  # left alone
+
+    def test_force_removes_unmarked(self, fake_ipython_dir):
+        fake_ipython_dir.mkdir(parents=True)
+        (fake_ipython_dir / HOOK_FILENAME).write_text("# something\n", encoding="utf-8")
+
+        cmd_autoload(_autoload_off(force=True))
+        assert not (fake_ipython_dir / HOOK_FILENAME).exists()
