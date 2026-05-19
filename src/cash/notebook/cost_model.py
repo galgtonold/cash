@@ -75,7 +75,7 @@ _COEFFS: dict[tuple[str, str, str], tuple[float, float]] = {
 _KNOWN_BACKENDS = frozenset({"ram", "disk"})
 
 
-def _resolve_family(value_type_name: str) -> str:
+def resolve_family(value_type_name: str) -> str:
     return _TYPE_TO_FAMILY.get(value_type_name, "_GENERIC")
 
 
@@ -96,7 +96,7 @@ def estimated_serialize_time(
     """Predicted wall-seconds to serialise + store an object of given
     type / size on the given backend."""
     return _predict(
-        _resolve_family(value_type_name),
+        resolve_family(value_type_name),
         size_bytes,
         _resolve_backend(backend_kind),
         "serialize",
@@ -111,7 +111,7 @@ def estimated_restore_time(
     """Predicted wall-seconds to load + deserialise an object of given
     type / size on the given backend."""
     return _predict(
-        _resolve_family(value_type_name),
+        resolve_family(value_type_name),
         size_bytes,
         _resolve_backend(backend_kind),
         "deserialize",

@@ -50,6 +50,13 @@ _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
 
+_COST_MODEL_KEYS = (
+    'cost_model_size_bytes',
+    'cost_model_restore_seconds',
+    'cost_model_type_name',
+    'cost_model_family',
+)
+
 class _ProcessResultRequired(TypedDict):
     """Keys that are always present in a :class:`ProcessResult`."""
 
@@ -664,11 +671,10 @@ class StatementProcessor:
             metrics['storage'] = saved_metadata['storage']
         if saved_metadata and 'skipped_reason' in saved_metadata:
             metrics['skipped_reason'] = saved_metadata['skipped_reason']
-        if saved_metadata and 'cost_model_size_bytes' in saved_metadata:
-            metrics['cost_model_size_bytes'] = saved_metadata['cost_model_size_bytes']
-            metrics['cost_model_restore_seconds'] = saved_metadata['cost_model_restore_seconds']
-            metrics['cost_model_type_name'] = saved_metadata['cost_model_type_name']
-            metrics['cost_model_family'] = saved_metadata['cost_model_family']
+        if saved_metadata:
+            for k in _COST_MODEL_KEYS:
+                if k in saved_metadata:
+                    metrics[k] = saved_metadata[k]
 
         metrics['total_time'] = time.time() - process_start
         self.analytics_manager.record_event(
@@ -730,11 +736,9 @@ class StatementProcessor:
                     metrics['storage'] = [metadata['source']]
                 elif 'storage' in metadata:
                     metrics['storage'] = metadata['storage']
-                if 'cost_model_size_bytes' in metadata:
-                    metrics['cost_model_size_bytes'] = metadata['cost_model_size_bytes']
-                    metrics['cost_model_restore_seconds'] = metadata['cost_model_restore_seconds']
-                    metrics['cost_model_type_name'] = metadata['cost_model_type_name']
-                    metrics['cost_model_family'] = metadata['cost_model_family']
+                for k in _COST_MODEL_KEYS:
+                    if k in metadata:
+                        metrics[k] = metadata[k]
 
             self.analytics_manager.record_event(
                 status='HIT',
@@ -1464,7 +1468,7 @@ class StatementProcessor:
             obj_size = self._estimate_object_size(var_value)
             type_name = type(var_value).__name__
             backend_kind = "ram" if is_ram_backend else "disk"
-            family = cost_model._resolve_family(type_name)
+            family = cost_model.resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(
                 type_name, obj_size, backend_kind
             )
@@ -1570,7 +1574,10 @@ class StatementProcessor:
                 return None
 
         # Size-aware caching: skip storing large objects when serialization overhead dominates
-        should_skip, skip_reason, prediction = self._should_skip_large_object_caching(captured_vars, execution_time, force_persist, has_file_dependencies=bool(file_dependencies))
+        should_skip, skip_reason, prediction = self._should_skip_large_object_caching(
+            captured_vars, execution_time, force_persist,
+            has_file_dependencies=bool(file_dependencies),
+        )
         if should_skip:
             skip_metadata: StatementCacheMetadata = {
                 'timestamp': time.time(),
