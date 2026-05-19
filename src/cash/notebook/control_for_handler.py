@@ -390,15 +390,24 @@ class ForLoopHandler:
         can be 100-300× the actual compute time.
 
         Heuristic: execute as single unit when ALL of:
-        1. The loop is NOT nested inside another loop (parent_context is None)
-           — nested loops in convergence studies benefit from per-iteration caching.
-        2. The loop has many iterations (> _MIN_ITERATIONS_FOR_SINGLE_UNIT)
+        1. The loop has many iterations (> _MIN_ITERATIONS_FOR_SINGLE_UNIT)
            — small loops always benefit from per-iteration caching since the
            absolute overhead is small and granular invalidation is valuable.
-        3. The estimated overhead (iterations × body_stmts × per_stmt_cost) is
+        2. The estimated overhead (iterations × body_stmts × per_stmt_cost) is
            significant (> 1s).
-        4. No body statement performs file I/O — file dependencies need
+        3. No body statement performs file I/O — file dependencies need
            per-iteration tracking.
+
+        Previously there was also a "not nested inside another loop" rule.
+        That was over-defensive: the outer loop in a convergence study
+        benefits from per-iteration caching (and rule 1 keeps it
+        per-iteration if it has few iterations), but a tight inner loop
+        with 200+ trivial iterations costs ~14s of per-statement machinery
+        and gains nothing from per-iteration cache granularity since users
+        rarely edit inner-loop bodies during exploration. The outer loop's
+        per-iteration cache key still correctly invalidates on inner-body
+        changes because the inner loop's single-unit cache key is part of
+        the outer iteration's snapshot.
 
         **Correctness tradeoff**: In fast-loop mode the loop executes as one
         opaque unit, so per-iteration cache keys are not computed.  This means:
@@ -414,11 +423,7 @@ class ForLoopHandler:
         The performance gain (up to 300×) justifies this tradeoff for tight
         numeric loops where per-iteration staleness detection has no value.
         """
-        # Don't apply inside nested loops — the outer loop already controls
-        # the iteration count, and inner loops in convergence studies should
-        # still be cached per-iteration.
-        if parent_context is not None:
-            return False
+        # (Nesting check intentionally removed — see docstring.)
 
         # Estimate iteration count
         try:

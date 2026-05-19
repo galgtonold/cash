@@ -1374,23 +1374,12 @@ class StatementProcessor:
         if has_file_dependencies:
             return False, None
 
-        # Absolute floor: don't cache statements whose own compute is
-        # cheaper than the cache machinery itself. Below this threshold
-        # there is no way for caching to be a net win — the per-statement
-        # overhead (file-tracker setup, capture_output, lineage update,
-        # ...) costs more than re-running the statement, and the cache
-        # restore on subsequent runs is even slower than that.
-        config_obj = getattr(self.cash_instance, 'config', None)
-        min_exec_time = _config_float(config_obj, 'min_execution_time_to_cache_seconds', 0.01)
-        if 0 < execution_time < min_exec_time:
-            reason = (
-                f"Compute took only {execution_time*1000:.1f} ms, below the "
-                f"{min_exec_time*1000:.0f} ms 'too cheap to cache' floor — "
-                f"caching this would slow re-runs, not speed them up"
-            )
-            if self.debug:
-                logger.debug("[SIZE_AWARE] %s", reason)
-            return True, reason
+        # NOTE: the "too cheap to cache" floor (statements whose own compute
+        # is below ``min_execution_time_to_cache_seconds``) is checked
+        # earlier in ``_store_in_cache`` — earlier than this method — so
+        # that no metadata entry is written at all. That keeps subsequent
+        # warm lookups as fast cache misses rather than slow
+        # metadata-only hits.
 
         # --- Determine cost model based on backend type -----------------------
         backend = getattr(self.cash_instance, 'backend', None)
@@ -1510,9 +1499,35 @@ class StatementProcessor:
         code: str,
         file_dependencies: set[str],
         force_persist: bool = False
-    ) -> StatementCacheMetadata:
-        """Store execution results and metadata in the cache. Returns metadata."""
+    ) -> StatementCacheMetadata | None:
+        """Store execution results and metadata in the cache. Returns
+        metadata, or ``None`` when the statement was so cheap to compute
+        that we don't even write a metadata-only entry (the next lookup
+        will miss cleanly rather than hit a metadata-only entry and
+        pay a per-file read just to decide 'recompute')."""
         t_store = time.time()
+
+        # "Too cheap to cache" floor — checked here (not inside
+        # ``_should_skip_large_object_caching``) so we can skip writing
+        # even a metadata-only entry. Without this, a notebook with many
+        # trivial statements (e.g. 100 `a_i = i + 1`) would write 100
+        # metadata-only files on the first run; every subsequent run
+        # would pay ~1ms/statement of cache-lookup overhead reading
+        # them only to discover they're skipped entries. By writing
+        # nothing, the next lookup is a fast clean miss.
+        if not force_persist and not file_dependencies:
+            config_obj = getattr(self.cash_instance, 'config', None)
+            min_exec_time = _config_float(
+                config_obj, 'min_execution_time_to_cache_seconds', 0.01
+            )
+            if 0 < execution_time < min_exec_time:
+                if self.debug:
+                    logger.debug(
+                        "[SIZE_AWARE] Compute took only %.1fms, below "
+                        "%.0fms floor — not writing cache entry",
+                        execution_time * 1000, min_exec_time * 1000,
+                    )
+                return None
 
         # Size-aware caching: skip storing large objects when serialization overhead dominates
         should_skip, skip_reason = self._should_skip_large_object_caching(captured_vars, execution_time, force_persist, has_file_dependencies=bool(file_dependencies))
