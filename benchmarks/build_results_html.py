@@ -36,6 +36,7 @@ NOTEBOOKS = [
     # Chosen for being self-contained (synthetic data, no downloads) so the
     # bench can run them without external dependencies. The notebook files
     # themselves are unmodified by the bench (we only read the source).
+    ("01_nyc_taxi_analysis", "examples/large_scale_projects/01_nyc_taxi_analysis.ipynb"),
     ("09_yelp_reviews", "examples/large_scale_projects/09_yelp_reviews.ipynb"),
     ("10_us_flights", "examples/large_scale_projects/10_us_flights.ipynb"),
     # Heavy-compute notebooks (20M and 80M-row pandas workloads). Built
