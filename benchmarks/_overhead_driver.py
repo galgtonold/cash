@@ -10,6 +10,16 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
+# Pre-import cash BEFORE creating any InteractiveShell so its
+# ``_auto_load_in_ipython`` side effect fires once now (no shell active →
+# no-op) instead of when the notebook's first ``import cash`` runs.
+# Without this, the auto-load would call ``_get_global_cash().register_magic()``
+# during cell 0 and silently override the bench's own CashMagics
+# registration in cold-mode runs, *and* enable cash in "off" mode runs
+# (because the notebook itself imports cash). The bench was measuring
+# something other than what its mode flag claimed.
+import cash  # noqa: F401 — side-effect import: neutralise IPython auto-load
+
 from IPython.core.interactiveshell import InteractiveShell
 
 from benchmarks._overhead_io import CodeCell
