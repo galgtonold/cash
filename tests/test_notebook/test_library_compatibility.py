@@ -1,4 +1,7 @@
 ﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.annotations import CacheAnnotation
+
+_PERSIST = CacheAnnotation(persist=True)
 """
 Library Compatibility Tests for sklearn, matplotlib, and other data science libraries.
 
@@ -206,7 +209,13 @@ plt.close(fig)
         assert 'fig' in shell.user_ns
 
     def test_cache_plot_data(self, processor_fixture):
-        """Test caching the data used for plots."""
+        """Test caching the data used for plots.
+
+        ``@cash:persist`` bypasses the cache policy's min-execution-time
+        floor (10 ms by default). This test is exercising the cache
+        mechanism, not the policy, so the trivial 100-element linspace
+        would otherwise be policy-skipped.
+        """
         processor, shell, backend = processor_fixture
 
         shell.user_ns['np'] = np
@@ -216,7 +225,7 @@ x = np.linspace(0, 2 * np.pi, 100)
 y_sin = np.sin(x)
 y_cos = np.cos(x)
 """
-        metrics = processor.process_statement(code)
+        metrics = processor.process_statement(code, annotation=_PERSIST)
         assert metrics['status'] == CacheStatus.COMPUTED
 
         # Clear and restore
@@ -224,7 +233,7 @@ y_cos = np.cos(x)
         shell.user_ns.pop('y_sin', None)
         shell.user_ns.pop('y_cos', None)
 
-        metrics2 = processor.process_statement(code)
+        metrics2 = processor.process_statement(code, annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
         assert len(shell.user_ns['x']) == 100
 
@@ -267,7 +276,9 @@ eigenvalues, eigenvectors = np.linalg.eig(A)
         assert len(shell.user_ns['eigenvalues']) == 2
 
     def test_cache_numpy_matrix_ops(self, processor_fixture):
-        """Test caching matrix multiplication results."""
+        """Test caching matrix multiplication results. Uses
+        ``@cash:persist`` to bypass the min-execution-time floor (2x2
+        matrices are trivially fast)."""
         processor, shell, backend = processor_fixture
         shell.user_ns['np'] = np
 
@@ -277,7 +288,7 @@ B = np.array([[5, 6], [7, 8]])
 C = A @ B
 det = np.linalg.det(A)
 """
-        metrics = processor.process_statement(code)
+        metrics = processor.process_statement(code, annotation=_PERSIST)
         assert metrics['status'] == CacheStatus.COMPUTED
         assert shell.user_ns['C'].shape == (2, 2)
 
@@ -287,7 +298,7 @@ det = np.linalg.det(A)
         shell.user_ns.pop('C', None)
         shell.user_ns.pop('det', None)
 
-        metrics2 = processor.process_statement(code)
+        metrics2 = processor.process_statement(code, annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
 
     def test_cache_large_numpy_array(self, processor_fixture):

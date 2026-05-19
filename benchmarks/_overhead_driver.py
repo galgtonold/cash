@@ -44,15 +44,16 @@ def run_notebook(
     # Defensive: clear user_ns so a re-used singleton doesn't carry state.
     shell.reset(new_session=True)
 
-    # Drop the global Cash singleton so the next `%load_ext cash` in the
-    # notebook (or our own `_enable_cash` call below) gets a fresh
-    # instance. Without this, cash's in-memory ``executed_cell_codes``
-    # and ``variable_lineage`` survive the shell.reset and silently
+    # Drop the global Cash singleton + clear in-memory tracking state
+    # so the next `%load_ext cash` (or our `_enable_cash` below) gets a
+    # fresh instance. Without this, cash's ``executed_cell_codes`` and
+    # ``variable_lineage`` survive the shell.reset and silently
     # short-circuit cells in later repeats -- e.g. 10_us_flights cell 3
     # (a pd.read_csv) drops from 2.5s to 40ms in repeats 1+ even with
     # CASH_CACHE_DIR wiped, because cash remembers the cell was
-    # "already executed" in repeat 0.
-    cash._global_cash = None
+    # "already executed" in repeat 0. ``reset_session`` is the public
+    # API that does exactly what we need here.
+    cash.reset_session()
 
     statement_sink: list[StatementMetric] = []
     if cash_enabled:

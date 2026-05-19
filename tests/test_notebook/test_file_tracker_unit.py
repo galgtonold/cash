@@ -134,3 +134,80 @@ class TestUserNamespacePatching:
         with tracker:
             pass
         assert user_ns["open"] is original
+
+
+# ---------------------------------------------------------------------------
+# FileAccessTracker — self-healing of leaked wrappers
+# ---------------------------------------------------------------------------
+
+class TestSelfHealing:
+    """When a previous tracker's __exit__ failed to revert a patch, the
+    next tracker should detect the leaked wrapper and walk the
+    ``_original_func`` chain down to the real callable before wrapping
+    its own version on top. Otherwise the leaked wrapper persists
+    forever and points at a (potentially dead) old tracker.
+    """
+
+    def test_unwraps_leaked_wrapper_before_repatching(self):
+        """If a previous tracker leaks a wrapper on builtins.open, the
+        next tracker should restore the chain to the real ``open``."""
+        import builtins
+
+        real_open = builtins.open
+
+        # Simulate a leak: tracker A enters, patches, exit fails silently.
+        leaky_tracker = FileAccessTracker()
+        leaky_tracker.__enter__()
+        leaked_wrapper = builtins.open
+        assert leaked_wrapper is not real_open
+        assert getattr(leaked_wrapper, "_is_file_tracker_patch", False)
+        # Simulate failed cleanup: drop the patches list so __exit__ is a no-op
+        # for builtins.open in particular.
+        leaky_tracker.patches = []
+        leaky_tracker.__exit__(None, None, None)
+        # The leaked wrapper is still installed.
+        assert builtins.open is leaked_wrapper
+
+        # Now a fresh tracker enters. It should self-heal: install its
+        # own wrapper and remember the *real* original, so its exit
+        # restores ``builtins.open`` cleanly.
+        try:
+            healing_tracker = FileAccessTracker()
+            with healing_tracker:
+                # The new wrapper is on top.
+                assert builtins.open is not real_open
+                assert builtins.open is not leaked_wrapper
+                # Its sentinel is set.
+                assert getattr(builtins.open, "_is_file_tracker_patch", False)
+            # After exit, builtins.open is restored to the REAL original,
+            # not to the leaked wrapper.
+            assert builtins.open is real_open
+        finally:
+            # Belt-and-suspenders cleanup so test failure doesn't pollute
+            # the rest of the test suite.
+            builtins.open = real_open
+
+    def test_chain_resolves_to_real_original_even_after_multiple_leaks(self):
+        """Even after multiple leaked trackers, a fresh tracker should
+        still recover the real original on exit. The leaked wrappers
+        accumulate via the sentinel-skip path, but the new tracker
+        must look past them."""
+        import builtins
+
+        real_open = builtins.open
+
+        # Stack two leaked-exit trackers.
+        for _ in range(2):
+            t = FileAccessTracker()
+            t.__enter__()
+            t.patches = []
+            t.__exit__(None, None, None)
+
+        try:
+            assert getattr(builtins.open, "_is_file_tracker_patch", False)
+            # A self-healing tracker should still recover the real original.
+            with FileAccessTracker():
+                pass
+            assert builtins.open is real_open
+        finally:
+            builtins.open = real_open

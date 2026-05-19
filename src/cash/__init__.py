@@ -52,6 +52,49 @@ def _get_global_cash():
     return _global_cash
 
 
+def reset_session() -> None:
+    """Drop the global ``Cash`` singleton so the next access starts fresh.
+
+    Use cases:
+
+    * **Testing fixtures** that need cash to start over without
+      restarting the Python interpreter.
+    * **Benchmark harnesses** doing repeated measurements in one process
+      (without this, cash's in-memory tracking dicts and FileAccess-
+      Tracker monkey-patches survive ``shell.reset()`` and contaminate
+      successive runs).
+    * **Advanced users** who want to discard accumulated lineage state
+      mid-session (e.g. before re-running a notebook against new inputs).
+
+    What this does:
+
+    * Sets ``_global_cash = None`` so the next ``cash.cache`` /
+      ``cash.show_stats`` / ``%load_ext cash`` creates a fresh ``Cash``
+      with empty tracking state.
+    * If an IPython session is active, re-runs the auto-load so the
+      ``%cash_on`` / ``%cash_off`` / ``%cash_stats`` magics rebind to
+      the new singleton.
+
+    What this does NOT do:
+
+    * It doesn't clear the on-disk cache directory — that's a separate
+      operation (``Cash().clear_cache()`` or ``%cash_clear``).
+    * It doesn't unwind any ``FileAccessTracker`` monkey-patches that
+      are currently in flight — those self-heal on the next tracker
+      ``__enter__`` (see ``cash.notebook.file_tracker._unwrap_to_real``).
+    """
+    global _global_cash
+    _global_cash = None
+    # If IPython is active, re-register magics on a fresh instance so
+    # existing ``%cash_*`` references resolve to the new singleton.
+    try:
+        from IPython import get_ipython  # type: ignore[import-not-found]
+        if get_ipython() is not None:
+            _get_global_cash().register_magic()
+    except ImportError:
+        pass
+
+
 def __getattr__(name):
     """Proxy module-level attribute access to the global ``Cash`` singleton.
 
@@ -72,6 +115,7 @@ __all__ = [
     "cache",
     "show_stats",
     "register_hasher",
+    "reset_session",
     # Purity declarations (stable)
     "pure",
     "stateful",

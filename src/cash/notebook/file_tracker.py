@@ -27,6 +27,31 @@ FileDependencies = dict[str, float]
 
 logger = logging.getLogger(__name__)
 
+def _unwrap_to_real(func: Any) -> Any:
+    """Walk a chain of FileAccessTracker wrappers down to the original
+    callable. Returns ``func`` unchanged if it isn't a wrapper.
+
+    Used by :meth:`FileAccessTracker._patch_module` and ``_patch_user_ns``
+    so a fresh tracker can self-heal past wrappers left behind by a
+    prior tracker that failed to unpatch (e.g. an exception during
+    ``__exit__``, an orphaned tracker, etc.). Without this, the sentinel
+    check ``_is_file_tracker_patch`` would cause the new tracker to skip
+    the function entirely, leaving the leaked wrapper installed
+    indefinitely and pinning a dead tracker instance in memory via its
+    closure on ``_track_path``.
+    """
+    seen: set[int] = set()
+    while getattr(func, '_is_file_tracker_patch', False):
+        if id(func) in seen:  # broken/circular chain, bail
+            break
+        seen.add(id(func))
+        next_func = getattr(func, '_original_func', None)
+        if next_func is None or not callable(next_func):
+            break
+        func = next_func
+    return func
+
+
 class FileDependencyRegistry:
     """
     Registry for file dependency handlers.
@@ -264,52 +289,59 @@ class FileAccessTracker:
 
                 original_func = getattr(module_obj, name)
 
-                # Avoid double patching if we already patched this object in this session
-                # (Simple check, could be more robust)
-                if getattr(original_func, '_is_file_tracker_patch', False) is True:
+                # Self-heal: if we see a wrapper from a prior tracker,
+                # walk down its ``_original_func`` chain to the real,
+                # non-wrapper callable. We wrap THAT instead and remember
+                # it as the original for unpatching. Without this step a
+                # silently-failed unpatch from a prior tracker (or just
+                # a tracker that got orphaned by an exception) leaves
+                # its wrapper installed forever, with subsequent
+                # trackers refusing to re-patch and the wrapper pinning
+                # the dead tracker in memory via its closure.
+                real_original = _unwrap_to_real(original_func)
+
+                if not callable(real_original):
                     continue
 
-                if not callable(original_func):
-                    continue
-
-                # Create wrapper
-                wrapper = factory(original_func, self._track_path)
+                # Create wrapper around the *real* original
+                wrapper = factory(real_original, self._track_path)
                 wrapper._is_file_tracker_patch = True
-                wrapper._original_func = original_func # For debugging/unwrapping
+                wrapper._original_func = real_original  # For debugging/unwrapping
 
                 # Apply patch
                 try:
                     setattr(module_obj, name, wrapper)
-                    self.patches.append((module_obj, name, original_func))
+                    self.patches.append((module_obj, name, real_original))
                 except (AttributeError, TypeError) as e:
                     logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", module_name, name, e)
 
     def _patch_user_ns(self):
-        """Patch open in user namespace (IPython specific)."""
+        """Patch open in user namespace (IPython specific). Like
+        ``_patch_module``, this self-heals by walking past any leaked
+        wrappers to the real callable."""
         # Handle user_ns['open']
         if 'open' in self.user_ns:
-            original = self.user_ns['open']
-            # Avoid repatching
-            if not getattr(original, '_is_file_tracker_patch', False):
-                factory = self.registry._create_open_handler
-                wrapper = factory(original, self._track_path)
-                wrapper._is_file_tracker_patch = True
+            real_open = _unwrap_to_real(self.user_ns['open'])
+            factory = self.registry._create_open_handler
+            wrapper = factory(real_open, self._track_path)
+            wrapper._is_file_tracker_patch = True
+            wrapper._original_func = real_open
 
-                self.user_ns['open'] = wrapper
-                self.patches.append((self.user_ns, 'open', original))
+            self.user_ns['open'] = wrapper
+            self.patches.append((self.user_ns, 'open', real_open))
 
         # Handle user_ns['__builtins__']['open'] (if dict)
         if '__builtins__' in self.user_ns:
             bs = self.user_ns['__builtins__']
             if isinstance(bs, dict) and 'open' in bs:
-                original = bs['open']
-                if not getattr(original, '_is_file_tracker_patch', False):
-                    factory = self.registry._create_open_handler
-                    wrapper = factory(original, self._track_path)
-                    wrapper._is_file_tracker_patch = True
+                real_open = _unwrap_to_real(bs['open'])
+                factory = self.registry._create_open_handler
+                wrapper = factory(real_open, self._track_path)
+                wrapper._is_file_tracker_patch = True
+                wrapper._original_func = real_open
 
-                    bs['open'] = wrapper
-                    self.patches.append((bs, 'open', original))
+                bs['open'] = wrapper
+                self.patches.append((bs, 'open', real_open))
 
     def _unpatch(self):
         """Revert all patches."""
