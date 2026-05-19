@@ -236,29 +236,34 @@ class TestSizeAwareCaching:
         assert size > 0
 
     def test_should_skip_large_object_basic(self):
-        """Large objects with fast computation should be skipped."""
+        """A large object whose predicted restore time exceeds both the
+        fixed budget and the ratio budget must be skipped. The fitted
+        ndarray_dense disk-deserialize model predicts > 160 ms for a 100 MB
+        ndarray, well above the 80 ms ratio budget at execution_time=0.1
+        and above the 50 ms fixed budget."""
+        import numpy as np
         sp = self._make_processor()
-        # Use a config with very slow serialization speed so restore is slow
         mock_config = MagicMock()
         mock_config.min_cache_savings_pct = 0.20
-        mock_config.estimated_serialization_speed = 10  # 10 bytes/s → very slow
+        mock_config.min_cache_fixed_budget_seconds = 0.05
         sp.cash_instance.config = mock_config
 
-        large_var = "x" * 200  # ~249 bytes, est_restore ≈ 24.9s >> 0.8*0.1 = 0.08
+        large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
         result, reason = sp._should_skip_large_object_caching(
             {'big_var': large_var},
-            execution_time=0.1,  # Fast computation
+            execution_time=0.1,  # ratio budget = 80 ms; restore prediction > 160 ms
         )
         assert result is True
         assert reason is not None
         assert "@cash:persist" in reason
 
     def test_should_not_skip_small_object(self):
-        """Small objects should never be skipped."""
+        """Small objects fall under the 50 ms fixed budget and should be
+        cached regardless of how fast the computation was."""
         sp = self._make_processor()
         mock_config = MagicMock()
         mock_config.min_cache_savings_pct = 0.20
-        mock_config.estimated_serialization_speed = 200 * 1024 * 1024  # 200 MB/s
+        mock_config.min_cache_fixed_budget_seconds = 0.05
         sp.cash_instance.config = mock_config
 
         result, reason = sp._should_skip_large_object_caching(
@@ -269,32 +274,35 @@ class TestSizeAwareCaching:
         assert reason is None
 
     def test_should_not_skip_when_compute_expensive(self):
-        """Large objects with expensive computation should be cached."""
+        """When the computation itself is very expensive, even a slow
+        restore is worth it. Restoring a 100 MB ndarray takes ~165 ms; the
+        ratio budget at execution_time=100s is 80s, so the policy should
+        cache."""
+        import numpy as np
         sp = self._make_processor()
         mock_config = MagicMock()
         mock_config.min_cache_savings_pct = 0.20
-        mock_config.estimated_serialization_speed = 10  # 10 bytes/s
+        mock_config.min_cache_fixed_budget_seconds = 0.05
         sp.cash_instance.config = mock_config
 
-        large_var = "x" * 200
-        # ~249 bytes, est_restore ≈ 24.9s.  exec_time=100 → threshold = 0.8*100=80
-        # 24.9 < 80 → savings > 20% → worth caching
+        large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
         result, reason = sp._should_skip_large_object_caching(
             {'big_var': large_var},
-            execution_time=100.0,  # Very expensive → restore overhead is negligible
+            execution_time=100.0,
         )
         assert result is False
         assert reason is None
 
     def test_should_not_skip_when_force_persist(self):
-        """force_persist overrides size-aware check."""
+        """force_persist overrides the cost-model decision."""
+        import numpy as np
         sp = self._make_processor()
         mock_config = MagicMock()
         mock_config.min_cache_savings_pct = 0.20
-        mock_config.estimated_serialization_speed = 10  # Would trigger skip without force_persist
+        mock_config.min_cache_fixed_budget_seconds = 0.05
         sp.cash_instance.config = mock_config
 
-        large_var = "x" * 200
+        large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
         result, reason = sp._should_skip_large_object_caching(
             {'big_var': large_var},
             execution_time=0.1,
@@ -304,11 +312,11 @@ class TestSizeAwareCaching:
         assert reason is None
 
     def test_no_config_uses_defaults(self):
-        """If no config, uses defaults (20% savings threshold, 200 MB/s disk speed)."""
+        """If no config, defaults (20% ratio, 50 ms fixed budget) apply.
+        A tiny object under the fixed budget should not be skipped."""
         sp = self._make_processor()
-        sp.cash_instance.config = None  # No config
+        sp.cash_instance.config = None
 
-        # Small object → should not skip
         result, reason = sp._should_skip_large_object_caching(
             {'x': 42},
             execution_time=0.01,

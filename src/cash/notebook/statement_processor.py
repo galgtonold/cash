@@ -1374,11 +1374,12 @@ class StatementProcessor:
 
         config = getattr(self.cash_instance, 'config', None)
         min_savings_pct = getattr(config, 'min_cache_savings_pct', 0.20) if config else 0.20
+        fixed_budget = getattr(config, 'min_cache_fixed_budget_seconds', 0.05) if config else 0.05
 
         for var_name, var_value in captured_vars.items():
             skip, reason = self._check_var_restore_budget(
                 var_name, var_value, execution_time,
-                is_ram_backend, min_savings_pct,
+                is_ram_backend, min_savings_pct, fixed_budget,
             )
             if skip:
                 return True, reason
@@ -1392,9 +1393,18 @@ class StatementProcessor:
         execution_time: float,
         is_ram_backend: bool,
         min_savings_pct: float,
+        fixed_budget: float,
     ) -> tuple[bool, str | None]:
         """Return (skip, reason) for a single variable based on the predicted
-        restore cost from the fitted cost model."""
+        restore cost from the fitted cost model.
+
+        The skip decision uses ``max(fixed_budget, (1 - min_savings_pct) ×
+        execution_time)`` as the budget. The fixed budget covers the
+        per-call overhead of cheap caches (e.g. opening a file) so trivial
+        cells aren't refused; the ratio kicks in once compute is large
+        enough to dominate. This matches the policy framing: small fixed
+        overhead is fine, what we want to avoid is doubling a long cell.
+        """
         from cash.notebook import cost_model
         try:
             obj_size = self._estimate_object_size(var_value)
@@ -1403,7 +1413,10 @@ class StatementProcessor:
             est_restore_time = cost_model.estimated_restore_time(
                 type_name, obj_size, backend_kind
             )
-            max_acceptable_restore = (1.0 - min_savings_pct) * execution_time
+            max_acceptable_restore = max(
+                fixed_budget,
+                (1.0 - min_savings_pct) * execution_time,
+            )
 
             if execution_time > 0 and est_restore_time > max_acceptable_restore:
                 size_mb = obj_size / (1024 * 1024)

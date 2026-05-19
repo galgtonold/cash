@@ -20,7 +20,7 @@ import numpy as np
 
 from cash.notebook.statement_processor import StatementProcessor
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends.backend import InMemoryBackend, FileBackend
 from traitlets.config.configurable import Configurable
 
 
@@ -35,18 +35,23 @@ class MockShell(Configurable):
 
 
 class TestSizeAwareCachingWithFileDeps:
-    """Test that file-dependent statements bypass size-aware caching skip."""
+    """Test that file-dependent statements bypass size-aware caching skip.
+
+    Uses FileBackend so the cost-model predictions reflect the disk path
+    (where serialize/deserialize cost is high enough for the policy to
+    actually fire on the test sizes). On RAM, the fitted DataFrame copy
+    cost is well under the fixed budget for 80 MB inputs.
+    """
 
     @pytest.fixture
-    def processor(self):
-        """Create a StatementProcessor for testing."""
-        backend = InMemoryBackend()
+    def processor(self, tmp_path):
+        """Create a StatementProcessor with a disk backend for testing."""
+        backend = FileBackend(cache_dir=str(tmp_path))
         cash_instance = Cash(backend=backend, register_magic=False)
         shell = MockShell()
         processor = StatementProcessor(shell, cash_instance)
         processor.debug = False
         yield processor
-        backend.clear()
 
     def test_skip_large_object_without_file_deps(self, processor):
         """Large object without file deps and fast compute → should skip cache."""
