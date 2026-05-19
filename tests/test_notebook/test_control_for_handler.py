@@ -182,15 +182,18 @@ def test_fast_loop_falls_back_to_single_unit(handler, mock_dispatcher):
     assert mock_dispatcher._execute_as_single_unit.call_count == 1
 
 
-def test_fast_loop_skipped_when_nested(handler, mock_dispatcher, mock_statement_processor):
-    """Even a huge loop runs per-iteration when nested (parent_context is not None)."""
+def test_fast_loop_fires_even_when_nested(handler, mock_dispatcher, mock_statement_processor):
+    """Nested huge loops also fall back to single-unit. (Earlier versions of
+    the heuristic refused single-unit for any nested loop on the theory that
+    convergence studies wanted granular cache invalidation. In practice the
+    outer loop's per-iteration caching gives that benefit; the inner loop's
+    7000+ trivial statements just cost time for no payoff.)"""
     body = "\n    ".join([f"x{i} = {i}" for i in range(200)])
     node = _parse_for(f"for i in range(1000):\n    {body}")
     handler.process(node, None, True, parent_context={'outer': 1})
-    # Should NOT have fallen back to single-unit.
-    assert mock_dispatcher._execute_as_single_unit.call_count == 0
-    # Should have processed all 1000 iterations × 200 stmts = 200,000 calls.
-    assert mock_statement_processor.process_statement.call_count == 200_000
+    assert mock_dispatcher._execute_as_single_unit.call_count == 1
+    # Per-iteration processing did NOT happen — single-unit short-circuited it.
+    assert mock_statement_processor.process_statement.call_count == 0
 
 
 def test_fast_loop_skipped_for_small_loop(handler, mock_dispatcher, mock_statement_processor):
