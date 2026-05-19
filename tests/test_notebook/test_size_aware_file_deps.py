@@ -58,7 +58,7 @@ class TestSizeAwareCachingWithFileDeps:
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
         # 80MB DataFrame at 200MB/s → est_serial ≈ 0.4s
         # With exec_time=0.01, threshold = 2.0 * 0.01 = 0.02 → 0.4 > 0.02 → skip
-        result, reason = processor._should_skip_large_object_caching(
+        result, reason, _ = processor._should_skip_large_object_caching(
             large_data, execution_time=0.01, force_persist=False, has_file_dependencies=False
         )
         assert result is True
@@ -68,7 +68,7 @@ class TestSizeAwareCachingWithFileDeps:
         """Large object WITH file deps → should NOT skip cache (file I/O is expensive)."""
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
         # Even with fast execution and large object, file deps mean we should cache
-        result, reason = processor._should_skip_large_object_caching(
+        result, reason, _ = processor._should_skip_large_object_caching(
             large_data, execution_time=1.0, force_persist=False, has_file_dependencies=True
         )
         assert result is False
@@ -77,7 +77,7 @@ class TestSizeAwareCachingWithFileDeps:
     def test_no_skip_large_object_with_force_persist(self, processor):
         """Large object with force_persist → should NOT skip cache."""
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
-        result, reason = processor._should_skip_large_object_caching(
+        result, reason, _ = processor._should_skip_large_object_caching(
             large_data, execution_time=1.0, force_persist=True, has_file_dependencies=False
         )
         assert result is False
@@ -86,7 +86,7 @@ class TestSizeAwareCachingWithFileDeps:
     def test_no_skip_small_object(self, processor):
         """Small object → should NOT skip cache regardless of file deps."""
         small_data = {'x': pd.DataFrame({'a': [1, 2, 3]})}
-        result, reason = processor._should_skip_large_object_caching(
+        result, reason, _ = processor._should_skip_large_object_caching(
             small_data, execution_time=0.1, force_persist=False, has_file_dependencies=False
         )
         assert result is False
@@ -96,7 +96,7 @@ class TestSizeAwareCachingWithFileDeps:
         """Large object with slow compute → should NOT skip cache."""
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
         # Execution time > 10s → expensive computation, ratio check passes
-        result, reason = processor._should_skip_large_object_caching(
+        result, reason, _ = processor._should_skip_large_object_caching(
             large_data, execution_time=10.0, force_persist=False, has_file_dependencies=False
         )
         assert result is False
@@ -138,7 +138,7 @@ class TestBackendAwareCaching:
         # 80MB DataFrame. RAM deepcopy at ~2 GB/s ≈ 0.04s restore time.
         # 0.1s compute → savings = 0.1 - 0.04 = 0.06 → 60% savings → well above 20% threshold
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
-        result, reason = ram_processor._should_skip_large_object_caching(
+        result, reason, _ = ram_processor._should_skip_large_object_caching(
             large_data, execution_time=0.1, force_persist=False, has_file_dependencies=False
         )
         assert result is False, f"RAM should cache 80MB DataFrame with 0.1s compute, but got skip: {reason}"
@@ -151,7 +151,7 @@ class TestBackendAwareCaching:
         # 500 MB → est_restore ≈ 1.0s at 500MB/s. exec_time=0.05 → threshold=0.04
         # 1.0 > 0.04 → skip
         large_data = {'big': 'x' * (500 * 1024 * 1024)}  # ~500 MB string
-        result, reason = ram_processor._should_skip_large_object_caching(
+        result, reason, _ = ram_processor._should_skip_large_object_caching(
             large_data, execution_time=0.05, force_persist=False, has_file_dependencies=False
         )
         assert result is True
@@ -162,7 +162,7 @@ class TestBackendAwareCaching:
         # 80MB DataFrame at 200MB/s → est_restore ≈ 0.4s. 
         # exec_time=0.01 → threshold=0.008. 0.4 > 0.008 → skip
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
-        result, reason = disk_processor._should_skip_large_object_caching(
+        result, reason, _ = disk_processor._should_skip_large_object_caching(
             large_data, execution_time=0.01, force_persist=False, has_file_dependencies=False
         )
         assert result is True
@@ -173,7 +173,7 @@ class TestBackendAwareCaching:
         # 80MB DataFrame at 200MB/s → est_restore ≈ 0.4s.
         # exec_time=10 → threshold=8.0. 0.4 < 8.0 → cache
         large_data = {'df': pd.DataFrame(np.random.randn(100000, 100))}
-        result, reason = disk_processor._should_skip_large_object_caching(
+        result, reason, _ = disk_processor._should_skip_large_object_caching(
             large_data, execution_time=10.0, force_persist=False, has_file_dependencies=False
         )
         assert result is False
@@ -183,7 +183,7 @@ class TestBackendAwareCaching:
         Uses execution_time=0.05 (50 ms) to stay above the 10 ms min-execution-time
         floor so the object-size-based skip reason (not the floor reason) fires."""
         large_data = {'big': 'x' * (500 * 1024 * 1024)}
-        result, reason = ram_processor._should_skip_large_object_caching(
+        result, reason, _ = ram_processor._should_skip_large_object_caching(
             large_data, execution_time=0.05, force_persist=False, has_file_dependencies=False
         )
         assert result is True
@@ -195,7 +195,7 @@ class TestBackendAwareCaching:
     def test_reason_none_when_caching(self, ram_processor):
         """When caching proceeds, reason is None."""
         small_data = {'x': 42}
-        result, reason = ram_processor._should_skip_large_object_caching(
+        result, reason, _ = ram_processor._should_skip_large_object_caching(
             small_data, execution_time=1.0
         )
         assert result is False
