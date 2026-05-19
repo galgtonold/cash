@@ -1372,21 +1372,13 @@ class StatementProcessor:
 
         is_ram_backend = primary_backend_type == 'InMemoryBackend'
 
-        if is_ram_backend:
-            default_speed = 2 * 1024 * 1024 * 1024  # 2 GB/s for known fast types
-            generic_speed = 500 * 1024 * 1024         # 500 MB/s for generic objects
-        else:
-            config = getattr(self.cash_instance, 'config', None)
-            default_speed = getattr(config, 'estimated_serialization_speed', 200 * 1024 * 1024) if config else 200 * 1024 * 1024
-            generic_speed = default_speed  # same for all types
-
         config = getattr(self.cash_instance, 'config', None)
         min_savings_pct = getattr(config, 'min_cache_savings_pct', 0.20) if config else 0.20
 
         for var_name, var_value in captured_vars.items():
             skip, reason = self._check_var_restore_budget(
                 var_name, var_value, execution_time,
-                is_ram_backend, default_speed, generic_speed, min_savings_pct,
+                is_ram_backend, min_savings_pct,
             )
             if skip:
                 return True, reason
@@ -1399,17 +1391,18 @@ class StatementProcessor:
         var_value: Any,
         execution_time: float,
         is_ram_backend: bool,
-        default_speed: int,
-        generic_speed: int,
         min_savings_pct: float,
     ) -> tuple[bool, str | None]:
-        """Return (skip, reason) for a single variable based on estimated restore cost."""
-        ram_fast_types = frozenset({'DataFrame', 'Series', 'ndarray'})
+        """Return (skip, reason) for a single variable based on the predicted
+        restore cost from the fitted cost model."""
+        from cash.notebook import cost_model
         try:
             obj_size = self._estimate_object_size(var_value)
             type_name = type(var_value).__name__
-            speed = (default_speed if type_name in ram_fast_types else generic_speed) if is_ram_backend else default_speed
-            est_restore_time = obj_size / speed
+            backend_kind = "ram" if is_ram_backend else "disk"
+            est_restore_time = cost_model.estimated_restore_time(
+                type_name, obj_size, backend_kind
+            )
             max_acceptable_restore = (1.0 - min_savings_pct) * execution_time
 
             if execution_time > 0 and est_restore_time > max_acceptable_restore:
@@ -1417,7 +1410,7 @@ class StatementProcessor:
                 backend_label = "copying" if is_ram_backend else "serializing"
                 pct_label = f"{min_savings_pct * 100:.0f}%"
                 reason = (
-                    f"Restoring '{var_name}' ({size_mb:.0f} MB) would take "
+                    f"Restoring '{var_name}' ({size_mb:.0f} MB {type_name}) would take "
                     f"~{est_restore_time:.2f}s vs {execution_time:.2f}s compute "
                     f"({backend_label}, <{pct_label} savings) — "
                     f"use @cash:persist to force"
@@ -1429,8 +1422,8 @@ class StatementProcessor:
                 size_mb = obj_size / (1024 * 1024)
                 backend_label = "copy" if is_ram_backend else "serialize"
                 logger.debug(
-                    "[SIZE_AWARE] Caching '%s' (%.1fMB) — est. %s %.2fs vs %.2fs compute",
-                    var_name, size_mb, backend_label, est_restore_time, execution_time
+                    "[SIZE_AWARE] Caching '%s' (%.1fMB %s) — est. %s %.2fs vs %.2fs compute",
+                    var_name, size_mb, type_name, backend_label, est_restore_time, execution_time
                 )
         except (TypeError, ValueError, AttributeError, OSError, RecursionError):
             logger.debug("[SIZE_AWARE] Failed to estimate object size, allowing caching")
