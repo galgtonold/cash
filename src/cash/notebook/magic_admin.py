@@ -273,22 +273,18 @@ class CashAdminMagicsMixin:
         total_stmts = stats['statements_computed'] + stats['statements_restored'] + stats['statements_skipped']
         hit_rate = (stats['statements_restored'] + stats['statements_skipped']) / max(total_stmts, 1) * 100
 
-        backend = self._cash_instance.backend
-        try:
-            entries = backend.list_entries()
-            total_entries = len(entries)
-            total_storage = sum(e.get('size', 0) for e in entries)
-        except (AttributeError, TypeError, OSError):
-            total_entries = 0
-            total_storage = 0
+        # NOTE: We deliberately don't walk the backend here (no
+        # ``list_entries()``). On disk-backed caches with thousands of
+        # entries that's an O(N) scan that opens every metadata file --
+        # the same pathology we removed from ``_diagnose_miss`` in the
+        # 2026-05-18 overhead pass. Users who want a backend-wide view
+        # can run ``%cash_admin`` (or the lower-level inspection tools).
 
         if mode == 'json':
             import json
             result = {
                 **stats,
                 'hit_rate_percent': round(hit_rate, 1),
-                'cache_entries': total_entries,
-                'storage_bytes': total_storage,
             }
             print(json.dumps(result, indent=2))
             return
@@ -304,11 +300,11 @@ class CashAdminMagicsMixin:
         print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
         print(f"  Time saved:          {_fmt_time(stats['total_time_saved'])}")
         print()
-        print(f"  Cache entries:       {total_entries}")
-        print(f"  Storage used:        {_fmt_size(total_storage)}")
-
         tracked = len(self._tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")
+        print()
+        print("  Cache size / entries are not shown here to keep this command")
+        print("  cheap; use %cash_admin to inspect the backend.")
 
     # ------------------------------------------------------------------
     # Export / import / diff
