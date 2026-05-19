@@ -76,3 +76,45 @@ def test_coeffs_table_covers_all_known_families_and_backends():
                 assert (family, backend, op) in _COEFFS, (
                     f"missing constant for ({family!r}, {backend!r}, {op!r})"
                 )
+
+
+def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp_path):
+    """End-to-end: when _should_skip_large_object_caching evaluates a
+    decision, it routes through cost_model.estimated_restore_time."""
+    from unittest.mock import MagicMock
+    from cash.notebook import cost_model
+
+    calls: list[tuple] = []
+    real_fn = cost_model.estimated_restore_time
+
+    def spy(type_name, size_bytes, backend_kind):
+        calls.append((type_name, size_bytes, backend_kind))
+        return real_fn(type_name, size_bytes, backend_kind)
+
+    monkeypatch.setattr(cost_model, "estimated_restore_time", spy)
+
+    from cash.backends.backend import FileBackend
+    from cash.core import Cash
+    from cash.notebook.statement_processor import StatementProcessor
+
+    backend = FileBackend(str(tmp_path))
+    cash = Cash(backend=backend, register_magic=False)
+    shell = MagicMock()
+    shell.user_ns = {}
+    proc = StatementProcessor(cash_instance=cash, shell=shell, debug=False)
+
+    # Moderate object — just enough that the cost_model is consulted.
+    # We don't assert skip=True (depends on fitted constants); the
+    # crucial assertion is that the policy routed through cost_model.
+    medium_obj = b"x" * 1_000_000  # 1 MB
+    # _should_skip_large_object_caching(captured_vars, execution_time,
+    #                                   force_persist, has_file_dependencies)
+    proc._should_skip_large_object_caching(
+        captured_vars={"medium": medium_obj},
+        execution_time=0.1,
+        force_persist=False,
+        has_file_dependencies=False,
+    )
+    assert any(c[0] == "bytes" for c in calls), (
+        f"expected estimated_restore_time call with type_name='bytes', got {calls}"
+    )
