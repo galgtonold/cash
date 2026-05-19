@@ -130,6 +130,21 @@ _KNOWN_PICKLABLE_TYPE_NAMES = frozenset({
     'Timestamp', 'Timedelta', 'DatetimeIndex',
 })
 
+def _config_float(config: Any, attr: str, default: float) -> float:
+    """Read a float-valued config attribute defensively.
+
+    Returns ``default`` when the config is None, missing the attribute,
+    or holding a value that can't be converted to float (e.g. a
+    MagicMock in tests).
+    """
+    if config is None:
+        return default
+    try:
+        return float(getattr(config, attr, default))
+    except (TypeError, ValueError):
+        return default
+
+
 def _get_statement_code_and_hash(metadata: StatementCacheMetadata | None) -> tuple[str | None, str | None]:
     """Return stored statement code and hash."""
     if not metadata:
@@ -1359,6 +1374,24 @@ class StatementProcessor:
         if has_file_dependencies:
             return False, None
 
+        # Absolute floor: don't cache statements whose own compute is
+        # cheaper than the cache machinery itself. Below this threshold
+        # there is no way for caching to be a net win — the per-statement
+        # overhead (file-tracker setup, capture_output, lineage update,
+        # ...) costs more than re-running the statement, and the cache
+        # restore on subsequent runs is even slower than that.
+        config_obj = getattr(self.cash_instance, 'config', None)
+        min_exec_time = _config_float(config_obj, 'min_execution_time_to_cache_seconds', 0.01)
+        if 0 < execution_time < min_exec_time:
+            reason = (
+                f"Compute took only {execution_time*1000:.1f} ms, below the "
+                f"{min_exec_time*1000:.0f} ms 'too cheap to cache' floor — "
+                f"caching this would slow re-runs, not speed them up"
+            )
+            if self.debug:
+                logger.debug("[SIZE_AWARE] %s", reason)
+            return True, reason
+
         # --- Determine cost model based on backend type -----------------------
         backend = getattr(self.cash_instance, 'backend', None)
         backend_type = type(backend).__name__ if backend else ''
@@ -1373,8 +1406,8 @@ class StatementProcessor:
         is_ram_backend = primary_backend_type == 'InMemoryBackend'
 
         config = getattr(self.cash_instance, 'config', None)
-        min_savings_pct = getattr(config, 'min_cache_savings_pct', 0.20) if config else 0.20
-        fixed_budget = getattr(config, 'min_cache_fixed_budget_seconds', 0.05) if config else 0.05
+        min_savings_pct = _config_float(config, 'min_cache_savings_pct', 0.20)
+        fixed_budget = _config_float(config, 'min_cache_fixed_budget_seconds', 0.05)
 
         for var_name, var_value in captured_vars.items():
             skip, reason = self._check_var_restore_budget(
