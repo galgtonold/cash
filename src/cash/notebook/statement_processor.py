@@ -88,6 +88,10 @@ class StatementCacheMetadata(TypedDict, total=False):
     source: str
     skipped_reason: str
     metadata_only: bool
+    cost_model_size_bytes: int
+    cost_model_restore_seconds: float
+    cost_model_type_name: str
+    cost_model_family: str
 
 class ProcessResult(_ProcessResultRequired, total=False):
     """Typed dictionary for the return value of ``StatementProcessor.process_statement()``.
@@ -118,6 +122,10 @@ class ProcessResult(_ProcessResultRequired, total=False):
     branch_label: str
     changed_functions: list[str]
     changed_modules: dict[str, str]
+    cost_model_size_bytes: int
+    cost_model_restore_seconds: float
+    cost_model_type_name: str
+    cost_model_family: str
 
 logger = logging.getLogger(__name__)
 
@@ -656,6 +664,11 @@ class StatementProcessor:
             metrics['storage'] = saved_metadata['storage']
         if saved_metadata and 'skipped_reason' in saved_metadata:
             metrics['skipped_reason'] = saved_metadata['skipped_reason']
+        if saved_metadata and 'cost_model_size_bytes' in saved_metadata:
+            metrics['cost_model_size_bytes'] = saved_metadata['cost_model_size_bytes']
+            metrics['cost_model_restore_seconds'] = saved_metadata['cost_model_restore_seconds']
+            metrics['cost_model_type_name'] = saved_metadata['cost_model_type_name']
+            metrics['cost_model_family'] = saved_metadata['cost_model_family']
 
         metrics['total_time'] = time.time() - process_start
         self.analytics_manager.record_event(
@@ -717,6 +730,11 @@ class StatementProcessor:
                     metrics['storage'] = [metadata['source']]
                 elif 'storage' in metadata:
                     metrics['storage'] = metadata['storage']
+                if 'cost_model_size_bytes' in metadata:
+                    metrics['cost_model_size_bytes'] = metadata['cost_model_size_bytes']
+                    metrics['cost_model_restore_seconds'] = metadata['cost_model_restore_seconds']
+                    metrics['cost_model_type_name'] = metadata['cost_model_type_name']
+                    metrics['cost_model_family'] = metadata['cost_model_family']
 
             self.analytics_manager.record_event(
                 status='HIT',
@@ -1327,7 +1345,7 @@ class StatementProcessor:
         execution_time: float,
         force_persist: bool = False,
         has_file_dependencies: bool = False
-    ) -> tuple[bool, str | None]:
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
         """Decide whether caching a set of output variables is worthwhile.
 
         The guiding principle is **expected time savings**: caching should only
@@ -1361,18 +1379,20 @@ class StatementProcessor:
           re-reading from disk)
 
         Returns:
-            ``(should_skip, reason)`` where *reason* is a human-readable
-            explanation when skipping, else ``None``.
+            ``(should_skip, reason, prediction)`` where *reason* is a human-readable
+            explanation when skipping (else ``None``), and *prediction* is the cost-model
+            dict for the largest variable seen (keys: ``size_bytes``, ``restore_seconds``,
+            ``type_name``, ``family``), or ``None`` when estimation failed for all vars.
         """
         if force_persist:
-            return False, None
+            return False, None, None
 
         # Never skip caching for statements that directly read files.
         # File I/O (pd.read_csv, np.load, etc.) is inherently expensive and
         # the "fast computation" heuristic doesn't apply — the time is spent
         # on disk I/O, not CPU computation, so caching genuinely saves time.
         if has_file_dependencies:
-            return False, None
+            return False, None, None
 
         # NOTE: the "too cheap to cache" floor (statements whose own compute
         # is below ``min_execution_time_to_cache_seconds``) is checked
@@ -1398,15 +1418,24 @@ class StatementProcessor:
         min_savings_pct = _config_float(config, 'min_cache_savings_pct', 0.20)
         fixed_budget = _config_float(config, 'min_cache_fixed_budget_seconds', 0.05)
 
+        # Track the prediction for the largest variable (by size_bytes) seen so
+        # far; returned when no variable causes a skip.
+        largest_prediction: dict[str, Any] | None = None
+
         for var_name, var_value in captured_vars.items():
-            skip, reason = self._check_var_restore_budget(
+            skip, reason, prediction = self._check_var_restore_budget(
                 var_name, var_value, execution_time,
                 is_ram_backend, min_savings_pct, fixed_budget,
             )
             if skip:
-                return True, reason
+                return True, reason, prediction
+            # Keep track of the largest variable's prediction for exposure.
+            if prediction is not None:
+                if (largest_prediction is None
+                        or prediction['size_bytes'] > largest_prediction['size_bytes']):
+                    largest_prediction = prediction
 
-        return False, None
+        return False, None, largest_prediction
 
     def _check_var_restore_budget(
         self,
@@ -1416,9 +1445,9 @@ class StatementProcessor:
         is_ram_backend: bool,
         min_savings_pct: float,
         fixed_budget: float,
-    ) -> tuple[bool, str | None]:
-        """Return (skip, reason) for a single variable based on the predicted
-        restore cost from the fitted cost model.
+    ) -> tuple[bool, str | None, dict[str, Any] | None]:
+        """Return (skip, reason, prediction) for a single variable based on the
+        predicted restore cost from the fitted cost model.
 
         The skip decision uses ``max(fixed_budget, (1 - min_savings_pct) ×
         execution_time)`` as the budget. The fixed budget covers the
@@ -1426,15 +1455,25 @@ class StatementProcessor:
         cells aren't refused; the ratio kicks in once compute is large
         enough to dominate. This matches the policy framing: small fixed
         overhead is fine, what we want to avoid is doubling a long cell.
+
+        ``prediction`` is a dict with keys ``size_bytes``, ``restore_seconds``,
+        ``type_name``, ``family``; or ``None`` if size estimation raises.
         """
         from cash.notebook import cost_model
         try:
             obj_size = self._estimate_object_size(var_value)
             type_name = type(var_value).__name__
             backend_kind = "ram" if is_ram_backend else "disk"
+            family = cost_model._resolve_family(type_name)
             est_restore_time = cost_model.estimated_restore_time(
                 type_name, obj_size, backend_kind
             )
+            prediction: dict[str, Any] = {
+                'size_bytes': obj_size,
+                'restore_seconds': est_restore_time,
+                'type_name': type_name,
+                'family': family,
+            }
             max_acceptable_restore = max(
                 fixed_budget,
                 (1.0 - min_savings_pct) * execution_time,
@@ -1452,7 +1491,7 @@ class StatementProcessor:
                 )
                 if self.debug:
                     logger.debug("[SIZE_AWARE] %s", reason)
-                return True, reason
+                return True, reason, prediction
             if self.debug and obj_size > 10 * 1024 * 1024:
                 size_mb = obj_size / (1024 * 1024)
                 backend_label = "copy" if is_ram_backend else "serialize"
@@ -1460,9 +1499,10 @@ class StatementProcessor:
                     "[SIZE_AWARE] Caching '%s' (%.1fMB %s) — est. %s %.2fs vs %.2fs compute",
                     var_name, size_mb, type_name, backend_label, est_restore_time, execution_time
                 )
+            return False, None, prediction
         except (TypeError, ValueError, AttributeError, OSError, RecursionError):
             logger.debug("[SIZE_AWARE] Failed to estimate object size, allowing caching")
-        return False, None
+        return False, None, None
 
     def _build_output_lineages(self, outputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for all outputs that have a lineage."""
@@ -1530,7 +1570,7 @@ class StatementProcessor:
                 return None
 
         # Size-aware caching: skip storing large objects when serialization overhead dominates
-        should_skip, skip_reason = self._should_skip_large_object_caching(captured_vars, execution_time, force_persist, has_file_dependencies=bool(file_dependencies))
+        should_skip, skip_reason, prediction = self._should_skip_large_object_caching(captured_vars, execution_time, force_persist, has_file_dependencies=bool(file_dependencies))
         if should_skip:
             skip_metadata: StatementCacheMetadata = {
                 'timestamp': time.time(),
@@ -1544,6 +1584,11 @@ class StatementProcessor:
                 'metadata_only': True,
                 'output_lineages': self._build_output_lineages(outputs),
             }
+            if prediction is not None:
+                skip_metadata['cost_model_size_bytes'] = prediction['size_bytes']
+                skip_metadata['cost_model_restore_seconds'] = prediction['restore_seconds']
+                skip_metadata['cost_model_type_name'] = prediction['type_name']
+                skip_metadata['cost_model_family'] = prediction['family']
             try:
                 backend = self.cash_instance.backend if self.cash_instance else None
                 if backend is not None:
@@ -1564,6 +1609,11 @@ class StatementProcessor:
             'force_persist': force_persist,
             'output_lineages': self._build_output_lineages(outputs),
         }
+        if prediction is not None:
+            metadata['cost_model_size_bytes'] = prediction['size_bytes']
+            metadata['cost_model_restore_seconds'] = prediction['restore_seconds']
+            metadata['cost_model_type_name'] = prediction['type_name']
+            metadata['cost_model_family'] = prediction['family']
 
         payload = {
             'variables': self._filter_safe_vars(captured_vars),
