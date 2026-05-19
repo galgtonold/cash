@@ -24,6 +24,7 @@ ENV_VARS = {
     'CASH_MAX_MEMORY_ENTRIES': ('max_memory_entries', lambda v: int(v) if v else None),
     'CASH_MIN_CACHE_SAVINGS_PCT': ('min_cache_savings_pct', float),
     'CASH_SERIALIZATION_SPEED': ('estimated_serialization_speed', int),
+    'CASH_MIN_CACHE_FIXED_BUDGET': ('min_cache_fixed_budget_seconds', float),
 }
 
 
@@ -40,7 +41,8 @@ class CashConfig:
     smart_persistence_threshold: float = 1.0
     max_memory_entries: int | None = None
     min_cache_savings_pct: float = 0.20  # skip caching when expected savings < 20%
-    estimated_serialization_speed: int = 200 * 1024 * 1024  # ~200 MB/s (disk; RAM uses deepcopy)
+    estimated_serialization_speed: int = 200 * 1024 * 1024  # deprecated: superseded by the fitted cost model in cash.notebook.cost_model; kept for backward compat with existing config files
+    min_cache_fixed_budget_seconds: float = 0.05  # always allow caching when predicted restore <= this many seconds, regardless of ratio (covers the per-call fixed cost of e.g. opening a file)
     redis_url: str = 'redis://localhost:6379'
     redis_prefix: str = 'cash:'
     s3_bucket: str = ''
