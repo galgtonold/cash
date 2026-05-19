@@ -89,12 +89,14 @@ for x in ['a', 'b', 'c', 'd']:
         assert shell.user_ns['results'] == ['A', 'B', 'C', 'D']
 
     def test_pure_body_statements_cached(self, magics_fixture):
-        """Pure computations inside loops should be cached per-iteration."""
+        """Pure computations inside loops should be cached per-iteration.
+        sum(range(500_000)) keeps each body statement above the 10 ms
+        min-execution-time floor so the iterations are actually stored in cache."""
         magics, shell, backend = magics_fixture
 
         code = """
 for i in [1, 2, 3]:
-    x = i * 100
+    x = sum(range(5_000_000)) * 0 + i * 100
 """
         # First run: compute
         magics.cash("", code.strip())

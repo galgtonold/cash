@@ -1,4 +1,5 @@
 ﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.annotations import CacheAnnotation
 
 import pytest
 import os
@@ -10,6 +11,12 @@ from cash.notebook.magics import CashMagics
 from cash.core import Cash
 from cash.backends.backend import InMemoryBackend, FileBackend
 from traitlets.config.configurable import Configurable
+
+# Annotation that forces caching regardless of execution time.
+# Used in tests that exercise cache mechanics (restore-after-write, etc.)
+# using trivial statements, so the 10 ms min-execution-time floor doesn't
+# prevent the cache entry from being written.
+_PERSIST = CacheAnnotation(persist=True)
 
 class MockShell(Configurable):
     '''Mock IPython shell for testing.'''
@@ -73,43 +80,46 @@ def processor_fixture(request, mock_shell):
 class TestStorageIntegration:
     
     def test_basic_caching(self, processor_fixture):
-        """Test basic execute -> restore cycle for both backends."""
+        """Test basic execute -> restore cycle for both backends.
+        _PERSIST forces caching regardless of the 10 ms min-execution-time floor
+        so the cache-mechanics path is exercised with trivial statements."""
         processor, shell, backend, _ = processor_fixture
         code = "a = 100\nb = a + 50"
-        
+
         # 1. Execute (Miss)
-        metrics1 = processor.process_statement(code)
+        metrics1 = processor.process_statement(code, annotation=_PERSIST)
         assert metrics1['status'] == CacheStatus.COMPUTED
         assert shell.user_ns['b'] == 150
-        
+
         # 2. Restore (Hit)
         shell.user_ns.pop('b', None)
-        metrics2 = processor.process_statement(code)
+        metrics2 = processor.process_statement(code, annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
         assert shell.user_ns['b'] == 150
-        
+
         # Verify specific storage source is reported correctly
         if isinstance(backend, InMemoryBackend):
             assert 'RAM' in metrics2.get('storage', [])
         else:
             # FileBackend storage might rely on what's in metadata from saved cycle
-            pass 
+            pass
 
     def test_code_change(self, processor_fixture):
-        """Test cache invalidation on code change."""
+        """Test cache invalidation on code change.
+        _PERSIST forces caching regardless of the 10 ms min-execution-time floor."""
         processor, shell, backend, _ = processor_fixture
-        
+
         # 1. Run v1
         code1 = "x = 'initial'"
-        processor.process_statement(code1)
+        processor.process_statement(code1, annotation=_PERSIST)
         assert shell.user_ns['x'] == 'initial'
-        
+
         # 2. Run v2
         code2 = "x = 'modified'"
-        metrics2 = processor.process_statement(code2)
+        metrics2 = processor.process_statement(code2, annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.COMPUTED
         assert shell.user_ns['x'] == 'modified'
-        
+
         # Verify 2 entries in backend
         assert len(backend.list_entries()) == 2
 
@@ -191,8 +201,9 @@ obj = Unpicklable()
         pass
 
     def test_persistence_restart_simulation(self):
-        """Test specifically for FileBackend: Persistence across 'restarts'."""
-        
+        """Test specifically for FileBackend: Persistence across 'restarts'.
+        _PERSIST forces caching regardless of the 10 ms min-execution-time floor."""
+
         temp_dir = tempfile.mkdtemp()
         try:
             # Session 1
@@ -201,20 +212,20 @@ obj = Unpicklable()
             cash1 = Cash(backend=backend1, register_magic=False)
             magics1 = CashMagics(shell1, cash1)
             proc1 = magics1._statement_processor
-            
+
             code = "x = 42"
-            metrics1 = proc1.process_statement(code)
+            metrics1 = proc1.process_statement(code, annotation=_PERSIST)
             assert metrics1['status'] == CacheStatus.COMPUTED
             backend1.shutdown()
-            
+
             # Session 2 (New objects, same directory)
             backend2 = FileBackend(cache_dir=temp_dir)
             shell2 = MockShell()
             cash2 = Cash(backend=backend2, register_magic=False)
             magics2 = CashMagics(shell2, cash2)
             proc2 = magics2._statement_processor
-            
-            metrics2 = proc2.process_statement(code)
+
+            metrics2 = proc2.process_statement(code, annotation=_PERSIST)
             assert metrics2['status'] == CacheStatus.RESTORED
             assert shell2.user_ns['x'] == 42
             

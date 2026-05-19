@@ -78,8 +78,9 @@ class TestMissReasonAttribution:
 
     def test_unchanged_re_run_is_restored_and_has_no_miss_reason(self, magics_fixture):
         magics, shell, _backend, _cash = magics_fixture
-        magics.cash("", "x = 21")               # first run, populates cache
-        m = _last_metric(shell, magics, "x = 21")  # re-run, expect hit
+        # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
+        magics.cash("", "# @cash:persist\nx = 21")               # first run, populates cache
+        m = _last_metric(shell, magics, "# @cash:persist\nx = 21")  # re-run, expect hit
         assert m["status"] == CacheStatus.RESTORED
         # RESTORED rows don't have a miss to attribute.
         assert m.get("miss_reason") is None

@@ -26,9 +26,13 @@ from unittest.mock import MagicMock
 
 from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.magics import CashMagics
+from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
 from cash.backends.backend import InMemoryBackend
 from traitlets.config.configurable import Configurable
+
+# Force caching regardless of the 10 ms min-execution-time floor.
+_PERSIST = CacheAnnotation(persist=True)
 
 
 # ============================================================================
@@ -736,7 +740,9 @@ class TestGranularEndToEnd:
     """End-to-end tests combining all components."""
 
     def test_full_flow_granular_invalidation(self, magics_fixture, tmp_path):
-        """E2E: change one function in module → only its users are invalidated."""
+        """E2E: change one function in module → only its users are invalidated.
+        _PERSIST overrides the 10 ms min-execution-time floor so trivial module
+        calls are actually stored in cache."""
         magics, shell, backend = magics_fixture
         sp = magics._statement_processor
         ft = sp.function_tracker
@@ -761,28 +767,28 @@ class TestGranularEndToEnd:
             sp.process_statement(f"import {module_name}", silent=True)
 
             # Execute: use compute
-            metrics1 = sp.process_statement(f"result = {module_name}.compute(5)", silent=True)
+            metrics1 = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
             assert metrics1['status'] == CacheStatus.COMPUTED
             assert shell.user_ns.get('result') == 10
 
             # Execute: use VERSION
-            metrics2 = sp.process_statement(f"v = {module_name}.VERSION", silent=True)
+            metrics2 = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
             assert metrics2['status'] == CacheStatus.COMPUTED
             assert shell.user_ns.get('v') == '1.0'
 
             # Execute: use format_result
-            metrics3 = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True)
+            metrics3 = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
             assert metrics3['status'] == CacheStatus.COMPUTED
             assert shell.user_ns.get('fmt') == 'Result: 42'
 
             # Re-run all — should be SKIPPED/RESTORED
-            metrics1b = sp.process_statement(f"result = {module_name}.compute(5)", silent=True)
+            metrics1b = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
             assert metrics1b['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
-            metrics2b = sp.process_statement(f"v = {module_name}.VERSION", silent=True)
+            metrics2b = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
             assert metrics2b['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
-            metrics3b = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True)
+            metrics3b = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
             assert metrics3b['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
             # Now change ONLY compute()
@@ -813,17 +819,17 @@ class TestGranularEndToEnd:
             sp.process_statement(f"import {module_name}", silent=True)
 
             # Re-run compute — should be COMPUTED (invalidated)
-            metrics1c = sp.process_statement(f"result = {module_name}.compute(5)", silent=True)
+            metrics1c = sp.process_statement(f"result = {module_name}.compute(5)", silent=True, annotation=_PERSIST)
             assert metrics1c['status'] == CacheStatus.COMPUTED
             assert shell.user_ns.get('result') == 500  # 5 * 100
 
             # VERSION didn't change → may still be SKIPPED/RESTORED or COMPUTED
             # (module reload changes module lineage which can affect cache keys)
-            metrics2c = sp.process_statement(f"v = {module_name}.VERSION", silent=True)
+            metrics2c = sp.process_statement(f"v = {module_name}.VERSION", silent=True, annotation=_PERSIST)
             assert metrics2c['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
 
             # format_result didn't change → may still be SKIPPED/RESTORED or COMPUTED
-            metrics3c = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True)
+            metrics3c = sp.process_statement(f"fmt = {module_name}.format_result(42)", silent=True, annotation=_PERSIST)
             assert metrics3c['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED, CacheStatus.COMPUTED)
 
         finally:
