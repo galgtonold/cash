@@ -1,4 +1,5 @@
 ﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.annotations import CacheAnnotation
 """
 Tests for module reload cache invalidation and exception surfacing.
 
@@ -274,10 +275,16 @@ class TestModuleReloadInvalidation:
         assert metrics2['status'] != CacheStatus.SKIPPED
 
     def test_full_flow_module_change_invalidates_cache(self, magics_fixture, tmp_path):
-        """End-to-end: changing module source should cause cache miss for dependent statements."""
+        """End-to-end: changing module source should cause cache miss for dependent statements.
+        _PERSIST forces caching regardless of the 10 ms min-execution-time floor so that
+        the cache-mechanics (SKIPPED/RESTORED on re-run, COMPUTED after invalidation)
+        are actually exercised."""
         magics, shell, backend = magics_fixture
         sp = magics._statement_processor
         ft = sp.function_tracker
+
+        # _PERSIST annotation: bypass min-execution-time floor for trivial module calls.
+        _persist = CacheAnnotation(persist=True)
 
         # Create module
         module_name = f"_test_flow_mod_{id(tmp_path)}"
@@ -299,12 +306,12 @@ class TestModuleReloadInvalidation:
 
             # Execute: use the module
             use_code = f"result = {module_name}.increment(5)"
-            metrics_use1 = sp.process_statement(use_code, silent=True)
+            metrics_use1 = sp.process_statement(use_code, silent=True, annotation=_persist)
             assert metrics_use1['status'] == CacheStatus.COMPUTED
             assert shell.user_ns.get('result') == 6
 
             # Re-run the same code - should be SKIPPED or RESTORED
-            metrics_use2 = sp.process_statement(use_code, silent=True)
+            metrics_use2 = sp.process_statement(use_code, silent=True, annotation=_persist)
             assert metrics_use2['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
 
             # Now change the module source
@@ -326,7 +333,7 @@ class TestModuleReloadInvalidation:
             sp.process_statement(import_code, silent=True)
 
             # Re-run: use the module - should be COMPUTED (cache miss)
-            metrics_use3 = sp.process_statement(use_code, silent=True)
+            metrics_use3 = sp.process_statement(use_code, silent=True, annotation=_persist)
             assert metrics_use3['status'] == CacheStatus.COMPUTED
             assert shell.user_ns.get('result') == 15  # 5 + 10
 

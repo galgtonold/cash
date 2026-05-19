@@ -1,4 +1,5 @@
 ﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.annotations import CacheAnnotation
 """
 Tests for cache behavior when re-executing statements.
 
@@ -11,9 +12,13 @@ import pytest
 from unittest.mock import MagicMock
 
 from cash.notebook.magics import CashMagics
+from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
 from cash.backends.backend import InMemoryBackend
 from traitlets.config.configurable import Configurable
+
+# Force caching regardless of the 10 ms min-execution-time floor.
+_PERSIST = CacheAnnotation(persist=True)
 
 
 class MockShell(Configurable):
@@ -54,35 +59,38 @@ class TestCacheRestoreBehavior:
         assert shell.user_ns.get('x') == 42
 
     def test_second_run_restores_from_cache(self, magics_fixture):
-        """Second identical execution should RESTORE from cache."""
+        """Second identical execution should RESTORE from cache.
+        _PERSIST overrides the 10 ms min-execution-time floor."""
         magics, shell, backend, processor = magics_fixture
 
-        metrics1 = processor.process_statement("x = 42")
+        metrics1 = processor.process_statement("x = 42", annotation=_PERSIST)
         assert metrics1['status'] == CacheStatus.COMPUTED
 
-        metrics2 = processor.process_statement("x = 42")
+        metrics2 = processor.process_statement("x = 42", annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
         assert shell.user_ns.get('x') == 42
 
     def test_multiple_reruns_always_restore(self, magics_fixture):
-        """Multiple re-runs of same statement should always RESTORE."""
+        """Multiple re-runs of same statement should always RESTORE.
+        _PERSIST overrides the 10 ms min-execution-time floor."""
         magics, shell, backend, processor = magics_fixture
 
-        processor.process_statement("x = 42")
+        processor.process_statement("x = 42", annotation=_PERSIST)
         for _ in range(3):
-            metrics = processor.process_statement("x = 42")
+            metrics = processor.process_statement("x = 42", annotation=_PERSIST)
             assert metrics['status'] == CacheStatus.RESTORED
 
     def test_cache_still_stores_results(self, magics_fixture):
-        """Results should be stored in cache and retrievable."""
+        """Results should be stored in cache and retrievable.
+        _PERSIST overrides the 10 ms min-execution-time floor."""
         magics, shell, backend, processor = magics_fixture
 
-        metrics = processor.process_statement("z = 99")
+        metrics = processor.process_statement("z = 99", annotation=_PERSIST)
         assert metrics['status'] == CacheStatus.COMPUTED
         assert shell.user_ns.get('z') == 99
 
         # Re-run should restore from cache
-        metrics2 = processor.process_statement("z = 99")
+        metrics2 = processor.process_statement("z = 99", annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
 
     def test_mutation_pattern_executes(self, magics_fixture):

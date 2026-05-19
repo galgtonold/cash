@@ -27,7 +27,10 @@ class TestCashStats:
         # The output should be valid JSON
         data = json.loads(captured.out.strip())
         assert 'hit_rate_percent' in data
-        assert 'cache_entries' in data
+        # cache_entries was removed from the JSON output in the 2026-05-18
+        # overhead pass (listing entries is O(N) on disk backends).
+        # Just verify the basic stats fields are present.
+        assert 'statements_computed' in data
 
     def test_stats_reset(self, cash_magics, capsys):
         cash_magics.cash("", "x = 42")
@@ -41,7 +44,8 @@ class TestCashStats:
         assert "Cells executed:" in captured.out
         assert "Cache hit rate:" in captured.out
         assert "Time saved:" in captured.out
-        assert "Cache entries:" in captured.out
+        # "Cache entries:" was removed in the 2026-05-18 overhead pass;
+        # the command now refers users to %cash_admin for backend info.
         assert "Tracked variables:" in captured.out
 
 
@@ -67,7 +71,8 @@ class TestCashExport:
         assert "Exported" in captured.out
 
     def test_export_import_roundtrip(self, cash_magics, cash_instance, tmp_path):
-        cash_magics.cash("", "x = 42")
+        # @cash:persist keeps this trivial statement above the 10 ms floor
+        cash_magics.cash("", "# @cash:persist\nx = 42")
         export_path = str(tmp_path / "test.cache")
         cash_magics.cash_export(export_path)
         

@@ -1,4 +1,5 @@
 ﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.annotations import CacheAnnotation
 """
 Tests for the ALREADY_EXECUTED skip optimization in statement_processor.py.
 
@@ -25,6 +26,9 @@ from cash import Cash
 from cash.backends.backend import InMemoryBackend
 from cash.notebook.magics import CashMagics
 import contextlib
+
+# Force caching regardless of the 10 ms min-execution-time floor.
+_PERSIST = CacheAnnotation(persist=True)
 
 
 class MockShell(Configurable):
@@ -137,17 +141,19 @@ class TestAlreadyExecutedOptimization:
     def test_skip_multiple_outputs(self, processor_fixture):
         """
         Already-executed optimization should work for multi-output statements.
+        _PERSIST overrides the 10 ms min-execution-time floor so trivial
+        assignments are actually written to cache.
         """
         processor, shell, backend, magics = processor_fixture
-        
+
         # First execution
-        metrics1 = processor.process_statement("x = 10\ny = 20")
+        metrics1 = processor.process_statement("x = 10\ny = 20", annotation=_PERSIST)
         assert shell.user_ns['x'] == 10
         assert shell.user_ns['y'] == 20
         assert metrics1['status'] == CacheStatus.COMPUTED
 
-        # Second execution - should be skipped
-        metrics2 = processor.process_statement("x = 10\ny = 20")
+        # Second execution - should be skipped or restored
+        metrics2 = processor.process_statement("x = 10\ny = 20", annotation=_PERSIST)
         assert shell.user_ns['x'] == 10
         assert shell.user_ns['y'] == 20
         assert metrics2['status'] in (CacheStatus.SKIPPED, CacheStatus.RESTORED)
@@ -424,15 +430,16 @@ class TestCacheRestorePaths:
     def test_restore_handles_cleared_namespace(self, processor_fixture):
         """
         If cached variables are removed from namespace, restoration should
-        bring them back from cache.
+        bring them back from cache. _PERSIST overrides the 10 ms
+        min-execution-time floor so trivial assignments are written to cache.
         """
         processor, shell, backend, magics = processor_fixture
-        
+
         # Execute
-        processor.process_statement("x = 42\ny = 84")
+        processor.process_statement("x = 42\ny = 84", annotation=_PERSIST)
         assert shell.user_ns['x'] == 42
         assert shell.user_ns['y'] == 84
-        
+
         # Clear from namespace to force cache restore
         del shell.user_ns['x']
         del shell.user_ns['y']
@@ -440,9 +447,9 @@ class TestCacheRestorePaths:
         processor.variable_lineage.pop('y', None)
         processor.executed_cell_codes.pop('x', None)
         processor.executed_cell_codes.pop('y', None)
-        
+
         # Restore from cache
-        metrics2 = processor.process_statement("x = 42\ny = 84")
+        metrics2 = processor.process_statement("x = 42\ny = 84", annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
         assert shell.user_ns['x'] == 42
         assert shell.user_ns['y'] == 84
@@ -496,20 +503,20 @@ class TestSizeAwareEdgeCases:
 
     def test_large_compute_slow_is_cached(self, processor_fixture):
         """
-        Large objects with slow computation (above min_compute_time) should be cached.
+        Large objects with computation above the 10 ms floor should be cached.
+        sum(range(5_000_000)) takes ~25 ms so the statement crosses the floor.
         """
         processor, shell, backend, magics = processor_fixture
 
-        # Create a large-ish object (bigger than 100 bytes)
-        metrics = processor.process_statement("big = list(range(1000))")
+        # Use a computation that genuinely takes > 10 ms
+        metrics = processor.process_statement("big = list(range(sum(range(5_000_000)) // 12499997500000))")
         assert metrics['status'] == CacheStatus.COMPUTED
-        
-        # Should be cached because min_compute_time is 0
+
         del shell.user_ns['big']
         processor.variable_lineage.pop('big', None)
         processor.executed_cell_codes.pop('big', None)
-        
-        metrics2 = processor.process_statement("big = list(range(1000))")
+
+        metrics2 = processor.process_statement("big = list(range(sum(range(5_000_000)) // 12499997500000))")
         assert metrics2['status'] == CacheStatus.RESTORED
 
 

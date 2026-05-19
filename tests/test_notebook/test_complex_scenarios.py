@@ -6,9 +6,13 @@ import time
 import tempfile
 from unittest.mock import MagicMock, patch
 from cash.notebook.magics import CashMagics
+from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
 from cash.backends.backend import InMemoryBackend
 from traitlets.config.configurable import Configurable
+
+# Force caching regardless of the 10 ms min-execution-time floor.
+_PERSIST = CacheAnnotation(persist=True)
 
 class MockShell(Configurable):
     '''Mock IPython shell for testing.'''
@@ -104,24 +108,26 @@ res = c.compute()
     # Let's try running without patching _execute_statement to test real analysis+exec
     # This requires the code to be valid and simple enough not to depend on external things.
     
-    metrics = processor.process_statement(code)
+    # _PERSIST overrides the 10 ms min-execution-time floor so a class
+    # definition (which runs instantly) is actually written to cache.
+    metrics = processor.process_statement(code, annotation=_PERSIST)
     assert metrics['status'] == CacheStatus.COMPUTED
     print(f"DEBUG: User NS keys after exec: {list(shell.user_ns.keys())}")
     assert 'res' in shell.user_ns
     assert shell.user_ns['res'] == 20
     assert 'c' in shell.user_ns
-    
+
     # Run again - should be RESTORED
-    # We need to clear user_ns to simulate a new session or ensure restoration works, 
-    # BUT for cache hit, the processor checks inputs. 
+    # We need to clear user_ns to simulate a new session or ensure restoration works,
+    # BUT for cache hit, the processor checks inputs.
     # Here, 'code' has no inputs (it defines everything).
-    
+
     # Clear variables to prove they come from cache
     shell.user_ns.pop('res', None)
     shell.user_ns.pop('c', None)
     shell.user_ns.pop('Complex', None)
-    
-    metrics2 = processor.process_statement(code)
+
+    metrics2 = processor.process_statement(code, annotation=_PERSIST)
     assert metrics2['status'] == CacheStatus.RESTORED
     assert 'res' in shell.user_ns
     assert shell.user_ns['res'] == 20

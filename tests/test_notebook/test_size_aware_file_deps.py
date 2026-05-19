@@ -143,14 +143,16 @@ class TestBackendAwareCaching:
         )
         assert result is False, f"RAM should cache 80MB DataFrame with 0.1s compute, but got skip: {reason}"
 
-    def test_ram_skips_giant_object_with_trivial_compute(self, ram_processor):
-        """RAM backend skips caching if deepcopy takes longer than the computation."""
+    def test_ram_skips_giant_object_with_modest_compute(self, ram_processor):
+        """RAM backend skips caching if deepcopy takes longer than the computation.
+        Uses execution_time=0.05 (50 ms) to stay above the 10 ms min-execution-time
+        floor while remaining far below the ~1 s predicted deepcopy cost for 500 MB."""
         # Create a very large generic object (not pandas — slower deepcopy at ~500 MB/s)
-        # 500 MB → est_restore ≈ 1.0s at 500MB/s. exec_time=0.001 → threshold=0.0008
-        # 1.0 > 0.0008 → skip
+        # 500 MB → est_restore ≈ 1.0s at 500MB/s. exec_time=0.05 → threshold=0.04
+        # 1.0 > 0.04 → skip
         large_data = {'big': 'x' * (500 * 1024 * 1024)}  # ~500 MB string
         result, reason = ram_processor._should_skip_large_object_caching(
-            large_data, execution_time=0.001, force_persist=False, has_file_dependencies=False
+            large_data, execution_time=0.05, force_persist=False, has_file_dependencies=False
         )
         assert result is True
         assert "copying" in reason.lower() or "@cash:persist" in reason
@@ -177,10 +179,12 @@ class TestBackendAwareCaching:
         assert result is False
 
     def test_reason_always_provided_on_skip(self, ram_processor):
-        """When caching is skipped, a human-readable reason is always returned."""
+        """When caching is skipped, a human-readable reason is always returned.
+        Uses execution_time=0.05 (50 ms) to stay above the 10 ms min-execution-time
+        floor so the object-size-based skip reason (not the floor reason) fires."""
         large_data = {'big': 'x' * (500 * 1024 * 1024)}
         result, reason = ram_processor._should_skip_large_object_caching(
-            large_data, execution_time=0.001, force_persist=False, has_file_dependencies=False
+            large_data, execution_time=0.05, force_persist=False, has_file_dependencies=False
         )
         assert result is True
         assert reason is not None
@@ -267,10 +271,11 @@ class TestReadCsvCachingUnit:
         sp = magics._statement_processor
         assert 'df' in sp.variable_lineage, "df should have a lineage after caching"
         
-        # The key test: the backend should have a cache entry for read_csv
+        # The key test: the backend should have a cache entry for read_csv.
+        # data_path = '...' is a trivial string assignment — it may be skipped by the
+        # min-execution-time floor (< 10 ms) — so we only require at least 1 entry.
         stored_keys = list(backend._store.keys())
-        # import may be skipped as redundant, but data_path and read_csv should be stored
-        assert len(stored_keys) >= 2, f"Expected at least 2 cache entries, got {len(stored_keys)}"
+        assert len(stored_keys) >= 1, f"Expected at least 1 cache entry, got {len(stored_keys)}"
         
         # Verify the read_csv cache entry exists by checking metadata
         found_read_csv = False

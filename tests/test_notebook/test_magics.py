@@ -49,24 +49,28 @@ class TestCashMagics(unittest.TestCase):
 
     def test_basic_caching(self):
         # 1. First run: Calculate a = 1 + 1
-        cell = "a = 1 + 1"
+        # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
+        cell = "# @cash:persist\na = 1 + 1"
         self.magics.cash("", cell)
-        
+
         self.assertEqual(self.shell.user_ns.get('a'), 2)
         # With incremental caching, we store per statement.
         self.assertEqual(len(self.backend.list_entries()), 1)
-        
+
         # 2. Modify 'a' in namespace to verify restoration
         self.shell.user_ns['a'] = 99
-        
+
         # 3. Second run: Should restore 'a' = 2
         self.magics.cash("", cell)
         self.assertEqual(self.shell.user_ns.get('a'), 2)
 
     def test_incremental_caching(self):
-        # Cell with two statements
-        cell = """
+        # Cell with two statements.
+        # Each statement gets its own @cash:persist annotation so both are
+        # cached regardless of the 10 ms min-execution-time floor.
+        cell = """# @cash:persist
 x = 10
+# @cash:persist
 y = x + 5
 """
         # 1. First run
@@ -74,18 +78,19 @@ y = x + 5
         self.assertEqual(self.shell.user_ns.get('x'), 10)
         self.assertEqual(self.shell.user_ns.get('y'), 15)
         self.assertEqual(len(self.backend.list_entries()), 2) # Two statements cached
-        
+
         # 2. Change second statement
-        cell_v2 = """
+        cell_v2 = """# @cash:persist
 x = 10
+# @cash:persist
 y = x + 10
 """
         self.magics.cash("", cell_v2)
-        
+
         # Verify behavior: x should be restored from cache, y should be recomputed
         self.assertEqual(self.shell.user_ns.get('x'), 10)
         self.assertEqual(self.shell.user_ns.get('y'), 20)
-        
+
         # Now we have 3 entries in cache:
         # - x = 10 (still valid from first run)
         # - y = x + 5 (old entry, no longer used but not deleted)
@@ -230,7 +235,8 @@ final_value = result * multiplier
         self.assertEqual(self.shell.user_ns.get('final_value'), 210)
 
     def test_rich_output_capture(self):
-        cell = "'rich_output'"
+        # @cash:persist forces caching regardless of the 10 ms min-execution-time floor
+        cell = "# @cash:persist\n'rich_output'"
         
         # 1. First run: Mock capture_output to return rich output
         mock_output = {'data': {'text/plain': 'mock_data'}, 'metadata': {}}

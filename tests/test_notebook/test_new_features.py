@@ -246,6 +246,8 @@ class TestSizeAwareCaching:
         mock_config = MagicMock()
         mock_config.min_cache_savings_pct = 0.20
         mock_config.min_cache_fixed_budget_seconds = 0.05
+        # Disable the min-execution-time floor so the object-size policy is tested.
+        mock_config.min_execution_time_to_cache_seconds = 0.0
         sp.cash_instance.config = mock_config
 
         large_var = np.zeros(12_500_000, dtype=np.float64)  # 100 MB
@@ -264,11 +266,13 @@ class TestSizeAwareCaching:
         mock_config = MagicMock()
         mock_config.min_cache_savings_pct = 0.20
         mock_config.min_cache_fixed_budget_seconds = 0.05
+        # Disable the min-execution-time floor so the object-size policy is tested.
+        mock_config.min_execution_time_to_cache_seconds = 0.0
         sp.cash_instance.config = mock_config
 
         result, reason = sp._should_skip_large_object_caching(
             {'small_var': 42},
-            execution_time=0.01,
+            execution_time=0.05,  # above the 10 ms floor; only size policy matters here
         )
         assert result is False
         assert reason is None

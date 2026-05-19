@@ -1,4 +1,5 @@
 ﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.annotations import CacheAnnotation
 """
 Tests for mutation-aware caching in statement_processor.
 
@@ -14,6 +15,10 @@ from cash.notebook.cacheability import analyze_statement
 from cash.core import Cash
 from cash.backends.backend import InMemoryBackend
 from traitlets.config.configurable import Configurable
+
+# Force caching regardless of the 10 ms min-execution-time floor, so tests
+# that exercise cache mechanics (restore-after-write) aren't skipped.
+_PERSIST = CacheAnnotation(persist=True)
 
 
 class MockShell(Configurable):
@@ -155,7 +160,9 @@ class TestMutationAwareCaching:
         assert any('mutation' in r.lower() or 'In-place' in r for r in metrics2.get('uncacheable_reasons', []))
 
     def test_class_definition_still_cacheable(self, processor_fixture):
-        """Class definitions with internal self.x=y should still be cacheable."""
+        """Class definitions with internal self.x=y should still be cacheable.
+        _PERSIST overrides the 10 ms min-execution-time floor so the class
+        definition (which runs instantly) is actually stored in cache."""
         processor, shell, backend = processor_fixture
 
         code = """
@@ -166,14 +173,14 @@ class Point:
 
 p = Point(3, 4)
 """
-        metrics = processor.process_statement(code)
+        metrics = processor.process_statement(code, annotation=_PERSIST)
         assert metrics['status'] == CacheStatus.COMPUTED
 
         # Clear and re-run — should be RESTORED from cache
         shell.user_ns.pop('Point', None)
         shell.user_ns.pop('p', None)
 
-        metrics2 = processor.process_statement(code)
+        metrics2 = processor.process_statement(code, annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
 
     def test_augmented_assign_as_output(self, processor_fixture):
@@ -200,7 +207,9 @@ p = Point(3, 4)
         assert metrics2['status'] == CacheStatus.COMPUTED
 
     def test_function_def_with_mutation_cacheable(self, processor_fixture):
-        """Function that internally mutates args should still be cacheable as a definition."""
+        """Function that internally mutates args should still be cacheable as a definition.
+        _PERSIST overrides the 10 ms min-execution-time floor so the function
+        definition (which runs instantly) is actually stored in cache."""
         processor, shell, backend = processor_fixture
 
         code = """
@@ -208,9 +217,9 @@ def transform(lst):
     lst.sort()
     return lst[0]
 """
-        metrics = processor.process_statement(code)
+        metrics = processor.process_statement(code, annotation=_PERSIST)
         assert metrics['status'] == CacheStatus.COMPUTED
 
         shell.user_ns.pop('transform', None)
-        metrics2 = processor.process_statement(code)
+        metrics2 = processor.process_statement(code, annotation=_PERSIST)
         assert metrics2['status'] == CacheStatus.RESTORED
