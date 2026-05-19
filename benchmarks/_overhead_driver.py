@@ -109,6 +109,10 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric]) -> None:
                 execution_time=float(result.get("execution_time", 0.0)),
                 total_time=float(result.get("total_time", 0.0)),
                 status=status_str,
+                cost_model_size_bytes=result.get("cost_model_size_bytes"),
+                cost_model_restore_seconds=result.get("cost_model_restore_seconds"),
+                cost_model_type_name=result.get("cost_model_type_name"),
+                cost_model_family=result.get("cost_model_family"),
             ))
         except Exception:  # noqa: BLE001 — tee must never break user code
             pass
