@@ -107,6 +107,18 @@ def main(argv: list[str] | None = None) -> int:
 
     stem = args.notebook.stem
 
+    # Isolate the global Cash instance (used by any ``@cash.cache`` decorator
+    # in the notebook and by the auto-loaded magics if anything still
+    # manages to trigger them) from the repo's accumulated ``.cash/``
+    # directory. Without this, "off" mode silently hits ~22k warm entries
+    # from past dev sessions and the comparison is meaningless. Per-(notebook,
+    # mode) directory, wiped on every CLI invocation.
+    global_cash_dir = args.results_dir / "_global_cash" / f"{stem}-{args.mode}"
+    if global_cash_dir.exists():
+        shutil.rmtree(global_cash_dir, ignore_errors=True)
+    global_cash_dir.mkdir(parents=True, exist_ok=True)
+    os.environ["CASH_CACHE_DIR"] = str(global_cash_dir)
+
     if args.mode == "warm":
         # Populate the cache once, then re-run --repeats times against it.
         warm_dir = args.cache_root / "warm-shared"
