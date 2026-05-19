@@ -38,6 +38,13 @@ NOTEBOOKS = [
     # themselves are unmodified by the bench (we only read the source).
     ("09_yelp_reviews", "examples/large_scale_projects/09_yelp_reviews.ipynb"),
     ("10_us_flights", "examples/large_scale_projects/10_us_flights.ipynb"),
+    # Heavy-compute notebooks (20M and 80M-row pandas workloads). Built
+    # to push into the regime where individual cells take seconds-to-
+    # tens-of-seconds, testing whether cash's overhead stays a small
+    # fraction of compute time as compute grows. The XL variant pushes
+    # cell 3 to 12+ seconds of pure pandas groupby.
+    ("synthetic_heavy", "benchmarks/synthetic_heavy.ipynb"),
+    ("synthetic_heavy_xl", "benchmarks/synthetic_heavy_xl.ipynb"),
 ]
 
 
@@ -189,9 +196,14 @@ def acceptance_rows(per_nb: dict[str, dict]) -> list[dict]:
     # examples/large_scale_projects/, picked because they're self-contained
     # (synthetic data, no external downloads) and representative of the
     # data-science workloads cash is built for.
+    # C9 + C10: heavy-compute notebooks pushing into seconds-to-tens-of-
+    # seconds per cell. C10 is the closest we have to the "minutes of
+    # compute" regime the user asked about.
     for crit_id, stem, friendly in [
         ("C7", "10_us_flights", "10_us_flights"),
         ("C8", "09_yelp_reviews", "09_yelp_reviews"),
+        ("C9", "synthetic_heavy", "synthetic_heavy (20M-row workload, ~8s baseline)"),
+        ("C10", "synthetic_heavy_xl", "synthetic_heavy_xl (80M-row workload, ~31s baseline)"),
     ]:
         info = per_nb.get(stem)
         if not info:
