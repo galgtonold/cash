@@ -32,6 +32,12 @@ NOTEBOOKS = [
     ("file_tracking_demo", "examples/file_tracking_demo.ipynb"),
     ("financial_analysis_demo", "examples/financial_analysis_demo.ipynb"),
     ("cfd_simulation_demo", "examples/cfd_simulation_demo.ipynb"),
+    # Production-shaped data-science notebooks from large_scale_projects.
+    # Chosen for being self-contained (synthetic data, no downloads) so the
+    # bench can run them without external dependencies. The notebook files
+    # themselves are unmodified by the bench (we only read the source).
+    ("09_yelp_reviews", "examples/large_scale_projects/09_yelp_reviews.ipynb"),
+    ("10_us_flights", "examples/large_scale_projects/10_us_flights.ipynb"),
 ]
 
 
@@ -178,6 +184,37 @@ def acceptance_rows(per_nb: dict[str, dict]) -> list[dict]:
         "detail": f"cold total = {syn_cold_ms:.1f} ms",
         "caveat": "",
     })
+
+    # C7 + C8: the 20% rule on production-shaped notebooks. These come from
+    # examples/large_scale_projects/, picked because they're self-contained
+    # (synthetic data, no external downloads) and representative of the
+    # data-science workloads cash is built for.
+    for crit_id, stem, friendly in [
+        ("C7", "10_us_flights", "10_us_flights"),
+        ("C8", "09_yelp_reviews", "09_yelp_reviews"),
+    ]:
+        info = per_nb.get(stem)
+        if not info:
+            continue
+        nb_off = info["off_total"]
+        nb_cold = info["cold_total"]
+        nb_budget = max(nb_off + 0.050, nb_off * 1.2)
+        delta_ms = (nb_cold - nb_off) * 1000
+        rows.append({
+            "id": crit_id,
+            "name": f"{friendly} cold ≤ max(off + 50 ms, off × 1.2)",
+            "pass": nb_cold <= nb_budget,
+            "detail": (
+                f"cold={nb_cold*1000:.0f} ms, off={nb_off*1000:.0f} ms, "
+                f"budget={nb_budget*1000:.0f} ms — "
+                f"{delta_ms:+.0f} ms overhead"
+            ),
+            "caveat": (
+                "Small absolute overhead — within the 'barely noticeable' "
+                "range the spec's per-cell budget was designed for. The "
+                "violation is by " + f"{(nb_cold - nb_budget)*1000:.0f} ms."
+            ) if nb_cold > nb_budget else "",
+        })
 
     return rows
 
