@@ -14,6 +14,10 @@ class StatementMetric:
     execution_time: float
     total_time: float
     status: str  # 'COMPUTED' | 'RESTORED' | 'SKIPPED' | 'UNKNOWN'
+    cost_model_size_bytes: int | None = None
+    cost_model_restore_seconds: float | None = None
+    cost_model_type_name: str | None = None
+    cost_model_family: str | None = None
 
 
 @dataclass
@@ -62,7 +66,19 @@ def read_results(path: Path) -> RunResult:
             notebook_cell_index=c["notebook_cell_index"],
             wall_seconds=c["wall_seconds"],
             source_chars=c["source_chars"],
-            statement_metrics=[StatementMetric(**m) for m in c["statement_metrics"]],
+            statement_metrics=[
+                StatementMetric(
+                    code=m["code"],
+                    execution_time=m["execution_time"],
+                    total_time=m["total_time"],
+                    status=m["status"],
+                    cost_model_size_bytes=m.get("cost_model_size_bytes"),
+                    cost_model_restore_seconds=m.get("cost_model_restore_seconds"),
+                    cost_model_type_name=m.get("cost_model_type_name"),
+                    cost_model_family=m.get("cost_model_family"),
+                )
+                for m in c["statement_metrics"]
+            ],
         )
         for c in data["cells"]
     ]
