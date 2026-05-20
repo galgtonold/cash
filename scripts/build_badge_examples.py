@@ -69,9 +69,9 @@ def main() -> int:
     fixture_kwargs: dict[str, dict[str, Any]] = {
         "anatomy_hero": {
             "timing_breakdown": {
-                "cache lookup": 0.011,
-                "lineage compute": 0.008,
-                "serialization": 0.034,
+                "upstream_check": 0.011,
+                "badge_init": 0.008,
+                "badge_progress": 0.005,
             },
             "cell_total_time": 0.421,
         },
