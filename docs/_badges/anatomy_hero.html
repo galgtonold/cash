@@ -1,0 +1,683 @@
+<style>
+/* Scoped scrollbar styling — applies only to scrollable elements that
+   *contain* a Cash badge. Uses :has() (Chromium 105+, Safari 15.4+,
+   Firefox 121+) so we don't repaint scrollbars in cells that don't
+   show our badge. Firefox uses scrollbar-color / scrollbar-width;
+   Chromium falls back to ::-webkit-scrollbar pseudo-elements. */
+:has(> .c3-wrap),
+:has(.c3-wrap) {
+  scrollbar-width: thin;
+  scrollbar-color: #c5c1b5 transparent;
+}
+:has(> .c3-wrap)::-webkit-scrollbar,
+:has(.c3-wrap)::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+  background: transparent;
+}
+:has(> .c3-wrap)::-webkit-scrollbar-thumb,
+:has(.c3-wrap)::-webkit-scrollbar-thumb {
+  background: #c5c1b5;
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+:has(> .c3-wrap)::-webkit-scrollbar-thumb:hover,
+:has(.c3-wrap)::-webkit-scrollbar-thumb:hover {
+  background: #a8a496;
+  background-clip: padding-box;
+}
+:has(> .c3-wrap)::-webkit-scrollbar-corner,
+:has(.c3-wrap)::-webkit-scrollbar-corner { background: transparent; }
+
+/* Outer wrap is a thin positioning anchor only — no reserved padding,
+   so the badge takes its natural width and doesn't trigger horizontal
+   scroll. Hover detail panels render *in flow* under their row (see
+   .c3-rowtip below), which sidesteps every ancestor-overflow trap. */
+.c3-wrap {
+  display: inline-block;
+  position: relative;
+  margin-top: 5px;
+  max-width: 100%;
+}
+/* Neutralize host (Jupyter / VS Code) defaults — but only on the inline
+   row code block (.c3-code). The expanded rowtip code block (.c3-rt-code)
+   wants its own background, so we don't touch it. */
+.c3-code {
+  background: transparent !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+.c3-card {
+  display: inline-flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid #e6e6e6;
+  border-left: 3px solid;
+  border-radius: 4px;
+  overflow: visible;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 12px;
+  color: #222;
+  max-width: 100%;
+  position: relative;
+}
+.c3-card[data-kind="cached"] { border-left-color: #2a8a5e; }
+.c3-card[data-kind="exec"]   { border-left-color: #a87530; }
+.c3-card[data-kind="warn"]   { border-left-color: #b53d29; }
+.c3-card[data-kind="mixed"]  { border-left-color: #336699; }
+
+/* Summary chip */
+.c3-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  list-style: none;
+  outline: none;
+  min-height: 22px;
+}
+.c3-summary::-webkit-details-marker { display: none; }
+.c3-summary::marker { content: ""; }
+.c3-card[open] > .c3-summary { border-bottom: 1px solid #efece4; }
+.c3-card[data-kind="cached"][open] > .c3-summary { background: #ecf6f0; }
+.c3-card[data-kind="exec"][open]   > .c3-summary { background: #fbf3e5; }
+
+.c3-summary-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.c3-card[data-kind="cached"] .c3-summary-label { color: #2a8a5e; }
+.c3-card[data-kind="exec"]   .c3-summary-label { color: #a87530; }
+.c3-card[data-kind="warn"]   .c3-summary-label { color: #b53d29; }
+.c3-card[data-kind="mixed"]  .c3-summary-label { color: #336699; }
+.c3-summary-sep { color: #999; font-size: 10px; }
+.c3-summary-sub {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  color: #666;
+}
+.c3-summary-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  height: 18px;
+  padding: 0 4px;
+  border-left: 1px solid #e8e5dc;
+  border-right: 1px solid #e8e5dc;
+  margin-left: 4px;
+  /* Cap so a 100-statement cell can't push the filter chips off the
+     edge — overflow clips the trailing bars rather than expanding. */
+  max-width: 200px;
+  overflow: hidden;
+}
+.c3-spark {
+  display: inline-flex;
+  align-items: flex-end;
+  height: 16px;
+  gap: 1px;
+  flex-shrink: 0;
+}
+.c3-spark-bar {
+  width: 3px;
+  min-height: 2px;
+  border-radius: 0.5px;
+}
+.c3-summary-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.c3-fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px 2px 5px;
+  background: #fff;
+  border: 1px solid #e2e2e0;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #666;
+}
+.c3-fchip-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+.c3-fchip-exec   .c3-fchip-dot { background: #d3a76b; }
+.c3-fchip-cached .c3-fchip-dot { background: #86bfa3; }
+.c3-fchip-warn   .c3-fchip-dot { background: #e8a397; }
+.c3-fchip-count  { color: #222; font-variant-numeric: tabular-nums; }
+.c3-summary-caret {
+  width: 7px; height: 7px;
+  border-right: 1.5px solid #888;
+  border-bottom: 1.5px solid #888;
+  transform: rotate(45deg) translate(-2px, -2px);
+  margin-left: 6px;
+  align-self: center;
+  transition: transform 0.15s ease;
+}
+.c3-card[open] > .c3-summary > .c3-summary-caret {
+  transform: rotate(-135deg) translate(-2px, -2px);
+}
+
+/* Panel — overflow is visible so click-to-expand tooltips can escape;
+   we trade per-badge scroll for the badge growing with its content. */
+.c3-panel {
+  background: #fdfdfc;
+  padding: 0;
+  min-width: 0;
+  overflow: visible;
+}
+
+/* Upstream subsection — nested <details> */
+.c3-upstream {
+  background: #f6f7f8;
+  border-bottom: 1px solid #ececec;
+}
+.c3-upstream > summary {
+  /* No gap, no right-padding: the bar-cell (80px) and saved-cell (76px)
+     on the right must butt up against each other so they align with the
+     row grid's contiguous tbar + chip columns below. Spacing on the left
+     comes from the caret's margin-right and the count's margin-left:auto. */
+  display: flex; align-items: center;
+  padding: 6px 0 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 11px;
+  color: #666;
+  list-style: none;
+}
+.c3-upstream > summary::-webkit-details-marker { display: none; }
+.c3-upstream > summary::marker { content: ""; }
+.c3-upstream > summary:hover { background: #f0f2f4; }
+.c3-upstream-label { font-weight: 600; letter-spacing: 0.02em; }
+.c3-upstream-count {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 10px; color: #888;
+  margin-left: auto;
+}
+/* Bar + saved cells sized so they line up under the row tbar + time
+   chip columns (80px and 76px in .c3-row grid-template-columns). */
+.c3-upstream-bar-cell { width: 80px; padding: 0 8px; box-sizing: border-box; }
+.c3-upstream-bar {
+  display: block;
+  height: 6px;
+  background: #f2efea;
+  border-radius: 3px;
+  overflow: hidden;
+  width: 100%;
+}
+.c3-upstream-bar > span {
+  display: block;
+  height: 100%;
+  background: #86bfa3;
+  border-radius: 3px;
+}
+.c3-upstream-saved-cell {
+  width: 76px; padding: 0 8px 0 6px; box-sizing: border-box;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.c3-upstream-saved { color: #2a8a5e; font-weight: 600; }
+.c3-upstream-body { border-top: 1px solid #ececec; padding: 2px 0; }
+/* Reuse the outer-badge chevron style. */
+.c3-upstream-caret {
+  width: 7px; height: 7px;
+  border-right: 1.5px solid #888;
+  border-bottom: 1.5px solid #888;
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  display: inline-block;
+  margin-right: 2px;
+}
+.c3-upstream[open] > summary .c3-upstream-caret {
+  transform: rotate(45deg);
+}
+
+/* Row grid */
+.c3-row {
+  display: grid;
+  grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px;
+  align-items: center;
+  border-bottom: 1px solid #f4f3ef;
+  min-height: 26px;
+  position: relative;          /* tooltip anchor */
+}
+.c3-row:last-child { border-bottom: 0; }
+.c3-row[data-clickable="true"] { cursor: pointer; }
+.c3-row[data-clickable="true"]:hover { background: #faf9f5; }
+.c3-row:hover { background: #faf9f5; }
+
+/* Click-to-expand row detail via the checkbox-hack pattern.
+   <input type="checkbox" hidden> + <label for="..."> + sibling CSS.
+   Bulletproof across every browser since IE9 — no <details>/<summary>
+   quirks, no JS, no overflow traps, no layout shift on hover. */
+.c3-rowx, .c3-loop-body { display: block; }
+.c3-rxtog {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  width: 0; height: 0;
+  margin: 0;
+}
+label.c3-row { cursor: pointer; }
+.c3-rowtip {
+  display: none;
+  background: #f4efe1;
+  border-top: 1px solid #c8c3b3;
+  border-bottom: 1px solid #c8c3b3;
+  padding: 12px 16px 14px 22px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 11px;
+  color: #222;
+  white-space: normal;
+  box-shadow: inset 5px 0 0 #b69a4d, 0 1px 2px rgba(0,0,0,0.04);
+}
+.c3-rxtog:checked ~ .c3-rowtip { display: block; }
+.c3-rxtog:checked ~ label.c3-row { background: #faf9f5; }
+/* Loop body expansion (per-iteration drill-down + tooltip) uses its
+   own checkbox toggle but keeps the existing summary/drill-down
+   markup inside the label. */
+.c3-rxtog:checked ~ .c3-iter-table { display: flex; }
+.c3-iter-table { display: none; }
+.c3-rt-h {
+  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+}
+.c3-rt-status {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+.c3-rt-time {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  color: #444;
+  margin-left: auto;
+}
+.c3-rt-saved { color: #2a8a5e; }
+.c3-rt-code {
+  margin: 0 0 8px;
+  padding: 6px 8px;
+  background: #f7f6f1;
+  border-radius: 3px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 110px;
+  overflow: hidden;
+  color: #222;
+}
+.c3-rt-dl {
+  display: grid;
+  grid-template-columns: 100px 1fr;
+  gap: 4px 10px;
+  margin: 0;
+  font-size: 10px;
+}
+.c3-rt-dl dt {
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #888;
+  padding-top: 1px;
+}
+.c3-rt-dl dd {
+  margin: 0;
+  color: #222;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  word-break: break-word;
+}
+
+.c3-rail { width: 5px; align-self: stretch; }
+.c3-rail-soft { opacity: 0.5; }
+
+.c3-code {
+  /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
+     (padding: 0; line-height: 1.21429; menlo-first font stack) would
+     otherwise win on specificity and compress every row. */
+  margin: 0 !important;
+  padding: 5px 10px !important;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace !important;
+  font-size: 12px !important;
+  color: #222 !important;
+  white-space: pre !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.4 !important;
+}
+.c3-code-body  { color: #444; }
+/* Faded suffix listing produced/restored variable names. Lives inline
+   so the parent .c3-code's overflow:hidden + ellipsis hides it first
+   when there's not enough room — never pushes the code itself off. */
+.c3-row-vars {
+  margin-left: 10px;
+  color: #999;
+  font-size: 10.5px;
+  font-style: italic;
+}
+.c3-code-group { font-style: italic; }
+.c3-caret {
+  display: inline-block;
+  color: #999;
+  font-size: 9px;
+  width: 10px;
+  margin-right: 2px;
+}
+
+/* Python syntax tokens */
+.c3-kw  { color: #cf222e; }
+.c3-str { color: #0a3069; }
+.c3-com { color: #6e7781; font-style: italic; }
+.c3-num { color: #0550ae; }
+
+/* Tier dots cell */
+.c3-dots-cell { padding: 0 4px; text-align: left; }
+.c3-dots { display: inline-flex; align-items: center; gap: 2px; }
+.c3-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  border: 1.5px solid #e6e6e6;
+  background: transparent;
+  vertical-align: middle;
+}
+.c3-dot-solid   { background: currentColor; border-color: currentColor; }
+.c3-dot-ring    { background: transparent;  border-color: currentColor; }
+.c3-dot-blocked { background: transparent;  border-color: currentColor; border-style: dashed; }
+.c3-dot-empty   { background: transparent;  border-color: #d2d4d8; }
+.c3-dots-cached  { color: #2a8a5e; }
+.c3-dots-exec    { color: #a87530; }
+.c3-dots-warn    { color: #b53d29; }
+
+/* Timing bar */
+.c3-tbar-cell { padding: 0 8px; }
+.c3-tbar {
+  display: block;
+  height: 6px;
+  background: #f2efea;
+  border-radius: 3px;
+  overflow: hidden;
+  width: 100%;
+}
+.c3-tbar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 3px;
+}
+.c3-tbar-fill-cached { background: #86bfa3; }
+.c3-tbar-fill-exec   { background: #d3a76b; }
+.c3-tbar-fill-warn   { background: #e8a397; }
+
+/* Time chip */
+.c3-time-chip {
+  padding: 3px 8px 3px 6px;
+  text-align: right;
+  display: block;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  line-height: 1.3;
+  border-left: 1px solid #f0eee8;
+}
+.c3-time-chip-exec   { color: #7a5310;   background: #fbf3e5; }
+.c3-time-chip-cached { color: #1f6646; background: #ecf6f0; }
+.c3-time-chip-warn   { color: #8a2916;   background: #fbeae5; }
+.c3-time-sub {
+  display: block;
+  font-size: 9px;
+  color: #2a8a5e;
+  margin-top: 1px;
+}
+.c3-notif-pill {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #b53d29;
+  padding: 1px 5px;
+  background: #fff;
+  border: 1px solid #f1c8c1;
+  border-radius: 3px;
+}
+
+/* Loop heading line */
+.c3-loop-head .c3-code { font-weight: 500; }
+.c3-loop-meta {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #666;
+  padding: 0 6px;
+  text-align: left;
+}
+
+/* Inline iteration mini-histogram on loop body line */
+.c3-iter-cell { padding: 0 4px; display: flex; align-items: center; }
+.c3-iter-strip {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 1px;
+  height: 16px;
+  max-width: 100%;
+  overflow: hidden;
+}
+.c3-iter-bar {
+  width: 4px;
+  min-height: 3px;
+  border-radius: 0.5px;
+  flex-shrink: 0;
+}
+
+/* Per-iteration drill-down — collapsed by default, revealed when the
+   parent loop-body row's checkbox is checked. The display rule lives
+   with the click-to-expand rules above; here we only set layout. */
+.c3-iter-table {
+  background: #fafbfc;
+  padding: 6px 12px 8px 30px;
+  border-bottom: 1px solid #f4f3ef;
+  flex-direction: column;
+  gap: 2px;
+}
+.c3-iter-row {
+  display: grid;
+  grid-template-columns: 12px 160px 1fr 70px;
+  align-items: center;
+  gap: 8px;
+  font-size: 10px;
+}
+.c3-iter-bullet {
+  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
+}
+.c3-iter-key {
+  color: #666;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+}
+.c3-iter-more .c3-iter-key { color: #999; font-style: italic; }
+.c3-iter-key b { color: #222; }
+.c3-iter-bar-track {
+  height: 4px;
+  background: #ececec;
+  border-radius: 2px;
+  overflow: hidden;
+}
+.c3-iter-bar-track > span { display: block; height: 100%; border-radius: 2px; }
+.c3-iter-time {
+  color: #444;
+  text-align: right;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Decorator inline detail */
+.c3-detail {
+  background: #fafbfc;
+  padding: 10px 14px 10px 30px;
+  border-bottom: 1px solid #f0f0ef;
+  font-size: 11px;
+  color: #444;
+}
+.c3-detail-h {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #666;
+  margin-bottom: 6px;
+}
+.c3-cache-tag {
+  display: inline-block;
+  padding: 1px 5px;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 9px;
+  color: #1a73e8;
+  background: #e8f0fe;
+  border-radius: 3px;
+  margin-right: 4px;
+}
+.c3-deco-detail {
+  display: none;
+  background: #fafbfc;
+  border-top: 1px solid #f4f3ef;
+  padding: 8px 16px 10px 22px;
+  font-size: 11px;
+}
+.c3-rxtog:checked ~ .c3-deco-detail { display: block; }
+.c3-deco-fn      { margin-top: 6px; }
+.c3-deco-fn-name {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  color: #444;
+  margin-bottom: 4px;
+}
+.c3-deco-strip {
+  display: flex; align-items: flex-end; gap: 2px; height: 20px;
+}
+.c3-deco-bar { width: 6px; border-radius: 1px; }
+
+/* Control structure (if / elif / else / try / except).
+   Head row is shown verbatim; body rows render inline beneath it (no
+   click-to-expand) so the if's body is always visible — same way it
+   reads in the source. */
+.c3-ctrl { display: block; }
+.c3-ctrl-head { /* uses .c3-row grid via the markup */ }
+.c3-ctrl-body {
+  border-left: 2px solid #e8e1ce;
+  /* Visual indent of one "tab" so nested loops/controls read at a
+     similar shift as Python's 4-space source indent — the previous
+     5px just aligned rails and looked unindented in deep nesting. */
+  margin-left: 24px;
+  background: #fbfaf3;
+}
+
+/* Overhead row — collapsed single-row variant. Section label sits inline
+   with the breakdown so we never spend 3 rows showing 0.00s sub-categories. */
+.c3-ovh { background: #fbfbfa; }
+.c3-ovh-cell {
+  padding: 5px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 10px;
+  color: #888;
+}
+.c3-ovh-label {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 9px;
+  color: #888;
+  margin-right: 10px;
+}
+.c3-ovh-parts { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 10px; }
+.c3-ovh-part  { white-space: nowrap; }
+.c3-ovh-time  { color: #666; font-variant-numeric: tabular-nums; }
+
+/* Section divider (current cell, decorator cache) — kept low-key */
+.c3-section {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
+  padding: 8px 12px 4px;
+}
+
+/* Skipped intermediate-dependency bucket (collapsible <details>) */
+.c3-skipped {
+  background: #f6f7f8;
+  border-top: 1px solid #ececec;
+  border-bottom: 1px solid #ececec;
+}
+.c3-skipped > summary {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 11px;
+  color: #666;
+  list-style: none;
+}
+.c3-skipped > summary::-webkit-details-marker { display: none; }
+.c3-skipped > summary::marker { content: ""; }
+.c3-skipped-meta {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: #888;
+  margin-left: auto;
+}
+
+/* Footer */
+.c3-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 7px 12px;
+  border-top: 1px solid #ececec;
+  background: #fdfdfc;
+}
+.c3-hint {
+  font-size: 9px;
+  color: #999;
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  letter-spacing: 0.02em;
+}
+/* !important here because Jupyter classic's notebook.css sets
+   a strong default anchor color that would repaint our subtle bug
+   link bright blue otherwise. */
+a.c3-bug,
+a.c3-bug:link,
+a.c3-bug:visited {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  color: #888 !important;
+  background: transparent !important;
+  text-decoration: none !important;
+  padding: 3px 6px;
+  border-radius: 3px;
+}
+a.c3-bug:hover {
+  color: #444 !important;
+  background: #f5f5f5 !important;
+}
+.c3-bug-arrow {
+  margin-left: 2px;
+  color: #999;
+  display: inline-block;
+}
+</style><div class="c3-wrap"><details class="c3-card" data-kind="exec"><summary class="c3-summary"><span class="c3-summary-label">EXECUTED</span><span class="c3-summary-sep">·</span><span class="c3-summary-sub">0.42s · saved 3.46s</span><span class="c3-summary-spark"><span class="c3-spark"><span class="c3-spark-bar" style="height:2px;background:#86bfa3;"></span><span class="c3-spark-bar" style="height:16px;background:#d3a76b;"></span></span></span><span class="c3-summary-chips"><span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>exec<span class="c3-fchip-count">1</span></span><span class="c3-fchip c3-fchip-cached"><span class="c3-fchip-dot"></span>cached<span class="c3-fchip-count">2</span></span></span><span class="c3-summary-caret"></span></summary><div class="c3-panel"><details class="c3-upstream"><summary><span class="c3-upstream-caret"></span><span class="c3-upstream-label">upstream context</span><span class="c3-upstream-count"><b>1</b> step</span><span class="c3-upstream-bar-cell"><span class="c3-upstream-bar"><span style="width:100.0%;"></span></span></span><span class="c3-upstream-saved-cell"><span class="c3-upstream-saved">↑2.85s</span></span></summary><div class="c3-upstream-body"><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000017"><label class="c3-row" for="rx-0000000017" data-kind="cached" data-status="restored"><span class="c3-rail c3-rail-soft" style="background:#2a8a5e;"></span><pre class="c3-code">df = pd.read_csv(<span class="c3-str">'sales.csv'</span>)<span class="c3-row-vars">← df</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring"></span><span class="c3-dot c3-dot-empty"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-cached" style="width:23.0%;"></span></span></span><span class="c3-time-chip c3-time-chip-cached"><span>0.02s</span><span class="c3-time-sub">↑2.85s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#1f6646;background:#ecf6f0;">restored</span><span class="c3-rt-time">0.018s <span class="c3-rt-saved">· saved 2.85s</span></span></div><pre class="c3-rt-code">df = pd.read_csv(<span class="c3-str">'sales.csv'</span>)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring"></span><span class="c3-dot c3-dot-empty"></span></span></span> ← RAM</dd><dt>Restored</dt><dd>df</dd><dt>Key</dt><dd><code>7a3f0b1c</code></dd></dl></div></div></div></details><div class="c3-section">CURRENT CELL</div><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000018"><label class="c3-row" for="rx-0000000018" data-kind="cached" data-status="restored"><span class="c3-rail" style="background:#2a8a5e;"></span><pre class="c3-code">features = encode(df)<span class="c3-row-vars">← features</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring"></span><span class="c3-dot c3-dot-empty"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-cached" style="width:26.5%;"></span></span></span><span class="c3-time-chip c3-time-chip-cached"><span>0.02s</span><span class="c3-time-sub">↑0.61s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#1f6646;background:#ecf6f0;">restored</span><span class="c3-rt-time">0.024s <span class="c3-rt-saved">· saved 0.61s</span></span></div><pre class="c3-rt-code">features = encode(df)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring"></span><span class="c3-dot c3-dot-empty"></span></span></span> ← RAM</dd><dt>Restored</dt><dd>features</dd><dt>Key</dt><dd><code>88a1c2d3</code></dd></dl></div></div><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000019"><label class="c3-row" for="rx-0000000019" data-kind="exec" data-status="computed"><span class="c3-rail" style="background:#a87530;"></span><pre class="c3-code">preds = decorated_predict(features)<span class="c3-row-vars">← preds</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid"></span><span class="c3-dot c3-dot-solid"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:100.0%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>0.34s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#7a5310;background:#fbf3e5;">computed</span><span class="c3-rt-time">0.341s</span></div><pre class="c3-rt-code">preds = decorated_predict(features)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid"></span><span class="c3-dot c3-dot-solid"></span></span></span> RAM · DISK</dd><dt>Produced</dt><dd>preds</dd><dt>@cache</dt><dd>2/3 cache hits</dd><dt>Key</dt><dd><code>c1e8a72f</code></dd><dt>Miss</dt><dd>input lineage changed (one of: features)</dd></dl></div></div><div class="c3-section">DECORATOR CACHE (@cash.cache)</div><div class="c3-row" data-kind="cached"><span class="c3-rail" style="background:#2a8a5e;"></span><pre class="c3-code"><span class="c3-cache-tag">@cache</span> <span class="c3-kw">predict_one</span>() <span class="c3-com">HIT</span></pre><span class="c3-dots-cell"></span><span class="c3-tbar-cell"><span class="c3-tbar"></span></span><span class="c3-time-chip c3-time-chip-cached"><span>0.00s</span></span></div><div class="c3-row" data-kind="cached"><span class="c3-rail" style="background:#2a8a5e;"></span><pre class="c3-code"><span class="c3-cache-tag">@cache</span> <span class="c3-kw">predict_one</span>() <span class="c3-com">HIT</span></pre><span class="c3-dots-cell"></span><span class="c3-tbar-cell"><span class="c3-tbar"></span></span><span class="c3-time-chip c3-time-chip-cached"><span>0.00s</span></span></div><div class="c3-row" data-kind="exec"><span class="c3-rail" style="background:#a87530;"></span><pre class="c3-code"><span class="c3-cache-tag">@cache</span> <span class="c3-kw">predict_one</span>() <span class="c3-com">MISS</span></pre><span class="c3-dots-cell"></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:50.5%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>0.09s</span></span></div><div class="c3-section"></div><div class="c3-row c3-ovh" data-kind="exec"><span class="c3-rail c3-rail-soft" style="background:#888;"></span><div class="c3-ovh-cell"><span class="c3-ovh-label">overhead</span><span class="c3-ovh-parts"><span class="c3-ovh-part">other&nbsp;<span class="c3-ovh-time">0.038s</span></span></span></div><span class="c3-dots-cell"></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:33.4%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>0.04s</span></span></div><div class="c3-footer"><span class="c3-hint">click a row for detail</span><a class="c3-bug" href="https://github.com/galgtonold/cash/issues/new?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body=%2A%2ADescribe%20the%20incorrect%20behavior%3A%2A%2A%0A%3C%21--%20What%20did%20cash%20do%20wrong%3F%20What%20did%20you%20expect%20instead%3F%20--%3E%0A%0A%2A%2ACash%20badge%20output%3A%2A%2A%0A%60%60%60%0A%20%20RESTORED%20%7C%20%200.024s%20%7C%20saved%20%200.612s%20%7C%20features%20%3D%20encode%28df%29%0A%20%20COMPUTED%20%7C%20%200.341s%20%7C%20saved%20%200.000s%20%7C%20preds%20%3D%20decorated_predict%28features%29%0A%60%60%60%0A%0A%2A%2AExpected%20behavior%3A%2A%2A%0A%3C%21--%20e.g.%20%27Should%20have%20re-executed%20but%20was%20RESTORED%20from%20cache%27%20--%3E%0A%0A%2A%2AEnvironment%3A%2A%2A%0A-%20Cash%20version%3A%20unknown%0A-%20Python%3A%20%28unknown%29%0A-%20Backend%3A%20%28unknown%29%0A%0A%2A%2AAdditional%20context%3A%2A%2A%0A%3C%21--%20Paste%20any%20relevant%20%60%25cash_debug%20on%60%20output%20here%20--%3E" target="_blank" rel="noopener noreferrer" title="Open a pre-filled GitHub issue to report incorrect caching behaviour">Report incorrect caching<span class="c3-bug-arrow"> →</span></a></div></div></details></div>

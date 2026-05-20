@@ -19,6 +19,7 @@ import itertools
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
@@ -64,8 +65,20 @@ def main() -> int:
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
 
+    # Per-fixture kwargs forwarded to build_interactive_badge.
+    fixture_kwargs: dict[str, dict[str, Any]] = {
+        "anatomy_hero": {
+            "timing_breakdown": {
+                "cache lookup": 0.011,
+                "lineage compute": 0.008,
+                "serialization": 0.034,
+            },
+            "cell_total_time": 0.421,
+        },
+    }
+
     for name, metrics in FIXTURES.items():
-        view = build_interactive_badge(metrics)
+        view = build_interactive_badge(metrics, **fixture_kwargs.get(name, {}))
         html = render_html(view)
         (args.out / f"{name}.html").write_text(html, encoding="utf-8")
         print(f"wrote {name}.html ({len(html):,} bytes)")
