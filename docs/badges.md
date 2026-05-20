@@ -94,3 +94,47 @@ Five common causes, each with the badge you'll see and the one-line fix.
 **Why:** A tracked local module (one you `import` from a local `.py` file) was edited. Everything downstream of the import re-runs.
 
 **Fix:** Expected when you edit the module. If you want a module *not* to invalidate caches, declare its functions `@cash.pure` so Cash only tracks the relevant function bodies rather than the whole module.
+
+## 4. Why wasn't this cached?
+
+A `⚙️ COMPUTED` row that also says **NOT CACHED** ran but Cash refused to store the result. Five common causes:
+
+### Side effects
+
+--8<-- "docs/_badges/not_cached_side_effect.html"
+
+**Why:** The statement writes to a file, sends a network request, mutates a database, or prints/plots — Cash never caches statements with observable side effects because restoring from cache would skip the side effect.
+
+**Fix:** Split the side effect off into its own statement and let the *value-producing* statement above it cache. If the side effect *is* the point of the cell, leave it uncached and use `@cash:no-cache` to suppress the warning.
+
+### Unseeded randomness
+
+--8<-- "docs/_badges/not_cached_unseeded_random.html"
+
+**Why:** The statement called `numpy.random.rand` (or `random.random`, `torch.rand`, `tf.random.*`) without first seeding the RNG. The next run would produce different output, so caching would be a lie.
+
+**Fix:** Seed the RNG explicitly (`np.random.seed(0)` or `rng = np.random.default_rng(0)`) — then Cash treats the call as deterministic. If you want unseeded randomness but also want the warning to go away, add `# @cash:allow-random` to the statement.
+
+### Cost model: too cheap to cache
+
+--8<-- "docs/_badges/not_cached_too_cheap.html"
+
+**Why:** Cash's cost model predicted that restoring this value from cache would be *slower* than recomputing it. By default a statement must take longer than `min_execution_time_to_cache_seconds` (0.01 s) and the predicted restore must save at least `min_cache_savings_pct` of that time.
+
+**Fix:** If you actually want it cached (e.g. you're benchmarking restore overhead, or the statement is downstream of something more expensive that needs the value early), force it with `# @cash:persist`.
+
+### Explicit `# @cash:no-cache`
+
+--8<-- "docs/_badges/not_cached_explicit.html"
+
+**Why:** You (or the previous author) annotated the statement to opt out.
+
+**Fix:** Delete the annotation if you no longer want the opt-out.
+
+### Untracked I/O
+
+--8<-- "docs/_badges/not_cached_untracked_io.html"
+
+**Why:** The statement read a file via an API Cash doesn't intercept (a custom loader, a third-party library, a C extension). Cash can't tell whether the file changed, so it refuses to cache rather than risk staleness.
+
+**Fix:** Either (a) use a tracked loader if one will do (`pd.read_*`, `np.load`, `joblib.load`, `open()`), or (b) wrap your loader and register it via `cash.register_hasher()` so Cash knows how to fingerprint the input.
