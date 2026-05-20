@@ -254,4 +254,51 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # §2 anatomy — one rich badge that exercises every visible region:
+    # header with mixed counts, upstream section, current section,
+    # decorator-call group, overhead breakdown.
+    "anatomy_hero": [
+        # Upstream restored row.
+        {
+            "status": "RESTORED",
+            "code": "df = pd.read_csv('sales.csv')",
+            "total_time": 0.018,
+            "saved_time": 2.847,
+            "evaluated_vars": ["df"],
+            "restored_vars": ["df"],
+            "storage": ["RAM", "DISK"],
+            "source": "RAM",
+            "cache_key": "stmt:7a3f0b1c9e2d4567",
+            "is_upstream": True,
+        },
+        # Current cell — restored intermediate.
+        {
+            "status": "RESTORED",
+            "code": "features = encode(df)",
+            "total_time": 0.024,
+            "saved_time": 0.612,
+            "evaluated_vars": ["features"],
+            "restored_vars": ["features"],
+            "storage": ["RAM"],
+            "source": "RAM",
+            "cache_key": "stmt:88a1c2d3e4f50617",
+            "is_upstream": False,
+        },
+        # Current cell — computed because miss_reason.
+        {
+            "status": "COMPUTED",
+            "code": "preds = decorated_predict(features)",
+            "total_time": 0.341,
+            "evaluated_vars": ["preds"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:c1e8a72f4b9d0156",
+            "miss_reason": "input lineage changed (one of: features)",
+            "decorator_calls": [
+                {"func_name": "predict_one", "cache_hit": True, "execution_time": 0.002},
+                {"func_name": "predict_one", "cache_hit": True, "execution_time": 0.002},
+                {"func_name": "predict_one", "cache_hit": False, "execution_time": 0.087},
+            ],
+            "is_upstream": False,
+        },
+    ],
 }
