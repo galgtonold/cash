@@ -1382,9 +1382,66 @@ class StatementProcessor:
                     self._estimate_object_size(getattr(obj, name), _depth + 1)
                     for name in obj._fields
                 )
+            if type_name in ('bytes', 'bytearray'):
+                return len(obj)
+            if isinstance(obj, (list, tuple)):
+                return self._estimate_indexable(obj, _depth)
+            if isinstance(obj, dict):
+                return self._estimate_dict(obj, _depth)
+            if isinstance(obj, (set, frozenset)):
+                return self._estimate_set(obj, _depth)
             return sys.getsizeof(obj)
         except (TypeError, AttributeError, IndexError, KeyError, StopIteration):
             return sys.getsizeof(obj)
+
+    def _estimate_indexable(self, obj: Any, _depth: int) -> int:
+        """Estimate size of a list or tuple.
+
+        K=3 (first / middle / last) at depth 0 to catch position-correlated
+        element sizes from monotonic-build patterns; K=1 (first element)
+        at depth >= 1 to bound total recursive cost.
+        """
+        n = len(obj)
+        base = sys.getsizeof(obj)
+        if n == 0:
+            return base
+        if n <= 2 or _depth >= 1:
+            return base + n * self._estimate_object_size(obj[0], _depth + 1)
+        samples = (obj[0], obj[n // 2], obj[-1])
+        avg = sum(self._estimate_object_size(s, _depth + 1) for s in samples) // 3
+        return base + n * avg
+
+    def _estimate_dict(self, obj: dict, _depth: int) -> int:
+        """Estimate size of a dict.
+
+        K=2 (first value + last value) at depth 0; K=1 (first value) at
+        depth >= 1. CPython doesn't support O(1) middle-by-index access,
+        so we accept the weaker position-bias detection for dicts.
+        """
+        n = len(obj)
+        base = sys.getsizeof(obj)
+        if n == 0:
+            return base
+        first_val = next(iter(obj.values()))
+        if n == 1:
+            return base + self._estimate_object_size(first_val, _depth + 1)
+        if _depth >= 1:
+            return base + n * self._estimate_object_size(first_val, _depth + 1)
+        last_val = next(reversed(obj.values()))
+        avg = (
+            self._estimate_object_size(first_val, _depth + 1) +
+            self._estimate_object_size(last_val, _depth + 1)
+        ) // 2
+        return base + n * avg
+
+    def _estimate_set(self, obj: Any, _depth: int) -> int:
+        """Estimate size of a set or frozenset (unordered; K=1 always)."""
+        n = len(obj)
+        base = sys.getsizeof(obj)
+        if n == 0:
+            return base
+        sample = next(iter(obj))
+        return base + n * self._estimate_object_size(sample, _depth + 1)
 
     def _should_skip_large_object_caching(
         self,
