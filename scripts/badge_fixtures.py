@@ -199,4 +199,59 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # §5.a — side effect detected (file write, print to stdout, plt.show,
+    # requests.get, db cursor).
+    "not_cached_side_effect": [
+        {
+            "status": "COMPUTED",
+            "code": "df.to_csv('out.csv')",
+            "total_time": 0.094,
+            "uncacheable_reasons": ["side effect: file write to out.csv"],
+            "is_upstream": False,
+        },
+    ],
+    # §5.b — randomness without seeding and without @cash:allow-random.
+    "not_cached_unseeded_random": [
+        {
+            "status": "COMPUTED",
+            "code": "noise = np.random.rand(1000)",
+            "total_time": 0.003,
+            "evaluated_vars": ["noise"],
+            "uncacheable_reasons": ["unseeded random call: numpy.random.rand"],
+            "is_upstream": False,
+        },
+    ],
+    # §5.c — cost model says caching this would be slower than recomputing.
+    "not_cached_too_cheap": [
+        {
+            "status": "COMPUTED",
+            "code": "total = sum(values)",
+            "total_time": 0.012,
+            "evaluated_vars": ["total"],
+            "skipped_reason": "below cost-model threshold (use @cash:persist to force)",
+            "is_upstream": False,
+        },
+    ],
+    # §5.d — explicit opt-out via the @cash:no-cache annotation.
+    "not_cached_explicit": [
+        {
+            "status": "COMPUTED",
+            "code": "x = compute_with_side_effect()",
+            "total_time": 0.241,
+            "evaluated_vars": ["x"],
+            "skipped_reason": "# @cash:no-cache",
+            "is_upstream": False,
+        },
+    ],
+    # §5.e — file accessed through an API cash doesn't intercept.
+    "not_cached_untracked_io": [
+        {
+            "status": "COMPUTED",
+            "code": "data = my_custom_loader('data.bin')",
+            "total_time": 0.812,
+            "evaluated_vars": ["data"],
+            "uncacheable_reasons": ["untracked file read: data.bin"],
+            "is_upstream": False,
+        },
+    ],
 }
