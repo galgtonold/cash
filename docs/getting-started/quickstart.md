@@ -177,3 +177,7 @@ samples = np.random.randn(100)  # Suppress randomness warning
 - [API Reference](../api_reference.md) — All magic commands
 - [Technical Architecture](../notebook_caching_technical.md) — How it works under the hood
 - [Migration Guide](../migration_guide.md) — Moving from other caching solutions
+
+## Next: read the badge
+
+Every cell now has a Cash badge. The badge tells you what was restored, what re-ran, and *why* — including the one or two things you can change to make a stubborn cell cache. See [Reading the Cash badge](../badges.md).

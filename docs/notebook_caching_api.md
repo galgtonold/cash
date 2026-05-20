@@ -4,6 +4,12 @@ This document provides detailed API reference for the notebook caching component
 
 ---
 
+## Cell badges
+
+Every cell shows a Cash badge above its output. The badge is the canonical UI for "what did cash do, and why?" — see [Reading the Cash badge](badges.md) for the full anatomy, status reference, and a walkthrough of the most common cache-miss and not-cached situations.
+
+---
+
 ## Magic Commands
 
 ### `%cash_on`
