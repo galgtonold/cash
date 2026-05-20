@@ -178,12 +178,20 @@ def _decisions_from_timings(
         cell_id = ct.notebook_cell_index
         t_compute = ct.wall_seconds
 
-        # Find the statement metric that has cost_model_* fields populated.
+        # Find the statement metric with the largest cost_model_size_bytes —
+        # that's the statement whose output dominates the cache decision.
+        # Picking the first hit instead would attribute cells like cell 4
+        # (which produces both a small `vocab` list and a big csr_matrix)
+        # to the wrong family.
         cost_stmt = None
+        best_size = -1
         for sm in ct.statement_metrics:
-            if sm.cost_model_size_bytes is not None or sm.cost_model_restore_seconds is not None:
+            sz = sm.cost_model_size_bytes
+            if sz is None:
+                continue
+            if sz > best_size:
+                best_size = sz
                 cost_stmt = sm
-                break
 
         if cost_stmt is None:
             # No cost_model_* fields at all → hit the 10ms floor
