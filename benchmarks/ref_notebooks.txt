@@ -1,0 +1,10 @@
+benchmarks/synthetic_micro.ipynb
+benchmarks/synthetic_heavy.ipynb
+benchmarks/synthetic_heavy_xl.ipynb
+benchmarks/bench_cost_model_validation.ipynb
+examples/cfd_simulation_demo.ipynb
+examples/file_tracking_demo.ipynb
+examples/financial_analysis_demo.ipynb
+examples/large_scale_projects/01_nyc_taxi_analysis.ipynb
+examples/large_scale_projects/09_yelp_reviews.ipynb
+examples/large_scale_projects/10_us_flights.ipynb
