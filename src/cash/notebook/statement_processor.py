@@ -1674,7 +1674,11 @@ class StatementProcessor:
             min_exec_time = _config_float(
                 config_obj, 'min_execution_time_to_cache_seconds', 0.01
             )
-            if 0 < execution_time < min_exec_time:
+            # On Windows, time.perf_counter() can report exactly 0.0 for
+            # genuinely instantaneous statements (a = 1) because the timer
+            # resolution is coarser than the operation. Treat 0 the same
+            # as "below the floor" — both mean "too cheap to cache".
+            if execution_time < min_exec_time:
                 if self.debug:
                     logger.debug(
                         "[SIZE_AWARE] Compute took only %.1fms, below "

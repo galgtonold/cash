@@ -59,17 +59,22 @@ magics = CashMagics(ip, cash)
 ip.register_magics(magics)
 %cash_on
 """,
-        # Cell 2: Some cacheable computation
-        "print('Persistent Data')"
+        # Cell 2: Some cacheable computation. Must do enough real work
+        # to cross the ``min_execution_time_to_cache_seconds`` floor
+        # (default 10ms) — otherwise the floor short-circuits and no
+        # metadata gets written, which is the documented behaviour.
+        # A tight sum over a few-hundred-k range does ~10-50ms.
+        """data = sum(i * i for i in range(500_000))
+print(f'Persistent Data: {data}')"""
     ])
-    
+
     # Start kernel WITHOUT auto cash init (we do it manually in cell 1)
     nb_runner.start_kernel(with_cash=False)
     nb_runner.run_all()
-    
+
     output_text = nb_runner.get_output(2)
     assert "Persistent Data" in output_text
-    
+
     # Verify cache files exist on disk
     assert cache_dir.exists()
     assert list(cache_dir.glob("*.db")) or list(cache_dir.glob("*")), "Cache directory should not be empty"
