@@ -31,7 +31,10 @@ class _DeterministicUUID:
     __slots__ = ("hex",)
 
     def __init__(self, n: int) -> None:
-        self.hex = f"{n:032x}"
+        # Put the counter in the LEADING hex digits so the renderer's
+        # ``.hex[:10]`` slice is unique per call. A 32-char hex string
+        # matches the standard ``uuid.UUID.hex`` length.
+        self.hex = f"{n:010x}" + "0" * 22
 
 
 _uuid_counter = itertools.count(1)

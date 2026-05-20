@@ -8,6 +8,7 @@ and commit the regenerated docs/_badges/*.html.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -55,3 +56,31 @@ def test_every_fixture_renders():
         html = render_html(view)
         assert html.strip(), f"fixture {name!r} produced empty HTML"
         assert "c3-wrap" in html, f"fixture {name!r} missing badge wrapper class"
+
+
+def test_render_emits_unique_checkbox_ids():
+    """Multi-row badges must have unique rx-* IDs.
+
+    The renderer's per-row <details> toggling depends on every <input id="rx-X">
+    being unique within the badge. A deterministic-UUID stub that collides on
+    the 10-char slice the renderer uses would produce invalid HTML.
+    """
+    sys.path.insert(0, str(REPO_ROOT))
+    try:
+        from cash.notebook.badge_renderer.renderers.html import render_html
+        from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+        # Patch uuid in the same way the build script does, then build a
+        # 3-row fixture that exercises multiple _uid() call sites.
+        import scripts.build_badge_examples  # noqa: F401  — applies the patch
+    finally:
+        sys.path.pop(0)
+
+    metrics = [
+        {"status": "RESTORED", "code": "a = 1", "total_time": 0.01, "is_upstream": False},
+        {"status": "COMPUTED", "code": "b = a + 1", "total_time": 0.02, "is_upstream": False},
+        {"status": "COMPUTED", "code": "c = b + 1", "total_time": 0.03, "is_upstream": False},
+    ]
+    html = render_html(build_interactive_badge(metrics))
+    ids = re.findall(r'id="(rx-[0-9a-f]+)"', html)
+    assert len(ids) >= 3, f"expected at least 3 rx-IDs, found {len(ids)}: {ids}"
+    assert len(ids) == len(set(ids)), f"duplicate rx-IDs: {ids}"
