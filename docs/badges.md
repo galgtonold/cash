@@ -10,13 +10,13 @@ This is a badge from a cell where the upstream `df` was restored, the intermedia
 
 What you're looking at:
 
-1. **Header line** — the collapsed view. Shows the cell-level status (`MIXED` here, because some rows restored and others computed), the count chips (`⚡ 2`, `⚙️ 1`), and `saved Xs / ran Ys` totals. Click anywhere on the header to expand.
-2. **Upstream section** — statements from earlier cells that Cash re-checked (or re-ran) before this cell could run. Each row is prefixed with `⬆️` so you can tell at a glance which work is "for this cell" vs "to set up this cell".
-3. **Current section** — statements in *this* cell. The `⚡` / `⚙️` icon is the per-row status. Restored rows show `saved Xs`; computed rows show the wall time they took.
-4. **Decorator section** — calls Cash recorded for `@cash.cache`-decorated functions invoked during this cell. The `2/3 cached` summary collapses many calls to one line.
-5. **Per-row anatomy** — left rail color is the status, then the code (syntax-highlighted), then storage-tier dots (`RAM` and/or `DISK`), then a timing bar scaled to the cell max, then a time chip on the right.
-6. **Overhead breakdown** — what Cash itself spent on bookkeeping. The badge shows up to four buckets: `upstream` (re-checking upstream cells), `init` (badge initialization), `progress` (updating the progress display), and `other` (everything else not accounted for by the per-row timings). Shows up when the breakdown is meaningful relative to the cell time.
-7. **Report incorrect caching** (footer link) — if a row looks wrong (restored when it shouldn't have been, or recomputed when it should've been a hit), this is the bug-report shortcut. Pre-fills cell context.
+1. **Header line** — the collapsed view. Shows the cell-level status (`EXECUTED` here), the total time and savings (`0.42s · saved 3.46s`), a tiny sparkline, and counter chips (`exec 1`, `cached 2`). Click the header to expand and see the panel below.
+2. **Upstream context** — a collapsed pill at the top of the panel labeled "upstream context · 1 step · ↑2.85s". Click to expand and see the upstream rows (statements from earlier cells that Cash had to re-check or re-restore for this cell to be valid).
+3. **Current cell** — the section labeled `CURRENT CELL`. Each row is a statement in *this* cell with its per-row status — `restored` (green rail) for `features = encode(df)`, `computed` (ochre rail) for `preds = decorated_predict(features)`. Click any row for a detail tooltip showing the cache key, storage tiers, miss reason, and `@cash.cache` hit ratio (`2/3 cache hits` here).
+4. **Decorator cache** — the section labeled `DECORATOR CACHE (@cash.cache)`. One row per `@cash.cache` call during this cell. The example shows three calls to `predict_one()`: two HITs and one MISS.
+5. **Per-row anatomy** — left vertical rail color is the status (green = cached, ochre = computed), then the syntax-highlighted code, then storage-tier dots (RAM/DISK — filled dot = present in that tier, ring = restored from that tier), then a timing bar scaled to the cell max, then a time chip on the right.
+6. **Overhead** — the bottom row labeled `overhead`, split into up to four sub-parts: `upstream` (re-checking upstream cells), `init` (badge initialization), `progress` (updating the progress display), and `other` (everything else). Shows when the breakdown is meaningful relative to cell time.
+7. **Report incorrect caching** (footer link) — if a row looks wrong, this opens a pre-filled GitHub issue with the badge output included.
 
 ## 2. Status reference
 
