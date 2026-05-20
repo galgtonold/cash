@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import builtins
 import contextlib
+import dataclasses
 import hashlib
 import logging
 import os
@@ -1369,6 +1370,18 @@ class StatementProcessor:
                 return _est_sparse_csr_csc(obj)
             if type_name in _SPARSE_COO_TYPES:
                 return _est_sparse_coo(obj)
+            if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+                base = sys.getsizeof(obj)
+                return base + sum(
+                    self._estimate_object_size(getattr(obj, f.name), _depth + 1)
+                    for f in dataclasses.fields(obj)
+                )
+            if isinstance(obj, tuple) and hasattr(obj, '_fields'):  # namedtuple
+                base = sys.getsizeof(obj)
+                return base + sum(
+                    self._estimate_object_size(getattr(obj, name), _depth + 1)
+                    for name in obj._fields
+                )
             return sys.getsizeof(obj)
         except (TypeError, AttributeError, IndexError, KeyError, StopIteration):
             return sys.getsizeof(obj)
