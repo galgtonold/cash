@@ -45,6 +45,8 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
+  - pymdownx.snippets:
+      base_path: ["."]
   - admonition
   - pymdownx.details
   - attr_list
@@ -60,6 +62,7 @@ nav:
     - Migration Guide: migration_guide.md
   - User Guide:
     - Notebook Caching: notebook_caching_api.md
+    - Reading the Cash Badge: badges.md
     - Magic Commands: api_reference.md
     - Configuration: getting-started/configuration.md
   - Tutorials:
