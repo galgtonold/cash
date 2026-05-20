@@ -75,9 +75,9 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 --8<-- "docs/_badges/miss_file_changed.html"
 
-**Why:** Cash hashes the contents of files passed to tracked I/O (`pd.read_csv`, `np.load`, `open`, `joblib.load`, `pickle.load`, `json.load`, and others). The file's content differs from what was hashed when the cache was populated.
+**Why:** Cash tracks files passed to common I/O calls (`pd.read_csv`, `np.load`, `open`, `joblib.load`, `pickle.load`, `json.load`, and others) and stamps the file's `(mtime, size)` into the cache key. The mtime or size differs from what was recorded when the cache was populated.
 
-**Fix:** If you changed the file on purpose, the recompute is correct. If the file is being touched by an unrelated process (a sync tool, a notebook autosave plugin), exclude it from that process — Cash compares content, not just mtime, so spurious mtime updates alone are fine, but any byte change forces a recompute.
+**Fix:** If you changed the file on purpose, the recompute is correct. If an unrelated process is touching the file (a sync tool, a notebook autosave plugin) and bumping its mtime without changing the bytes, exclude the file from that process — Cash will still invalidate on the mtime change.
 
 ### Function source changed
 
