@@ -40,7 +40,6 @@ from ..view import (
     IterationRow,
     LoopStatement,
     OverheadBreakdown,
-    Section,
     SectionItem,
     SectionKind,
     SkippedBucket,
@@ -1958,15 +1957,15 @@ def render_html(badge: InteractiveBadge) -> str:
         _STYLE_BLOCK
         + '<div class="c3-wrap">'
         + f'<details class="c3-card" data-kind="{kind}">'
-        + f'<summary class="c3-summary">'
+        + '<summary class="c3-summary">'
         + f'<span class="c3-summary-label">{_esc(label)}</span>'
-        + f'<span class="c3-summary-sep">·</span>'
+        + '<span class="c3-summary-sep">·</span>'
         + f'<span class="c3-summary-sub">{_esc(sub)}</span>'
         + sparkline
         + chips
-        + f'<span class="c3-summary-caret"></span>'
+        + '<span class="c3-summary-caret"></span>'
         + "</summary>"
-        + f'<div class="c3-panel">'
+        + '<div class="c3-panel">'
         + body_html
         + _footer_html(badge.footer)
         + "</div>"

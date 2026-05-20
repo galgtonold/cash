@@ -11,7 +11,6 @@ dicts. Pure-phase invariants land in a later refactor.
 import logging
 import re
 import types
-from typing import TYPE_CHECKING
 
 from ._protocols import TrackingState
 from .analysis import CodeAnalyzer

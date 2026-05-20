@@ -19,7 +19,6 @@ It does NOT own:
 """
 
 import ast
-import contextlib
 import hashlib
 import logging
 from typing import TYPE_CHECKING

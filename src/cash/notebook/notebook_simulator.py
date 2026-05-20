@@ -18,17 +18,17 @@ from collections.abc import Callable
 from typing import Any
 
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from .control_structures import is_control_structure  # re-exported for test patching
+from .control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
-from .server_discovery import get_notebook_cells  # re-exported for test patching
-from .simulator_types import (
+from .server_discovery import get_notebook_cells  # noqa: F401  re-exported for test patching
+from .simulator_types import (  # noqa: F401  re-exported (private renames)
     IncrementalStartResult as _IncrementalStartResult,
     SimulationCacheEntry as _SimulationCacheEntry,
     TraceEntry as _TraceEntry,
     apply_collected_mutations,
 )
-from .virtual_lineage import (
+from .virtual_lineage import (  # noqa: F401  re-exported (imported by upstream.py via .notebook_simulator)
     VirtualLineage,
     _BUILTIN_NAMES,
     _FORWARD_PROBE_PLACEHOLDER,

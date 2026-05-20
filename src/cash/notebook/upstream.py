@@ -3,21 +3,15 @@ from __future__ import annotations
 import ast
 import hashlib
 import logging
-import os
 import re
-import time as time_module
-import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 from ..exceptions import AmbiguousCellError, UpstreamStateError
-from ..utils import resolve_file_dep_path
 from .server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .analysis import CodeAnalyzer
-from .cache_key import CacheKeyContext, compute_cache_key
-from .cache_status import CacheStatus
-from .notebook_simulator import (
+from .notebook_simulator import (  # noqa: F401  re-exports for tests + downstream modules
     NotebookSimulator,
     _BUILTIN_NAMES,
     _FORWARD_PROBE_PLACEHOLDER,
@@ -26,7 +20,7 @@ from .notebook_simulator import (
     _TraceEntry,
     _normalize_stmt,
 )
-from .control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from .control_structures import is_control_structure
 
 if TYPE_CHECKING:
     from .statement_processor import ProcessResult

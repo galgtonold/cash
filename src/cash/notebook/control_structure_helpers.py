@@ -13,7 +13,6 @@ logic without each carrying a copy of the lineage-update plumbing.
 """
 
 import ast
-import contextlib
 import hashlib
 import logging
 import sys
