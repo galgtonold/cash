@@ -1487,17 +1487,12 @@ class StatementProcessor:
             explanation when skipping (else ``None``), and *prediction* is the cost-model
             dict for the largest variable seen (keys: ``size_bytes``, ``restore_seconds``,
             ``type_name``, ``family``), or ``None`` when estimation failed for all vars.
+
+        The early-return paths (``force_persist``, ``has_file_dependencies``) still
+        compute and return the prediction so downstream observability (cost-model
+        validation, residual reports) sees consistent family attribution regardless
+        of which gate fired the cache decision.
         """
-        if force_persist:
-            return False, None, None
-
-        # Never skip caching for statements that directly read files.
-        # File I/O (pd.read_csv, np.load, etc.) is inherently expensive and
-        # the "fast computation" heuristic doesn't apply — the time is spent
-        # on disk I/O, not CPU computation, so caching genuinely saves time.
-        if has_file_dependencies:
-            return False, None, None
-
         # NOTE: the "too cheap to cache" floor (statements whose own compute
         # is below ``min_execution_time_to_cache_seconds``) is checked
         # earlier in ``_store_in_cache`` — earlier than this method — so
@@ -1523,21 +1518,37 @@ class StatementProcessor:
         fixed_budget = _config_float(config, 'min_cache_fixed_budget_seconds', 0.05)
 
         # Track the prediction for the largest variable (by size_bytes) seen so
-        # far; returned when no variable causes a skip.
+        # far. Computed even on the early-return paths so observability is
+        # consistent — the file_dependencies / force_persist gates decide
+        # whether to cache, not whether to predict.
         largest_prediction: dict[str, Any] | None = None
 
+        # Compute predictions for all vars; collect skip-causing var separately.
+        skip_decision: tuple[str | None, dict[str, Any] | None] | None = None
         for var_name, var_value in captured_vars.items():
             skip, reason, prediction = self._check_var_restore_budget(
                 var_name, var_value, execution_time,
                 is_ram_backend, min_savings_pct, fixed_budget,
             )
-            if skip:
-                return True, reason, prediction
             # Keep track of the largest variable's prediction for exposure.
             if prediction is not None:
                 if (largest_prediction is None
                         or prediction['size_bytes'] > largest_prediction['size_bytes']):
                     largest_prediction = prediction
+            # Only the FIRST skip-causing var matters for the decision; remember it.
+            if skip and skip_decision is None:
+                skip_decision = (reason, prediction)
+
+        # Never skip caching for statements that directly read files (file I/O
+        # is inherently expensive; the "fast computation" heuristic doesn't apply)
+        # or when force_persist is set by a user annotation. The prediction is
+        # still returned so observability stays consistent.
+        if force_persist or has_file_dependencies:
+            return False, None, largest_prediction
+
+        if skip_decision is not None:
+            reason, skip_prediction = skip_decision
+            return True, reason, skip_prediction
 
         return False, None, largest_prediction
 
