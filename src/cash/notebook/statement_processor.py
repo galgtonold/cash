@@ -50,6 +50,26 @@ _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
 
+# Maximum recursion depth for _estimate_object_size when walking nested
+# containers. Beyond this we fall back to sys.getsizeof to bound cost.
+_MAX_ESTIMATE_DEPTH = 4
+
+# scipy.sparse type names. We dispatch on type-name string to avoid an
+# import-time dependency on scipy.
+_SPARSE_CSR_CSC_TYPES = frozenset({
+    'csr_matrix', 'csc_matrix', 'csr_array', 'csc_array',
+})
+_SPARSE_COO_TYPES = frozenset({'coo_matrix', 'coo_array'})
+
+
+def _est_sparse_csr_csc(m: Any) -> int:
+    return int(m.data.nbytes + m.indices.nbytes + m.indptr.nbytes)
+
+
+def _est_sparse_coo(m: Any) -> int:
+    return int(m.data.nbytes + m.row.nbytes + m.col.nbytes)
+
+
 _COST_MODEL_KEYS = (
     'cost_model_size_bytes',
     'cost_model_restore_seconds',
@@ -1324,13 +1344,19 @@ class StatementProcessor:
             logger.debug("[MODULE_HASH] Could not read module file: %s", mod_file)
             return None
 
-    def _estimate_object_size(self, obj: Any) -> int:
+    def _estimate_object_size(self, obj: Any, _depth: int = 0) -> int:
         """Estimate the memory size of an object in bytes.
 
         Uses sys.getsizeof for basic types and specialized estimators
-        for common data science types (DataFrame, ndarray).
-        Falls back to sys.getsizeof for unknown types.
+        for common data science types (DataFrame, Series, ndarray, scipy
+        sparse). Recursion is bounded by ``_MAX_ESTIMATE_DEPTH``.
+
+        The estimator must remain order-of-magnitude correct (not
+        precise) and bounded in runtime — see the design doc for the
+        K=3-outer / K=1-inner sampling rule.
         """
+        if _depth >= _MAX_ESTIMATE_DEPTH:
+            return sys.getsizeof(obj)
         try:
             type_name = type(obj).__name__
             if type_name == 'DataFrame':
@@ -1338,9 +1364,13 @@ class StatementProcessor:
             if type_name == 'Series':
                 return int(obj.memory_usage(deep=True))
             if type_name == 'ndarray':
-                return obj.nbytes
+                return int(obj.nbytes)
+            if type_name in _SPARSE_CSR_CSC_TYPES:
+                return _est_sparse_csr_csc(obj)
+            if type_name in _SPARSE_COO_TYPES:
+                return _est_sparse_coo(obj)
             return sys.getsizeof(obj)
-        except (TypeError, AttributeError):
+        except (TypeError, AttributeError, IndexError, KeyError, StopIteration):
             return sys.getsizeof(obj)
 
     def _should_skip_large_object_caching(
