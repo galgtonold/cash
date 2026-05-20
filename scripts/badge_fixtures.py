@@ -32,4 +32,82 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    "status_computed": [
+        {
+            "status": "COMPUTED",
+            "code": "summary = df.describe()",
+            "total_time": 0.214,
+            "evaluated_vars": ["summary"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:c1e8a72f4b9d0156",
+            "is_upstream": False,
+        },
+    ],
+    "status_skipped": [
+        {
+            "status": "SKIPPED",
+            "code": "result = expensive_call(x)",
+            "total_time": 0.0,
+            "evaluated_vars": ["result"],
+            "skipped_reason": "downstream value not requested",
+            "is_upstream": False,
+        },
+    ],
+    "status_mixed": [
+        {
+            "status": "RESTORED",
+            "code": "df = pd.read_csv('sales.csv')",
+            "total_time": 0.018,
+            "saved_time": 2.847,
+            "evaluated_vars": ["df"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:7a3f0b1c9e2d4567",
+            "is_upstream": False,
+        },
+        {
+            "status": "COMPUTED",
+            "code": "summary = df.describe()",
+            "total_time": 0.214,
+            "evaluated_vars": ["summary"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:c1e8a72f4b9d0156",
+            "is_upstream": False,
+        },
+    ],
+    "status_function_changed": [
+        {
+            "status": "FUNCTION_CHANGED",
+            "code": "scores = score_rows(df)",
+            "total_time": 0.041,
+            "changed_functions": ["score_rows"],
+            "is_upstream": False,
+        },
+    ],
+    "status_module_reloaded": [
+        {
+            "status": "MODULE_RELOADED",
+            "code": "from features import build_features",
+            "total_time": 0.012,
+            "changed_modules": {"features": "..."},
+            "is_upstream": False,
+        },
+    ],
+    "status_warning": [
+        {
+            "status": "WARNING",
+            "code": "x = np.random.rand(1000)",
+            "total_time": 0.003,
+            "evaluated_vars": ["x"],
+            "uncacheable_reasons": ["unseeded random call: numpy.random.rand"],
+            "is_upstream": False,
+        },
+    ],
+    "status_error": [
+        {
+            "status": "ERROR",
+            "code": "result = will_raise()",
+            "total_time": 0.005,
+            "is_upstream": False,
+        },
+    ],
 }
