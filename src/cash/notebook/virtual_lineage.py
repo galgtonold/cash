@@ -17,16 +17,14 @@ import re
 import time as time_module
 import types
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
-from ..exceptions import UpstreamStateError
 from ..utils import resolve_file_dep_path
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .analysis import CodeAnalyzer
 from .cache_key import CacheKeyContext, compute_cache_key
 from .cache_status import CacheStatus
 from .control_structures import extract_target_names, get_control_structure_type, is_control_structure
-from .server_discovery import get_notebook_cells
 from .simulator_types import (
     IncrementalStartResult as _IncrementalStartResult,
     RestoreCollector,
@@ -34,9 +32,6 @@ from .simulator_types import (
     TraceEntry as _TraceEntry,
     apply_collected_mutations,
 )
-
-if TYPE_CHECKING:
-    from .statement_processor import ProcessResult
 
 __all__ = ["VirtualLineage"]
 

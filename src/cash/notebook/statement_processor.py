@@ -3,7 +3,6 @@ from __future__ import annotations
 """Core statement processing: analysis, cache lookup, execution, and lineage tracking."""
 
 import ast
-import builtins
 import contextlib
 import dataclasses
 import hashlib

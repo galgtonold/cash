@@ -88,6 +88,9 @@ dev = [
     "ipykernel",
     "pandas",
     "pyarrow>=13.0",
+    # scipy is used by tests/test_notebook/test_size_estimator.py to
+    # exercise the csr/csc/coo branches of _estimate_object_size.
+    "scipy",
     "nest_asyncio",
     "traitlets",
     "pyinstrument>=4.6,<6",
