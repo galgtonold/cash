@@ -199,7 +199,7 @@ def render_report(
         f"(skipped when oracle says cache)."
     )
     if headroom < 0.05:
-        lines.append("- Headroom is under 5% — the policy is essentially as good as the oracle on this workload.")
+        lines.append("- Headroom is under 5% - the policy is essentially as good as the oracle on this workload.")
     elif headroom < 0.20:
         lines.append("- Headroom is meaningful but not large; targeted family remapping or refit could close most of it.")
     else:
