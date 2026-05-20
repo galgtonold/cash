@@ -22,6 +22,8 @@ That's the install. The next time you re-run the notebook, every statement that 
 
 ![Cash badge demo placeholder](docs/assets/badge-demo.png)
 
+> See [Reading the Cash badge](docs/badges.md) for a walkthrough of every part of the badge and the most common questions it answers.
+
 ---
 
 ## What you get
