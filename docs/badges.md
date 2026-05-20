@@ -50,3 +50,47 @@ Individual examples:
 --8<-- "docs/_badges/status_warning.html"
 
 --8<-- "docs/_badges/status_error.html"
+
+## 3. Why did this re-run?
+
+Five common causes, each with the badge you'll see and the one-line fix.
+
+### First time seeing this code
+
+--8<-- "docs/_badges/miss_first_time.html"
+
+**Why:** Cash has no record of this exact statement having been computed before. Editing a statement (even whitespace, in some cases) makes a new cache key.
+
+**Fix:** Nothing to fix — this is expected. The next run with unchanged code will be `⚡ RESTORED`.
+
+### Input lineage changed
+
+--8<-- "docs/_badges/miss_input_lineage.html"
+
+**Why:** One of the variables this statement reads (`features` here) has a different lineage hash than the last time this statement ran. Cash tracks every assignment's lineage, so a re-run upstream — even if the *value* is identical — invalidates downstream caches that read it.
+
+**Fix:** If the upstream re-ran legitimately (you changed it), there's nothing to fix; let the downstream catch up. If you didn't expect the upstream to re-run, jump to that row's badge — its `miss_reason` will explain what it was reacting to.
+
+### File changed
+
+--8<-- "docs/_badges/miss_file_changed.html"
+
+**Why:** Cash hashes the contents of files passed to tracked I/O (`pd.read_csv`, `np.load`, `open`, `joblib.load`, `pickle.load`, `json.load`, and others). The file's content differs from what was hashed when the cache was populated.
+
+**Fix:** If you changed the file on purpose, the recompute is correct. If the file is being touched by an unrelated process (a sync tool, a notebook autosave plugin), exclude it from that process — Cash compares content, not just mtime, so spurious mtime updates alone are fine, but any byte change forces a recompute.
+
+### Function source changed
+
+--8<-- "docs/_badges/miss_function_source_changed.html"
+
+**Why:** A helper function called from this statement had its source change since the last run. The dedicated `🔄 FUNCTION_CHANGED` upstream row identifies which one (`score_rows` here).
+
+**Fix:** Expected when you edit a helper. If you didn't edit it, you may be re-importing across kernel sessions where the source bytes differ trivially — `%cash_track` and `%cash_verify` help diagnose this.
+
+### Module reloaded
+
+--8<-- "docs/_badges/miss_module_reloaded.html"
+
+**Why:** A tracked local module (one you `import` from a local `.py` file) was edited. Everything downstream of the import re-runs.
+
+**Fix:** Expected when you edit the module. If you want a module *not* to invalidate caches, declare its functions `@cash.pure` so Cash only tracks the relevant function bodies rather than the whole module.
