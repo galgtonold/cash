@@ -32,6 +32,8 @@
   function init() {
     var table = document.querySelector("table.cash-matrix-table");
     if (!table) return;
+    if (table.dataset.cashMatrixReady === "1") return;
+    table.dataset.cashMatrixReady = "1";
     var tbody = table.tBodies[0];
     if (!tbody) return;
     var headers = table.tHead ? table.tHead.rows[0].cells : [];
