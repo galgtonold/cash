@@ -61,6 +61,8 @@ Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotation
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
 
+See [Cost model and smart persistence](cost-model.md) for the full explanation of the persistence decision.
+
 ### `# @cash:no-cache` (alias: `nocache`)
 
 Disables caching entirely for a statement. The statement still executes; its result simply isn't stored, and on the next run it executes again.

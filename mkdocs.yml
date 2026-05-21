@@ -68,6 +68,7 @@ nav:
     - API Reference: api_reference.md
     - Configuration: getting-started/configuration.md
     - Command-line interface: cli.md
+    - Cost model: cost-model.md
   - Tutorials:
     - Getting Started: tutorials/getting_started.md
     - Data Science Workflows: tutorials/data_science_workflows.md
