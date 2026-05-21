@@ -112,6 +112,7 @@
   }
   if (document.readyState === "complete") burstSend();
   else window.addEventListener("load", burstSend);
+  document.addEventListener("toggle", sendSize, true);
   if (typeof ResizeObserver !== "undefined") {
     new ResizeObserver(sendSize).observe(document.documentElement);
   }
