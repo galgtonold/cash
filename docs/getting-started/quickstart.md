@@ -30,11 +30,11 @@ Run the cell again — the `read_csv` result loads instantly from cache. The bad
 
 **First run** — Cash ran the statement and cached the result:
 
---8<-- "docs/_badges/status_computed.html"
+<iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Second run** — Cash restored the value from cache instead of recomputing:
 
---8<-- "docs/_badges/status_restored.html"
+<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 See [Reading the Cash badge](../badges.md) for the full anatomy and every status.
 

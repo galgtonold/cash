@@ -5,12 +5,19 @@ Usage:
 
 Default --out is docs/_badges relative to repo root.
 
+Each output file is a STANDALONE HTML document (DOCTYPE + html + head +
+body) so the badge can be embedded in the docs via ``<iframe src="…">``
+and rendered in an isolated context that mkdocs-material's global CSS
+cannot reach. The wrapper also includes a tiny postMessage resize
+script so the parent page can size the iframe to the badge's content
+height (initially and after the badge expands).
+
 The renderer normally calls ``uuid.uuid4()`` to mint unique checkbox
-IDs (so multiple badges on the same page can't collide). For doc
-snippets we need byte-stable output across runs, so we monkey-patch
-``uuid.uuid4`` with a deterministic counter for the lifetime of this
-script. IDs become ``id-0000000001``, ``id-0000000002``, ... — still
-unique within and across fixtures, just reproducible.
+IDs. For doc snippets we need byte-stable output across runs, so we
+monkey-patch ``uuid.uuid4`` with a deterministic counter for the
+lifetime of this script. IDs become ``id-0000000001``,
+``id-0000000002``, ... — still unique within and across fixtures, just
+reproducible.
 """
 from __future__ import annotations
 
@@ -79,11 +86,67 @@ def main() -> int:
 
     for name, metrics in FIXTURES.items():
         view = build_interactive_badge(metrics, **fixture_kwargs.get(name, {}))
-        html = render_html(view)
-        (args.out / f"{name}.html").write_text(html, encoding="utf-8")
-        print(f"wrote {name}.html ({len(html):,} bytes)")
+        badge_html = render_html(view)
+        doc = _wrap_standalone(badge_html, title=name)
+        (args.out / f"{name}.html").write_text(doc, encoding="utf-8")
+        print(f"wrote {name}.html ({len(doc):,} bytes)")
 
     return 0
+
+
+# A standalone HTML wrapper that:
+# - resets browser default margins so the badge sits flush in its iframe;
+# - posts a 'cash-badge-resize' message to the parent on load, on every
+#   <details> toggle inside the badge, and on any size change, so the
+#   parent can resize the hosting iframe to fit.
+_WRAPPER = """\
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cash badge: {title}</title>
+<style>
+  html, body {{ margin: 0; padding: 0; background: transparent; }}
+  body {{ padding: 1px; }}  /* avoid clipping the card's 1px outer border */
+</style>
+</head>
+<body>
+{body}
+<script>
+(function () {{
+  if (window.parent === window) return;
+  function sendSize() {{
+    var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    window.parent.postMessage({{ type: "cash-badge-resize", height: h }}, "*");
+  }}
+  // Send on load, then re-send a few times with backoff so the parent's
+  // resize listener still receives a message even if the iframe document
+  // was cached and fired its load event before the parent's script ran.
+  function burstSend() {{
+    sendSize();
+    setTimeout(sendSize, 50);
+    setTimeout(sendSize, 200);
+    setTimeout(sendSize, 1000);
+  }}
+  if (document.readyState === "complete") burstSend();
+  else window.addEventListener("load", burstSend);
+  // Re-send on every <details> open/close so the iframe grows/shrinks
+  // when the badge expands.
+  document.addEventListener("toggle", sendSize, true);
+  // Catch any other layout change (font load, reflow).
+  if (typeof ResizeObserver !== "undefined") {{
+    new ResizeObserver(sendSize).observe(document.documentElement);
+  }}
+}})();
+</script>
+</body>
+</html>
+"""
+
+
+def _wrap_standalone(badge_html: str, *, title: str) -> str:
+    """Wrap a badge fragment in a self-contained HTML document."""
+    return _WRAPPER.format(title=title, body=badge_html)
 
 
 if __name__ == "__main__":

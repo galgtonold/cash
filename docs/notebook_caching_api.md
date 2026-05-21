@@ -8,7 +8,7 @@ This document provides detailed API reference for the notebook caching component
 
 Every cell shows a Cash badge above its output. The badge is the canonical UI for "what did cash do, and why?" — for example, a typical cell where the upstream input restored from cache and the current computation ran fresh:
 
---8<-- "docs/_badges/status_mixed.html"
+<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 See [Reading the Cash badge](badges.md) for the full anatomy, status reference, and a walkthrough of the most common cache-miss and not-cached situations.
 
