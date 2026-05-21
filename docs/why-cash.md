@@ -256,3 +256,18 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     miss costs a recompute every time the process restarts. It's not in
     the same category as a persistent, dependency-aware cache.
     See [migration guide](migration_guide.md).
+
+## Try it / Go deeper
+
+<div class="cash-cta-split" markdown="0">
+  <a class="cash-cta-card primary" href="getting-started/quickstart.md">
+    <h3>Try it now →</h3>
+    <p><code>pip install cash-lib</code>, then drop <code>%cash_on</code> in your first cell.</p>
+    <p><strong>Quickstart →</strong></p>
+  </a>
+  <div class="cash-cta-card secondary">
+    <h3>Go deeper →</h3>
+    <p>Read how lineage tracking, upstream simulation, and the cache key work under the hood.</p>
+    <p><a href="notebook_caching_technical.md"><strong>Architecture</strong></a> · <a href="architecture_decisions.md"><strong>ADRs</strong></a> · <a href="cost-model.md"><strong>Cost model</strong></a></p>
+  </div>
+</div>
