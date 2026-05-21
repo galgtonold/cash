@@ -26,7 +26,17 @@ print(f"Loaded {len(df)} rows")
 
 ### Step 3: Re-run and See the Magic
 
-Run the cell again — the `read_csv` result loads instantly from cache!
+Run the cell again — the `read_csv` result loads instantly from cache. The badge that appeared above the cell on the first run will switch from `EXECUTED` (ochre) to `RESTORED` (green):
+
+**First run** — Cash ran the statement and cached the result:
+
+--8<-- "docs/_badges/status_computed.html"
+
+**Second run** — Cash restored the value from cache instead of recomputing:
+
+--8<-- "docs/_badges/status_restored.html"
+
+See [Reading the Cash badge](../badges.md) for the full anatomy and every status.
 
 ## What Gets Cached?
 
