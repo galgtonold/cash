@@ -69,20 +69,19 @@ summary = df.groupby('category').agg({
 print(summary)
 ```
 
-On first run, you'll see ochre **⚙️ EXECUTED** badges — Cash ran each statement and cached the results. (Internally the cache status is `COMPUTED`; the chip label reads `EXECUTED`.)
+On first run, you'll see ochre **EXECUTED** badges — Cash ran each statement and cached the results. (Internally the cache status is `COMPUTED`; the chip label reads `EXECUTED`.) The badge looks something like this:
+
+<iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 ## Step 4: Experience the Cache
 
 Now **re-run the notebook** (Kernel → Restart & Run All, or click Run All).
 
-This time you'll see green **⚡ CACHED** badges with timing — the result was restored from cache (internal status: `RESTORED`):
+This time you'll see green **CACHED** badges with timing — the result was restored from cache (internal status: `RESTORED`):
 
-```
-⚡ CACHED (Saved 0.15s)   df = pd.DataFrame({...})
-⚡ CACHED (Saved 0.08s)   summary = df.groupby(...)
-```
+<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-The results loaded instantly from cache instead of being recomputed.
+The results loaded instantly from cache instead of being recomputed. See [Reading the Cash badge](../badges.md) for the full anatomy.
 
 ## Step 5: Change Something
 

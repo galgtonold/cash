@@ -49,6 +49,10 @@ In English:
 
 The `max(...)` matters: small cells get a flat floor so trivial overhead doesn't trip the gate; long cells get the ratio so a 20 s cell isn't allowed to spend 19 s on restore.
 
+When the gate refuses, the badge for that row shows the skip reason:
+
+<iframe class="cash-badge" src="/_badges/not_cached_too_cheap.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
 ### What `est_restore_time` actually is
 
 The prediction comes from `cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)` at [`cost_model.py:106-118`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py). Internally:

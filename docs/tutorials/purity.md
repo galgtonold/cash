@@ -29,8 +29,12 @@ def featurize(df):
     return df.assign(score=df["a"] * df["b"])
 
 # Cell:
-result = featurize(my_df)   # Cash badge: not cached (unknown side effects)
+result = featurize(my_df)
 ```
+
+Without `@pure`, Cash plays it safe and the badge shows a NOT CACHED row:
+
+<iframe class="cash-badge" src="/_badges/not_cached_untracked_io.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 Slap `@pure` on `featurize` and Cash will happily cache the result:
 
@@ -42,8 +46,12 @@ def featurize(df):
     return df.assign(score=df["a"] * df["b"])
 
 # Cell:
-result = featurize(my_df)   # Cash badge: cached on next run
+result = featurize(my_df)
 ```
+
+Next run, the badge flips to RESTORED:
+
+<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 That's the entire workflow: import, decorate, re-run.
 

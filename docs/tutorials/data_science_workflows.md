@@ -31,6 +31,10 @@ print(f"Customers: {len(customers)}, Transactions: {len(transactions)}")
     and many other file-reading functions. If the file's content changes,
     all dependent statements automatically recompute.
 
+When the CSV changes between runs, the badge above this cell shows a `COMPUTED` row whose miss reason names the file:
+
+<iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
 ### Cell 3: Data Cleaning
 
 ```python
@@ -99,6 +103,10 @@ Here's where Cash pays off. You want to try different features:
 2. **Re-run the notebook**
 3. Cells 2-3 are **RESTORED** from cache (data loading stays fast)
 4. Cell 4-6 **RECOMPUTE** (new features → new model → new evaluation)
+
+The badge on Cell 4 after that re-run looks like this — a cell with both a cached upstream input AND a computed current row:
+
+<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 Without Cash: 30s to reload CSVs + clean data every iteration.
 With Cash: everything before your change loads in milliseconds.

@@ -87,6 +87,10 @@ def load_config():
     return config, schema
 ```
 
+When one of the tracked files changes, the next call recomputes and the badge — visible if you call `load_data()` from a notebook — names the file in the `miss_reason`:
+
+<iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
 ## Step 4: Choose the Right Backend
 
 ### Development (default)
@@ -166,7 +170,9 @@ if __name__ == "__main__":
 ```
 
 On first run: everything computes and caches.
-On subsequent runs: if `data/raw.csv` hasn't changed, everything restores from cache instantly.
+On subsequent runs: if `data/raw.csv` hasn't changed, every stage restores from cache. From a notebook, the badge above each stage looks like this:
+
+<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 ## Step 6: Cache Introspection
 
