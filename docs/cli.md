@@ -1,0 +1,295 @@
+# Command-line interface
+
+Cash ships a `cash` CLI for the tasks that don't fit cleanly inside a notebook
+cell — installing the global IPython autoload hook, inspecting on-disk cache
+directories, clearing caches, and reporting which configuration is in effect.
+Behaviour is derived directly from `src/cash/__main__.py`; this page is the
+canonical reference.
+
+`cash` and `python -m cash` are equivalent entry points (the script is declared
+as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
+subcommand prints help and exits 0.
+
+## Quick reference
+
+| Subcommand | Purpose | Destructive? |
+|---|---|---|
+| [`cash version`](#cash-version) | Print the installed cash version. | No |
+| [`cash info`](#cash-info) | Show the effective merged configuration. | No |
+| [`cash inspect [path]`](#cash-inspect-path) | Summarise a cache directory or notebook. | No |
+| [`cash clear [path] [--all]`](#cash-clear-path-all) | Delete a cache directory. | **Yes** — no confirmation prompt |
+| [`cash autoload on`](#cash-autoload-on) | Install the IPython startup hook. | No (refuses to clobber by default) |
+| [`cash autoload off`](#cash-autoload-off) | Remove the startup hook. | Yes (deletes one file) |
+
+There are no global flags beyond `-h/--help`. `--version` is not a flag — it is
+its own subcommand (`cash version`).
+
+---
+
+## Installing the autoload hook
+
+This is the command most users reach for. It writes a single Python file into
+your IPython startup directory so that every new kernel either has `cash`
+pre-imported (`--mode available`) or has caching automatically enabled
+(`--mode active`, the default).
+
+The target path is:
+
+```
+<IPython dir>/profile_<profile>/startup/00-cash.py
+```
+
+`<IPython dir>` is resolved via `IPython.paths.get_ipython_dir()` when IPython
+is importable, and falls back to `~/.ipython` otherwise. `<profile>` defaults
+to `default`, giving `~/.ipython/profile_default/startup/00-cash.py` on most
+machines.
+
+### `cash autoload on`
+
+Install the startup hook so cash is loaded automatically in every new
+IPython/Jupyter kernel.
+
+**Usage:** `cash autoload on [--mode {available,active}] [--profile NAME] [--force]`
+
+**Arguments:**
+
+- `--mode {available,active}` — *Optional, default `active`.*
+    - `active` writes the **active** hook: `import cash` plus
+      `get_ipython().run_line_magic("cash_on", "")`. Caching is on the moment
+      the kernel boots; run `%cash_off` per session to opt out.
+    - `available` writes the **available** hook: just `import cash`. You still
+      run `%cash_on` (or use `@cash.cache`) per notebook, but the import is
+      already done.
+- `--profile NAME` — *Optional, default `default`.* IPython profile to install
+  into. Use this if you keep parallel profiles (e.g. one for work, one for
+  data-science experiments).
+- `--force` — *Optional.* Overwrite any existing file at the target path, even
+  if cash didn't write it. Without `--force`, cash refuses to clobber a
+  non-cash file.
+
+**Examples:**
+
+```bash
+cash autoload on                       # active mode (default): cash + %cash_on
+cash autoload on --mode available      # lighter: just `import cash`
+cash autoload on --profile work        # install into ~/.ipython/profile_work
+cash autoload on --force               # replace whatever's at 00-cash.py
+```
+
+**Behaviour notes:**
+
+- **Idempotent.** Re-running `cash autoload on` when the file already contains
+  the exact body for the requested mode prints
+  `Autoload already on (mode=<mode>): <path>` and exits 0 — no rewrite.
+- **Safe by default.** If a different file already exists at the target path,
+  cash refuses and exits 1 with the message
+  `Refusing to overwrite existing file: <path>`. Pass `--force` to replace it,
+  or run `cash autoload off` first if it was a cash hook from an earlier
+  install.
+- The written file starts with a `# cash-ipython-hook (managed by ...)`
+  marker comment. `cash autoload off` uses this marker to decide whether the
+  file is safe to delete.
+
+### `cash autoload off`
+
+Remove the startup hook written by `cash autoload on`.
+
+**Usage:** `cash autoload off [--profile NAME] [--force]`
+
+**Arguments:**
+
+- `--profile NAME` — *Optional, default `default`.* IPython profile to clean
+  up. Must match whatever you passed to `cash autoload on`.
+- `--force` — *Optional.* Delete the target file **even if it lacks the
+  `cash-ipython-hook` marker.** Without `--force`, cash refuses to remove a
+  file it doesn't recognise as its own.
+
+**Examples:**
+
+```bash
+cash autoload off                      # remove from the default profile
+cash autoload off --profile work       # remove from a custom profile
+cash autoload off --force              # delete whatever sits at 00-cash.py
+```
+
+**Behaviour notes:**
+
+- If no file exists at the target path, cash prints
+  `Autoload not installed at: <path>` and exits 0 — it's a no-op, not an
+  error.
+- The marker check is a substring search for `cash-ipython-hook` inside the
+  file. Older cash hooks (or files you wrote by hand) without the marker will
+  trip the safety check; use `--force` to override.
+
+---
+
+## Inspecting your environment
+
+### `cash version`
+
+Print the installed cash version.
+
+**Usage:** `cash version`
+
+**Examples:**
+
+```bash
+cash version
+# cash 0.5.0b1
+```
+
+**Behaviour notes:**
+
+- Imports `cash.__version__`. If the import fails (e.g. the package is broken
+  or partially installed), prints `cash unknown` and exits 0.
+- This is a subcommand, not a global flag. `cash --version` does not work.
+
+### `cash info`
+
+Print the effective merged configuration.
+
+**Usage:** `cash info`
+
+**Output fields:**
+
+- `Backend` — the configured backend type (e.g. `file`, `memory`, `tiered`).
+- `Cache dir` — the on-disk cache directory the file backend will use.
+- `Debug` — whether debug logging is enabled.
+- `Compress` — whether cache entries are compressed on disk.
+- `Max size` — the maximum cache size in GiB.
+- `Threshold` — the smart-persistence threshold in seconds (statements that
+  take longer than this get persisted to disk; faster ones may stay
+  in-memory).
+- `Config` — the path to `~/.cash/config.toml` if it exists, or
+  `(defaults, no config file)` otherwise.
+
+**Examples:**
+
+```bash
+cash info
+# Cash v0.5.0b1
+#   Backend:    file
+#   Cache dir:  /home/me/project/.cash
+#   Debug:      False
+#   Compress:   True
+#   Max size:   10.0 GB
+#   Threshold:  1.0s
+#   Config:     /home/me/.cash/config.toml
+```
+
+**Behaviour notes:**
+
+- `cash info` does **not** show per-value provenance — it tells you the value
+  but not whether it came from an environment variable, the user config file,
+  or the built-in default. If you need to debug a config override, inspect
+  the relevant `CASH_*` environment variables and `~/.cash/config.toml`
+  directly.
+
+### `cash inspect [path]`
+
+Summarise a cache directory, or report on a notebook and its sibling `.cash`
+directory.
+
+**Usage:** `cash inspect [path]`
+
+**Arguments:**
+
+- `path` — *Optional.* One of:
+    - **A `.ipynb` file.** Reads the notebook with `nbformat`, counts code
+      and markdown cells, detects whether `%cash_on` or `%%cash` is used, and
+      then inspects the sibling `.cash` directory next to the notebook (if
+      any).
+    - **A directory.** Treated as a cache directory; cash walks it
+      recursively.
+    - **Omitted.** Defaults to `./.cash` in the current working directory. If
+      that directory does not exist, prints
+      `No cache found. Specify a notebook or cache directory.` and exits 1.
+
+**Examples:**
+
+```bash
+cash inspect                           # inspect ./.cash
+cash inspect ./.cash                   # explicit
+cash inspect ./notebooks/analysis.ipynb
+cash inspect /tmp/some-cache-dir
+```
+
+**Output for a cache directory:**
+
+- Total file count and total size (human-readable: B/KB/MB/GB).
+- Approximate cache-entry count (number of `.meta` files).
+- A breakdown of file extensions and their counts.
+- Up to 5 most-recent cache entries, each shown with timestamp, cache key
+  prefix, and the names of the variables it produced.
+
+**Output for a notebook:**
+
+- Code-cell and markdown-cell counts.
+- `Uses cash: Yes/No` based on a textual scan for `%cash_on` or `%%cash`.
+- The cache summary above if a sibling `.cash/` exists; otherwise
+  `Cache: not found (no .cash directory)`.
+
+**Behaviour notes:**
+
+- `nbformat` is an optional dependency. If it isn't installed when you point
+  `cash inspect` at a `.ipynb`, cash prints
+  `nbformat not installed. Install with: pip install nbformat` and continues
+  cleanly (exit 0).
+- Cache metadata is read via `pickle`. Corrupted or unreadable `.meta` files
+  are silently skipped (logged at debug level); if none of the recent entries
+  can be read, the section shows `(could not read metadata)`.
+
+---
+
+## Clearing caches
+
+### `cash clear [path] [--all]`
+
+Delete a cache directory.
+
+!!! warning "Destructive without confirmation"
+    `cash clear` calls `shutil.rmtree()` immediately on the resolved
+    directory. There is **no confirmation prompt** and **no `--force` flag**
+    — running the command deletes the cache as soon as you press enter. Be
+    sure of the target before you run it, especially in CI.
+
+**Usage:** `cash clear [path] [--all]`
+
+**Arguments:**
+
+- `path` — *Optional.* One of:
+    - **A directory.** Removed in full via `shutil.rmtree`.
+    - **A `.ipynb` file.** Cash removes the sibling `.cash/` directory next
+      to the notebook (if any). If there's no sibling cache, prints
+      `No cache found for <path>` and exits 0.
+    - **Anything else.** Prints `Not found: <path>` and exits 1.
+- `--all` — *Optional.* Clear `./.cash` in the current working directory.
+  When set, any `path` argument is ignored. If `./.cash` doesn't exist,
+  prints `No .cash directory found in current directory` and exits 0.
+
+**Examples:**
+
+```bash
+cash clear --all                       # nuke ./.cash
+cash clear ./.cash                     # same thing, explicit
+cash clear ./notebooks/analysis.ipynb  # nuke the sibling .cash next to the notebook
+cash clear /tmp/some-cache-dir         # nuke any directory
+```
+
+**Behaviour notes:**
+
+- If neither `path` nor `--all` is supplied, cash prints
+  `Specify a path or use --all to clear all caches` and exits 1 without
+  touching anything.
+- The no-op "nothing to clear" message paths (no `./.cash`, no sibling cache)
+  exit 0; they're treated as success, not failure.
+
+---
+
+## Exit codes
+
+| Code | When |
+|---|---|
+| `0` | The command succeeded, including no-op outcomes ("nothing to clear", "autoload not installed at ..."). |
+| `1` | User-error refusals: `cash clear` with no `path` and no `--all`; `cash inspect` with no `./.cash` and no path; `cash clear <missing-path>`; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
+| traceback | Uncaught exceptions bubble up as Python tracebacks — `main()` does not wrap dispatch in `try/except`. If you see one, treat it as a bug and please file an issue. |
