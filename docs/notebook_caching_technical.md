@@ -933,83 +933,52 @@ def process_statement(self, code, ttl=None, ...):
 
 ### Lineage Propagation
 
-```
-        Cell 1                    Cell 2                    Cell 3
-    ┌─────────────┐          ┌─────────────┐          ┌─────────────┐
-    │ a = 1       │          │ c = a + b   │          │ d = c * 2   │
-    │ b = 2       │          │             │          │             │
-    └─────────────┘          └─────────────┘          └─────────────┘
-          │                        │                        │
-          ▼                        ▼                        ▼
-    ┌─────────────┐          ┌─────────────┐          ┌─────────────┐
-    │ lineage(a)  │────┐     │ lineage(c)  │────┐     │ lineage(d)  │
-    │ = H("a=1")  │    │     │ = H(code +  │    │     │ = H(code +  │
-    │             │    │     │    L(a)+L(b))│    │     │    L(c))    │
-    │ lineage(b)  │────┤     │             │    │     │             │
-    │ = H("b=2")  │    │     └─────────────┘    │     └─────────────┘
-    └─────────────┘    │           ▲            │           ▲
-                       └───────────┘            └───────────┘
-                         (inputs)                 (inputs)
+```mermaid
+flowchart LR
+    C1["<b>Cell 1</b><br/><code>a = 1</code><br/><code>b = 2</code>"]
+    C2["<b>Cell 2</b><br/><code>c = a + b</code>"]
+    C3["<b>Cell 3</b><br/><code>d = c * 2</code>"]
+    L1["lineage(a) = H('a=1')<br/>lineage(b) = H('b=2')"]
+    L2["lineage(c) = H(code + L(a) + L(b))"]
+    L3["lineage(d) = H(code + L(c))"]
+    C1 --> L1
+    C2 --> L2
+    C3 --> L3
+    L1 -. inputs .-> L2
+    L2 -. inputs .-> L3
 ```
 
 ### Cache Hit vs Miss
 
-```
-                    Statement Execution
-                           │
-                           ▼
-              ┌────────────────────────┐
-              │  Compute Cache Key     │
-              │  key = H(code + deps)  │
-              └───────────┬────────────┘
-                          │
-                          ▼
-              ┌────────────────────────┐
-              │  backend.get(key)      │
-              └───────────┬────────────┘
-                          │
-            ┌─────────────┴─────────────┐
-            │                           │
-            ▼                           ▼
-      [Cache HIT]                 [Cache MISS]
-            │                           │
-            ▼                           ▼
-    ┌───────────────┐           ┌───────────────┐
-    │ Deserialize   │           │ Execute code  │
-    │ Load outputs  │           │ Capture output│
-    │ Restore state │           │ Serialize     │
-    │               │           │ Store in cache│
-    │ Time: ~10ms   │           │               │
-    └───────────────┘           │ Time: varies  │
-                                └───────────────┘
+```mermaid
+flowchart TD
+    EXEC(["<b>Statement Execution</b>"])
+    KEY["<b>Compute Cache Key</b><br/><code>key = H(code + deps)</code>"]
+    GET["<code>backend.get(key)</code>"]
+    HIT["<b>Cache HIT</b><br/>Deserialize · Load outputs<br/>Restore state<br/><i>Time: ~10 ms</i>"]
+    MISS["<b>Cache MISS</b><br/>Execute code · Capture output<br/>Serialize · Store in cache<br/><i>Time: varies</i>"]
+    EXEC --> KEY --> GET
+    GET --> HIT
+    GET --> MISS
 ```
 
 ### Control Structure Processing
 
-```
-    for ticker in ["AAPL", "MSFT", "GOOGL"]:
-        stats[ticker] = compute(ticker)
-                │
-                ▼
-    ┌─────────────────────────────────────┐
-    │   ControlStructureProcessor          │
-    └─────────────────┬───────────────────┘
-                      │
-      ┌───────────────┼───────────────┐
-      │               │               │
-      ▼               ▼               ▼
- ┌─────────┐    ┌─────────┐    ┌─────────┐
- │ Iter 1  │    │ Iter 2  │    │ Iter 3  │
- │ AAPL    │    │ MSFT    │    │ GOOGL   │
- │         │    │         │    │         │
- │ ctx=4f2c│    │ ctx=28e9│    │ ctx=3342│
- └────┬────┘    └────┬────┘    └────┬────┘
-      │              │              │
-      ▼              ▼              ▼
- ┌─────────┐    ┌─────────┐    ┌─────────┐
- │ Cache   │    │ Cache   │    │ Cache   │
- │ Key 1   │    │ Key 2   │    │ Key 3   │
- └─────────┘    └─────────┘    └─────────┘
+```mermaid
+flowchart TD
+    LOOP["<code>for ticker in ['AAPL', 'MSFT', 'GOOGL']:</code><br/>&nbsp;&nbsp;&nbsp;&nbsp;<code>stats[ticker] = compute(ticker)</code>"]
+    CSP["<b>ControlStructureProcessor</b>"]
+    I1["<b>Iter 1</b> &mdash; AAPL<br/>ctx = 4f2c…"]
+    I2["<b>Iter 2</b> &mdash; MSFT<br/>ctx = 28e9…"]
+    I3["<b>Iter 3</b> &mdash; GOOGL<br/>ctx = 3342…"]
+    K1["Cache key 1"]
+    K2["Cache key 2"]
+    K3["Cache key 3"]
+    LOOP --> CSP
+    CSP --> I1 & I2 & I3
+    I1 --> K1
+    I2 --> K2
+    I3 --> K3
 ```
 
 ---

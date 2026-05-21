@@ -215,8 +215,13 @@
 .md-typeset .mermaid svg {
   display: block !important;
   margin: 0 auto !important;
-  max-width: 100% !important;     /* overrides inline `max-width: 512px` */
-  width: 100% !important;
+  /* The actual `width` is set per-diagram by docs/javascripts/
+     badge-iframe-resize.js — it reads mermaid's inline
+     `style.maxWidth` (the diagram's natural rendered width) and
+     applies that as `style.width`, so small diagrams stay small
+     instead of getting stretched up to the column width.
+     We only constrain the upper bound here. */
+  max-width: 100% !important;
   height: auto !important;
 }
 

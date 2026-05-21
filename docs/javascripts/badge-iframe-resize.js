@@ -62,3 +62,53 @@
     document.addEventListener("DOMContentLoaded", pollAll);
   }
 })();
+
+/* ----- mermaid diagram sizing -----
+ *
+ * mkdocs-mermaid2-plugin renders each SVG with `width="100%"` AND an inline
+ * `style="max-width: <natural-px>"` matching the diagram's intrinsic size.
+ * The combination means small diagrams (whose natural width is below the
+ * column width) get stretched to fill the column anyway, blowing node font
+ * sizes up to the point where labels are larger than section headings.
+ *
+ * CSS can't selectively override the `width="100%"` attribute, and SVG
+ * elements don't honor `width: max-content` for sizing the way HTML does.
+ * So we post-process each SVG after mermaid renders:
+ *   - read the inline `max-width` (mermaid's measured natural width)
+ *   - apply it as the SVG's `width` style, capped at 100% of column
+ *
+ * Result: small diagrams render at their natural size; large diagrams
+ * still shrink to fit the column. */
+(function () {
+  "use strict";
+
+  function fitMermaidSvgs() {
+    var svgs = document.querySelectorAll(".mermaid svg");
+    for (var i = 0; i < svgs.length; i += 1) {
+      var svg = svgs[i];
+      if (svg.dataset.cashFitted === "1") continue;
+      var maxWidth = svg.style.maxWidth;  // mermaid's inline natural width
+      if (!maxWidth) continue;
+      svg.style.width = maxWidth;
+      svg.removeAttribute("width");  // defeat width="100%" attribute
+      svg.dataset.cashFitted = "1";
+    }
+  }
+
+  // mermaid renders asynchronously; poll for a short window after load.
+  function startFitting() {
+    fitMermaidSvgs();
+    var attempts = 0;
+    var iv = setInterval(function () {
+      fitMermaidSvgs();
+      attempts += 1;
+      if (attempts >= 20) clearInterval(iv);  // 20 * 200 ms = 4 s window
+    }, 200);
+  }
+
+  if (document.readyState === "complete" || document.readyState === "interactive") {
+    startFitting();
+  } else {
+    document.addEventListener("DOMContentLoaded", startFitting);
+  }
+})();
