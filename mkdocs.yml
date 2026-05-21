@@ -30,6 +30,9 @@ theme:
     - content.code.copy
     - content.code.annotate
 
+extra_css:
+  - stylesheets/badge-isolation.css
+
 plugins:
   - search
   - mkdocstrings:
