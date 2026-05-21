@@ -231,6 +231,207 @@
   max-width: 100%;
 }
 
+/* ─── Why Cash? page blocks ──────────────────────────────────────────── *
+ * Custom layout for docs/why-cash.md. All colours come from --cash-*
+ * tokens above — do not introduce new colour values here.               */
+
+/* §1 Pain grid — 2×2 on desktop, single column on mobile. */
+.cash-pain-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 1.5em 0;
+}
+@media (max-width: 600px) {
+  .cash-pain-grid { grid-template-columns: 1fr; }
+}
+.cash-pain-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 16px 18px;
+  background: var(--cash-bg-section);
+  border-left: 3px solid var(--cash-ochre);
+  border-radius: var(--cash-radius-sm);
+}
+.cash-pain-card .cash-pain-icon {
+  font-size: 22px;
+  line-height: 1;
+}
+.cash-pain-card .cash-pain-title {
+  font-weight: 700;
+  color: var(--cash-ink);
+  font-size: 15px;
+}
+.cash-pain-card .cash-pain-sub {
+  font-size: 14px;
+  color: var(--cash-ink-2);
+  line-height: 1.45;
+}
+
+/* §4 Shines / Skip — two-column comparison cards. */
+.cash-shines-skip-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 1.5em 0;
+}
+@media (max-width: 700px) {
+  .cash-shines-skip-grid { grid-template-columns: 1fr; }
+}
+.cash-shines-card,
+.cash-skip-card {
+  padding: 16px 18px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+}
+.cash-shines-card {
+  background: var(--cash-green-bg);
+  border-left: 3px solid var(--cash-green);
+}
+.cash-skip-card {
+  background: var(--cash-ochre-bg);
+  border-left: 3px solid var(--cash-ochre);
+}
+.cash-shines-card h4,
+.cash-skip-card h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.cash-shines-card h4 { color: var(--cash-green); }
+.cash-skip-card  h4 { color: var(--cash-ochre); }
+.cash-shines-card ul,
+.cash-skip-card ul {
+  margin: 0;
+  padding-left: 1.2em;
+  font-size: 14px;
+  color: var(--cash-ink);
+}
+.cash-shines-card li,
+.cash-skip-card li { margin: 4px 0; }
+
+/* §7 CTA split — two cards side by side, full-width primary on mobile. */
+.cash-cta-split {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin: 2em 0 1em;
+}
+@media (max-width: 700px) {
+  .cash-cta-split { grid-template-columns: 1fr; }
+}
+.cash-cta-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px 20px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+  text-decoration: none !important;
+}
+.cash-cta-card h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+}
+.cash-cta-card p {
+  margin: 0;
+  font-size: 14px;
+  color: var(--cash-ink-2);
+}
+.cash-cta-card.primary {
+  background: var(--cash-green-bg);
+  border-left: 3px solid var(--cash-green);
+}
+.cash-cta-card.primary h3 { color: var(--cash-green); }
+.cash-cta-card.secondary {
+  background: var(--cash-ochre-bg);
+  border-left: 3px solid var(--cash-ochre);
+}
+.cash-cta-card.secondary h3 { color: var(--cash-ochre); }
+
+/* §2 Calculator widget. JS replaces the stub div's innerHTML; this is
+ * the style for the populated state. The stub is invisible until JS
+ * runs (acceptable: the calculator is supplementary). */
+.cash-calculator {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 12px;
+  padding: 16px 18px;
+  margin: 1.5em 0;
+  background: var(--cash-bg-section);
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+}
+.cash-calculator-row {
+  display: grid;
+  grid-template-columns: 1fr 110px;
+  align-items: center;
+  gap: 10px;
+}
+.cash-calculator label {
+  font-size: 14px;
+  color: var(--cash-ink);
+}
+.cash-calculator input[type="number"] {
+  font-family: var(--cash-font-mono);
+  font-size: 14px;
+  padding: 4px 8px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-code);
+  background: var(--cash-bg);
+  color: var(--cash-ink);
+  width: 100%;
+  box-sizing: border-box;
+  text-align: right;
+}
+.cash-calculator-output {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--cash-green);
+  padding-top: 6px;
+  border-top: 1px solid var(--cash-rule);
+}
+.cash-calculator-caveat {
+  font-size: 12px;
+  font-style: italic;
+  color: var(--cash-ink-4);
+}
+
+/* §5 Comparison matrix — sortable / filterable table. */
+.cash-matrix-filter {
+  margin: 1em 0 0.5em;
+}
+.cash-matrix-filter input {
+  font-family: var(--cash-font-sans);
+  font-size: 14px;
+  padding: 6px 10px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-code);
+  background: var(--cash-bg);
+  color: var(--cash-ink);
+  width: 240px;
+  max-width: 100%;
+}
+.md-typeset table.cash-matrix-table th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.md-typeset table.cash-matrix-table th[aria-sort="ascending"]::after  { content: " ▲"; color: var(--cash-green); }
+.md-typeset table.cash-matrix-table th[aria-sort="descending"]::after { content: " ▼"; color: var(--cash-green); }
+.md-typeset table.cash-matrix-table td {
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.md-typeset table.cash-matrix-table td:first-child {
+  text-align: left;
+  font-weight: 500;
+}
+.cash-matrix-row-hidden { display: none; }
+
 /* ─── Notebook cell code blocks ─────────────────────────────────────── *
  * Tag any code fence that simulates a Jupyter notebook input cell with  *
  * `{ .nb-cell }` to get this treatment:                                *
