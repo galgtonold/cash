@@ -30,11 +30,11 @@ Run the cell again — the `read_csv` result loads instantly from cache. The bad
 
 **First run** — Cash ran the statement and cached the result:
 
-<iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" src="/_badges/quickstart_first_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Second run** — Cash restored the value from cache instead of recomputing:
 
-<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" src="/_badges/quickstart_second_run.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 See [Reading the Cash badge](../badges.md) for the full anatomy and every status.
 
@@ -54,20 +54,6 @@ result = df.groupby('category').sum()
 ```
 
 If you change Statement 2, only Statement 2 and 3 re-execute. Statement 1 stays cached!
-
-## Debug Mode
-
-Want to see what Cash is doing?
-
-```python
-%cash_debug on
-```
-
-You'll see status badges for each statement:
-
-- ⚙️ **EXECUTED** — Ochre chip. Cash ran the statement and cached the result (first run).
-- ⚡ **CACHED** — Green chip. The result was restored from cache (cache hit!).
-- ⏩ **SKIPPED** — Green chip. Already in memory from an earlier statement, no work needed.
 
 ## Decorator-based Caching
 
