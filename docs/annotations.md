@@ -9,7 +9,7 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:persist` | — | no | Force-cache this statement, even if the cost model would skip it. |
 | `# @cash:no-cache` | `nocache` | no | Never cache this statement. Wins over `persist`. |
 | `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
-| `# @cash:allow-random` | `allowrandom` | no | Parsed but **currently inert** — see [below](#cash-allow-random-alias-allowrandom). |
+| `# @cash:allow-random` | `allowrandom` | no | Parsed but **currently inert** — see [below](#cashallow-random-alias-allowrandom). |
 
 A minimal example:
 

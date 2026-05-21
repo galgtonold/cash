@@ -217,7 +217,7 @@ The flow: [`annotations.py:48-49`](https://github.com/galgtonold/cash/blob/main/
 
 ### `# @cash:no-cache`
 
-A different mechanism — opts out *earlier*, at the cacheability decision in [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py). The statement is never even considered for caching; filter 1 and filter 2 don't run. `no-cache` wins over `persist` when both are present. See [Annotations · `@cash:no-cache`](annotations.md#cash-no-cache-alias-nocache).
+A different mechanism — opts out *earlier*, at the cacheability decision in [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py). The statement is never even considered for caching; filter 1 and filter 2 don't run. `no-cache` wins over `persist` when both are present. See [Annotations · `@cash:no-cache`](annotations.md#cashno-cache-alias-nocache).
 
 ### File-dependent statements always cache
 

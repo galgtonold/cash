@@ -113,7 +113,7 @@ A `⚙️ COMPUTED` row that also says **NOT CACHED** ran but Cash refused to st
 
 **Why:** The statement called `numpy.random.rand` (or `random.random`, `torch.rand`, `tf.random.*`) without first seeding the RNG. The next run would produce different output, so caching would be a lie.
 
-**Fix:** Seed the RNG explicitly (`np.random.seed(0)` or `rng = np.random.default_rng(0)`) — then Cash treats the call as deterministic. If you want unseeded randomness but also want the warning to go away, the `# @cash:allow-random` annotation is intended for this but is **currently inert** — see [Annotations · `@cash:allow-random`](annotations.md#cash-allow-random-alias-allowrandom) for the up-to-date status.
+**Fix:** Seed the RNG explicitly (`np.random.seed(0)` or `rng = np.random.default_rng(0)`) — then Cash treats the call as deterministic. If you want unseeded randomness but also want the warning to go away, the `# @cash:allow-random` annotation is intended for this but is **currently inert** — see [Annotations · `@cash:allow-random`](annotations.md#cashallow-random-alias-allowrandom) for the up-to-date status.
 
 ### Cost model: too cheap to cache
 
