@@ -132,6 +132,30 @@ def test_graph_marks_external_inputs_as_leaves():
         f"np should be marked external:\n{text}"
 
 
+def test_graph_walks_union_of_history_records():
+    """When a variable is mutated multiple times, the graph must show inputs
+    from EVERY history record — not just the latest.
+
+    This is the financial-demo failure: df was created via pd.read_csv (record 1),
+    then mutated by `df['SMA'] = df.groupby(...)` (record 2). The latest record's
+    only input is df itself (self-skip). Without walking the first record too,
+    the graph shows nothing.
+    """
+    from cash.notebook.provenance import ProvenanceTracker
+    pv = ProvenanceTracker()
+    pv.record("df", code="df = pd.read_csv('x.csv')", inputs=["pd"])
+    # Later: df is mutated; its inputs only list df (self-reference)
+    pv.record("df", code="df['SMA'] = df.groupby('g').transform(...)", inputs=["df"])
+
+    block = pv._format_graph_section("df")
+    text = "\n".join(block)
+    # The creation record had pd as an input — must surface in the graph.
+    assert "pd" in text and "(external)" in text, (
+        f"Expected 'pd (external)' from the creation record (record 1).\n"
+        f"Got:\n{text}"
+    )
+
+
 def test_graph_breaks_self_reference_cycle():
     """A variable that lists itself as an input must not cause infinite recursion."""
     from cash.notebook.provenance import ProvenanceTracker
