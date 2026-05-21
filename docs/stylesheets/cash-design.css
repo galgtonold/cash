@@ -474,3 +474,74 @@
   border-top-left-radius: 0 !important;
   border-top-right-radius: 0 !important;
 }
+
+/* ─── Admonitions ────────────────────────────────────────────────────── *
+ * Material's defaults use vivid off-brand colours (lime for question/faq,*
+ * cyan-teal for tip, amber for warning). Map everything onto Cash tokens.*
+ *                                                                         *
+ *   question / faq / help  →  cash-green  (forest green, brand primary)  *
+ *   tip / hint / important →  cash-green  (same family, different icon)  *
+ *   warning / caution      →  cash-ochre  (amber, brand secondary)       *
+ *   info / note            →  cash-info   (blue, neutral)                */
+
+/* question / faq / help */
+.md-typeset .admonition.question,
+.md-typeset details.question {
+  border-color: var(--cash-green);
+}
+.md-typeset .question > .admonition-title,
+.md-typeset .question > summary {
+  background-color: var(--cash-green-bg);
+}
+.md-typeset .question > .admonition-title::before,
+.md-typeset .question > summary::before {
+  background-color: var(--cash-green);
+}
+
+/* tip / hint / important */
+.md-typeset .admonition.tip,
+.md-typeset details.tip {
+  border-color: var(--cash-green);
+}
+.md-typeset .tip > .admonition-title,
+.md-typeset .tip > summary {
+  background-color: var(--cash-green-bg);
+}
+.md-typeset .tip > .admonition-title::before,
+.md-typeset .tip > summary::before {
+  background-color: var(--cash-green);
+}
+
+/* warning / caution / attention */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: var(--cash-ochre);
+}
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary {
+  background-color: var(--cash-ochre-bg);
+}
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .warning > summary::before {
+  background-color: var(--cash-ochre);
+}
+
+/* info / note / abstract */
+.md-typeset .admonition.info,
+.md-typeset details.info,
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: var(--cash-info);
+}
+.md-typeset .info > .admonition-title,
+.md-typeset .info > summary,
+.md-typeset .note > .admonition-title,
+.md-typeset .note > summary {
+  background-color: var(--cash-info-bg);
+}
+.md-typeset .info > .admonition-title::before,
+.md-typeset .info > summary::before,
+.md-typeset .note > .admonition-title::before,
+.md-typeset .note > summary::before {
+  background-color: var(--cash-info);
+}
