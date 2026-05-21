@@ -75,6 +75,42 @@
   --cash-radius-code:  3px;
 }
 
+/* ─── Dark mode (slate scheme) ───────────────────────────────────────── *
+ * Material toggles the slate scheme by setting
+ * `data-md-color-scheme="slate"` on <body>. The light-mode tokens above
+ * assume a white page: ink #333 on a dark background is invisible, and
+ * the pale tinted backgrounds (--cash-green-bg, --cash-ochre-bg,
+ * --cash-bg-section) become bright islands. Rebind the tokens so the
+ * whole token-driven layer follows the scheme — no per-component
+ * overrides needed. */
+
+[data-md-color-scheme="slate"] {
+  /* Brand accents — lift toward lighter, more saturated hues so they
+   * read as text/links/borders on a dark background. The light-mode
+   * #006644 / #996300 are too low-contrast in dark mode. */
+  --cash-green:        #4ec19a;
+  --cash-green-bg:     rgba(78, 193, 154, 0.12);
+  --cash-ochre:        #e0a64a;
+  --cash-ochre-bg:     rgba(224, 166, 74, 0.12);
+
+  /* Surfaces — translucent whites so material's slate base shows
+   * through. Keeps tinted cards distinguishable without becoming
+   * bright islands on a dark page. */
+  --cash-bg:           transparent;
+  --cash-bg-section:   rgba(255, 255, 255, 0.05);
+  --cash-bg-nested:    rgba(255, 255, 255, 0.03);
+
+  /* Ink — inverted scale, brightest = strongest. */
+  --cash-ink:          #e8eaed;
+  --cash-ink-2:        #b0b8c4;
+  --cash-ink-3:        #8892a0;
+  --cash-ink-4:        #6c7480;
+  --cash-ink-5:        #5a626d;
+
+  --cash-rule:         rgba(255, 255, 255, 0.1);
+  --cash-rule-strong:  rgba(255, 255, 255, 0.2);
+}
+
 /* ─── mkdocs-material variable overrides ─────────────────────────────── *
  * Material exposes design tokens as `--md-*` CSS variables. By mapping
  * them onto our `--cash-*` tokens we keep material's responsive logic
@@ -104,6 +140,17 @@
   --md-accent-fg-color--transparent: rgba(153, 99, 0, 0.1);
   --md-accent-bg-color:            #ffffff;
   --md-accent-bg-color--light:     rgba(255, 255, 255, 0.7);
+}
+
+/* Dark-mode override for material's link-color token. The compound
+ * selector below has higher specificity than `[data-md-color-primary=
+ * "custom"]` above, which would otherwise pin --md-typeset-a-color
+ * to the light-mode green. Material's `.md-typeset a code` rule reads
+ * this token directly with higher specificity than our `.md-typeset
+ * code { color: var(--cash-ink) }`, so code-inside-link only flips
+ * to the lifted green via this variable. */
+[data-md-color-scheme="slate"][data-md-color-primary="custom"] {
+  --md-typeset-a-color: #4ec19a;
 }
 
 /* ─── Body typography ────────────────────────────────────────────────── */
