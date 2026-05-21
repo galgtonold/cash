@@ -161,15 +161,14 @@ When something doesn't seem right:
 %cash_debug on
 ```
 
-You'll see detailed output for each statement:
+This raises the cash logger to DEBUG and prints labelled lines from each
+subsystem. Look for these prefixes to see what happened for each statement:
 
-```
-[LINEAGE_DEBUG] Statement: df = pd.read_csv('data.csv')
-  Inputs: {} (no dependencies)
-  File deps: {'data.csv': 'sha256:abc123...'}
-  Output lineage: sha256:def456...
-  Status: RESTORED (cache hit)
-```
+- `[CACHE_KEY]` — how the cache key was constructed
+- `[CACHE_HIT_DEBUG]` — why a lookup hit or missed
+- `[UPSTREAM_DEBUG]` — what made an upstream cell re-run
+- `[LINEAGE_DEBUG]` — the inputs detected for a statement and their resolved lineage hashes
+- `[STATE]` — what the tracking state looks like at each step
 
 Check overall statistics:
 
