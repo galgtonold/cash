@@ -17,7 +17,7 @@ The transition is natural: wrap your notebook statements into functions, then de
 
 In your notebook, look for expensive operations:
 
-```python
+```python { .nb-cell }
 # Notebook code (exploration)
 %cash_on
 
@@ -195,7 +195,7 @@ my_function.cache_clear()           # Clear this function's cache
 
 Cash connects both APIs. When you use `@cash.cache` inside a notebook with `%cash_on`, the decorator results appear in the notebook badges with condensed metrics:
 
-```python
+```python { .nb-cell }
 # In a notebook with %cash_on
 
 from cash import cache
