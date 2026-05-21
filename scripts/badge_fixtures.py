@@ -342,4 +342,44 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # data_science_workflows tutorial — Cell 2 recomputes because customers.csv changed.
+    "miss_file_changed_customers": [
+        {
+            "status": "COMPUTED",
+            "code": "customers = pd.read_csv('customers.csv')",
+            "total_time": 1.847,
+            "evaluated_vars": ["customers"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:2c9d4e1a7b3f8056",
+            "miss_reason": "file changed: customers.csv",
+            "is_upstream": False,
+        },
+    ],
+    # data_science_workflows tutorial — Cell 4 after changing how='left' to
+    # how='inner'. The expensive groupby statement is restored from cache;
+    # only the merge statement (whose code changed) recomputes.
+    "workflows_mixed": [
+        {
+            "status": "RESTORED",
+            "code": "tx_features = transactions.groupby('customer_id').agg(...)",
+            "total_time": 0.031,
+            "saved_time": 3.214,
+            "evaluated_vars": ["tx_features"],
+            "restored_vars": ["tx_features"],
+            "storage": ["RAM", "DISK"],
+            "source": "RAM",
+            "cache_key": "stmt:1a2b3c4d5e6f7081",
+            "is_upstream": False,
+        },
+        {
+            "status": "COMPUTED",
+            "code": "df = customers.merge(tx_features, on='customer_id', how='inner')",
+            "total_time": 0.183,
+            "evaluated_vars": ["df"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:8f9e0d1c2b3a4956",
+            "miss_reason": "code changed",
+            "is_upstream": False,
+        },
+    ],
 }
