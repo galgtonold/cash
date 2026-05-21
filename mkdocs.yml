@@ -64,6 +64,7 @@ nav:
     - Notebook Caching: notebook_caching_api.md
     - Reading the Cash Badge: badges.md
     - Magic Commands: magics.md
+    - Annotations: annotations.md
     - API Reference: api_reference.md
     - Configuration: getting-started/configuration.md
   - Tutorials:

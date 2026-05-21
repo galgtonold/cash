@@ -90,7 +90,8 @@ topic name to drill into a sub-card.
 **Arguments:**
 
 - *(no argument)* — Main quick-reference (essential commands, cache management,
-  module tracking, annotation syntax).
+  module tracking, annotation syntax). See [Annotations](annotations.md) for the
+  full `@cash:` directive reference.
 - `badge` / `badges` — Badge display modes and status icons.
 - `debug` / `debugging` — Debug logging and verification commands.
 - `collab` / `collaboration` / `sharing` — Export / import / diff commands.
