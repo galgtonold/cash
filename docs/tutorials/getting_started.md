@@ -18,7 +18,7 @@ pip install cash-lib
 
 Create a new notebook and add this to the first cell:
 
-```python
+```python { .nb-cell }
 import cash
 %cash_on
 ```
@@ -46,7 +46,7 @@ Now every new IPython/Jupyter kernel starts with cash imported and `%cash_on` al
 
 ## Step 3: Run Some Code
 
-```python
+```python { .nb-cell }
 # Cell 2
 import pandas as pd
 import numpy as np
@@ -61,7 +61,7 @@ df = pd.DataFrame({
 print(f"Created DataFrame with {len(df)} rows")
 ```
 
-```python
+```python { .nb-cell }
 # Cell 3
 summary = df.groupby('category').agg({
     'value': ['mean', 'std', 'min', 'max']
@@ -87,7 +87,7 @@ The results loaded instantly from cache instead of being recomputed. See [Readin
 
 Modify Cell 3 to add a filter:
 
-```python
+```python { .nb-cell }
 # Cell 3 (modified)
 summary = df[df['value'] > 0].groupby('category').agg({
     'value': ['mean', 'std', 'min', 'max']

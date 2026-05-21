@@ -6,7 +6,7 @@ The easiest way to use Cash is in a Jupyter notebook:
 
 ### Step 1: Enable Cash
 
-```python
+```python { .nb-cell }
 import cash
 
 # Enable auto-caching for all subsequent cells
@@ -15,7 +15,7 @@ import cash
 
 ### Step 2: Write Code Normally
 
-```python
+```python { .nb-cell }
 import pandas as pd
 import numpy as np
 
@@ -42,7 +42,7 @@ See [Reading the Cash badge](../badges.md) for the full anatomy and every status
 
 Cash caches at the **statement level**, not the cell level. This means:
 
-```python
+```python { .nb-cell }
 # Statement 1: cached independently
 df = pd.read_csv('data.csv')
 
@@ -113,7 +113,7 @@ c.register_hasher(
 
 ### Selective Caching
 
-```python
+```python { .nb-cell }
 # Cache a single cell
 %%cash
 df = pd.read_csv('data.csv')
@@ -145,7 +145,7 @@ Supported file operations:
 
 Control caching for individual statements with comment annotations:
 
-```python
+```python { .nb-cell }
 # @cash:no-cache
 result = api.fetch_data()       # Always re-executed
 
