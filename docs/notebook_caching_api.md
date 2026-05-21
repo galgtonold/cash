@@ -6,7 +6,11 @@ This document provides detailed API reference for the notebook caching component
 
 ## Cell badges
 
-Every cell shows a Cash badge above its output. The badge is the canonical UI for "what did cash do, and why?" — see [Reading the Cash badge](badges.md) for the full anatomy, status reference, and a walkthrough of the most common cache-miss and not-cached situations.
+Every cell shows a Cash badge above its output. The badge is the canonical UI for "what did cash do, and why?" — for example, a typical cell where the upstream input restored from cache and the current computation ran fresh:
+
+--8<-- "docs/_badges/status_mixed.html"
+
+See [Reading the Cash badge](badges.md) for the full anatomy, status reference, and a walkthrough of the most common cache-miss and not-cached situations.
 
 ---
 

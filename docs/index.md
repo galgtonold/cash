@@ -40,6 +40,12 @@ result = df.groupby('category').sum()
 # Second run: instant from cache ✅
 ```
 
+Cash shows a badge above each cell summarizing what it did. The example below — restored upstream `df`, restored intermediate `features`, recomputed `preds` because a new `features` lineage invalidated its cache — gives you the visual vocabulary at a glance:
+
+--8<-- "docs/_badges/anatomy_hero.html"
+
+See [Reading the Cash badge](badges.md) for the full anatomy.
+
 ## Installation
 
 ```bash
