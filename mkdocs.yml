@@ -49,9 +49,9 @@ plugins:
           secondaryColor: '#fffbe6'       # cash-ochre-bg — alt node fill
           secondaryTextColor: '#996300'
           secondaryBorderColor: '#996300'
-          tertiaryColor: '#f5f5f5'        # cash-bg-section
-          tertiaryTextColor: '#333333'    # cash-ink
-          tertiaryBorderColor: '#dddddd'  # cash-rule-strong
+          tertiaryColor: '#eef8f4'        # light cash-green tint for subgraph containers
+          tertiaryTextColor: '#1a4d38'    # dark cash-green for subgraph labels
+          tertiaryBorderColor: '#4da888'  # medium cash-green — visible, on-brand
           background: '#ffffff'
           mainBkg: '#e6fffa'
           edgeLabelBackground: '#ffffff'
