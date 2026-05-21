@@ -83,6 +83,7 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - "Why Cash?": why-cash.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md

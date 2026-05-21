@@ -1,5 +1,8 @@
 # Cash - Smart Caching for Python
 
+> **New to cash?** Read **[Why Cash?](why-cash.md)** first — it answers
+> *"is this for my workflow?"* before you spend time on installation.
+
 Cash is a transparent caching library for Python with two primary use cases:
 
 1. **Jupyter Notebook Caching** — Automatically cache cell results with `%cash_on`
