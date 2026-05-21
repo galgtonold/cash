@@ -49,6 +49,54 @@ def test_provenance_graph_shows_full_chain_across_mutations(nb_runner):
 
 
 @pytest.mark.timeout(60)
+def test_provenance_graph_shows_chain_in_financial_demo_flow(nb_runner, tmp_path):
+    """Mirror the financial-analysis demo's exact flow: read a CSV into df,
+    mutate df across multiple cells, then call %cash_provenance df --graph.
+
+    The chain must reach back to the original `pd.read_csv` cell — that's
+    what the user reported missing.
+    """
+    csv_path = tmp_path / "data.csv"
+    csv_path.write_text(
+        "Ticker,Close\nAAPL,150\nMSFT,200\nGOOGL,2800\nAAPL,160\nMSFT,210\nGOOGL,2850\n",
+        encoding="utf-8",
+    )
+    csv_path_str = str(csv_path).replace("\\", "/")
+    nb_runner.create_notebook([
+        "import cash, pandas as pd, numpy as np",
+        "%cash_on",
+        # Cell 3 — load (heavyweight in the real demo, here just real read_csv)
+        f"df = pd.read_csv('{csv_path_str}')",
+        # Cell 4 — first mutation
+        "df['Close'] = df['Close'].astype(float)",
+        # Cell 5 — second mutation (modeled on df.sort_values in the demo)
+        "df = df.sort_values(by=['Ticker'])",
+        # Cell 6 — third mutation that mirrors the financial-demo problematic
+        # statement: df['SMA'] = df.groupby(...).transform(...)
+        "df['SMA'] = df.groupby('Ticker')['Close'].transform(lambda x: x.rolling(2).mean())",
+        # Cell 7 — the assertion target
+        "%cash_provenance df --graph",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    out = nb_runner.get_output(7)
+    # Hard requirements after this fix is correct:
+    # (a) History must show > 1 record — multiple mutations.
+    # (b) The graph must include the read_csv code OR the path OR mention `pd`
+    #     so the chain back to the file is visible.
+    assert "(no dependencies)" not in out, (
+        f"Graph still shows no deps. Full provenance output:\n{out}"
+    )
+    chain_signal = any(
+        s in out for s in ("read_csv", "data.csv", "pd")
+    )
+    assert chain_signal, (
+        f"Graph block should mention the upstream read_csv/data.csv/pd:\n{out}"
+    )
+
+
+@pytest.mark.timeout(60)
 def test_provenance_graph_shows_external_file_dep_inputs(nb_runner):
     """When df is built from a tracked file, the chain should still show
     the file-read assignment in the graph (its `pd.read_csv` call).

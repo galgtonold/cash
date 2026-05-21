@@ -949,7 +949,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             file_dep_set[var_name].update(file_deps.keys())
 
     def _build_restore_metric(self, var_name: str, metadata: dict, restored_vars: dict) -> ProcessResult:
-        """Build a ProcessResult entry for a successfully restored variable."""
+        """Build a ProcessResult entry for a successfully restored variable.
+
+        Carries through the cached ``inputs`` list so downstream observability
+        (provenance.record, audit log) can reconstruct the dependency chain
+        even when the variable was hydrated from disk rather than freshly
+        computed in this session.
+        """
         saved_time = metadata.get('execution_time', 0.0)
         source = metadata.get('source', metadata.get('storage', 'Disk'))
         if isinstance(source, list):
@@ -962,6 +968,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             'saved_time': saved_time,
             'error': None,
             'restored_vars': list(restored_vars.keys()),
+            'inputs': list(metadata.get('inputs', [])),
             'uncacheable_reasons': [],
             'source': source,
             'is_upstream': True,
@@ -1183,7 +1190,16 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
                 return _EarlyReturn(self._original_run_cell(raw_cell, *args, **kwargs))
             if isinstance(e, (RuntimeError, AmbiguousCellError)):
-                error_code = f"raise {type(e).__name__}('''{str(e)}''')"
+                # Re-raise the original exception inside the user's cell so
+                # IPython renders the traceback as if the cell itself raised.
+                # The synthesized `raise <Type>(...)` was failing with NameError
+                # when <Type> (e.g. AmbiguousCellError) wasn't imported in the
+                # user's namespace. Import the class explicitly before raising.
+                cls = type(e)
+                error_code = (
+                    f"from {cls.__module__} import {cls.__name__}; "
+                    f"raise {cls.__name__}('''{str(e)}''')"
+                )
                 self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
                 return _EarlyReturn(self._original_run_cell(error_code, *args, **kwargs))
             logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", e)
