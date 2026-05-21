@@ -49,23 +49,16 @@ Now every new IPython/Jupyter kernel starts with cash imported and `%cash_on` al
 ```python { .nb-cell }
 # Cell 2
 import pandas as pd
-import numpy as np
 
-# Create sample data
-np.random.seed(42)
-df = pd.DataFrame({
-    'date': pd.date_range('2024-01-01', periods=10000, freq='h'),
-    'value': np.random.randn(10000).cumsum(),
-    'category': np.random.choice(['A', 'B', 'C'], 10000)
-})
-print(f"Created DataFrame with {len(df)} rows")
+# Cash automatically tracks file dependencies
+# If sales.csv changes, this cell recomputes
+df = pd.read_csv('sales.csv')
+print(f"Loaded {len(df)} rows")
 ```
 
 ```python { .nb-cell }
 # Cell 3
-summary = df.groupby('category').agg({
-    'value': ['mean', 'std', 'min', 'max']
-}).round(2)
+summary = df.describe()
 print(summary)
 ```
 
@@ -85,13 +78,11 @@ The results loaded instantly from cache instead of being recomputed. See [Readin
 
 ## Step 5: Change Something
 
-Modify Cell 3 to add a filter:
+Modify Cell 3 slightly — for example, round the output:
 
 ```python { .nb-cell }
 # Cell 3 (modified)
-summary = df[df['value'] > 0].groupby('category').agg({
-    'value': ['mean', 'std', 'min', 'max']
-}).round(2)
+summary = df.describe().round(2)
 print(summary)
 ```
 

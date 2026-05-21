@@ -51,7 +51,7 @@ result = featurize(my_df)
 
 Next run, the badge flips to RESTORED:
 
-<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" src="/_badges/purity_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 That's the entire workflow: import, decorate, re-run.
 
