@@ -161,8 +161,8 @@ if __name__ == "__main__":
     clean = transform(raw)
     model = train(clean)
     
-    # Check cache stats
-    print(model.cache_info())  # hits, misses, hit_rate, time_saved
+    # Check cache stats (cache_info is attached to the decorated function, not its return value)
+    print(train.cache_info())  # hits, misses, hit_rate, total_time_saved
 ```
 
 On first run: everything computes and caches.

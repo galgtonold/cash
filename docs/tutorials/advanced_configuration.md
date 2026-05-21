@@ -15,38 +15,43 @@ Cash supports multiple storage backends. Choose based on your needs:
 | `RedisBackend` | ✅ Configurable | 🟢 Network-fast | ✅ Multi-process | Teams, microservices |
 | `S3Backend` | ✅ Cloud-durable | 🟠 Network | ✅ Multi-region | Cloud pipelines |
 
-### Configuring via `%cash_on`
-
-```python
-# Memory only (fastest, no persistence)
-%cash_on --backend memory
-
-# SQLite (single-file persistence)
-%cash_on --backend sqlite
-
-# Custom cache directory
-%cash_on --cache-dir ./my_project_cache
-```
-
 ### Configuring Programmatically
 
+`%cash_on` itself only accepts `ttl=N` (a global TTL in seconds). Backend
+selection happens by constructing a `Cash(...)` instance and calling
+`register_magic()` on it — there is no `--backend` or `--cache-dir` flag on the
+magic.
+
 ```python
-from cash import Cash
-from cash.backends import (
-    InMemoryBackend,
-    FileBackend,
-    TieredBackend,
-    SQLiteBackend,
-)
+from cash import Cash, InMemoryBackend, FileBackend
+from cash.backends.sqlite_backend import SQLiteBackend
 
-# Tiered: in-memory L1 + file L2 (default behavior)
-app = Cash(backend=TieredBackend(
-    l1=InMemoryBackend(max_entries=500),
-    l2=FileBackend("./cache", max_size_bytes=5_000_000_000)
-))
+# In-memory only (fastest, no persistence across kernel restarts)
+c = Cash(backend=InMemoryBackend())
+c.register_magic()
 
-# SQLite with custom path
-app = Cash(backend=SQLiteBackend("./cache/data.db"))
+# File backend (disk-persistent, default if no backend is passed)
+c = Cash(backend=FileBackend(cache_dir="./my_project_cache"))
+c.register_magic()
+
+# SQLite backend (single-file, good for sharing one cache between scripts)
+c = Cash(backend=SQLiteBackend(db_path="./.cash/cache.db"))
+c.register_magic()
+```
+
+For a tiered cache (in-memory L1 + on-disk L2 — the default if you call
+`Cash()` with no backend argument), pass a list of backends positionally:
+
+```python
+from cash import Cash, InMemoryBackend, FileBackend
+from cash.backends import TieredBackend
+
+backend = TieredBackend([
+    InMemoryBackend(max_entries=100),
+    FileBackend(cache_dir="./.cash"),
+])
+c = Cash(backend=backend)
+c.register_magic()
 ```
 
 ## Statement-Level Annotations
@@ -143,20 +148,15 @@ Enable detailed logging to understand caching decisions:
 %cash_debug on
 ```
 
-Debug output shows:
+`%cash_debug on` raises the cash logger to DEBUG and prints labelled lines
+from each subsystem. Look for these prefixes to see how caching decisions
+were made:
 
-- **Lineage tracking**: What inputs each statement depends on
-- **Cache key computation**: How the cache key was built
-- **File dependencies**: Which files are tracked and their hashes
-- **Upstream simulation**: How upstream changes are detected
-
-```
-[LINEAGE_DEBUG] Statement: summary = df.describe()
-  Inputs: {'df': 'sha256:a1b2c3...'}
-  File deps: {}
-  Cache key: stmt:sha256:d4e5f6...
-  Status: RESTORED (hit)
-```
+- `[CACHE_KEY]` — how the cache key was constructed for a statement
+- `[CACHE_HIT_DEBUG]` — why a lookup hit or missed
+- `[UPSTREAM_DEBUG]` — what made an upstream cell re-run
+- `[LINEAGE_DEBUG]` — the inputs detected for a statement and their resolved lineage hashes
+- `[STATE]` — what the tracking state looks like at each step
 
 Turn off when done:
 
@@ -197,26 +197,39 @@ Share cached results across notebooks or team members:
 
 ### Clear Cache
 
-```python
-%cash_clear          # Clear all cached data
-%cash_clear --vars x,y  # Clear specific variables
-```
-
-## Inspect Variables
-
-View the dependency graph and lineage of cached variables:
+From inside a notebook, use `%cash_repair --full` to wipe the entire cache
+*and* reset in-memory tracking state. To clear only the in-memory tracking
+(keep the on-disk cache), use `%cash_repair --state`:
 
 ```python
-%cash_inspect df
+%cash_repair --full   # Clear all cache + reset in-memory state
+%cash_repair --state  # Reset only in-memory state, keep cached data
 ```
 
-Shows:
+From outside a notebook, use the `cash` CLI:
 
-- The code that produced the variable
-- Input dependencies (other variables it depends on)
-- File dependencies
-- Lineage hash
-- Whether it's cached in memory, on disk, or both
+```bash
+cash clear --all                  # Clear the .cash directory in the current dir
+cash clear ./path/to/notebook.ipynb  # Clear the cache associated with a specific notebook
+cash clear ./some/cache_dir       # Remove a specific cache directory
+```
+
+Older versions of this tutorial referenced `%cash_clear` and
+`%cash_inspect` magics — those do not exist in current cash. Use
+`%cash_repair` (above) or the CLI subcommands instead.
+
+## Inspecting the Cache
+
+To inspect cache contents from outside a notebook, use the CLI:
+
+```bash
+cash inspect                          # Inspect cache in the current directory
+cash inspect path/to/notebook.ipynb   # Inspect cache for a specific notebook
+```
+
+This shows entry counts, sizes, and metadata for whatever cache directory it
+discovers. (There is no in-notebook `%cash_inspect` magic — use `%cash_stats`
+for session statistics or the `cash inspect` CLI for a detailed view.)
 
 ## Performance Tuning
 
