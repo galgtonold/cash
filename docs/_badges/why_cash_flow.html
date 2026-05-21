@@ -235,10 +235,14 @@
       var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
       window.parent.postMessage({ type: "cash-badge-resize", height: h }, "*");
     }
-    sendSize();
-    setTimeout(sendSize, 50);
-    setTimeout(sendSize, 200);
-    window.addEventListener("load", sendSize);
+    function burstSend() {
+      sendSize();
+      setTimeout(sendSize, 50);
+      setTimeout(sendSize, 200);
+      setTimeout(sendSize, 1000);
+    }
+    if (document.readyState === "complete") burstSend();
+    else window.addEventListener("load", burstSend);
     document.addEventListener("toggle", sendSize, true);
     if (typeof ResizeObserver !== "undefined") {
       new ResizeObserver(sendSize).observe(document.documentElement);
