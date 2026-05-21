@@ -29,12 +29,16 @@ def test_committed_badges_match_current_render(tmp_path):
     )
     assert result.returncode == 0, f"build script failed: {result.stderr}"
 
+    # Only compare files the build script owns (those generated from FIXTURES).
+    # Hand-crafted badge HTML in docs/_badges/ (e.g. animated "why-cash" reels
+    # or one-off tutorial illustrations) are intentionally excluded.
     committed = {p.name: p.read_text(encoding="utf-8")
                  for p in BADGES_DIR.glob("*.html")}
     rendered = {p.name: p.read_text(encoding="utf-8")
                 for p in out_dir.glob("*.html")}
 
-    assert committed == rendered, (
+    committed_managed = {k: v for k, v in committed.items() if k in rendered}
+    assert committed_managed == rendered, (
         "docs/_badges/*.html is stale. Run "
         "`python scripts/build_badge_examples.py` and commit the result."
     )
