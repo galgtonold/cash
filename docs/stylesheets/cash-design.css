@@ -179,3 +179,26 @@
 .md-typeset hr {
   border-bottom: 1px solid var(--cash-rule);
 }
+
+/* ─── Mermaid diagrams ───────────────────────────────────────────────── *
+ * The mkdocs-mermaid2-plugin renders an SVG inside a wrapper. The wrapper
+ * defaults to `display: inline` which collapses to 0x0 in our layout.
+ * Force the SVG to be block-level and constrain by viewBox aspect ratio. */
+
+.md-typeset .mermaid {
+  background: var(--cash-bg);
+  text-align: center;
+  margin: 1em 0;
+}
+.md-typeset .mermaid > div,
+.md-typeset .mermaid > svg {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  height: auto;
+}
+.md-typeset .mermaid svg {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
