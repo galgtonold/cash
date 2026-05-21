@@ -152,3 +152,25 @@ The same four cells, run through four lifecycle events — first run, re-run, ke
     </ul>
   </div>
 </div>
+
+## Cash vs. the alternatives you've tried
+
+If you *do* already use a caching tool, here's where cash sits in the landscape. **All ⚠️ cells have a hover tooltip explaining the partial.**
+
+<div class="cash-matrix-filter" markdown="0">
+  <input type="text" id="cash-matrix-filter" placeholder="Filter capabilities…" aria-label="Filter capability rows">
+</div>
+
+| Capability | Manual pickling | `%store` | `lru_cache` | `joblib.Memory` | **cash** |
+|---|---|---|---|---|---|
+| Statement-level granularity | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Automatic invalidation on upstream change | ❌ | ❌ | ❌ | <span title="Only on direct argument change — not on transitive code edits">⚠️</span> | ✅ |
+| File-dependency tracking | <span title="Possible if you write mtime checks yourself">⚠️</span> | ❌ | ❌ | ❌ | ✅ |
+| Survives kernel restart | <span title="Yes if you remember to dump; no automatic restore">⚠️</span> | ✅ | ❌ | ✅ | ✅ |
+| Observable (badges / provenance) | ❌ | ❌ | ❌ | <span title="call_and_shelve prints when verbose; no badges">⚠️</span> | ✅ |
+| Works in plain scripts (non-notebook) | ✅ | ❌ | ✅ | ✅ | ✅ |
+| Mutation detection | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Function-source change detection | ❌ | ❌ | ❌ | <span title="Hashes function source — but only the decorated function, not its callees">⚠️</span> | ✅ |
+| Native pandas / numpy / polars / PyArrow hashing | ❌ | ❌ | <span title="Numpy and pandas aren't hashable by default; you'd need a wrapper">⚠️</span> | ✅ | ✅ |
+| Zero-config to start | ✅ | ✅ | ✅ | <span title="Requires picking a Memory location and decorating each function">⚠️</span> | ✅ |
+{: .cash-matrix-table }
