@@ -83,3 +83,66 @@ def test_provenance_dependency_graph_is_populated(magics_fixture):
     deps = magics._session.provenance.get_dependencies("c")
     assert "a" in deps, f"expected 'a' in dependencies of c, got {deps}"
     assert "b" in deps, f"expected 'b' in dependencies of c, got {deps}"
+
+
+def test_graph_renders_as_tree_with_transitive_deps():
+    """The graph block must show indentation that reflects the dep chain.
+
+    Three-level chain: c depends on b, b depends on a. The rendered block
+    should indent 'a' under 'b', not put both at the same level.
+    """
+    from cash.notebook.provenance import ProvenanceTracker
+    pv = ProvenanceTracker()
+    pv.record("a", code="a = 1", inputs=[])
+    pv.record("b", code="b = a + 1", inputs=["a"])
+    pv.record("c", code="c = b * 2", inputs=["b"])
+
+    block = pv._format_graph_section("c")
+    text = "\n".join(block)
+    # 'b' appears as a direct child; 'a' appears underneath, more indented.
+    b_idx = next(i for i, line in enumerate(block) if "─ b " in line)
+    a_idx = next(i for i, line in enumerate(block) if "─ a " in line)
+    assert b_idx < a_idx, f"'b' should appear before 'a' in the tree:\n{text}"
+    b_indent = len(block[b_idx]) - len(block[b_idx].lstrip(" │"))
+    a_indent = len(block[a_idx]) - len(block[a_idx].lstrip(" │"))
+    assert a_indent > b_indent, (
+        f"'a' should be more indented than 'b' (a child of b in the tree):\n{text}\n"
+        f"b_indent={b_indent}, a_indent={a_indent}"
+    )
+
+
+def test_graph_marks_external_inputs_as_leaves():
+    """Inputs without their own provenance record render as `(external)`.
+
+    AST-extracted 'inputs' can include imports and built-ins (np, len, …)
+    that aren't real upstream variables. Those should appear as leaves with
+    an `(external)` tag rather than being expanded further.
+    """
+    from cash.notebook.provenance import ProvenanceTracker
+    pv = ProvenanceTracker()
+    pv.record("f", code="def f(x): return np.mean(x)", inputs=["np"])
+    pv.record("y", code="y = f(data)", inputs=["f", "data"])
+
+    block = pv._format_graph_section("y")
+    text = "\n".join(block)
+    assert "(external)" in text, f"expected external marker for np/data:\n{text}"
+    # np must not be expanded — it has no record, so it's a leaf.
+    np_lines = [line for line in block if " np" in line]
+    assert any("(external)" in line for line in np_lines), \
+        f"np should be marked external:\n{text}"
+
+
+def test_graph_breaks_self_reference_cycle():
+    """A variable that lists itself as an input must not cause infinite recursion."""
+    from cash.notebook.provenance import ProvenanceTracker
+    pv = ProvenanceTracker()
+    # df depends on df (the financial-demo case: df['SMA'] = df.groupby(...))
+    pv.record("df", code="df = pd.read_csv('x.csv')", inputs=[])
+    pv.record("df", code="df['SMA'] = df.groupby(...).transform(...)", inputs=["df"])
+
+    block = pv._format_graph_section("df")
+    text = "\n".join(block)
+    # Self-ref should NOT render df under df. The graph should be empty or
+    # contain only external inputs.
+    assert "    └─ df " not in text and "    ├─ df " not in text, \
+        f"self-reference to df should be suppressed:\n{text}"

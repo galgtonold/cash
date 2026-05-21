@@ -150,18 +150,55 @@ class ProvenanceTracker:
         filtered = [r for r in self._timeline if r.variable == variable] if variable else self._timeline
         return filtered[-limit:]
 
-    def _format_graph_section(self, variable: str) -> list:
-        """Return lines for the dependency-graph block."""
+    def _format_graph_section(self, variable: str, max_depth: int = 5) -> list:
+        """Return lines for the dependency-graph block.
+
+        Renders a real tree: each level is indented by depth, with box-drawing
+        connectors that show parent/child relationships. Self-references and
+        already-visited nodes are skipped to break cycles. Inputs without a
+        provenance record (typically imported modules and built-ins picked up
+        from AST analysis, e.g. ``np``, ``len``) render as ``(external)`` leaves
+        so the tree doesn't try to expand them further.
+        """
         lines = ["", "  Dependency Graph:"]
-        deps = self.get_dependencies(variable)
-        if deps:
-            for dep in sorted(deps):
-                dep_latest = self.get_latest(dep)
-                code_preview = f" ← {dep_latest.code.strip()[:40]}" if dep_latest else ""
-                lines.append(f"    └─ {dep}{code_preview}")
-        else:
+        visited = {variable}
+        rendered_any = False
+
+        def _walk(var: str, prefix: str) -> None:
+            nonlocal rendered_any
+            latest = self.get_latest(var)
+            if latest is None or not latest.inputs:
+                return
+            # Filter out self-references and already-visited nodes.
+            deps_here = [inp for inp in latest.inputs if inp != var and inp not in visited]
+            if not deps_here:
+                return
+            # Render in a stable order (sorted), with the last sibling using
+            # └─ and earlier siblings using ├─ so the tree reads cleanly.
+            depth_now = (len(prefix) // 3) if prefix else 0
+            for i, inp in enumerate(sorted(deps_here)):
+                is_last = (i == len(deps_here) - 1)
+                connector = "└─ " if is_last else "├─ "
+                inp_latest = self.get_latest(inp)
+                if inp_latest is None:
+                    suffix = " (external)"
+                else:
+                    suffix = f" ← {inp_latest.code.strip()[:40]}"
+                lines.append(f"    {prefix}{connector}{inp}{suffix}")
+                rendered_any = True
+                visited.add(inp)
+                # Only recurse into nodes that have their own provenance and
+                # haven't exceeded the depth cap (avoids deep / wide blowups
+                # on chains of pure helpers).
+                if inp_latest is not None and depth_now + 1 < max_depth:
+                    child_prefix = prefix + ("   " if is_last else "│  ")
+                    _walk(inp, child_prefix)
+
+        _walk(variable, "")
+        if not rendered_any:
             lines.append("    (no dependencies)")
-        dependents = self.get_dependents(variable)
+
+        dependents = self.get_dependents(variable) - {variable}
         if dependents:
             lines.append(f"  Dependents: {', '.join(sorted(dependents))}")
         return lines
