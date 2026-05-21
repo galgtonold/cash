@@ -33,7 +33,7 @@ print(f"Customers: {len(customers)}, Transactions: {len(transactions)}")
 
 When the CSV changes between runs, the badge above this cell shows a `COMPUTED` row whose miss reason names the file:
 
-<iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" src="/_badges/miss_file_changed_customers.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 ### Cell 3: Data Cleaning
 
@@ -97,18 +97,34 @@ print(classification_report(y_test, y_pred))
 
 ## The Iteration Loop
 
-Here's where Cash pays off. You want to try different features:
+Here's where Cash pays off. Suppose you tweak only the merge step in Cell 4 — for example, switching from a left join to an inner join to drop customers without transactions:
 
-1. **Change Cell 4** to add a new feature (e.g., `std_spend`)
-2. **Re-run the notebook**
-3. Cells 2-3 are **RESTORED** from cache (data loading stays fast)
-4. Cell 4-6 **RECOMPUTE** (new features → new model → new evaluation)
+```python { .nb-cell }
+# Cell 4 (modified — only the merge line changed)
+tx_features = transactions.groupby('customer_id').agg(
+    total_spend=('amount', 'sum'),
+    avg_spend=('amount', 'mean'),
+    tx_count=('amount', 'count'),
+    last_purchase=('date', 'max'),
+    days_since_first=('date', lambda x: (x.max() - x.min()).days)
+).reset_index()
 
-The badge on Cell 4 after that re-run looks like this — a cell with both a cached upstream input AND a computed current row:
+# Changed: how='left' → how='inner'
+df = customers.merge(tx_features, on='customer_id', how='inner')
+df['days_since_last'] = (pd.Timestamp.now() - df['last_purchase']).dt.days
+```
 
-<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+Re-run the notebook:
 
-Without Cash: 30s to reload CSVs + clean data every iteration.
+- Cells 2-3 are **RESTORED** from cache (CSV loading stays fast)
+- In Cell 4, the groupby statement is **RESTORED** (its code didn't change), and only the merge statement **RECOMPUTES** (code changed)
+- Cells 5-6 **RECOMPUTE** (new `df` → new model → new evaluation)
+
+The Cell 4 badge shows that mix — the expensive groupby came from cache, only the merge ran:
+
+<iframe class="cash-badge" src="/_badges/workflows_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+Without Cash: 30s to reload CSVs + recompute aggregations on every iteration.
 With Cash: everything before your change loads in milliseconds.
 
 ## Working with Large Files
