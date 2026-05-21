@@ -123,6 +123,8 @@ A `⚙️ COMPUTED` row that also says **NOT CACHED** ran but Cash refused to st
 
 **Fix:** If you actually want it cached (e.g. you're benchmarking restore overhead, or the statement is downstream of something more expensive that needs the value early), force it with `# @cash:persist`.
 
+See [Cost model and smart persistence](cost-model.md) for how this decision is made and how to override it.
+
 ### Explicit `# @cash:no-cache`
 
 --8<-- "docs/_badges/not_cached_explicit.html"
