@@ -129,3 +129,26 @@ flowchart LR
 The same four cells, run through four lifecycle events — first run, re-run, kernel restart, upstream edit:
 
 <iframe class="cash-badge" src="/_badges/why_cash_flow.html" loading="lazy" scrolling="no" height="300" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+## Is this for you?
+
+<div class="cash-shines-skip-grid" markdown="0">
+  <div class="cash-shines-card">
+    <h4>Cash shines for</h4>
+    <ul>
+      <li>Long-running notebook pipelines (data prep, feature engineering, model exploration).</li>
+      <li>Iterative analysis with frequent upstream-cell editing.</li>
+      <li>Notebooks with expensive file reads (large CSVs, parquet, pickles).</li>
+      <li>Mixed-language teams who don't want to learn Make / snakemake / DVC just for caching.</li>
+    </ul>
+  </div>
+  <div class="cash-skip-card">
+    <h4>Skip cash if</h4>
+    <ul>
+      <li>Your notebook is a single cell with no expensive steps.</li>
+      <li>You're writing a pure I/O script (API ingestion, network polling) — caching is at the wrong layer.</li>
+      <li>You need hard real-time behaviour.</li>
+      <li>Your cells <em>intentionally</em> produce different output each run — though see the <a href="tutorials/purity.md"><code>@stateful</code> decorator</a> for the nuanced case.</li>
+    </ul>
+  </div>
+</div>
