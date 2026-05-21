@@ -73,6 +73,7 @@ nav:
     - Data Science Workflows: tutorials/data_science_workflows.md
     - Production Transition: tutorials/production_transition.md
     - Advanced Configuration: tutorials/advanced_configuration.md
+    - Purity decorators: tutorials/purity.md
   - Technical Reference:
     - Architecture: notebook_caching_technical.md
     - Architecture Decisions: architecture_decisions.md
