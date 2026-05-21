@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cash badge: why_cash_reel</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  body { padding: 4px; overflow: hidden; }
+
+  .reel { position: relative; height: 110px; }
+  .reel-frame {
+    position: absolute; top: 0; left: 0; right: 0;
+    display: flex; flex-direction: column; gap: 6px;
+    opacity: 0;
+    animation: reel-cycle 16s infinite;
+  }
+  .reel-frame:nth-child(1) { animation-delay:  0s; }
+  .reel-frame:nth-child(2) { animation-delay:  4s; }
+  .reel-frame:nth-child(3) { animation-delay:  8s; }
+  .reel-frame:nth-child(4) { animation-delay: 12s; }
+  @keyframes reel-cycle {
+    0%, 1%   { opacity: 0; }
+    3%, 22%  { opacity: 1; }
+    24%, 100% { opacity: 0; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reel-frame { animation: none; opacity: 1; position: static; margin-bottom: 8px; }
+    .reel { height: auto; }
+  }
+
+  .reel-caption {
+    font-size: 11px; color: #666; letter-spacing: 0.04em;
+    text-transform: uppercase; font-weight: 600;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 10px; background: #fff;
+    border: 1px solid #e6e6e6; border-radius: 4px;
+    font-size: 12px; color: #222;
+  }
+  .badge-rail { width: 3px; height: 14px; border-radius: 1px; }
+  .badge-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .badge-time {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px; color: #666; margin-left: 6px;
+  }
+  .badge-saved { color: #2a8a5e; }
+  .kind-computed .badge-rail  { background: #a87530; }
+  .kind-computed .badge-label { color: #a87530; }
+  .kind-restored .badge-rail  { background: #2a8a5e; }
+  .kind-restored .badge-label { color: #2a8a5e; }
+  .kind-skipped  .badge-rail  { background: #336699; }
+  .kind-skipped  .badge-label { color: #336699; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 6px; }
+</style>
+</head>
+<body>
+  <div class="reel">
+    <!-- Frame 1: first run, all cells COMPUTED -->
+    <div class="reel-frame">
+      <div class="reel-caption">First run — kernel cold</div>
+      <div class="badge-row">
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">2.83s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">1.04s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">5.91s</span></span>
+      </div>
+    </div>
+    <!-- Frame 2: re-run unchanged, SKIPPED + RESTORED -->
+    <div class="reel-frame">
+      <div class="reel-caption">Same notebook, re-run</div>
+      <div class="badge-row">
+        <span class="badge kind-skipped"><span class="badge-rail"></span><span class="badge-label">SKIPPED</span><span class="badge-time">0.01s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.04s</span><span class="badge-time badge-saved">↑5.87s</span></span>
+      </div>
+    </div>
+    <!-- Frame 3: kernel restart, RESTORED from disk -->
+    <div class="reel-frame">
+      <div class="reel-caption">After kernel restart</div>
+      <div class="badge-row">
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.03s</span><span class="badge-time badge-saved">↑2.80s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.05s</span><span class="badge-time badge-saved">↑5.86s</span></span>
+      </div>
+    </div>
+    <!-- Frame 4: upstream cell edited, selective re-COMPUTE -->
+    <div class="reel-frame">
+      <div class="reel-caption">Upstream cell edited</div>
+      <div class="badge-row">
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">2.91s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">6.13s</span></span>
+      </div>
+    </div>
+  </div>
+<script>
+(function () {
+  if (window.parent === window) return;
+  function sendSize() {
+    var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+    window.parent.postMessage({ type: "cash-badge-resize", height: h }, "*");
+  }
+  function burstSend() {
+    sendSize();
+    setTimeout(sendSize, 50);
+    setTimeout(sendSize, 200);
+    setTimeout(sendSize, 1000);
+  }
+  if (document.readyState === "complete") burstSend();
+  else window.addEventListener("load", burstSend);
+  if (typeof ResizeObserver !== "undefined") {
+    new ResizeObserver(sendSize).observe(document.documentElement);
+  }
+})();
+</script>
+</body>
+</html>
