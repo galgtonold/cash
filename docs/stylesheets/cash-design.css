@@ -489,6 +489,10 @@
 .md-typeset details.question {
   border-color: var(--cash-green);
 }
+.md-typeset .admonition.question:focus-within,
+.md-typeset details.question:focus-within {
+  box-shadow: rgba(0, 102, 68, 0.15) 0 0 0 0.2rem;
+}
 .md-typeset .question > .admonition-title,
 .md-typeset .question > summary {
   background-color: var(--cash-green-bg);
@@ -497,11 +501,19 @@
 .md-typeset .question > summary::before {
   background-color: var(--cash-green);
 }
+.md-typeset .question > .admonition-title::after,
+.md-typeset .question > summary::after {
+  color: var(--cash-green);
+}
 
 /* tip / hint / important */
 .md-typeset .admonition.tip,
 .md-typeset details.tip {
   border-color: var(--cash-green);
+}
+.md-typeset .admonition.tip:focus-within,
+.md-typeset details.tip:focus-within {
+  box-shadow: rgba(0, 102, 68, 0.15) 0 0 0 0.2rem;
 }
 .md-typeset .tip > .admonition-title,
 .md-typeset .tip > summary {
@@ -511,11 +523,19 @@
 .md-typeset .tip > summary::before {
   background-color: var(--cash-green);
 }
+.md-typeset .tip > .admonition-title::after,
+.md-typeset .tip > summary::after {
+  color: var(--cash-green);
+}
 
 /* warning / caution / attention */
 .md-typeset .admonition.warning,
 .md-typeset details.warning {
   border-color: var(--cash-ochre);
+}
+.md-typeset .admonition.warning:focus-within,
+.md-typeset details.warning:focus-within {
+  box-shadow: rgba(153, 99, 0, 0.15) 0 0 0 0.2rem;
 }
 .md-typeset .warning > .admonition-title,
 .md-typeset .warning > summary {
@@ -525,6 +545,10 @@
 .md-typeset .warning > summary::before {
   background-color: var(--cash-ochre);
 }
+.md-typeset .warning > .admonition-title::after,
+.md-typeset .warning > summary::after {
+  color: var(--cash-ochre);
+}
 
 /* info / note / abstract */
 .md-typeset .admonition.info,
@@ -532,6 +556,12 @@
 .md-typeset .admonition.note,
 .md-typeset details.note {
   border-color: var(--cash-info);
+}
+.md-typeset .admonition.info:focus-within,
+.md-typeset details.info:focus-within,
+.md-typeset .admonition.note:focus-within,
+.md-typeset details.note:focus-within {
+  box-shadow: rgba(26, 115, 232, 0.15) 0 0 0 0.2rem;
 }
 .md-typeset .info > .admonition-title,
 .md-typeset .info > summary,
@@ -544,4 +574,10 @@
 .md-typeset .note > .admonition-title::before,
 .md-typeset .note > summary::before {
   background-color: var(--cash-info);
+}
+.md-typeset .info > .admonition-title::after,
+.md-typeset .info > summary::after,
+.md-typeset .note > .admonition-title::after,
+.md-typeset .note > summary::after {
+  color: var(--cash-info);
 }
