@@ -8,14 +8,14 @@ You're building a churn prediction model. The workflow involves loading data, cl
 
 ### Cell 1: Setup
 
-```python
+```python { .nb-cell }
 import cash
 %cash_on
 ```
 
 ### Cell 2: Load Data
 
-```python
+```python { .nb-cell }
 import pandas as pd
 
 # Cash automatically tracks file dependencies
@@ -37,7 +37,7 @@ When the CSV changes between runs, the badge above this cell shows a `COMPUTED` 
 
 ### Cell 3: Data Cleaning
 
-```python
+```python { .nb-cell }
 # Multiple statements — each cached independently
 customers = customers.dropna(subset=['email', 'signup_date'])
 customers['signup_date'] = pd.to_datetime(customers['signup_date'])
@@ -48,7 +48,7 @@ If you change the `dropna` logic, only that statement and its dependents recompu
 
 ### Cell 4: Feature Engineering
 
-```python
+```python { .nb-cell }
 import numpy as np
 
 # Aggregate transaction features per customer
@@ -67,7 +67,7 @@ df['days_since_last'] = (pd.Timestamp.now() - df['last_purchase']).dt.days
 
 ### Cell 5: Model Training
 
-```python
+```python { .nb-cell }
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report
@@ -90,7 +90,7 @@ model.fit(X_train, y_train)
 
 ### Cell 6: Evaluation
 
-```python
+```python { .nb-cell }
 y_pred = model.predict(X_test)
 print(classification_report(y_test, y_pred))
 ```

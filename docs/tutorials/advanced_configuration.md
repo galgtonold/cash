@@ -22,7 +22,7 @@ selection happens by constructing a `Cash(...)` instance and calling
 `register_magic()` on it — there is no `--backend` or `--cache-dir` flag on the
 magic.
 
-```python
+```python { .nb-cell }
 from cash import Cash, InMemoryBackend, FileBackend
 from cash.backends.sqlite_backend import SQLiteBackend
 
@@ -42,7 +42,7 @@ c.register_magic()
 For a tiered cache (in-memory L1 + on-disk L2 — the default if you call
 `Cash()` with no backend argument), pass a list of backends positionally:
 
-```python
+```python { .nb-cell }
 from cash import Cash, InMemoryBackend, FileBackend
 from cash.backends import TieredBackend
 
@@ -62,7 +62,7 @@ Annotations are comment directives that control caching for individual statement
 
 Use for non-deterministic or side-effectful operations:
 
-```python
+```python { .nb-cell }
 # @cash:no-cache
 current_time = datetime.now()  # Changes every call
 
@@ -77,7 +77,7 @@ print(f"Debug: {some_value}")  # Side effect (output to stdout)
 
 Cache results for a limited duration:
 
-```python
+```python { .nb-cell }
 # @cash:ttl=60
 fast_changing = get_stock_price("AAPL")  # Re-fetch every minute
 
@@ -92,7 +92,7 @@ daily_data = fetch_daily_metrics()  # Once per day
 
 By default, Cash uses smart policies to decide what goes to disk. Override this for expensive results:
 
-```python
+```python { .nb-cell }
 # @cash:persist
 model = train_neural_network(X, y)  # 15 min to train — save to disk!
 
@@ -104,7 +104,7 @@ embeddings = compute_embeddings(corpus)  # 2 GB of vectors — persist them
 
 Cash warns when random functions are used without seeds (results may not reproduce from cache):
 
-```python
+```python { .nb-cell }
 # Without annotation: Cash warns about non-reproducible result
 sample = df.sample(1000)
 
@@ -120,7 +120,7 @@ sample = df.sample(1000, random_state=42)  # No warning needed
 
 Set a default TTL for all statements:
 
-```python
+```python { .nb-cell }
 # Magic command
 %cash_on ttl=3600  # All statements expire after 1 hour
 
@@ -134,7 +134,7 @@ result = compute_something()
 
 Control how Cash shows caching status:
 
-```python
+```python { .nb-cell }
 %cash_badge html     # Rich HTML badges with colors (default in JupyterLab)
 %cash_badge print    # Plain text output (good for terminals/CI)
 %cash_badge off      # Silent mode — no output
@@ -144,7 +144,7 @@ Control how Cash shows caching status:
 
 Enable detailed logging to understand caching decisions:
 
-```python
+```python { .nb-cell }
 %cash_debug on
 ```
 
@@ -160,7 +160,7 @@ were made:
 
 Turn off when done:
 
-```python
+```python { .nb-cell }
 %cash_debug off
 ```
 
@@ -168,7 +168,7 @@ Turn off when done:
 
 ### View Statistics
 
-```python
+```python { .nb-cell }
 %cash_stats
 ```
 
@@ -176,7 +176,7 @@ Turn off when done:
 
 Share cached results across notebooks or team members:
 
-```python
+```python { .nb-cell }
 # Export all cached data
 %cash_export project_cache.cache
 
@@ -187,7 +187,7 @@ Share cached results across notebooks or team members:
 %cash_export lineage.json --json
 ```
 
-```python
+```python { .nb-cell }
 # Import cache from file
 %cash_import project_cache.cache
 
@@ -201,7 +201,7 @@ From inside a notebook, use `%cash_repair --full` to wipe the entire cache
 *and* reset in-memory tracking state. To clear only the in-memory tracking
 (keep the on-disk cache), use `%cash_repair --state`:
 
-```python
+```python { .nb-cell }
 %cash_repair --full   # Clear all cache + reset in-memory state
 %cash_repair --state  # Reset only in-memory state, keep cached data
 ```
@@ -235,7 +235,7 @@ for session statistics or the `cash inspect` CLI for a detailed view.)
 
 ### 1. Separate I/O from Computation
 
-```python
+```python { .nb-cell }
 # Good: I/O in its own statement
 df = pd.read_csv('big_file.csv')   # Cached independently
 result = df.groupby('col').sum()    # Cached independently
@@ -248,7 +248,7 @@ result = pd.read_csv('big_file.csv').groupby('col').sum()
 
 Kernel crashes happen. Persist anything that takes >10 seconds:
 
-```python
+```python { .nb-cell }
 # @cash:persist
 trained_model = train_complex_model(X, y)  # 20 min → saved to disk
 ```
@@ -257,7 +257,7 @@ trained_model = train_complex_model(X, y)  # 20 min → saved to disk
 
 Low hit rates (<50%) suggest code patterns that prevent caching:
 
-```python
+```python { .nb-cell }
 %cash_stats  # Check hit rate
 ```
 
@@ -272,7 +272,7 @@ Common causes of low hit rates:
 
 Don't waste cache space on trivial statements:
 
-```python
+```python { .nb-cell }
 # @cash:no-cache
 x = 42  # Not worth caching
 
