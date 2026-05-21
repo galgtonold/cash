@@ -415,18 +415,18 @@
   width: 240px;
   max-width: 100%;
 }
-.md-typeset table.cash-matrix-table th {
+.md-typeset .cash-matrix-table table th {
   cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
-.md-typeset table.cash-matrix-table th[aria-sort="ascending"]::after  { content: " ▲"; color: var(--cash-green); }
-.md-typeset table.cash-matrix-table th[aria-sort="descending"]::after { content: " ▼"; color: var(--cash-green); }
-.md-typeset table.cash-matrix-table td {
+.md-typeset .cash-matrix-table table th[aria-sort="ascending"]::after  { content: " ▲"; color: var(--cash-green); }
+.md-typeset .cash-matrix-table table th[aria-sort="descending"]::after { content: " ▼"; color: var(--cash-green); }
+.md-typeset .cash-matrix-table table td {
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.md-typeset table.cash-matrix-table td:first-child {
+.md-typeset .cash-matrix-table table td:first-child {
   text-align: left;
   font-weight: 500;
 }
