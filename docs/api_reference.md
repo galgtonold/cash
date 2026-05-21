@@ -38,12 +38,11 @@ cash = Cash(
 
 | Method | Description |
 |--------|-------------|
-| `cash.cache(func, *, depends_on=None, dynamic_depends_on=None, file_depends_on=None, ttl=None)` | Decorator for function caching |
-| `cash.register(data_source)` | Register a `DataSource` for dependency tracking |
+| `cash.cache(func, *, depends_on=None, dynamic_depends_on=None, file_depends_on=None, ttl=None)` | Decorator for function caching. Pass `depends_on=` / `file_depends_on=` to track `DataSource` / file dependencies. |
 | `cash.register_hasher(type_, hasher_fn)` | Register a custom hasher for a specific type |
 | `cash.register_file_handler(module, func, handler)` | Register a custom file tracking handler |
 | `cash.show_stats()` | Print cache statistics |
-| `cash.invalidate(func_name)` | Invalidate all cache entries for a function |
+| `func.cache_clear()` | Invalidate all cache entries for a wrapped function (called on the decorated function, not `cash`) |
 | `cash.cleanup(max_age=None)` | Remove expired cache entries; returns count removed |
 | `cash.explorer()` | Return a `CacheExplorer` for interactive browsing |
 
@@ -108,14 +107,21 @@ Cash includes built-in hashers for: pandas DataFrame/Series, numpy ndarray, pola
 ```python
 from cash import InMemoryBackend
 
-backend = InMemoryBackend(max_entries=1000)
+backend = InMemoryBackend(
+    max_memory_percent=0.9,
+    check_interval=10,
+    max_entries=None,
+)
 ```
 
-Fast, session-scoped cache. Lost on kernel restart.
+Fast, session-scoped cache. Lost on kernel restart. Supports smart eviction based on
+memory pressure (requires `psutil`) and optional LRU eviction by entry count.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `max_entries` | `int` | `None` | Maximum entries before LRU eviction |
+| `max_memory_percent` | `float` | `0.9` | Memory usage fraction (0.0–1.0) at which to trigger eviction |
+| `check_interval` | `int` | `10` | Number of `set` operations between memory checks |
+| `max_entries` | `int \| None` | `None` | Maximum number of entries before LRU eviction (`None` = unlimited) |
 
 ### `FileBackend`
 
@@ -126,6 +132,7 @@ backend = FileBackend(
     cache_dir=".cash",
     compress=False,
     max_size_bytes=None,
+    flush_interval=5,
     default_ttl=None,
 )
 ```
@@ -134,10 +141,11 @@ Persistent cache on disk. Survives kernel restarts.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `cache_dir` | `str` | `".cash"` | Cache directory path |
+| `cache_dir` | `str` | required | Cache directory path |
 | `compress` | `bool` | `False` | Enable gzip compression |
-| `max_size_bytes` | `int` | `None` | Max total cache size |
-| `default_ttl` | `int` | `None` | Default TTL in seconds |
+| `max_size_bytes` | `int \| None` | `None` | Max total cache size in bytes (triggers LRU eviction) |
+| `flush_interval` | `int` | `5` | Seconds between metadata flush cycles |
+| `default_ttl` | `int \| None` | `None` | Default TTL in seconds (`None` = no expiration) |
 
 ### `CascadingBackend`
 
@@ -159,28 +167,79 @@ from cash.backends.sqlite_backend import SQLiteBackend
 
 backend = SQLiteBackend(
     db_path=".cash/cache.db",
-    max_size_bytes=None,
     default_ttl=None,
+    max_size_bytes=None,
+    wal_mode=True,
 )
 ```
 
-SQLite-based persistent cache with atomic operations (WAL mode).
+SQLite-based persistent cache. Uses a single database file for all entries — better than
+`FileBackend` for many small entries.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `db_path` | `str` | `".cash/cache.db"` | Path to the SQLite database file |
+| `default_ttl` | `int \| None` | `None` | Default TTL in seconds (`None` = no expiration) |
+| `max_size_bytes` | `int \| None` | `None` | Maximum total data size (`None` = unlimited) |
+| `wal_mode` | `bool` | `True` | Use WAL journal mode for better concurrency |
 
 ### `RedisBackend` *(requires `pip install cash-lib[redis]`)*
 
 ```python
 from cash.experimental import RedisBackend
 
-backend = RedisBackend(url="redis://localhost:6379")
+backend = RedisBackend(
+    host="localhost",
+    port=6379,
+    db=0,
+    password=None,
+    prefix="cash:",
+    socket_keepalive=True,
+    health_check_interval=30,
+    retry_on_timeout=True,
+    max_retries=3,
+)
 ```
+
+Redis-based shared cache. Connection parameters are passed directly to `redis.Redis`;
+extra keyword arguments are forwarded via `**kwargs`.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `host` | `str` | `"localhost"` | Redis server hostname |
+| `port` | `int` | `6379` | Redis server port |
+| `db` | `int` | `0` | Redis logical database number |
+| `password` | `str \| None` | `None` | Redis password, if required |
+| `prefix` | `str` | `"cash:"` | Key prefix used for all cache entries |
+| `socket_keepalive` | `bool` | `True` | Enable TCP keepalive on the connection |
+| `health_check_interval` | `int` | `30` | Seconds between client-side health checks |
+| `retry_on_timeout` | `bool` | `True` | Retry commands on socket timeouts |
+| `max_retries` | `int` | `3` | Maximum retries (exponential backoff) for transient errors |
+| `**kwargs` | — | — | Additional keyword args forwarded to `redis.Redis` |
 
 ### `S3Backend` *(requires `pip install cash-lib[s3]`)*
 
 ```python
 from cash.experimental import S3Backend
 
-backend = S3Backend(bucket="my-cache-bucket", prefix="cash/")
+backend = S3Backend(
+    bucket="my-cache-bucket",
+    prefix="cash/",
+    max_pool_connections=10,
+    retries=3,
+)
 ```
+
+S3-backed shared cache. Extra keyword arguments are forwarded to `boto3.client('s3', ...)`,
+so you can pass `region_name=`, `endpoint_url=`, credentials, etc.
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `bucket` | `str` | required | S3 bucket name |
+| `prefix` | `str` | `"cash/"` | Key prefix used for all cache objects |
+| `max_pool_connections` | `int` | `10` | Connection pool size for the boto3 client |
+| `retries` | `int` | `3` | Maximum retry attempts (standard mode) |
+| `**kwargs` | — | — | Additional keyword args forwarded to `boto3.client('s3', ...)` |
 
 ---
 
@@ -340,7 +399,7 @@ is_stateful(add)   # False
 
 ```toml
 [cash]
-backend = "file"          # "memory", "file", "sqlite", "redis", "s3"
+backend_type = "file"     # "memory", "file", "sqlite", "redis", "s3"
 cache_dir = ".cash"
 debug = false
 compress = false
