@@ -30,7 +30,20 @@
   }
 
   function init() {
-    var table = document.querySelector("table.cash-matrix-table");
+    var filterInput = document.getElementById("cash-matrix-filter");
+    var table = (function () {
+      // In mkdocs-material, {: .cash-matrix-table } on a markdown table ends up
+      // on a wrapping <div>, or (as we found) gets swallowed as a table cell.
+      // Try class-based selectors first, then fall back to finding the table that
+      // follows the filter input's container in the DOM.
+      return document.querySelector(".cash-matrix-table table") ||
+             document.querySelector("table.cash-matrix-table") ||
+             (filterInput &&
+               filterInput.closest("div") &&
+               filterInput.closest("div").nextElementSibling &&
+               filterInput.closest("div").nextElementSibling.querySelector("table")) ||
+             null;
+    })();
     if (!table) return;
     if (table.dataset.cashMatrixReady === "1") return;
     table.dataset.cashMatrixReady = "1";
@@ -79,7 +92,6 @@
       })(i);
     }
 
-    var filterInput = document.getElementById("cash-matrix-filter");
     if (filterInput) {
       filterInput.addEventListener("input", function () {
         var q = filterInput.value.trim().toLowerCase();

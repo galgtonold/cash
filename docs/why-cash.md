@@ -173,7 +173,6 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 | Function-source change detection | ❌ | ❌ | ❌ | <span title="Hashes function source — but only the decorated function, not its callees">⚠️</span> | ✅ |
 | Native pandas / numpy / polars / PyArrow hashing | ❌ | ❌ | <span title="Numpy and pandas aren't hashable by default; you'd need a wrapper">⚠️</span> | ✅ | ✅ |
 | Zero-config to start | ✅ | ✅ | ✅ | <span title="Requires picking a Memory location and decorating each function">⚠️</span> | ✅ |
-{: .cash-matrix-table }
 
 ## Common questions
 
