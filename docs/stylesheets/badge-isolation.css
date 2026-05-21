@@ -1,26 +1,21 @@
 /* Isolate Cash badges from mkdocs-material's admonition styling.
 
    mkdocs-material applies admonition-style chrome to every `<details>`/`<summary>`
-   pair under `.md-typeset` — a tinted background, a border-left rail, a left-side
-   icon injected via `::before` with a mask-image, a chevron via `::after`, and
-   left/right padding to make room for the icon. The Cash badge supplies its own
-   palette and iconography and would clash visually.
+   pair under `.md-typeset` — a tinted background, a left-side icon injected via
+   `::before` with a mask-image, a right-side chevron via `::after`, and
+   padding on the summary to make room for the icon. The Cash badge uses native
+   `<details>/<summary>` for its own expandable card and supplies its own
+   palette, border, and iconography.
 
-   We override ONLY the specific additions that conflict. The badge keeps full
-   control of its own layout, padding, and chrome.
+   We override material's additions while leaving the badge's own border, the
+   per-state border-left color, and the per-state expanded-summary background
+   free to win their part of the cascade.
 */
 
-/* Kill material's left-side icon (the ::before mask-image circle). */
-.md-typeset .c3-wrap details > summary::before,
-.md-typeset .c3-wrap details[open] > summary::before {
-  display: none !important;
-  content: none !important;
-  background: none !important;
-  mask: none !important;
-  -webkit-mask: none !important;
-}
+/* ---- 1. Kill material's pseudo-element icon and chevron. ---- */
 
-/* Kill material's right-side chevron (the ::after disclosure indicator). */
+.md-typeset .c3-wrap details > summary::before,
+.md-typeset .c3-wrap details[open] > summary::before,
 .md-typeset .c3-wrap details > summary::after,
 .md-typeset .c3-wrap details[open] > summary::after {
   display: none !important;
@@ -28,26 +23,64 @@
   background: none !important;
   mask: none !important;
   -webkit-mask: none !important;
-  transform: none !important;
 }
 
-/* Kill material's tinted background and border-left on the details container.
-   The badge supplies its own background per state (RESTORED/COMPUTED/MIXED). */
+/* ---- 2. Kill material's box-shadow on the card. ---- */
+
 .md-typeset .c3-wrap details,
 .md-typeset .c3-wrap details[open] {
-  background: none !important;
-  background-color: transparent !important;
-  border: none !important;
   box-shadow: none !important;
 }
 
-/* Same for the summary itself — kill material's admonition-tinted background
-   and the padding it adds to make room for the (now hidden) icon/chevron. */
-.md-typeset .c3-wrap details > summary,
-.md-typeset .c3-wrap details[open] > summary {
+/* ---- 3. Restore the badge's intended border and background on the card.
+
+   The badge's own CSS sets:
+     .c3-card { background: #fff; border: 1px solid #e6e6e6; border-left: 3px solid; border-radius: 4px; }
+     .c3-card[data-kind="cached"] { border-left-color: #2a8a5e; }
+     .c3-card[data-kind="exec"]   { border-left-color: #a87530; }
+     ...
+   But material's `.md-typeset details` selector (specificity 0,1,1) wins over
+   the badge's `.c3-card` (0,1,0), so material's reset bleeds through. We
+   re-state the badge's rule at higher specificity here.
+
+   IMPORTANT: do NOT set `border-left-color` — leaving it unset lets the
+   badge's `.c3-card[data-kind="…"]` rule paint it per state.
+---- */
+
+.md-typeset .c3-wrap details.c3-card,
+.md-typeset .c3-wrap details.c3-card[open] {
+  background: #fff;
+  border-top: 1px solid #e6e6e6;
+  border-right: 1px solid #e6e6e6;
+  border-bottom: 1px solid #e6e6e6;
+  border-left-style: solid;
+  border-left-width: 3px;
+  border-radius: 4px;
+  overflow: visible;
+}
+
+/* ---- 4. Reset material's blue tint on the collapsed summary.
+
+   For the OPEN state, the badge's `.c3-card[data-kind="…"][open] > .c3-summary`
+   rule (specificity 0,4,0) wins over material's
+   `.md-typeset details[open] > summary` (0,2,2) — so we don't need to touch
+   the open summary background here.
+---- */
+
+.md-typeset .c3-wrap details:not([open]) > summary,
+.md-typeset .c3-wrap details:not([open]) > summary.c3-summary {
   background: none !important;
   background-color: transparent !important;
-  border: none !important;
+}
+
+/* ---- 5. Remove material's padding-left/right that made room for the icon.
+   Also reset font-weight, list-style, and the native disclosure marker.
+---- */
+
+.md-typeset .c3-wrap details > summary,
+.md-typeset .c3-wrap details[open] > summary,
+.md-typeset .c3-wrap details > summary.c3-summary,
+.md-typeset .c3-wrap details[open] > summary.c3-summary {
   padding-left: 0 !important;
   padding-right: 0 !important;
   font-weight: inherit !important;
@@ -57,8 +90,8 @@
   display: none;
 }
 
-/* mkdocs-material also styles inline code with a background and border that
-   would show through the badge's syntax-highlighted code rows. */
+/* ---- 6. Kill material's chrome on inline code spans inside the badge. ---- */
+
 .md-typeset .c3-wrap code {
   background: none !important;
   border: none !important;
