@@ -86,6 +86,26 @@
   --md-code-font: var(--cash-font-mono);
 }
 
+/* The mkdocs.yml palette is set to `primary: custom` and `accent: custom`,
+ * which means material expects us to supply the brand colors here.
+ * Map them to the cash green / ochre brand tokens. The selectors must use
+ * the `[data-md-color-primary="custom"]` / `accent` attribute so material's
+ * dark-mode toggle picks up the same colors. */
+[data-md-color-primary="custom"] {
+  --md-primary-fg-color:           #006644;  /* cash-green */
+  --md-primary-fg-color--light:    #228866;
+  --md-primary-fg-color--dark:     #004433;
+  --md-primary-bg-color:           #ffffff;
+  --md-primary-bg-color--light:    rgba(255, 255, 255, 0.7);
+  --md-typeset-a-color:            #006644;  /* legacy var, some material themes read it */
+}
+[data-md-color-accent="custom"] {
+  --md-accent-fg-color:            #996300;  /* cash-ochre */
+  --md-accent-fg-color--transparent: rgba(153, 99, 0, 0.1);
+  --md-accent-bg-color:            #ffffff;
+  --md-accent-bg-color--light:     rgba(255, 255, 255, 0.7);
+}
+
 /* ─── Body typography ────────────────────────────────────────────────── */
 
 .md-typeset {
