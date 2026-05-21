@@ -107,11 +107,35 @@ class ProvenanceTracker:
         history = self._history.get(variable, [])
         return history[-1] if history else None
 
+    def _all_recorded_inputs(self, variable: str) -> list[str]:
+        """Union of inputs across *every* history record of variable.
+
+        Order: first-seen, preserved across records so the natural
+        creation-then-mutation order is retained in any rendering.
+
+        Why this exists: when a variable is mutated in multiple statements
+        (e.g. ``df = pd.read_csv(...)`` then ``df['x'] = ...``), each
+        statement creates a new ProvenanceRecord whose ``inputs`` only
+        reflects that statement's analyzed inputs. Looking at just the
+        latest record loses the original creation chain. The dependency
+        graph and ``get_dependencies`` walker need the union to surface
+        a meaningful chain.
+        """
+        seen: set[str] = set()
+        out: list[str] = []
+        for record in self._history.get(variable, []):
+            for inp in record.inputs:
+                if inp not in seen:
+                    seen.add(inp)
+                    out.append(inp)
+        return out
+
     def get_dependencies(self, variable: str) -> set[str]:
         """Get all transitive dependencies for a variable.
 
         Returns the set of all variables that directly or indirectly
-        contribute to this variable's value.
+        contribute to this variable's value, considering every history
+        record (not just the latest).
         """
         deps = set()
         visited = set()
@@ -120,11 +144,9 @@ class ProvenanceTracker:
             if var_name in visited:
                 return
             visited.add(var_name)
-            latest = self.get_latest(var_name)
-            if latest:
-                for inp in latest.inputs:
-                    deps.add(inp)
-                    _walk(inp)
+            for inp in self._all_recorded_inputs(var_name):
+                deps.add(inp)
+                _walk(inp)
 
         _walk(variable)
         return deps
@@ -159,6 +181,11 @@ class ProvenanceTracker:
         provenance record (typically imported modules and built-ins picked up
         from AST analysis, e.g. ``np``, ``len``) render as ``(external)`` leaves
         so the tree doesn't try to expand them further.
+
+        Crucially, walks the *union of inputs across all history records* for
+        each variable, not just the latest one. When ``df`` is created in one
+        cell and mutated in later cells, walking only the latest record loses
+        the creation chain entirely.
         """
         lines = ["", "  Dependency Graph:"]
         visited = {variable}
@@ -166,31 +193,34 @@ class ProvenanceTracker:
 
         def _walk(var: str, prefix: str) -> None:
             nonlocal rendered_any
-            latest = self.get_latest(var)
-            if latest is None or not latest.inputs:
+            inputs = self._all_recorded_inputs(var)
+            if not inputs:
                 return
             # Filter out self-references and already-visited nodes.
-            deps_here = [inp for inp in latest.inputs if inp != var and inp not in visited]
+            deps_here = [inp for inp in inputs if inp != var and inp not in visited]
             if not deps_here:
                 return
-            # Render in a stable order (sorted), with the last sibling using
-            # └─ and earlier siblings using ├─ so the tree reads cleanly.
             depth_now = (len(prefix) // 3) if prefix else 0
-            for i, inp in enumerate(sorted(deps_here)):
+            # Order: preserve first-seen order from _all_recorded_inputs so the
+            # tree reads chronologically (creation step first, mutations after).
+            for i, inp in enumerate(deps_here):
                 is_last = (i == len(deps_here) - 1)
                 connector = "└─ " if is_last else "├─ "
-                inp_latest = self.get_latest(inp)
-                if inp_latest is None:
+                inp_history = self._history.get(inp, [])
+                if not inp_history:
                     suffix = " (external)"
+                    has_record = False
                 else:
-                    suffix = f" ← {inp_latest.code.strip()[:40]}"
+                    # Use the FIRST record's code if available — that's the
+                    # most informative one (the creation event). Falling back
+                    # to the latest record if first is missing somehow.
+                    inp_first = inp_history[0]
+                    suffix = f" ← {inp_first.code.strip()[:60]}"
+                    has_record = True
                 lines.append(f"    {prefix}{connector}{inp}{suffix}")
                 rendered_any = True
                 visited.add(inp)
-                # Only recurse into nodes that have their own provenance and
-                # haven't exceeded the depth cap (avoids deep / wide blowups
-                # on chains of pure helpers).
-                if inp_latest is not None and depth_now + 1 < max_depth:
+                if has_record and depth_now + 1 < max_depth:
                     child_prefix = prefix + ("   " if is_last else "│  ")
                     _walk(inp, child_prefix)
 
