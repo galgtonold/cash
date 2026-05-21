@@ -1,0 +1,181 @@
+/* Cash design tokens applied to the mkdocs-material docs site.
+ *
+ * Single source of truth for tokens:
+ *   design/_handoff_extract/cash-design-system/project/colors_and_type.css
+ *
+ * The design system already nominates teal + amber as the docs palette
+ * (matching mkdocs-material's defaults), so we leave the navigation
+ * chrome alone. What we change here:
+ *   1. Surface the full token set as CSS custom properties so anything
+ *      else in the docs (e.g. badges via iframe, custom callouts) can
+ *      pull from them.
+ *   2. Drop Roboto / Roboto Mono for the system stacks the spec calls for.
+ *   3. Tune the prose type scale (16/20/28/40) and code-span chrome
+ *      (gray bg, 1px 5px padding, 3px radius, mono, 0.92em).
+ *   4. Adopt the spec ink scale for body text.
+ *   5. Use cash-green for links so the brand voice carries through the
+ *      reading experience.
+ */
+
+/* ─── Tokens ─────────────────────────────────────────────────────────── */
+
+:root {
+  /* Brand colors */
+  --cash-green:        #006644;
+  --cash-green-bg:     #e6fffa;
+  --cash-ochre:        #996300;
+  --cash-ochre-bg:     #fffbe6;
+
+  /* Semantic state colors */
+  --cash-mixed:        #336699;
+  --cash-info:         #1a73e8;
+  --cash-info-bg:      #e8f0fe;
+  --cash-info-rule:    #c8d8ee;
+  --cash-warn:         #f57f17;
+  --cash-warn-fg:      #795548;
+  --cash-warn-bg:      #fffde7;
+  --cash-changed:      #e65100;
+  --cash-changed-bg:   #fff3e0;
+  --cash-danger:       #c0392b;
+  --cash-danger-bg:    #fff5f5;
+
+  /* Surfaces */
+  --cash-bg:           #ffffff;
+  --cash-bg-section:   #f5f5f5;
+  --cash-bg-nested:    #f8f8f8;
+
+  /* Ink */
+  --cash-ink:          #333333;
+  --cash-ink-2:        #555555;
+  --cash-ink-3:        #666666;
+  --cash-ink-4:        #888888;
+  --cash-ink-5:        #999999;
+
+  --cash-rule:         #eeeeee;
+  --cash-rule-strong:  #dddddd;
+
+  /* Type families — system stacks per spec, no webfonts. */
+  --cash-font-sans:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+      sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --cash-font-mono:
+      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+
+  /* Type scale */
+  --cash-fs-base:      12px;
+  --cash-fs-body:      16px;
+  --cash-fs-h3:        20px;
+  --cash-fs-h2:        28px;
+  --cash-fs-h1:        40px;
+  --cash-lh-body:      1.55;
+
+  /* Geometry */
+  --cash-radius-sm:    4px;
+  --cash-radius-code:  3px;
+}
+
+/* ─── mkdocs-material variable overrides ─────────────────────────────── *
+ * Material exposes design tokens as `--md-*` CSS variables. By mapping
+ * them onto our `--cash-*` tokens we keep material's responsive logic
+ * intact while shifting its brand voice to ours.                        */
+
+:root {
+  /* Fonts — disable Roboto, use system stacks. */
+  --md-text-font: var(--cash-font-sans);
+  --md-code-font: var(--cash-font-mono);
+}
+
+/* ─── Body typography ────────────────────────────────────────────────── */
+
+.md-typeset {
+  font-size: var(--cash-fs-body);
+  line-height: var(--cash-lh-body);
+  color: var(--cash-ink);
+}
+
+.md-typeset h1 {
+  font-size: var(--cash-fs-h1);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--cash-ink);
+}
+.md-typeset h2 {
+  font-size: var(--cash-fs-h2);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--cash-ink);
+}
+.md-typeset h3 {
+  font-size: var(--cash-fs-h3);
+  font-weight: 600;
+  color: var(--cash-ink);
+}
+.md-typeset h4 {
+  font-weight: 600;
+  color: var(--cash-ink-2);
+}
+
+/* ─── Code spans ─────────────────────────────────────────────────────── *
+ * Per spec: light gray bg, small padding, 3px radius, mono, 0.92em.
+ * Material's default is a wider padding and a tinted (often pinkish on
+ * the default palette) background.                                      */
+
+.md-typeset code {
+  font-family: var(--cash-font-mono);
+  font-size: 0.92em;
+  background: var(--cash-bg-section);
+  color: var(--cash-ink);
+  padding: 1px 5px;
+  border-radius: var(--cash-radius-code);
+  border: none;
+}
+
+/* Code blocks keep material's syntax highlighting; we only nudge the
+ * border radius so it matches the inline-code radius. Avoid changing
+ * padding inside <pre> — material's overflow behaviour depends on it. */
+.md-typeset pre > code,
+.md-typeset .highlight pre {
+  border-radius: var(--cash-radius-code);
+}
+
+/* ─── Links ──────────────────────────────────────────────────────────── *
+ * Brand voice: use cash-green for in-prose links so readers feel the
+ * same "cached" green they see in the badge. Keep material's hover/
+ * focus behaviour untouched.                                            */
+
+.md-typeset a,
+.md-typeset a:visited {
+  color: var(--cash-green);
+}
+.md-typeset a:hover {
+  color: var(--cash-ochre);
+}
+
+/* ─── Tables ─────────────────────────────────────────────────────────── */
+
+.md-typeset table:not([class]) th {
+  background: var(--cash-bg-section);
+  color: var(--cash-ink-3);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  border-bottom: 1px solid var(--cash-rule-strong);
+}
+.md-typeset table:not([class]) td {
+  border-bottom: 1px solid var(--cash-rule);
+  color: var(--cash-ink);
+}
+
+/* ─── Blockquotes ────────────────────────────────────────────────────── */
+
+.md-typeset blockquote {
+  color: var(--cash-ink-2);
+  border-left: 3px solid var(--cash-rule-strong);
+  background: var(--cash-bg-nested);
+}
+
+/* ─── Horizontal rule ────────────────────────────────────────────────── */
+
+.md-typeset hr {
+  border-bottom: 1px solid var(--cash-rule);
+}
