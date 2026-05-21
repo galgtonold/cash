@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cash demo: why_cash_flow</title>
+<style>
+  html, body { margin: 0; padding: 0; background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
+  body { padding: 4px; }
+
+  .flow { display: grid; grid-template-columns: 1fr 90px; gap: 18px; align-items: stretch; }
+  .cells { display: flex; flex-direction: column; gap: 6px; }
+  .cell {
+    display: grid; grid-template-columns: 80px 1fr 70px;
+    align-items: center; gap: 8px;
+    padding: 6px 10px; background: #fff;
+    border: 1px solid #e6e6e6; border-radius: 4px;
+    font-size: 12px; color: #222;
+    transition: border-color 0.3s, background 0.3s;
+  }
+  .cell-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 2px 6px; border-radius: 2px;
+    text-align: center;
+  }
+  .cell-code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px; color: #444;
+  }
+  .cell-time {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 11px; color: #666; text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .cell.kind-computed { border-left: 3px solid #a87530; }
+  .cell.kind-computed .cell-label { color: #a87530; background: #fbf3e5; }
+  .cell.kind-restored { border-left: 3px solid #2a8a5e; }
+  .cell.kind-restored .cell-label { color: #2a8a5e; background: #ecf6f0; }
+  .cell.kind-skipped  { border-left: 3px solid #336699; }
+  .cell.kind-skipped  .cell-label { color: #336699; background: #eaf0f6; }
+  .cell.kind-blank    { border-left: 3px solid #e6e6e6; opacity: 0.55; }
+  .cell.kind-blank .cell-label { color: #aaa; background: #f4f4f4; }
+
+  .cache {
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: flex-start; gap: 6px;
+    padding-top: 12px;
+  }
+  .cache-icon {
+    width: 56px; height: 80px;
+    border: 2px solid #2a8a5e; border-radius: 0 0 28px 28px / 0 0 12px 12px;
+    background: linear-gradient(to top, #ecf6f0 var(--fill, 100%), #fff var(--fill, 100%));
+    position: relative;
+  }
+  .cache-icon::before {
+    content: ""; position: absolute;
+    top: -7px; left: -2px; right: -2px; height: 12px;
+    border: 2px solid #2a8a5e; border-radius: 50%;
+    background: #fff;
+  }
+  .cache-label {
+    font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+    text-transform: uppercase; color: #2a8a5e;
+  }
+
+  .controls {
+    display: flex; gap: 8px; align-items: center;
+    margin-top: 14px; padding: 0 2px;
+  }
+  .ctl-btn {
+    appearance: none; -webkit-appearance: none;
+    background: #fff; border: 1px solid #d0d0d0; border-radius: 4px;
+    width: 28px; height: 28px;
+    font-size: 13px; cursor: pointer; color: #333;
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  .ctl-btn:hover { background: #f5f5f5; }
+  .ctl-btn:focus-visible { outline: 2px solid #2a8a5e; outline-offset: 1px; }
+  .ctl-step {
+    font-size: 11px; color: #666; letter-spacing: 0.04em;
+    text-transform: uppercase; font-weight: 600;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cache-icon { transition: none; }
+    .cell { transition: none; }
+  }
+</style>
+</head>
+<body>
+  <div class="flow">
+    <div class="cells">
+      <div class="cell" data-cell="1">
+        <span class="cell-label">—</span>
+        <span class="cell-code">df = pd.read_csv("large.csv")</span>
+        <span class="cell-time">—</span>
+      </div>
+      <div class="cell" data-cell="2">
+        <span class="cell-label">—</span>
+        <span class="cell-code">features = featurize(df)</span>
+        <span class="cell-time">—</span>
+      </div>
+      <div class="cell" data-cell="3">
+        <span class="cell-label">—</span>
+        <span class="cell-code">model = train(features)</span>
+        <span class="cell-time">—</span>
+      </div>
+      <div class="cell" data-cell="4">
+        <span class="cell-label">—</span>
+        <span class="cell-code">preds = model.predict(X_test)</span>
+        <span class="cell-time">—</span>
+      </div>
+    </div>
+    <div class="cache">
+      <div class="cache-icon" id="cache-fill" style="--fill: 100%;"></div>
+      <div class="cache-label">cache</div>
+    </div>
+  </div>
+  <div class="controls">
+    <button class="ctl-btn" id="ctl-toggle" aria-label="Play or pause animation">⏸</button>
+    <button class="ctl-btn" id="ctl-restart" aria-label="Restart animation">↻</button>
+    <span class="ctl-step" id="ctl-step" aria-live="polite">Step 1 of 4 — first run</span>
+  </div>
+
+<script>
+(function () {
+  "use strict";
+  var STEPS = [
+    {
+      label: "Step 1 of 4 — first run",
+      fill: "20%",
+      cells: [
+        { kind: "computed", lbl: "COMPUTED", time: "2.83s" },
+        { kind: "computed", lbl: "COMPUTED", time: "1.04s" },
+        { kind: "computed", lbl: "COMPUTED", time: "5.91s" },
+        { kind: "computed", lbl: "COMPUTED", time: "0.42s" }
+      ]
+    },
+    {
+      label: "Step 2 of 4 — edit cell 3, re-run",
+      fill: "50%",
+      cells: [
+        { kind: "skipped",  lbl: "SKIPPED",  time: "0.01s" },
+        { kind: "skipped",  lbl: "SKIPPED",  time: "0.01s" },
+        { kind: "computed", lbl: "COMPUTED", time: "6.13s" },
+        { kind: "computed", lbl: "COMPUTED", time: "0.44s" }
+      ]
+    },
+    {
+      label: "Step 3 of 4 — restart kernel",
+      fill: "100%",
+      cells: [
+        { kind: "restored", lbl: "RESTORED", time: "0.02s" },
+        { kind: "restored", lbl: "RESTORED", time: "0.03s" },
+        { kind: "restored", lbl: "RESTORED", time: "0.05s" },
+        { kind: "restored", lbl: "RESTORED", time: "0.02s" }
+      ]
+    },
+    {
+      label: "Step 4 of 4 — edit cell 1, re-run",
+      fill: "100%",
+      cells: [
+        { kind: "computed", lbl: "COMPUTED", time: "2.91s" },
+        { kind: "computed", lbl: "COMPUTED", time: "1.07s" },
+        { kind: "computed", lbl: "COMPUTED", time: "6.02s" },
+        { kind: "skipped",  lbl: "SKIPPED",  time: "0.01s" }
+      ]
+    }
+  ];
+
+  var cells = [
+    document.querySelector('[data-cell="1"]'),
+    document.querySelector('[data-cell="2"]'),
+    document.querySelector('[data-cell="3"]'),
+    document.querySelector('[data-cell="4"]')
+  ];
+  var cacheFill = document.getElementById("cache-fill");
+  var stepLabel = document.getElementById("ctl-step");
+  var toggleBtn = document.getElementById("ctl-toggle");
+  var restartBtn = document.getElementById("ctl-restart");
+
+  function render(stepIdx) {
+    var s = STEPS[stepIdx];
+    stepLabel.textContent = s.label;
+    cacheFill.style.setProperty("--fill", s.fill);
+    for (var i = 0; i < cells.length; i++) {
+      cells[i].className = "cell kind-" + s.cells[i].kind;
+      cells[i].querySelector(".cell-label").textContent = s.cells[i].lbl;
+      cells[i].querySelector(".cell-time").textContent  = s.cells[i].time;
+    }
+  }
+
+  var idx = 0;
+  var timer = null;
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  function tick() {
+    idx = (idx + 1) % STEPS.length;
+    render(idx);
+  }
+  function play() {
+    if (timer) return;
+    timer = setInterval(tick, 2500);
+    toggleBtn.textContent = "⏸";
+    toggleBtn.setAttribute("aria-label", "Pause animation");
+  }
+  function pause() {
+    if (!timer) return;
+    clearInterval(timer);
+    timer = null;
+    toggleBtn.textContent = "▶";
+    toggleBtn.setAttribute("aria-label", "Play animation");
+  }
+
+  toggleBtn.addEventListener("click", function () {
+    if (timer) pause(); else play();
+  });
+  restartBtn.addEventListener("click", function () {
+    idx = 0;
+    render(idx);
+  });
+
+  render(idx);
+  if (reduceMotion) {
+    pause();  // stay on step 1
+  } else {
+    play();
+  }
+
+  // Iframe height autosize (same protocol as other _badges/*.html files).
+  if (window.parent !== window) {
+    function sendSize() {
+      var h = Math.ceil(document.documentElement.getBoundingClientRect().height);
+      window.parent.postMessage({ type: "cash-badge-resize", height: h }, "*");
+    }
+    sendSize();
+    setTimeout(sendSize, 50);
+    setTimeout(sendSize, 200);
+    window.addEventListener("load", sendSize);
+    document.addEventListener("toggle", sendSize, true);
+    if (typeof ResizeObserver !== "undefined") {
+      new ResizeObserver(sendSize).observe(document.documentElement);
+    }
+  }
+})();
+</script>
+</body>
+</html>
