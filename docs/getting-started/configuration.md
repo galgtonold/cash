@@ -7,11 +7,11 @@ Cash can be configured through magic commands, environment variables, or the `Ca
 ### `%cash_on` — Enable Auto-Caching
 
 ```python
-%cash_on                           # Default (TieredBackend: InMemory L1 + File L2)
-%cash_on --backend memory          # In-memory backend only
-%cash_on --backend sqlite          # SQLite backend
-%cash_on --cache-dir ./my_cache    # Custom directory
+%cash_on              # Enable auto-caching (default backend: TieredBackend = InMemory L1 + File L2)
+%cash_on ttl=3600     # Enable with a 1-hour TTL on all cached entries
 ```
+
+`%cash_on` takes only an optional `ttl=N` argument. To pick a different backend or cache directory, construct a `Cash(backend=...)` instance programmatically — see [Backend Configuration](#backend-configuration) below.
 
 ### `%cash_debug` — Debug Output
 
@@ -44,14 +44,18 @@ For programmatic configuration:
 from cash.config import CashConfig
 
 config = CashConfig(
-    cache_dir='./my_cache',      # Cache directory
-    backend_type='file',          # Backend type: 'memory', 'file', 'sqlite'
-    max_size=1000,                # Max cache entries
-    default_ttl=3600,             # Default TTL in seconds
-    debug=False,                  # Debug mode
-    enable_file_tracking=True,    # Track file dependencies
+    cache_dir='./my_cache',              # Cache directory (default: '.cash')
+    debug=False,                         # Debug mode
+    max_cache_size=1024 ** 3,            # Max cache size in bytes (default: 1 GiB)
+    compress=False,                      # Compress cached entries
+    flush_interval=5,                    # Seconds between background flushes
+    smart_persistence=True,              # Only persist results worth more than the I/O cost
+    smart_persistence_threshold=1.0,     # Execution-time threshold (seconds) for persistence
+    min_cache_savings_pct=0.20,          # Skip caching when expected savings < 20%
 )
 ```
+
+`CashConfig` is consumed by `get_config()` and by environment-variable / TOML loading. It is **not** auto-applied when you construct `Cash()` — to use a non-default backend, pass a backend object directly (`Cash(backend=...)`); see [Backend Configuration](#backend-configuration) below.
 
 ## Backend Configuration
 
@@ -93,9 +97,15 @@ backend = SQLiteBackend(db_path='./cache.db')
 Shared cache across notebooks/users. Requires Redis server.
 
 ```python
-from cash.experimental import RedisBackend
+from cash.backends import RedisBackend
 
-backend = RedisBackend(url='redis://localhost:6379')
+backend = RedisBackend(
+    host='localhost',
+    port=6379,
+    db=0,
+    password=None,
+    prefix='cash:',
+)
 ```
 
 ### S3Backend
@@ -103,12 +113,14 @@ backend = RedisBackend(url='redis://localhost:6379')
 Cloud storage backend. For persistent, shared caching.
 
 ```python
-from cash.experimental import S3Backend
+from cash.backends import S3Backend
 
 backend = S3Backend(
     bucket='my-cache-bucket',
     prefix='cash/',
-    region='us-east-1'
+    max_pool_connections=10,
+    retries=3,
+    region_name='us-east-1',  # forwarded via **kwargs to boto3.client('s3')
 )
 ```
 
@@ -129,10 +141,15 @@ backend = TieredBackend([
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `CASH_CACHE_DIR` | Default cache directory | `./cash_cache` |
+| `CASH_CACHE_DIR` | Default cache directory | `.cash` |
 | `CASH_BACKEND` | Default backend type | `file` |
 | `CASH_DEBUG` | Enable debug mode | `false` |
-| `CASH_MAX_SIZE` | Max cache entries | `1000` |
+| `CASH_MAX_CACHE_SIZE` | Max cache size in bytes | `1073741824` (1 GiB) |
+| `CASH_COMPRESS` | Compress cache entries | `false` |
+| `CASH_REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
+| `CASH_S3_BUCKET` | Default S3 bucket name | (unset) |
+| `CASH_MAX_MEMORY_ENTRIES` | Cap on in-memory entries (`null` = unlimited) | unset |
+| `CASH_MIN_CACHE_SAVINGS_PCT` | Skip caching when expected savings fall below this fraction | `0.20` |
 
 ## File Tracking Configuration
 
@@ -151,9 +168,4 @@ with open('config.json') as f:       # json
     config = json.load(f)
 ```
 
-To disable file tracking:
-
-```python
-from cash.config import CashConfig
-config = CashConfig(enable_file_tracking=False)
-```
+File tracking is always on for these recognized read patterns — there is no global toggle. To opt a single statement out of caching (and therefore out of file-dependency tracking for that statement), use the `# @cash:no-cache` annotation described in the [Quick Start](quickstart.md#statement-level-annotations).
