@@ -129,6 +129,8 @@ cash autoload off           # remove the hook
 
 Under the hood the command writes a single file to `~/.ipython/profile_default/startup/00-cash.py`. It refuses to clobber an existing file there without `--force`, and `cash autoload off` refuses to remove a file it didn't write — so your own startup scripts are safe.
 
+Full CLI reference: [docs/cli.md](docs/cli.md).
+
 ---
 
 ## Most-used magic commands
