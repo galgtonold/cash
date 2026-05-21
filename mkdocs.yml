@@ -41,6 +41,7 @@ extra_css:
 
 extra_javascript:
   - javascripts/badge-iframe-resize.js
+  - javascripts/why-cash-calculator.js
 
 plugins:
   - search
