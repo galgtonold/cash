@@ -174,3 +174,85 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 | Native pandas / numpy / polars / PyArrow hashing | ❌ | ❌ | <span title="Numpy and pandas aren't hashable by default; you'd need a wrapper">⚠️</span> | ✅ | ✅ |
 | Zero-config to start | ✅ | ✅ | ✅ | <span title="Requires picking a Memory location and decorating each function">⚠️</span> | ✅ |
 {: .cash-matrix-table }
+
+## Common questions
+
+### Correctness
+
+??? question "What if cash returns a stale value?"
+    Cash invalidates a cached result whenever the code that produced it
+    changes *or* any of its inputs change. Inputs are tracked by lineage
+    hash, so a change three cells upstream still propagates. If a cell
+    reads a file, cash hashes the file and invalidates if it changes.
+    See [Notebook caching — architecture](notebook_caching_technical.md).
+
+??? question "What about in-place mutations like `df['x'] = 0`?"
+    Cash uses AST-based mutation detection to flag in-place mutations
+    so cached objects can be invalidated correctly.
+    See [the mutation pattern in the data-science tutorial](tutorials/data_science_workflows.md).
+
+### Coverage
+
+??? question "Does it work with pandas / numpy / polars / torch / duckdb?"
+    Native built-in hashers cover pandas, numpy, polars, PyArrow, modin,
+    and dask. For anything else — torch tensors, duckdb relations,
+    custom domain types — register a hasher with `cash.register_hasher`.
+    See [API reference](api_reference.md#register_hasher).
+
+??? question "Notebooks only, or scripts too?"
+    Both. The `@cash.cache` decorator works in plain Python scripts.
+    The notebook integration (`%cash_on` and statement-level caching)
+    is what the rest of this page focuses on, but the underlying engine
+    is independent of Jupyter.
+    See [API reference](api_reference.md).
+
+### Overhead
+
+??? question "How much does cash slow down a cold run?"
+    Cash adds ~5–30ms per cached statement on a cold run (lineage
+    computation, cache key, write). For most real notebook work the
+    overhead is dwarfed by the work being cached. The
+    [cost model](cost-model.md) lays out the maths in detail.
+
+??? question "What about disk usage?"
+    Cash uses a tiered backend by default (RAM → SQLite → file → optional
+    Redis / S3). Eviction rules and a size-budget cap are configurable.
+    See [Configuration](getting-started/configuration.md).
+
+### Production readiness
+
+??? question "Is beta safe for real work?"
+    Yes for notebook use; the public beta has comprehensive unit + integration
+    test coverage (the test suite is hundreds of integration tests, many
+    derived from real-world bug reports). Treat it like any other library
+    you'd pin a version of. The [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
+    documents breaking changes between releases.
+
+??? question "How do I force a fresh run?"
+    Three escape hatches. (1) `@cash:no-cache` annotation on a single
+    statement. (2) `%cash_off` to disable for a whole cell. (3) The
+    `cash clear` CLI command. See [annotations](annotations.md) and
+    [CLI reference](cli.md).
+
+### Vs. alternatives
+
+??? question "Why not joblib.Memory?"
+    `joblib.Memory` caches at the function call level — you wrap each
+    function with `@memory.cache` and joblib hashes the arguments. It
+    doesn't see notebook-level dependencies (a cell that uses an
+    upstream variable, file reads, mutations), so you'd still hit all
+    four pains on this page. See [migration guide](migration_guide.md#from-joblibmemory).
+
+??? question "Why not `%store`?"
+    IPython's `%store` is a manual save/load primitive — no automatic
+    invalidation, no granularity, no signal when an underlying file
+    changes. It's a useful primitive for kernel restart, not a caching
+    system. The "With `%store`" tab above shows what its limits look
+    like in practice.
+
+??? question "Why not `functools.lru_cache`?"
+    `lru_cache` keys on hashable function arguments — pandas DataFrames
+    and numpy arrays aren't hashable, and even if they were, an `lru_cache`
+    miss costs a recompute every time the process restarts. It's not in
+    the same category as a persistent, dependency-aware cache.
+    See [migration guide](migration_guide.md).
