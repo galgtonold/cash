@@ -102,3 +102,30 @@ What each pain looks like with cash:
 ### How much time would *you* reclaim?
 
 <div class="cash-calculator" markdown="0"></div>
+
+## Why this works
+
+```mermaid
+flowchart LR
+    subgraph Manual["Manual workflow"]
+        A1[Cell 1: load CSV] -->|pickle.dump| P1[(tmp.pkl)]
+        A2[Cell 2: transform] -->|pickle.dump| P2[(tmp2.pkl)]
+        P1 -.->|"pickle.load (which one?)"| A3[Cell 3: model]
+        P2 -.-> A3
+        A3 -->|pickle.dump| P3[(model_v3_FINAL.pkl)]
+    end
+    subgraph Cash["Cash workflow"]
+        B1[Cell 1: load CSV] --> C[(cash cache)]
+        B2[Cell 2: transform] --> C
+        B3[Cell 3: model] --> C
+        C -.->|automatic restore| B1
+        C -.-> B2
+        C -.-> B3
+    end
+```
+
+*Cash replaces ad-hoc plumbing with a single dependency-aware cache.*
+
+The same four cells, run through four lifecycle events — first run, re-run, kernel restart, upstream edit:
+
+<iframe class="cash-badge" src="/_badges/why_cash_flow.html" loading="lazy" scrolling="no" height="300" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
