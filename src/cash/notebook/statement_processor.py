@@ -532,6 +532,10 @@ class StatementProcessor:
 
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
+        # Surface input variable names so downstream consumers (provenance,
+        # audit, badge tooltips) can reconstruct the dependency graph.
+        # Filter out the no-name inputs the AST sometimes emits.
+        metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
         # Attribute the miss for the badge's row-detail drawer when we can do
         # it cheaply. ``_check_cache`` sets ``_last_miss_reason`` as a side
         # effect for TTL / file invalidations (already-computed information).
@@ -748,6 +752,10 @@ class StatementProcessor:
             metrics['status'] = CacheStatus.RESTORED
             metrics['saved_time'] = metadata.get('execution_time', 0.0) if metadata else 0.0
             metrics['restored_vars'] = metadata.get('outputs', []) if metadata else []
+            # Carry the stored input list through so provenance/audit can
+            # reconstruct the dependency graph on a cache hit, not just on
+            # a fresh compute.
+            metrics['inputs'] = list(metadata.get('inputs', []) if metadata else [])
             metrics['total_time'] = time.time() - process_start
 
             if metadata:
