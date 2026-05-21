@@ -492,28 +492,14 @@ Cash bridges the `@cash.cache` decorator with notebook statement-level caching, 
 
 ### How It Works
 
-```
-Statement: result = my_cached_func(df)
-           │
-           ▼
-    StatementProcessor.process()
-    executes the statement via exec()
-           │
-           ▼
-    @cash.cache wrapper runs:
-    - Computes decorator cache key
-    - Checks backend → HIT or MISS
-    - Logs call to _decorator_call_log
-           │
-           ▼
-    StatementProcessor calls
-    cash.drain_decorator_calls()
-           │
-           ▼
-    Decorator metrics merged into badge:
-    - Function name, cache hit/miss
-    - Execution time saved
-    - Condensed view if many calls
+```mermaid
+flowchart TD
+    STMT["<b>Statement:</b> <code>result = my_cached_func(df)</code>"]
+    SP["<b>StatementProcessor.process()</b><br/>executes the statement via <code>exec()</code>"]
+    WRAP["<b>@cash.cache wrapper runs</b><br/>Computes decorator cache key<br/>Checks backend → HIT or MISS<br/>Logs call to <code>_decorator_call_log</code>"]
+    DRAIN["<b>StatementProcessor calls</b><br/><code>cash.drain_decorator_calls()</code>"]
+    MERGE["<b>Decorator metrics merged into badge</b><br/>Function name, cache hit/miss<br/>Execution time saved<br/>Condensed view if many calls"]
+    STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
 ### Call Logging
@@ -645,19 +631,13 @@ The `MutationDetector` scans AST nodes for:
 
 ### How Mutations Affect Caching
 
-```
-Statement with mutation detected:
-         │
-         ▼
-Mark variable in vars_with_mutation_lineage set
-         │
-         ▼
-UpstreamChecker sees variable is mutated:
-    → Skip lineage validation for this variable
-    → Prevents incorrect cache restoration
-         │
-         ▼
-Statement always re-executes (safe fallback)
+```mermaid
+flowchart TD
+    DETECT["<b>Statement with mutation detected</b>"]
+    MARK["<b>Mark variable</b> in <code>vars_with_mutation_lineage</code> set"]
+    SKIP["<b>UpstreamChecker</b> sees variable is mutated<br/>→ Skip lineage validation for this variable<br/>→ Prevents incorrect cache restoration"]
+    REX["<b>Statement always re-executes</b><br/>(safe fallback)"]
+    DETECT --> MARK --> SKIP --> REX
 ```
 
 Mutations are tracked per-variable. The system errs on the side of re-execution rather than serving stale cached data.
@@ -837,23 +817,13 @@ For large cached objects, Cash supports deferred deserialization via `LazyProxy`
 
 ### How It Works
 
-```
-cache.get(key)
-      │
-      ▼
-┌─────────────────┐
-│ Return LazyProxy │ ← No deserialization yet!
-│ (metadata only)  │    Stores: size, type, timestamp
-└────────┬────────┘
-         │
-         ▼ (later, when accessed)
-  proxy.value  OR  proxy.resolve()
-         │
-         ▼
-┌─────────────────┐
-│ Deserialize now  │ ← Full object loaded on demand
-│ Cache the result │
-└─────────────────┘
+```mermaid
+flowchart TD
+    GET["<code>cache.get(key)</code>"]
+    PROXY["<b>Return LazyProxy</b> &mdash; no deserialization yet<br/>Stores: size, type, timestamp"]
+    ACCESS["<i>(later, when accessed)</i><br/><code>proxy.value</code> OR <code>proxy.resolve()</code>"]
+    DESER["<b>Deserialize now</b> &mdash; full object loaded on demand<br/>Cache the result"]
+    GET --> PROXY --> ACCESS --> DESER
 ```
 
 ### Usage
@@ -883,53 +853,17 @@ df = proxy.value  # Deserialization happens here
 
 ### Complete Flow for a Single Cell
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Cell Execution Flow                               │
-└─────────────────────────────────────────────────────────────────────┘
-
-1. User executes cell
-         │
-         ▼
-2. CashMagics._execute_cell() intercepts
-         │
-         ▼
-3. CodeAnalyzer.analyze_code_block()
-   → Determine inputs & outputs
-         │
-         ▼
-4. _ensure_state_for_inputs()
-   ├─→ For each missing input: try _restore_variable()
-   └─→ UpstreamChecker.check_and_reexecute()
-       ├─→ Simulate upstream cells (virtual lineage)
-       ├─→ Detect lineage mismatches
-       ├─→ Try virtual restore from disk cache
-       └─→ Re-execute if needed
-         │
-         ▼
-5. Parse cell into statements
-         │
-         ▼
-6. For each statement:
-   ├─→ MutationDetector: check for in-place mutations
-   ├─→ SideEffectDetector: check for file writes, network calls
-   ├─→ RandomnessDetector: check for unseeded random calls
-   ├─→ Is control structure? → ControlStructureProcessor.process()
-   └─→ StatementProcessor.process_statement()
-       ├─→ Compute cache key (via cache_key.compute_cache_key())
-       ├─→ Check skip optimization (already in memory?)
-       ├─→ Check cache → HIT? Return cached result
-       ├─→ Execute statement
-       ├─→ Drain decorator call log (cash.drain_decorator_calls())
-       ├─→ Capture outputs (stdout, display, variables)
-       ├─→ Compute output lineages
-       └─→ Store in cache
-         │
-         ▼
-7. Update tracking dictionaries
-         │
-         ▼
-8. Render execution badge (timing, cache status, decorator metrics)
+```mermaid
+flowchart TD
+    S1["<b>1. User executes cell</b>"]
+    S2["<b>2.</b> <code>CashMagics._execute_cell()</code> intercepts"]
+    S3["<b>3.</b> <code>CodeAnalyzer.analyze_code_block()</code><br/>→ determine inputs & outputs"]
+    S4["<b>4.</b> <code>_ensure_state_for_inputs()</code><br/>For each missing input: try <code>_restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, try virtual restore, re-execute if needed"]
+    S5["<b>5.</b> Parse cell into statements"]
+    S6["<b>6. For each statement:</b><br/>MutationDetector, SideEffectDetector, RandomnessDetector pre-checks<br/>If control structure → ControlStructureProcessor.process()<br/>Else → StatementProcessor.process_statement():<br/>compute cache key · check skip optimization · check cache (HIT? return cached) · execute · drain decorator calls · capture outputs · compute output lineages · store in cache"]
+    S7["<b>7. Update tracking dictionaries</b>"]
+    S8["<b>8. Render execution badge</b><br/>(timing, cache status, decorator metrics)"]
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
 ```
 
 ### Statement Processing Detail
