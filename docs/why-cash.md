@@ -98,3 +98,7 @@ What each pain looks like with cash:
 - ❓ **Staleness** → lineage hashes invalidate automatically when any upstream cell changes. The badge tells you what was reused and what was recomputed.
 - 🥒 **Pickle sprawl** → no filenames. The cache is keyed by code + inputs, stored in a single managed backend.
 - 🌅 **Restart fear** → restart freely. The cache survives the kernel, so the next run is RESTORED, not recomputed.
+
+### How much time would *you* reclaim?
+
+<div class="cash-calculator" markdown="0"></div>
