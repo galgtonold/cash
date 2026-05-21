@@ -31,6 +31,11 @@ theme:
     - content.code.annotate
   font: false  # Use system font stacks (per cash design system), not Roboto.
 
+# Working notes (specs / plans) live under docs/superpowers/ and are
+# gitignored. Skip them entirely so `mkdocs build --strict` stays clean.
+exclude_docs: |
+  superpowers/
+
 extra_css:
   - stylesheets/cash-design.css
 

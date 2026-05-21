@@ -42,7 +42,7 @@ If you'd rather not type those two lines at the top of every notebook, install t
 cash autoload on
 ```
 
-Now every new IPython/Jupyter kernel starts with cash imported and `%cash_on` already executed. Use `%cash_off` to opt a single notebook out, or `cash autoload off` to remove the hook entirely. See the [README](../../README.md#always-on-caching-across-notebooks) for the `--mode=available` variant if you'd prefer to keep `%cash_on` explicit.
+Now every new IPython/Jupyter kernel starts with cash imported and `%cash_on` already executed. Use `%cash_off` to opt a single notebook out, or `cash autoload off` to remove the hook entirely. See the [CLI reference](../cli.md) for the `--mode=available` variant if you'd prefer to keep `%cash_on` explicit.
 
 ## Step 3: Run Some Code
 
