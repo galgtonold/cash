@@ -51,71 +51,28 @@ The notebook caching system in `cash` provides **statement-level caching** for i
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         User Notebook                                │
-│  ┌─────────────────────────────────────────────────────────────┐    │
-│  │ %cash_on                                                     │    │
-│  │ df = pd.read_csv('data.csv')  # Statement 1                 │    │
-│  │ df = df.sort_values('date')   # Statement 2                 │    │
-│  │ result = df.groupby('x').sum() # Statement 3                │    │
-│  └─────────────────────────────────────────────────────────────┘    │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        CashMagics                                    │
-│  - Intercepts cell execution via IPython hooks                      │
-│  - Coordinates all caching components                               │
-│  - Manages variable tracking dictionaries                           │
-│  - Records provenance for every statement                           │
-│  - Drains decorator call log for badge integration                  │
-└───────────────────────────────┬─────────────────────────────────────┘
-                                │
-        ┌──────────┬────────────┼────────────┬──────────┬──────────┐
-        │          │            │            │          │          │
-        ▼          ▼            ▼            ▼          ▼          ▼
-┌────────────┐┌──────────┐┌──────────┐┌──────────┐┌──────────┐┌────────────┐
-│CodeAnalyzer││Upstream  ││Statement ││Function  ││Mutation  ││Decorator   │
-│            ││Checker   ││Processor ││Tracker   ││Detector  ││Bridge      │
-│- Parse AST ││- Detect  ││- Execute ││- Hash    ││- AST scan││- Call log  │
-│- Find I/O  ││  changes ││- Cache   ││  sources ││- In-place││- drain()   │
-│- Strip     ││- Simulate││- Track   ││- Module  ││  mutation││- Badge     │
-│  magic     ││- Re-exec ││  lineage ││  reload  ││- Skip    ││  metrics   │
-└────────────┘└──────────┘└────┬─────┘└──────────┘└──────────┘└────────────┘
-                               │
-              ┌────────────────┼──────────────────────────┐
-              │                │                          │
-              ▼                ▼                          ▼
-  ┌──────────────────┐  ┌──────────────────────┐  ┌──────────────────────┐
-  │ControlStructure  │  │ FileTracker           │  │ Randomness &         │
-  │ Processor        │  │                       │  │ SideEffect Detectors │
-  │- Handle for/while│  │- Intercept file reads │  │- Unseeded RNG detect │
-  │- Per-iteration   │  │- Track pandas/numpy/  │  │- Side effect scan    │
-  │  keys            │  │  polars/open/joblib   │  │- Purity checks       │
-  │- Branch caching  │  │- Hash file content    │  │- @cash: annotations  │
-  └─────────┬────────┘  └──────────┬────────────┘  └──────────────────────┘
-            │                      │
-            ▼                      ▼
-  ┌─────────────────────────────────────────┐
-  │           Cache Backend                 │
-  │  (TieredBackend default:                │
-  │   L1=InMemory, L2=FileBackend)          │
-  │                                         │
-  │  Also: SQLite, Redis, S3, Cascading     │
-  │  Optional: LazyProxy for deferred       │
-  │  deserialization of large objects        │
-  └─────────────────────────────────────────┘
-        ▲
-        │
-  ┌──────────────────────────────────────┐
-  │     cache_key.py                      │
-  │  Single source of truth for           │
-  │  compute_cache_key()                  │
-  │  Used by: StatementProcessor,         │
-  │  UpstreamChecker (simulation,         │
-  │  virtual restore, skip checks)        │
-  └──────────────────────────────────────┘
+```mermaid
+flowchart TD
+    NB["<b>User Notebook</b><br/><code>%cash_on</code><br/><code>df = pd.read_csv('data.csv')</code><br/><code>df = df.sort_values('date')</code><br/><code>result = df.groupby('x').sum()</code>"]
+    MAGICS["<b>CashMagics</b><br/>Intercepts cell execution via IPython hooks<br/>Coordinates all caching components<br/>Manages variable tracking dictionaries<br/>Records provenance for every statement<br/>Drains decorator call log for badge integration"]
+    CA["<b>CodeAnalyzer</b><br/>Parse AST · Find I/O · Strip magic"]
+    UC["<b>UpstreamChecker</b><br/>Detect changes · Simulate · Re-exec"]
+    SP["<b>StatementProcessor</b><br/>Execute · Cache · Track lineage"]
+    FT["<b>FunctionTracker</b><br/>Hash sources · Module reload"]
+    MD["<b>MutationDetector</b><br/>AST scan · In-place mutation · Skip"]
+    DB["<b>Decorator Bridge</b><br/>Call log · drain() · Badge metrics"]
+    CS["<b>ControlStructure Processor</b><br/>for/while · Per-iteration keys · Branch caching"]
+    FILE["<b>FileTracker</b><br/>Intercept file reads<br/>pandas/numpy/polars/open/joblib<br/>Hash file content"]
+    RAND["<b>Randomness & SideEffect Detectors</b><br/>Unseeded RNG · Side effect scan<br/>Purity checks · <code>@cash:</code> annotations"]
+    BACK["<b>Cache Backend</b><br/>TieredBackend default: L1=InMemory, L2=FileBackend<br/>Also: SQLite, Redis, S3, Cascading<br/>Optional LazyProxy for deferred deserialization"]
+    KEY["<b>cache_key.py</b><br/>Single source of truth for <code>compute_cache_key()</code><br/>Used by StatementProcessor and UpstreamChecker<br/>(simulation, virtual restore, skip checks)"]
+
+    NB --> MAGICS
+    MAGICS --> CA & UC & SP & FT & MD & DB
+    SP --> CS & FILE & RAND
+    CS --> BACK
+    FILE --> BACK
+    KEY --> BACK
 ```
 
 ---
@@ -321,38 +278,17 @@ Without upstream checking, cell 3 would use stale cached results based on old ce
 
 ### The Solution: Virtual Simulation
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                  Upstream Checking Flow                      │
-└─────────────────────────────────────────────────────────────┘
-
-User runs Cell 3 (requires variable 'df')
-            │
-            ▼
-    ┌───────────────────┐
-    │ Read Notebook File│ ← Get current cell contents
-    └─────────┬─────────┘
-              │
-              ▼
-    ┌───────────────────┐
-    │ Simulate Cells    │ ← Compute "virtual lineages"
-    │ 1, 2 (upstream)   │    from notebook code
-    └─────────┬─────────┘
-              │
-              ▼
-    ┌───────────────────┐
-    │ Compare Lineages  │
-    │ Virtual vs Actual │
-    └─────────┬─────────┘
-              │
-     ┌────────┴────────┐
-     │                 │
-     ▼                 ▼
- [Match]           [Mismatch]
-     │                 │
-     ▼                 ▼
- Continue        Re-execute
- with cache      changed cells
+```mermaid
+flowchart TD
+    START(["User runs Cell 3<br/>(requires variable 'df')"])
+    READ["<b>Read Notebook File</b><br/>Get current cell contents"]
+    SIM["<b>Simulate Cells 1, 2 (upstream)</b><br/>Compute virtual lineages<br/>from notebook code"]
+    CMP{"<b>Compare Lineages</b><br/>Virtual vs Actual"}
+    OK["<b>Continue</b><br/>with cached values"]
+    REX["<b>Re-execute</b><br/>changed cells"]
+    START --> READ --> SIM --> CMP
+    CMP -- Match --> OK
+    CMP -- Mismatch --> REX
 ```
 
 ### Virtual Lineage Simulation
@@ -453,37 +389,18 @@ The system can restore notebook state from cache across kernel restarts.
 
 ### Restoration Flow
 
-```
-Kernel Restart
-      │
-      ▼
-User runs Cell 5 (needs 'df' from Cell 2)
-      │
-      ▼
-┌─────────────────────┐
-│ Check if 'df' exists│ → NO
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Look up cache for   │
-│ 'df' definition     │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Recursively restore │
-│ 'df' dependencies   │
-└──────────┬──────────┘
-           │
-           ▼
-┌─────────────────────┐
-│ Deserialize & load  │
-│ 'df' into namespace │
-└──────────┬──────────┘
-           │
-           ▼
-     Continue with Cell 5
+```mermaid
+flowchart TD
+    KR(["Kernel Restart"])
+    RUN(["User runs Cell 5<br/>(needs 'df' from Cell 2)"])
+    CHK{"Check if 'df'<br/>exists in namespace"}
+    LOOK["<b>Look up cache</b><br/>for 'df' definition"]
+    DEP["<b>Recursively restore</b><br/>'df' dependencies"]
+    DESER["<b>Deserialize & load</b><br/>'df' into namespace"]
+    DONE(["Continue with Cell 5"])
+    KR --> RUN --> CHK
+    CHK -- NO --> LOOK --> DEP --> DESER --> DONE
+    CHK -- YES --> DONE
 ```
 
 ### Virtual Restore
@@ -508,32 +425,15 @@ Cash tracks function definitions as dependencies, so changing a helper function 
 
 ### How Function Tracking Works
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                    Function Tracking Flow                            │
-└─────────────────────────────────────────────────────────────────────┘
-
-Cell defines helper function:
-    def process(df): return df.dropna()
-         │
-         ▼
-FunctionTracker hashes source:
-    source_hash = SHA256(inspect.getsource(process))
-         │
-         ▼
-Cell uses the function:
-    result = process(df)
-         │
-         ▼
-Cache key includes function hash:
-    key = SHA256(code + input_lineages + func_source_hashes)
-         │
-         ▼
-User changes process() definition:
-    def process(df): return df.fillna(0)  # Changed!
-         │
-         ▼
-New source_hash differs → cache MISS → recompute
+```mermaid
+flowchart TD
+    DEF["<b>Cell defines helper function</b><br/><code>def process(df): return df.dropna()</code>"]
+    HASH["<b>FunctionTracker hashes source</b><br/><code>source_hash = SHA256(inspect.getsource(process))</code>"]
+    USE["<b>Cell uses the function</b><br/><code>result = process(df)</code>"]
+    KEY["<b>Cache key includes function hash</b><br/><code>key = SHA256(code + input_lineages + func_source_hashes)</code>"]
+    EDIT["<b>User changes <code>process()</code> definition</b><br/><code>def process(df): return df.fillna(0)</code>  &nbsp;changed!"]
+    MISS["<b>New source_hash differs</b><br/>cache MISS → recompute"]
+    DEF --> HASH --> USE --> KEY --> EDIT --> MISS
 ```
 
 ### Cache Key with Function Dependencies

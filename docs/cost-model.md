@@ -13,19 +13,11 @@ This page explains how the persistence decision is made, what knobs you can tune
 
 There is no single "cache yes/no" switch in Cash. Two independent filters fire one after the other:
 
-```
-┌────────────────────────────────┐
-│ Filter 1: cost-model gate      │   "Should we cache at all?"
-│   _should_skip_large_object_   │   Applied against the *primary* tier.
-│   caching                      │   Skip ⇒ no metadata, badge shows reason.
-└──────────────┬─────────────────┘
-               │ pass
-               ▼
-┌────────────────────────────────┐
-│ Filter 2: tier-promotion       │   "Should we ALSO promote to disk?"
-│   smart_persistence_policy     │   Only relevant with TieredBackend.
-│   (closure in core.py)         │   RAM tier is always written.
-└────────────────────────────────┘
+```mermaid
+flowchart TD
+    F1["<b>Filter 1: cost-model gate</b><br/><i>_should_skip_large_object_caching</i><br/>Should we cache at all?<br/>Applied against the primary tier.<br/>Skip → no metadata, badge shows reason."]
+    F2["<b>Filter 2: tier-promotion</b><br/><i>smart_persistence_policy</i> (closure in core.py)<br/>Should we ALSO promote to disk?<br/>Only relevant with TieredBackend.<br/>RAM tier is always written."]
+    F1 -- pass --> F2
 ```
 
 The two filters answer different questions and use different formulas. A value can pass filter 1 and fail filter 2 — the common case for medium-sized DataFrames produced by sub-second cells. You see RAM caching but no disk promotion, so a kernel restart misses.
