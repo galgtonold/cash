@@ -27,7 +27,7 @@ Cash is a transparent caching library for Python with two primary use cases:
 
 ## Quick Example
 
-```python
+```python { .nb-cell }
 import cash
 
 # Enable auto-caching for all cells

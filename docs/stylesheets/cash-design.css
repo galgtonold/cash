@@ -230,3 +230,46 @@
   margin: 0 auto;
   max-width: 100%;
 }
+
+/* ─── Notebook cell code blocks ─────────────────────────────────────── *
+ * Tag any code fence that simulates a Jupyter notebook input cell with  *
+ * `{ .nb-cell }` to get this treatment:                                *
+ *   — blue left rail (matches Jupyter's active-cell indicator color)    *
+ *   — a compact "In [ ]:" header so readers instantly read "run this   *
+ *     in a notebook cell", not a CLI snippet or standalone script.     *
+ *                                                                        *
+ * Usage in markdown:                                                     *
+ *   ```python { .nb-cell }                                               *
+ *   import cash                                                          *
+ *   %cash_on                                                             *
+ *   ```                                                                  */
+
+.md-typeset .highlight.nb-cell {
+  border-left: 3px solid var(--cash-info);
+  /* Left side flush against the rail; only right side rounds */
+  border-radius: 0 var(--cash-radius-code) var(--cash-radius-code) 0;
+  /* Clip the ::before header corners inside the container */
+  overflow: hidden;
+}
+
+/* "In [ ]:" header bar — instantly recognizable to any Jupyter user */
+.md-typeset .highlight.nb-cell::before {
+  content: "In\00a0[\00a0]:";   /* non-breaking spaces for display */
+  display: block;
+  font-family: var(--cash-font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--cash-info);
+  background: var(--cash-info-bg);
+  border-bottom: 1px solid var(--cash-info-rule);
+  padding: 4px 10px;
+  line-height: 1.4;
+}
+
+/* Flush the <pre> against the header — no gap, no double rounding */
+.md-typeset .highlight.nb-cell > pre {
+  margin-top: 0;
+  border-top-left-radius: 0 !important;
+  border-top-right-radius: 0 !important;
+}

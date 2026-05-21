@@ -21,7 +21,7 @@ Cash also runs a fallback AST-based heuristic (`analyze_function_purity`) on und
 
 Here's a function Cash refuses to cache by default — it calls a user-defined helper that Cash can't introspect easily:
 
-```python
+```python { .nb-cell }
 import cash
 %cash_on
 
@@ -38,7 +38,7 @@ Without `@pure`, Cash plays it safe and the badge shows a NOT CACHED row:
 
 Slap `@pure` on `featurize` and Cash will happily cache the result:
 
-```python
+```python { .nb-cell }
 from cash import pure
 
 @pure
