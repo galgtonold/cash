@@ -301,4 +301,33 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # Quickstart prose — first run of `df = pd.read_csv('large_dataset.csv')`.
+    # Code matches docs/getting-started/quickstart.md so the embedded badge
+    # is honest about what the reader just typed.
+    "quickstart_first_run": [
+        {
+            "status": "COMPUTED",
+            "code": "df = pd.read_csv('large_dataset.csv')",
+            "total_time": 2.851,
+            "evaluated_vars": ["df"],
+            "storage": ["RAM", "DISK"],
+            "cache_key": "stmt:5b1d8e2af0c34719",
+            "is_upstream": False,
+        },
+    ],
+    # Quickstart prose — second run of the same statement, restored from cache.
+    "quickstart_second_run": [
+        {
+            "status": "RESTORED",
+            "code": "df = pd.read_csv('large_dataset.csv')",
+            "total_time": 0.019,
+            "saved_time": 2.832,
+            "evaluated_vars": ["df"],
+            "restored_vars": ["df"],
+            "storage": ["RAM", "DISK"],
+            "source": "RAM",
+            "cache_key": "stmt:5b1d8e2af0c34719",
+            "is_upstream": False,
+        },
+    ],
 }
