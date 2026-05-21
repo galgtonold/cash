@@ -97,8 +97,8 @@ print(summary)
 
 Re-run the notebook:
 
-- **Cell 2**: ⚡ **CACHED** (green chip) — unchanged, loaded from cache
-- **Cell 3**: ⚙️ **EXECUTED** (ochre chip) — code changed, recomputed
+- **Cell 2**: **CACHED** (green chip) — unchanged, loaded from cache
+- **Cell 3**: **EXECUTED** (ochre chip) — code changed, recomputed
 
 Cash knew that only Cell 3 changed, so only Cell 3 recomputed.
 

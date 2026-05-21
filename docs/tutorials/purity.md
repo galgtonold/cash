@@ -34,7 +34,7 @@ result = featurize(my_df)
 
 Without `@pure`, Cash plays it safe and the badge shows a NOT CACHED row:
 
-<iframe class="cash-badge" src="/_badges/not_cached_untracked_io.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" src="/_badges/not_cached_purity.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 Slap `@pure` on `featurize` and Cash will happily cache the result:
 

@@ -26,10 +26,10 @@ Every row and the overall badge use one of these statuses. The badge identifies 
 |---|---|---|---|
 | **RESTORED** | green | `CACHED` chip | Row's value came from the cache. |
 | **COMPUTED** | ochre | `EXEC` chip | Row ran. May or may not have been stored — check the row detail for "NOT CACHED". |
-| **SKIPPED** | grey | (no chip) | Row was unreachable on this run (downstream of a branch not taken) or its value isn't needed. |
+| **SKIPPED** | green | `cached` chip | Row was unreachable on this run (downstream of a branch not taken) or its value isn't needed. |
 | **MIXED** | (cell header only) | `EXECUTED` summary with both `EXEC` and `CACHED` chips | Cell-level only: some rows restored, some computed. |
-| **FUNCTION_CHANGED** | ochre | warning chip | A helper function this row calls had its source change since the last run. |
-| **MODULE_RELOADED** | ochre | warning chip | A tracked local import was edited; everything downstream re-runs. |
+| **FUNCTION_CHANGED** | red | warning chip | A helper function this row calls had its source change since the last run. |
+| **MODULE_RELOADED** | red | warning chip | A tracked local import was edited; everything downstream re-runs. |
 | **WARNING** | red | warning chip | Something to look at (e.g. unseeded random); the row still ran. |
 | **ERROR** | red | (error label) | The statement raised. |
 

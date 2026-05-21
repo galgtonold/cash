@@ -254,6 +254,18 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # §5.f — function called without @pure; Cash can't verify it has no side
+    # effects, so it plays it safe and skips caching.
+    "not_cached_purity": [
+        {
+            "status": "COMPUTED",
+            "code": "result = featurize(my_df)",
+            "total_time": 0.094,
+            "evaluated_vars": ["result"],
+            "uncacheable_reasons": ["function purity unknown"],
+            "is_upstream": False,
+        },
+    ],
     # §2 anatomy — one rich badge that exercises every visible region:
     # header with mixed counts, upstream section, current section,
     # decorator-call group, overhead breakdown.
