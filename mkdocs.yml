@@ -29,6 +29,10 @@ theme:
     - search.highlight
     - content.code.copy
     - content.code.annotate
+  font: false  # Use system font stacks (per cash design system), not Roboto.
+
+extra_css:
+  - stylesheets/cash-design.css
 
 extra_javascript:
   - javascripts/badge-iframe-resize.js
