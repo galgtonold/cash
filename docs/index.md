@@ -42,7 +42,7 @@ result = df.groupby('category').sum()
 
 Cash shows a badge above each cell summarizing what it did. The example below — restored upstream `df`, restored intermediate `features`, recomputed `preds` because a new `features` lineage invalidated its cache — gives you the visual vocabulary at a glance:
 
---8<-- "docs/_badges/anatomy_hero.html"
+<iframe class="cash-badge" src="/_badges/anatomy_hero.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 See [Reading the Cash badge](badges.md) for the full anatomy.
 

@@ -30,8 +30,8 @@ theme:
     - content.code.copy
     - content.code.annotate
 
-extra_css:
-  - stylesheets/badge-isolation.css
+extra_javascript:
+  - javascripts/badge-iframe-resize.js
 
 plugins:
   - search
@@ -48,8 +48,6 @@ markdown_extensions:
   - pymdownx.superfences
   - pymdownx.tabbed:
       alternate_style: true
-  - pymdownx.snippets:
-      base_path: ["."]
   - admonition
   - pymdownx.details
   - attr_list

@@ -6,7 +6,7 @@ Every cell Cash touches gets a badge above its output — a one-line summary plu
 
 This is a badge from a cell where the upstream `df` was restored, the intermediate `features` was restored, and the final `preds` was recomputed because a new `features` lineage invalidated its cache:
 
---8<-- "docs/_badges/anatomy_hero.html"
+<iframe class="cash-badge" src="/_badges/anatomy_hero.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 What you're looking at:
 
@@ -20,36 +20,36 @@ What you're looking at:
 
 ## 2. Status reference
 
-Every row and the overall badge use one of these statuses:
+Every row and the overall badge use one of these statuses. The badge identifies status by the **colored left rail** on each row and by the header chip text — not by an icon glyph.
 
-| Status | Icon | When you see it |
-|---|---|---|
-| **RESTORED** | ⚡ | Row's value came from the cache. |
-| **COMPUTED** | ⚙️ | Row ran. May or may not have been stored — check the row detail for "NOT CACHED". |
-| **SKIPPED** | ⏩ | Row was unreachable on this run (downstream of a branch not taken) or its value isn't needed. |
-| **MIXED** | — | Cell-level only: some rows restored, some computed. |
-| **FUNCTION_CHANGED** | 🔄 | A helper function this row calls had its source change since the last run. |
-| **MODULE_RELOADED** | 🔄 | A tracked local import was edited; everything downstream re-runs. |
-| **WARNING** | ⚠️ | Something to look at (e.g. unseeded random); the row still ran. |
-| **ERROR** | ❌ | The statement raised. |
+| Status | Rail color | Header label | When you see it |
+|---|---|---|---|
+| **RESTORED** | green | `CACHED` chip | Row's value came from the cache. |
+| **COMPUTED** | ochre | `EXEC` chip | Row ran. May or may not have been stored — check the row detail for "NOT CACHED". |
+| **SKIPPED** | grey | (no chip) | Row was unreachable on this run (downstream of a branch not taken) or its value isn't needed. |
+| **MIXED** | (cell header only) | `EXECUTED` summary with both `EXEC` and `CACHED` chips | Cell-level only: some rows restored, some computed. |
+| **FUNCTION_CHANGED** | ochre | warning chip | A helper function this row calls had its source change since the last run. |
+| **MODULE_RELOADED** | ochre | warning chip | A tracked local import was edited; everything downstream re-runs. |
+| **WARNING** | red | warning chip | Something to look at (e.g. unseeded random); the row still ran. |
+| **ERROR** | red | (error label) | The statement raised. |
 
 Individual examples:
 
---8<-- "docs/_badges/status_restored.html"
+<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_computed.html"
+<iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_skipped.html"
+<iframe class="cash-badge" src="/_badges/status_skipped.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_mixed.html"
+<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_function_changed.html"
+<iframe class="cash-badge" src="/_badges/status_function_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_module_reloaded.html"
+<iframe class="cash-badge" src="/_badges/status_module_reloaded.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_warning.html"
+<iframe class="cash-badge" src="/_badges/status_warning.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
---8<-- "docs/_badges/status_error.html"
+<iframe class="cash-badge" src="/_badges/status_error.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 ## 3. Why did this re-run?
 
@@ -57,15 +57,15 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 ### First time seeing this code
 
---8<-- "docs/_badges/miss_first_time.html"
+<iframe class="cash-badge" src="/_badges/miss_first_time.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** Cash has no record of this exact statement having been computed before. Editing a statement (even whitespace, in some cases) makes a new cache key.
 
-**Fix:** Nothing to fix — this is expected. The next run with unchanged code will be `⚡ RESTORED`.
+**Fix:** Nothing to fix — this is expected. The next run with unchanged code will show as `RESTORED` (green rail).
 
 ### Input lineage changed
 
---8<-- "docs/_badges/miss_input_lineage.html"
+<iframe class="cash-badge" src="/_badges/miss_input_lineage.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** One of the variables this statement reads (`features` here) has a different lineage hash than the last time this statement ran. Cash tracks every assignment's lineage, so a re-run upstream — even if the *value* is identical — invalidates downstream caches that read it.
 
@@ -73,7 +73,7 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 ### File changed
 
---8<-- "docs/_badges/miss_file_changed.html"
+<iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** Cash tracks files passed to common I/O calls (`pd.read_csv`, `np.load`, `open`, `joblib.load`, `pickle.load`, `json.load`, and others) and stamps the file's `(mtime, size)` into the cache key. The mtime or size differs from what was recorded when the cache was populated.
 
@@ -81,15 +81,15 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 ### Function source changed
 
---8<-- "docs/_badges/miss_function_source_changed.html"
+<iframe class="cash-badge" src="/_badges/miss_function_source_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-**Why:** A helper function called from this statement had its source change since the last run. The dedicated `🔄 FUNCTION_CHANGED` upstream row identifies which one (`score_rows` here).
+**Why:** A helper function called from this statement had its source change since the last run. The dedicated `FUNCTION_CHANGED` upstream row identifies which one (`score_rows` here).
 
 **Fix:** Expected when you edit a helper. If you didn't edit it, you may be re-importing across kernel sessions where the source bytes differ trivially — `%cash_track` and `%cash_verify` help diagnose this.
 
 ### Module reloaded
 
---8<-- "docs/_badges/miss_module_reloaded.html"
+<iframe class="cash-badge" src="/_badges/miss_module_reloaded.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** A tracked local module (one you `import` from a local `.py` file) was edited. Everything downstream of the import re-runs.
 
@@ -97,11 +97,11 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 ## 4. Why wasn't this cached?
 
-A `⚙️ COMPUTED` row that also says **NOT CACHED** ran but Cash refused to store the result. Five common causes:
+A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused to store the result. Five common causes:
 
 ### Side effects
 
---8<-- "docs/_badges/not_cached_side_effect.html"
+<iframe class="cash-badge" src="/_badges/not_cached_side_effect.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** The statement writes to a file, sends a network request, mutates a database, or prints/plots — Cash never caches statements with observable side effects because restoring from cache would skip the side effect.
 
@@ -109,7 +109,7 @@ A `⚙️ COMPUTED` row that also says **NOT CACHED** ran but Cash refused to st
 
 ### Unseeded randomness
 
---8<-- "docs/_badges/not_cached_unseeded_random.html"
+<iframe class="cash-badge" src="/_badges/not_cached_unseeded_random.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** The statement called `numpy.random.rand` (or `random.random`, `torch.rand`, `tf.random.*`) without first seeding the RNG. The next run would produce different output, so caching would be a lie.
 
@@ -117,7 +117,7 @@ A `⚙️ COMPUTED` row that also says **NOT CACHED** ran but Cash refused to st
 
 ### Cost model: too cheap to cache
 
---8<-- "docs/_badges/not_cached_too_cheap.html"
+<iframe class="cash-badge" src="/_badges/not_cached_too_cheap.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** Cash's cost model predicted that restoring this value from cache would be *slower* than recomputing it. By default a statement must take longer than `min_execution_time_to_cache_seconds` (0.01 s) and the predicted restore must save at least `min_cache_savings_pct` of that time.
 
@@ -127,7 +127,7 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 
 ### Explicit `# @cash:no-cache`
 
---8<-- "docs/_badges/not_cached_explicit.html"
+<iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** You (or the previous author) annotated the statement to opt out.
 
@@ -135,7 +135,7 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 
 ### Untracked I/O
 
---8<-- "docs/_badges/not_cached_untracked_io.html"
+<iframe class="cash-badge" src="/_badges/not_cached_untracked_io.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 **Why:** The statement read a file via an API Cash doesn't intercept (a custom loader, a third-party library, a C extension). Cash can't tell whether the file changed, so it refuses to cache rather than risk staleness.
 
