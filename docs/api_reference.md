@@ -443,7 +443,7 @@ create_default_config()  # Creates ~/.cash/config.toml
 
 # Load config
 config = get_config()  # Merges env > file > defaults
-print(config.backend)   # "file"
+print(config.backend_type)  # "file"
 print(config.cache_dir)  # ".cash"
 ```
 
