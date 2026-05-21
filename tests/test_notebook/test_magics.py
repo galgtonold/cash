@@ -282,8 +282,48 @@ final_value = result * multiplier
                     expected_call_found = True
                     break
             
-            self.assertTrue(expected_call_found, 
+            self.assertTrue(expected_call_found,
                 f"Expected publish_display_data call not found. Calls: {combined_calls}")
+
+    def test_cash_help_annotation_examples_parse(self):
+        """Every '@cash:' line in %cash_help output must match the real parser.
+
+        Regression guard for QW-4: prior help text printed
+            # @cash: no-cache
+        with a space after the colon, which silently fails to parse because
+        ANNOTATION_PATTERN requires the directive to follow the colon directly.
+        """
+        from io import StringIO
+        import sys
+        from cash.notebook.annotations import ANNOTATION_PATTERN, parse_annotation_line
+
+        captured = StringIO()
+        original_stdout = sys.stdout
+        sys.stdout = captured
+        try:
+            self.magics.cash_help("")
+        finally:
+            sys.stdout = original_stdout
+
+        output = captured.getvalue()
+        annotation_lines = [
+            line for line in output.splitlines() if "@cash:" in line
+        ]
+        # Sanity-check: the default help text should actually advertise annotations.
+        self.assertTrue(
+            annotation_lines,
+            f"Expected %cash_help output to contain '@cash:' examples; got:\n{output}",
+        )
+        for line in annotation_lines:
+            self.assertIsNotNone(
+                ANNOTATION_PATTERN.search(line),
+                f"Help-text line does not match ANNOTATION_PATTERN: {line!r}",
+            )
+            self.assertIsNotNone(
+                parse_annotation_line(line),
+                f"Help-text line does not parse as a real annotation: {line!r}",
+            )
+
 
 if __name__ == '__main__':
     unittest.main()
