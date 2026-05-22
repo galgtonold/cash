@@ -729,30 +729,32 @@ class TestPipelineParity:
     """
 
     def test_cash_magic_invokes_module_change_detection(self, magics_fixture):
-        """%%cash must call `_detect_module_changes` (was missing pre-unification)."""
+        """%%cash must call `CellExecutor._detect_module_changes` (was missing pre-unification)."""
         magics, _, _ = magics_fixture
+        executor = magics._cell_executor
         called_with: list[str] = []
-        original = magics._detect_module_changes
+        original = executor._detect_module_changes
 
         def spy(raw_cell):
             called_with.append(raw_cell)
             return original(raw_cell)
 
-        magics._detect_module_changes = spy
+        executor._detect_module_changes = spy
         magics.cash("", "x = 1")
         assert called_with == ["x = 1"]
 
     def test_cash_magic_invokes_pre_execution_notifications(self, magics_fixture):
-        """%%cash must call `_build_pre_execution_notifications` (was missing pre-unification)."""
+        """%%cash must call `CellExecutor._build_pre_execution_notifications` (was missing pre-unification)."""
         magics, _, _ = magics_fixture
+        executor = magics._cell_executor
         call_count = [0]
-        original = magics._build_pre_execution_notifications
+        original = executor._build_pre_execution_notifications
 
         def spy(raw_cell, pre_upstream_metrics, upstream_metrics):
             call_count[0] += 1
             return original(raw_cell, pre_upstream_metrics, upstream_metrics)
 
-        magics._build_pre_execution_notifications = spy
+        executor._build_pre_execution_notifications = spy
         magics.cash("", "x = 1")
         assert call_count[0] == 1
 

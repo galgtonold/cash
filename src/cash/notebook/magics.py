@@ -20,15 +20,18 @@ from IPython.core.magic import Magics, cell_magic, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
 
 from ..core import Cash
-from ..exceptions import AmbiguousCellError
 from ..utils import safe_text
 from . import badge_renderer as _badge
 from ._protocols import ShellProtocol
-from .analysis import CodeAnalyzer
-from .annotations import get_statement_annotations
 from .audit import AuditLogger
 from .cache_status import CacheStatus
-from .control_structures import ControlStructureProcessor, is_control_structure
+from .cell_executor import (
+    CellExecutor,
+    _EarlyReturn,
+    _PipelineCompleted,
+    _PipelineSyntaxError,
+)
+from .control_structures import ControlStructureProcessor
 from .error_display import show_clean_error as _show_clean_error_impl
 from .magic_admin import CashAdminMagicsMixin
 from .module_invalidator import ModuleInvalidator
@@ -76,53 +79,6 @@ class CellMetrics(TypedDict):
 
 logger = logging.getLogger(__name__)
 
-class _EarlyReturn:
-    """Sentinel wrapper returned by ``_execute_cell_statements`` when a
-    statement error forces an early exit through ``_original_run_cell``.
-
-    ``_execute_cell`` checks for this wrapper and propagates the stored
-    IPython result unchanged.
-    """
-    __slots__ = ('value',)
-
-    def __init__(self, value: Any) -> None:
-        self.value = value
-
-
-class _PipelineSyntaxError:
-    """Sentinel returned by ``_execute_cached_pipeline`` when the cell's
-    AST fails to parse.  Caller decides how to react: the ``%cash_on``
-    hook delegates to ``_original_run_cell(raw_cell)`` so IPython
-    surfaces the SyntaxError naturally; ``%%cash`` logs and returns."""
-    __slots__ = ()
-
-
-class _PipelineCompleted:
-    """Successful pipeline run: carries everything the finaliser needs.
-
-    Returned by ``_execute_cached_pipeline``; consumed by
-    ``_finalize_cell_execution``.
-    """
-    __slots__ = (
-        'all_metrics', 'buffered_outputs', 'badge_display_id',
-        'hook_start', 'timing_breakdown', 'badge_render_time',
-    )
-
-    def __init__(
-        self,
-        all_metrics: list,
-        buffered_outputs: list,
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: 'TimingBreakdown',
-        badge_render_time: float,
-    ) -> None:
-        self.all_metrics = all_metrics
-        self.buffered_outputs = buffered_outputs
-        self.badge_display_id = badge_display_id
-        self.hook_start = hook_start
-        self.timing_breakdown = timing_breakdown
-        self.badge_render_time = badge_render_time
 
 class CashSession:
     """Groups session-level concerns owned by a single CashMagics instance.
@@ -231,6 +187,19 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             shell,
             backend=cash_instance.backend,
             tracking_state=self._tracking_state,
+            debug=self._debug,
+        )
+
+        self._cell_executor = CellExecutor(
+            shell,
+            cash_instance=cash_instance,
+            magics=self,
+            tracking_state=self._tracking_state,
+            statement_processor=self._statement_processor,
+            upstream_checker=self._upstream_checker,
+            restorer=self._restorer,
+            module_invalidator=self._module_invalidator,
+            control_structure_processor=self._control_structure_processor,
             debug=self._debug,
         )
 
@@ -678,421 +647,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 current_code=code,
             )
 
-    def _check_and_reexecute_upstream_cells(self, cell_code: str, required_inputs: set, progress_callback: Callable[..., None] | None = None) -> tuple[list[ProcessResult], float, float]:
-        """
-        Check if any upstream cells (that define required inputs) have changed.
-        If so, re-execute them before proceeding with current cell.
-
-        Args:
-            cell_code: The code content of the current cell
-            required_inputs: Set of variable names this cell requires
-            progress_callback: Optional callback(metrics_so_far, current_stmt_code)
-                called during upstream re-execution so the badge can show progress.
-
-        Returns a list of metrics for any executed or restored upstream statements.
-        """
-        # Delegate to upstream checker
-        upstream_metrics, total_restore_time, total_execution_time = self._upstream_checker.check_and_reexecute(
-            cell_code,
-            required_inputs,
-            self._statement_processor.process_statement,
-            self._global_ttl,
-            cell_id=self._current_cell_id,
-            progress_callback=progress_callback,
-            control_structure_callback=self._control_structure_processor.process,
-        )
-
-        return upstream_metrics, total_restore_time, total_execution_time
-
-    def _ensure_state_for_inputs(self, cell_code: str, progress_callback: Callable[..., None] | None = None) -> tuple[list[ProcessResult], float, float]:
-        """
-        Ensure that all required inputs for a cell are available in memory.
-        Handles upstream checking and state restoration.
-
-        Args:
-            cell_code: The code content of the current cell
-            progress_callback: Optional callback(metrics_so_far, current_stmt_code)
-                called during upstream re-execution for badge progress.
-
-        Returns:
-            Tuple of (upstream_metrics, total_restore_time, total_execution_time)
-        """
-        try:
-            if self._debug:
-                 print(f"[ENSURE_STATE_DEBUG] Cell code: {cell_code[:50]}...")
-
-            # Analyze cell dependencies
-            inputs, outputs = CodeAnalyzer.analyze_code_block(cell_code)
-
-            if self._debug:
-                print(f"[ENSURE_STATE_DEBUG] Analyzed inputs: {inputs}")
-                print(f"[ENSURE_STATE_DEBUG] Analyzed outputs: {outputs}")
-                print(f"[ENSURE_STATE_DEBUG] Current user_ns keys (first 10): {list(self.shell.user_ns.keys())[:10]}")
-
-            # Attempt to restore missing inputs from cache first
-            # This is a fast path to avoid re-execution if possible
-            total_restore_time = 0
-            upstream_metrics = []
-
-            for var_name in inputs:
-                if var_name not in self.shell.user_ns:
-                    start_restore = time.time()
-                    try:
-                        metrics = self._restorer.restore_variable(var_name)
-                        total_restore_time += (time.time() - start_restore)
-                        if metrics:
-                            upstream_metrics.extend(metrics)
-                    except NameError:
-                        # Could not find a source — proceed; upstream re-execution may provide it.
-                        if self._debug:
-                            print(f"[STATE] Could not restore '{var_name}' from cache. Hoping for upstream re-execution.")
-
-            # Check if any upstream cells/statements have changed compared to what we have in memory.
-            # If the notebook file dictates a different lineage than what we restored, we must re-execute.
-            reexec_metrics, upstream_restore_time, total_execution_time = self._check_and_reexecute_upstream_cells(cell_code, inputs, progress_callback=progress_callback)
-            total_restore_time += upstream_restore_time  # Add upstream restore time to our cache restore time
-
-            # Usually check_and_reexecute returns re-executed stuff or NEWLY restored stuff via virtual restore.
-            # So simple list extend is fine.
-            upstream_metrics.extend(reexec_metrics)
-
-        except (RuntimeError, SyntaxError, AmbiguousCellError):
-            raise
-        except (KeyError, ValueError, TypeError, AttributeError, OSError) as e:
-            logger.debug("[STATE] Error in state restoration logic: %s", e)
-            raise
-
-        return upstream_metrics, total_restore_time, total_execution_time
-
-    # ------------------------------------------------------------------
-    # _execute_cell helpers — each encapsulates one concern of the
-    # cell execution pipeline.  Keeping these small and focused makes
-    # _execute_cell itself a readable orchestration sequence.
-    # ------------------------------------------------------------------
-
-    def _extract_cell_id_and_notebook_path(self) -> None:
-        """Resolve cell_id and notebook path from IPython kernel metadata.
-
-        Must run BEFORE the upstream check so the notebook path is available
-        for reading upstream cells.  Sets ``self._current_cell_id`` as a
-        side-effect.
-        """
-        try:
-            cell_id = self._cell_id_from_parent_metadata(self.shell)
-            self._current_cell_id = cell_id
-            self._maybe_seed_notebook_path(cell_id)
-
-            if self._debug:
-                if cell_id:
-                    print(f"[PROXY_CELL_ID] Captured cell_id early: {cell_id}")
-                else:
-                    print("[PROXY_CELL_ID] No cell_id in parent metadata")
-        except (AttributeError, TypeError, KeyError, RuntimeError) as e:
-            if self._debug:
-                print(f"[PROXY_CELL_ID] Could not capture cell_id early: {e}")
-
-    def _init_cell_timing_and_badge(self, badge_display_id: str) -> TimingBreakdown:
-        """Set up timing tracking and render the initial 'RUNNING' badge.
-
-        Returns the ``timing_breakdown`` dict used to accumulate phase timings.
-        """
-        timing_breakdown: TimingBreakdown = {}
-        cell_start = time.time()
-
-        self._badge_cell_start_time = cell_start
-        self._last_badge_render_time = 0.0
-
-        t_badge_init = time.time()
-        if self._badge_mode == 'html':
-            self._render_interactive_badge(
-                [], display_id=badge_display_id,
-                status="RUNNING", update_existing=False,
-            )
-        timing_breakdown['badge_init'] = time.time() - t_badge_init
-        return timing_breakdown
-
-    def _detect_module_changes(self, raw_cell: str) -> list[ProcessResult]:
-        """Check for changed tracked modules, reload them, and invalidate lineage.
-
-        Returns a list of notification metrics (MODULE_RELOADED entries) for
-        the badge display.
-        """
-        ft = self._statement_processor.function_tracker
-        notifications: list[ProcessResult] = []
-
-        # Auto-track local module imports found in this cell
-        try:
-            newly_tracked = ft.auto_track_local_imports(raw_cell)
-            if newly_tracked and self._debug:
-                print(f"[AUTO_TRACK] Auto-tracking local modules: {', '.join(sorted(newly_tracked))}")
-        except (ImportError, AttributeError, OSError, TypeError) as exc:
-            logger.debug("Failed to auto-track local imports: %s", exc)
-
-        # Check tracked modules for source file changes and reload if needed
-        try:
-            changed_modules, per_module_changed_symbols = ft.check_and_reload_changed_modules(
-                self.shell.user_ns,
-            )
-            if changed_modules:
-                self._module_invalidator.invalidate(
-                    changed_modules,
-                    self._statement_processor,
-                    per_module_changed_symbols,
-                )
-
-                mod_names = ', '.join(sorted(changed_modules.keys()))
-                notification = {
-                    'status': 'MODULE_RELOADED',
-                    'code': f"🔄 Module{'s' if len(changed_modules) > 1 else ''} reloaded: {mod_names}",
-                    'is_upstream': True,
-                    'total_time': 0.0,
-                    'execution_time': 0.0,
-                    'outputs': [],
-                    'changed_modules': dict(changed_modules.items()),
-                }
-                notifications.append(notification)
-                if self._debug:
-                    for mod, path in changed_modules.items():
-                        syms = per_module_changed_symbols.get(mod)
-                        sym_info = f" (changed symbols: {syms})" if syms is not None else " (full invalidation)"
-                        print(f"[AUTO_TRACK] Reloaded changed module '{mod}' ({path}){sym_info}")
-        except (ImportError, AttributeError, OSError, TypeError, ValueError) as exc:
-            logger.debug("Failed to check/reload changed modules: %s", exc)
-
-        return notifications
-
-    def _resolve_upstream_state(
-        self,
-        raw_cell: str,
-        pre_upstream_metrics: list[ProcessResult],
-        badge_display_id: str,
-        timing_breakdown: TimingBreakdown,
-        args: tuple,
-        kwargs: dict,
-    ) -> tuple[list[ProcessResult], float, float] | _EarlyReturn:
-        """Run upstream dependency checking and state restoration.
-
-        Returns ``(upstream_metrics, restore_time, exec_time)`` on success, or
-        an ``_EarlyReturn`` wrapping the original runner's result if an
-        unrecoverable error forced a fallback.
-        """
-        t_ensure = time.time()
-
-        # Progress callback for badge updates during upstream re-execution
-        def _upstream_progress_cb(
-            upstream_metrics_so_far: list,
-            current_stmt_code: str,
-            current_step: int | None = None,
-            total_steps: int | None = None,
-        ) -> None:
-            combined = pre_upstream_metrics + upstream_metrics_so_far
-            upstream_label = f"↑ {current_stmt_code}" if current_stmt_code else current_stmt_code
-            self._maybe_progress_badge(
-                combined, display_id=badge_display_id,
-                step=current_step if current_step is not None else len(combined),
-                total=total_steps or 0,
-                code=upstream_label,
-            )
-
-        try:
-            upstream_metrics, total_restore_time, total_execution_time = self._ensure_state_for_inputs(
-                raw_cell, progress_callback=_upstream_progress_cb,
-            )
-        except Exception as e:  # noqa: BLE001 - broad fallback for upstream simulation failures
-            if isinstance(e, KeyboardInterrupt):
-                raise
-            if isinstance(e, SyntaxError):
-                self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-                return _EarlyReturn(self._original_run_cell(raw_cell, *args, **kwargs))
-            if isinstance(e, (RuntimeError, AmbiguousCellError)):
-                # Re-raise the original exception inside the user's cell so
-                # IPython renders the traceback as if the cell itself raised.
-                # The synthesized `raise <Type>(...)` was failing with NameError
-                # when <Type> (e.g. AmbiguousCellError) wasn't imported in the
-                # user's namespace. Import the class explicitly before raising.
-                cls = type(e)
-                error_code = (
-                    f"from {cls.__module__} import {cls.__name__}; "
-                    f"raise {cls.__name__}('''{str(e)}''')"
-                )
-                self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-                return _EarlyReturn(self._original_run_cell(error_code, *args, **kwargs))
-            logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", e)
-            self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _EarlyReturn(self._original_run_cell(raw_cell, *args, **kwargs))
-
-        timing_breakdown['upstream_check_raw'] = time.time() - t_ensure
-        timing_breakdown['total_restore_time'] = total_restore_time
-        timing_breakdown['total_execution_time'] = total_execution_time
-        timing_breakdown['upstream_check'] = (
-            (time.time() - t_ensure) - total_restore_time - total_execution_time
-        )
-
-        if self._debug:
-            print(f"[TIMING_PROXY] Ensure state: {(time.time() - t_ensure)*1000:.2f}ms")
-            print(f"[TIMING_PROXY] Total restore time: {total_restore_time*1000:.2f}ms")
-            print(f"[TIMING_PROXY] Total execution time: {total_execution_time*1000:.2f}ms")
-            print(f"[TIMING_PROXY] Pure overhead (excl. restore+exec): {((time.time() - t_ensure) - total_restore_time - total_execution_time)*1000:.2f}ms")
-
-        return upstream_metrics, total_restore_time, total_execution_time
-
-    def _make_function_change_metrics(self) -> list[ProcessResult]:
-        """Return notification metrics for any user-defined functions that changed source."""
-        ft = self._statement_processor.function_tracker
-        try:
-            changed_funcs = ft.detect_changed_functions(self.shell.user_ns)
-            if not changed_funcs:
-                return []
-            func_names = ', '.join(sorted(changed_funcs))
-            if self._debug:
-                print(f"[FUNCTION_CHANGE] Detected changed functions: {func_names}")
-            return [{
-                'status': 'FUNCTION_CHANGED',
-                'code': f"🔄 Function{'s' if len(changed_funcs) > 1 else ''} changed: {func_names}",
-                'is_upstream': True,
-                'execution_time': 0.0,
-                'total_time': 0.0,
-                'saved_time': 0.0,
-                'error': None,
-                'restored_vars': [],
-                'uncacheable_reasons': [],
-                'outputs': [],
-                'changed_functions': sorted(changed_funcs),
-            }]
-        except (AttributeError, TypeError, OSError) as exc:
-            logger.debug("Failed to check function changes: %s", exc)
-            return []
-
-    def _make_opaque_warning_metrics(self, raw_cell: str) -> list[ProcessResult]:
-        """Return WARNING metrics for opaque call patterns detected in raw_cell."""
-        ft = self._statement_processor.function_tracker
-        try:
-            opaque_warnings = ft.detect_opaque_call_patterns(raw_cell, self.shell.user_ns)
-            if not opaque_warnings:
-                return []
-            if self._debug:
-                for w in opaque_warnings:
-                    print(f"[OPAQUE_CALL] {w}")
-            return [{
-                'status': 'WARNING',
-                'code': f"⚠️ {msg}",
-                'is_upstream': True,
-                'execution_time': 0.0,
-                'total_time': 0.0,
-                'saved_time': 0.0,
-                'error': None,
-                'restored_vars': [],
-                'uncacheable_reasons': [],
-                'outputs': [],
-            } for msg in opaque_warnings]
-        except (AttributeError, TypeError, SyntaxError, ValueError) as exc:
-            logger.debug("Failed to detect opaque call patterns: %s", exc)
-            return []
-
-    def _build_pre_execution_notifications(
-        self,
-        raw_cell: str,
-        pre_upstream_metrics: list[ProcessResult],
-        upstream_metrics: list[ProcessResult],
-    ) -> list[ProcessResult]:
-        """Assemble the initial metrics list from module, upstream, and function-change notifications."""
-        all_metrics: list[ProcessResult] = []
-        if pre_upstream_metrics:
-            all_metrics.extend(pre_upstream_metrics)
-        if upstream_metrics:
-            all_metrics.extend(upstream_metrics)
-        all_metrics.extend(self._make_function_change_metrics())
-        all_metrics.extend(self._make_opaque_warning_metrics(raw_cell))
-        return all_metrics
-
-    def _execute_cached_pipeline(
-        self,
-        raw_cell: str,
-        args: tuple,
-        kwargs: dict,
-    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
-        """Shared cached-execution pipeline used by both `%cash_on` and `%%cash`.
-
-        Phases (matches CONTEXT.md CellExecutor spec):
-        1. Cell ID & notebook path resolution
-        2. Badge & timing initialisation
-        3. Module change detection
-        4. Upstream dependency resolution
-        5. AST parse
-        6. Pre-execution notification assembly
-        7. Statement-by-statement execution
-
-        Returns one of:
-        - ``_PipelineCompleted`` — caller invokes ``_finalize_cell_execution``
-        - ``_PipelineSyntaxError`` — caller decides how to surface the error
-        - ``_EarlyReturn(value)`` — propagate the wrapped value upstream
-
-        The two magic entry points (`_execute_cell`, `cash`) own everything
-        outside this pipeline (guards, history, benchmark dispatch, TTL
-        override, IPython delegation).  Keeping the shared part in one
-        method is what prevents the drift that originally existed between
-        them.
-        """
-        # 1. Cell ID & notebook path
-        self._extract_cell_id_and_notebook_path()
-
-        # 2. Badge & timing init
-        badge_display_id = str(uuid.uuid4())
-        timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
-        hook_start = time.time()
-        if self._debug:
-            print(f"[TIMING_PROXY] Start cached_run_cell: {datetime.now().strftime('%H:%M:%S.%f')}")
-
-        # 3. Module change detection (must precede upstream check)
-        pre_upstream_metrics = self._detect_module_changes(raw_cell)
-
-        # 4. Upstream resolution
-        upstream_result = self._resolve_upstream_state(
-            raw_cell, pre_upstream_metrics, badge_display_id,
-            timing_breakdown, args, kwargs,
-        )
-        if isinstance(upstream_result, _EarlyReturn):
-            return upstream_result
-        upstream_metrics, _restore_time, _execution_time = upstream_result
-
-        # 5. AST parse
-        try:
-            tree = ast.parse(raw_cell)
-        except SyntaxError:
-            self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _PipelineSyntaxError()
-
-        # 6. Pre-execution notifications
-        all_metrics = self._build_pre_execution_notifications(
-            raw_cell, pre_upstream_metrics, upstream_metrics,
-        )
-
-        if self._debug:
-            print("[TIMING_PROXY] Start executing statements...")
-
-        # 7. Statement execution
-        result = self._execute_cell_statements(
-            raw_cell, tree, all_metrics, badge_display_id,
-            hook_start, timing_breakdown, args, kwargs,
-        )
-        if isinstance(result, _EarlyReturn):
-            return result
-
-        all_metrics, buffered_result_outputs, badge_render_time = result
-        timing_breakdown['badge_progress'] = badge_render_time
-
-        return _PipelineCompleted(
-            all_metrics=all_metrics,
-            buffered_outputs=buffered_result_outputs,
-            badge_display_id=badge_display_id,
-            hook_start=hook_start,
-            timing_breakdown=timing_breakdown,
-            badge_render_time=badge_render_time,
-        )
-
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell`` to implement caching when
-        ``%cash_on`` is active.  Delegates to ``_execute_cached_pipeline``."""
+        ``%cash_on`` is active.  Delegates to :meth:`CellExecutor.execute_cell`."""
         if not self._auto_cache_enabled:
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
@@ -1112,7 +669,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             return self._original_run_cell("pass", *args, **kwargs)
 
         try:
-            result = self._execute_cached_pipeline(raw_cell, args, kwargs)
+            result = self._cell_executor.execute_cell(
+                raw_cell, args, kwargs,
+                original_run_cell=self._original_run_cell,
+            )
         except KeyboardInterrupt:
             raise
         except Exception as e:  # noqa: BLE001 - intentionally broad: surfaces user code exceptions to IPython
@@ -1128,85 +688,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             result.badge_display_id, result.hook_start, result.timing_breakdown,
             result.badge_render_time, args, kwargs,
         )
-
-    @staticmethod
-    def _flush_rich_outputs(
-        rich_outputs: list,
-        is_last_statement: bool,
-        buffered_result_outputs: list,
-    ) -> list:
-        """Publish or buffer rich outputs depending on statement position.
-
-        Returns the (possibly updated) buffer — callers should reassign the
-        returned value, as the last-statement path replaces the buffer.
-        """
-        if is_last_statement:
-            return rich_outputs
-        for output in rich_outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
-            else:
-                display(output)
-        return buffered_result_outputs
-
-    def _process_regular_stmt(
-        self,
-        stmt_code: str,
-        annotation: Any,
-        occurrence_index: int,
-        is_last_statement: bool,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-    ) -> list:
-        """Process one non-control statement with caching; return updated buffer."""
-        metrics = self._statement_processor.process_statement(
-            stmt_code, self._global_ttl, silent=True,
-            render_badge=False, annotation=annotation,
-            occurrence_index=occurrence_index,
-        )
-        if not metrics:
-            return buffered_result_outputs
-
-        all_metrics.append(metrics)
-        if metrics.get('stdout'):
-            print(metrics['stdout'], end='')
-        if metrics.get('stderr'):
-            print(metrics['stderr'], end='', file=sys.stderr)
-        if metrics.get('status') == CacheStatus.ERROR and metrics.get('error'):
-            raise metrics['error']
-
-        return self._flush_rich_outputs(
-            metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
-        )
-
-    def _finalize_error_badge(
-        self,
-        e: BaseException,
-        raw_cell: str,
-        node: ast.stmt,
-        all_metrics: list[ProcessResult],
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: TimingBreakdown,
-    ) -> None:
-        """Show a clean error display + render the final DONE badge.
-
-        Does **not** re-raise — that is the pipeline caller's job.  The hook
-        (`%cash_on`) wraps the propagated exception in ``_synthesize_run_cell_raise``
-        so IPython's kernel-reply status reflects the error; the magic
-        (`%%cash`) lets the exception bubble out of its handler so IPython's
-        normal magic-error rendering takes over.
-        """
-        self._show_clean_error(e, raw_cell, node)
-        hook_total = time.time() - hook_start
-        if self._badge_mode == 'html':
-            self._render_interactive_badge(
-                all_metrics, display_id=badge_display_id,
-                cell_total_time=hook_total, timing_breakdown=timing_breakdown,
-                status="DONE",
-            )
-        elif self._badge_mode == 'print':
-            self._print_text_badge(all_metrics, cell_total_time=hook_total)
 
     def _synthesize_run_cell_raise(
         self,
@@ -1241,113 +722,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             except (AttributeError, TypeError):
                 logger.debug("Could not restore showtraceback")
         return ipython_error_result
-
-    def _collect_ctrl_outputs(
-        self,
-        ctrl_result: Any,
-        is_last_statement: bool,
-        all_metrics: list[ProcessResult],
-        buffered_result_outputs: list,
-    ) -> list:
-        """Flush outputs from all metrics in a control structure result."""
-        for metrics in ctrl_result.metrics:
-            if not metrics:
-                continue
-            all_metrics.append(metrics)
-            if not metrics.get('_output_flushed'):
-                if metrics.get('stdout'):
-                    print(metrics['stdout'], end='')
-                if metrics.get('stderr'):
-                    print(metrics['stderr'], end='', file=sys.stderr)
-            buffered_result_outputs = self._flush_rich_outputs(
-                metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
-            )
-        return buffered_result_outputs
-
-    def _execute_cell_statements(
-        self,
-        raw_cell: str,
-        tree: ast.Module,
-        all_metrics: list[ProcessResult],
-        badge_display_id: str,
-        hook_start: float,
-        timing_breakdown: TimingBreakdown,
-        args: tuple,
-        kwargs: dict,
-    ) -> _EarlyReturn | tuple[list[ProcessResult], list, float]:
-        """Iterate over AST statements, executing or caching each one.
-
-        Returns ``(all_metrics, buffered_result_outputs, badge_render_time)``
-        on success, or an ``_EarlyReturn`` if a statement raised an error.
-        """
-        buffered_result_outputs: list = []
-        badge_render_time = 0.0
-
-        upstream_step_count = len([
-            m for m in all_metrics
-            if m.get('is_upstream', False) and m.get('status') != 'SKIPPED'
-        ])
-        total_steps_unified = upstream_step_count + len(tree.body)
-        stmt_occurrence_counts: dict[str, int] = {}
-
-        for i, node in enumerate(tree.body):
-            try:
-                stmt_code = ast.unparse(node)
-            except (ValueError, TypeError):
-                continue
-
-            occ = stmt_occurrence_counts.get(stmt_code, 0)
-            stmt_occurrence_counts[stmt_code] = occ + 1
-            annotation = get_statement_annotations(raw_cell, node)
-            is_last = (i == len(tree.body) - 1)
-            unified_step = upstream_step_count + i + 1
-
-            t_badge_pre = time.time()
-            if self._badge_mode == 'html':
-                self._render_interactive_badge(
-                    all_metrics, display_id=badge_display_id,
-                    status="RUNNING", current_step=unified_step,
-                    total_steps=total_steps_unified, current_code=stmt_code,
-                )
-            badge_render_time += time.time() - t_badge_pre
-
-            try:
-                if is_control_structure(node):
-                    if self._debug:
-                        print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
-                    ctrl_result = self._control_structure_processor.process(
-                        node, ttl=self._global_ttl, silent=True,
-                    )
-                    buffered_result_outputs = self._collect_ctrl_outputs(
-                        ctrl_result, is_last, all_metrics, buffered_result_outputs,
-                    )
-                    if self._debug:
-                        print(f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
-                              f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed")
-                    if not ctrl_result.success:
-                        raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
-                else:
-                    buffered_result_outputs = self._process_regular_stmt(
-                        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
-                    )
-
-                t_badge = time.time()
-                self._maybe_progress_badge(
-                    all_metrics, display_id=badge_display_id,
-                    step=unified_step + 1, total=total_steps_unified, code=None,
-                )
-                badge_render_time += time.time() - t_badge
-
-            except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
-                if isinstance(e, KeyboardInterrupt):
-                    raise
-                self._finalize_error_badge(
-                    e, raw_cell, node, all_metrics, badge_display_id,
-                    hook_start, timing_breakdown,
-                )
-                raise
-
-        return (all_metrics, buffered_result_outputs, badge_render_time)
 
     def _finalize_cell_execution(
         self,
@@ -1635,17 +1009,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         Usage: ``%%cash [ttl=60]``
 
-        Delegates to the shared ``_execute_cached_pipeline`` so this path
-        runs the same caching logic as ``%cash_on`` — module-change
-        detection, opaque-warning metrics, function-change metrics, and
-        the early-return plumbing all apply here too.  The two used to
-        drift; the shared pipeline makes drift structurally impossible.
+        Delegates to :meth:`CellExecutor.execute_cell` so this path runs
+        the same caching logic as ``%cash_on`` — module-change detection,
+        opaque-warning metrics, function-change metrics, and the
+        early-return plumbing all apply here too.  The two used to drift;
+        the shared executor makes drift structurally impossible.
+
+        Does **not** pass ``original_run_cell`` to the executor — that
+        opts out of the IPython-fallback paths.  Exceptions from upstream
+        simulation propagate naturally so IPython's magic-error path
+        handles them.
         """
         ttl = self._cash_parse_ttl(line)
         saved_ttl = self._global_ttl
         self._global_ttl = ttl
         try:
-            result = self._execute_cached_pipeline(cell, (), {})
+            result = self._cell_executor.execute_cell(cell)
 
             if isinstance(result, _EarlyReturn):
                 return

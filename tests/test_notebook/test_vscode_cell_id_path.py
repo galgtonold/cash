@@ -182,6 +182,7 @@ class TestEarlyCellIdCapture:
     @pytest.fixture
     def magics_fixture(self):
         """Minimal CashMagics fixture with a mock shell."""
+        from cash.notebook.cell_executor import CellExecutor
         from cash.notebook.magics import CashMagics
 
         shell = MagicMock()
@@ -205,6 +206,21 @@ class TestEarlyCellIdCapture:
             m._execution_history = []
             m._control_structure_processor = MagicMock()
             m._cash_instance = MagicMock()
+            # CellExecutor needs to exist so _execute_cell can delegate; the
+            # cell_id capture happens inside the executor's pipeline.  The
+            # tests suppress() the later-phase failures.
+            m._cell_executor = CellExecutor(
+                shell=shell,
+                cash_instance=m._cash_instance,
+                magics=m,
+                tracking_state=MagicMock(),
+                statement_processor=m._statement_processor,
+                upstream_checker=m._upstream_checker,
+                restorer=MagicMock(),
+                module_invalidator=MagicMock(),
+                control_structure_processor=m._control_structure_processor,
+                debug=False,
+            )
         return m
 
     def test_captures_cellid_from_parent_metadata(self, magics_fixture):
