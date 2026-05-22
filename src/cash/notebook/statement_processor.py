@@ -21,14 +21,18 @@ from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, Tracki
 from cash.notebook.cache_freshness import (
     CacheFreshnessChecker,
     snapshot_file_deps,
-    split_file_dep_value,
 )
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.object_hashing import estimate_object_size
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.server_discovery import get_notebook_path
-from cash.utils import normalize_path, resolve_file_dep_path
+from cash.notebook.statement_file_deps import (
+    StatementFileDeps,
+    compute_file_hash_component,
+    read_module_source_hash,
+)
+from cash.utils import resolve_file_dep_path
 
 __all__ = [
     "StatementCacheMetadata",
@@ -141,7 +145,6 @@ class ProcessResult(_ProcessResultRequired, total=False):
 
 logger = logging.getLogger(__name__)
 
-_SCALAR_TYPES = (int, float, str, bool, complex)
 _KNOWN_PICKLABLE_TYPE_NAMES = frozenset({
     'DataFrame', 'Series', 'ndarray',
     'int', 'float', 'str', 'bool', 'bytes', 'NoneType',
@@ -363,6 +366,14 @@ class StatementProcessor:
 
         self.executed_file_mtimes = {}  # var_name -> {filepath: mtime} at time of last execution
 
+        # Statement-level file-dep tracker. Shares executed_file_deps (from
+        # tracking_state) and executed_file_mtimes (owned here) by reference.
+        self._file_deps = StatementFileDeps(
+            tracking_state=self._tracking_state,
+            executed_file_mtimes=self.executed_file_mtimes,
+            debug=debug,
+        )
+
         # Used to prevent the "redundant import" optimization from skipping
         # import statements for modules that need re-execution after source changes.
         self.recently_reloaded_modules: set[str] = set()
@@ -427,6 +438,8 @@ class StatementProcessor:
         # first set_tracking_state, so guard with hasattr).
         if hasattr(self, '_freshness'):
             self._freshness.set_tracking_state(state)
+        if hasattr(self, '_file_deps'):
+            self._file_deps.set_tracking_state(state)
 
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, render_badge: bool = True, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
         """
@@ -1093,7 +1106,7 @@ class StatementProcessor:
 
         file_hash_component = ""
         if accessed_files:
-            file_hash_component = self._compute_file_hash_component(accessed_files)
+            file_hash_component = compute_file_hash_component(accessed_files)
 
         for var_name in outputs:
             if var_name not in user_ns:
@@ -1138,71 +1151,10 @@ class StatementProcessor:
 
             self.variable_sources[var_name] = cache_key
 
-            self._update_file_deps_for_var(var_name, accessed_files, inputs, value)
+            self._file_deps.update_for_var(var_name, accessed_files, inputs, value)
 
         return captured_vars
 
-    def _inherit_file_deps_from_inputs(self, var_name: str, inputs: set[str], value: Any) -> None:
-        """Propagate file deps from *inputs* to *var_name*, skipping scalar outputs."""
-        is_scalar = isinstance(value, _SCALAR_TYPES)
-        if not is_scalar:
-            for input_var in inputs:
-                if input_var not in self.executed_file_deps:
-                    continue
-                if var_name not in self.executed_file_deps:
-                    self.executed_file_deps[var_name] = set()
-                self.executed_file_deps[var_name].update(self.executed_file_deps[input_var])
-                if input_var in self.executed_file_mtimes:
-                    if var_name not in self.executed_file_mtimes:
-                        self.executed_file_mtimes[var_name] = {}
-                    self.executed_file_mtimes[var_name].update(self.executed_file_mtimes[input_var])
-                if self.debug:
-                    logger.debug(
-                        "[CACHE DEBUG] Propagated file deps from '%s' to '%s': %s",
-                        input_var, var_name, self.executed_file_deps[input_var],
-                    )
-        elif self.debug and any(iv in self.executed_file_deps for iv in inputs):
-            logger.debug(
-                "[FILE_DEPS] Skipping file dep propagation for scalar '%s' (type: %s)",
-                var_name, type(value).__name__,
-            )
-
-    def _update_file_deps_for_var(
-        self,
-        var_name: str,
-        accessed_files: set[str] | None,
-        inputs: set[str],
-        value: Any,
-    ) -> None:
-        """Record direct and inherited file dependencies for *var_name*.
-
-        Two sources of file deps are handled here so that the logic is not
-        duplicated:
-
-        1. **Direct deps** — files that were read during the current
-           statement's execution (``accessed_files``).
-        2. **Inherited deps** — file deps already carried by input variables
-           (e.g. ``df = df.sort_values()`` inherits ``df``'s source file so
-           downstream cells still invalidate when that file changes).
-           Scalar outputs are excluded from inheritance because a scalar
-           derived from a DataFrame (``n_rows = len(df)``) should not be
-           invalidated when the source CSV changes.
-        """
-        if not hasattr(self, 'executed_file_deps'):
-            return
-
-        # 1. Direct file dependencies from this statement's execution.
-        if accessed_files:
-            if var_name not in self.executed_file_deps:
-                self.executed_file_deps[var_name] = set()
-            self.executed_file_deps[var_name].update(accessed_files)
-            if var_name not in self.executed_file_mtimes:
-                self.executed_file_mtimes[var_name] = {}
-            for fpath in accessed_files:
-                    with contextlib.suppress(OSError):  # File may have been deleted between execution and capture
-                        self.executed_file_mtimes[var_name][fpath] = os.path.getmtime(fpath)
-        # 2. Propagate file dependencies from input variables (unless output is scalar).
-        self._inherit_file_deps_from_inputs(var_name, inputs, value)
 
     def _compute_module_lineage_component(
         self,
@@ -1233,7 +1185,7 @@ class StatementProcessor:
                 for dep_path, _ in self.function_tracker._dep_file_to_parents.items()
                 if var_name in self.function_tracker._dep_file_to_parents[dep_path]
             }
-            mod_source_hash = self._read_module_source_hash(mod_file, dep_files)
+            mod_source_hash = read_module_source_hash(mod_file, dep_files)
             return f":mod_src:{mod_source_hash}" if mod_source_hash else ""
 
         if callable(value):
@@ -1245,7 +1197,7 @@ class StatementProcessor:
             mod_file = getattr(mod_obj, '__file__', None) if mod_obj else None
             if not (mod_file and os.path.isfile(mod_file)):
                 return ""
-            mod_source_hash = self._read_module_source_hash(mod_file)
+            mod_source_hash = read_module_source_hash(mod_file)
             if not mod_source_hash:
                 return ""
             if self.debug:
@@ -1265,7 +1217,7 @@ class StatementProcessor:
         mod_file = getattr(mod_obj, '__file__', None) if mod_obj else None
         if not (mod_file and os.path.isfile(mod_file)):
             return ""
-        mod_source_hash = self._read_module_source_hash(mod_file)
+        mod_source_hash = read_module_source_hash(mod_file)
         if not mod_source_hash:
             return ""
         if self.debug:
@@ -1295,58 +1247,6 @@ class StatementProcessor:
                     continue
                 return self._lookup_from_import_mod_hash(var_name, node.module)
         return ""
-
-    def _compute_file_hash_component(self, accessed_files: set[str]) -> str:
-        """Compute a hash component from accessed file paths and their stats."""
-        notebook_dir = None
-        try:
-            notebook_path = get_notebook_path()
-            if notebook_path:
-                notebook_dir = os.path.dirname(os.path.realpath(notebook_path))
-        except (OSError, ValueError):
-            logger.debug("[PROCESSOR] Failed to get notebook directory for file hash")
-
-        file_components = []
-        for f in sorted(accessed_files):
-            if os.path.exists(f):
-                canonical_path = normalize_path(os.path.realpath(f))
-                display_path = canonical_path
-                if notebook_dir:
-                    try:
-                        rel_path = normalize_path(os.path.relpath(canonical_path, notebook_dir))
-                        if not rel_path.startswith('../../../'):
-                            display_path = rel_path
-                    except (ValueError, OSError):
-                        pass  # Cross-drive relpath fails on Windows; fall back to absolute
-                try:
-                    stat = os.stat(canonical_path)
-                    file_components.append(f"{display_path}:{stat.st_mtime}:{stat.st_size}")
-                except OSError:
-                    pass  # File may have been removed between exists() and stat()
-        if file_components:
-            component = ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
-            logger.debug("[FILE_HASH] Final hash component: %s...", component[:50])
-            return component
-        return ""
-
-    def _read_module_source_hash(self, mod_file: str, dep_files: set[str] | None = None) -> str | None:
-        """Read a module file (and optional dependency files) and return their combined SHA256 hash."""
-        try:
-            hasher = hashlib.sha256()
-            with open(mod_file, 'rb') as mf:
-                hasher.update(mf.read())
-            if dep_files:
-                for dep_path in sorted(dep_files):
-                    if os.path.isfile(dep_path):
-                        try:
-                            with open(dep_path, 'rb') as df:
-                                hasher.update(df.read())
-                        except OSError:
-                            logger.debug("[MODULE_HASH] Could not read dependency file: %s", dep_path)
-            return hasher.hexdigest()
-        except OSError:
-            logger.debug("[MODULE_HASH] Could not read module file: %s", mod_file)
-            return None
 
 
     def _should_skip_large_object_caching(
@@ -1729,25 +1629,6 @@ class StatementProcessor:
         if metadata and 'key' in metadata:
             self.variable_sources[var_name] = metadata['key']
 
-    def _restore_file_deps_from_metadata(self, restored_vars: dict, metadata: StatementCacheMetadata | None) -> None:
-        """Propagate file deps from cached metadata back into executed_file_deps/mtimes."""
-        if not metadata:
-            return
-        file_deps = metadata.get('file_dependencies', {})
-        if not file_deps:
-            return
-        # `executed_file_mtimes` historically holds {path: float}; flatten the
-        # new {'mtime': ..., 'size': ...} form back to a bare mtime here.
-        mtime_map = {
-            path: split_file_dep_value(stored)[0]
-            for path, stored in file_deps.items()
-        }
-        for var_name in restored_vars:
-            self.executed_file_deps.setdefault(var_name, set()).update(file_deps.keys())
-            if not hasattr(self, 'executed_file_mtimes'):
-                self.executed_file_mtimes = {}
-            self.executed_file_mtimes.setdefault(var_name, {}).update(mtime_map)
-
     def _replay_cached_outputs(
         self,
         stdout: str,
@@ -1802,7 +1683,7 @@ class StatementProcessor:
             for var_name, value in restored_vars.items():
                 self._restore_one_var(var_name, value, metadata)
 
-            self._restore_file_deps_from_metadata(restored_vars, metadata)
+            self._file_deps.restore_from_metadata(restored_vars, metadata)
             var_restore_time = time.time() - t_var
 
             output_replay_time = 0.0

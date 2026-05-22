@@ -325,9 +325,10 @@ class TestFileDependencyPropagation:
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n3,4\n")
         
-        # Simulate that 'df' has file deps
-        processor.executed_file_deps = {'df': {str(test_file)}}
-        processor.executed_file_mtimes = {'df': {str(test_file): os.path.getmtime(str(test_file))}}
+        # Simulate that 'df' has file deps — mutate the shared dicts so
+        # sibling sub-components (StatementFileDeps) see the update too.
+        processor.executed_file_deps['df'] = {str(test_file)}
+        processor.executed_file_mtimes['df'] = {str(test_file): os.path.getmtime(str(test_file))}
         
         # Set up 'df' in namespace (as a list to avoid pandas dependency)
         shell.user_ns['df'] = [1, 2, 3]
@@ -348,8 +349,9 @@ class TestFileDependencyPropagation:
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2\n")
         
-        processor.executed_file_deps = {'data': {str(test_file)}}
-        processor.executed_file_mtimes = {'data': {str(test_file): os.path.getmtime(str(test_file))}}
+        # Mutate the shared dicts so StatementFileDeps sees the update too.
+        processor.executed_file_deps['data'] = {str(test_file)}
+        processor.executed_file_mtimes['data'] = {str(test_file): os.path.getmtime(str(test_file))}
         
         shell.user_ns['data'] = [1, 2, 3]
         processor.variable_lineage['data'] = 'data_lineage'
