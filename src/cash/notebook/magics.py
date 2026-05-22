@@ -88,6 +88,42 @@ class _EarlyReturn:
     def __init__(self, value: Any) -> None:
         self.value = value
 
+
+class _PipelineSyntaxError:
+    """Sentinel returned by ``_execute_cached_pipeline`` when the cell's
+    AST fails to parse.  Caller decides how to react: the ``%cash_on``
+    hook delegates to ``_original_run_cell(raw_cell)`` so IPython
+    surfaces the SyntaxError naturally; ``%%cash`` logs and returns."""
+    __slots__ = ()
+
+
+class _PipelineCompleted:
+    """Successful pipeline run: carries everything the finaliser needs.
+
+    Returned by ``_execute_cached_pipeline``; consumed by
+    ``_finalize_cell_execution``.
+    """
+    __slots__ = (
+        'all_metrics', 'buffered_outputs', 'badge_display_id',
+        'hook_start', 'timing_breakdown', 'badge_render_time',
+    )
+
+    def __init__(
+        self,
+        all_metrics: list,
+        buffered_outputs: list,
+        badge_display_id: str,
+        hook_start: float,
+        timing_breakdown: 'TimingBreakdown',
+        badge_render_time: float,
+    ) -> None:
+        self.all_metrics = all_metrics
+        self.buffered_outputs = buffered_outputs
+        self.badge_display_id = badge_display_id
+        self.hook_start = hook_start
+        self.timing_breakdown = timing_breakdown
+        self.badge_render_time = badge_render_time
+
 class CashSession:
     """Groups session-level concerns owned by a single CashMagics instance.
 
@@ -969,26 +1005,101 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         all_metrics.extend(self._make_opaque_warning_metrics(raw_cell))
         return all_metrics
 
-    def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
-        """Proxy for interactiveshell.run_cell to implement caching.
+    def _execute_cached_pipeline(
+        self,
+        raw_cell: str,
+        args: tuple,
+        kwargs: dict,
+    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+        """Shared cached-execution pipeline used by both `%cash_on` and `%%cash`.
 
-        Orchestrates the cell execution pipeline in distinct phases:
-        1. Guard / benchmark dispatch
-        2. Cell ID & notebook path resolution
-        3. Badge & timing initialisation
-        4. Module change detection & lineage invalidation
-        5. Upstream dependency resolution
+        Phases (matches CONTEXT.md CellExecutor spec):
+        1. Cell ID & notebook path resolution
+        2. Badge & timing initialisation
+        3. Module change detection
+        4. Upstream dependency resolution
+        5. AST parse
         6. Pre-execution notification assembly
-        7. Statement-by-statement execution (delegated to _execute_cell_statements)
-        8. Finalisation & badge rendering (delegated to _finalize_cell_execution)
+        7. Statement-by-statement execution
+
+        Returns one of:
+        - ``_PipelineCompleted`` — caller invokes ``_finalize_cell_execution``
+        - ``_PipelineSyntaxError`` — caller decides how to surface the error
+        - ``_EarlyReturn(value)`` — propagate the wrapped value upstream
+
+        The two magic entry points (`_execute_cell`, `cash`) own everything
+        outside this pipeline (guards, history, benchmark dispatch, TTL
+        override, IPython delegation).  Keeping the shared part in one
+        method is what prevents the drift that originally existed between
+        them.
         """
+        # 1. Cell ID & notebook path
+        self._extract_cell_id_and_notebook_path()
+
+        # 2. Badge & timing init
+        badge_display_id = str(uuid.uuid4())
+        timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
+        hook_start = time.time()
+        if self._debug:
+            print(f"[TIMING_PROXY] Start cached_run_cell: {datetime.now().strftime('%H:%M:%S.%f')}")
+
+        # 3. Module change detection (must precede upstream check)
+        pre_upstream_metrics = self._detect_module_changes(raw_cell)
+
+        # 4. Upstream resolution
+        upstream_result = self._resolve_upstream_state(
+            raw_cell, pre_upstream_metrics, badge_display_id,
+            timing_breakdown, args, kwargs,
+        )
+        if isinstance(upstream_result, _EarlyReturn):
+            return upstream_result
+        upstream_metrics, _restore_time, _execution_time = upstream_result
+
+        # 5. AST parse
+        try:
+            tree = ast.parse(raw_cell)
+        except SyntaxError:
+            self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return _PipelineSyntaxError()
+
+        # 6. Pre-execution notifications
+        all_metrics = self._build_pre_execution_notifications(
+            raw_cell, pre_upstream_metrics, upstream_metrics,
+        )
+
+        if self._debug:
+            print("[TIMING_PROXY] Start executing statements...")
+
+        # 7. Statement execution
+        result = self._execute_cell_statements(
+            raw_cell, tree, all_metrics, badge_display_id,
+            hook_start, timing_breakdown, args, kwargs,
+        )
+        if isinstance(result, _EarlyReturn):
+            return result
+
+        all_metrics, buffered_result_outputs, badge_render_time = result
+        timing_breakdown['badge_progress'] = badge_render_time
+
+        return _PipelineCompleted(
+            all_metrics=all_metrics,
+            buffered_outputs=buffered_result_outputs,
+            badge_display_id=badge_display_id,
+            hook_start=hook_start,
+            timing_breakdown=timing_breakdown,
+            badge_render_time=badge_render_time,
+        )
+
+    def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
+        """Proxy for ``interactiveshell.run_cell`` to implement caching when
+        ``%cash_on`` is active.  Delegates to ``_execute_cached_pipeline``."""
         if not self._auto_cache_enabled:
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
         # Record raw cell text for bug-report history (before any processing)
         self._execution_history.append(raw_cell)
 
-        # 1. Benchmark dispatch (one-shot)
+        # Benchmark dispatch (one-shot)
         benchmark_config = getattr(self, '_benchmark_config', None)
         if benchmark_config and benchmark_config.get('active'):
             self._benchmark_config['active'] = False
@@ -1000,62 +1111,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             )
             return self._original_run_cell("pass", *args, **kwargs)
 
-        # 2. Early cell_id capture & notebook path discovery
-        self._extract_cell_id_and_notebook_path()
-
-        # 3. Badge & timing initialisation
-        badge_display_id = str(uuid.uuid4())
-        timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
-
-        hook_start = time.time()
-        if self._debug:
-            print(f"[TIMING_PROXY] Start cached_run_cell: {datetime.now().strftime('%H:%M:%S.%f')}")
-
-        # 4. Module change detection (must precede upstream check)
-        pre_upstream_metrics = self._detect_module_changes(raw_cell)
-
-        # 5. Upstream dependency resolution
-        upstream_result = self._resolve_upstream_state(
-            raw_cell, pre_upstream_metrics, badge_display_id,
-            timing_breakdown, args, kwargs,
-        )
-        if isinstance(upstream_result, _EarlyReturn):
-            return upstream_result.value
-
-        upstream_metrics, _total_restore_time, _total_execution_time = upstream_result
-
-        # 6. Parse AST & assemble pre-execution notifications
         try:
-            tree = ast.parse(raw_cell)
-        except SyntaxError:
-            self._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return self._original_run_cell(raw_cell, *args, **kwargs)
+            result = self._execute_cached_pipeline(raw_cell, args, kwargs)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001 - intentionally broad: surfaces user code exceptions to IPython
+            return self._synthesize_run_cell_raise(e, args, kwargs)
 
-        all_metrics = self._build_pre_execution_notifications(
-            raw_cell, pre_upstream_metrics, upstream_metrics,
-        )
-
-        if self._debug:
-            print("[TIMING_PROXY] Start executing statements...")
-
-        # 7. Execute/cache each statement
-        t_process = time.time()
-        result = self._execute_cell_statements(
-            raw_cell, tree, all_metrics, badge_display_id,
-            hook_start, timing_breakdown, args, kwargs,
-        )
         if isinstance(result, _EarlyReturn):
             return result.value
-        all_metrics, buffered_result_outputs, badge_render_time = result
+        if isinstance(result, _PipelineSyntaxError):
+            return self._original_run_cell(raw_cell, *args, **kwargs)
 
-        time.time() - t_process
-        timing_breakdown['badge_progress'] = badge_render_time
-
-        # 8. Finalize — aggregate metrics, render badge, replay buffered outputs
         return self._finalize_cell_execution(
-            raw_cell, all_metrics, buffered_result_outputs,
-            badge_display_id, hook_start, timing_breakdown, badge_render_time,
-            args, kwargs,
+            raw_cell, result.all_metrics, result.buffered_outputs,
+            result.badge_display_id, result.hook_start, result.timing_breakdown,
+            result.badge_render_time, args, kwargs,
         )
 
     @staticmethod
@@ -1108,7 +1179,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
         )
 
-    def _handle_stmt_error(
+    def _finalize_error_badge(
         self,
         e: BaseException,
         raw_cell: str,
@@ -1117,10 +1188,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         badge_display_id: str,
         hook_start: float,
         timing_breakdown: TimingBreakdown,
-        args: tuple,
-        kwargs: dict,
-    ) -> _EarlyReturn:
-        """Show clean error, finalize badge, and re-raise via IPython kernel."""
+    ) -> None:
+        """Show a clean error display + render the final DONE badge.
+
+        Does **not** re-raise — that is the pipeline caller's job.  The hook
+        (`%cash_on`) wraps the propagated exception in ``_synthesize_run_cell_raise``
+        so IPython's kernel-reply status reflects the error; the magic
+        (`%%cash`) lets the exception bubble out of its handler so IPython's
+        normal magic-error rendering takes over.
+        """
         self._show_clean_error(e, raw_cell, node)
         hook_total = time.time() - hook_start
         if self._badge_mode == 'html':
@@ -1132,8 +1208,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         elif self._badge_mode == 'print':
             self._print_text_badge(all_metrics, cell_total_time=hook_total)
 
-        # Re-raise through IPython so the kernel reply status is "error".
-        # Suppress IPython's own showtraceback to avoid a duplicate traceback.
+    def _synthesize_run_cell_raise(
+        self,
+        e: BaseException,
+        args: tuple,
+        kwargs: dict,
+    ) -> Any:
+        """Re-raise *e* through IPython's run_cell so the kernel reply status
+        is "error" while suppressing IPython's duplicate traceback.
+
+        Hook-path only: makes sense when ``_execute_cell`` is itself standing
+        in for ``run_cell``.  The ``%%cash`` magic does **not** call this —
+        it just lets the exception propagate so IPython's magic-error path
+        handles it.
+        """
         self.shell.user_ns['__cash_exception__'] = e
         orig_showtb = getattr(self.shell, 'showtraceback', None)
         try:
@@ -1152,7 +1240,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                         del self.shell.showtraceback
             except (AttributeError, TypeError):
                 logger.debug("Could not restore showtraceback")
-        return _EarlyReturn(ipython_error_result)
+        return ipython_error_result
 
     def _collect_ctrl_outputs(
         self,
@@ -1253,10 +1341,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
                 if isinstance(e, KeyboardInterrupt):
                     raise
-                return self._handle_stmt_error(
+                self._finalize_error_badge(
                     e, raw_cell, node, all_metrics, badge_display_id,
-                    hook_start, timing_breakdown, args, kwargs,
+                    hook_start, timing_breakdown,
                 )
+                raise
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
 
@@ -1271,12 +1360,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         badge_render_time: float,
         args: tuple,
         kwargs: dict,
+        delegate_to_run_cell: bool = True,
     ) -> Any:
         """Post-process a cell execution: flush analytics, record metrics, render final badge.
 
-        This is the tail phase of ``_execute_cell`` extracted for readability.
-        It handles analytics flushing, session statistics updates, provenance
-        recording, audit logging, debug output, and the final badge render.
+        Tail phase shared by ``_execute_cell`` (hook-driven `%cash_on`) and
+        the ``cash`` cell magic (`%%cash`).  Handles analytics flushing,
+        session statistics updates, provenance recording, audit logging,
+        debug output, and the final badge render.
+
+        ``delegate_to_run_cell``: when True (the default, used by the hook),
+        ends by calling ``self._original_run_cell("pass", *args, **kwargs)``
+        so IPython's internal bookkeeping (execution count, history) stays
+        in sync.  ``%%cash`` passes False — it runs inside an IPython magic
+        whose own dispatcher already keeps that bookkeeping consistent.
         """
         hook_total = time.time() - hook_start
 
@@ -1324,8 +1421,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         elif self._badge_mode == 'print':
             self._print_text_badge(all_metrics, cell_total_time=hook_total)
 
-        # Delegate to original run_cell with "pass" to handle bookkeeping without executing code
-        return self._original_run_cell("pass", *args, **kwargs)
+        # Delegate to original run_cell with "pass" so IPython keeps its
+        # execution count + history consistent.  Skipped when called from
+        # `%%cash` (its dispatcher already handles that bookkeeping).
+        if delegate_to_run_cell:
+            return self._original_run_cell("pass", *args, **kwargs)
+        return None
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
         """Compute and store ``_last_cell_metrics`` for ``%cash_status``."""
@@ -1528,292 +1629,38 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 logger.warning("Invalid TTL value")
         return None
 
-    def _setup_cash_upstream(
-        self, cell: str, line: str, badge_display_id: str,
-    ) -> list[ProcessResult]:
-        """Run upstream dependency check for %%cash, returning upstream metrics."""
-        def _progress_cb(upstream_so_far, current_stmt_code, current_step=None, total_steps=None):
-            upstream_label = f"↑ {current_stmt_code}" if current_stmt_code else current_stmt_code
-            self._maybe_progress_badge(
-                upstream_so_far, display_id=badge_display_id,
-                step=current_step if current_step is not None else len(upstream_so_far),
-                total=total_steps or 0, code=upstream_label,
-            )
-
-        try:
-            inputs, _outputs = CodeAnalyzer.analyze_code_block(cell)
-            full_cell_code = f"%%cash{(' ' + line) if line else ''}\n{cell}"
-            upstream_metrics, _, _ = self._check_and_reexecute_upstream_cells(
-                full_cell_code, inputs, progress_callback=_progress_cb,
-            )
-            return upstream_metrics
-        except (SyntaxError, KeyError, ValueError, TypeError, AttributeError, OSError) as e:
-            logger.debug("[DEBUG] Error checking upstream dependencies: %s", e)
-            return []
-
-    @staticmethod
-    def _publish_outputs(rich_outputs: list) -> None:
-        """Immediately publish each output via display/publish_display_data."""
-        for output in rich_outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
-            else:
-                display(output)
-
-    def _cash_execute_control_struct(
-        self,
-        node: Any,
-        i: int,
-        ttl: int | None,
-        is_last_statement: bool,
-        all_metrics: list,
-        buffered_result_outputs: list,
-    ) -> None:
-        """Execute a control-structure node from %%cash and collect its metrics."""
-        if self._debug:
-            print("[CONTROL] Detected control structure in %%cash, delegating to ControlStructureProcessor")
-        result = self._control_structure_processor.process(node, ttl=ttl, silent=True)
-
-        for metrics in result.metrics:
-            if metrics:
-                metrics['statement_index'] = i
-                all_metrics.append(metrics)
-                if not metrics.get('_output_flushed'):
-                    if metrics.get('stdout'):
-                        print(metrics['stdout'], end='')
-                    if metrics.get('stderr'):
-                        print(metrics['stderr'], end='', file=sys.stderr)
-                rich_outputs = metrics.get('rich_outputs', [])
-                if is_last_statement:
-                    buffered_result_outputs.extend(rich_outputs)
-                else:
-                    self._publish_outputs(rich_outputs)
-
-        if self._debug:
-            print(f"[CONTROL] Completed: {result.total_iterations} iterations, "
-                  f"{result.cached_iterations} cached, {result.computed_iterations} computed")
-        if not result.success:
-            raise result.error or RuntimeError("Unknown error in control structure execution")
-
-    def _cash_execute_regular_stmt(
-        self,
-        stmt_code: str,
-        annotation: Any,
-        occurrence_index: int,
-        ttl: int | None,
-        is_last_statement: bool,
-        i: int,
-        upstream_metrics: list,
-        badge_display_id: str,
-        cell_start: float,
-        all_metrics: list,
-        buffered_result_outputs: list,
-    ) -> None:
-        """Execute a regular (non-control-structure) statement from %%cash."""
-        metrics = self._statement_processor.process_statement(
-            stmt_code, ttl, silent=True, render_badge=False,
-            annotation=annotation, occurrence_index=occurrence_index,
-        )
-        if self._debug:
-            print(f"[TIMING_CELL] Statement process time: {(time.time() - cell_start)*1000:.2f}ms")
-
-        if metrics:
-            metrics['statement_index'] = i
-            all_metrics.append(metrics)
-            if metrics.get('stdout'):
-                print(metrics['stdout'], end='')
-            if metrics.get('stderr'):
-                print(metrics['stderr'], end='', file=sys.stderr)
-            if metrics.get('status') == CacheStatus.ERROR and metrics.get('error'):
-                final_metrics = upstream_metrics + all_metrics
-                if self._badge_mode == 'html':
-                    self._render_interactive_badge(final_metrics, display_id=badge_display_id)
-                elif self._badge_mode == 'print':
-                    self._print_text_badge(final_metrics, cell_total_time=time.time() - cell_start)
-                raise metrics['error']
-            rich_outputs = metrics.get('rich_outputs', [])
-            if is_last_statement:
-                buffered_result_outputs.clear()
-                buffered_result_outputs.extend(rich_outputs)
-            else:
-                self._publish_outputs(rich_outputs)
-
-    def _cash_execute_stmt(
-        self,
-        node: Any,
-        i: int,
-        stmt_code: str,
-        annotation: Any,
-        occurrence_index: int,
-        ttl: int | None,
-        is_last_statement: bool,
-        upstream_metrics: list,
-        upstream_step_count: int,
-        badge_display_id: str,
-        cell_start: float,
-        all_metrics: list,
-        buffered_result_outputs: list,
-        total_steps_unified: int,
-    ) -> None:
-        """Pre-badge render then dispatch to control-struct or regular-stmt handler."""
-        unified_step = upstream_step_count + i + 1
-
-        if self._badge_mode == 'html':
-            self._render_interactive_badge(
-                upstream_metrics + all_metrics, display_id=badge_display_id,
-                status="RUNNING", current_step=unified_step,
-                total_steps=total_steps_unified, current_code=stmt_code,
-            )
-
-        if is_control_structure(node):
-            self._cash_execute_control_struct(
-                node, i, ttl, is_last_statement, all_metrics, buffered_result_outputs,
-            )
-        else:
-            self._cash_execute_regular_stmt(
-                stmt_code, annotation, occurrence_index, ttl, is_last_statement,
-                i, upstream_metrics, badge_display_id, cell_start,
-                all_metrics, buffered_result_outputs,
-            )
-
-    @staticmethod
-    def _cash_compute_overall_status(all_metrics: list) -> str | None:
-        """Return the overall cell cache status from per-statement metrics."""
-        statuses = [m.get('status') for m in all_metrics if m.get('status')]
-        if not statuses:
-            return None
-        if all(s == CacheStatus.RESTORED for s in statuses):
-            return 'RESTORED'
-        if all(s == CacheStatus.COMPUTED for s in statuses):
-            return 'COMPUTED'
-        if all(s == CacheStatus.SKIPPED for s in statuses):
-            return 'SKIPPED'
-        return 'MIXED'
-
-    def _cash_finalize_and_badge(
-        self,
-        final_metrics: list,
-        buffered_result_outputs: list,
-        badge_display_id: str,
-        total_cell_time: float,
-    ) -> None:
-        """Flush buffered outputs and render the final cell badge."""
-        for output in buffered_result_outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
-            else:
-                display(output)
-        if self._badge_mode == 'html':
-            self._render_interactive_badge(final_metrics, display_id=badge_display_id)
-        elif self._badge_mode == 'print':
-            self._print_text_badge(final_metrics, cell_total_time=total_cell_time)
-
     @cell_magic
     def cash(self, line: str, cell: str) -> None:
-        """
-        Cell magic to cache the execution of a cell.
-        Usage: %%cash [ttl=60]
-        """
-        # NOTE: Do NOT clear recently_reloaded_modules here — see _execute_cell.
+        """Cell magic to cache the execution of a single cell.
 
-        cell_start = time.time()
-        self._badge_cell_start_time = cell_start
-        self._last_badge_render_time = 0.0
+        Usage: ``%%cash [ttl=60]``
 
-        t_parse_options = time.time()
+        Delegates to the shared ``_execute_cached_pipeline`` so this path
+        runs the same caching logic as ``%cash_on`` — module-change
+        detection, opaque-warning metrics, function-change metrics, and
+        the early-return plumbing all apply here too.  The two used to
+        drift; the shared pipeline makes drift structurally impossible.
+        """
         ttl = self._cash_parse_ttl(line)
-        parse_options_time = time.time() - t_parse_options
-
-        badge_display_id = str(uuid.uuid4())
-        code_key = self._current_cell_id or badge_display_id
-        self._cell_code_map[code_key] = cell
-
-        if self._badge_mode == 'html':
-            self._render_interactive_badge([], display_id=badge_display_id, status="RUNNING", update_existing=False)
-
-        upstream_metrics = self._setup_cash_upstream(cell, line, badge_display_id)
-
-        t_split = time.time()
+        saved_ttl = self._global_ttl
+        self._global_ttl = ttl
         try:
-            tree = ast.parse(cell)
-        except SyntaxError as e:
-            logger.error("Syntax Error: %s", e)
-            return
-        split_time = time.time() - t_split
+            result = self._execute_cached_pipeline(cell, (), {})
 
-        t_exec_all = time.time()
-        all_metrics: list = []
-        if self._debug:
-            print("[TIMING_CELL] Start executing statements...")
+            if isinstance(result, _EarlyReturn):
+                return
+            if isinstance(result, _PipelineSyntaxError):
+                logger.error("Syntax Error in %%cash cell")
+                return
 
-        buffered_result_outputs: list = []
-        upstream_step_count = len([
-            m for m in upstream_metrics
-            if m.get('is_upstream', False) and m.get('status') != 'SKIPPED'
-        ])
-        total_steps_unified = upstream_step_count + len(tree.body)
-        stmt_occurrence_counts: dict = {}
-
-        for i, node in enumerate(tree.body):
-            try:
-                stmt_code = ast.unparse(node)
-            except (ValueError, TypeError) as exc:
-                logger.debug("Failed to unparse AST node at index %d: %s", i, exc)
-                continue
-
-            occ = stmt_occurrence_counts.get(stmt_code, 0)
-            stmt_occurrence_counts[stmt_code] = occ + 1
-            annotation = get_statement_annotations(cell, node)
-            is_last_statement = (i == len(tree.body) - 1)
-
-            self._cash_execute_stmt(
-                node, i, stmt_code, annotation, occ, ttl, is_last_statement,
-                upstream_metrics, upstream_step_count, badge_display_id, cell_start,
-                all_metrics, buffered_result_outputs, total_steps_unified,
+            self._finalize_cell_execution(
+                cell, result.all_metrics, result.buffered_outputs,
+                result.badge_display_id, result.hook_start, result.timing_breakdown,
+                result.badge_render_time, (), {},
+                delegate_to_run_cell=False,
             )
-            self._maybe_progress_badge(
-                upstream_metrics + all_metrics, display_id=badge_display_id,
-                step=upstream_step_count + i + 1, total=total_steps_unified, code=stmt_code,
-            )
-
-        final_metrics = upstream_metrics + all_metrics
-        exec_all_time = time.time() - t_exec_all
-        total_cell_time = time.time() - cell_start
-
-        try:
-            self._statement_processor.analytics_manager.flush()
-        except (AttributeError, TypeError, OSError):
-            logger.debug("Analytics flush failed in cell magic")
-
-        if self._debug:
-            logger.debug("[CELL TIMING] Parse options: %.1fms | Split statements: %.1fms",
-                         parse_options_time * 1000, split_time * 1000)
-            logger.debug("[CELL TIMING] Execute all: %.1fms | CELL TOTAL: %.1fms",
-                         exec_all_time * 1000, total_cell_time * 1000)
-
-        overall_status = self._cash_compute_overall_status(all_metrics)
-        self._last_cell_metrics = {
-            'statements': [
-                {
-                    'code': m.get('code', '')[:100],
-                    'status': m.get('status'),
-                    'execution_time': m.get('execution_time', 0.0),
-                    'saved_time': m.get('saved_time', 0.0),
-                    'outputs': m.get('restored_vars', []),
-                    'is_upstream': m.get('is_upstream', False),
-                }
-                for m in all_metrics
-            ],
-            'total_time': total_cell_time,
-            'total_restored_time': sum(m.get('saved_time', 0.0) for m in all_metrics),
-            'total_computed_time': sum(
-                m.get('execution_time', 0.0) for m in all_metrics if m.get('status') == CacheStatus.COMPUTED
-            ),
-            'upstream_metrics': [m for m in all_metrics if m.get('is_upstream', False)],
-            'status': overall_status,
-        }
-
-        self._cash_finalize_and_badge(final_metrics, buffered_result_outputs, badge_display_id, total_cell_time)
+        finally:
+            self._global_ttl = saved_ttl
 
     def _show_clean_error(
         self,

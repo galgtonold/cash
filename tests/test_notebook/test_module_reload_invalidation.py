@@ -712,3 +712,65 @@ class TestTransitiveDependencyTracking:
                 assert not norm.startswith(prefix), (
                     f"Stdlib path {dep_path} should not be tracked as a dependency"
                 )
+
+
+# ============================================================================
+# Pipeline parity tests — both magics should run the same caching pipeline.
+# ============================================================================
+
+
+class TestPipelineParity:
+    """Regression coverage for the `%cash_on` vs `%%cash` drift bug.
+
+    Before the unification, ``%%cash`` skipped module-change detection,
+    opaque-warning metrics, and function-change metrics that ``%cash_on``
+    ran.  Now both routes go through ``_execute_cached_pipeline`` so they
+    cannot drift again.
+    """
+
+    def test_cash_magic_invokes_module_change_detection(self, magics_fixture):
+        """%%cash must call `_detect_module_changes` (was missing pre-unification)."""
+        magics, _, _ = magics_fixture
+        called_with: list[str] = []
+        original = magics._detect_module_changes
+
+        def spy(raw_cell):
+            called_with.append(raw_cell)
+            return original(raw_cell)
+
+        magics._detect_module_changes = spy
+        magics.cash("", "x = 1")
+        assert called_with == ["x = 1"]
+
+    def test_cash_magic_invokes_pre_execution_notifications(self, magics_fixture):
+        """%%cash must call `_build_pre_execution_notifications` (was missing pre-unification)."""
+        magics, _, _ = magics_fixture
+        call_count = [0]
+        original = magics._build_pre_execution_notifications
+
+        def spy(raw_cell, pre_upstream_metrics, upstream_metrics):
+            call_count[0] += 1
+            return original(raw_cell, pre_upstream_metrics, upstream_metrics)
+
+        magics._build_pre_execution_notifications = spy
+        magics.cash("", "x = 1")
+        assert call_count[0] == 1
+
+    def test_both_magics_populate_last_cell_metrics(self, magics_fixture):
+        """Both routes must populate `_last_cell_metrics` with the same shape."""
+        magics, _, _ = magics_fixture
+
+        magics.cash("", "a_via_cash_magic = 1")
+        metrics_cash = magics._last_cell_metrics
+        assert metrics_cash is not None
+        assert 'statements' in metrics_cash
+        assert 'total_time' in metrics_cash
+        assert 'status' in metrics_cash
+
+        magics._execute_cell("b_via_hook = 2")
+        metrics_hook = magics._last_cell_metrics
+        assert metrics_hook is not None
+        assert set(metrics_cash.keys()) == set(metrics_hook.keys()), (
+            f"%%cash and %cash_on must produce identical _last_cell_metrics keys; "
+            f"missing: {set(metrics_cash.keys()) ^ set(metrics_hook.keys())}"
+        )
