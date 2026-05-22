@@ -32,6 +32,7 @@ from cash.notebook.statement_file_deps import (
     compute_file_hash_component,
     read_module_source_hash,
 )
+from cash.notebook.statement_restore import StatementRestorer
 from cash.utils import resolve_file_dep_path
 
 __all__ = [
@@ -167,14 +168,6 @@ def _config_float(config: Any, attr: str, default: float) -> float:
     except (TypeError, ValueError):
         return default
 
-
-def _get_statement_code_and_hash(metadata: StatementCacheMetadata | None) -> tuple[str | None, str | None]:
-    """Return stored statement code and hash."""
-    if not metadata:
-        return None, None
-    stored_code = metadata.get('code')
-    stored_hash = metadata.get('source_hash')
-    return stored_code, stored_hash
 
 class _TeeWriter:
     """A writer that sends output to both a real stream and a list buffer.
@@ -374,6 +367,18 @@ class StatementProcessor:
             debug=debug,
         )
 
+        # Statement-level cache restorer. Hydrates outputs from a cached
+        # payload + replays stdout/stderr/rich-outputs.  Distinct from the
+        # variable-granular Restorer in restore.py (owned by CashMagics);
+        # see CONTEXT.md for the unit-of-work distinction.
+        self._stmt_restorer = StatementRestorer(
+            shell=shell,
+            tracking_state=self._tracking_state,
+            file_deps=self._file_deps,
+            compute_hash=compute_hash_fn,
+            debug=debug,
+        )
+
         # Used to prevent the "redundant import" optimization from skipping
         # import statements for modules that need re-execution after source changes.
         self.recently_reloaded_modules: set[str] = set()
@@ -440,6 +445,8 @@ class StatementProcessor:
             self._freshness.set_tracking_state(state)
         if hasattr(self, '_file_deps'):
             self._file_deps.set_tracking_state(state)
+        if hasattr(self, '_stmt_restorer'):
+            self._stmt_restorer.set_tracking_state(state)
 
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, render_badge: bool = True, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
         """
@@ -756,7 +763,7 @@ class StatementProcessor:
                 logger.debug("%s Input lineages used: %s", _LOG_CACHE_HIT, [(v, self.variable_lineage.get(v, 'NONE')[:16] + '...') for v in inputs if v not in ['get_ipython', '__builtins__', 'print']])
                 if metadata:
                     logger.debug("%s Stored lineages in cache: %s", _LOG_CACHE_HIT, [(k, v[:16]+'...') for k,v in metadata.get('output_lineages', {}).items()])
-            self._restore_from_cache(cached_data, metadata, silent, process_start, render_badge)
+            self._stmt_restorer.restore_from_cache(cached_data, metadata, silent, process_start, render_badge)
 
             metrics['status'] = CacheStatus.RESTORED
             metrics['saved_time'] = metadata.get('execution_time', 0.0) if metadata else 0.0
@@ -1520,7 +1527,7 @@ class StatementProcessor:
             try:
                 backend = self.cash_instance.backend if self.cash_instance else None
                 if backend is not None:
-                    self._persist_metadata_only(backend, cache_key, skip_metadata)
+                    self._stmt_restorer.persist_metadata_only(backend, cache_key, skip_metadata)
             except (OSError, TypeError, ValueError, AttributeError):
                 logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
             return skip_metadata
@@ -1565,7 +1572,7 @@ class StatementProcessor:
         try:
             backend = self.cash_instance.backend
             if backend is not None:
-                self._persist_metadata_only(backend, cache_key, metadata)
+                self._stmt_restorer.persist_metadata_only(backend, cache_key, metadata)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
 
@@ -1577,131 +1584,6 @@ class StatementProcessor:
             logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)
 
         return metadata
-
-    def _persist_metadata_only(self, backend: Any, cache_key: str, metadata: dict[str, Any]) -> None:
-        """Persist only metadata (no data payload) to disk for badge display after restart.
-
-        Walks the backend chain to find backends that support metadata-only writes
-        (e.g. FileBackend). This ensures timing info survives kernel restarts even
-        when the actual data was too large / too cheap to cache.
-        """
-        if hasattr(backend, 'set_metadata_only'):
-            backend.set_metadata_only(cache_key, metadata)
-
-    def _record_restored_var_hash(self, var_name: str, value: Any, metadata: StatementCacheMetadata | None) -> None:
-        """Update variable_hashes / current_session_hashes for a single restored variable."""
-        type_name = type(value).__name__
-        if type_name in ('DataFrame', 'Series', 'ndarray'):
-            lineage_hash = (metadata.get('output_lineages', {}) if metadata else {}).get(var_name)
-            if lineage_hash:
-                self.variable_hashes.setdefault(var_name, set()).add(lineage_hash)
-                self.current_session_hashes[var_name] = lineage_hash
-        elif self.compute_hash:
-            try:
-                content_hash = self.compute_hash(value)
-                self.variable_hashes.setdefault(var_name, set()).add(content_hash)
-                self.current_session_hashes[var_name] = content_hash
-            except (TypeError, ValueError, AttributeError, RecursionError) as e:
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] Could not hash restored variable '%s': %s", var_name, e)
-
-    def _restore_one_var(self, var_name: str, value: Any, metadata: StatementCacheMetadata | None) -> None:
-        """Write one restored variable into the shell namespace and update tracking state."""
-        self.shell.user_ns[var_name] = value
-
-        if metadata:
-            output_lineages = metadata.get('output_lineages', {})
-            if var_name in output_lineages:
-                self.lineage.record(var_name, output_lineages[var_name], value=value)
-
-            stored_code, stored_hash = _get_statement_code_and_hash(metadata)
-            if stored_hash:
-                if var_name not in self.executed_cell_hashes:
-                    self.executed_cell_hashes[var_name] = set()
-                elif isinstance(self.executed_cell_hashes[var_name], str):
-                    self.executed_cell_hashes[var_name] = {self.executed_cell_hashes[var_name]}
-                self.executed_cell_hashes[var_name].add(stored_hash)
-            if stored_code:
-                self.executed_cell_codes[var_name] = stored_code
-
-        self._record_restored_var_hash(var_name, value, metadata)
-
-        if metadata and 'key' in metadata:
-            self.variable_sources[var_name] = metadata['key']
-
-    def _replay_cached_outputs(
-        self,
-        stdout: str,
-        stderr: str,
-        rich_outputs: list,
-        metadata: StatementCacheMetadata | None,
-        render_badge: bool,
-    ) -> float:
-        """Replay stdout/stderr/rich outputs and render badge. Returns elapsed seconds."""
-        t_output = time.time()
-        if stdout:
-            print(stdout, end='')
-        if stderr:
-            print(stderr, end='', file=sys.stderr)
-
-        saved_time = metadata.get('execution_time', 0.0) if metadata else 0.0
-        source = metadata.get('source') if metadata else None
-        storage = metadata.get('storage') if metadata else None
-        if render_badge:
-            self._render_status_badge(CacheStatus.RESTORED, time_saved=saved_time, source=source, storage=storage)
-
-        for output in rich_outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
-            else:
-                display(output)
-        return time.time() - t_output
-
-    def _restore_from_cache(self, cached_data: Any, metadata: StatementCacheMetadata | None, silent: bool, process_start: float, render_badge: bool = True) -> ProcessResult:
-        t_restore = time.time()
-
-        try:
-            payload = cached_data
-            if isinstance(payload, dict) and 'variables' in payload:
-                restored_vars = payload['variables']
-                stdout = payload.get('stdout', '')
-                stderr = payload.get('stderr', '')
-                # Prefer the new key but fall back to legacy 'outputs' so
-                # existing on-disk caches still hydrate their rich output.
-                rich_outputs = payload.get('rich_outputs', payload.get('outputs', []))
-                rng_state = payload.get('rng_state')
-                if rng_state:
-                    if self.debug:
-                        logger.debug("[CACHE DEBUG] Restoring RNG state")
-                    restore_rng_state(rng_state)
-            else:
-                restored_vars = payload
-                stdout = stderr = ""
-                rich_outputs = []
-
-            t_var = time.time()
-            for var_name, value in restored_vars.items():
-                self._restore_one_var(var_name, value, metadata)
-
-            self._file_deps.restore_from_metadata(restored_vars, metadata)
-            var_restore_time = time.time() - t_var
-
-            output_replay_time = 0.0
-            if not silent:
-                output_replay_time = self._replay_cached_outputs(stdout, stderr, rich_outputs, metadata, render_badge)
-
-            restore_time = time.time() - t_restore
-            total_time = time.time() - process_start
-
-            if self.debug:
-                logger.debug("[TIMING] Var restore: %.1fms | Output: %.1fms", var_restore_time*1000, output_replay_time*1000)
-                logger.debug("[TIMING] Total restore: %.1fms | OVERALL: %.1fms", restore_time*1000, total_time*1000)
-                logger.debug("[CACHE DEBUG] ✓ Restored from cache")
-
-        except (KeyError, TypeError, ValueError, AttributeError, OSError) as e:
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Error restoring cache: %s", e)
-            raise
 
     def _analyze_and_hash(self, code: str, occurrence_index: int = 0, tree: ast.Module | None = None) -> tuple[set[str], set[str], str, str, float, float]:
         """Analyze code and compute hashes.
