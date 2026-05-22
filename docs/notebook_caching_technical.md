@@ -858,7 +858,7 @@ flowchart TD
     S1["<b>1. User executes cell</b>"]
     S2["<b>2.</b> <code>CashMagics._execute_cell()</code> intercepts"]
     S3["<b>3.</b> <code>CodeAnalyzer.analyze_code_block()</code><br/>→ determine inputs & outputs"]
-    S4["<b>4.</b> <code>_ensure_state_for_inputs()</code><br/>For each missing input: try <code>_restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, try virtual restore, re-execute if needed"]
+    S4["<b>4.</b> <code>CellExecutor._ensure_state_for_inputs()</code><br/>For each missing input: try <code>Restorer.restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, try virtual restore, re-execute if needed"]
     S5["<b>5.</b> Parse cell into statements"]
     S6["<b>6. For each statement:</b><br/>MutationDetector, SideEffectDetector, RandomnessDetector pre-checks<br/>If control structure → ControlStructureProcessor.process()<br/>Else → StatementProcessor.process_statement():<br/>compute cache key · check skip optimization · check cache (HIT? return cached) · execute · drain decorator calls · capture outputs · compute output lineages · store in cache"]
     S7["<b>7. Update tracking dictionaries</b>"]

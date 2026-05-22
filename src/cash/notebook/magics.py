@@ -137,7 +137,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Execution history tracking for fallback matching
         self._execution_history = []  # List of cell contents executed this session
-        self._cell_code_map = {}  # cell_id -> cell code (for interactive toggles)
         self._executed_cell_raw_codes = set()  # Set of raw cell codes executed this session (used in repair/reset)
 
         # Shared tracking state — single owner of all lineage/dependency dicts
