@@ -1,18 +1,12 @@
-"""Tests for `cash.notebook.object_hashing` — pure hashing/sizing utilities.
+"""Tests for `cash.notebook.object_hashing.compute_hash` — hash dispatch table.
 
 Migrated from `test_magics_coverage.py` when the functions moved out of
-`CashMagics` into their own module. Tests no longer need an IPython shell
-fixture; they exercise the module functions directly.
+`CashMagics` into their own module. The companion size-estimator
+(``estimate_object_size``) is exercised by ``test_size_estimator.py``.
 """
-import sys
-
 import pytest
 
-from cash.notebook.object_hashing import (
-    _recursive_getsizeof,
-    calculate_memory_size,
-    compute_hash,
-)
+from cash.notebook.object_hashing import compute_hash
 
 
 # ============================================================================
@@ -84,69 +78,3 @@ class TestComputeHash:
 # calculate_memory_size
 # ============================================================================
 
-class TestCalculateMemorySize:
-    def test_simple_types(self):
-        size = calculate_memory_size({'x': 42, 'y': 'hello'})
-        assert size > 0
-
-    def test_dataframe_memory(self):
-        try:
-            import pandas as pd
-        except ImportError:
-            pytest.skip("pandas not installed")
-        df = pd.DataFrame({'a': range(1000), 'b': range(1000)})
-        size = calculate_memory_size({'df': df})
-        assert size > 1000
-
-    def test_numpy_array_memory(self):
-        try:
-            import numpy as np
-        except ImportError:
-            pytest.skip("numpy not installed")
-        arr = np.zeros(10000)
-        size = calculate_memory_size({'arr': arr})
-        assert size >= 80000  # 10000 * 8 bytes per float64
-
-    def test_series_memory(self):
-        try:
-            import pandas as pd
-        except ImportError:
-            pytest.skip("pandas not installed")
-        s = pd.Series(range(1000))
-        size = calculate_memory_size({'s': s})
-        assert size > 0
-
-    def test_empty_dict(self):
-        size = calculate_memory_size({})
-        assert size == 0
-
-    def test_nested_containers(self):
-        data = {'nested': {'a': [1, 2, 3], 'b': {'c': [4, 5]}}}
-        size = calculate_memory_size(data)
-        assert size > 0
-
-
-# ============================================================================
-# _recursive_getsizeof
-# ============================================================================
-
-class TestRecursiveGetsizeof:
-    def test_simple_int(self):
-        size = _recursive_getsizeof(42)
-        assert size > 0
-
-    def test_list_includes_elements(self):
-        list_size = _recursive_getsizeof([1, 2, 3])
-        int_size = _recursive_getsizeof(42)
-        assert list_size > int_size
-
-    def test_dict_includes_keys_and_values(self):
-        size = _recursive_getsizeof({'key': 'value', 'key2': 'value2'})
-        assert size > sys.getsizeof({})
-
-    def test_handles_circular_reference(self):
-        """Should handle circular references without infinite recursion."""
-        lst = [1, 2, 3]
-        lst.append(lst)
-        size = _recursive_getsizeof(lst)
-        assert size > 0

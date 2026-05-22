@@ -220,19 +220,19 @@ class TestSizeAwareCaching:
 
     def test_estimate_object_size_int(self):
         """Integer size estimation."""
-        sp = self._make_processor()
-        assert sp._estimate_object_size(42) > 0
+        from cash.notebook.object_hashing import estimate_object_size
+        assert estimate_object_size(42) > 0
 
     def test_estimate_object_size_str(self):
         """String size estimation."""
-        sp = self._make_processor()
-        size = sp._estimate_object_size("hello" * 1000)
+        from cash.notebook.object_hashing import estimate_object_size
+        size = estimate_object_size("hello" * 1000)
         assert size > 5000  # At least 5KB for a 5000-char string
 
     def test_estimate_object_size_list(self):
         """List size estimation."""
-        sp = self._make_processor()
-        size = sp._estimate_object_size(list(range(10000)))
+        from cash.notebook.object_hashing import estimate_object_size
+        size = estimate_object_size(list(range(10000)))
         assert size > 0
 
     def test_should_skip_large_object_basic(self):

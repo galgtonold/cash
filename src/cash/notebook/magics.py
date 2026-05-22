@@ -35,7 +35,7 @@ from .control_structures import ControlStructureProcessor
 from .error_display import show_clean_error as _show_clean_error_impl
 from .magic_admin import CashAdminMagicsMixin
 from .module_invalidator import ModuleInvalidator
-from .object_hashing import calculate_memory_size, compute_hash
+from .object_hashing import compute_hash
 from .restore import Restorer
 from .provenance import ProvenanceTracker
 from .statement_processor import ProcessResult, StatementProcessor
@@ -166,7 +166,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             cash_instance,
             debug=self._debug,
             compute_hash_fn=compute_hash,
-            calculate_memory_fn=calculate_memory_size,
             tracking_state=self._tracking_state,
         )
 

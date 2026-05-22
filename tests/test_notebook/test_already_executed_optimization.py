@@ -478,28 +478,22 @@ class TestSizeAwareEdgeCases:
     """Additional edge cases for size-aware caching."""
 
     def test_estimate_object_size_basic_types(self, processor_fixture):
-        """
-        _estimate_object_size should handle basic Python types.
-        """
-        processor, shell, backend, magics = processor_fixture
-        
+        """estimate_object_size should handle basic Python types."""
+        from cash.notebook.object_hashing import estimate_object_size
+
         # Small objects
-        assert processor._estimate_object_size(42) < 10000
-        assert processor._estimate_object_size("hello") < 10000
-        assert processor._estimate_object_size([1, 2, 3]) < 10000
-        
+        assert estimate_object_size(42) < 10000
+        assert estimate_object_size("hello") < 10000
+        assert estimate_object_size([1, 2, 3]) < 10000
+
         # Larger objects
         big_list = list(range(100000))
-        size = processor._estimate_object_size(big_list)
-        assert size > 0
+        assert estimate_object_size(big_list) > 0
 
     def test_estimate_object_size_none(self, processor_fixture):
-        """
-        _estimate_object_size should handle None.
-        """
-        processor, shell, backend, magics = processor_fixture
-        size = processor._estimate_object_size(None)
-        assert size >= 0
+        """estimate_object_size should handle None."""
+        from cash.notebook.object_hashing import estimate_object_size
+        assert estimate_object_size(None) >= 0
 
     def test_large_compute_slow_is_cached(self, processor_fixture):
         """

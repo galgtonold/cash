@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import dataclasses
 import hashlib
 import logging
 import os
@@ -21,6 +20,7 @@ from cash.exceptions import CacheBackendError, CacheKeyComputationError, CacheSe
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
+from cash.notebook.object_hashing import estimate_object_size
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.server_discovery import get_notebook_path
 from cash.utils import normalize_path, resolve_file_dep_path
@@ -49,26 +49,6 @@ _LOG_PURITY = "[PURITY]"
 _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
-
-# Maximum recursion depth for _estimate_object_size when walking nested
-# containers. Beyond this we fall back to sys.getsizeof to bound cost.
-_MAX_ESTIMATE_DEPTH = 4
-
-# scipy.sparse type names. We dispatch on type-name string to avoid an
-# import-time dependency on scipy.
-_SPARSE_CSR_CSC_TYPES = frozenset({
-    'csr_matrix', 'csc_matrix', 'csr_array', 'csc_array',
-})
-_SPARSE_COO_TYPES = frozenset({'coo_matrix', 'coo_array'})
-
-
-def _est_sparse_csr_csc(m: Any) -> int:
-    return int(m.data.nbytes + m.indices.nbytes + m.indptr.nbytes)
-
-
-def _est_sparse_coo(m: Any) -> int:
-    return int(m.data.nbytes + m.row.nbytes + m.col.nbytes)
-
 
 _COST_MODEL_KEYS = (
     'cost_model_size_bytes',
@@ -344,7 +324,6 @@ class StatementProcessor:
         cash_instance: Cash backend for cache storage
         debug: Enable debug output
         compute_hash_fn: Function to compute variable hashes
-        calculate_memory_fn: Function to calculate memory size
     """
 
     def __init__(
@@ -353,14 +332,12 @@ class StatementProcessor:
         cash_instance: CashInstanceProtocol,
         debug: bool = False,
         compute_hash_fn: Callable[[Any], str] | None = None,
-        calculate_memory_fn: Callable[[dict[str, Any]], int] | None = None,
         tracking_state: TrackingState | None = None,
     ) -> None:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol = cash_instance
         self.debug = debug
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
-        self.calculate_memory: Callable[[dict[str, Any]], int] | None = calculate_memory_fn
 
         self.analytics_manager = AnalyticsManager()
 
@@ -1352,103 +1329,6 @@ class StatementProcessor:
             logger.debug("[MODULE_HASH] Could not read module file: %s", mod_file)
             return None
 
-    def _estimate_object_size(self, obj: Any, _depth: int = 0) -> int:
-        """Estimate the memory size of an object in bytes.
-
-        Uses sys.getsizeof for basic types and specialized estimators
-        for common data science types (DataFrame, Series, ndarray, scipy
-        sparse). Recursion is bounded by ``_MAX_ESTIMATE_DEPTH``.
-
-        The estimator must remain order-of-magnitude correct (not
-        precise) and bounded in runtime — see the design doc for the
-        K=3-outer / K=1-inner sampling rule.
-        """
-        if _depth >= _MAX_ESTIMATE_DEPTH:
-            return sys.getsizeof(obj)
-        try:
-            type_name = type(obj).__name__
-            if type_name == 'DataFrame':
-                return int(obj.memory_usage(deep=True).sum())
-            if type_name == 'Series':
-                return int(obj.memory_usage(deep=True))
-            if type_name == 'ndarray':
-                return int(obj.nbytes)
-            if type_name in _SPARSE_CSR_CSC_TYPES:
-                return _est_sparse_csr_csc(obj)
-            if type_name in _SPARSE_COO_TYPES:
-                return _est_sparse_coo(obj)
-            if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
-                base = sys.getsizeof(obj)
-                return base + sum(
-                    self._estimate_object_size(getattr(obj, f.name), _depth + 1)
-                    for f in dataclasses.fields(obj)
-                )
-            if isinstance(obj, tuple) and hasattr(obj, '_fields'):  # namedtuple
-                base = sys.getsizeof(obj)
-                return base + sum(
-                    self._estimate_object_size(getattr(obj, name), _depth + 1)
-                    for name in obj._fields
-                )
-            if type_name in ('bytes', 'bytearray'):
-                return len(obj)
-            if isinstance(obj, (list, tuple)):
-                return self._estimate_indexable(obj, _depth)
-            if isinstance(obj, dict):
-                return self._estimate_dict(obj, _depth)
-            if isinstance(obj, (set, frozenset)):
-                return self._estimate_set(obj, _depth)
-            return sys.getsizeof(obj)
-        except (TypeError, AttributeError, IndexError, KeyError, StopIteration):
-            return sys.getsizeof(obj)
-
-    def _estimate_indexable(self, obj: Any, _depth: int) -> int:
-        """Estimate size of a list or tuple.
-
-        K=3 (first / middle / last) at depth 0 to catch position-correlated
-        element sizes from monotonic-build patterns; K=1 (first element)
-        at depth >= 1 to bound total recursive cost.
-        """
-        n = len(obj)
-        base = sys.getsizeof(obj)
-        if n == 0:
-            return base
-        if n <= 2 or _depth >= 1:
-            return base + n * self._estimate_object_size(obj[0], _depth + 1)
-        samples = (obj[0], obj[n // 2], obj[-1])
-        avg = sum(self._estimate_object_size(s, _depth + 1) for s in samples) // 3
-        return base + n * avg
-
-    def _estimate_dict(self, obj: dict, _depth: int) -> int:
-        """Estimate size of a dict.
-
-        K=2 (first value + last value) at depth 0; K=1 (first value) at
-        depth >= 1. CPython doesn't support O(1) middle-by-index access,
-        so we accept the weaker position-bias detection for dicts.
-        """
-        n = len(obj)
-        base = sys.getsizeof(obj)
-        if n == 0:
-            return base
-        first_val = next(iter(obj.values()))
-        if n == 1:
-            return base + self._estimate_object_size(first_val, _depth + 1)
-        if _depth >= 1:
-            return base + n * self._estimate_object_size(first_val, _depth + 1)
-        last_val = next(reversed(obj.values()))
-        avg = (
-            self._estimate_object_size(first_val, _depth + 1) +
-            self._estimate_object_size(last_val, _depth + 1)
-        ) // 2
-        return base + n * avg
-
-    def _estimate_set(self, obj: Any, _depth: int) -> int:
-        """Estimate size of a set or frozenset (unordered; K=1 always)."""
-        n = len(obj)
-        base = sys.getsizeof(obj)
-        if n == 0:
-            return base
-        sample = next(iter(obj))
-        return base + n * self._estimate_object_size(sample, _depth + 1)
 
     def _should_skip_large_object_caching(
         self,
@@ -1583,7 +1463,7 @@ class StatementProcessor:
         """
         from cash.notebook import cost_model
         try:
-            obj_size = self._estimate_object_size(var_value)
+            obj_size = estimate_object_size(var_value)
             type_name = type(var_value).__name__
             backend_kind = "ram" if is_ram_backend else "disk"
             family = cost_model.resolve_family(type_name)
