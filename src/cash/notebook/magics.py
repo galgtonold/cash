@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import hashlib
 import logging
 import os
 import pickle
@@ -36,6 +35,7 @@ from .control_structures import ControlStructureProcessor, is_control_structure
 from .error_display import show_clean_error as _show_clean_error_impl
 from .magic_admin import CashAdminMagicsMixin
 from .module_invalidator import ModuleInvalidator
+from .object_hashing import calculate_memory_size, compute_hash
 from .provenance import ProvenanceTracker
 from .statement_processor import ProcessResult, StatementProcessor
 from .upstream import UpstreamChecker
@@ -168,7 +168,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             shell,
             cash_instance=cash_instance,
             debug=self._debug,
-            compute_hash_fn=self._compute_hash,
+            compute_hash_fn=compute_hash,
             tracking_state=self._tracking_state,
         )
 
@@ -176,8 +176,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             shell,
             cash_instance,
             debug=self._debug,
-            compute_hash_fn=self._compute_hash,
-            calculate_memory_fn=self._calculate_memory_size,
+            compute_hash_fn=compute_hash,
+            calculate_memory_fn=calculate_memory_size,
             tracking_state=self._tracking_state,
         )
 
@@ -593,148 +593,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 print(f"[CELL_ID] Could not capture cell_id: {e}")
             self._current_cell_id = None
 
-    @staticmethod
-    def _hash_dataframe_or_series(obj: Any, type_name: str) -> str:
-        """Hash a pandas DataFrame or Series using shape + dtypes + data sample."""
-        shape_str = f"{obj.shape}"
-        dtypes_str = str(obj.dtypes.to_dict()) if type_name == 'DataFrame' else str(obj.dtype)
-        try:
-            sample = str(obj.head(5).values.tobytes() if len(obj) > 0 else b'')
-        except (TypeError, ValueError, AttributeError):
-            sample = str(obj.head(5))
-        combined = f"{shape_str}:{dtypes_str}:{sample}"
-        return hashlib.sha256(combined.encode('utf-8')).hexdigest()
-
-    @staticmethod
-    def _hash_collection(obj: Any) -> str:
-        """Hash a list/tuple/dict/set/frozenset — sampling large ones to avoid O(n) pickle."""
-        n = len(obj)
-        if n <= 200:
-            return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-        if isinstance(obj, (list, tuple)):
-            combined = f"list:{n}:{repr(obj[:5])}:{repr(obj[-5:])}"
-        elif isinstance(obj, dict):
-            combined = f"dict:{n}:{repr(sorted(obj.keys())[:10])}"
-        else:
-            combined = f"set:{n}:{repr(sorted(obj)[:10])}"
-        return hashlib.sha256(combined.encode('utf-8')).hexdigest()
-
-    def _compute_hash(self, obj: Any) -> str:
-        """Compute a hash for an object using type-specific methods with explicit fallbacks.
-
-        Strategy order:
-        1. Type-specific fast hash (DataFrame/ndarray/collections)
-        2. Generic pickle hash
-        3. Identity hash (always succeeds)
-        """
-        _HASH_ERRORS = (TypeError, ValueError, AttributeError, pickle.PicklingError)
-        type_name = type(obj).__name__
-
-        # Strategy 1: type-specific fast hash
-        try:
-            if type_name in ('DataFrame', 'Series'):
-                return self._hash_dataframe_or_series(obj, type_name)
-            if type_name == 'ndarray':
-                shape_str = str(obj.shape)
-                dtype_str = str(obj.dtype)
-                sample = str(obj.flat[:100].tobytes() if obj.size > 0 else b'')
-                combined = f"{shape_str}:{dtype_str}:{sample}"
-                return hashlib.sha256(combined.encode('utf-8')).hexdigest()
-            if isinstance(obj, (list, tuple, dict, set, frozenset)):
-                return self._hash_collection(obj)
-            return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-        except _HASH_ERRORS as exc:
-            logger.debug("Primary hash failed for %s: %s", type_name, exc)
-
-        # Strategy 2: plain pickle fallback
-        try:
-            return hashlib.sha256(pickle.dumps(obj)).hexdigest()
-        except (TypeError, pickle.PicklingError):
-            pass
-
-        # Strategy 3: identity hash (always succeeds)
-        return hashlib.sha256(str(id(obj)).encode('utf-8')).hexdigest()
-
-    def _calculate_memory_size(self, variables_dict: dict[str, Any]) -> int:
-        """
-        Calculate the total memory size of output variables using type-specific methods.
-        This is much faster than pickle.dumps() on the entire payload.
-
-        Args:
-            variables_dict: Dictionary of variable names to their values
-
-        Returns:
-            Total memory size in bytes
-        """
-        total_size = 0
-
-        for _var_name, value in variables_dict.items():
-            try:
-                # Check type and use appropriate method
-                type_name = type(value).__name__
-
-                # DataFrame: Use built-in memory_usage (fast and accurate)
-                if type_name == 'DataFrame':
-                    try:
-                        total_size += value.memory_usage(deep=True).sum()
-                        continue
-                    except (TypeError, AttributeError):
-                        pass  # Fall through to other methods
-
-                # NumPy array: Use nbytes
-                elif type_name == 'ndarray':
-                    try:
-                        total_size += value.nbytes
-                        continue
-                    except (TypeError, AttributeError):
-                        pass
-
-                # Series: Similar to DataFrame
-                elif type_name == 'Series':
-                    try:
-                        total_size += value.memory_usage(deep=True)
-                        continue
-                    except (TypeError, AttributeError):
-                        pass
-
-                # For other types, use sys.getsizeof with recursion for containers
-                total_size += self._recursive_getsizeof(value)
-
-            except (TypeError, ValueError, RecursionError):
-                # If all else fails, try pickle as last resort
-                try:
-                    total_size += len(pickle.dumps(value))
-                except (TypeError, pickle.PicklingError):
-                    # If even pickle fails, estimate with sys.getsizeof
-                    total_size += sys.getsizeof(value)
-
-        return total_size
-
-    def _recursive_getsizeof(self, obj: Any, seen: set[int] | None = None) -> int:
-        """
-        Recursively calculate size of an object including its contents.
-        More accurate than plain sys.getsizeof() for containers.
-        """
-        size = sys.getsizeof(obj)
-
-        if seen is None:
-            seen = set()
-
-        obj_id = id(obj)
-        if obj_id in seen:
-            return 0
-
-        seen.add(obj_id)
-
-        # Handle containers
-        if isinstance(obj, dict):
-            size += sum(self._recursive_getsizeof(k, seen) + self._recursive_getsizeof(v, seen)
-                       for k, v in obj.items())
-        elif isinstance(obj, (list, tuple, set, frozenset)):
-            size += sum(self._recursive_getsizeof(item, seen) for item in obj)
-
-        return size
-
     def _should_render_progress_badge(self) -> bool:
         """Check if enough time has passed to render a progress badge update.
 
@@ -914,7 +772,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:
         """Update TrackingState after writing a restored variable into user_ns."""
-        restored_hash = self._compute_hash(restored_vars[var_name])
+        restored_hash = compute_hash(restored_vars[var_name])
         hashes = self._tracking_state.variable_hashes
         if var_name not in hashes:
             hashes[var_name] = set()
@@ -985,7 +843,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             if input_var not in self.shell.user_ns:
                 restored_metrics.extend(self._restore_variable(input_var))
             elif input_var in self._tracking_state.variable_hashes:
-                current_hash = self._compute_hash(self.shell.user_ns.get(input_var))
+                current_hash = compute_hash(self.shell.user_ns.get(input_var))
                 if current_hash not in self._tracking_state.variable_hashes[input_var]:
                     restored_metrics.extend(self._restore_variable(input_var))
 
