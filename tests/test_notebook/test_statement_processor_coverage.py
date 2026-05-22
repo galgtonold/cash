@@ -52,7 +52,7 @@ class TestCheckCache:
 
     def test_cache_miss_returns_none(self, processor_fixture):
         processor, _, _ = processor_fixture
-        metadata, cached_data, time_taken = processor._check_cache("nonexistent_key", None)
+        metadata, cached_data, time_taken = processor._freshness.check_cache("nonexistent_key", None)
         assert cached_data is None
 
     def test_stale_format_invalidation(self, processor_fixture):
@@ -67,7 +67,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
         # Should be invalidated due to missing output_lineages
         assert result_data is None
 
@@ -83,7 +83,7 @@ class TestCheckCache:
         backend.set(cache_key, cached_data, metadata)
         
         # TTL of 10 seconds - entry should be expired
-        result_meta, result_data, _ = processor._check_cache(cache_key, 10)
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, 10)
         assert result_data is None
 
     def test_ttl_not_expired(self, processor_fixture):
@@ -97,7 +97,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._check_cache(cache_key, 3600)
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, 3600)
         assert result_data is not None
 
     def test_file_dep_missing_file(self, processor_fixture):
@@ -112,7 +112,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
         assert result_data is None
 
     def test_file_dep_changed_mtime(self, processor_fixture, tmp_path):
@@ -130,7 +130,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
         assert result_data is None
 
     def test_file_dep_unchanged(self, processor_fixture, tmp_path):
@@ -149,7 +149,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
         assert result_data is not None
 
     def test_input_file_dep_invalidation(self, processor_fixture, tmp_path):
@@ -159,9 +159,11 @@ class TestCheckCache:
         test_file.write_text("a,b\n1,2\n")
         current_mtime = os.path.getmtime(str(test_file))
         
-        # Set up input var's file dependencies
-        processor.executed_file_deps = {'df': {str(test_file)}}
-        
+        # Set up input var's file dependencies — mutate the shared dict so the
+        # freshness checker (which holds its own ref via set_tracking_state)
+        # sees the update too.
+        processor.executed_file_deps['df'] = {str(test_file)}
+
         # Store source cache entry for the input variable with OLD mtime
         source_key = "source_cache_key"
         source_meta = {
@@ -170,7 +172,7 @@ class TestCheckCache:
             'file_dependencies': {str(test_file): current_mtime - 100},  # Old mtime
         }
         backend.set(source_key, {'variables': {'df': 'data'}}, source_meta)
-        processor.variable_sources = {'df': source_key}
+        processor.variable_sources['df'] = source_key
         
         # Now store the dependent cache entry (no direct file deps)
         cache_key = "test_input_dep"
@@ -181,7 +183,7 @@ class TestCheckCache:
         cached_data = {'variables': {'result': 100}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._check_cache(cache_key, None, inputs={'df'})
+        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None, inputs={'df'})
         assert result_data is None
 
 
