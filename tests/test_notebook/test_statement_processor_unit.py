@@ -60,11 +60,14 @@ class TestStatementProcessorImport:
         assert hasattr(StatementProcessor, "process_statement")
 
     def test_has_expected_attributes(self):
-        """The class should define key methods for statement processing."""
+        """The class should define key methods for statement processing.
+
+        `_capture_and_track_variables` moved to StatementLineageBuilder
+        (now reached via ``processor._lineage.capture_and_track_variables``).
+        """
         expected_methods = [
             "process_statement",
             "_execute_statement",
-            "_capture_and_track_variables",
             "_analyze_and_hash",
         ]
         for method_name in expected_methods:
