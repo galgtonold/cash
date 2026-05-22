@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import ast
 import contextlib
-import hashlib
 import logging
 import os
 import pickle
@@ -30,7 +29,6 @@ from cash.notebook.server_discovery import get_notebook_path
 from cash.notebook.statement_file_deps import StatementFileDeps
 from cash.notebook.statement_lineage import StatementLineageBuilder
 from cash.notebook.statement_restore import StatementRestorer
-from cash.utils import resolve_file_dep_path
 
 __all__ = [
     "StatementCacheMetadata",
@@ -43,15 +41,9 @@ __all__ = [
 _LOG_PROCESSOR = "[PROCESSOR]"
 _LOG_DEBUG = "[DEBUG]"
 _LOG_MUTATION = "[MUTATION]"
-_LOG_SIDE_EFFECT = "[SIDE_EFFECT]"
-_LOG_CACHE_KEY = "[CACHE_KEY]"
 _LOG_CACHE_HIT = "[CACHE_HIT_DEBUG]"
 _LOG_CACHE = "[CACHE]"
 _LOG_CACHE_DEBUG = "[CACHE DEBUG]"
-_LOG_FILE_DEPS = "[FILE_DEPS]"
-_LOG_FILE_HASH = "[FILE_HASH]"
-_LOG_MODULE_HASH = "[MODULE_HASH]"
-_LOG_TIMING = "[TIMING]"
 _LOG_PURITY = "[PURITY]"
 _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
