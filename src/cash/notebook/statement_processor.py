@@ -18,6 +18,11 @@ from typing import Any, TypedDict
 
 from cash.exceptions import CacheBackendError, CacheKeyComputationError, CacheSerializationError
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from cash.notebook.cache_freshness import (
+    CacheFreshnessChecker,
+    snapshot_file_deps,
+    split_file_dep_value,
+)
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.object_hashing import estimate_object_size
@@ -348,6 +353,14 @@ class StatementProcessor:
 
         self.set_tracking_state(tracking_state or TrackingState())
 
+        # Cache-freshness checker (TTL / file-dep / input-file invalidation).
+        # Holds the same tracking_state ref so set_tracking_state propagates.
+        self._freshness = CacheFreshnessChecker(
+            tracking_state=self._tracking_state,
+            backend=cash_instance.backend if cash_instance is not None else None,
+            debug=debug,
+        )
+
         self.executed_file_mtimes = {}  # var_name -> {filepath: mtime} at time of last execution
 
         # Used to prevent the "redundant import" optimization from skipping
@@ -395,8 +408,11 @@ class StatementProcessor:
         This is the preferred way to configure tracking state.  All fields
         are aliases to the same mutable containers so mutations are visible
         across ``CashMagics``, ``StatementProcessor``, and ``UpstreamChecker``.
+        Sibling sub-components (e.g. ``CacheFreshnessChecker``) receive the
+        same reference via propagation here.
         """
 
+        self._tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -407,6 +423,10 @@ class StatementProcessor:
         self.executed_file_deps = state.executed_file_deps
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
+        # Propagate to sibling sub-components (created in __init__ after the
+        # first set_tracking_state, so guard with hasattr).
+        if hasattr(self, '_freshness'):
+            self._freshness.set_tracking_state(state)
 
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, render_badge: bool = True, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
         """
@@ -514,14 +534,13 @@ class StatementProcessor:
         # Filter out the no-name inputs the AST sometimes emits.
         metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
         # Attribute the miss for the badge's row-detail drawer when we can do
-        # it cheaply. ``_check_cache`` sets ``_last_miss_reason`` as a side
-        # effect for TTL / file invalidations (already-computed information).
-        # We *don't* fall back to a backend-wide scan for the empty-key path —
-        # that diagnostic was O(N²) in cache size and dominated cold-run cost.
-        if not skip_cache:
-            reason = getattr(self, '_last_miss_reason', None)
-            if reason:
-                metrics['miss_reason'] = reason
+        # it cheaply. ``CacheFreshnessChecker`` sets ``last_miss_reason`` as a
+        # side effect for TTL / file invalidations (already-computed
+        # information).  We *don't* fall back to a backend-wide scan for the
+        # empty-key path — that diagnostic was O(N²) in cache size and
+        # dominated cold-run cost.
+        if not skip_cache and self._freshness.last_miss_reason:
+            metrics['miss_reason'] = self._freshness.last_miss_reason
 
         self._post_execute(
             code, result, inputs, outputs, accessed_files,
@@ -557,7 +576,7 @@ class StatementProcessor:
     ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
-            return self._check_cache(cache_key, ttl, inputs)
+            return self._freshness.check_cache(cache_key, ttl, inputs)
         if self.debug:
             logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
@@ -1614,7 +1633,7 @@ class StatementProcessor:
             'source_hash': source_hash,
             'code': code,
             'key': cache_key,
-            'file_dependencies': self._snapshot_file_deps(file_dependencies),
+            'file_dependencies': snapshot_file_deps(file_dependencies),
             'force_persist': force_persist,
             'output_lineages': self._build_output_lineages(outputs),
         }
@@ -1720,7 +1739,7 @@ class StatementProcessor:
         # `executed_file_mtimes` historically holds {path: float}; flatten the
         # new {'mtime': ..., 'size': ...} form back to a bare mtime here.
         mtime_map = {
-            path: self._split_file_dep_value(stored)[0]
+            path: split_file_dep_value(stored)[0]
             for path, stored in file_deps.items()
         }
         for var_name in restored_vars:
@@ -1853,155 +1872,6 @@ class StatementProcessor:
             return True
 
         return bool(callable(val) and (var_name.startswith('_') or hasattr(val, '__self__')))
-
-    def _invalidate_if_ttl_expired(self, metadata: StatementCacheMetadata, cached_data: Any, ttl: int) -> Any:
-        """Return None if the cache entry has exceeded *ttl* seconds, else return *cached_data*."""
-        timestamp = metadata.get('timestamp', 0)
-        age = time.time() - timestamp
-        if age > ttl:
-            self._last_miss_reason = f"cache TTL expired ({age:.0f}s old, limit {ttl}s)"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Cache expired (TTL)")
-            return None
-        return cached_data
-
-    @staticmethod
-    def _snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, float]]:
-        """Return ``{path: {'mtime': mtime, 'size': size}}`` for paths that exist."""
-        snapshot: dict[str, dict[str, float]] = {}
-        for f in paths:
-            try:
-                st = os.stat(f)
-            except OSError:
-                continue
-            snapshot[f] = {'mtime': st.st_mtime, 'size': st.st_size}
-        return snapshot
-
-    @staticmethod
-    def _split_file_dep_value(value: Any) -> tuple[float, int | None]:
-        """Return ``(mtime, size_or_None)`` for either the new or legacy form.
-
-        New form: ``{'mtime': ..., 'size': ...}``.
-        Legacy:   bare float (mtime only).  Cache entries from ≤0.5.0 use
-        the legacy form; we still honour them but skip the size check.
-        """
-        if isinstance(value, dict):
-            return float(value.get('mtime', 0.0)), value.get('size')
-        return float(value), None
-
-    def _invalidate_if_direct_file_changed(self, metadata: StatementCacheMetadata, cached_data: Any) -> Any:
-        """Return None if any direct file dep in *metadata* is missing or modified."""
-        file_deps = metadata.get('file_dependencies', {})
-        for fpath, stored in file_deps.items():
-            resolved = resolve_file_dep_path(fpath)
-            if resolved is None:
-                self._last_miss_reason = f"file dependency missing: {fpath}"
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
-                return None
-            stored_mtime, stored_size = self._split_file_dep_value(stored)
-            try:
-                cur_stat = os.stat(resolved)
-            except OSError:
-                self._last_miss_reason = f"file dependency unreadable: {resolved}"
-                return None
-            mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
-            if mtime_delta > 0.01:
-                self._last_miss_reason = f"file changed: {resolved}"
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency mtime changed: %s (delta=%.4fs)", resolved, mtime_delta)
-                return None
-            # Filesystems with coarse mtime granularity (HFS+/APFS, some
-            # ext4 configs) can produce identical mtimes for back-to-back
-            # writes.  Falling back to size catches that case for the
-            # common "rewrote the CSV" scenario.
-            if stored_size is not None and cur_stat.st_size != stored_size:
-                self._last_miss_reason = f"file changed (size): {resolved}"
-                if self.debug:
-                    logger.debug(
-                        "[CACHE DEBUG] File dependency size changed: %s (was %d, now %d)",
-                        resolved, stored_size, cur_stat.st_size,
-                    )
-                return None
-        return cached_data
-
-    def _input_file_changed(self, input_var: str, fpath: str) -> bool:
-        """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached."""
-        resolved = resolve_file_dep_path(fpath)
-        if resolved is None:
-            self._last_miss_reason = f"input file missing (via {input_var}): {fpath}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
-            return True
-        source_cache_key = self.variable_sources.get(input_var)
-        if not source_cache_key:
-            return False
-        source_meta, _ = self.cash_instance.backend.get(source_cache_key)
-        if not source_meta:
-            return False
-        source_file_deps = source_meta.get('file_dependencies', {})
-        if fpath not in source_file_deps:
-            return False
-        stored_mtime, stored_size = self._split_file_dep_value(source_file_deps[fpath])
-        try:
-            cur_stat = os.stat(resolved)
-        except OSError:
-            return True
-        mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
-        if mtime_delta > 0.01:
-            self._last_miss_reason = f"file changed via input '{input_var}': {resolved}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' source file mtime changed: %s (delta=%.4fs)", input_var, resolved, mtime_delta)
-            return True
-        if stored_size is not None and cur_stat.st_size != stored_size:
-            self._last_miss_reason = f"file changed (size) via input '{input_var}': {resolved}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' source file size changed: %s (was %d, now %d)", input_var, resolved, stored_size, cur_stat.st_size)
-            return True
-        return False
-
-    def _invalidate_if_input_file_changed(self, inputs: set[str], cached_data: Any) -> Any:
-        """Return None if any file dep of an input variable has changed since it was computed."""
-        if not hasattr(self, 'executed_file_deps'):
-            return cached_data
-        for input_var in inputs:
-            for fpath in self.executed_file_deps.get(input_var, ()):
-                if self._input_file_changed(input_var, fpath):
-                    return None
-        return cached_data
-
-    def _check_cache(self, cache_key: str, ttl: int | None, inputs: set[str] | None = None) -> tuple[StatementCacheMetadata | None, Any | None, float]:
-        """Check cache for existing entry.
-
-        Also checks file dependencies inherited from input variables.
-        Side-effect: sets ``self._last_miss_reason`` (a short human-readable
-        explanation) whenever the lookup ultimately misses, so the badge can
-        surface "why did this cell re-run?" in its expanded row detail.
-        """
-        # Reset per-lookup miss attribution. The invalidator helpers may
-        # overwrite this with a more specific reason on the way out.
-        self._last_miss_reason = None
-
-        t3 = time.time()
-        metadata, cached_data = self.cash_instance.backend.get(cache_key)
-        cache_check_time = time.time() - t3
-
-        if cached_data and metadata:
-            if ttl:
-                cached_data = self._invalidate_if_ttl_expired(metadata, cached_data, ttl)
-            if cached_data:
-                cached_data = self._invalidate_if_direct_file_changed(metadata, cached_data)
-            # CRITICAL: Also check file dependencies inherited from INPUT variables.
-            # Fixes the bug where `df` cell was cached even when the source CSV changed.
-            if cached_data and inputs:
-                cached_data = self._invalidate_if_input_file_changed(inputs, cached_data)
-            if cached_data is not None and 'output_lineages' not in metadata:
-                cached_data = None
-                self._last_miss_reason = "cache entry uses an old format (missing lineage metadata)"
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] Cache entry missing lineage metadata (stale format), invalidating.")
-
-        return metadata, cached_data, cache_check_time
 
     def _print_cache_debug(
         self,
