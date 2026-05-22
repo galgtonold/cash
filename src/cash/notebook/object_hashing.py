@@ -1,9 +1,15 @@
 """Pure functions for hashing and sizing arbitrary Python objects.
 
-Used as the `compute_hash_fn` and `calculate_memory_fn` callable seam
-threaded into `StatementProcessor` and `UpstreamChecker` (see
-``CashMagics._init_processing_components``), and by the upcoming
-``Restorer`` to verify restored objects against their stored lineage.
+Hash helpers (``compute_hash``) are used as the ``compute_hash_fn``
+callable seam threaded into ``StatementProcessor`` and ``UpstreamChecker``
+and by ``Restorer`` to verify restored objects against their stored
+lineage.
+
+Size helpers (``estimate_object_size``) are used by
+``StatementProcessor`` to enforce per-statement cache-budget decisions
+(skip caching when an object would exceed the configured RAM/disk
+budgets).  Order-of-magnitude correct, not precise; bounded in runtime
+by a depth cap and sampling.
 
 **Anti-god-class rule (load-bearing):** this module is *pure functions*.
 No state, no class, no IPython, no ``Cash`` dependency. If a caller
@@ -13,6 +19,7 @@ in the caller — do not grow this module into a class with options.
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import logging
 import pickle
@@ -83,75 +90,127 @@ def compute_hash(obj: Any) -> str:
     return hashlib.sha256(str(id(obj)).encode('utf-8')).hexdigest()
 
 
-def _recursive_getsizeof(obj: Any, seen: set[int] | None = None) -> int:
-    """Recursively calculate size of an object including its contents.
+# ---------------------------------------------------------------------------
+# Object size estimation
+# ---------------------------------------------------------------------------
 
-    More accurate than plain ``sys.getsizeof()`` for containers.
+# Recursion-depth cap for ``estimate_object_size`` walks; bounds total cost.
+_MAX_ESTIMATE_DEPTH = 4
+
+# scipy.sparse type names. Dispatched via type-name string to avoid an
+# import-time dependency on scipy.
+_SPARSE_CSR_CSC_TYPES = frozenset({
+    'csr_matrix', 'csc_matrix', 'csr_array', 'csc_array',
+})
+_SPARSE_COO_TYPES = frozenset({'coo_matrix', 'coo_array'})
+
+
+def _est_sparse_csr_csc(m: Any) -> int:
+    return int(m.data.nbytes + m.indices.nbytes + m.indptr.nbytes)
+
+
+def _est_sparse_coo(m: Any) -> int:
+    return int(m.data.nbytes + m.row.nbytes + m.col.nbytes)
+
+
+def estimate_object_size(obj: Any, _depth: int = 0) -> int:
+    """Estimate the memory size of an object in bytes.
+
+    Uses ``sys.getsizeof`` for basic types and specialised estimators for
+    common data-science types (DataFrame, Series, ndarray, scipy sparse).
+    Recursion is bounded by ``_MAX_ESTIMATE_DEPTH``.
+
+    Must remain **order-of-magnitude correct** (not precise) and bounded
+    in runtime — see the K=3-outer / K=1-inner sampling rule below.
+    Circular references are naturally bounded by the depth cap, so no
+    ``seen`` set is required.
     """
-    size = sys.getsizeof(obj)
+    if _depth >= _MAX_ESTIMATE_DEPTH:
+        return sys.getsizeof(obj)
+    try:
+        type_name = type(obj).__name__
+        if type_name == 'DataFrame':
+            return int(obj.memory_usage(deep=True).sum())
+        if type_name == 'Series':
+            return int(obj.memory_usage(deep=True))
+        if type_name == 'ndarray':
+            return int(obj.nbytes)
+        if type_name in _SPARSE_CSR_CSC_TYPES:
+            return _est_sparse_csr_csc(obj)
+        if type_name in _SPARSE_COO_TYPES:
+            return _est_sparse_coo(obj)
+        if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+            base = sys.getsizeof(obj)
+            return base + sum(
+                estimate_object_size(getattr(obj, f.name), _depth + 1)
+                for f in dataclasses.fields(obj)
+            )
+        if isinstance(obj, tuple) and hasattr(obj, '_fields'):  # namedtuple
+            base = sys.getsizeof(obj)
+            return base + sum(
+                estimate_object_size(getattr(obj, name), _depth + 1)
+                for name in obj._fields
+            )
+        if type_name in ('bytes', 'bytearray'):
+            return len(obj)
+        if isinstance(obj, (list, tuple)):
+            return _estimate_indexable(obj, _depth)
+        if isinstance(obj, dict):
+            return _estimate_dict(obj, _depth)
+        if isinstance(obj, (set, frozenset)):
+            return _estimate_set(obj, _depth)
+        return sys.getsizeof(obj)
+    except (TypeError, AttributeError, IndexError, KeyError, StopIteration):
+        return sys.getsizeof(obj)
 
-    if seen is None:
-        seen = set()
 
-    obj_id = id(obj)
-    if obj_id in seen:
-        return 0
+def _estimate_indexable(obj: Any, _depth: int) -> int:
+    """Estimate size of a list or tuple.
 
-    seen.add(obj_id)
-
-    if isinstance(obj, dict):
-        size += sum(_recursive_getsizeof(k, seen) + _recursive_getsizeof(v, seen)
-                    for k, v in obj.items())
-    elif isinstance(obj, (list, tuple, set, frozenset)):
-        size += sum(_recursive_getsizeof(item, seen) for item in obj)
-
-    return size
-
-
-def calculate_memory_size(variables_dict: dict[str, Any]) -> int:
-    """Calculate the total memory size of output variables using type-specific methods.
-
-    Much faster than ``pickle.dumps()`` on the entire payload.
-
-    Args:
-        variables_dict: Dictionary of variable names to their values.
-
-    Returns:
-        Total memory size in bytes.
+    K=3 (first / middle / last) at depth 0 to catch position-correlated
+    element sizes from monotonic-build patterns; K=1 (first element) at
+    depth >= 1 to bound total recursive cost.
     """
-    total_size = 0
+    n = len(obj)
+    base = sys.getsizeof(obj)
+    if n == 0:
+        return base
+    if n <= 2 or _depth >= 1:
+        return base + n * estimate_object_size(obj[0], _depth + 1)
+    samples = (obj[0], obj[n // 2], obj[-1])
+    avg = sum(estimate_object_size(s, _depth + 1) for s in samples) // 3
+    return base + n * avg
 
-    for _var_name, value in variables_dict.items():
-        try:
-            type_name = type(value).__name__
 
-            if type_name == 'DataFrame':
-                try:
-                    total_size += value.memory_usage(deep=True).sum()
-                    continue
-                except (TypeError, AttributeError):
-                    pass
+def _estimate_dict(obj: dict, _depth: int) -> int:
+    """Estimate size of a dict.
 
-            elif type_name == 'ndarray':
-                try:
-                    total_size += value.nbytes
-                    continue
-                except (TypeError, AttributeError):
-                    pass
+    K=2 (first value + last value) at depth 0; K=1 (first value) at depth
+    >= 1.  CPython doesn't support O(1) middle-by-index access, so we
+    accept the weaker position-bias detection for dicts.
+    """
+    n = len(obj)
+    base = sys.getsizeof(obj)
+    if n == 0:
+        return base
+    first_val = next(iter(obj.values()))
+    if n == 1:
+        return base + estimate_object_size(first_val, _depth + 1)
+    if _depth >= 1:
+        return base + n * estimate_object_size(first_val, _depth + 1)
+    last_val = next(reversed(obj.values()))
+    avg = (
+        estimate_object_size(first_val, _depth + 1) +
+        estimate_object_size(last_val, _depth + 1)
+    ) // 2
+    return base + n * avg
 
-            elif type_name == 'Series':
-                try:
-                    total_size += value.memory_usage(deep=True)
-                    continue
-                except (TypeError, AttributeError):
-                    pass
 
-            total_size += _recursive_getsizeof(value)
-
-        except (TypeError, ValueError, RecursionError):
-            try:
-                total_size += len(pickle.dumps(value))
-            except (TypeError, pickle.PicklingError):
-                total_size += sys.getsizeof(value)
-
-    return total_size
+def _estimate_set(obj: Any, _depth: int) -> int:
+    """Estimate size of a set or frozenset (unordered; K=1 always)."""
+    n = len(obj)
+    base = sys.getsizeof(obj)
+    if n == 0:
+        return base
+    sample = next(iter(obj))
+    return base + n * estimate_object_size(sample, _depth + 1)
