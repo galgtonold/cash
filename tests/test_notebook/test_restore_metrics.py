@@ -37,7 +37,7 @@ def magics(cash_instance):
 
 def test_restore_variable_returns_metrics(magics, cash_instance):
     """
-    Test that _restore_variable returns metrics with saved_time.
+    Test that Restorer.restore_variable returns metrics with saved_time.
     """
     # 1. Setup Cache Entry
     var_name = 'a'
@@ -69,7 +69,7 @@ def test_restore_variable_returns_metrics(magics, cash_instance):
     if var_name in magics.shell.user_ns:
         del magics.shell.user_ns[var_name]
         
-    metrics = magics._restore_variable(var_name)
+    metrics = magics._restorer.restore_variable(var_name)
     
     # 3. Verify
     assert var_name in magics.shell.user_ns
