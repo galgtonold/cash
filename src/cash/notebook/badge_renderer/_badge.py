@@ -29,11 +29,16 @@ def render_interactive_badge(
     cell_total_time: float | None = None,
     timing_breakdown: dict[str, float] | None = None,
     bug_report_context: dict | None = None,
+    configured_tiers: tuple[str, ...] = (),
 ) -> str:
     """Build the interactive HTML badge string for cell execution results.
 
     Pipeline: ``metrics_list → view_builder.build_interactive_badge → BadgeView
     → renderers.html.render_html → HTML string``.
+
+    ``configured_tiers`` is the backend-declared tier list
+    (``cash.backend.tier_labels()``); it drives the per-row dot indicator
+    so a three-tier configuration shows three dots, not the legacy two.
     """
     if badge_mode != "html":
         return ""
@@ -50,6 +55,7 @@ def render_interactive_badge(
         cell_total_time=cell_total_time,
         timing_breakdown=timing_breakdown,
         bug_report_context=bug_report_context,
+        configured_tiers=configured_tiers,
     )
     return render_html(view)
 

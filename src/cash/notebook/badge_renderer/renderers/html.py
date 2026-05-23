@@ -24,7 +24,19 @@ stays compact and the CSS class names form a stable contract for tests.
 
 from __future__ import annotations
 
+from contextvars import ContextVar
 from typing import Any
+
+# Active tier list for the current render pass — set at the top of
+# ``render_html`` / ``render_status_badge_html`` from the badge's
+# ``configured_tiers`` field. ``_dots()`` reads it through ``.get()``
+# so every row, control body, iteration row, and tooltip drawer in one
+# render shares the same tier rack without each helper taking a kwarg.
+# Reset to ``()`` at the start of each render to prevent leakage between
+# successive renders in the same thread.
+_CONFIGURED_TIERS: ContextVar[tuple[str, ...]] = ContextVar(
+    "_CONFIGURED_TIERS", default=(),
+)
 
 from .. import theme
 from ..view import (
@@ -237,70 +249,52 @@ _CSS = f"""
   overflow: visible;
 }}
 
-/* Upstream subsection — nested <details> */
+/* Upstream subsection — reuses the EXACT same .c3-rowx + checkbox-hack
+   pattern as expandable rows below, so it inherits everything that
+   already works (grid alignment, VS Code rendering, hover state). The
+   head is a real .c3-row label; the body is a sibling div that becomes
+   visible when the checkbox is checked. No <details>/<summary> — that
+   markup added a separate code path that VS Code's notebook renderer
+   styled differently from real rows. */
 .c3-upstream {{
   background: {theme.BG_UPSTREAM};
   border-bottom: 1px solid #ececec;
 }}
-.c3-upstream > summary {{
-  /* No gap, no right-padding: the bar-cell (80px) and saved-cell (76px)
-     on the right must butt up against each other so they align with the
-     row grid's contiguous tbar + chip columns below. Spacing on the left
-     comes from the caret's margin-right and the count's margin-left:auto. */
-  display: flex; align-items: center;
-  padding: 6px 0 6px 12px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  color: {theme.INK_3};
-  list-style: none;
-}}
-.c3-upstream > summary::-webkit-details-marker {{ display: none; }}
-.c3-upstream > summary::marker {{ content: ""; }}
-.c3-upstream > summary:hover {{ background: #f0f2f4; }}
-.c3-upstream-label {{ font-weight: 600; letter-spacing: 0.02em; }}
-.c3-upstream-count {{
-  font-family: {theme.FONT_MONO}; font-size: 10px; color: {theme.INK_4};
-  margin-left: auto;
-}}
-/* Bar + saved cells sized so they line up under the row tbar + time
-   chip columns (80px and 76px in .c3-row grid-template-columns). */
-.c3-upstream-bar-cell {{ width: 80px; padding: 0 8px; box-sizing: border-box; }}
-.c3-upstream-bar {{
-  display: block;
-  height: 6px;
-  background: #f2efea;
-  border-radius: 3px;
+/* Head-row content cell — sits in the row's "code" column.
+   Plain block + inline children with explicit margin, so we don't
+   rely on flex `gap` (which VS Code's older Chromium renderer
+   distributes oddly — pushing the meta to the column centre). */
+.c3-upstream-head-cell {{
+  padding: 0 10px;
+  min-width: 0;
   overflow: hidden;
-  width: 100%;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }}
-.c3-upstream-bar > span {{
-  display: block;
-  height: 100%;
-  background: {theme.BAR_CACHED};
-  border-radius: 3px;
+.c3-upstream-label {{
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: {theme.INK_4};
 }}
-.c3-upstream-saved-cell {{
-  width: 76px; padding: 0 8px 0 6px; box-sizing: border-box;
-  text-align: right;
-  font-family: {theme.FONT_MONO}; font-size: 11px;
-  font-variant-numeric: tabular-nums;
+.c3-upstream-meta {{
+  font-family: {theme.FONT_MONO};
+  font-size: 10px;
+  color: {theme.INK_5};
+  /* padding-left rather than margin-left: some notebook hosts reset
+     margins on bare <span> elements. The HTML also emits a literal
+     &nbsp; before the meta as a belt-and-braces backup. */
+  padding-left: 6px;
 }}
-.c3-upstream-saved {{ color: {theme.RAIL_CACHED}; font-weight: 600; }}
-.c3-upstream-body {{ border-top: 1px solid #ececec; padding: 2px 0; }}
-/* Reuse the outer-badge chevron style. */
-.c3-upstream-caret {{
-  width: 7px; height: 7px;
-  border-right: 1.5px solid {theme.INK_4};
-  border-bottom: 1.5px solid {theme.INK_4};
-  transform: rotate(-45deg);
-  transition: transform 0.15s ease;
-  display: inline-block;
-  margin-right: 2px;
+.c3-upstream-body {{
+  display: none;
+  border-top: 1px solid #ececec;
+  padding: 2px 0;
 }}
-.c3-upstream[open] > summary .c3-upstream-caret {{
-  transform: rotate(45deg);
-}}
+/* Body becomes visible when the head row's hidden checkbox is checked
+   (general-sibling combinator — same mechanism as .c3-rowtip). */
+.c3-rxtog:checked ~ .c3-upstream-body {{ display: block; }}
 
 /* Row grid */
 .c3-row {{
@@ -331,15 +325,15 @@ _CSS = f"""
 label.c3-row {{ cursor: pointer; }}
 .c3-rowtip {{
   display: none;
-  background: #f4efe1;
-  border-top: 1px solid #c8c3b3;
-  border-bottom: 1px solid #c8c3b3;
-  padding: 12px 16px 14px 22px;
+  background: #fbfaf5;
+  border-top: 1px solid #e6e1d2;
+  border-bottom: 1px solid #e6e1d2;
+  padding: 10px 14px 12px;
   font-family: {theme.FONT_SANS};
   font-size: 11px;
   color: {theme.INK};
   white-space: normal;
-  box-shadow: inset 5px 0 0 #b69a4d, 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: inset 3px 0 0 #b69a4d;
 }}
 .c3-rxtog:checked ~ .c3-rowtip {{ display: block; }}
 .c3-rxtog:checked ~ label.c3-row {{ background: {theme.BG_HOVER}; }}
@@ -349,7 +343,8 @@ label.c3-row {{ cursor: pointer; }}
 .c3-rxtog:checked ~ .c3-iter-table {{ display: flex; }}
 .c3-iter-table {{ display: none; }}
 .c3-rt-h {{
-  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px;
 }}
 .c3-rt-status {{
   font-size: 9px;
@@ -364,12 +359,13 @@ label.c3-row {{ cursor: pointer; }}
   font-size: 11px;
   color: {theme.INK_2};
   margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }}
 .c3-rt-saved {{ color: {theme.RAIL_CACHED}; }}
 .c3-rt-code {{
-  margin: 0 0 8px;
-  padding: 6px 8px;
-  background: #f7f6f1;
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  background: #fff;
   border-radius: 3px;
   font-family: {theme.FONT_MONO};
   font-size: 11px;
@@ -378,21 +374,22 @@ label.c3-row {{ cursor: pointer; }}
   max-height: 110px;
   overflow: hidden;
   color: {theme.INK};
+  line-height: 1.45;
 }}
 .c3-rt-dl {{
   display: grid;
-  grid-template-columns: 100px 1fr;
-  gap: 4px 10px;
+  grid-template-columns: 84px 1fr;
+  gap: 3px 12px;
   margin: 0;
   font-size: 10px;
+  align-items: baseline;
 }}
 .c3-rt-dl dt {{
   font-size: 9px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: {theme.INK_4};
-  padding-top: 1px;
 }}
 .c3-rt-dl dd {{
   margin: 0;
@@ -401,22 +398,31 @@ label.c3-row {{ cursor: pointer; }}
   font-size: 10px;
   word-break: break-word;
 }}
+.c3-rt-dl dd code {{
+  font-family: {theme.FONT_MONO};
+  background: #fff;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 9.5px;
+}}
 
 .c3-rail {{ width: 5px; align-self: stretch; }}
 .c3-rail-soft {{ opacity: 0.5; }}
 
 .c3-code {{
   /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
-     (padding: 0; line-height: 1.21429; menlo-first font stack) would
-     otherwise win on specificity and compress every row. */
+     (padding: 0; line-height: 1.21429; menlo-first font stack, and
+     overflow:auto which puts a horizontal scrollbar on every long row)
+     would otherwise win on specificity and compress / scroll-bar
+     every row. */
   margin: 0 !important;
   padding: 5px 10px !important;
   font-family: {theme.FONT_MONO} !important;
   font-size: 12px !important;
   color: {theme.INK} !important;
   white-space: pre !important;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
   line-height: 1.4 !important;
 }}
 .c3-code-body  {{ color: {theme.INK_2}; }}
@@ -828,41 +834,83 @@ def _dots(
     storage_tiers: tuple[str, ...],
     source: str | None,
     uncacheable_reasons: tuple[str, ...],
+    configured_tiers: tuple[str, ...] | None = None,
 ) -> str:
-    """Two-dot tier indicator: RAM (left) / DISK (right)."""
+    """N-dot tier indicator — one dot per configured backend tier.
+
+    ``configured_tiers`` comes from the badge root and lists every tier
+    the active backend exposes, in configured order (e.g. ``('RAM',
+    'REDIS', 'DISK')``). Each dot's fill encodes whether that tier holds
+    this entry; the row-level kind colour (cached/exec/warn) still
+    derives from the row's status.
+
+    Fallback chain when no configured tier list is available (legacy
+    callers, standalone tests): use this row's own ``storage_tiers``;
+    otherwise render a single empty dot.
+    """
+    written = {t.upper() for t in storage_tiers}
+    src_upper = (source or "").upper()
+
     if uncacheable_reasons:
-        ram, disk, kind = "blocked", "blocked", "warn"
-        title = "Uncacheable: " + ", ".join(uncacheable_reasons)
+        kind = "warn"
+        def state_for(_tier: str) -> str:
+            return "blocked"
+        aggregate_title = "Uncacheable: " + ", ".join(uncacheable_reasons)
     elif status is BadgeStatus.RESTORED:
-        from_ram = (source or "").upper() == "RAM"
-        ram, disk = ("ring", "empty") if from_ram else ("empty", "ring")
         kind = "cached"
-        title = f"Restored from {source or 'cache'}"
+        def state_for(tier: str) -> str:
+            return "ring" if tier.upper() == src_upper else "empty"
+        aggregate_title = f"Restored from {source or 'cache'}"
     elif status is BadgeStatus.SKIPPED:
-        # 'SKIPPED' here means 'not re-executed' — the cache already had a
-        # downstream value that didn't need this step's output. The value
-        # was never produced this run, so neither RAM nor DISK has it now;
-        # show empty dots in a neutral color to avoid suggesting otherwise.
-        ram, disk, kind = "empty", "empty", "exec"
-        title = "Not re-run — downstream value was satisfied by cache"
+        kind = "exec"
+        def state_for(_tier: str) -> str:
+            return "empty"
+        aggregate_title = "Not re-run — downstream value was satisfied by cache"
     elif status in (BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED,
                     BadgeStatus.MODULE_RELOADED, BadgeStatus.ERROR):
-        ram, disk, kind = "empty", "empty", "warn"
-        title = "—"
+        kind = "warn"
+        def state_for(_tier: str) -> str:
+            return "empty"
+        aggregate_title = "—"
     elif storage_tiers:
-        ram = "solid" if "RAM" in storage_tiers else "empty"
-        disk = "solid" if "DISK" in storage_tiers else "empty"
         kind = "exec"
-        title = "Cached to: " + "+".join(storage_tiers)
+        def state_for(tier: str) -> str:
+            return "solid" if tier.upper() in written else "empty"
+        aggregate_title = "Cached to: " + "+".join(storage_tiers)
     else:
-        ram, disk, kind = "empty", "empty", "exec"
-        title = "no storage info"
+        kind = "exec"
+        def state_for(_tier: str) -> str:
+            return "empty"
+        aggregate_title = "no storage info"
+
+    # Tier list resolution:
+    # 1. caller-supplied configured tiers (explicit kwarg wins)
+    # 2. the render-pass ContextVar set by render_html / render_status_badge_html
+    # 3. this row's own storage_tiers (legacy / standalone-test fallback)
+    # 4. a single empty placeholder so the cell always has at least one dot
+    if configured_tiers is None:
+        configured_tiers = _CONFIGURED_TIERS.get()
+    tiers: tuple[str, ...] = configured_tiers or storage_tiers or ("",)
+
+    def _dot_title(tier: str, state: str) -> str:
+        if not tier:
+            return aggregate_title
+        if state == "solid":
+            return f"{tier} — stored"
+        if state == "ring":
+            return f"{tier} — restored from here"
+        if state == "blocked":
+            return f"{tier} — uncacheable"
+        return f"{tier} — not stored"
+
+    dots_html = "".join(
+        f'<span class="c3-dot c3-dot-{state_for(t)}" '
+        f'title="{_esc(_dot_title(t, state_for(t)))}"></span>'
+        for t in tiers
+    )
     return (
         f'<span class="c3-dots-cell"><span class="c3-dots c3-dots-{kind}" '
-        f'title="{_esc(title)}">'
-        f'<span class="c3-dot c3-dot-{ram}"></span>'
-        f'<span class="c3-dot c3-dot-{disk}"></span>'
-        f"</span></span>"
+        f'title="{_esc(aggregate_title)}">{dots_html}</span></span>'
     )
 
 
@@ -1630,7 +1678,6 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
     return (
         f'<details class="c3-skipped">'
         f'<summary title="{_esc(title)}">'
-        f'<span class="c3-upstream-caret"></span>'
         f'<span>{_esc(label)}</span>'
         f'<span class="c3-skipped-meta">{_esc(saved)}</span>'
         f"</summary>"
@@ -1906,6 +1953,17 @@ def _footer_html(footer: BugReportLink | None) -> str:
 def render_html(badge: InteractiveBadge) -> str:
     """Render an :class:`InteractiveBadge` to v3-design HTML."""
     _reset_ids()
+    # Publish the configured tier list for every nested ``_dots()`` call
+    # in this render pass. Reset on exit so a subsequent render doesn't
+    # inherit stale tiers from a previous one.
+    _tier_token = _CONFIGURED_TIERS.set(badge.configured_tiers)
+    try:
+        return _render_html_impl(badge)
+    finally:
+        _CONFIGURED_TIERS.reset(_tier_token)
+
+
+def _render_html_impl(badge: InteractiveBadge) -> str:
     kind, label, sub = _summary_meta(badge.header)
     max_time = _max_time(badge)
 
@@ -1916,31 +1974,63 @@ def render_html(badge: InteractiveBadge) -> str:
         n = sum(1 for i in upstream.items if not isinstance(i, SkippedBucket))
         up_saved = sum(_item_saved_time(i) for i in upstream.items)
         up_exec = sum(_item_total_time(i) for i in upstream.items)
+        # Derive the aggregate kind from the actual item statuses so the
+        # head row's rail / bar / chip match what's underneath — all
+        # restored → cached (green), all computed → exec (ocker), mixed
+        # → exec for bar but the rail picks blue via 'mixed' separately.
+        statuses = tuple(_walk_statuses(upstream.items))
+        up_kind = _aggregate_kind(statuses) if statuses else "cached"
+        # Rail color: mirrors the per-row rail logic — if everything was
+        # restored we use the cached rail, if anything was computed we
+        # surface that on the rail too.
+        if statuses and all(s in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED) for s in statuses):
+            rail_col = theme.RAIL_CACHED
+        elif statuses and all(s is BadgeStatus.COMPUTED for s in statuses):
+            rail_col = theme.RAIL_EXEC
+        else:
+            rail_col = theme.RAIL_MIXED if statuses else theme.RAIL_CACHED
         # Scale the bar against the larger of saved or any badge-wide exec
         # time, so a big saving reads as a near-full bar even when the
         # restore overhead itself is invisibly small.
         bar_scale = max(max_time, up_saved, up_exec, theme.MIN_TIME_DISPLAY_S)
-        bar_ratio = min(1.0, max(up_saved, up_exec) / bar_scale)
-        bar_pct = (bar_ratio ** 0.5) * 100
-        bar_html = (
-            f'<span class="c3-upstream-bar"><span style="width:{bar_pct:.1f}%;"></span></span>'
-            if bar_pct > 0 else '<span class="c3-upstream-bar"></span>'
+        bar_value = max(up_saved, up_exec)
+        bar_html = _tbar(bar_value, bar_scale, up_kind)
+        # Chip content: prefer the saved time when it's meaningful (the
+        # whole point of the upstream section is to surface what the
+        # cache saved). If nothing was saved but the steps still cost
+        # real time, show that instead so the chip isn't a lonely "—".
+        if up_saved > theme.MIN_TIME_DISPLAY_S:
+            chip_display = f"↑{up_saved:.2f}s"
+            chip_kind = "cached"
+        elif up_exec > theme.MIN_TIME_DISPLAY_S:
+            chip_display = _fmt_time(up_exec)
+            chip_kind = up_kind
+        else:
+            chip_display = "—"
+            chip_kind = up_kind
+        chip_html = (
+            f'<span class="c3-time-chip c3-time-chip-{chip_kind}">'
+            f'<span>{chip_display}</span></span>'
         )
-        saved_html = (
-            f'<span class="c3-upstream-saved">↑{up_saved:.2f}s</span>'
-            if up_saved > theme.MIN_TIME_DISPLAY_S else "—"
-        )
+        plural = "s" if n != 1 else ""
+        up_rid = _uid("rx-up")
         body_html += (
-            f'<details class="c3-upstream">'
-            f'<summary>'
-            f'<span class="c3-upstream-caret"></span>'
+            f'<div class="c3-upstream c3-rowx">'
+            f'<input type="checkbox" class="c3-rxtog" id="{up_rid}">'
+            f'<label class="c3-row" for="{up_rid}" data-kind="{up_kind}">'
+            f'<span class="c3-rail c3-rail-soft" style="background:{rail_col};"></span>'
+            f'<div class="c3-upstream-head-cell">'
             f'<span class="c3-upstream-label">upstream context</span>'
-            f'<span class="c3-upstream-count"><b>{n}</b> step{"s" if n != 1 else ""}</span>'
-            f'<span class="c3-upstream-bar-cell">{bar_html}</span>'
-            f'<span class="c3-upstream-saved-cell">{saved_html}</span>'
-            f"</summary>"
+            # &nbsp; hard-codes the separator so notebook hosts that strip
+            # span margins (VS Code) still render visible spacing.
+            f'<span class="c3-upstream-meta">&nbsp;{n} step{plural}</span>'
+            f'</div>'
+            f'<span class="c3-dots-cell"></span>'
+            f'{bar_html}'
+            f'{chip_html}'
+            f"</label>"
             f'<div class="c3-upstream-body">{rows}</div>'
-            f"</details>"
+            f"</div>"
         )
 
     for section in badge.sections:
@@ -1986,16 +2076,27 @@ def render_status_badge_html(badge: StatusBadge) -> str:
     label = badge.status.value.upper()
     fg = theme.chip_fg(kind)
     bg = theme.chip_bg(kind)
-    # Build storage dots if tiers are present (max 2: RAM + DISK).
+    # Build storage dots — one per configured tier, in order. Filled when
+    # this entry was stored to that tier, hollow otherwise. Falls back to
+    # the per-entry storage list when no configured tier list is
+    # available (legacy / standalone-test path).
     tier_dots = ""
-    if badge.storage_tiers:
+    pill_tiers = badge.configured_tiers or badge.storage_tiers
+    if pill_tiers:
+        written = {t.upper() for t in badge.storage_tiers}
         dot_color = theme.rail_color(badge.status.value)
-        dots_inner = "".join(
-            f'<span style="display:inline-block;width:6px;height:6px;border-radius:50%;'
-            f'background:{dot_color};margin-left:3px;vertical-align:middle;"></span>'
-            for _ in badge.storage_tiers[:2]
-        )
-        tier_dots = dots_inner
+        pieces = []
+        for tier in pill_tiers:
+            filled = tier.upper() in written
+            style = (
+                f'display:inline-block;width:6px;height:6px;border-radius:50%;'
+                f'margin-left:3px;vertical-align:middle;'
+                + (f'background:{dot_color};'
+                   if filled else
+                   f'background:transparent;border:1px solid {dot_color};')
+            )
+            pieces.append(f'<span style="{style}" title="{_esc(tier)}"></span>')
+        tier_dots = "".join(pieces)
     saved = f' · ↑{badge.time_saved_s:.2f}s' if badge.time_saved_s > 0 else ""
     source = f' · {_esc(badge.source)}' if badge.source else ""
     return (

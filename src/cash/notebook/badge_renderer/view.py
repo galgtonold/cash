@@ -298,6 +298,11 @@ class InteractiveBadge:
     header: BadgeHeader
     sections: tuple[Section, ...]
     footer: BugReportLink | None = None
+    # Ordered labels of all tiers the active backend exposes — drives the
+    # dot indicator (one dot per configured tier). Empty when the runtime
+    # cannot describe the tiers (legacy callers, mocked metric in a
+    # standalone test); the renderer falls back to per-row storage_tiers.
+    configured_tiers: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -315,6 +320,9 @@ class StatusBadge:
     time_saved_s: float
     source: str | None = None
     storage_tiers: tuple[str, ...] = ()
+    # Same role as InteractiveBadge.configured_tiers — drives the compact
+    # pill's dot strip (one dot per configured tier, in order).
+    configured_tiers: tuple[str, ...] = ()
 
 
 __all__ = [
