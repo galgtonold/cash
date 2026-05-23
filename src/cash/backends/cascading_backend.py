@@ -128,7 +128,9 @@ class CascadingBackend(_MultiBackendMixin, CacheBackend):
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)
-            if metadata is not None and value is not None:
+            # Presence test: metadata-None means key absent. A non-None
+            # metadata with value=None is a legitimately stored None.
+            if metadata is not None:
                 # Read-repair: write back to all earlier backends that missed
                 for j in range(i):
                     try:
