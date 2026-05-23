@@ -71,6 +71,7 @@ class S3Backend(CacheBackend):
             serializer = serializer_cls()
             value = serializer.deserialize(data_bytes)
 
+            metadata.setdefault('source', self.source_label)
             return metadata, value
         except self.botocore_exceptions.ClientError as e:
             error_code = e.response.get('Error', {}).get('Code', '')
@@ -93,7 +94,7 @@ class S3Backend(CacheBackend):
 
         metadata['size'] = len(serialized_value)
         if 'storage' not in metadata:
-            metadata['storage'] = ['S3']
+            metadata['storage'] = [self.source_label]
         meta_bytes = pickle.dumps(metadata)
 
         # Upload data

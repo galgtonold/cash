@@ -78,7 +78,12 @@ def test_s3_get(s3_backend):
     s3_backend.s3.get_object.side_effect = get_object_side_effect
     
     m, d = s3_backend.get('k')
-    assert m == metadata
+    # get() now injects source=S3 on bare-backend reads (see
+    # test_label_consistency.py), so check the stored fields survive and
+    # source is present rather than asserting full-dict equality.
+    assert m is not None
+    assert m['key'] == 'k' and m['size'] == 10
+    assert m['source'] == 'S3'
     assert d == original_data
 
 

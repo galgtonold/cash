@@ -31,10 +31,22 @@ def _bare_backends(tmp_path):
         import fakeredis
         import redis as _redis
     except ImportError:
+        pass
+    else:
+        with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
+            from cash.backends.redis_backend import RedisBackend
+            yield "REDIS", RedisBackend(prefix="cash:t:")
+
+    # S3 with moto's in-memory implementation
+    try:
+        import boto3
+        from moto import mock_aws
+    except ImportError:
         return
-    with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
-        from cash.backends.redis_backend import RedisBackend
-        yield "REDIS", RedisBackend(prefix="cash:t:")
+    with mock_aws():
+        boto3.client("s3", region_name="us-east-1").create_bucket(Bucket="cash-test")
+        from cash.backends.s3_backend import S3Backend
+        yield "S3", S3Backend(bucket="cash-test", region_name="us-east-1")
 
 
 class TestStorageLabelMatchesSourceLabel:
