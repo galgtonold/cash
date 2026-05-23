@@ -459,23 +459,27 @@ from cash import Cash
 # Default configuration (auto-tiered)
 cash = Cash()
 
-# Custom configuration
+# Custom configuration — any CashConfig field name works as a kwarg.
 cash = Cash(
     cache_dir=".my_cache",     # Custom cache directory
     compress=True,              # Enable compression
     debug=True,                 # Enable debug output
-    background_io=True,         # Async disk writes
-    use_locking=True            # Thread-safe operations
+    use_locking=True,           # Thread-safe operations
+    # Any other CashConfig field: backend, redis_host, redis_port,
+    # s3_bucket, smart_persistence_threshold, ...
 )
 ```
 
-### Environment Variables
+Background writes are on by default for every backend except RAM —
+serialisation happens on the calling thread, the actual storage write
+runs in a per-backend background worker, so `set()` returns once the
+bytes are captured. There's no opt-in flag.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `CASH_DEBUG` | Enable debug mode | `false` |
-| `CASH_CACHE_DIR` | Default cache directory | `.cash` |
-| `CASH_COMPRESS` | Enable compression | `false` |
+### Environment variables
+
+Every `CashConfig` field has a `CASH_*` env-var binding; see the
+[Configuration reference](getting-started/configuration.md#all-cashconfig-fields)
+for the complete table.
 
 ---
 

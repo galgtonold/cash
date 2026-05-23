@@ -345,7 +345,16 @@ If this hurts you, the workarounds are: convert to a recognised type before stor
 
 ### Filter 2 doesn't fire without TieredBackend
 
-If you configured `backend_type = 'file'` (single-tier `FileBackend`) or any other non-tiered backend, the `smart_persistence_*` knobs are inert. There's no promotion decision to make — every value that passes filter 1 goes to the one backend you have.
+If you configured `backend = "file"` (single-tier `FileBackend`) or any other non-tiered backend, the `smart_persistence_*` knobs are inert. There's no promotion decision to make — every value that passes filter 1 goes to the one backend you have.
+
+### Redis / S3 coefficients are *estimates*, not measurements
+
+`RAM` and `DISK` coefficients come from the offline measurement campaign in `benchmarks/measure_ser_deser.py` and are refit by `benchmarks/fit_cost_model.py`. The Redis and S3 coefficients added in commit [`8832780`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py) are **estimated** from a documented bandwidth/latency model:
+
+- Redis: `500 µs` round-trip latency + `20 ns/B` (≈ 50 MB/s LAN sustained); pickle work scaled from the DISK fits at `0.1×` (most of disk's intercept is disk I/O, not pickling).
+- S3: `80 ms` request setup (DNS + TLS + auth) + `50 ns/B` (≈ 20 MB/s single-stream same-region); pickle work scaled at `0.2×`.
+
+Cross-region or public-internet S3 is 5–10× slower; users with those topologies should override the relevant `[[tool.cash.tiers]]` block manually or refit. A future measurement pass can replace these constants without touching the cost-model API — the consumer only sees `estimated_serialize_time(family, size_bytes, backend_kind)` etc.
 
 ## API reference
 
