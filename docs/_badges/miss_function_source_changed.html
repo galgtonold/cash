@@ -185,70 +185,52 @@
   overflow: visible;
 }
 
-/* Upstream subsection — nested <details> */
+/* Upstream subsection — reuses the EXACT same .c3-rowx + checkbox-hack
+   pattern as expandable rows below, so it inherits everything that
+   already works (grid alignment, VS Code rendering, hover state). The
+   head is a real .c3-row label; the body is a sibling div that becomes
+   visible when the checkbox is checked. No <details>/<summary> — that
+   markup added a separate code path that VS Code's notebook renderer
+   styled differently from real rows. */
 .c3-upstream {
   background: #f6f7f8;
   border-bottom: 1px solid #ececec;
 }
-.c3-upstream > summary {
-  /* No gap, no right-padding: the bar-cell (80px) and saved-cell (76px)
-     on the right must butt up against each other so they align with the
-     row grid's contiguous tbar + chip columns below. Spacing on the left
-     comes from the caret's margin-right and the count's margin-left:auto. */
-  display: flex; align-items: center;
-  padding: 6px 0 6px 12px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 11px;
-  color: #666;
-  list-style: none;
-}
-.c3-upstream > summary::-webkit-details-marker { display: none; }
-.c3-upstream > summary::marker { content: ""; }
-.c3-upstream > summary:hover { background: #f0f2f4; }
-.c3-upstream-label { font-weight: 600; letter-spacing: 0.02em; }
-.c3-upstream-count {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 10px; color: #888;
-  margin-left: auto;
-}
-/* Bar + saved cells sized so they line up under the row tbar + time
-   chip columns (80px and 76px in .c3-row grid-template-columns). */
-.c3-upstream-bar-cell { width: 80px; padding: 0 8px; box-sizing: border-box; }
-.c3-upstream-bar {
-  display: block;
-  height: 6px;
-  background: #f2efea;
-  border-radius: 3px;
+/* Head-row content cell — sits in the row's "code" column.
+   Plain block + inline children with explicit margin, so we don't
+   rely on flex `gap` (which VS Code's older Chromium renderer
+   distributes oddly — pushing the meta to the column centre). */
+.c3-upstream-head-cell {
+  padding: 0 10px;
+  min-width: 0;
   overflow: hidden;
-  width: 100%;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
-.c3-upstream-bar > span {
-  display: block;
-  height: 100%;
-  background: #86bfa3;
-  border-radius: 3px;
+.c3-upstream-label {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: #888;
 }
-.c3-upstream-saved-cell {
-  width: 76px; padding: 0 8px 0 6px; box-sizing: border-box;
-  text-align: right;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 11px;
-  font-variant-numeric: tabular-nums;
+.c3-upstream-meta {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 10px;
+  color: #999;
+  /* padding-left rather than margin-left: some notebook hosts reset
+     margins on bare <span> elements. The HTML also emits a literal
+     &nbsp; before the meta as a belt-and-braces backup. */
+  padding-left: 6px;
 }
-.c3-upstream-saved { color: #2a8a5e; font-weight: 600; }
-.c3-upstream-body { border-top: 1px solid #ececec; padding: 2px 0; }
-/* Reuse the outer-badge chevron style. */
-.c3-upstream-caret {
-  width: 7px; height: 7px;
-  border-right: 1.5px solid #888;
-  border-bottom: 1.5px solid #888;
-  transform: rotate(-45deg);
-  transition: transform 0.15s ease;
-  display: inline-block;
-  margin-right: 2px;
+.c3-upstream-body {
+  display: none;
+  border-top: 1px solid #ececec;
+  padding: 2px 0;
 }
-.c3-upstream[open] > summary .c3-upstream-caret {
-  transform: rotate(45deg);
-}
+/* Body becomes visible when the head row's hidden checkbox is checked
+   (general-sibling combinator — same mechanism as .c3-rowtip). */
+.c3-rxtog:checked ~ .c3-upstream-body { display: block; }
 
 /* Row grid */
 .c3-row {
@@ -279,15 +261,15 @@
 label.c3-row { cursor: pointer; }
 .c3-rowtip {
   display: none;
-  background: #f4efe1;
-  border-top: 1px solid #c8c3b3;
-  border-bottom: 1px solid #c8c3b3;
-  padding: 12px 16px 14px 22px;
+  background: #fbfaf5;
+  border-top: 1px solid #e6e1d2;
+  border-bottom: 1px solid #e6e1d2;
+  padding: 10px 14px 12px;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
   font-size: 11px;
   color: #222;
   white-space: normal;
-  box-shadow: inset 5px 0 0 #b69a4d, 0 1px 2px rgba(0,0,0,0.04);
+  box-shadow: inset 3px 0 0 #b69a4d;
 }
 .c3-rxtog:checked ~ .c3-rowtip { display: block; }
 .c3-rxtog:checked ~ label.c3-row { background: #faf9f5; }
@@ -297,7 +279,8 @@ label.c3-row { cursor: pointer; }
 .c3-rxtog:checked ~ .c3-iter-table { display: flex; }
 .c3-iter-table { display: none; }
 .c3-rt-h {
-  display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 10px;
 }
 .c3-rt-status {
   font-size: 9px;
@@ -312,12 +295,13 @@ label.c3-row { cursor: pointer; }
   font-size: 11px;
   color: #444;
   margin-left: auto;
+  font-variant-numeric: tabular-nums;
 }
 .c3-rt-saved { color: #2a8a5e; }
 .c3-rt-code {
-  margin: 0 0 8px;
-  padding: 6px 8px;
-  background: #f7f6f1;
+  margin: 0 0 12px;
+  padding: 7px 10px;
+  background: #fff;
   border-radius: 3px;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   font-size: 11px;
@@ -326,21 +310,22 @@ label.c3-row { cursor: pointer; }
   max-height: 110px;
   overflow: hidden;
   color: #222;
+  line-height: 1.45;
 }
 .c3-rt-dl {
   display: grid;
-  grid-template-columns: 100px 1fr;
-  gap: 4px 10px;
+  grid-template-columns: 84px 1fr;
+  gap: 3px 12px;
   margin: 0;
   font-size: 10px;
+  align-items: baseline;
 }
 .c3-rt-dl dt {
   font-size: 9px;
-  font-weight: 600;
+  font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: #888;
-  padding-top: 1px;
 }
 .c3-rt-dl dd {
   margin: 0;
@@ -349,22 +334,31 @@ label.c3-row { cursor: pointer; }
   font-size: 10px;
   word-break: break-word;
 }
+.c3-rt-dl dd code {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  background: #fff;
+  border-radius: 2px;
+  padding: 0 4px;
+  font-size: 9.5px;
+}
 
 .c3-rail { width: 5px; align-self: stretch; }
 .c3-rail-soft { opacity: 0.5; }
 
 .c3-code {
   /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
-     (padding: 0; line-height: 1.21429; menlo-first font stack) would
-     otherwise win on specificity and compress every row. */
+     (padding: 0; line-height: 1.21429; menlo-first font stack, and
+     overflow:auto which puts a horizontal scrollbar on every long row)
+     would otherwise win on specificity and compress / scroll-bar
+     every row. */
   margin: 0 !important;
   padding: 5px 10px !important;
   font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace !important;
   font-size: 12px !important;
   color: #222 !important;
   white-space: pre !important;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
   line-height: 1.4 !important;
 }
 .c3-code-body  { color: #444; }
@@ -691,7 +685,7 @@ a.c3-bug:hover {
   color: #999;
   display: inline-block;
 }
-</style><div class="c3-wrap"><details class="c3-card" data-kind="exec"><summary class="c3-summary"><span class="c3-summary-label">EXECUTED</span><span class="c3-summary-sep">·</span><span class="c3-summary-sub">1.73s</span><span class="c3-summary-spark"><span class="c3-spark"><span class="c3-spark-bar" style="height:16px;background:#d3a76b;"></span></span></span><span class="c3-summary-chips"><span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>exec<span class="c3-fchip-count">1</span></span><span class="c3-fchip c3-fchip-warn"><span class="c3-fchip-dot"></span>warn<span class="c3-fchip-count">1</span></span></span><span class="c3-summary-caret"></span></summary><div class="c3-panel"><details class="c3-upstream"><summary><span class="c3-upstream-caret"></span><span class="c3-upstream-label">upstream context</span><span class="c3-upstream-count"><b>1</b> step</span><span class="c3-upstream-bar-cell"><span class="c3-upstream-bar"><span style="width:15.4%;"></span></span></span><span class="c3-upstream-saved-cell">—</span></summary><div class="c3-upstream-body"><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-000000000e"><label class="c3-row" for="rx-000000000e" data-kind="warn" data-status="function_changed"><span class="c3-rail c3-rail-soft" style="background:#b53d29;"></span><pre class="c3-code">score_rows</pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-warn" title="—"><span class="c3-dot c3-dot-empty"></span><span class="c3-dot c3-dot-empty"></span></span></span><span class="c3-tbar-cell"></span><span class="c3-time-chip c3-time-chip-warn"><span class="c3-notif-pill">changed</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#8a2916;background:#fbeae5;">function_changed</span><span class="c3-rt-time">—</span></div><pre class="c3-rt-code">scores = score_rows(df)</pre><dl class="c3-rt-dl"><dt>Fn changed</dt><dd>score_rows</dd></dl></div></div></div></details><div class="c3-section">CURRENT CELL</div><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-000000000f"><label class="c3-row" for="rx-000000000f" data-kind="exec" data-status="computed"><span class="c3-rail" style="background:#a87530;"></span><pre class="c3-code">scores = score_rows(df)<span class="c3-row-vars">← scores</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid"></span><span class="c3-dot c3-dot-solid"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:100.0%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>1.73s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#7a5310;background:#fbf3e5;">computed</span><span class="c3-rt-time">1.732s</span></div><pre class="c3-rt-code">scores = score_rows(df)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid"></span><span class="c3-dot c3-dot-solid"></span></span></span> RAM · DISK</dd><dt>Produced</dt><dd>scores</dd><dt>Key</dt><dd><code>5d6e7f80</code></dd><dt>Miss</dt><dd>function source changed: score_rows</dd></dl></div></div><div class="c3-footer"><span class="c3-hint">click a row for detail</span><a class="c3-bug" href="https://github.com/galgtonold/cash/issues/new?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body=%2A%2ADescribe%20the%20incorrect%20behavior%3A%2A%2A%0A%3C%21--%20What%20did%20cash%20do%20wrong%3F%20What%20did%20you%20expect%20instead%3F%20--%3E%0A%0A%2A%2ACash%20badge%20output%3A%2A%2A%0A%60%60%60%0A%20%20COMPUTED%20%7C%20%201.732s%20%7C%20saved%20%200.000s%20%7C%20scores%20%3D%20score_rows%28df%29%0A%60%60%60%0A%0A%2A%2AExpected%20behavior%3A%2A%2A%0A%3C%21--%20e.g.%20%27Should%20have%20re-executed%20but%20was%20RESTORED%20from%20cache%27%20--%3E%0A%0A%2A%2AEnvironment%3A%2A%2A%0A-%20Cash%20version%3A%20unknown%0A-%20Python%3A%20%28unknown%29%0A-%20Backend%3A%20%28unknown%29%0A%0A%2A%2AAdditional%20context%3A%2A%2A%0A%3C%21--%20Paste%20any%20relevant%20%60%25cash_debug%20on%60%20output%20here%20--%3E" target="_blank" rel="noopener noreferrer" title="Open a pre-filled GitHub issue to report incorrect caching behaviour">Report incorrect caching<span class="c3-bug-arrow"> →</span></a></div></div></details></div>
+</style><div class="c3-wrap"><details class="c3-card" data-kind="exec"><summary class="c3-summary"><span class="c3-summary-label">EXECUTED</span><span class="c3-summary-sep">·</span><span class="c3-summary-sub">1.73s</span><span class="c3-summary-spark"><span class="c3-spark"><span class="c3-spark-bar" style="height:16px;background:#d3a76b;"></span></span></span><span class="c3-summary-chips"><span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>exec<span class="c3-fchip-count">1</span></span><span class="c3-fchip c3-fchip-warn"><span class="c3-fchip-dot"></span>warn<span class="c3-fchip-count">1</span></span></span><span class="c3-summary-caret"></span></summary><div class="c3-panel"><div class="c3-upstream c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-up-0000000014"><label class="c3-row" for="rx-up-0000000014" data-kind="exec"><span class="c3-rail c3-rail-soft" style="background:#336699;"></span><div class="c3-upstream-head-cell"><span class="c3-upstream-label">upstream context</span><span class="c3-upstream-meta">&nbsp;1 step</span></div><span class="c3-dots-cell"></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:15.4%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>0.04s</span></span></label><div class="c3-upstream-body"><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000013"><label class="c3-row" for="rx-0000000013" data-kind="warn" data-status="function_changed"><span class="c3-rail c3-rail-soft" style="background:#b53d29;"></span><pre class="c3-code">score_rows</pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-warn" title="—"><span class="c3-dot c3-dot-empty" title="—"></span></span></span><span class="c3-tbar-cell"></span><span class="c3-time-chip c3-time-chip-warn"><span class="c3-notif-pill">changed</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#8a2916;background:#fbeae5;">function_changed</span><span class="c3-rt-time">—</span></div><pre class="c3-rt-code">scores = score_rows(df)</pre><dl class="c3-rt-dl"><dt>Fn changed</dt><dd>score_rows</dd></dl></div></div></div></div><div class="c3-section">CURRENT CELL</div><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000015"><label class="c3-row" for="rx-0000000015" data-kind="exec" data-status="computed"><span class="c3-rail" style="background:#a87530;"></span><pre class="c3-code">scores = score_rows(df)<span class="c3-row-vars">← scores</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid" title="RAM — stored"></span><span class="c3-dot c3-dot-solid" title="DISK — stored"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:100.0%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>1.73s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#7a5310;background:#fbf3e5;">computed</span><span class="c3-rt-time">1.732s</span></div><pre class="c3-rt-code">scores = score_rows(df)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid" title="RAM — stored"></span><span class="c3-dot c3-dot-solid" title="DISK — stored"></span></span></span> RAM · DISK</dd><dt>Produced</dt><dd>scores</dd><dt>Key</dt><dd><code>5d6e7f80</code></dd><dt>Miss</dt><dd>function source changed: score_rows</dd></dl></div></div><div class="c3-footer"><span class="c3-hint">click a row for detail</span><a class="c3-bug" href="https://github.com/galgtonold/cash/issues/new?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body=%2A%2ADescribe%20the%20incorrect%20behavior%3A%2A%2A%0A%3C%21--%20What%20did%20cash%20do%20wrong%3F%20What%20did%20you%20expect%20instead%3F%20--%3E%0A%0A%2A%2ACash%20badge%20output%3A%2A%2A%0A%60%60%60%0A%20%20COMPUTED%20%7C%20%201.732s%20%7C%20saved%20%200.000s%20%7C%20scores%20%3D%20score_rows%28df%29%0A%60%60%60%0A%0A%2A%2AExpected%20behavior%3A%2A%2A%0A%3C%21--%20e.g.%20%27Should%20have%20re-executed%20but%20was%20RESTORED%20from%20cache%27%20--%3E%0A%0A%2A%2AEnvironment%3A%2A%2A%0A-%20Cash%20version%3A%20unknown%0A-%20Python%3A%20%28unknown%29%0A-%20Backend%3A%20%28unknown%29%0A%0A%2A%2AAdditional%20context%3A%2A%2A%0A%3C%21--%20Paste%20any%20relevant%20%60%25cash_debug%20on%60%20output%20here%20--%3E" target="_blank" rel="noopener noreferrer" title="Open a pre-filled GitHub issue to report incorrect caching behaviour">Report incorrect caching<span class="c3-bug-arrow"> →</span></a></div></div></details></div>
 <script>
 (function () {
   if (window.parent === window) return;
