@@ -1047,8 +1047,9 @@ class StatementProcessor:
           RAM caching is almost always worthwhile.
 
         * **Disk / remote (FileBackend, Redis, S3, TieredBackend)** – needs
-          pickle + I/O.  Estimated at ``estimated_serialization_speed`` from
-          config (~200 MB/s).  Overhead = 2 × serialise time (store + restore).
+          pickle + I/O.  Restore cost is predicted by the fitted cost model
+          in ``cash.notebook.cost_model`` (per-family ``a + b·size_bytes``).
+          Overhead = 2 × serialise time (store + restore).
 
         Caching is skipped when the expected time savings would be less than
         ``min_cache_savings_pct`` (default 20 %) of the original execution time::

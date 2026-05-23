@@ -176,7 +176,6 @@ All on `CashConfig` (see [`src/cash/config.py:32-51`](https://github.com/galgton
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET` | `0.05` s | 1 | Floor on the restore-time budget. Trivial cells get this much budget regardless of compute. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE` | `0.01` s | floor | Statements faster than this never cache. |
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `None` | RAM tier | LRU cap on `InMemoryBackend`. Indirect: forces eviction even when filter 1 said cache. |
-| `estimated_serialization_speed` | `CASH_SERIALIZATION_SPEED` | `200 MB/s` | — | **Dead config**, see [Surprises](#surprises). |
 
 The `_config_float` helper used by filter 1 reads each field defensively; missing or non-numeric values fall back to the defaults shown above.
 
@@ -319,10 +318,6 @@ When the README says TieredBackend is smart about what reaches disk, it means th
 
 `min_persist_compute_s = 0.1` and `small_result_bytes = 64 * 1024` at [`core.py:223-224`](https://github.com/galgtonold/cash/blob/main/src/cash/core.py) are **not** in `CashConfig`. They live inside the closure body. To change them, subclass `Cash` and override `_create_default_backend`, or construct a `TieredBackend` yourself with a custom `promotion_policy`.
 
-### `estimated_serialization_speed` is dead config
-
-Defined at [`config.py:45`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py) with a comment marking it deprecated; mapped from `CASH_SERIALIZATION_SPEED` at [`config.py:26`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py). Nothing in `src/cash/notebook/` reads it — `grep` only finds the definition itself and a docstring reference. Setting it has no runtime effect; it's kept solely so existing config files don't break.
-
 ### Cheap-floor writes no metadata
 
 Statements that hit the `< 0.01 s` floor at [`statement_processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) return `None` — no metadata file, no badge entry. The badge has nothing to show, so the cell just looks "uncached" with no reason. This is intentional: writing 100 metadata-only entries for a notebook of trivial assignments would mean 100 cache lookups on the next run, all of them slow misses.
@@ -382,7 +377,6 @@ class CashConfig:
     min_cache_fixed_budget_seconds: float = 0.05
     min_execution_time_to_cache_seconds: float = 0.01
     max_memory_entries: int | None = None
-    estimated_serialization_speed: int = 200 * 1024 * 1024  # deprecated, see surprises
     # ...
 ```
 
