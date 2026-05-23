@@ -28,7 +28,10 @@ from .exceptions import (
     CacheExpiredError,
     CacheKeyComputationError,
     CacheSerializationError,
+    CashCacheIneffectiveWarning,
+    CashCacheStoreFailedWarning,
     CashError,
+    CashWarning,
     DependencyNotFoundError,
     UpstreamStateError,
 )
@@ -270,6 +273,10 @@ __all__ = [
     "AmbiguousCellError",
     "UpstreamStateError",
     "CacheKeyComputationError",
+    # Warnings (stable)
+    "CashWarning",
+    "CashCacheIneffectiveWarning",
+    "CashCacheStoreFailedWarning",
 ]
 
 # Experimental features are available via:
