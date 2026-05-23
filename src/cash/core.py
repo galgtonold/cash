@@ -293,14 +293,24 @@ class Cash:
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
                 arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+                if arg_type_name == "<unknown>":
+                    suggestion = (
+                        "Cash could not identify which argument is unhashable "
+                        "(likely a nested value inside a container). Try passing "
+                        "a simpler argument, or register a hasher for the offending "
+                        "type via cash.register_hasher(SomeType, ...)."
+                    )
+                else:
+                    suggestion = (
+                        f"Register a hasher via cash.register_hasher({arg_type_name}, ...) "
+                        f"or pass the argument by a hashable value."
+                    )
                 self._warn_once(
                     CashCacheIneffectiveWarning,
                     func_name,
                     arg_type_name,
                     f"@cash.cache on {func_name}: failed to build cache key from "
-                    f"argument of type {arg_type_name}. Call will not cache. "
-                    f"Register a hasher via cash.register_hasher({arg_type_name}, ...) "
-                    f"or pass the argument by a hashable value.",
+                    f"argument of type {arg_type_name}. Call will not cache. {suggestion}",
                 )
                 result = func(*args, **kwargs)
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
@@ -309,14 +319,22 @@ class Cash:
             return (cache_key, current_state_hash, args_hash)
         except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+            if arg_type_name == "<unknown>":
+                hint = (
+                    " Cash could not identify the offending argument type; "
+                    "check your function's arguments."
+                )
+            else:
+                hint = (
+                    f" Consider cash.register_hasher({arg_type_name}, ...) "
+                    f"if {arg_type_name} is the unhashable argument."
+                )
             self._warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 arg_type_name,
                 f"@cash.cache on {func_name}: cache-key generation raised "
-                f"{type(e).__name__} ({e}). Call will not cache. "
-                f"Consider cash.register_hasher({arg_type_name}, ...) if {arg_type_name} "
-                f"is the unhashable argument.",
+                f"{type(e).__name__} ({e}). Call will not cache.{hint}",
             )
             result = func(*args, **kwargs)
             self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='error', cache_key='')

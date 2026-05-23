@@ -1,6 +1,7 @@
 """Tests for the CashWarning hierarchy and _warn_once dedup."""
 from __future__ import annotations
 
+import threading
 import warnings
 
 import pytest
@@ -75,9 +76,6 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
     assert captured[1].filename.endswith("test_warnings_ineffective.py"), captured[1].filename
 
 
-import threading
-
-
 class _Unpicklable:
     """Holds a threading.Lock, which is not picklable."""
     def __init__(self):
@@ -150,3 +148,40 @@ def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
         f"warning attributed to {ineffective[0].filename!r}; "
         f"expected user call site in test_warnings_ineffective.py"
     )
+
+
+def test_resolve_key_exception_emits_ineffective_warning(tmp_path):
+    """The `except` branch in _resolve_cache_key (where key gen raises e.g.
+    ValueError) also emits CashCacheIneffectiveWarning. We trigger it by
+    registering a custom hasher that raises ValueError — TypeError would be
+    swallowed by _serialize_args's inner try/except, but ValueError is only
+    caught by _resolve_cache_key's outer except, which is the branch we want
+    to exercise here.
+    """
+
+    class _BoxedThing:
+        def __init__(self, v):
+            self.v = v
+
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    def bad_hasher(value):
+        raise ValueError("hasher refuses this value")
+
+    c.register_hasher(_BoxedThing, bad_hasher)
+
+    @c.cache
+    def f(obj):
+        return obj.v * 2
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        result = f(_BoxedThing(7))
+
+    assert result == 14  # function still runs
+    ineffective = [w for w in captured if issubclass(w.category, CashCacheIneffectiveWarning)]
+    assert len(ineffective) == 1, [str(w.message) for w in captured]
+    msg = str(ineffective[0].message)
+    assert "_BoxedThing" in msg
+    assert "ValueError" in msg
+    assert "cache-key generation raised" in msg
