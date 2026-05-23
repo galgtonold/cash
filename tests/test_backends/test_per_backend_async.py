@@ -189,6 +189,39 @@ class TestRAMStaysSync:
 # Tiered backend cell-finish time
 # ---------------------------------------------------------------------------
 
+class TestTieredShutdownPropagates:
+    """A script that exits via atexit calls Cash.shutdown → backend.shutdown.
+    For TieredBackend (the default), that MUST cascade into every tier so
+    each tier's PendingWrites is drained — otherwise a Python script can
+    exit before the slow async write to S3/Redis lands, losing data."""
+
+    def test_tiered_shutdown_drains_each_tier(self, tmp_path, monkeypatch):
+        import time as _time
+        ram = InMemoryBackend()
+        disk = FileBackend(str(tmp_path / "fb"), flush_interval=0)
+        tiered = TieredBackend([ram, disk], promotion_policy=lambda e, s: True)
+
+        # Make the disk write slow so the test can prove shutdown waited.
+        original = disk._do_set_sync
+        write_done = []
+        def slow(*args, **kwargs):
+            _time.sleep(0.3)
+            r = original(*args, **kwargs)
+            write_done.append(_time.perf_counter())
+            return r
+        monkeypatch.setattr(disk, "_do_set_sync", slow)
+
+        meta = {"execution_time": 5.0, "size": 100}
+        tiered.set("k", "v", meta)
+        tiered.shutdown()
+        shutdown_returned_at = _time.perf_counter()
+
+        assert write_done, "disk write must have completed"
+        assert write_done[0] <= shutdown_returned_at, (
+            "TieredBackend.shutdown returned before its disk tier's write finished"
+        )
+
+
 class TestTieredCellFinishTime:
     """A TieredBackend.set() with a slow async tier should return quickly —
     the cell-execution path is no longer blocked on the slow write."""
