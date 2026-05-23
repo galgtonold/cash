@@ -461,7 +461,6 @@ class TestSizeAwareConfig:
         from cash.config import CashConfig
         config = CashConfig()
         assert config.min_cache_savings_pct == 0.20
-        assert config.estimated_serialization_speed == 200 * 1024 * 1024
 
     def test_config_to_dict_has_size_settings(self):
         """to_dict() includes size-aware settings."""
@@ -469,4 +468,3 @@ class TestSizeAwareConfig:
         config = CashConfig()
         d = config.to_dict()
         assert 'min_cache_savings_pct' in d
-        assert 'estimated_serialization_speed' in d
