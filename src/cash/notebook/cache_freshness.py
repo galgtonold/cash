@@ -126,11 +126,6 @@ class CacheFreshnessChecker:
             # Fixes the bug where `df` cell was cached even when the source CSV changed.
             if cached_data and inputs:
                 cached_data = self._invalidate_if_input_file_changed(inputs, cached_data)
-            if cached_data is not None and 'output_lineages' not in metadata:
-                cached_data = None
-                self.last_miss_reason = "cache entry uses an old format (missing lineage metadata)"
-                if self.debug:
-                    logger.debug("[CACHE DEBUG] Cache entry missing lineage metadata (stale format), invalidating.")
 
         return metadata, cached_data, cache_check_time
 

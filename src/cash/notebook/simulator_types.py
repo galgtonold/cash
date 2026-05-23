@@ -183,9 +183,6 @@ def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None
     at well-defined boundaries where mid-phase visibility is required
     (e.g. so subsequent statements see import lineages in cache-key
     computation).
-
-    Preserves legacy ``executed_cell_hashes`` normalisation: bare-str
-    entries are promoted to a set so subsequent ``.add`` calls succeed.
     """
     restores, resets = collector.drain()
     for op in restores:
@@ -200,8 +197,6 @@ def apply_collected_mutations(collector: "RestoreCollector", state: Any) -> None
             existing = state.executed_cell_hashes.get(op.var_name)
             if existing is None:
                 state.executed_cell_hashes[op.var_name] = {op.code_hash}
-            elif isinstance(existing, str):
-                state.executed_cell_hashes[op.var_name] = {existing, op.code_hash}
             else:
                 existing.add(op.code_hash)
         if op.input_lineages is not None:
