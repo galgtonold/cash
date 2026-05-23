@@ -3,7 +3,7 @@ import pytest
 import unittest.mock
 import importlib
 from cash.experimental import __getattr__ as exp_getattr
-from cash.ui.graph import DependencyGraph
+from cash.graph import DependencyGraph
 
 
 class TestUIInit:
@@ -233,9 +233,9 @@ class TestDependencyGraph:
         with unittest.mock.patch.dict('sys.modules', {
             'pyvis': unittest.mock.MagicMock(),
             'pyvis.network': unittest.mock.MagicMock(),
-        }), unittest.mock.patch('cash.ui.graph.Network', return_value=mock_net, create=True):
+        }), unittest.mock.patch('cash.graph.Network', return_value=mock_net, create=True):
             # Need to patch at the point of use
-            import cash.ui.graph as graph_mod  # noqa: F811
+            import cash.graph as graph_mod  # noqa: F811
 
             # Verify the module loaded with our mock
             assert graph_mod is not None
@@ -256,7 +256,7 @@ class TestDependencyGraph:
             'IPython.display': mock_ipython.display,
         }):
             # Re-import to pick up mocks
-            import cash.ui.graph as graph_mod
+            import cash.graph as graph_mod
             importlib.reload(graph_mod)
             g2 = graph_mod.DependencyGraph()
             g2.add_dependency("a", "b")
