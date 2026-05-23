@@ -9,14 +9,16 @@ automatically invalidates dependent cached results.
 """
 
 import builtins
+import contextvars
 import importlib
 import importlib.abc
 import importlib.util
 import logging
 import os
 import sys
+import threading
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Optional
 
 from cash.utils import normalize_path
 
@@ -26,6 +28,83 @@ __all__ = ["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "Fil
 FileDependencies = dict[str, float]
 
 logger = logging.getLogger(__name__)
+
+# Active tracker for the current asyncio task / thread.
+# Read by the patched I/O dispatchers to decide whether to record the
+# access. Isolated per task/thread by contextvars semantics.
+_active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = (
+    contextvars.ContextVar("_active_tracker", default=None)
+)
+
+# Per-target install lock: the dispatcher wrappers are installed once
+# per (module/dict, attr-name) pair for the lifetime of the process.
+# Subsequent ``__enter__`` calls skip already-installed targets (cheap
+# attribute-sentinel check). New targets — i.e. modules imported after
+# the first tracker entered, or new handlers registered via
+# :func:`cash.register_file_handler` — are still picked up because
+# ``_apply_patches`` runs on every ``__enter__`` and only the
+# already-installed wrappers are no-op skipped.
+_install_lock = threading.Lock()
+
+
+def _dispatch_track(path: Any) -> None:
+    """Module-level tracker-dispatching shim. Custom handler factories
+    registered via :func:`cash.register_file_handler` receive this as
+    their ``tracker_callback`` argument. The shim consults
+    ``_active_tracker`` at *call* time, so old-signature factories
+    (whose wrappers do ``tracker_callback(path)``) transparently route
+    to whichever tracker is active on the current asyncio task or
+    thread — same isolation guarantees as the built-in handlers.
+    """
+    _tracker = _active_tracker.get()
+    if _tracker is not None:
+        _tracker._track_path(path)
+
+def _find_patch_targets(func_pattern: str, module_obj: Any) -> list:
+    """Return the list of attribute names to patch on *module_obj*."""
+    if func_pattern.endswith('*'):
+        prefix = func_pattern[:-1]
+        return [name for name in dir(module_obj) if name.startswith(prefix)]
+    if hasattr(module_obj, func_pattern):
+        return [func_pattern]
+    return []
+
+
+def _install_module_patches(module_name: str, module_obj: Any) -> None:
+    """Install dispatcher patches on a module. Idempotent — skips any
+    target whose current attribute is already a dispatcher wrapper.
+
+    Called from :meth:`FileAccessTracker._patch_module` and from
+    :class:`_PatchingLoader.exec_module` (post-import). The dispatcher
+    wrappers route via ``_active_tracker`` so they're tracker-agnostic
+    — one install serves all trackers.
+    """
+    registry = FileDependencyRegistry()
+    handlers = registry.get_handlers_for_module(module_name)
+
+    for func_pattern, factory in handlers:
+        targets = _find_patch_targets(func_pattern, module_obj)
+        for name in targets:
+            if not hasattr(module_obj, name):
+                continue
+            original_func = getattr(module_obj, name)
+
+            # Install-once skip.
+            if getattr(original_func, '_is_file_tracker_patch', False):
+                continue
+
+            real_original = _unwrap_to_real(original_func)
+            if not callable(real_original):
+                continue
+
+            wrapper = factory(real_original, _dispatch_track)
+            wrapper._is_file_tracker_patch = True
+            wrapper._original_func = real_original
+            try:
+                setattr(module_obj, name, wrapper)
+            except (AttributeError, TypeError) as e:
+                logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", module_name, name, e)
+
 
 def _unwrap_to_real(func: Any) -> Any:
     """Walk a chain of FileAccessTracker wrappers down to the original
@@ -126,31 +205,51 @@ class FileDependencyRegistry:
 
     @staticmethod
     def _create_open_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Handler for open()-like functions."""
+        """Handler for open()-like functions.
+
+        ``track_callback`` is kept in the signature for backwards
+        compatibility with custom handlers registered via
+        :meth:`FileDependencyRegistry.register`. It is ignored — the
+        wrapper consults ``_active_tracker`` at call time so the
+        same patch can serve any number of concurrent trackers.
+        """
         def tracked_open(file, *args, **kwargs):
-            # Only track read modes or default mode
             mode = args[0] if args else kwargs.get('mode', 'r')
             if 'r' in mode or '+' in mode:
-                track_callback(file)
+                _tracker = _active_tracker.get()
+                if _tracker is not None:
+                    _tracker._track_path(file)
             return original_func(file, *args, **kwargs)
         return tracked_open
 
     @staticmethod
     def _create_path_arg_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Generic handler for functions where the first argument is a path."""
+        """Generic handler for functions where the first argument is a path.
+
+        ``track_callback`` kept for backwards compatibility — see
+        :meth:`_create_open_handler`. The wrapper consults
+        ``_active_tracker`` at call time.
+        """
         def tracked_func(path_or_buf, *args, **kwargs):
-            # Check if it looks like a file path
             if isinstance(path_or_buf, (str, bytes, os.PathLike)):
-                track_callback(path_or_buf)
+                _tracker = _active_tracker.get()
+                if _tracker is not None:
+                    _tracker._track_path(path_or_buf)
             return original_func(path_or_buf, *args, **kwargs)
         return tracked_func
 
 class PostImportHook(importlib.abc.MetaPathFinder):
+    """Intercepts imports of registered modules to patch them after loading.
+
+    Under the ContextVar refactor a single shared hook is installed
+    once on ``sys.meta_path`` (see ``_shared_import_hook`` below). The
+    ``tracker`` argument is accepted for backwards compatibility but is
+    not used — the hook drives module patching via
+    :func:`_install_module_patches`, which routes file reads via
+    ``_active_tracker`` rather than a captured tracker instance.
     """
-    Intercepts imports of specific modules to patch them after loading.
-    """
-    def __init__(self, tracker: FileAccessTracker):
-        self.tracker = tracker
+    def __init__(self, tracker: Optional["FileAccessTracker"] = None):
+        self.tracker = tracker  # legacy, unused
         self._skip: set[str] = set()  # Avoid recursion
 
     def find_spec(self, fullname, path, target=None):
@@ -163,7 +262,7 @@ class PostImportHook(importlib.abc.MetaPathFinder):
         # The handlers are registered by module name.
         top_level = fullname.split('.')[0]
 
-        targets = self.tracker.registry.handlers.keys()
+        targets = FileDependencyRegistry().handlers.keys()
         if fullname not in targets and top_level not in targets:
              return None
 
@@ -178,13 +277,12 @@ class PostImportHook(importlib.abc.MetaPathFinder):
             return None
 
         # Wrap the loader
-        spec.loader = _PatchingLoader(spec.loader, self.tracker, fullname)
+        spec.loader = _PatchingLoader(spec.loader, fullname)
         return spec
 
 class _PatchingLoader:
-    def __init__(self, original_loader, tracker, fullname):
+    def __init__(self, original_loader, fullname):
         self.original_loader = original_loader
-        self.tracker = tracker
         self.fullname = fullname
 
     def create_module(self, spec):
@@ -194,23 +292,46 @@ class _PatchingLoader:
         # execute module
         self.original_loader.exec_module(module)
 
-        # Now patch it!
-        self.tracker._patch_module(self.fullname, module)
+        # Now patch it via the module-level dispatcher installer —
+        # tracker-agnostic, install-once-per-target.
+        _install_module_patches(self.fullname, module)
+
+
+# Shared meta_path hook — installed at most once for the lifetime of
+# the process by :meth:`FileAccessTracker.__enter__`. Tracker-agnostic.
+_shared_import_hook: Optional[PostImportHook] = None
+_shared_import_hook_lock = threading.Lock()
+
+
+def _ensure_import_hook_installed() -> None:
+    global _shared_import_hook
+    with _shared_import_hook_lock:
+        if _shared_import_hook is None:
+            _shared_import_hook = PostImportHook()
+            sys.meta_path.insert(0, _shared_import_hook)
 
 class FileAccessTracker:
     """Context manager that intercepts file I/O to record which files a
     statement reads.
 
-    **Monkey-patching approach**: On ``__enter__``, patches ``builtins.open``,
-    loaded pandas/polars/numpy/joblib/pickle/json I/O functions, and the user
-    namespace binding of ``open``.  A ``PostImportHook`` is also installed on
-    ``sys.meta_path`` to patch libraries imported *inside* the tracked block.
+    **ContextVar dispatch (current design)**: On the first
+    ``__enter__`` ever, install once-permanently dispatcher wrappers on
+    ``builtins.open``, registered pandas/polars/numpy/joblib/pickle/json
+    I/O functions, the user namespace ``open``, and a meta-path import
+    hook for libraries loaded later. The wrappers consult a
+    ``ContextVar`` (``_active_tracker``) at *call* time to decide
+    whether to record the access. ``__enter__`` sets that ContextVar
+    to ``self`` and stores the token; ``__exit__`` ``reset()``s it.
 
-    **Cleanup guarantee**: ``__exit__`` always restores every patched function
-    and removes the import hook — even if an exception is raised.  Each patch
-    record in ``self.patches`` is a ``(obj, name, original_fn)`` tuple; all
-    are reverted in :meth:`_unpatch`.  The ``sys.meta_path`` hook is removed
-    first so that new imports during unpatch are not double-intercepted.
+    Because ``ContextVar`` values are isolated per ``asyncio.Task`` and
+    per ``threading.Thread`` by default, concurrent trackers — e.g. two
+    coroutines under ``asyncio.gather``, or two worker threads — each
+    see only their own block's reads.
+
+    **No per-tracker unpatching**: the wrappers stay installed for the
+    lifetime of the process. With no active tracker the dispatcher is a
+    single ``ContextVar.get()`` + ``is None`` check before falling
+    through to the original — sub-microsecond.
 
     **Limitation**: The heuristic does not track writes (e.g., ``to_csv``,
     ``np.save``).  Write-side dependencies are not needed for cache invalidation
@@ -222,18 +343,31 @@ class FileAccessTracker:
         self.patches = []
         self.user_ns = user_ns or {}
         self.registry = FileDependencyRegistry()
+        # Kept for backwards compatibility — third-party code may
+        # inspect or reference ``tracker.import_hook``. The actual
+        # hook installed on ``sys.meta_path`` is the shared one in
+        # ``_shared_import_hook``, lazily installed by ``__enter__``.
         self.import_hook = PostImportHook(self)
+        self._token: Optional[contextvars.Token] = None
 
     def __enter__(self):
-        self._apply_patches()
-        sys.meta_path.insert(0, self.import_hook)
+        # Install permanent dispatcher patches. Each (module/dict, name)
+        # target is patched only once for the lifetime of the process —
+        # ``_apply_patches`` self-skips targets whose current attribute
+        # already carries the ``_is_file_tracker_patch`` sentinel. This
+        # is cheap on the hot path (a single ``getattr`` per registered
+        # target) and lets newly-imported modules and newly-registered
+        # handlers be picked up on the next ``__enter__``.
+        with _install_lock:
+            self._apply_patches()
+        _ensure_import_hook_installed()
+        self._token = _active_tracker.set(self)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        # Remove import hook first so new imports during unpatch are not intercepted.
-        if self.import_hook in sys.meta_path:
-            sys.meta_path.remove(self.import_hook)
-        self._unpatch()
+        if self._token is not None:
+            _active_tracker.reset(self._token)
+            self._token = None
 
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
@@ -267,63 +401,33 @@ class FileAccessTracker:
                 self._patch_module(mod_name, module)
 
     def _find_patch_targets(self, func_pattern: str, module_obj: Any) -> list:
-        """Return the list of attribute names to patch on *module_obj*."""
-        if func_pattern.endswith('*'):
-            prefix = func_pattern[:-1]
-            return [name for name in dir(module_obj) if name.startswith(prefix)]
-        if hasattr(module_obj, func_pattern):
-            return [func_pattern]
-        return []
+        """Return the list of attribute names to patch on *module_obj*.
+
+        Backwards-compatible shim — delegates to the module-level
+        :func:`_find_patch_targets`.
+        """
+        return _find_patch_targets(func_pattern, module_obj)
 
     def _patch_module(self, module_name: str, module_obj: Any):
-        """Patch functions in a module based on registry."""
-        handlers = self.registry.get_handlers_for_module(module_name)
+        """Patch functions in a module based on registry.
 
-        for func_pattern, factory in handlers:
-            targets = self._find_patch_targets(func_pattern, module_obj)
-
-            # Apply patches
-            for name in targets:
-                if not hasattr(module_obj, name):
-                    continue
-
-                original_func = getattr(module_obj, name)
-
-                # Self-heal: if we see a wrapper from a prior tracker,
-                # walk down its ``_original_func`` chain to the real,
-                # non-wrapper callable. We wrap THAT instead and remember
-                # it as the original for unpatching. Without this step a
-                # silently-failed unpatch from a prior tracker (or just
-                # a tracker that got orphaned by an exception) leaves
-                # its wrapper installed forever, with subsequent
-                # trackers refusing to re-patch and the wrapper pinning
-                # the dead tracker in memory via its closure.
-                real_original = _unwrap_to_real(original_func)
-
-                if not callable(real_original):
-                    continue
-
-                # Create wrapper around the *real* original
-                wrapper = factory(real_original, self._track_path)
-                wrapper._is_file_tracker_patch = True
-                wrapper._original_func = real_original  # For debugging/unwrapping
-
-                # Apply patch
-                try:
-                    setattr(module_obj, name, wrapper)
-                    self.patches.append((module_obj, name, real_original))
-                except (AttributeError, TypeError) as e:
-                    logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", module_name, name, e)
+        Backwards-compatible shim — delegates to the module-level
+        :func:`_install_module_patches` which is tracker-agnostic
+        (uses ``_dispatch_track`` + ``_active_tracker``).
+        """
+        _install_module_patches(module_name, module_obj)
 
     def _patch_user_ns(self):
         """Patch open in user namespace (IPython specific). Like
         ``_patch_module``, this self-heals by walking past any leaked
         wrappers to the real callable."""
-        # Handle user_ns['open']
-        if 'open' in self.user_ns:
+        # Handle user_ns['open'] — skip if dispatcher already installed.
+        if 'open' in self.user_ns and not getattr(
+            self.user_ns['open'], '_is_file_tracker_patch', False
+        ):
             real_open = _unwrap_to_real(self.user_ns['open'])
             factory = self.registry._create_open_handler
-            wrapper = factory(real_open, self._track_path)
+            wrapper = factory(real_open, _dispatch_track)
             wrapper._is_file_tracker_patch = True
             wrapper._original_func = real_open
 
@@ -333,10 +437,12 @@ class FileAccessTracker:
         # Handle user_ns['__builtins__']['open'] (if dict)
         if '__builtins__' in self.user_ns:
             bs = self.user_ns['__builtins__']
-            if isinstance(bs, dict) and 'open' in bs:
+            if isinstance(bs, dict) and 'open' in bs and not getattr(
+                bs['open'], '_is_file_tracker_patch', False
+            ):
                 real_open = _unwrap_to_real(bs['open'])
                 factory = self.registry._create_open_handler
-                wrapper = factory(real_open, self._track_path)
+                wrapper = factory(real_open, _dispatch_track)
                 wrapper._is_file_tracker_patch = True
                 wrapper._original_func = real_open
 
@@ -344,7 +450,9 @@ class FileAccessTracker:
                 self.patches.append((bs, 'open', real_open))
 
     def _unpatch(self):
-        """Revert all patches."""
+        """DEPRECATED: with the ContextVar refactor patches are permanent.
+        Kept here for backwards compatibility with any callers that may
+        have hard-coded references. Safe no-op when patches are not present."""
         for obj, name, original in reversed(self.patches):
             try:
                 if isinstance(obj, dict):
@@ -352,6 +460,6 @@ class FileAccessTracker:
                 else:
                     setattr(obj, name, original)
             except (AttributeError, TypeError, KeyError) as e:
-                logger.debug("[FILE_TRACKER] Failed to unpatch: %s", e)
-        self.patches = []
+                logger.debug("[FILE_TRACKER] Failed to unpatch %s: %s", name, e)
+        self.patches.clear()
 
