@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 # Import only what doesn't cause circular dependencies
-from .graph import DependencyGraph
+from cash.graph import DependencyGraph
 
 
 # Lazy imports to avoid circular dependencies

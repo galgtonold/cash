@@ -1,6 +1,6 @@
-"""Tests for DependencyGraph in cash.ui.graph."""
+"""Tests for DependencyGraph in cash.graph."""
 
-from cash.ui.graph import DependencyGraph
+from cash.graph import DependencyGraph
 
 
 class TestDependencyGraph:
