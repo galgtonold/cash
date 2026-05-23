@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from ..utils import resolve_file_dep_path
 from ._protocols import ShellProtocol
+from .cache_freshness import split_file_dep_value
 from .cache_status import CacheStatus
 from .object_hashing import compute_hash
 from .statement_processor import ProcessResult
@@ -117,14 +118,7 @@ class Restorer:
                 if self._debug:
                     print(f"[STATE] Cannot restore '{var_name}': file dependency missing: {fpath}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            # Tolerate both the new {'mtime': ..., 'size': ...} form and the
-            # legacy bare-float form left over from older cache entries.
-            if isinstance(stored, dict):
-                stored_mtime = float(stored.get('mtime', 0.0))
-                stored_size = stored.get('size')
-            else:
-                stored_mtime = float(stored)
-                stored_size = None
+            stored_mtime, stored_size = split_file_dep_value(stored)
             try:
                 cur_stat = os.stat(resolved)
             except OSError:

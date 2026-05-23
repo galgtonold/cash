@@ -46,20 +46,20 @@ class TestValidateFileFreshness:
 
     def test_missing_file_is_stale(self, tmp_path):
         missing = str(tmp_path / "nonexistent.csv")
-        assert NotebookSimulator._validate_file_freshness({missing: 0.0}) is False
+        assert NotebookSimulator._validate_file_freshness({missing: {'mtime': 0.0}}) is False
 
     def test_existing_file_with_matching_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         import os
         mtime = os.path.getmtime(str(test_file))
-        assert NotebookSimulator._validate_file_freshness({str(test_file): mtime}) is True
+        assert NotebookSimulator._validate_file_freshness({str(test_file): {'mtime': mtime}}) is True
 
     def test_existing_file_with_stale_mtime(self, tmp_path):
         test_file = tmp_path / "data.csv"
         test_file.write_text("a,b\n1,2")
         # Use a very old mtime
-        assert NotebookSimulator._validate_file_freshness({str(test_file): 0.0}) is False
+        assert NotebookSimulator._validate_file_freshness({str(test_file): {'mtime': 0.0}}) is False
 
     def test_multiple_files_all_fresh(self, tmp_path):
         """All files must be fresh for the result to be True."""
@@ -69,8 +69,8 @@ class TestValidateFileFreshness:
         f2.write_text("data2")
         import os
         files = {
-            str(f1): os.path.getmtime(str(f1)),
-            str(f2): os.path.getmtime(str(f2)),
+            str(f1): {'mtime': os.path.getmtime(str(f1))},
+            str(f2): {'mtime': os.path.getmtime(str(f2))},
         }
         assert NotebookSimulator._validate_file_freshness(files) is True
 
@@ -82,8 +82,8 @@ class TestValidateFileFreshness:
         f2.write_text("data2")
         import os
         files = {
-            str(f1): os.path.getmtime(str(f1)),
-            str(f2): 0.0,  # Stale
+            str(f1): {'mtime': os.path.getmtime(str(f1))},
+            str(f2): {'mtime': 0.0},  # Stale
         }
         assert NotebookSimulator._validate_file_freshness(files) is False
 
@@ -183,7 +183,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'output_lineages': {'df': 'abc123'},
             'code': 'df = pd.read_csv("data.csv")',
             'source_hash': 'hash1',
-            'file_dependencies': {csv_path: csv_file.stat().st_mtime},
+            'file_dependencies': {csv_path: {'mtime': csv_file.stat().st_mtime}},
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {'data_path': 'lin1'})
         checker.simulator._apply_phase_mutations()
@@ -220,7 +220,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
                 'output_lineages': {'df': 'abc123'},
                 'code': 'df = pd.read_csv("data.csv")',
                 'source_hash': 'hash1',
-                'file_dependencies': {stale_path: 0.0},
+                'file_dependencies': {stale_path: {'mtime': 0.0}},
             }
             checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
             checker.simulator._apply_phase_mutations()
@@ -240,7 +240,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'output_lineages': {'df': 'abc123'},
             'code': 'df = pd.read_csv("missing.csv")',
             'source_hash': 'hash1',
-            'file_dependencies': {'/no/such/file/ever_unique_xyz.csv': 0.0},
+            'file_dependencies': {'/no/such/file/ever_unique_xyz.csv': {'mtime': 0.0}},
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'df'}, metadata, {})
         checker.simulator._apply_phase_mutations()
@@ -259,7 +259,7 @@ class TestUpdateTrackingAfterRestoreFileDeps:
             'output_lineages': {'df': 'abc1', 'df2': 'abc2'},
             'code': 'df, df2 = load()',
             'source_hash': 'hash1',
-            'file_dependencies': {csv_path: csv_file.stat().st_mtime},
+            'file_dependencies': {csv_path: {'mtime': csv_file.stat().st_mtime}},
         }
         checker.simulator._virtual_lineage._update_tracking_after_restore({'df', 'df2'}, metadata, {})
         checker.simulator._apply_phase_mutations()

@@ -107,7 +107,7 @@ class TestCheckCache:
         metadata = {
             'timestamp': time.time(),
             'output_lineages': {'x': 'abc123'},
-            'file_dependencies': {'/nonexistent/file.csv': time.time()},
+            'file_dependencies': {'/nonexistent/file.csv': {'mtime': time.time()}},
         }
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
@@ -125,11 +125,11 @@ class TestCheckCache:
         metadata = {
             'timestamp': time.time(),
             'output_lineages': {'x': 'abc123'},
-            'file_dependencies': {str(test_file): time.time() - 100},  # Old mtime
+            'file_dependencies': {str(test_file): {'mtime': time.time() - 100}},  # Old mtime
         }
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
-        
+
         result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
         assert result_data is None
 
@@ -144,11 +144,11 @@ class TestCheckCache:
         metadata = {
             'timestamp': time.time(),
             'output_lineages': {'x': 'abc123'},
-            'file_dependencies': {str(test_file): current_mtime},
+            'file_dependencies': {str(test_file): {'mtime': current_mtime}},
         }
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
-        
+
         result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
         assert result_data is not None
 
@@ -169,7 +169,7 @@ class TestCheckCache:
         source_meta = {
             'timestamp': time.time(),
             'output_lineages': {'df': 'def456'},
-            'file_dependencies': {str(test_file): current_mtime - 100},  # Old mtime
+            'file_dependencies': {str(test_file): {'mtime': current_mtime - 100}},  # Old mtime
         }
         backend.set(source_key, {'variables': {'df': 'data'}}, source_meta)
         processor.variable_sources['df'] = source_key
