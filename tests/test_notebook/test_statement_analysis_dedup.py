@@ -12,7 +12,7 @@ import pytest
 from traitlets.config import Configurable
 from unittest.mock import MagicMock, patch
 
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.magics import CashMagics
 

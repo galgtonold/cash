@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
 """
 Tests for the ALREADY_EXECUTED skip optimization in statement_processor.py.
@@ -23,7 +23,7 @@ import shutil
 from unittest.mock import MagicMock, patch
 from traitlets.config import Configurable
 from cash import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.notebook.magics import CashMagics
 import contextlib
 

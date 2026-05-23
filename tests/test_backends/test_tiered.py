@@ -5,7 +5,7 @@ cleanup, and edge cases.
 """
 import pytest
 from unittest.mock import MagicMock
-from cash.backends.backend import InMemoryBackend, FileBackend
+from cash.backends import InMemoryBackend, FileBackend
 from cash.backends.tiered_backend import TieredBackend
 
 

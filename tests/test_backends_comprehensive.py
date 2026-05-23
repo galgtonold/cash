@@ -2,7 +2,7 @@
 import hashlib
 import os
 import time
-from cash.backends.backend import (
+from cash.backends import (
     InMemoryBackend, FileBackend, CascadingBackend, AsyncBackendWrapper
 )
 from cash.backends.serialization import PickleSerializer, CloudPickleSerializer, get_serializer

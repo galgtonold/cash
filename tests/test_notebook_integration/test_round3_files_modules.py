@@ -172,7 +172,7 @@ class TestDiskPersistenceRestore:
             # Cell 1: Setup with file backend
             f"""import time
 from cash import Cash
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 from cash.notebook.magics import CashMagics
 
 backend = FileBackend(cache_dir='{cache_dir_str}')

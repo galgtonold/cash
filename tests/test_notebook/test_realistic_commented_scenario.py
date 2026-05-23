@@ -48,7 +48,7 @@ capture_output_mock.return_value.__exit__ = MagicMock(return_value=False)
 sys.modules['IPython.utils.io'].capture_output = capture_output_mock
 
 from cash.notebook.magics import CashMagics
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.core import Cash
 from traitlets.config.configurable import Configurable
 

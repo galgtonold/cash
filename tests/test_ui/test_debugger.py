@@ -4,7 +4,7 @@ from cash.core import Cash
 from cash.exceptions import CashError
 from cash.notebook.magics import CashMagics
 from cash.ui.debugger import CacheDebugger
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 
 class MockShell:
     def __init__(self):

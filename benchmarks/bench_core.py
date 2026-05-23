@@ -118,7 +118,7 @@ def bench_backend_operations():
     """Benchmark backend get/set operations."""
     print("\n=== Backend Operations ===")
 
-    from cash.backends.backend import InMemoryBackend, FileBackend
+    from cash.backends import InMemoryBackend, FileBackend
     import tempfile
 
     # InMemoryBackend

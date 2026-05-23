@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
 """
 Tests for module reload cache invalidation and exception surfacing.
@@ -21,7 +21,7 @@ from unittest.mock import MagicMock
 from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.magics import CashMagics
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable
 
 

@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 """
 Tests for granular per-symbol module invalidation.
 
@@ -28,7 +28,7 @@ from cash.notebook.function_tracker import FunctionTracker
 from cash.notebook.magics import CashMagics
 from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable
 
 # Force caching regardless of the 10 ms min-execution-time floor.

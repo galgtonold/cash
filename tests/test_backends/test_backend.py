@@ -1,6 +1,6 @@
-﻿"""Tests for FileBackend functionality."""
+"""Tests for FileBackend functionality."""
 import os
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 
 
 def test_set_get(file_backend):

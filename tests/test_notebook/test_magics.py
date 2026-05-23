@@ -3,7 +3,7 @@ from unittest.mock import MagicMock, patch
 import time
 from cash.core import Cash
 from cash.notebook.magics import CashMagics
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 
 from traitlets.config import Configurable
 

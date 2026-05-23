@@ -93,7 +93,7 @@ def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp
 
     monkeypatch.setattr(cost_model, "estimated_restore_time", spy)
 
-    from cash.backends.backend import FileBackend
+    from cash.backends import FileBackend
     from cash.core import Cash
     from cash.notebook.statement_processor import StatementProcessor
 

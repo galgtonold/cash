@@ -120,7 +120,7 @@ src/cash/
 
 1. Subclass `CacheBackend` from `cash.backends.backend`:
 ```python
-from cash.backends.backend import CacheBackend
+from cash.backends import CacheBackend
 
 class MyBackend(CacheBackend):
     def get(self, key): ...

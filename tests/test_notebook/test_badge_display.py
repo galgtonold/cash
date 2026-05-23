@@ -15,7 +15,7 @@ from traitlets.config import Configurable
 
 from cash.core import Cash
 from cash.notebook.magics import CashMagics
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.notebook.cache_status import CacheStatus
 
 

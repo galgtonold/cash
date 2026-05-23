@@ -18,7 +18,7 @@ from unittest.mock import MagicMock
 import pytest
 from traitlets.config import Configurable
 
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
 from cash.notebook.magics import CashMagics

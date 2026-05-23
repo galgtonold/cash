@@ -285,7 +285,7 @@ class TestBackendPerformance:
     """Compare InMemoryBackend vs FileBackend performance."""
 
     def test_inmemory_set_get(self):
-        from cash.backends.backend import InMemoryBackend
+        from cash.backends import InMemoryBackend
         backend = InMemoryBackend()
         key = "test_key"
         value = {"data": list(range(1000))}
@@ -302,7 +302,7 @@ class TestBackendPerformance:
         assert get_median < 10.0, f"InMemory get too slow: {get_median:.3f}ms (target <10ms)"
 
     def test_file_backend_set_get(self, tmp_path):
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
         backend = FileBackend(str(tmp_path / "cache"))
         value = {"data": list(range(1000))}
         metadata = {"created": time.time()}
@@ -332,7 +332,7 @@ class TestBackendPerformance:
         'get from cache' compared to 'already have the variable'.
         Target: <10ms overhead per cache hit.
         """
-        from cash.backends.backend import InMemoryBackend
+        from cash.backends import InMemoryBackend
         backend = InMemoryBackend()
         # Store a moderate-sized value
         value = {f"col_{i}": list(range(500)) for i in range(10)}

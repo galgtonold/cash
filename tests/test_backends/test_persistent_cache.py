@@ -1,7 +1,7 @@
-﻿"""Tests for persistent cache functionality across Cash instances."""
+"""Tests for persistent cache functionality across Cash instances."""
 import os
 from cash import Cash
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 
 def test_persistence_across_instances(temp_cache_dir):
     """Test that cached values persist across Cash instances."""

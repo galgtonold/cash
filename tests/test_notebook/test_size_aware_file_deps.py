@@ -20,7 +20,7 @@ import numpy as np
 
 from cash.notebook.statement_processor import StatementProcessor
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend, FileBackend
+from cash.backends import InMemoryBackend, FileBackend
 from traitlets.config.configurable import Configurable
 
 
@@ -120,7 +120,7 @@ class TestBackendAwareCaching:
     @pytest.fixture
     def disk_processor(self):
         """Processor with FileBackend (disk)."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
         import tempfile
         tmp = tempfile.mkdtemp()
         backend = FileBackend(cache_dir=tmp)

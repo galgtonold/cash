@@ -3,7 +3,7 @@ import unittest
 import time
 from unittest.mock import MagicMock, patch
 import sys
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 
 class TestSmartMemoryBackend(unittest.TestCase):
     def setUp(self):

@@ -36,7 +36,7 @@ class ShellProtocol(Protocol):
 class CacheBackendProtocol(Protocol):
     """Minimal interface for a cache backend used by the notebook subsystem.
 
-    Matches the subset of :class:`cash.backends.backend.CacheBackend` that
+    Matches the subset of :class:`cash.backends.CacheBackend` that
     ``StatementProcessor`` and ``UpstreamChecker`` actually use.
     """
 
