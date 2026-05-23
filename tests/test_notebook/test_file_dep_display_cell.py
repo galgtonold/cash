@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 """
 Integration test for file dependency invalidation with display-only cells.
 
@@ -25,7 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..', 'src'))
 
 from cash.notebook.magics import CashMagics
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 
 
 class MockShell(Configurable):

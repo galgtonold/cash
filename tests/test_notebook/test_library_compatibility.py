@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
 
 _PERSIST = CacheAnnotation(persist=True)
@@ -14,7 +14,7 @@ import numpy as np
 from unittest.mock import MagicMock
 from cash.notebook.magics import CashMagics
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable
 
 # Skip all tests if sklearn/matplotlib aren't available

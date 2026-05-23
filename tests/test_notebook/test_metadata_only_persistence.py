@@ -13,7 +13,7 @@ class TestFileBackendMetadataOnly:
 
     def test_set_metadata_only_creates_meta_file(self, tmp_path):
         """set_metadata_only should create a .meta file but NO .data file."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
 
         backend = FileBackend(cache_dir=str(tmp_path))
         metadata = {
@@ -31,7 +31,7 @@ class TestFileBackendMetadataOnly:
 
     def test_set_metadata_only_marks_metadata_only_flag(self, tmp_path):
         """Stored metadata should have metadata_only=True."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
 
         backend = FileBackend(cache_dir=str(tmp_path))
         backend.set_metadata_only('test_key', {'execution_time': 2.0})
@@ -46,7 +46,7 @@ class TestFileBackendMetadataOnly:
 
     def test_get_metadata_returns_metadata_only_entry(self, tmp_path):
         """get_metadata should return metadata-only entries (no .data file needed)."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
 
         backend = FileBackend(cache_dir=str(tmp_path))
         metadata = {
@@ -64,14 +64,14 @@ class TestFileBackendMetadataOnly:
 
     def test_get_metadata_returns_none_for_missing_key(self, tmp_path):
         """get_metadata should return None for nonexistent keys."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
 
         backend = FileBackend(cache_dir=str(tmp_path))
         assert backend.get_metadata('nonexistent') is None
 
     def test_get_returns_none_for_metadata_only_entry(self, tmp_path):
         """get() (full data retrieval) should return None for metadata-only entries."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
 
         backend = FileBackend(cache_dir=str(tmp_path))
         backend.set_metadata_only('key1', {'execution_time': 1.0})
@@ -82,7 +82,7 @@ class TestFileBackendMetadataOnly:
 
     def test_metadata_survives_fresh_backend_instance(self, tmp_path):
         """Metadata-only entries should survive creating a new FileBackend on same dir."""
-        from cash.backends.backend import FileBackend
+        from cash.backends import FileBackend
 
         # First instance: write metadata
         backend1 = FileBackend(cache_dir=str(tmp_path))
@@ -104,7 +104,7 @@ class TestCascadingBackendMetadataOnly:
 
     def test_set_metadata_only_delegates_to_file_backend(self, tmp_path):
         """set_metadata_only should delegate to FileBackend in the chain."""
-        from cash.backends.backend import InMemoryBackend, FileBackend, CascadingBackend
+        from cash.backends import InMemoryBackend, FileBackend, CascadingBackend
 
         mem = InMemoryBackend()
         file = FileBackend(cache_dir=str(tmp_path))
@@ -123,7 +123,7 @@ class TestCascadingBackendMetadataOnly:
 
     def test_get_metadata_on_cascading_backend(self, tmp_path):
         """get_metadata on CascadingBackend should check all backends."""
-        from cash.backends.backend import InMemoryBackend, FileBackend, CascadingBackend
+        from cash.backends import InMemoryBackend, FileBackend, CascadingBackend
 
         mem = InMemoryBackend()
         file = FileBackend(cache_dir=str(tmp_path))
@@ -139,7 +139,7 @@ class TestCascadingBackendMetadataOnly:
 
     def test_get_metadata_returns_none_for_missing(self, tmp_path):
         """get_metadata on CascadingBackend should return None for missing keys."""
-        from cash.backends.backend import InMemoryBackend, FileBackend, CascadingBackend
+        from cash.backends import InMemoryBackend, FileBackend, CascadingBackend
 
         mem = InMemoryBackend()
         file = FileBackend(cache_dir=str(tmp_path))
@@ -149,7 +149,7 @@ class TestCascadingBackendMetadataOnly:
 
     def test_get_metadata_prefers_full_entry_over_metadata_only(self, tmp_path):
         """If a full cache entry exists, get_metadata should return its metadata."""
-        from cash.backends.backend import InMemoryBackend, FileBackend, CascadingBackend
+        from cash.backends import InMemoryBackend, FileBackend, CascadingBackend
 
         mem = InMemoryBackend()
         file = FileBackend(cache_dir=str(tmp_path))
@@ -167,7 +167,7 @@ class TestCascadingBackendMetadataOnly:
 
     def test_metadata_only_survives_simulated_restart(self, tmp_path):
         """Metadata-only entries should survive simulated kernel restart."""
-        from cash.backends.backend import InMemoryBackend, FileBackend, CascadingBackend
+        from cash.backends import InMemoryBackend, FileBackend, CascadingBackend
 
         # First session: write metadata-only
         file1 = FileBackend(cache_dir=str(tmp_path))
@@ -193,7 +193,7 @@ class TestStatementProcessorMetadataPersistence:
     def test_persist_metadata_only_calls_backend(self, tmp_path):
         """persist_metadata_only should call set_metadata_only on the backend."""
         from cash.notebook.statement_restore import StatementRestorer
-        from cash.backends.backend import FileBackend, CascadingBackend, InMemoryBackend
+        from cash.backends import FileBackend, CascadingBackend, InMemoryBackend
 
         file_backend = FileBackend(cache_dir=str(tmp_path))
         cascade = CascadingBackend([InMemoryBackend(), file_backend])
@@ -226,7 +226,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_tiered_has_get_metadata(self, tmp_path):
         """TieredBackend should have get_metadata method."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()
@@ -237,7 +237,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_tiered_has_set_metadata_only(self, tmp_path):
         """TieredBackend should have set_metadata_only method."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()
@@ -248,7 +248,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_set_metadata_only_persists_to_file_backend(self, tmp_path):
         """set_metadata_only should write to FileBackend in the tier chain."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()
@@ -265,7 +265,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_get_metadata_finds_metadata_only_entry(self, tmp_path):
         """get_metadata should find metadata-only entries in FileBackend tier."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()
@@ -280,7 +280,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_get_metadata_returns_none_for_missing(self, tmp_path):
         """get_metadata should return None for nonexistent keys."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()
@@ -291,7 +291,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_metadata_survives_restart(self, tmp_path):
         """Metadata-only entries should survive creating new TieredBackend (simulated restart)."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         # First session
@@ -314,7 +314,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_metadata_only_does_not_overwrite_full_entry(self, tmp_path):
         """set_metadata_only should NOT overwrite a full cache entry on disk."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()
@@ -337,7 +337,7 @@ class TestTieredBackendMetadataOnly:
     def test_set_stores_metadata_even_without_promotion(self, tmp_path):
         """When TieredBackend.set() doesn't promote to disk (cheap stmt),
         _persist_metadata_only should still persist the metadata."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
         from cash.notebook.statement_restore import StatementRestorer
 
@@ -365,7 +365,7 @@ class TestTieredBackendMetadataOnly:
 
     def test_get_metadata_finds_promoted_full_entry(self, tmp_path):
         """get_metadata should also find metadata from fully-promoted entries."""
-        from cash.backends.backend import InMemoryBackend, FileBackend
+        from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
 
         l1 = InMemoryBackend()

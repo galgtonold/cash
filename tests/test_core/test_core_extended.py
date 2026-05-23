@@ -2,7 +2,7 @@
 import time
 from unittest.mock import patch, MagicMock
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend, CascadingBackend, AsyncBackendWrapper
+from cash.backends import InMemoryBackend, CascadingBackend, AsyncBackendWrapper
 from cash.backends.tiered_backend import TieredBackend
 from cash.data_source import FileDataSource
 

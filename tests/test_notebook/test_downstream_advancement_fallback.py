@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 """
 Tests for downstream advancement fallback when cell is not found in notebook.
 
@@ -21,7 +21,7 @@ from unittest.mock import MagicMock, patch
 from cash.notebook.magics import CashMagics
 from cash.notebook.upstream import _SimulationCacheEntry
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable
 
 

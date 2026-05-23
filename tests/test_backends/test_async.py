@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from cash.backends.backend import InMemoryBackend, AsyncBackendWrapper
+from cash.backends import InMemoryBackend, AsyncBackendWrapper
 from cash.backends.file_backend import FileBackend
 from cash.backends.tiered_backend import TieredBackend
 

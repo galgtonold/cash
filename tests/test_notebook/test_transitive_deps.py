@@ -11,7 +11,7 @@ When we change Cell 1 to a = 7, Cell 3 should get updated value.
 import pytest
 from unittest.mock import MagicMock
 from cash import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from cash.notebook.magics import CashMagics
 from traitlets.config import Configurable
 

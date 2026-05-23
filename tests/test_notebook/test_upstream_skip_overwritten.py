@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from cash.notebook.upstream import UpstreamChecker
 from cash.notebook._protocols import TrackingState
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable
 
 

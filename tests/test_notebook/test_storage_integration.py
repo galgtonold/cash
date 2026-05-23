@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
 
 import pytest
@@ -9,7 +9,7 @@ import time
 from unittest.mock import MagicMock
 from cash.notebook.magics import CashMagics
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend, FileBackend
+from cash.backends import InMemoryBackend, FileBackend
 from traitlets.config.configurable import Configurable
 
 # Annotation that forces caching regardless of execution time.

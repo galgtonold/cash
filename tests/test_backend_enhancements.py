@@ -2,7 +2,7 @@
 
 import time
 
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 from cash.backends.sqlite_backend import SQLiteBackend
 
 

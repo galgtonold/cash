@@ -49,7 +49,7 @@ def test_file_backend_setup(nb_runner, tmp_path):
         f"""
 %load_ext cash
 from cash import Cash
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 from cash.notebook.magics import CashMagics
 
 backend = FileBackend(cache_dir='{cache_dir_str}')

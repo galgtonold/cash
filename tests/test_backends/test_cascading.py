@@ -1,6 +1,6 @@
-﻿"""Tests for CascadingBackend functionality."""
+"""Tests for CascadingBackend functionality."""
 import pytest
-from cash.backends.backend import InMemoryBackend, CascadingBackend
+from cash.backends import InMemoryBackend, CascadingBackend
 
 
 @pytest.fixture

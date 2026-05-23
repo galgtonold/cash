@@ -1,9 +1,9 @@
-﻿"""Tests for compression functionality in FileBackend."""
+"""Tests for compression functionality in FileBackend."""
 import os
 from cash import Cash
 
 
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 
 def test_compression_enabled(temp_cache_dir):
     """Test that compression reduces file size for compressible data."""

@@ -1,6 +1,6 @@
 from unittest.mock import MagicMock
 from cash.backends.tiered_backend import TieredBackend
-from cash.backends.backend import InMemoryBackend, FileBackend
+from cash.backends import InMemoryBackend, FileBackend
 
 class TestTieredBackend:
     

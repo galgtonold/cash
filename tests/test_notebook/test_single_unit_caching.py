@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 """Tests for control structure caching behaviour.
 
 For-loops are decomposed per-iteration.  Each body statement goes through
@@ -14,7 +14,7 @@ from traitlets.config import Configurable
 
 from cash.core import Cash
 from cash.notebook.magics import CashMagics
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 
 
 class MockShell(Configurable):

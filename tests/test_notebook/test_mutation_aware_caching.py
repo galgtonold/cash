@@ -1,4 +1,4 @@
-﻿from cash.notebook.cache_status import CacheStatus
+from cash.notebook.cache_status import CacheStatus
 from cash.notebook.annotations import CacheAnnotation
 """
 Tests for mutation-aware caching in statement_processor.
@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 from cash.notebook.magics import CashMagics
 from cash.notebook.cacheability import analyze_statement
 from cash.core import Cash
-from cash.backends.backend import InMemoryBackend
+from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable
 
 # Force caching regardless of the 10 ms min-execution-time floor, so tests

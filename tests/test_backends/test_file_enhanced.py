@@ -1,7 +1,7 @@
 import time
 import os
 import pickle
-from cash.backends.backend import FileBackend
+from cash.backends import FileBackend
 
 class TestFileBackendEnhanced:
     
