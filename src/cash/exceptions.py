@@ -16,6 +16,9 @@ __all__ = [
     "AmbiguousCellError",
     "UpstreamStateError",
     "CacheKeyComputationError",
+    "CashWarning",
+    "CashCacheIneffectiveWarning",
+    "CashCacheStoreFailedWarning",
 ]
 
 class CashError(Exception):
@@ -57,3 +60,33 @@ class UpstreamStateError(CashError):
 
 class CacheKeyComputationError(CashError):
     """Raised when a cache key cannot be computed for a statement."""
+
+# ---------------------------------------------------------------------------
+# Warnings (not errors — runtime advisories surfaced via warnings.warn)
+# ---------------------------------------------------------------------------
+
+class CashWarning(UserWarning):
+    """Base class for all Cash-emitted warnings.
+
+    Filter via:
+        import warnings
+        import cash
+        warnings.filterwarnings("error", category=cash.CashWarning)
+    """
+
+class CashCacheIneffectiveWarning(CashWarning):
+    """The cache is not doing anything useful for this call.
+
+    Typical causes: unpicklable args with no registered hasher;
+    dynamic dependency resolver raised; @cash.cache on an async
+    generator; use_locking=True on an async function. The user's
+    function ran (or will run) but its result is not being cached
+    or re-used.
+    """
+
+class CashCacheStoreFailedWarning(CashWarning):
+    """Compute succeeded but the backend rejected the write.
+
+    Typical causes: serializer cannot handle the return type, disk
+    full, Redis disconnected mid-set, S3 credential expiry.
+    """
