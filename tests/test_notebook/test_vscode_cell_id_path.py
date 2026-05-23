@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from cash.utils import (
+from cash.notebook.server_discovery import (
     extract_notebook_path_from_vscode_cell_id,
     set_notebook_path,
     get_notebook_path,

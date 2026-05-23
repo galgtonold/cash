@@ -22,6 +22,7 @@ from typing import Any
 from ..utils import resolve_file_dep_path
 from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .analysis import CodeAnalyzer
+from .cache_freshness import split_file_dep_value
 from .cache_key import CacheKeyContext, compute_cache_key
 from .cache_status import CacheStatus
 from .control_structures import extract_target_names, get_control_structure_type, is_control_structure
@@ -967,11 +968,10 @@ class VirtualLineage:
     ) -> bool:
         """Return True if all historical file dependencies are still fresh.
 
-        Tolerates both the new ``{path: {'mtime': ..., 'size': ...}}`` form and
-        the legacy bare-float form (``{path: mtime}``) used by older cache
-        entries.  When the size is recorded it is checked too â€” that catches
-        rewrites that happen within a single mtime tick on coarse-resolution
-        filesystems (HFS+/APFS, some ext4 configs).
+        Each entry is ``{path: {'mtime': ..., 'size': ...}}``. When ``size``
+        is recorded it is checked too — that catches rewrites within a
+        single mtime tick on coarse-resolution filesystems (HFS+/APFS,
+        some ext4 configs).
         """
         for fpath, stored in hist_files.items():
             resolved = resolve_file_dep_path(fpath)
@@ -979,12 +979,7 @@ class VirtualLineage:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
-            if isinstance(stored, dict):
-                stored_mtime = float(stored.get('mtime', 0.0))
-                stored_size = stored.get('size')
-            else:
-                stored_mtime = float(stored)
-                stored_size = None
+            stored_mtime, stored_size = split_file_dep_value(stored)
             try:
                 cur_stat = os.stat(resolved)
             except OSError:
@@ -1452,8 +1447,8 @@ class VirtualLineage:
     ) -> tuple[set, float, float] | None:
         """Validate file deps for a virtual restore.  Returns failure tuple or None.
 
-        Tolerates both the new ``{'mtime': ..., 'size': ...}`` and the legacy
-        bare-float forms â€” see :meth:`_validate_file_freshness`.
+        Each entry is ``{'mtime': ..., 'size': ...}`` — see
+        :meth:`_validate_file_freshness`.
         """
         for fpath, stored in file_deps.items():
             resolved = resolve_file_dep_path(fpath)
@@ -1461,12 +1456,7 @@ class VirtualLineage:
                 if self.debug:
                     print(f"[UPSTREAM] Restore failed: Miss file {fpath}")
                 return set(), time_module.time() - start_time, 0.0
-            if isinstance(stored, dict):
-                stored_mtime = float(stored.get('mtime', 0.0))
-                stored_size = stored.get('size')
-            else:
-                stored_mtime = float(stored)
-                stored_size = None
+            stored_mtime, stored_size = split_file_dep_value(stored)
             try:
                 cur_stat = os.stat(resolved)
             except OSError:

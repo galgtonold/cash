@@ -42,7 +42,7 @@ class TestProcessResultTypes:
             "storage": 128,
             "total_time": 0.5,
             "cached": True,
-            "file_dependencies": {"data.csv": 1234567890.0},
+            "file_dependencies": {"data.csv": {"mtime": 1234567890.0}},
             "output_lineages": {"y": "abc123"},
             "input_lineages": {"x": "def456"},
         }

@@ -389,7 +389,7 @@ class TestCheckFileDepsForRestore:
         checker = _make_checker()
         mtime = os.path.getmtime(str(f))
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(f): mtime}, time.time()
+            {str(f): {'mtime': mtime}}, time.time()
         )
         assert result is None  # None means all fresh
 
@@ -398,7 +398,7 @@ class TestCheckFileDepsForRestore:
         f.write_text("content")
         checker = _make_checker()
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(f): 0.0}, time.time()  # old mtime → stale
+            {str(f): {'mtime': 0.0}}, time.time()  # old mtime → stale
         )
         assert result is not None  # Tuple means failure
         assert isinstance(result, tuple)
@@ -406,7 +406,7 @@ class TestCheckFileDepsForRestore:
     def test_missing_file(self, tmp_path):
         checker = _make_checker()
         result = checker.simulator._virtual_lineage._check_file_deps_for_restore(
-            {str(tmp_path / "gone.csv"): 1.0}, time.time()
+            {str(tmp_path / "gone.csv"): {'mtime': 1.0}}, time.time()
         )
         assert result is not None
 

@@ -85,8 +85,7 @@ class StatementCacheMetadata(TypedDict, total=False):
     source_hash: str
     code: str
     key: str
-    # path -> {"mtime": float, "size": int}.  Older cache entries may use
-    # the legacy bare-float form (path -> mtime); helpers below tolerate both.
+    # path -> {"mtime": float, "size": int}
     file_dependencies: dict[str, dict[str, float]]
     force_persist: bool
     output_lineages: dict[str, str]

@@ -51,16 +51,14 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, float]]:
     return snapshot
 
 
-def split_file_dep_value(value: Any) -> tuple[float, int | None]:
-    """Return ``(mtime, size_or_None)`` for either the new or legacy form.
+def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
+    """Return ``(mtime, size_or_None)`` from a file-dep snapshot dict.
 
-    New form: ``{'mtime': ..., 'size': ...}``.
-    Legacy:   bare float (mtime only).  Cache entries from ≤0.5.0 use
-    the legacy form; we still honour them but skip the size check.
+    Snapshots are written as ``{'mtime': float, 'size': int}``; ``size`` may be
+    absent for callers that only record mtime, in which case the size check is
+    skipped downstream.
     """
-    if isinstance(value, dict):
-        return float(value.get('mtime', 0.0)), value.get('size')
-    return float(value), None
+    return float(value.get('mtime', 0.0)), value.get('size')
 
 
 # ---------------------------------------------------------------------------
