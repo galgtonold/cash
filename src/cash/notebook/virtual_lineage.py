@@ -1781,13 +1781,6 @@ class VirtualLineage:
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see _store_in_cache)
                 variables_to_restore = cached_data.get('variables', {})
-                if not variables_to_restore:
-                    # Legacy format (pre-v0.2): variables stored at top level
-                    # instead of nested under 'variables' key.  Safe to remove
-                    # once all caches created before v0.2 have expired.
-                    variables_to_restore = {k: v for k, v in cached_data.items()
-                                           if k not in ('stdout', 'stderr', 'outputs', 'rng_state')}
-
                 restored_vars = self._restore_vars_from_cache(variables_to_restore, metadata)
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 return restored_vars, time_module.time() - start_time, saved_time
