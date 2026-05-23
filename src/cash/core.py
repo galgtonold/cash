@@ -138,7 +138,7 @@ class Cash:
 
         # Dedup keys for _warn_once: (category, func_name, arg_type_name).
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
-        self._warning_keys_seen: set[tuple[type, str, str]] = set()
+        self._warning_keys_seen: set[tuple[type[Warning], str, str]] = set()
 
         atexit.register(self.shutdown)
 
@@ -788,6 +788,8 @@ class Cash:
         func_name: str,
         arg_type_name: str,
         message: str,
+        *,
+        stacklevel: int = 5,
     ) -> None:
         """Emit ``warnings.warn(message, category)`` at most once per
         ``(category, func_name, arg_type_name)`` for this Cash instance.
@@ -796,15 +798,23 @@ class Cash:
         attach to a specific arg type (e.g. store-failed). The seen-set
         key still distinguishes by func_name.
 
-        ``stacklevel=3`` attributes the warning to the user's call site
-        (their ``@c.cache``-decorated function call), not to ``core.py``.
+        ``stacklevel`` controls which frame is blamed in the warning's
+        filename/lineno. The default of ``5`` is correct for warnings
+        emitted from ``_resolve_cache_key`` via the standard call chain
+        ``user → stats_wrapper → wrapper → _resolve_cache_key → _warn_once``.
+        Callers reached through a deeper or shallower chain pass their
+        own value:
+
+        * ``_store_in_cache`` via ``_compute_and_store`` → ``stacklevel=6``
+        * ``_resolve_dynamic_dependencies`` (called from ``_resolve_cache_key``) → ``stacklevel=6``
+        * ``cache(func)`` decoration-time checks → ``stacklevel=3``
         """
         key = (category, func_name, arg_type_name)
         with self._decorator_call_log_lock:
             if key in self._warning_keys_seen:
                 return
             self._warning_keys_seen.add(key)
-        warnings.warn(message, category=category, stacklevel=3)
+        warnings.warn(message, category=category, stacklevel=stacklevel)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.
