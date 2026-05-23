@@ -945,6 +945,21 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             'notebook_source': notebook_cells,
         }
 
+    def _configured_tier_labels(self) -> tuple[str, ...]:
+        """Snapshot the active backend's tier list for the badge renderer.
+
+        Each render reads it fresh so a user reconfiguring the backend
+        mid-session (e.g. swapping in a Redis tier) sees the new layout
+        on the next cell run.
+        """
+        backend = getattr(self._cash_instance, 'backend', None)
+        if backend is None:
+            return ()
+        try:
+            return tuple(backend.tier_labels())
+        except Exception:  # noqa: BLE001 — best-effort: never break the badge over a backend quirk
+            return ()
+
     def _render_interactive_badge(self, metrics_list: list[ProcessResult], display_id: str | None = None, status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, update_existing: bool = True, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None, _from_thread: bool = False) -> None:
         """Render a clickable interactive badge with detailed execution history.
 
@@ -961,6 +976,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             cell_total_time=cell_total_time,
             timing_breakdown=timing_breakdown,
             bug_report_context=self._get_bug_report_context(),
+            configured_tiers=self._configured_tier_labels(),
         )
         if not html:
             return

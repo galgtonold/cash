@@ -9,16 +9,21 @@ from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.cache_status import CacheStatus
 
 
-def _storage_html_for(metric_extras: dict) -> str:
+def _storage_html_for(metric_extras: dict, configured_tiers: tuple[str, ...] = ()) -> str:
     """Render a single COMPUTED metric to HTML and return that HTML for assertion.
 
     The current-cell storage cell is what these tests care about — the
     helper centralises the build/render boilerplate so each test reads as
     a single dict literal + assertion.
+
+    ``configured_tiers`` is the badge-level tier list (e.g. ``('RAM',
+    'REDIS', 'DISK')``) that drives one indicator dot per configured tier.
+    Defaults to ``()`` so legacy tests fall back to the per-row
+    ``storage_tiers`` behaviour.
     """
     metric = {'code': 'x = 1', 'status': str(CacheStatus.COMPUTED), 'total_time': 0.05}
     metric.update(metric_extras)
-    return render_html(build_interactive_badge([metric]))
+    return render_html(build_interactive_badge([metric], configured_tiers=configured_tiers))
 
 
 class TestTieredBackendStoragePropagation:
@@ -110,3 +115,86 @@ class TestComputedStorageDisplay:
         # (Bare substring search hits CSS rule names; check the actual element.)
         assert 'class="c3-dots c3-dots-warn"' in html
         assert 'class="c3-dots c3-dots-cached"' not in html
+
+
+class TestNTierDots:
+    """Configured-tier dot rendering — one dot per configured tier, in order."""
+
+    def _dot_states(self, html: str) -> list[str]:
+        """Extract the dot state list from the FIRST .c3-dots block."""
+        import re
+        m = re.search(r'<span class="c3-dots[^"]*"[^>]*>(.*?)</span>\s*</span>', html, re.DOTALL)
+        assert m, "no .c3-dots block found"
+        return re.findall(r'c3-dot c3-dot-(\w+)', m.group(1))
+
+    def test_three_tier_compute_all_three_solid(self):
+        html = _storage_html_for(
+            {'storage': ['RAM', 'REDIS', 'DISK']},
+            configured_tiers=('RAM', 'REDIS', 'DISK'),
+        )
+        assert self._dot_states(html) == ['solid', 'solid', 'solid']
+
+    def test_three_tier_redis_only_renders_three_dots_middle_solid(self):
+        """Cached only to Redis (no RAM, no DISK) — middle dot solid, others empty."""
+        html = _storage_html_for(
+            {'storage': ['REDIS']},
+            configured_tiers=('RAM', 'REDIS', 'DISK'),
+        )
+        assert self._dot_states(html) == ['empty', 'solid', 'empty']
+
+    def test_three_tier_partial_promotion_third_empty(self):
+        """Cached to RAM+REDIS but NOT promoted to DISK — third dot empty."""
+        html = _storage_html_for(
+            {'storage': ['RAM', 'REDIS']},
+            configured_tiers=('RAM', 'REDIS', 'DISK'),
+        )
+        assert self._dot_states(html) == ['solid', 'solid', 'empty']
+
+    def test_restored_from_middle_tier_rings_correct_dot(self):
+        """RESTORED from REDIS with three configured tiers — ring on the REDIS slot only."""
+        html = _storage_html_for(
+            {'status': str(CacheStatus.RESTORED), 'source': 'REDIS', 'storage': ['REDIS']},
+            configured_tiers=('RAM', 'REDIS', 'DISK'),
+        )
+        assert self._dot_states(html) == ['empty', 'ring', 'empty']
+
+    def test_restored_from_first_tier_rings_first_dot(self):
+        html = _storage_html_for(
+            {'status': str(CacheStatus.RESTORED), 'source': 'RAM', 'storage': ['RAM']},
+            configured_tiers=('RAM', 'REDIS', 'DISK'),
+        )
+        assert self._dot_states(html) == ['ring', 'empty', 'empty']
+
+    def test_redis_only_backend_renders_single_dot(self):
+        """User wires up just RedisBackend (no tiering) — one dot, solid."""
+        html = _storage_html_for(
+            {'storage': ['REDIS']},
+            configured_tiers=('REDIS',),
+        )
+        assert self._dot_states(html) == ['solid']
+
+    def test_per_dot_title_identifies_tier(self):
+        """Each dot's title attribute names its tier (so hover identifies which is which)."""
+        html = _storage_html_for(
+            {'storage': ['RAM', 'REDIS']},
+            configured_tiers=('RAM', 'REDIS', 'DISK'),
+        )
+        # Each tier name appears in a per-dot title.
+        assert 'title="RAM' in html
+        assert 'title="REDIS' in html
+        assert 'title="DISK' in html
+
+    def test_case_insensitive_tier_matching(self):
+        """A legacy stored 'Redis' label (mixed case) still matches a 'REDIS' configured tier."""
+        html = _storage_html_for(
+            {'storage': ['Redis']},  # legacy lowercase form
+            configured_tiers=('RAM', 'REDIS'),
+        )
+        # Second dot (REDIS) should still register as solid.
+        assert self._dot_states(html) == ['empty', 'solid']
+
+    def test_configured_tiers_absent_falls_back_to_storage(self):
+        """Without configured_tiers, the renderer falls back to per-row storage."""
+        html = _storage_html_for({'storage': ['RAM', 'DISK']})
+        # Backwards-compat path — same as before this work.
+        assert self._dot_states(html).count('solid') >= 2

@@ -992,8 +992,15 @@ def build_interactive_badge(
     cell_total_time: float | None = None,
     timing_breakdown: dict[str, float] | None = None,
     bug_report_context: dict | None = None,
+    configured_tiers: tuple[str, ...] = (),
 ) -> InteractiveBadge:
-    """Build an :class:`InteractiveBadge` view from a metrics list."""
+    """Build an :class:`InteractiveBadge` view from a metrics list.
+
+    ``configured_tiers`` is the ordered tier-label list reported by the
+    active backend (``cash.backend.tier_labels()``). It drives the dot
+    indicator's slot count; when empty the renderer falls back to the
+    per-row ``storage_tiers`` data.
+    """
     metrics = metrics_list or []
 
     upstream_all = [m for m in metrics if m.get("is_upstream", False)
@@ -1069,7 +1076,12 @@ def build_interactive_badge(
         sections.append(overhead)
 
     footer = BugReportLink(url=build_bug_report_url(metrics, bug_report_context))
-    return InteractiveBadge(header=header, sections=tuple(sections), footer=footer)
+    return InteractiveBadge(
+        header=header,
+        sections=tuple(sections),
+        footer=footer,
+        configured_tiers=tuple(configured_tiers),
+    )
 
 
 def build_status_badge(
@@ -1079,6 +1091,7 @@ def build_status_badge(
     time_saved: float = 0.0,
     source: str | None = None,
     storage: Any = (),
+    configured_tiers: tuple[str, ...] = (),
 ) -> StatusBadge:
     """Build a :class:`StatusBadge` (the compact non-interactive pill)."""
     return StatusBadge(
@@ -1087,6 +1100,7 @@ def build_status_badge(
         time_saved_s=float(time_saved),
         source=source,
         storage_tiers=_tup_str(storage),
+        configured_tiers=tuple(configured_tiers),
     )
 
 
