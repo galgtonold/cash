@@ -74,14 +74,26 @@ class TestFileAccessTrackerOpen:
         normalised = os.path.realpath(str(test_file)).replace(os.sep, "/")
         assert normalised not in accessed
 
-    def test_unpatches_on_exit(self):
-        import builtins
+    def test_tracker_inactive_outside_with_block(self, tmp_path: Path):
+        """After the ContextVar refactor, ``builtins.open`` stays patched
+        for the lifetime of the process, but the wrapper is a no-op when
+        no tracker is active. This test replaces the old
+        ``test_unpatches_on_exit`` which checked that ``builtins.open``
+        was literally restored to the original on exit — that contract no
+        longer holds. The functional guarantee — file reads outside the
+        ``with`` block are not recorded — is still enforced and is what
+        this test now verifies.
+        """
+        test_file = tmp_path / "outside.txt"
+        test_file.write_text("data")
 
-        original_open = builtins.open
         tracker = FileAccessTracker()
         with tracker:
-            assert builtins.open is not original_open  # patched
-        assert builtins.open is original_open  # restored
+            pass
+        # After exit: a read should NOT be recorded by the tracker.
+        with open(str(test_file), "r") as f:
+            _ = f.read()
+        assert test_file.name not in {p.rsplit("/", 1)[-1] for p in tracker.get_accessed_files()}
 
 
 # ---------------------------------------------------------------------------
@@ -140,74 +152,52 @@ class TestUserNamespacePatching:
 # FileAccessTracker — self-healing of leaked wrappers
 # ---------------------------------------------------------------------------
 
-class TestSelfHealing:
-    """When a previous tracker's __exit__ failed to revert a patch, the
-    next tracker should detect the leaked wrapper and walk the
-    ``_original_func`` chain down to the real callable before wrapping
-    its own version on top. Otherwise the leaked wrapper persists
-    forever and points at a (potentially dead) old tracker.
+class TestPermanentInstallSemantics:
+    """After the ContextVar refactor the per-tracker
+    install/unpatch dance is replaced by an install-once-permanently
+    dispatcher that consults ``_active_tracker``. This eliminates the
+    leaked-wrapper class of bug entirely — once installed, the wrapper
+    stays in place but is a no-op when no tracker is active. These
+    tests pin the new contract.
     """
 
-    def test_unwraps_leaked_wrapper_before_repatching(self):
-        """If a previous tracker leaks a wrapper on builtins.open, the
-        next tracker should restore the chain to the real ``open``."""
+    def test_wrapper_is_noop_when_no_tracker_active(self, tmp_path: Path):
+        """With patches installed but no active tracker, reads must not
+        be recorded anywhere — there's no tracker to record into."""
         import builtins
 
-        real_open = builtins.open
+        # Trigger the install-once if some other test in this file
+        # hasn't already.
+        with FileAccessTracker():
+            pass
 
-        # Simulate a leak: tracker A enters, patches, exit fails silently.
-        leaky_tracker = FileAccessTracker()
-        leaky_tracker.__enter__()
-        leaked_wrapper = builtins.open
-        assert leaked_wrapper is not real_open
-        assert getattr(leaked_wrapper, "_is_file_tracker_patch", False)
-        # Simulate failed cleanup: drop the patches list so __exit__ is a no-op
-        # for builtins.open in particular.
-        leaky_tracker.patches = []
-        leaky_tracker.__exit__(None, None, None)
-        # The leaked wrapper is still installed.
-        assert builtins.open is leaked_wrapper
+        # Patches are permanent — the wrapper is on builtins.open.
+        assert getattr(builtins.open, "_is_file_tracker_patch", False), (
+            "Expected the dispatcher wrapper to be permanently installed."
+        )
 
-        # Now a fresh tracker enters. It should self-heal: install its
-        # own wrapper and remember the *real* original, so its exit
-        # restores ``builtins.open`` cleanly.
-        try:
-            healing_tracker = FileAccessTracker()
-            with healing_tracker:
-                # The new wrapper is on top.
-                assert builtins.open is not real_open
-                assert builtins.open is not leaked_wrapper
-                # Its sentinel is set.
-                assert getattr(builtins.open, "_is_file_tracker_patch", False)
-            # After exit, builtins.open is restored to the REAL original,
-            # not to the leaked wrapper.
-            assert builtins.open is real_open
-        finally:
-            # Belt-and-suspenders cleanup so test failure doesn't pollute
-            # the rest of the test suite.
-            builtins.open = real_open
+        # Now do a read with no active tracker: nothing tracks it.
+        test_file = tmp_path / "stray.txt"
+        test_file.write_text("x")
+        # The dispatcher should pass through cleanly.
+        with open(str(test_file), "r") as f:
+            assert f.read() == "x"
 
-    def test_chain_resolves_to_real_original_even_after_multiple_leaks(self):
-        """Even after multiple leaked trackers, a fresh tracker should
-        still recover the real original on exit. The leaked wrappers
-        accumulate via the sentinel-skip path, but the new tracker
-        must look past them."""
-        import builtins
+    def test_sequential_trackers_are_isolated(self, tmp_path: Path):
+        """Two trackers used back-to-back must each see only their own
+        block's reads — no cross-contamination."""
+        p_a = tmp_path / "a.txt"; p_a.write_text("a")
+        p_b = tmp_path / "b.txt"; p_b.write_text("b")
 
-        real_open = builtins.open
+        t1 = FileAccessTracker()
+        with t1, open(str(p_a)) as f:
+            f.read()
 
-        # Stack two leaked-exit trackers.
-        for _ in range(2):
-            t = FileAccessTracker()
-            t.__enter__()
-            t.patches = []
-            t.__exit__(None, None, None)
+        t2 = FileAccessTracker()
+        with t2, open(str(p_b)) as f:
+            f.read()
 
-        try:
-            assert getattr(builtins.open, "_is_file_tracker_patch", False)
-            # A self-healing tracker should still recover the real original.
-            with FileAccessTracker():
-                pass
-            assert builtins.open is real_open
-        finally:
-            builtins.open = real_open
+        assert any(r.endswith("a.txt") for r in t1.get_accessed_files())
+        assert not any(r.endswith("b.txt") for r in t1.get_accessed_files())
+        assert any(r.endswith("b.txt") for r in t2.get_accessed_files())
+        assert not any(r.endswith("a.txt") for r in t2.get_accessed_files())
