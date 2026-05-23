@@ -84,6 +84,7 @@ dev = [
     "pytest-subtests",
     "pytest-timeout",
     "pytest-xdist",
+    "pytest-asyncio>=0.23",
     "nbclient",
     "jupyter_client",
     "ipykernel",
@@ -112,6 +113,7 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 timeout = 30
+asyncio_mode = "auto"
 filterwarnings = [
     "ignore:Passing individual keyword arguments to compute_cache_key:DeprecationWarning",
     "ignore:set_tracking_dicts\\(\\) is deprecated:DeprecationWarning",
