@@ -70,6 +70,18 @@ class _MultiBackendMixin:
                     entries.append(entry)
         return entries
 
+    def tier_labels(self) -> list[str]:
+        """Flatten child tier labels in configured order.
+
+        Nested composite backends are expanded transitively, so a
+        ``TieredBackend([TieredBackend([RAM, DISK]), S3])`` reports
+        ``['RAM', 'DISK', 'S3']`` — one dot per leaf storage tier.
+        """
+        labels: list[str] = []
+        for b in self.backends:
+            labels.extend(b.tier_labels())
+        return labels
+
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         total = 0
         seen_keys = set()
