@@ -40,10 +40,11 @@ def test_core_exports_stable():
         'pure', 'stateful', 'is_pure', 'is_stateful',
         'analyze_function_purity',
         'InMemoryBackend', 'FileBackend', 'SQLiteBackend',
-        'CascadingBackend', 'AsyncBackendWrapper',
+        'CascadingBackend',
         'FileDataSource',
         'get_config', 'CashConfig', 'create_default_config',
         'register_hasher',
+        'reset_session',
         # Exception hierarchy
         'CashError', 'CacheBackendError', 'CacheExpiredError',
         'CacheSerializationError', 'DependencyNotFoundError',

@@ -8,9 +8,10 @@ class TestFileBackendEnhanced:
     def test_async_metadata_tracking(self, tmp_path):
         # Flush interval 1s
         backend = FileBackend(str(tmp_path), flush_interval=0.5)
-        
+
         backend.set("key1", "value")
-        
+        backend._writes.wait_all()  # drain async data write before reading the meta file
+
         # Get initial metadata access time
         meta_path = os.path.join(tmp_path, backend._get_paths("key1")[0])
         with open(meta_path, 'rb') as f:
@@ -53,8 +54,9 @@ class TestFileBackendEnhanced:
         
         # Insert items items approx 300-400 bytes each (Pickle overhead is significant)
         large_val = "x" * 400
-        
+
         backend.set("k1", large_val)
+        backend._writes.wait_all()  # async write — size only known after it lands
         s1 = backend._current_size_bytes
         assert s1 > 400
         
@@ -72,10 +74,11 @@ class TestFileBackendEnhanced:
         
         # Insert k3, forcing eviction if sum > 1000
         backend.set("k3", large_val)
-        
+        backend._writes.wait_all()  # let the async write + _check_and_evict settle
+
         # Total size without eviction would be s1 + (s2-s1) + ... ~ 3 * size
         # If 3 * size > 1000, eviction happens.
-        
+
         # Verify k2 is gone (LRU)
         meta2, val2 = backend.get("k2")
         assert val2 is None, "k2 should have been evicted"
@@ -95,9 +98,9 @@ class TestFileBackendEnhanced:
         # 1. Create backend, write stuff
         b1 = FileBackend(str(tmp_path))
         b1.set("k1", "v1")
+        b1.shutdown()  # drain async write — size is only known once it lands
         size = b1._current_size_bytes
-        b1.shutdown()
-        
+
         assert size > 0
         
         # 2. Re-create backend (lazy init: trigger with a cache operation)

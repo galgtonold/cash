@@ -14,7 +14,7 @@ from typing import Any
 
 from cash.exceptions import CacheSerializationError
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, CacheMetadata, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,10 @@ class SQLiteBackend(CacheBackend):
         self._default_ttl = default_ttl
         self._max_size_bytes = max_size_bytes
         self._lock = threading.RLock()
+
+        # Per-backend async writes: serialization happens on the calling
+        # thread, the actual INSERT runs in this executor.
+        self._writes = PendingWrites()
 
         # Ensure parent directory exists
         os.makedirs(os.path.dirname(db_path) or '.', exist_ok=True)
@@ -85,6 +89,8 @@ class SQLiteBackend(CacheBackend):
         self._conn.commit()
 
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+        # Wait for any pending write for this key so we never miss it.
+        self._writes.wait(key)
         with self._lock:
             cursor = self._conn.execute(
                 'SELECT data, metadata, created_at, ttl, access_count FROM cache_entries WHERE key = ?',
@@ -136,6 +142,7 @@ class SQLiteBackend(CacheBackend):
                 ) from e
 
     def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+        """Serialize on the calling thread, INSERT in the background."""
         if metadata is None:
             metadata = {}
 
@@ -144,7 +151,7 @@ class SQLiteBackend(CacheBackend):
         if serializer is None:
             serializer = PickleSerializer()
 
-        # Serialize value
+        # IMPORTANT: serialize on the calling thread.
         serialized_value = serializer.serialize(value)
         data_size = len(serialized_value)
         metadata['size'] = data_size
@@ -165,6 +172,14 @@ class SQLiteBackend(CacheBackend):
 
         meta_bytes = pickle.dumps(metadata)
 
+        self._writes.submit(
+            key, self._do_set_sync,
+            key, serialized_value, meta_bytes, data_size, now, ttl,
+        )
+
+    def _do_set_sync(self, key: str, serialized_value: bytes, meta_bytes: bytes,
+                     data_size: int, now: float, ttl: int | None) -> None:
+        """The actual INSERT — runs in the PendingWrites worker thread."""
         with self._lock:
             self._conn.execute('''
                 INSERT OR REPLACE INTO cache_entries
@@ -178,11 +193,14 @@ class SQLiteBackend(CacheBackend):
                 self._check_and_evict()
 
     def delete(self, key: str) -> None:
+        # Drain any pending write so the delete actually deletes.
+        self._writes.drain(key)
         with self._lock:
             self._conn.execute('DELETE FROM cache_entries WHERE key = ?', (key,))
             self._conn.commit()
 
     def clear(self) -> None:
+        self._writes.wait_all()
         with self._lock:
             self._conn.execute('DELETE FROM cache_entries')
             self._conn.commit()
@@ -193,6 +211,7 @@ class SQLiteBackend(CacheBackend):
                 logger.debug("VACUUM failed after clearing SQLite cache")
 
     def list_entries(self) -> list[dict]:
+        self._writes.wait_all()
         entries = []
         with self._lock:
             cursor = self._conn.execute('SELECT metadata FROM cache_entries')
@@ -278,7 +297,8 @@ class SQLiteBackend(CacheBackend):
             return cursor.fetchone()[0]
 
     def shutdown(self) -> None:
-        """Close the database connection."""
+        """Wait for pending writes, then close the database connection."""
+        self._writes.shutdown(wait=True)
         try:
             self._conn.close()
         except sqlite3.Error:

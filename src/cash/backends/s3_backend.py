@@ -8,7 +8,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, CacheMetadata, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 try:
@@ -48,12 +48,18 @@ class S3Backend(CacheBackend):
         self.bucket = bucket
         self.prefix = prefix
         self.botocore_exceptions = botocore.exceptions
+        # Per-backend async writes: serialize on the calling thread, run
+        # the S3 PUTs in this executor so a slow upload doesn't block the
+        # cell that produced the value.
+        self._writes = PendingWrites()
 
     def _get_keys(self, key: str) -> tuple[str, str]:
         # S3 keys (paths)
         return f"{self.prefix}{key}.meta", f"{self.prefix}{key}.data"
 
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+        # Wait for any pending write for this key.
+        self._writes.wait(key)
         meta_key, data_key = self._get_keys(key)
 
         try:
@@ -83,6 +89,7 @@ class S3Backend(CacheBackend):
             return None, None
 
     def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+        """Serialize on the calling thread, run the S3 PUTs in background."""
         meta_key, data_key = self._get_keys(key)
 
         metadata = self._init_metadata(metadata, key)
@@ -90,6 +97,7 @@ class S3Backend(CacheBackend):
         if serializer is None:
             serializer = PickleSerializer()
 
+        # IMPORTANT: serialize on the calling thread.
         serialized_value = serializer.serialize(value)
 
         metadata['size'] = len(serialized_value)
@@ -97,16 +105,22 @@ class S3Backend(CacheBackend):
             metadata['storage'] = [self.source_label]
         meta_bytes = pickle.dumps(metadata)
 
-        # Upload data
+        self._writes.submit(
+            key, self._do_set_sync,
+            meta_key, data_key, meta_bytes, serialized_value,
+        )
+
+    def _do_set_sync(self, meta_key: str, data_key: str,
+                     meta_bytes: bytes, serialized_value: bytes) -> None:
+        """The actual S3 PUTs — runs in the PendingWrites worker thread."""
         try:
             self.s3.put_object(Bucket=self.bucket, Key=data_key, Body=serialized_value)
-
             # Upload metadata (only after data succeeds)
             self.s3.put_object(Bucket=self.bucket, Key=meta_key, Body=meta_bytes)
         except self.botocore_exceptions.ClientError as e:
-            # Clean up if partial write?
-            # If data wrote but meta failed, it's orphaned but harmless as we need meta to find it.
-            # If we want to be clean, we could delete data_key.
+            # If data wrote but meta failed, the orphan is harmless
+            # (we need meta to find it). Best-effort cleanup of the data
+            # blob so we don't leak storage.
             try:
                 self.s3.delete_object(Bucket=self.bucket, Key=data_key)
             except self.botocore_exceptions.ClientError:
@@ -114,6 +128,8 @@ class S3Backend(CacheBackend):
             raise CacheBackendError(f"S3 Write Error: {e}") from e
 
     def delete(self, key: str) -> None:
+        # Drain any pending write so the delete actually deletes.
+        self._writes.drain(key)
         meta_key, data_key = self._get_keys(key)
         try:
             self.s3.delete_object(Bucket=self.bucket, Key=meta_key)
@@ -124,6 +140,7 @@ class S3Backend(CacheBackend):
             ) from e
 
     def clear(self) -> None:
+        self._writes.wait_all()
         # List and delete all objects with prefix
         try:
             paginator = self.s3.get_paginator('list_objects_v2')
@@ -148,6 +165,7 @@ class S3Backend(CacheBackend):
             ) from e
 
     def list_entries(self) -> list[dict]:
+        self._writes.wait_all()
         entries = []
         try:
             paginator = self.s3.get_paginator('list_objects_v2')
@@ -171,4 +189,4 @@ class S3Backend(CacheBackend):
         return entries
 
     def shutdown(self) -> None:
-        pass
+        self._writes.shutdown(wait=True)

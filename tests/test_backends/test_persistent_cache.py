@@ -16,11 +16,15 @@ def test_persistence_across_instances(temp_cache_dir):
     
     result1 = compute(10)
     assert result1 == 20
-    
+
+    # Async writes — shut down the first instance so its pending writes
+    # land on disk before we inspect the directory or open a second one.
+    app1.shutdown()
+
     # Verify cache files were created
     files = os.listdir(temp_cache_dir)
     assert len(files) > 0, "Cache files should exist"
-    
+
     # Create second instance pointing to same directory
     backend2 = FileBackend(temp_cache_dir)
     app2 = Cash(backend=backend2)
@@ -47,7 +51,11 @@ def test_persistence_simple(temp_cache_dir):
     
     result = add(1, 2)
     assert result == 3
-    
+
+    # Async writes — shut down so pending writes flush to disk before
+    # we glob the directory.
+    app.shutdown()
+
     # Check if cache files exist
     files = os.listdir(temp_cache_dir)
     assert len(files) > 0, "Cache directory should not be empty"

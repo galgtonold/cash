@@ -15,7 +15,7 @@ for convenience.  Either import path is valid for those symbols; prefer
 """
 from __future__ import annotations
 
-from .backends import AsyncBackendWrapper, CascadingBackend, FileBackend, InMemoryBackend
+from .backends import CascadingBackend, FileBackend, InMemoryBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
 from .core import Cash
@@ -131,7 +131,6 @@ __all__ = [
     "FileBackend",
     "SQLiteBackend",
     "CascadingBackend",
-    "AsyncBackendWrapper",
     # Data sources (stable)
     "FileDataSource",
     # Exceptions (stable)
