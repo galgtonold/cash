@@ -35,6 +35,7 @@ class SQLiteBackend(CacheBackend):
         max_size_bytes: Maximum total data size. None = unlimited.
         wal_mode: Use WAL journal mode for better concurrency (default: True).
     """
+    source_label: str = "SQLITE"
 
     def __init__(self, db_path: str = '.cash/cache.db', default_ttl: int = None,
                  max_size_bytes: int = None, wal_mode: bool = True):

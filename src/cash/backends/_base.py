@@ -137,6 +137,17 @@ class CacheBackend(ABC):
         metadata.setdefault('access_count', 0)
         return metadata
 
+    def tier_labels(self) -> list[str]:
+        """Ordered labels of the storage tiers this backend exposes.
+
+        Used by the notebook badge renderer to lay out one indicator dot
+        per tier. The default returns ``[source_label]`` (or the class
+        name as a fallback) — a single-tier label. Composite backends
+        (``TieredBackend``, ``CascadingBackend``) override to return
+        their children's labels in configured order.
+        """
+        return [getattr(type(self), "source_label", None) or type(self).__name__]
+
     def shutdown(self) -> None:  # noqa: B027 - intentional no-op default; subclasses override as needed
         """Perform any necessary cleanup before exit (e.g. waiting for async writes)."""
 
