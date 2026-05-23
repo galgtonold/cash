@@ -84,7 +84,8 @@ class UpstreamChecker:
         self.simulator.reset_caches()
 
     def _wire_state(self, state: TrackingState) -> None:
-        """Internal: alias tracking dicts onto self for backward compatibility.
+        """Internal: alias tracking dicts onto self so existing attribute
+        accesses (``self.executed_cell_codes``, etc.) keep working.
 
         Kept as a separate method so ``set_tracking_state`` can also forward
         to the simulator.

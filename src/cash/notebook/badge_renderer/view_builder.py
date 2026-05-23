@@ -45,7 +45,7 @@ _NOTIFICATION_STATUSES = frozenset({"FUNCTION_CHANGED", "MODULE_RELOADED", "WARN
 
 
 # ---------------------------------------------------------------------------
-# Loop / control grouping (inlined from the deprecated _grouping.py)
+# Loop / control grouping
 # ---------------------------------------------------------------------------
 
 def _make_loop_group(base_code: str, metrics: list[dict[str, Any]]) -> dict[str, Any]:
@@ -656,8 +656,8 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
         changed_modules_tup = _tup_str(changed_modules)
 
     # Short prefix of the statement cache key — first 8 hex chars after the
-    # ``stmt:`` prefix the runtime stamps onto cache keys. Empty for paths
-    # that don't expose the key (legacy notebooks, mock metrics).
+    # ``stmt:`` prefix the runtime stamps onto cache keys. Empty for callers
+    # that don't expose the key (e.g. mock metrics in tests).
     raw_key = str(m.get("cache_key") or "")
     if raw_key.startswith("stmt:"):
         raw_key = raw_key[5:]

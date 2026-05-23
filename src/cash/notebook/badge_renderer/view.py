@@ -11,7 +11,7 @@ Design rules:
 * Props are **semantic**, never presentational. ``status=BadgeStatus.RESTORED``
   is correct; ``color='#006644'`` is not — color lives in the theme module.
 * Lists are stored as :class:`tuple` so the whole tree is hashable.
-* The node set is closed: every visible row in the legacy renderer must be
+* The node set is closed: every visible row in the badge must be
   representable here. New badge variants add a node, never a string
   discriminator.
 * Nodes carry only data the renderer needs. Raw metric dicts and bug-report
@@ -305,9 +305,9 @@ class StatusBadge:
     """Compact non-interactive badge (the binary restored/computed pill).
 
     Produced from a single ``ProcessResult``-like dict by the view-builder.
-    Today the legacy ``render_status_badge`` uses only a two-colour palette;
-    the IR keeps the same prop set so the renderer can decide whether to
-    expand the palette in the future without changing the data model.
+    Today ``render_status_badge`` uses only a two-colour palette; the IR
+    keeps the same prop set so the renderer can decide whether to expand
+    the palette in the future without changing the data model.
     """
 
     status: BadgeStatus

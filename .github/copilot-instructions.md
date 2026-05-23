@@ -73,9 +73,7 @@ def test_feature_name(magics_fixture):
 
 #### Integration Tests (`tests/test_notebook_integration/`)
 
-**Two approaches available:**
-
-##### 1. New API: `nb_runner` fixture (Recommended for new tests)
+Use the `nb_runner` fixture:
 - Uses real notebook files that cash reads naturally (no mocking)
 - Supports cell modification with proper change detection
 - Supports selective cell execution with kernel persistence
@@ -179,7 +177,7 @@ def test_slow_operation(nb_runner):
 - Always use `tmp_path` for file-based test data to ensure isolation
 
 #### Integration Tests
-- **`nb_runner`** (NEW - recommended): Uses real notebook files, supports cell modification
+- **`nb_runner`**: Uses real notebook files, supports cell modification
   - `nb_runner.create_notebook([...])` - create notebook programmatically
   - `nb_runner.load(path)` - load existing .ipynb file
   - `nb_runner.start_kernel()` - start kernel (with_cash=True by default)
@@ -187,8 +185,6 @@ def test_slow_operation(nb_runner):
   - `nb_runner.get_output(n)` - get text output from cell n
   - `nb_runner.set_cell_source(n, code)` - modify cell (cash detects changes)
   - `nb_runner.reset_cash_state()` - clear cash's internal tracking state
-  
-- **`notebook_runner`** (legacy): Uses mocking, for backward compatibility only
 
 #### Reference Notebooks
 Store test notebooks in `tests/test_notebook_integration/reference_notebooks/` for reuse.
