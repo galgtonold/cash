@@ -14,7 +14,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, CacheMetadata, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,11 @@ class FileBackend(CacheBackend):
         self._lock = threading.RLock()
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
+
+        # Per-backend async writes: serialization happens on the calling
+        # thread, the actual disk I/O runs in this executor so a slow
+        # write doesn't block cell execution.
+        self._writes = PendingWrites()
 
         # Lazy initialization: defer directory creation, stat scanning,
         # and background thread to first actual use.
@@ -147,6 +152,9 @@ class FileBackend(CacheBackend):
             Metadata dict if key exists, None otherwise.
         """
         self._ensure_initialized()
+        # Wait for any in-flight write so the metadata we report reflects
+        # the most recent ``set()`` for this key.
+        self._writes.wait(key)
         cached_meta = self._metadata_cache.get(key)
 
         meta_path, data_path = self._get_paths(key)
@@ -173,6 +181,9 @@ class FileBackend(CacheBackend):
 
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
         self._ensure_initialized()
+        # Wait for any in-flight write for this key so we never return
+        # stale-or-missing data when get() races set().
+        self._writes.wait(key)
         # Check memory cache first for metadata
         cached_meta = self._metadata_cache.get(key)
 
@@ -269,6 +280,9 @@ class FileBackend(CacheBackend):
             self._current_size_bytes += metadata['size'] + actual_meta_size
 
     def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+        """Serialize the value on the calling thread, then write to disk
+        in the background. ``set()`` returns once the bytes are captured;
+        a subsequent ``get(key)`` waits for the write."""
         self._ensure_initialized()
         meta_path, data_path = self._get_paths(key)
 
@@ -281,21 +295,40 @@ class FileBackend(CacheBackend):
         if serializer is None:
             serializer = PickleSerializer()
 
-        # Serialize (let serialization errors propagate directly)
+        # IMPORTANT: serialize on the calling thread so a post-set()
+        # mutation of `value` can't corrupt the cached bytes.
         serialized_value = serializer.serialize(value)
 
         metadata['compressed'] = self.compress
+        # Pre-compute size from the serialized bytes; the on-disk size
+        # may differ slightly under compression but the user-facing
+        # metadata needs to be populated synchronously for the badge.
+        metadata['size'] = len(serialized_value)
         if 'storage' not in metadata:
             metadata['storage'] = [self.source_label]
 
+        # Freeze a copy of metadata for the background write — the caller
+        # can mutate the original after we return without affecting the
+        # written meta-file.
+        meta_for_write = dict(metadata)
+        self._writes.submit(
+            key, self._do_set_sync,
+            key, meta_path, data_path, meta_for_write, serialized_value,
+        )
+
+    def _do_set_sync(self, key: str, meta_path: str, data_path: str,
+                     metadata: dict, serialized_value: bytes) -> None:
+        """The actual disk write — runs in the PendingWrites worker thread.
+
+        Failures clean up any partial files and re-raise. The exception
+        is stored on the future and surfaces on the next ``get(key)``
+        (or ``shutdown()``).
+        """
         try:
             self._write_cache_files(key, meta_path, data_path, metadata, serialized_value)
-
             if self._max_size_bytes:
                 self._check_and_evict()
-
         except (OSError, pickle.PickleError, ValueError) as exc:
-            # Cleanup partial files on write failure
             logger.debug("Cache set failed for key %r, cleaning up: %s", key, exc)
             try:
                 if os.path.exists(data_path):
@@ -303,7 +336,6 @@ class FileBackend(CacheBackend):
                 if os.path.exists(meta_path):
                     os.remove(meta_path)
             except OSError:
-                # Best-effort cleanup; files may already be gone
                 logger.debug("Cleanup of partial cache files failed for key %r", key, exc_info=True)
             raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
 
@@ -342,6 +374,9 @@ class FileBackend(CacheBackend):
 
     def delete(self, key: str) -> None:
         self._ensure_initialized()
+        # Drain any pending write for this key — otherwise the write
+        # could fire after the delete and leave a ghost entry.
+        self._writes.drain(key)
         meta_path, data_path = self._get_paths(key)
 
         size_to_remove = 0
@@ -394,6 +429,9 @@ class FileBackend(CacheBackend):
 
     def clear(self) -> None:
         self._ensure_initialized()
+        # Drain pending writes so they don't fire after the clear and
+        # resurrect entries we just removed from disk.
+        self._writes.wait_all()
         for ext in ["*.meta", "*.data"]:
             for f in glob.glob(os.path.join(self.cache_dir, ext)):
                 try:
@@ -407,6 +445,9 @@ class FileBackend(CacheBackend):
             self._current_size_bytes = 0
 
     def shutdown(self) -> None:
+        # Drain any in-flight async writes before stopping the flusher,
+        # otherwise we could lose the metadata for a not-yet-written entry.
+        self._writes.shutdown(wait=True)
         self._stop_event.set()
         if hasattr(self, '_flusher_thread'):
             self._flusher_thread.join(timeout=1.0)
@@ -415,6 +456,10 @@ class FileBackend(CacheBackend):
 
     def list_entries(self) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        # Drain pending writes so the listing reflects everything the
+        # caller has already set() — otherwise async writes still in
+        # flight would be invisible.
+        self._writes.wait_all()
         entries = []
         for meta_path in glob.glob(os.path.join(self.cache_dir, "*.meta")):
             try:
@@ -427,6 +472,7 @@ class FileBackend(CacheBackend):
 
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         self._ensure_initialized()
+        self._writes.wait_all()
         count = 0
         for meta_path in glob.glob(os.path.join(self.cache_dir, "*.meta")):
             try:

@@ -2,7 +2,7 @@
 import time
 from unittest.mock import patch, MagicMock
 from cash.core import Cash
-from cash.backends import InMemoryBackend, CascadingBackend, AsyncBackendWrapper
+from cash.backends import InMemoryBackend, CascadingBackend
 from cash.backends.tiered_backend import TieredBackend
 from cash.data_source import FileDataSource
 
@@ -55,12 +55,6 @@ class TestCashInit:
         c = Cash(backends=[], register_magic=False)
         # Empty list is treated as "no backends specified" → falls through to default config
         assert isinstance(c.backend, TieredBackend)
-
-    def test_init_with_background_io(self):
-        """Cash with background_io wraps backend in AsyncBackendWrapper."""
-        c = Cash(backend=InMemoryBackend(), register_magic=False, background_io=True)
-        assert isinstance(c.backend, AsyncBackendWrapper)
-        c.shutdown()
 
     def test_init_with_debug(self):
         """Cash with debug flag."""

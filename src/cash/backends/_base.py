@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import contextlib
 import logging
+import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -11,7 +13,158 @@ from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CacheMetadata", "CacheBackend"]
+__all__ = ["CacheMetadata", "CacheBackend", "PendingWrites"]
+
+
+class PendingWrites:
+    """Per-backend background-write scheduler.
+
+    Used by backends whose writes are slow enough that blocking the
+    user's calling thread on every ``set()`` would noticeably hurt
+    cell-execution latency (File, SQLite, Redis, S3 — anything that
+    touches a disk or a network).
+
+    Semantics
+    ---------
+    * One single-worker executor per backend, so writes to *that*
+      backend are naturally serialized (no concurrent fsync, no
+      reordered writes for the same key).
+    * Serialization of the user's value MUST happen on the calling
+      thread, not inside the worker, so that a post-``set()`` mutation
+      can't corrupt the cached copy. The helper just dispatches the
+      already-prepared payload; it has no opinion about *what* the
+      bytes are.
+    * ``submit(key, fn, *args)`` records the future under ``key`` so
+      subsequent ``get(key)`` / ``delete(key)`` calls on the owning
+      backend can wait for it. If a previous write for the same key is
+      still pending, the new submission waits for the old one first —
+      this keeps "set k=a; set k=b" ordering deterministic.
+    * ``wait(key)`` blocks until any pending write for that key resolves
+      and re-raises its exception, so failures surface on the next
+      observation of that key.
+    * ``shutdown(wait=True)`` blocks until every in-flight write
+      completes — called by ``CacheBackend.shutdown()`` (which itself
+      runs from Cash's ``atexit`` handler).
+    """
+
+    def __init__(self, max_workers: int = 1) -> None:
+        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self._pending: dict[str, concurrent.futures.Future] = {}
+        self._lock = threading.Lock()
+        self._shutdown = False
+        # Per-thread state. ``current_key`` is set on the worker while it
+        # processes a task, so re-entrant ``drain(key)`` / ``wait(key)``
+        # calls from inside that same task (e.g. via _check_and_evict)
+        # can detect "I'd be waiting on myself" and skip the block
+        # instead of deadlocking.
+        self._tls = threading.local()
+
+    def _run_task(self, key: str, fn: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
+        """Worker-side wrapper: marks ``current_key`` so re-entrant
+        ``drain``/``wait`` for the same key see the marker and bail out."""
+        self._tls.current_key = key
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            self._tls.current_key = None
+
+    def submit(self, key: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> concurrent.futures.Future:
+        """Submit ``fn(*args, **kwargs)`` to run in the background, tagged with *key*.
+
+        If a previous submission for the same key is still in flight,
+        wait for it before submitting the new one. This preserves write
+        ordering for repeated sets of the same key.
+        """
+        with self._lock:
+            prev = self._pending.get(key)
+        # Wait OUTSIDE the lock to avoid blocking other keys' submissions
+        # while a slow write completes.
+        if prev is not None and not prev.done():
+            try:
+                prev.result()
+            except Exception:  # noqa: BLE001 — surfaces later via wait(key)
+                pass
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("PendingWrites: executor has been shut down")
+            future = self._executor.submit(self._run_task, key, fn, args, kwargs)
+            self._pending[key] = future
+        return future
+
+    def wait(self, key: str) -> None:
+        """Block until the pending write for *key* (if any) finishes.
+
+        Re-raises any exception the worker raised, so background write
+        failures surface at the next ``get()``/``delete()``.
+
+        Re-entrancy guard: if the calling thread is the worker thread
+        currently processing the same key, we'd be waiting on our own
+        future. Skip the wait — we're guaranteed up-to-date by virtue
+        of being mid-write.
+        """
+        if getattr(self._tls, "current_key", None) == key:
+            return
+        with self._lock:
+            future = self._pending.get(key)
+        if future is not None:
+            future.result()  # re-raises on failure
+
+    def drain(self, key: str) -> None:
+        """Wait for the pending write for *key* and forget it.
+
+        Used by ``delete(key)`` so the delete-then-set race produces the
+        expected absence rather than a ghost entry from a slow write.
+        Swallows any exception the worker raised — we're throwing the
+        result away anyway.
+
+        Re-entrancy guard: when the worker calls drain on its own key
+        (e.g. through ``_check_and_evict`` deciding to evict the entry
+        we're currently writing), waiting on the future would deadlock.
+        The caller is the one producing the value, so we let them
+        proceed; the write will complete after this method returns.
+        """
+        if getattr(self._tls, "current_key", None) == key:
+            with self._lock:
+                self._pending.pop(key, None)
+            return
+        with self._lock:
+            future = self._pending.pop(key, None)
+        if future is not None:
+            try:
+                future.result()
+            except Exception:  # noqa: BLE001 — we're about to delete, exception is moot
+                pass
+
+    def pending_count(self) -> int:
+        """How many writes are still in flight. Useful for status panels."""
+        with self._lock:
+            return sum(1 for f in self._pending.values() if not f.done())
+
+    def wait_all(self) -> None:
+        """Block until every pending write completes.
+
+        Used by bulk reads (``list_entries``, ``cleanup_expired``) and
+        destructive ops (``clear``) so they observe consistent state
+        rather than racing in-flight writes. Re-entrancy guard same as
+        ``wait``/``drain``: skip if the calling thread is the worker.
+        """
+        if getattr(self._tls, "current_key", None) is not None:
+            return
+        with self._lock:
+            futures = list(self._pending.values())
+        for f in futures:
+            try:
+                f.result()
+            except Exception:  # noqa: BLE001 — surfaced separately via wait(key)
+                pass
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Block (when ``wait=True``) until every in-flight write finishes."""
+        with self._lock:
+            if self._shutdown:
+                return
+            self._shutdown = True
+        self._executor.shutdown(wait=wait)
 
 
 class CacheMetadata(TypedDict, total=False):

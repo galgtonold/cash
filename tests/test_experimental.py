@@ -43,11 +43,11 @@ class TestBackendsInit:
         """Core backends are importable from cash.backends."""
         from cash.backends import (
             CacheBackend, InMemoryBackend, FileBackend,
-            CascadingBackend, AsyncBackendWrapper, TieredBackend
+            CascadingBackend, TieredBackend,
         )
         assert all(cls is not None for cls in [
             CacheBackend, InMemoryBackend, FileBackend,
-            CascadingBackend, AsyncBackendWrapper, TieredBackend
+            CascadingBackend, TieredBackend,
         ])
 
     def test_serializers_importable(self):

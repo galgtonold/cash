@@ -9,7 +9,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, CacheMetadata, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 try:
@@ -62,11 +62,16 @@ class RedisBackend(CacheBackend):
             **kwargs
         )
         self.prefix = prefix
+        # Per-backend async writes: serialization happens on the calling
+        # thread, the actual Redis pipeline runs in this executor.
+        self._writes = PendingWrites()
 
     def _get_keys(self, key: str) -> tuple[str, str]:
         return f"{self.prefix}{key}:meta", f"{self.prefix}{key}:data"
 
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+        # Wait for any pending write for this key.
+        self._writes.wait(key)
         meta_key, data_key = self._get_keys(key)
 
         try:
@@ -95,6 +100,7 @@ class RedisBackend(CacheBackend):
         return None, None
 
     def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+        """Serialize on the calling thread, run the pipeline in background."""
         meta_key, data_key = self._get_keys(key)
 
         metadata = self._init_metadata(metadata, key)
@@ -102,7 +108,7 @@ class RedisBackend(CacheBackend):
         if serializer is None:
             serializer = PickleSerializer()
 
-        # Serialize value
+        # IMPORTANT: serialize on the calling thread.
         serialized_value = serializer.serialize(value)
 
         # Store size and storage identifier
@@ -112,12 +118,17 @@ class RedisBackend(CacheBackend):
 
         # Serialize metadata (includes ttl inside the pickled blob)
         meta_bytes = pickle.dumps(metadata)
-
-        # TTL handling — also set Redis-level EXPIRE so keys auto-evict.
-        # Reading from metadata (not meta_bytes) is safe: pickle.dumps is
-        # non-mutating.
         ttl = metadata.get('ttl')
 
+        self._writes.submit(
+            key, self._do_set_sync,
+            meta_key, data_key, meta_bytes, serialized_value, ttl, key,
+        )
+
+    def _do_set_sync(self, meta_key: str, data_key: str,
+                     meta_bytes: bytes, serialized_value: bytes,
+                     ttl: int | None, key: str) -> None:
+        """The actual Redis pipeline — runs in the PendingWrites worker."""
         try:
             pipe = self.client.pipeline()
             pipe.set(meta_key, meta_bytes)
@@ -132,6 +143,8 @@ class RedisBackend(CacheBackend):
             raise CacheBackendError(f"Redis set failed for key {key!r}: {exc}") from exc
 
     def delete(self, key: str) -> None:
+        # Drain any pending write so the delete actually deletes.
+        self._writes.drain(key)
         meta_key, data_key = self._get_keys(key)
         try:
             self.client.delete(meta_key, data_key)
@@ -139,6 +152,7 @@ class RedisBackend(CacheBackend):
             raise CacheBackendError(f"Redis delete failed for key {key!r}: {exc}") from exc
 
     def clear(self) -> None:
+        self._writes.wait_all()
         try:
             cursor = 0
             while True:
@@ -151,6 +165,7 @@ class RedisBackend(CacheBackend):
             raise CacheBackendError(f"Redis clear failed: {exc}") from exc
 
     def list_entries(self) -> list[dict]:
+        self._writes.wait_all()
         entries = []
         # Scan for meta keys
         match_pattern = f"{self.prefix}*:meta"
@@ -178,6 +193,7 @@ class RedisBackend(CacheBackend):
         return entries
 
     def shutdown(self) -> None:
+        self._writes.shutdown(wait=True)
         self.client.close()
 
     def lock(self, key: str) -> contextlib.AbstractContextManager:

@@ -1,9 +1,9 @@
-"""Tests for backend classes - CascadingBackend, AsyncBackendWrapper, InMemoryBackend, FileBackend."""
+"""Tests for backend classes - CascadingBackend, InMemoryBackend, FileBackend."""
 import hashlib
 import os
 import time
 from cash.backends import (
-    InMemoryBackend, FileBackend, CascadingBackend, AsyncBackendWrapper
+    InMemoryBackend, FileBackend, CascadingBackend
 )
 from cash.backends.serialization import PickleSerializer, CloudPickleSerializer, get_serializer
 
@@ -206,6 +206,9 @@ class TestFileBackendAdvanced:
         """Corrupted metadata file returns None gracefully."""
         b = FileBackend(str(tmp_path / "cache"))
         b.set("key1", "value", {"info": "test"})
+        # Drain the async write before corrupting the file — otherwise the
+        # still-in-flight write lands AFTER our corruption and undoes it.
+        b._writes.wait_all()
         safe_name = hashlib.sha256("key1".encode()).hexdigest()
         meta_path = os.path.join(str(tmp_path / "cache"), f"{safe_name}.meta")
         with open(meta_path, "wb") as f:
@@ -219,6 +222,8 @@ class TestFileBackendAdvanced:
         """Corrupted data file returns None gracefully."""
         b = FileBackend(str(tmp_path / "cache"))
         b.set("key1", "value", {"info": "test"})
+        # Drain before corrupting.
+        b._writes.wait_all()
         safe_name = hashlib.sha256("key1".encode()).hexdigest()
         data_path = os.path.join(str(tmp_path / "cache"), f"{safe_name}.data")
         with open(data_path, "wb") as f:
@@ -332,80 +337,6 @@ class TestCascadingBackend:
         assert val is None
 
 
-class TestAsyncBackendWrapper:
-    """Test AsyncBackendWrapper for async writes."""
-
-    def test_async_set_get(self):
-        """Async set followed by synchronous get."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-
-        ab.set("k1", "v1", {"key": "k1"})
-        time.sleep(0.1)  # Wait for async write
-
-        meta, val = ab.get("k1")
-        assert val == "v1"
-        ab.shutdown()
-
-    def test_async_delete(self):
-        """Async delete removes entry."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-
-        inner.set("k1", "v1", {"key": "k1"})
-        ab.delete("k1")
-        time.sleep(0.1)
-
-        _, val = ab.get("k1")
-        assert val is None
-        ab.shutdown()
-
-    def test_clear(self):
-        """Clear works synchronously."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-
-        inner.set("k1", "v1", {"key": "k1"})
-        ab.clear()
-        _, val = ab.get("k1")
-        assert val is None
-
-    def test_list_entries(self):
-        """list_entries delegates to inner backend."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-
-        inner.set("k1", "v1", {"key": "k1"})
-        entries = ab.list_entries()
-        assert len(entries) == 1
-
-    def test_cleanup_expired(self):
-        """cleanup_expired delegates to inner backend."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-
-        inner.set("old", "v1", {"key": "old", "timestamp": 1000})
-        removed = ab.cleanup_expired(lambda m: m.get('timestamp', 0) < 2000)
-        assert removed == 1
-
-    def test_lock_delegation(self):
-        """Lock delegates to inner backend."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-
-        with ab.lock("k1"):
-            ab.set("k1", "v1", {"key": "k1"})
-        ab.shutdown()
-
-    def test_shutdown(self):
-        """Shutdown waits for pending operations."""
-        inner = InMemoryBackend()
-        ab = AsyncBackendWrapper(inner)
-        ab.set("k1", "v1", {"key": "k1"})
-        ab.shutdown(wait=True)
-        # Verify the write completed
-        _, val = inner.get("k1")
-        assert val == "v1"
 
 
 class TestSerializers:

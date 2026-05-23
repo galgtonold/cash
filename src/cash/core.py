@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
-from .backends import AsyncBackendWrapper, CacheBackend, CacheMetadata, CascadingBackend, FileBackend, InMemoryBackend
+from .backends import CacheBackend, CacheMetadata, CascadingBackend, FileBackend, InMemoryBackend
 
 if TYPE_CHECKING:
     from .ui.explorer import CacheExplorer
@@ -57,7 +57,6 @@ class Cash:
         compress: Enable gzip compression for file-based caching.
         register_magic: Register IPython magic commands (default True).
         debug: Enable debug logging output.
-        background_io: Wrap backend in AsyncBackendWrapper for non-blocking writes.
         use_locking: Enable double-checked locking for thread-safe caching.
         config_path: Path to custom config TOML file.
 
@@ -87,7 +86,6 @@ class Cash:
         compress: bool | None = None,
         register_magic: bool = True,
         debug: bool | None = None,
-        background_io: bool = False,
         use_locking: bool = False,
         config_path: str | None = None,
     ) -> None:
@@ -112,7 +110,6 @@ class Cash:
             'backends': backends,
             'cache_dir': cache_dir,
             'compress': compress,
-            'background_io': background_io,
         }
         # Eagerly set _backend when the caller supplied a concrete instance
         # so that the property short-circuits without locking.
@@ -123,10 +120,6 @@ class Cash:
                 self._backend = CascadingBackend(backends)
             else:
                 self._backend = backends[0]
-
-        # Wrap eagerly-set backends with AsyncBackendWrapper if requested.
-        if background_io and self._backend is not None:
-            self._backend = AsyncBackendWrapper(self._backend)
 
         self._backend_lock = threading.Lock()
 
@@ -175,8 +168,6 @@ class Cash:
                 )
             else:
                 self._backend = InMemoryBackend()
-            if params.get('background_io'):
-                self._backend = AsyncBackendWrapper(self._backend)
             return self._backend
 
     @backend.setter

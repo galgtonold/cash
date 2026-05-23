@@ -16,14 +16,14 @@ def test_compression_enabled(temp_cache_dir):
         return b"0" * 10000
     
     large_data()
-    entries = app.backend.list_entries()
+    entries = app.backend.list_entries()  # list_entries drains pending writes
     assert len(entries) == 1
-    
+
     files = os.listdir(temp_cache_dir)
     data_file = [f for f in files if f.endswith('.data')][0]
     data_path = os.path.join(temp_cache_dir, data_file)
     file_size = os.path.getsize(data_path)
-    
+
     assert file_size < 1000
 
 
@@ -31,15 +31,17 @@ def test_compression_disabled(temp_cache_dir):
     """Test that disabling compression keeps files uncompressed."""
     backend = FileBackend(temp_cache_dir, compress=False)
     app = Cash(backend=backend)
-    
+
     @app.cache
     def large_data():
         return b"0" * 10000
-    
+
     large_data()
+    # Drain pending writes so the on-disk file exists.
+    backend.list_entries()
     files = os.listdir(temp_cache_dir)
     data_file = [f for f in files if f.endswith('.data')][0]
     data_path = os.path.join(temp_cache_dir, data_file)
     file_size = os.path.getsize(data_path)
-    
+
     assert file_size > 10000

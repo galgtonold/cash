@@ -1,9 +1,7 @@
-"""Cascading (multi-backend) and async wrapper backends."""
+"""Cascading multi-backend (writes to every tier on set, reads first hit)."""
 
 from __future__ import annotations
 
-import concurrent.futures
-import contextlib
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -15,7 +13,7 @@ from .serialization import Serializer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["_MultiBackendMixin", "CascadingBackend", "AsyncBackendWrapper"]
+__all__ = ["_MultiBackendMixin", "CascadingBackend"]
 
 
 class _MultiBackendMixin:
@@ -124,60 +122,3 @@ class CascadingBackend(_MultiBackendMixin, CacheBackend):
     def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
         for backend in self.backends:
             backend.set(key, value, metadata, serializer)
-
-
-class AsyncBackendWrapper(CacheBackend):
-    """
-    Wrapper that performs write operations (set, delete) asynchronously
-    using a ThreadPoolExecutor. Read operations are synchronous.
-    """
-
-    def __init__(self, backend: CacheBackend, max_workers: int = 1) -> None:
-        self.backend = backend
-        self.executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
-        self._futures = []
-
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
-        return self.backend.get(key)
-
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
-        # Note: value must be thread-safe or copied if we pass it to thread.
-        # Since we are async, the main thread might mutate value after calling set.
-        # We should probably copy it here if it's mutable?
-        # But deepcopy is expensive.
-        # For now, assume caller handles it or we rely on backend's serialization/copying.
-        # But backend.set runs in another thread.
-        # If we use InMemoryBackend, it deepcopies.
-        # If we use FileBackend, it serializes.
-        # Serialization might be affected if object changes during serialization?
-        # Yes.
-        # Ideally we deepcopy here if we want true safety, but that kills performance.
-        # Let's proceed without deepcopy for now, assuming typical usage (cache result then don't mutate it immediately).
-
-        future = self.executor.submit(self.backend.set, key, value, metadata, serializer)
-        self._clean_futures()
-        self._futures.append(future)
-
-    def delete(self, key: str) -> None:
-        future = self.executor.submit(self.backend.delete, key)
-        self._clean_futures()
-        self._futures.append(future)
-
-    def clear(self) -> None:
-        self.shutdown()
-        self.backend.clear()
-
-    def list_entries(self) -> list[dict[str, Any]]:
-        return self.backend.list_entries()
-
-    def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
-        return self.backend.cleanup_expired(is_expired)
-
-    def _clean_futures(self) -> None:
-        self._futures = [f for f in self._futures if not f.done()]
-
-    def shutdown(self, wait: bool = True):
-        self.executor.shutdown(wait=wait)
-
-    def lock(self, key: str) -> contextlib.AbstractContextManager:
-        return self.backend.lock(key)

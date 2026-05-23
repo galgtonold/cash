@@ -34,6 +34,9 @@ def test_clear(file_backend, temp_cache_dir):
 def test_persistence(temp_cache_dir):
     backend1 = FileBackend(temp_cache_dir)
     backend1.set("k1", b"v1")
+    # Writes are async — shutdown drains pending writes so backend2
+    # (which has its own PendingWrites) can see the result on disk.
+    backend1.shutdown()
     backend2 = FileBackend(temp_cache_dir)
     _, value = backend2.get("k1")
     assert value == b"v1"
