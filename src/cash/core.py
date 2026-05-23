@@ -13,6 +13,7 @@ import logging
 import pickle
 import threading
 import time
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
@@ -134,6 +135,10 @@ class Cash:
         self._decorator_call_log_lock = threading.Lock()
         # Custom type hasher registry: maps type → callable(value) → str
         self._type_hashers: dict[type, Callable[[Any], str]] = {}
+
+        # Dedup keys for _warn_once: (category, func_name, arg_type_name).
+        # Guarded by _decorator_call_log_lock (already exists for thread safety).
+        self._warning_keys_seen: set[tuple[type, str, str]] = set()
 
         atexit.register(self.shutdown)
 
@@ -776,6 +781,30 @@ class Cash:
         }
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
+
+    def _warn_once(
+        self,
+        category: type[Warning],
+        func_name: str,
+        arg_type_name: str,
+        message: str,
+    ) -> None:
+        """Emit ``warnings.warn(message, category)`` at most once per
+        ``(category, func_name, arg_type_name)`` for this Cash instance.
+
+        ``arg_type_name`` is the empty string for warnings that do not
+        attach to a specific arg type (e.g. store-failed). The seen-set
+        key still distinguishes by func_name.
+
+        ``stacklevel=3`` attributes the warning to the user's call site
+        (their ``@c.cache``-decorated function call), not to ``core.py``.
+        """
+        key = (category, func_name, arg_type_name)
+        with self._decorator_call_log_lock:
+            if key in self._warning_keys_seen:
+                return
+            self._warning_keys_seen.add(key)
+        warnings.warn(message, category=category, stacklevel=3)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.
