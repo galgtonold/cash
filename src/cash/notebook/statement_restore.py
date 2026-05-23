@@ -177,8 +177,6 @@ class StatementRestorer:
             if stored_hash:
                 if var_name not in self.executed_cell_hashes:
                     self.executed_cell_hashes[var_name] = set()
-                elif isinstance(self.executed_cell_hashes[var_name], str):
-                    self.executed_cell_hashes[var_name] = {self.executed_cell_hashes[var_name]}
                 self.executed_cell_hashes[var_name].add(stored_hash)
             if stored_code:
                 self.executed_cell_codes[var_name] = stored_code

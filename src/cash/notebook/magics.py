@@ -954,8 +954,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         html = _badge.render_interactive_badge(
             metrics_list=metrics_list,
             badge_mode=self._badge_mode,
-            debug=self._debug,
-            display_id=display_id,
             status=status,
             current_step=current_step,
             total_steps=total_steps,

@@ -145,8 +145,6 @@ class StatementLineageBuilder:
 
             if var_name not in self.executed_cell_hashes:
                 self.executed_cell_hashes[var_name] = set()
-            elif isinstance(self.executed_cell_hashes[var_name], str):
-                self.executed_cell_hashes[var_name] = {self.executed_cell_hashes[var_name]}
             self.executed_cell_hashes[var_name].add(source_hash)
 
             self.executed_cell_codes[var_name] = code

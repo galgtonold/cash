@@ -22,8 +22,6 @@ from .theme import FONT_MONO, RAIL_CACHED, RAIL_EXEC
 def render_interactive_badge(
     metrics_list: list[dict[str, Any]],
     badge_mode: str,
-    debug: bool = False,  # noqa: ARG001 — kept for caller compatibility
-    display_id: str | None = None,  # noqa: ARG001
     status: str = "DONE",
     current_step: int = 0,
     total_steps: int = 0,

@@ -305,10 +305,9 @@ def compute_cache_key(
         if module_source_hashes:
             module_component = ":" + ":".join(sorted(module_source_hashes))
 
-    # Include occurrence index for duplicate statements within a cell.
-    # Only added when > 0 (second+ occurrence) to maintain backward compatibility
-    # with existing cache entries for non-duplicate statements.
-    occurrence_component = f":occ{occurrence_index}" if occurrence_index > 0 else ""
+    # Include occurrence index so duplicate statements within a cell get
+    # distinct keys (first occurrence is ``occ0``).
+    occurrence_component = f":occ{occurrence_index}"
 
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}{occurrence_component}"

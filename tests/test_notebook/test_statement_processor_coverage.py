@@ -55,22 +55,6 @@ class TestCheckCache:
         metadata, cached_data, time_taken = processor._freshness.check_cache("nonexistent_key", None)
         assert cached_data is None
 
-    def test_stale_format_invalidation(self, processor_fixture):
-        """Cache entries without output_lineages should be invalidated."""
-        processor, _, backend = processor_fixture
-        # Manually store a cache entry without output_lineages
-        cache_key = "test_stale_key"
-        metadata = {
-            'timestamp': time.time(),
-            # Missing 'output_lineages' - stale format
-        }
-        cached_data = {'variables': {'x': 42}}
-        backend.set(cache_key, cached_data, metadata)
-        
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
-        # Should be invalidated due to missing output_lineages
-        assert result_data is None
-
     def test_ttl_expiration(self, processor_fixture):
         """Cache entries past TTL should be invalidated."""
         processor, _, backend = processor_fixture
