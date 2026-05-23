@@ -146,7 +146,7 @@ class TestNotebookPathCacheInvalidation:
 
     def test_invalidate_clears_cache(self):
         """invalidate_notebook_path_cache should reset cached path and time."""
-        from cash.utils import (
+        from cash.notebook.server_discovery import (
             invalidate_notebook_path_cache,
         )
         import cash.notebook.server_discovery as discovery_mod
@@ -164,7 +164,7 @@ class TestNotebookPathCacheInvalidation:
     def test_get_notebook_path_after_invalidation(self):
         """After invalidation, get_notebook_path should re-discover (not use stale cache)."""
         import cash.notebook.server_discovery as discovery_mod
-        from cash.utils import invalidate_notebook_path_cache, get_notebook_path
+        from cash.notebook.server_discovery import invalidate_notebook_path_cache, get_notebook_path
 
         # Set a fake cached path (state lives in server_discovery)
         discovery_mod._cached_notebook_path = "/old/notebook.ipynb"

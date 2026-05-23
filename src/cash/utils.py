@@ -1,12 +1,8 @@
 """Shared utility functions for the cash library.
 
-``normalize_path`` — pure path helper used throughout the codebase.
-
-Notebook-specific I/O and Jupyter Server HTTP discovery
-(``get_notebook_path``, ``get_notebook_cells``, etc.) live in
-``cash.notebook.server_discovery``.  For backward compatibility these names
-are still accessible here, but new code should import them from
-``cash.notebook.server_discovery`` directly.
+Pure helpers that don't depend on Jupyter or filesystem discovery.
+Notebook-specific I/O and Jupyter Server HTTP discovery live in
+``cash.notebook.server_discovery``.
 """
 
 from __future__ import annotations
@@ -15,15 +11,6 @@ import logging
 import os
 import sys
 
-from cash.notebook.server_discovery import (  # noqa: F401  (re-exports)
-    extract_notebook_path_from_vscode_cell_id,
-    get_notebook_cells,
-    get_notebook_cells_with_ids,
-    get_notebook_path,
-    invalidate_notebook_path_cache,
-    set_notebook_path,
-)
-
 logger = logging.getLogger(__name__)
 
 __all__ = [
@@ -31,12 +18,6 @@ __all__ = [
     "resolve_file_dep_path",
     "safe_text",
     "stdout_supports_unicode",
-    "invalidate_notebook_path_cache",
-    "set_notebook_path",
-    "extract_notebook_path_from_vscode_cell_id",
-    "get_notebook_path",
-    "get_notebook_cells",
-    "get_notebook_cells_with_ids",
 ]
 
 

@@ -112,10 +112,10 @@ class TestDownstreamAdvancementFallback:
             ("#VSC-def456", old_cell_code),
         ]
 
-        with patch('cash.utils.get_notebook_path', return_value='/fake/notebook.ipynb'), \
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
              patch('cash.notebook.upstream.get_notebook_cells', return_value=notebook_cells), \
              patch('cash.notebook.upstream.get_notebook_cells_with_ids', return_value=cells_with_ids), \
-             patch('cash.utils.invalidate_notebook_path_cache'):
+             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
 
             required_inputs = {'df'}
             current_cell_outputs = {'df'}
@@ -155,10 +155,10 @@ class TestDownstreamAdvancementFallback:
 
         cell_code = "y = x * 2"
 
-        with patch('cash.utils.get_notebook_path', return_value='/fake/notebook.ipynb'), \
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
              patch('cash.notebook.upstream.get_notebook_cells', return_value=["x = 10"]), \
              patch('cash.notebook.upstream.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.utils.invalidate_notebook_path_cache'):
+             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
 
             upstream._check_notebook_based(
                 cell_code,
@@ -185,10 +185,10 @@ class TestDownstreamAdvancementFallback:
 
         cell_code = "df['col'] = 1"
 
-        with patch('cash.utils.get_notebook_path', return_value='/fake/notebook.ipynb'), \
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
              patch('cash.notebook.upstream.get_notebook_cells', return_value=["x = 10"]), \
              patch('cash.notebook.upstream.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.utils.invalidate_notebook_path_cache'):
+             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
 
             upstream._check_notebook_based(
                 cell_code,
@@ -218,10 +218,10 @@ class TestDownstreamAdvancementFallback:
 
         cell_code = "df['col'] = 1"
 
-        with patch('cash.utils.get_notebook_path', return_value='/fake/notebook.ipynb'), \
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
              patch('cash.notebook.upstream.get_notebook_cells', return_value=["x = 10"]), \
              patch('cash.notebook.upstream.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.utils.invalidate_notebook_path_cache'):
+             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
 
             upstream._check_notebook_based(
                 cell_code,
@@ -257,10 +257,10 @@ class TestDownstreamAdvancementFallback:
 
         cell_code = "df1['a'] = df2['b']\ndf2['c'] = df1['d']"
 
-        with patch('cash.utils.get_notebook_path', return_value='/fake/notebook.ipynb'), \
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
              patch('cash.notebook.upstream.get_notebook_cells', return_value=["x = 10"]), \
              patch('cash.notebook.upstream.get_notebook_cells_with_ids', return_value=[("#id1", "x = 10")]), \
-             patch('cash.utils.invalidate_notebook_path_cache'):
+             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
 
             upstream._check_notebook_based(
                 cell_code,
@@ -338,10 +338,10 @@ class TestDownstreamAdvancementFallback:
         edited_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_61'] = df['Close'].rolling(2).mean()"
         old_cell_code = "df['VolAdj'] = df['Close'] * df['Volume']\ndf['SMA_60'] = df['Close'].rolling(2).mean()"
 
-        with patch('cash.utils.get_notebook_path', return_value='/fake/notebook.ipynb'), \
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value='/fake/notebook.ipynb'), \
              patch('cash.notebook.upstream.get_notebook_cells', return_value=[old_cell_code]), \
              patch('cash.notebook.upstream.get_notebook_cells_with_ids', return_value=[("#VSC-abc", old_cell_code)]), \
-             patch('cash.utils.invalidate_notebook_path_cache'):
+             patch('cash.notebook.server_discovery.invalidate_notebook_path_cache'):
 
             upstream._check_notebook_based(
                 edited_cell_code,

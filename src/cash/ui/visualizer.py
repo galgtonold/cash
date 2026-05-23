@@ -17,7 +17,7 @@ try:
 except ImportError:
     HAS_IPYTHON = False
 
-from ..utils import get_notebook_cells, get_notebook_path
+from ..notebook.server_discovery import get_notebook_cells, get_notebook_path
 from .debugger import CacheDebugger
 
 # ── Status display constants ──────────────────────────────────────────────────
