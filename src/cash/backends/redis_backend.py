@@ -30,6 +30,11 @@ class RedisBackend(CacheBackend):
     Requires 'redis' package: pip install redis
     """
     source_label: str = "REDIS"
+    # Tier-promotion hint: Redis is in-memory on the server and the
+    # protocol doesn't love multi-MB transfers, so the tiered pipeline
+    # skips Redis for objects past this cap. Bare-backend writes are
+    # not gated — users can opt-in to bigger values explicitly.
+    max_size_bytes: int | None = 10 * 1024 * 1024
 
     def __init__(self, host: str = 'localhost', port: int = 6379, db: int = 0,
                  password: str | None = None, prefix: str = 'cash:',

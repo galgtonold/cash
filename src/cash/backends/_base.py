@@ -48,7 +48,18 @@ class CacheBackend(ABC):
       failures.  Implementations should clean up partial writes before raising.
     * ``delete()`` and ``clear()`` raise
       :class:`~cash.exceptions.CacheBackendError` on infrastructure failures.
+
+    Tier-promotion hints
+    --------------------
+    * ``max_size_bytes`` — upper bound on object size this backend is happy
+      to host as a tier inside a :class:`TieredBackend`. ``None`` (default)
+      means unbounded. The cap is a *promotion hint*, not a hard gate: a
+      bare-backend ``set()`` writes whatever you give it. Only the tiered
+      pipeline skips a tier whose cap the object exceeds.
     """
+
+    # Tier-promotion hint. See class docstring.
+    max_size_bytes: int | None = None
 
     @abstractmethod
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
