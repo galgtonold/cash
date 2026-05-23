@@ -10,7 +10,7 @@ class TestGetNotebookPath:
 
     def test_returns_none_without_ipython(self):
         """Returns None when no IPython/Jupyter available."""
-        from cash.utils import get_notebook_path
+        from cash.notebook.server_discovery import get_notebook_path
         # In a test environment, should return None
         result = get_notebook_path()
         assert result is None or isinstance(result, str)
@@ -21,14 +21,14 @@ class TestGetNotebookPath:
         mock_ip = MagicMock()
         mock_ip.user_ns = {'__vsc_ipynb_file__': '/path/to/notebook.ipynb'}
 
-        with patch('cash.utils.get_ipython', return_value=mock_ip, create=True):
+        with patch('cash.notebook.server_discovery.get_ipython', return_value=mock_ip, create=True):
             # This test may not work due to import caching, but verifies the code path
             pass
 
     def test_returns_none_on_error(self):
         """Returns None when all detection methods fail."""
-        from cash.utils import get_notebook_path
-        with patch('cash.utils.get_ipython', side_effect=Exception("no ipython"), create=True):
+        from cash.notebook.server_discovery import get_notebook_path
+        with patch('cash.notebook.server_discovery.get_ipython', side_effect=Exception("no ipython"), create=True):
             result = get_notebook_path()
             # Should handle error gracefully
             assert result is None or isinstance(result, str)
@@ -39,7 +39,7 @@ class TestReadNotebookCodeCells:
 
     def test_read_code_cells(self, tmp_path):
         """Read code cells from a notebook file."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb = {
             "cells": [
@@ -58,7 +58,7 @@ class TestReadNotebookCodeCells:
 
     def test_read_code_cells_with_ids(self, tmp_path):
         """Read code cells with IDs."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb = {
             "cells": [
@@ -76,7 +76,7 @@ class TestReadNotebookCodeCells:
 
     def test_read_cells_string_source(self, tmp_path):
         """Handle source as string (not list)."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb = {
             "cells": [
@@ -91,14 +91,14 @@ class TestReadNotebookCodeCells:
 
     def test_read_nonexistent_notebook(self):
         """Returns empty list for nonexistent notebook."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         cells = _read_notebook_code_cells("/nonexistent/notebook.ipynb")
         assert cells == []
 
     def test_read_invalid_json(self, tmp_path):
         """Returns empty list for invalid JSON."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb_path = tmp_path / "bad.ipynb"
         nb_path.write_text("not valid json{{{")
@@ -108,7 +108,7 @@ class TestReadNotebookCodeCells:
 
     def test_no_cells_key(self, tmp_path):
         """Returns empty list if no 'cells' key."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb_path = tmp_path / "empty.ipynb"
         nb_path.write_text(json.dumps({"metadata": {}}))
@@ -122,7 +122,7 @@ class TestGetNotebookCells:
 
     def test_get_notebook_cells(self, tmp_path):
         """get_notebook_cells returns list of code strings."""
-        from cash.utils import get_notebook_cells
+        from cash.notebook.server_discovery import get_notebook_cells
 
         nb = {"cells": [{"cell_type": "code", "source": ["x = 1"]}]}
         nb_path = tmp_path / "test.ipynb"
@@ -133,7 +133,7 @@ class TestGetNotebookCells:
 
     def test_get_notebook_cells_with_ids(self, tmp_path):
         """get_notebook_cells_with_ids returns list of (id, code) tuples."""
-        from cash.utils import get_notebook_cells_with_ids
+        from cash.notebook.server_discovery import get_notebook_cells_with_ids
 
         nb = {"cells": [{"cell_type": "code", "source": ["x = 1"], "id": "c1"}]}
         nb_path = tmp_path / "test.ipynb"
@@ -213,7 +213,7 @@ class TestGetNotebookPathEdgeCases:
 
     def test_vscode_injected_path(self):
         """Returns VS Code injected notebook path."""
-        from cash.utils import get_notebook_path
+        from cash.notebook.server_discovery import get_notebook_path
 
         mock_ip = MagicMock()
         mock_ip.user_ns = {'__vsc_ipynb_file__': '/path/to/notebook.ipynb'}
@@ -224,7 +224,7 @@ class TestGetNotebookPathEdgeCases:
 
     def test_ipython_import_fails(self):
         """Returns None when IPython import fails."""
-        from cash.utils import get_notebook_path
+        from cash.notebook.server_discovery import get_notebook_path
 
         # Temporarily make IPython unimportable
         with patch.dict('sys.modules', {'IPython': None}):
@@ -233,15 +233,15 @@ class TestGetNotebookPathEdgeCases:
 
     def test_none_path_returns_empty_list(self):
         """_read_notebook_code_cells returns [] when no path detected."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
-        with patch('cash.utils.get_notebook_path', return_value=None):
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value=None):
             cells = _read_notebook_code_cells(None)
             assert cells == []
 
     def test_no_glob_fallback(self, tmp_path, monkeypatch):
         """No glob fallback when no notebook path given (Issue 23 fix)."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         # Create a fake notebook in tmp_path
         nb = {"cells": [{"cell_type": "code", "source": ["x = 42"]}]}
@@ -249,14 +249,14 @@ class TestGetNotebookPathEdgeCases:
         nb_path.write_text(json.dumps(nb))
 
         monkeypatch.chdir(tmp_path)
-        with patch('cash.utils.get_notebook_path', return_value=None):
+        with patch('cash.notebook.server_discovery.get_notebook_path', return_value=None):
             # Should return empty list instead of picking up the notebook via glob
             cells = _read_notebook_code_cells(None)
             assert cells == []
 
     def test_cell_id_from_metadata(self, tmp_path):
         """Read cell ID from metadata when 'id' key is missing."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb = {
             "cells": [
@@ -271,7 +271,7 @@ class TestGetNotebookPathEdgeCases:
 
     def test_cell_no_id(self, tmp_path):
         """Cell with no id field returns None."""
-        from cash.utils import _read_notebook_code_cells
+        from cash.notebook.server_discovery import _read_notebook_code_cells
 
         nb = {
             "cells": [
