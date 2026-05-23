@@ -160,30 +160,34 @@ Print the effective merged configuration.
 - `Threshold` — the smart-persistence threshold in seconds (statements that
   take longer than this get persisted to disk; faster ones may stay
   in-memory).
-- `Config` — the path to `~/.cash/config.toml` if it exists, or
-  `(defaults, no config file)` otherwise.
+- `Tiers` — present when the active config declares an explicit tier
+  list; lists each tier's type in order.
+- `Source` — which layers contributed to the resolved config (e.g.
+  `project:./pyproject.toml,env`, or `defaults` when nothing was set).
 
 **Examples:**
 
 ```bash
 cash info
 # Cash v0.5.0b1
-#   Backend:    file
+#   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
 #   Debug:      False
 #   Compress:   True
 #   Max size:   10.0 GB
 #   Threshold:  1.0s
-#   Config:     /home/me/.cash/config.toml
+#   Source:     project:/home/me/project/pyproject.toml,env
 ```
 
 **Behaviour notes:**
 
-- `cash info` does **not** show per-value provenance — it tells you the value
-  but not whether it came from an environment variable, the user config file,
-  or the built-in default. If you need to debug a config override, inspect
-  the relevant `CASH_*` environment variables and `~/.cash/config.toml`
-  directly.
+- `cash info` shows a `Source:` line listing which layers contributed
+  (`defaults`, `user:<path>`, `project:<path>`, `env`, `kwargs`) but
+  does NOT show which layer was authoritative for each individual
+  field. To debug a specific override, inspect the relevant `CASH_*`
+  env vars and the relevant TOML files (project `pyproject.toml`
+  `[tool.cash]` and XDG user config — see
+  [Configuration](getting-started/configuration.md#file-locations)).
 
 ### `cash inspect [path]`
 

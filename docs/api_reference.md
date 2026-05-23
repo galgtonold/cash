@@ -22,17 +22,27 @@ Complete reference for all public APIs in the Cash caching framework.
 from cash import Cash
 
 cash = Cash(
-    backend=None,        # CacheBackend instance (default: auto from config)
-    cache_dir=None,      # str - directory for FileBackend  
-    backends=None,       # List[CacheBackend] - for CascadingBackend
-    compress=None,       # bool - enable gzip compression (default from config)
+    backend=None,        # CacheBackend instance (skips config-driven build)
+    cache_dir=None,      # str - shortcut for the file/disk tier directory
+    backends=None,       # List[CacheBackend] - wrapped in CascadingBackend
+    compress=None,       # bool - shortcut for FileBackend gzip
     register_magic=True, # bool - auto-register IPython magics
-    debug=None,          # bool - enable debug logging (default from config)
-    background_io=False, # bool - async backend wrapper
+    debug=None,          # bool - shortcut for CASH_DEBUG
     use_locking=False,   # bool - enable double-checked locking
-    config_path=None,    # str - path to config file
+    config_path=None,    # str - explicit user-config TOML path
+    **config_overrides,  # any CashConfig field; highest priority
 )
 ```
+
+Any `CashConfig` field name is accepted as a kwarg. E.g.
+`Cash(backend="redis", redis_host="redis.internal", redis_prefix="app:")`
+constructs a `RedisBackend` configured from those values. Kwargs are the
+highest-priority layer (above env vars and TOML files).
+
+Writes go through a per-backend background thread; serialisation
+happens on the calling thread so set() returns once the bytes are
+captured. See
+[Background writes](getting-started/configuration.md#background-writes).
 
 **Methods:**
 
@@ -303,56 +313,72 @@ is_stateful(add)   # False
 
 ## Configuration
 
-### Config File (`~/.cash/config.toml`)
+Cash resolves configuration in priority order: constructor kwargs > env
+vars (`CASH_*`) > project (`pyproject.toml` `[tool.cash]`) > user
+config (`~/.config/cash/config.toml`) > built-in defaults. Full field
+reference and tables are in
+[getting-started/configuration.md](getting-started/configuration.md).
+
+### Simple-mode config
 
 ```toml
-[cash]
-backend_type = "file"     # "memory", "file", "sqlite", "redis", "s3"
+# pyproject.toml
+[tool.cash]
+backend = "redis"
 cache_dir = ".cash"
 debug = false
 compress = false
-max_memory_entries = 1000
-default_ttl = 3600
-
-[redis]
-url = "redis://localhost:6379"
-
-[s3]
-bucket = "my-cache-bucket"
-prefix = "cash/"
+max_cache_size = 1073741824
+redis_host = "redis.internal"
+redis_prefix = "myapp:"
 ```
 
-### Environment Variables
+### Advanced-mode tier stack
 
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `CASH_BACKEND` | Backend type | `memory`, `file`, `sqlite` |
-| `CASH_CACHE_DIR` | Cache directory | `/tmp/cash-cache` |
-| `CASH_DEBUG` | Enable debug mode | `1`, `true` |
-| `CASH_COMPRESS` | Enable compression | `1`, `true` |
-| `CASH_MAX_CACHE_SIZE` | Max cache size bytes | `1073741824` |
-| `CASH_MAX_MEMORY_ENTRIES` | Max in-memory entries | `1000` |
-| `CASH_REDIS_URL` | Redis connection URL | `redis://localhost:6379` |
-| `CASH_S3_BUCKET` | S3 bucket name | `my-bucket` |
+```toml
+[[tool.cash.tiers]]
+type = "memory"
+max_entries = 10000
 
-### Per-Notebook Config
+[[tool.cash.tiers]]
+type = "redis"
+host = "redis.internal"
+
+[[tool.cash.tiers]]
+type = "s3"
+bucket = "my-cache"
+region = "us-east-1"
+```
+
+### Per-script overrides
 
 ```python
 cash = Cash(config_path="./my_notebook_config.toml")
+# or directly:
+cash = Cash(backend="redis", redis_host="...", debug=True)
 ```
 
-### `CashConfig` Dataclass
+### Runtime mutation
 
 ```python
-from cash import CashConfig, create_default_config
+import cash
+cash.configure(debug=True)                              # hot field
+cash.configure(backend="redis", redis_host="prod-...")  # rebuild
+```
 
-# Create default config file
-create_default_config()  # Creates ~/.cash/config.toml
+### `CashConfig` dataclass
 
-# Load config
-config = get_config()  # Merges env > file > defaults
-print(config.backend_type)  # "file"
-print(config.cache_dir)  # ".cash"
+```python
+from cash import CashConfig, create_default_config, get_config
+
+# Write a documented template to the XDG user config location.
+create_default_config()
+
+# Inspect the resolved config (merges all five layers).
+config = get_config()
+print(config.backend)        # "tiered" by default
+print(config.cache_dir)      # ".cash"
+print(config._source)        # which layers contributed
 ```
 
 ---
