@@ -308,10 +308,23 @@ class Cash:
         func_name: str,
         ttl: int | None,
     ) -> Any:
-        """Return cached_data if valid, else _CACHE_MISS sentinel."""
-        if cached_data is not None:
+        """Return cached_data if valid, else _CACHE_MISS sentinel.
+
+        Key-presence is determined by ``metadata is not None`` — the
+        backend contract is that absent keys return ``(None, None)``,
+        so a non-None metadata dict with a ``None`` data value still
+        counts as a hit (a function that legitimately returned ``None``).
+
+        Auto-tracked file dependencies stored in
+        ``metadata['auto_file_deps']`` are re-stat'd here; any file with
+        a different mtime/size than recorded forces a miss so the
+        function re-reads the changed file.
+        """
+        if metadata is not None:
             try:
                 self._validate_ttl(metadata, ttl)
+                if not self._auto_file_deps_fresh(metadata):
+                    return _CACHE_MISS
                 self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
                 return cached_data
             except CacheExpiredError:
@@ -319,6 +332,31 @@ class Cash:
             except (TypeError, KeyError):
                 logger.debug("Cache hit but validation failed for %s", func_name)
         return _CACHE_MISS
+
+    @staticmethod
+    def _auto_file_deps_fresh(metadata: dict[str, Any]) -> bool:
+        """Return True if every file recorded in ``metadata['auto_file_deps']``
+        still has the same (mtime, size) on disk.
+
+        Auto-tracked deps are captured during the first compute via
+        :class:`cash.notebook.file_tracker.FileAccessTracker` and stored
+        as ``{path: {'mtime': float, 'size': int}}``. If a recorded path
+        is gone or its (mtime, size) changed, we invalidate the cache
+        so the next compute re-reads the file. A path that disappears
+        is also a change.
+        """
+        snap = metadata.get('auto_file_deps') or {}
+        if not snap:
+            return True  # nothing to check
+        import os
+        for path, recorded in snap.items():
+            try:
+                st = os.stat(path)
+            except OSError:
+                return False  # file vanished — invalidate
+            if st.st_mtime != recorded.get('mtime') or st.st_size != recorded.get('size'):
+                return False
+        return True
 
     def _make_wrapper(
         self,
@@ -348,10 +386,25 @@ class Cash:
                 return hit
 
             def _compute_and_store() -> Any:
-                res = func(*args, **kwargs)
+                # Wrap the function call in FileAccessTracker so any
+                # auto-tracked file reads (pandas/numpy/joblib/open/...)
+                # are recorded as implicit cache dependencies — a later
+                # mtime/size change forces a recompute.
+                from cash.notebook.file_tracker import FileAccessTracker
+                from cash.notebook.cache_freshness import snapshot_file_deps
+                tracker = FileAccessTracker(getattr(func, '__globals__', None))
+                with tracker:
+                    res = func(*args, **kwargs)
+                accessed = tracker.get_accessed_files()
+                auto_file_deps = snapshot_file_deps(accessed) if accessed else None
+
                 self._attach_lineage(res, cache_key)
                 execution_time = time.perf_counter() - call_start
-                self._store_in_cache(cache_key, func_name, res, metadata, ttl, current_state_hash, args_hash, execution_time)
+                self._store_in_cache(
+                    cache_key, func_name, res, metadata, ttl,
+                    current_state_hash, args_hash, execution_time,
+                    auto_file_deps=auto_file_deps,
+                )
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=execution_time, args_hash=args_hash, cache_key=cache_key)
                 return res
 
@@ -629,7 +682,9 @@ class Cash:
         try:
             with self.backend.lock(cache_key):
                 locked_metadata, locked_data = self.backend.get(cache_key)
-                if locked_data is not None:
+                # Use metadata presence (not data presence) as the
+                # existence test — see _try_get_cached for rationale.
+                if locked_metadata is not None:
                     try:
                         self._validate_ttl(locked_metadata, ttl)
                         self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
@@ -776,6 +831,7 @@ class Cash:
         state_hash: str,
         args_hash: str,
         execution_time: float = 0.0,
+        auto_file_deps: dict[str, dict[str, float]] | None = None,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -793,8 +849,12 @@ class Cash:
                 'serializer_cls': type(serializer),
                 'ttl': ttl,
                 'args_hash': args_hash,
-                'state_hash': state_hash
+                'state_hash': state_hash,
             }
+            if auto_file_deps:
+                # Each entry: path → {'mtime': float, 'size': int}
+                # Validated on subsequent get() via _auto_file_deps_fresh.
+                metadata['auto_file_deps'] = auto_file_deps
 
             self.backend.set(cache_key, result, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:

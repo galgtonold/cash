@@ -49,7 +49,11 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
     def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)
-            if value is not None:
+            # Key-presence test: metadata is None when the child backend
+            # reports "key absent" (per its API contract). A non-None
+            # metadata dict with a None value means the user genuinely
+            # cached None — still a hit.
+            if metadata is not None:
                 # Read-Repair / Promotion to faster tiers
                 # If found in Tier 2 (File), promote to Tier 1 (Memory)
                 for j in range(i):
@@ -66,8 +70,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                         )
 
                 # Inject source information
-                if metadata:
-                    metadata['source'] = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                metadata['source'] = getattr(type(backend), 'source_label', None) or type(backend).__name__
 
                 return metadata, value
         return None, None
