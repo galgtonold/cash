@@ -80,6 +80,25 @@ class _MultiBackendMixin:
             labels.extend(b.tier_labels())
         return labels
 
+    def shutdown(self) -> None:
+        """Propagate shutdown to every child backend.
+
+        This is what lets ``atexit`` drain pending async writes in
+        Python scripts: ``Cash.shutdown()`` → ``TieredBackend.shutdown()``
+        → each tier's own ``shutdown()`` → each tier's PendingWrites
+        executor finishes its queue before the process exits. Errors
+        from one tier do not block shutdown of the others — we still
+        owe every backend its cleanup call.
+        """
+        for backend in self.backends:
+            try:
+                backend.shutdown()
+            except Exception as e:  # noqa: BLE001 — best-effort cleanup
+                logger.warning(
+                    "Shutdown failed for backend %s: %s",
+                    type(backend).__name__, e,
+                )
+
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         total = 0
         seen_keys = set()

@@ -408,8 +408,9 @@ class Cash:
             def _compute_and_store() -> Any:
                 res = func(*args, **kwargs)
                 self._attach_lineage(res, cache_key)
-                self._store_in_cache(cache_key, func_name, res, metadata, ttl, current_state_hash, args_hash)
-                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
+                execution_time = time.perf_counter() - call_start
+                self._store_in_cache(cache_key, func_name, res, metadata, ttl, current_state_hash, args_hash, execution_time)
+                self._log_decorator_call(func_name, cache_hit=False, execution_time=execution_time, args_hash=args_hash, cache_key=cache_key)
                 return res
 
             if self.use_locking:
@@ -832,6 +833,7 @@ class Cash:
         ttl: int | None,
         state_hash: str,
         args_hash: str,
+        execution_time: float = 0.0,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -840,6 +842,12 @@ class Cash:
                 'key': cache_key,
                 'func_name': func_name,
                 'timestamp': time.time(),
+                # The decorator's measured wall-clock cost. ``TieredBackend``
+                # reads this to decide whether the value is expensive enough
+                # to promote past RAM (otherwise the smart-persistence
+                # policy gates everything at the 0.1s floor, and script
+                # runs that recompute the same cheap value forever).
+                'execution_time': execution_time,
                 'serializer_cls': type(serializer),
                 'ttl': ttl,
                 'args_hash': args_hash,
