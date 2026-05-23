@@ -70,9 +70,60 @@ _COEFFS: dict[tuple[str, str, str], tuple[float, float]] = {
     ("_GENERIC", "disk", "serialize"): (2.508677e-04, 1.077603e-09),
     # disk deserialize: dict_shallow is slowest at large sizes
     ("_GENERIC", "disk", "deserialize"): (1.038392e-02, 1.976465e-09),
+
+    # ===== Redis (LAN) =====
+    # Estimated, NOT benchmarked. Modelled as:
+    #   a = (disk_a × 0.1) + 500us network round-trip
+    #   b = max(disk_b, 20 ns/B)      ≈ 50 MB/s sustained
+    # The 0.1× factor removes the disk I/O dominating disk's a; what's
+    # left is the pure pickle work that's still required when serialising
+    # to a network buffer.
+    ("bytes",             "redis", "serialize"):   (6.011709e-04, 2.000000e-08),
+    ("bytes",             "redis", "deserialize"): (1.450319e-03, 2.000000e-08),
+    ("dataframe_numeric", "redis", "serialize"):   (5.330326e-04, 2.000000e-08),
+    ("dataframe_numeric", "redis", "deserialize"): (1.310776e-03, 2.000000e-08),
+    ("dict_shallow",      "redis", "serialize"):   (5.250868e-04, 2.000000e-08),
+    ("dict_shallow",      "redis", "deserialize"): (1.538392e-03, 2.000000e-08),
+    ("list_flat",         "redis", "serialize"):   (5.969259e-04, 2.000000e-08),
+    ("list_flat",         "redis", "deserialize"): (1.361285e-03, 2.000000e-08),
+    ("ndarray_dense",     "redis", "serialize"):   (5.678949e-04, 2.000000e-08),
+    ("ndarray_dense",     "redis", "deserialize"): (1.460452e-03, 2.000000e-08),
+    ("series_numeric",    "redis", "serialize"):   (6.362212e-04, 2.000000e-08),
+    ("series_numeric",    "redis", "deserialize"): (1.778298e-03, 2.000000e-08),
+    ("sparse",            "redis", "serialize"):   (6.758385e-04, 2.000000e-08),
+    ("sparse",            "redis", "deserialize"): (1.575261e-03, 2.000000e-08),
+    # Generic fallback: copy the slowest disk family with the network
+    # transform applied — series_numeric deserialize is the worst case.
+    ("_GENERIC",          "redis", "serialize"):   (6.758385e-04, 2.000000e-08),
+    ("_GENERIC",          "redis", "deserialize"): (1.778298e-03, 2.000000e-08),
+
+    # ===== S3 (same-region) =====
+    # Estimated, NOT benchmarked. Modelled as:
+    #   a = (disk_a × 0.2) + 80ms request setup (DNS/TLS/auth)
+    #   b = max(disk_b, 50 ns/B)      ≈ 20 MB/s single-stream
+    # Cross-region / public-internet S3 is 5–10× slower; users with
+    # those topologies should override the relevant backend's
+    # ``bandwidth_estimate``. The 80ms latency floor dominates objects
+    # under ~2 MB.
+    ("bytes",             "s3", "serialize"):   (8.020234e-02, 5.000000e-08),
+    ("bytes",             "s3", "deserialize"): (8.190064e-02, 5.000000e-08),
+    ("dataframe_numeric", "s3", "serialize"):   (8.006607e-02, 5.000000e-08),
+    ("dataframe_numeric", "s3", "deserialize"): (8.162155e-02, 5.000000e-08),
+    ("dict_shallow",      "s3", "serialize"):   (8.005017e-02, 5.000000e-08),
+    ("dict_shallow",      "s3", "deserialize"): (8.207678e-02, 5.000000e-08),
+    ("list_flat",         "s3", "serialize"):   (8.019385e-02, 5.000000e-08),
+    ("list_flat",         "s3", "deserialize"): (8.172257e-02, 5.000000e-08),
+    ("ndarray_dense",     "s3", "serialize"):   (8.013579e-02, 5.000000e-08),
+    ("ndarray_dense",     "s3", "deserialize"): (8.192090e-02, 5.000000e-08),
+    ("series_numeric",    "s3", "serialize"):   (8.027244e-02, 5.000000e-08),
+    ("series_numeric",    "s3", "deserialize"): (8.255660e-02, 5.000000e-08),
+    ("sparse",            "s3", "serialize"):   (8.035168e-02, 5.000000e-08),
+    ("sparse",            "s3", "deserialize"): (8.215052e-02, 5.000000e-08),
+    ("_GENERIC",          "s3", "serialize"):   (8.035168e-02, 5.000000e-08),
+    ("_GENERIC",          "s3", "deserialize"): (8.255660e-02, 5.000000e-08),
 }
 
-_KNOWN_BACKENDS = frozenset({"ram", "disk"})
+_KNOWN_BACKENDS = frozenset({"ram", "disk", "redis", "s3"})
 
 
 def resolve_family(value_type_name: str) -> str:
