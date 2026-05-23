@@ -17,6 +17,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from .backends import CacheBackend, CacheMetadata, CascadingBackend, FileBackend, InMemoryBackend
+from .backends.factory import build_backend_from_config
 
 if TYPE_CHECKING:
     from .ui.explorer import CacheExplorer
@@ -88,31 +89,23 @@ class Cash:
         debug: bool | None = None,
         use_locking: bool = False,
         config_path: str | None = None,
+        **config_overrides: Any,
     ) -> None:
-        self.config = get_config(config_path)
+        # Map the legacy explicit kwargs into the overrides dict so the
+        # config layer treats them with the same priority as any other
+        # constructor-supplied override (highest).
+        for key, val in (("cache_dir", cache_dir), ("compress", compress), ("debug", debug)):
+            if val is not None:
+                config_overrides.setdefault(key, val)
+        self.config = get_config(config_path=config_path, overrides=config_overrides or None)
 
-        # Apply config defaults for parameters not explicitly provided
-        if compress is None:
-            compress = self.config.compress
-        if debug is None:
-            debug = self.config.debug
+        debug = self.config.debug
 
-        # Default to TieredBackend with local .cash directory if no config provided
-        if backend is None and cache_dir is None and (backends is None or len(backends) == 0):
-            cache_dir = self.config.cache_dir
-
-        # Store parameters for lazy backend construction.
-        # If an explicit backend instance was provided, use it directly.
-        # Otherwise, defer creation to first access via the ``backend`` property.
+        # Store params for lazy backend construction. If an explicit
+        # backend (or list of backends) was provided, that wins — those
+        # are concrete objects, not config — and we skip the factory.
         self._backend: CacheBackend | None = None
-        self._backend_params = {
-            'backend': backend,
-            'backends': backends,
-            'cache_dir': cache_dir,
-            'compress': compress,
-        }
-        # Eagerly set _backend when the caller supplied a concrete instance
-        # so that the property short-circuits without locking.
+        self._explicit_backends = backends  # remembered for repr / debugging only
         if backend is not None:
             self._backend = backend
         elif backends:
@@ -149,25 +142,18 @@ class Cash:
 
     @property
     def backend(self) -> CacheBackend:
-        """Lazily create the cache backend on first access.
+        """Lazily build the cache backend from ``self.config`` on first access.
 
-        This avoids filesystem I/O, thread creation, and directory scanning
-        at ``Cash()`` construction time.  The heavy lifting happens only
-        when the cache is actually used.
+        This avoids filesystem I/O, thread creation, and directory
+        scanning at ``Cash()`` construction time. The heavy lifting
+        happens only when the cache is actually used.
         """
         if self._backend is not None:
             return self._backend
         with self._backend_lock:
             if self._backend is not None:
                 return self._backend
-            params = self._backend_params
-            cache_dir = params.get('cache_dir')
-            if cache_dir:
-                self._backend = self._create_default_backend(
-                    cache_dir, params.get('compress', False),
-                )
-            else:
-                self._backend = InMemoryBackend()
+            self._backend = build_backend_from_config(self.config)
             return self._backend
 
     @backend.setter
@@ -192,50 +178,6 @@ class Cash:
         qualname = getattr(func, '__qualname__', None) or func.__name__
         return f"{module}.{qualname}"
 
-    def _create_default_backend(self, cache_dir: str, compress: bool) -> CacheBackend:
-        """Create the default tiered backend using config settings."""
-        config = self.config
-
-        # Smart Hybrid Caching (Memory + File)
-        l1 = InMemoryBackend(max_entries=config.max_memory_entries)
-        # File Backend with configurable limits
-        l2 = FileBackend(
-            cache_dir,
-            compress=compress,
-            max_size_bytes=config.max_cache_size,
-            flush_interval=config.flush_interval
-        )
-
-        if config.smart_persistence:
-            threshold = config.smart_persistence_threshold
-
-            # Minimum compute time below which persistence is never worthwhile:
-            # the disk I/O alone costs more than just re-running the cell.
-            min_persist_compute_s = 0.1
-            small_result_bytes = 64 * 1024  # 64 KB
-
-            def smart_persistence_policy(execution_time: float, size_bytes: int) -> bool:
-                # Tiny computations: never persist. Disk I/O round-trip dominates.
-                if execution_time < min_persist_compute_s:
-                    return False
-                # Small results that took non-trivial compute: always persist.
-                # Disk write cost for < 64 KB is sub-millisecond, and on a cold
-                # restart we save the full execution_time — easy win.
-                if size_bytes < small_result_bytes:
-                    return True
-                # Medium-fast computations with bigger results: defer to the
-                # configurable ``smart_persistence_threshold`` (default 1.0 s)
-                # so users can opt out of persisting heavy intermediates.
-                if execution_time < threshold:
-                    return False
-                # Slow + large: check bandwidth trade-off (storing + restoring
-                # at ~100 MB/s should still be a net win vs. recomputing).
-                disk_bandwidth = 100 * 1024 * 1024  # 100MB/s
-                io_time = (size_bytes / disk_bandwidth) * 2
-                return execution_time > io_time
-
-            return TieredBackend([l1, l2], promotion_policy=smart_persistence_policy)
-        return TieredBackend([l1, l2])
 
     @overload
     def cache(self, func: Callable[P, T]) -> Callable[P, T]: ...

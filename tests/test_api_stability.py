@@ -45,6 +45,7 @@ def test_core_exports_stable():
         'get_config', 'CashConfig', 'create_default_config',
         'register_hasher',
         'reset_session',
+        'configure',
         # Exception hierarchy
         'CashError', 'CacheBackendError', 'CacheExpiredError',
         'CacheSerializationError', 'DependencyNotFoundError',
