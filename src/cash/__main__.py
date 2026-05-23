@@ -31,19 +31,15 @@ def cmd_info(args: argparse.Namespace) -> None:
     config = get_config()
 
     print(f"Cash v{get_version()}")
-    print(f"  Backend:    {config.backend_type}")
+    print(f"  Backend:    {config.backend}")
     print(f"  Cache dir:  {config.cache_dir}")
     print(f"  Debug:      {config.debug}")
     print(f"  Compress:   {config.compress}")
     print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB")
     print(f"  Threshold:  {config.smart_persistence_threshold}s")
-
-    # Check if config file exists
-    config_path = Path.home() / ".cash" / "config.toml"
-    if config_path.exists():
-        print(f"  Config:     {config_path}")
-    else:
-        print("  Config:     (defaults, no config file)")
+    if config.tiers:
+        print(f"  Tiers:      {', '.join(t.type for t in config.tiers)}")
+    print(f"  Source:     {config._source}")
 
 
 def _format_bytes(size_bytes: int) -> str:
