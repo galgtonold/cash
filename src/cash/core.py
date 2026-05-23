@@ -26,7 +26,7 @@ from .backends.serialization import get_serializer
 from .backends.tiered_backend import TieredBackend
 from .config import CashConfig, get_config
 from .data_source import DataSource
-from .exceptions import CacheExpiredError
+from .exceptions import CacheExpiredError, CashCacheIneffectiveWarning
 from .graph import DependencyGraph
 from .notebook.analysis import CodeAnalyzer
 
@@ -292,16 +292,55 @@ class Cash:
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
+                arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+                self._warn_once(
+                    CashCacheIneffectiveWarning,
+                    func_name,
+                    arg_type_name,
+                    f"@cash.cache on {func_name}: failed to build cache key from "
+                    f"argument of type {arg_type_name}. Call will not cache. "
+                    f"Register a hasher via cash.register_hasher({arg_type_name}, ...) "
+                    f"or pass the argument by a hashable value.",
+                )
                 result = func(*args, **kwargs)
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
                 return (_CACHE_MISS, result, 'unhashable')
             cache_key = self._compute_cache_key(func_name, current_state_hash, dynamic_state_hash, args_hash)
             return (cache_key, current_state_hash, args_hash)
         except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
-            logger.warning("Cache key generation failed for %s: %s", func_name, e)
+            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+            self._warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                arg_type_name,
+                f"@cash.cache on {func_name}: cache-key generation raised "
+                f"{type(e).__name__} ({e}). Call will not cache. "
+                f"Consider cash.register_hasher({arg_type_name}, ...) if {arg_type_name} "
+                f"is the unhashable argument.",
+            )
             result = func(*args, **kwargs)
             self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='error', cache_key='')
             return (_CACHE_MISS, result, 'error')
+
+    @staticmethod
+    def _first_unhashable_arg_type(args: tuple, kwargs: dict) -> str:
+        """Return the qualname of the first non-built-in arg type, or '<unknown>'.
+
+        Used to attribute CashCacheIneffectiveWarning to a concrete type name
+        so the user knows which register_hasher() call to add. Skips strings,
+        ints, floats, bools, None, lists, dicts, tuples, sets — they're
+        always picklable, so they're never the culprit. The first non-builtin
+        wins; this is heuristic but matches the most common single-bad-arg
+        case.
+        """
+        BUILTIN_OK = (str, int, float, bool, type(None), bytes, list, dict, tuple, set, frozenset)
+        for a in args:
+            if not isinstance(a, BUILTIN_OK):
+                return type(a).__qualname__
+        for v in kwargs.values():
+            if not isinstance(v, BUILTIN_OK):
+                return type(v).__qualname__
+        return "<unknown>"
 
     def _try_get_cached(
         self,
@@ -546,7 +585,11 @@ class Cash:
             args_bytes = pickle.dumps((hashed_args, hashed_kwargs))
             return hashlib.sha256(args_bytes).hexdigest()
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
-            logger.warning("Could not serialize arguments for %s: %s", func_name, e)
+            # Pickle failure here is surfaced via CashCacheIneffectiveWarning in
+            # _resolve_cache_key (which sees the None return). Keep this log at
+            # debug level so it's available when explicitly enabled but doesn't
+            # double-warn.
+            logger.debug("Could not serialize arguments for %s: %s", func_name, e)
             return None
 
     @staticmethod

@@ -73,3 +73,80 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
     assert captured[0].filename.endswith("core.py"), captured[0].filename
     # Second emission: stacklevel=2 → this test file
     assert captured[1].filename.endswith("test_warnings_ineffective.py"), captured[1].filename
+
+
+import threading
+
+
+class _Unpicklable:
+    """Holds a threading.Lock, which is not picklable."""
+    def __init__(self):
+        self._lock = threading.Lock()
+
+
+def test_unpicklable_arg_emits_ineffective_warning(tmp_path):
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def f(obj):
+        return 42
+
+    obj = _Unpicklable()
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        result = f(obj)
+        # Second call with another unpicklable instance — should NOT
+        # emit a second warning (dedup on (func, arg_type)).
+        f(_Unpicklable())
+
+    assert result == 42  # function still runs
+    ineffective = [w for w in captured if issubclass(w.category, CashCacheIneffectiveWarning)]
+    assert len(ineffective) == 1, [str(w.message) for w in captured]
+    msg = str(ineffective[0].message)
+    assert "_Unpicklable" in msg
+    assert "register_hasher" in msg
+
+
+def test_unpicklable_arg_different_func_emits_separately(tmp_path):
+    """A second function with an unpicklable arg of the same type emits its own warning."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def f(obj):
+        return 1
+
+    @c.cache
+    def g(obj):
+        return 2
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        f(_Unpicklable())
+        g(_Unpicklable())
+
+    ineffective = [w for w in captured if issubclass(w.category, CashCacheIneffectiveWarning)]
+    assert len(ineffective) == 2
+
+
+def test_unpicklable_arg_warning_blames_user_call_site(tmp_path):
+    """The warning's filename should be this test file, not cash/core.py.
+    Locks in that _warn_once is called with the right stacklevel from
+    _resolve_cache_key (default stacklevel=5 covers
+    user -> stats_wrapper -> wrapper -> _resolve_cache_key -> _warn_once)."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def f(obj):
+        return 42
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        f(_Unpicklable())
+
+    ineffective = [w for w in captured if issubclass(w.category, CashCacheIneffectiveWarning)]
+    assert len(ineffective) == 1
+    # The warning should be attributed to this test file, NOT to cash/core.py.
+    assert ineffective[0].filename.endswith("test_warnings_ineffective.py"), (
+        f"warning attributed to {ineffective[0].filename!r}; "
+        f"expected user call site in test_warnings_ineffective.py"
+    )
