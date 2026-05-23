@@ -35,9 +35,14 @@ def test_redis_get(redis_backend):
     pipe.execute.return_value = [meta_bytes, data_bytes]
     
     m, d = redis_backend.get('k')
-    assert m == metadata
+    # get() now injects source=REDIS on bare-backend reads (see
+    # test_label_consistency.py), so check the stored fields survive and
+    # source is present rather than asserting full-dict equality.
+    assert m is not None
+    assert m['key'] == 'k' and m['size'] == 10
+    assert m['source'] == 'REDIS'
     assert d == original_data
-    
+
     pipe.get.assert_any_call('test:k:meta')
     pipe.get.assert_any_call('test:k:data')
 

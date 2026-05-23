@@ -64,6 +64,7 @@ class InMemoryBackend(CacheBackend):
 
             metadata['last_access'] = time.time()
             metadata['access_count'] = metadata.get('access_count', 0) + 1
+            metadata.setdefault('source', self.source_label)
 
             return metadata, self._safe_deep_copy(value, key)
         return None, None
