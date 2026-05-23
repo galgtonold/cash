@@ -84,7 +84,11 @@ class TestS3Backend(unittest.TestCase):
         self.backend.s3.get_object.side_effect = get_object_side_effect
         
         m, d = self.backend.get("k")
-        self.assertEqual(m, metadata)
+        # get() now injects source=S3 on bare-backend reads.
+        self.assertIsNotNone(m)
+        self.assertEqual(m['key'], 'k')
+        self.assertEqual(m['size'], 10)
+        self.assertEqual(m['source'], 'S3')
         self.assertEqual(d, original_data)
 
     def test_set(self):
