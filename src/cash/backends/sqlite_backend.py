@@ -123,6 +123,7 @@ class SQLiteBackend(CacheBackend):
                 serializer = serializer_cls()
                 value = serializer.deserialize(data_bytes)
 
+                metadata.setdefault('source', self.source_label)
                 return metadata, value
             except (pickle.UnpicklingError, KeyError, TypeError, ValueError, EOFError) as e:
                 logger.debug("Error deserializing cache entry %s: %s", key, e)
@@ -156,7 +157,7 @@ class SQLiteBackend(CacheBackend):
 
         # Inject storage info
         if 'storage' not in metadata:
-            metadata['storage'] = ['SQLite']
+            metadata['storage'] = [self.source_label]
 
         meta_bytes = pickle.dumps(metadata)
 

@@ -225,6 +225,7 @@ class FileBackend(CacheBackend):
                     data_bytes = f.read()
                     value = serializer.deserialize(data_bytes)
 
+            metadata.setdefault('source', self.source_label)
             return metadata, value
         except (OSError, pickle.PickleError, ValueError) as exc:
             logger.debug("Cache get failed for key %r: %s", key, exc)
@@ -284,6 +285,8 @@ class FileBackend(CacheBackend):
         serialized_value = serializer.serialize(value)
 
         metadata['compressed'] = self.compress
+        if 'storage' not in metadata:
+            metadata['storage'] = [self.source_label]
 
         try:
             self._write_cache_files(key, meta_path, data_path, metadata, serialized_value)

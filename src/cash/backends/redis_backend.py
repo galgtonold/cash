@@ -82,6 +82,7 @@ class RedisBackend(CacheBackend):
                 serializer = serializer_cls()
                 value = serializer.deserialize(data_bytes)
 
+                metadata.setdefault('source', self.source_label)
                 return metadata, value
             except (pickle.UnpicklingError, KeyError, TypeError, ValueError) as e:
                 logger.debug("Redis get() deserialization error: %s", e)
@@ -102,7 +103,7 @@ class RedisBackend(CacheBackend):
         # Store size and storage identifier
         metadata['size'] = len(serialized_value)
         if 'storage' not in metadata:
-            metadata['storage'] = ['Redis']
+            metadata['storage'] = [self.source_label]
 
         # Serialize metadata (includes ttl inside the pickled blob)
         meta_bytes = pickle.dumps(metadata)

@@ -25,9 +25,14 @@ class TestRedisBackend(unittest.TestCase):
         pipe.execute.return_value = [meta_bytes, data_bytes]
         
         m, d = self.backend.get("k")
-        self.assertEqual(m, metadata)
+        # get() now injects source=REDIS on bare-backend reads, so check
+        # the stored fields survive instead of full-dict equality.
+        self.assertIsNotNone(m)
+        self.assertEqual(m['key'], 'k')
+        self.assertEqual(m['size'], 10)
+        self.assertEqual(m['source'], 'REDIS')
         self.assertEqual(d, original_data)
-        
+
         # Verify calls
         pipe.get.assert_any_call("test:k:meta")
         pipe.get.assert_any_call("test:k:data")
