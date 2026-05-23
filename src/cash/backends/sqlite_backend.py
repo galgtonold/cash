@@ -36,6 +36,10 @@ class SQLiteBackend(CacheBackend):
         wal_mode: Use WAL journal mode for better concurrency (default: True).
     """
     source_label: str = "SQLITE"
+    # Tier-promotion hint: SQLite's row/blob handling degrades on
+    # multi-hundred-MB values, so the tiered pipeline skips it past
+    # this cap. Bare-backend writes are not gated.
+    max_size_bytes: int | None = 100 * 1024 * 1024
 
     def __init__(self, db_path: str = '.cash/cache.db', default_ttl: int = None,
                  max_size_bytes: int = None, wal_mode: bool = True):

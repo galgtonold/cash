@@ -91,7 +91,10 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 key, type(self.backends[0]).__name__, e,
             )
 
-        # Check promotion for subsequent tiers
+        # Check promotion for subsequent tiers. The promotion decision is
+        # made per-tier so a single set() can land in some tiers and skip
+        # others — e.g. a 20 MB DataFrame goes to RAM + DISK but skips
+        # Redis (10 MB cap).
         if len(self.backends) > 1:
             exec_time = metadata.get('execution_time', 0)
             size = metadata.get('size', 0)
@@ -99,15 +102,27 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # Check if force_persist is set via @cash:persist annotation
             force_persist = metadata.get('force_persist', False)
 
-            if force_persist or self.promotion_policy(exec_time, size):
-                for i in range(1, len(self.backends)):
-                    backend = self.backends[i]
-                    try:
-                        backend.set(key, value, metadata, serializer)
-                        _label = getattr(type(backend), 'source_label', None) or type(backend).__name__
-                        stored_destinations.append(_label)
-                    except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
-                        logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
+            # Universal compute floor — same for every tier past tier 0.
+            past_compute_floor = force_persist or self.promotion_policy(exec_time, size)
+
+            for i in range(1, len(self.backends)):
+                backend = self.backends[i]
+                if not past_compute_floor:
+                    continue
+                cap = getattr(type(backend), 'max_size_bytes', None)
+                if cap is not None and size and size > cap:
+                    # This tier doesn't want objects this large.
+                    logger.debug(
+                        "[TIERED] Skipping %s for key %r: size %d > cap %d",
+                        type(backend).__name__, key, size, cap,
+                    )
+                    continue
+                try:
+                    backend.set(key, value, metadata, serializer)
+                    _label = getattr(type(backend), 'source_label', None) or type(backend).__name__
+                    stored_destinations.append(_label)
+                except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
+                    logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
 
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:
