@@ -26,7 +26,11 @@ from .backends.serialization import get_serializer
 from .backends.tiered_backend import TieredBackend
 from .config import CashConfig, get_config
 from .data_source import DataSource
-from .exceptions import CacheExpiredError, CashCacheIneffectiveWarning
+from .exceptions import (
+    CacheExpiredError,
+    CashCacheIneffectiveWarning,
+    CashCacheStoreFailedWarning,
+)
 from .graph import DependencyGraph
 from .notebook.analysis import CodeAnalyzer
 
@@ -966,7 +970,15 @@ class Cash:
 
             self.backend.set(cache_key, result, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
-            logger.warning("Could not cache result for %s: %s", func_name, e)
+            backend_name = type(self.backend).__name__
+            self._warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "",
+                f"@cash.cache on {func_name}: backend {backend_name} failed to store "
+                f"result ({type(e).__name__}: {e}). Compute succeeded; next call will recompute.",
+                stacklevel=6,
+            )
 
     def cleanup(self, max_age: int | None = None) -> int:
         """Remove expired items from the cache.
