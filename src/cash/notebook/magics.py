@@ -862,10 +862,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             code = m.get('code', '')
             status = m.get('status', 'computed')
             duration_ms = m.get('execution_time', 0.0) * 1000
-            # NOTE: never fall back to ``m.get('rich_outputs')`` (or the legacy
-            # ``m.get('outputs')`` it replaced) — those hold IPython rich-display
-            # objects, NOT variable names. F-01 (commit e739134) fixed the same
-            # anti-pattern in the badge view; the audit path needs the same care.
+            # ``rich_outputs`` holds IPython rich-display objects, NOT variable
+            # names — never source variable names from it.
             outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('evaluated_vars', [])
             inputs_list = list(m.get('inputs', []))
             # Outputs may contain rich-display dicts; provenance/audit only

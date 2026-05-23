@@ -120,9 +120,7 @@ class StatementRestorer:
                 restored_vars = payload['variables']
                 stdout = payload.get('stdout', '')
                 stderr = payload.get('stderr', '')
-                # Prefer the new key but fall back to legacy 'outputs' so
-                # existing on-disk caches still hydrate their rich output.
-                rich_outputs = payload.get('rich_outputs', payload.get('outputs', []))
+                rich_outputs = payload.get('rich_outputs', [])
                 rng_state = payload.get('rng_state')
                 if rng_state:
                     if self.debug:

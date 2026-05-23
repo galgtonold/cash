@@ -803,9 +803,7 @@ class StatementProcessor:
             if isinstance(payload, dict) and 'variables' in payload:
                 metrics['stdout'] = payload.get('stdout', '')
                 metrics['stderr'] = payload.get('stderr', '')
-                # Read both the new key and the legacy 'outputs' key so old
-                # on-disk caches keep restoring their rich display data.
-                metrics['rich_outputs'] = payload.get('rich_outputs', payload.get('outputs', []))
+                metrics['rich_outputs'] = payload.get('rich_outputs', [])
             else:
                 metrics['stdout'] = ''
                 metrics['stderr'] = ''
