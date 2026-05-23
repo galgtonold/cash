@@ -185,3 +185,26 @@ def test_resolve_key_exception_emits_ineffective_warning(tmp_path):
     assert "_BoxedThing" in msg
     assert "ValueError" in msg
     assert "cache-key generation raised" in msg
+
+
+def test_dynamic_dep_resolver_error_emits_warning(tmp_path):
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    def bad_resolver(*args, **kwargs):
+        raise RuntimeError("resolver oops")
+
+    @c.cache(dynamic_depends_on=bad_resolver)
+    def f(x):
+        return x * 2
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        result = f(7)
+        f(8)  # second call — should NOT re-warn (same (func, '')).
+
+    assert result == 14  # function still runs through despite resolver failure
+    ineffective = [w for w in captured if issubclass(w.category, CashCacheIneffectiveWarning)]
+    assert len(ineffective) == 1
+    msg = str(ineffective[0].message)
+    assert "dynamic_depends_on" in msg
+    assert "RuntimeError" in msg

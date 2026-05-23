@@ -575,8 +575,16 @@ class Cash:
                             dynamic_state_parts.append(str(ds._get_mtime()))
                         else:
                             dynamic_state_parts.append(str(ds.has_changed()))
-            except (OSError, TypeError, ValueError, AttributeError) as e:
-                logger.warning("Dynamic dependency resolution failed for %s: %s", func_name, e)
+            except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as e:
+                self._warn_once(
+                    CashCacheIneffectiveWarning,
+                    func_name,
+                    "",
+                    f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
+                    f"{type(e).__name__} ({e}). Call will not include this dependency "
+                    f"in the cache key — results may be stale if the underlying data changes.",
+                    stacklevel=6,
+                )
 
         if dynamic_state_parts:
             # Sort to ensure deterministic order if multiple sources
