@@ -47,7 +47,7 @@ class NotebookSimulator:
     references (lineage dicts, ``executed_*`` trackers) so writes are visible
     to both. The Phase-1 forward simulation / cache-probing methods live on
     :class:`VirtualLineage`; ``NotebookSimulator`` delegates to it and exposes
-    property/method forwarders for the legacy seams.
+    property/method forwarders so existing call sites keep their shape.
     """
 
     def __init__(
