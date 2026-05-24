@@ -674,6 +674,34 @@ class Cash:
                 return False
         return True
 
+    def _wrap_iterator_hit(
+        self,
+        cache_key: str,
+        metadata: dict[str, Any] | None,
+        hit: Any,
+    ) -> Any:
+        """Wrap a cache-hit value in the right iterator class.
+
+        Reads ``metadata['iterator_storage']`` to decide:
+        - ``'chunked'`` → returns a fresh ``_ChunkedCachedIterator``.
+        - legacy ``materialized_iterator=True`` (v1 entries) → returns
+          ``_ListCachedIterator(hit)``.
+        - neither → returns *hit* directly (non-iterator return type).
+
+        Used by all three cache-hit paths in this module:
+        :meth:`_make_wrapper` (sync unlocked), :meth:`_compute_with_lock`
+        (sync locked re-read), and :meth:`_make_async_wrapper`. Keeping
+        the dispatch in one place ensures the three paths can't drift.
+        """
+        if metadata:
+            storage = metadata.get('iterator_storage')
+            if storage == 'chunked':
+                n_chunks = metadata.get('n_chunks', 0)
+                return _ChunkedCachedIterator(self, cache_key, n_chunks)
+            if metadata.get('materialized_iterator'):
+                return _ListCachedIterator(hit)
+        return hit
+
     def _make_wrapper(
         self,
         func: Callable,
@@ -702,15 +730,7 @@ class Cash:
             metadata, cached_data = self.backend.get(cache_key)
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
             if hit is not _CACHE_MISS:
-                if metadata:
-                    storage = metadata.get('iterator_storage')
-                    if storage == 'chunked':
-                        n_chunks = metadata.get('n_chunks', 0)
-                        return _ChunkedCachedIterator(self, cache_key, n_chunks)
-                    if metadata.get('materialized_iterator'):
-                        # Legacy v1 entry — value is the full list.
-                        return _ListCachedIterator(hit)
-                return hit
+                return self._wrap_iterator_hit(cache_key, metadata, hit)
 
             def _compute_and_store() -> Any:
                 # Wrap the function call in FileAccessTracker so any
@@ -865,14 +885,7 @@ class Cash:
                 args_hash, func_name, ttl,
             )
             if hit is not _CACHE_MISS:
-                if metadata:
-                    storage = metadata.get('iterator_storage')
-                    if storage == 'chunked':
-                        n_chunks = metadata.get('n_chunks', 0)
-                        return _ChunkedCachedIterator(self, cache_key, n_chunks)
-                    if metadata.get('materialized_iterator'):
-                        return _ListCachedIterator(hit)
-                return hit
+                return self._wrap_iterator_hit(cache_key, metadata, hit)
 
             if self.use_locking:
                 self._warn_once(
@@ -1284,7 +1297,7 @@ class Cash:
                     try:
                         self._validate_ttl(locked_metadata, ttl)
                         self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
-                        return locked_data
+                        return self._wrap_iterator_hit(cache_key, locked_metadata, locked_data)
                     except (TypeError, KeyError, CacheExpiredError):
                         logger.debug("Cache validation failed under lock for %s", func_name)
                 return compute_and_store()
