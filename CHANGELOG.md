@@ -40,6 +40,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Changing the body of a registered hasher invalidates dependent
   cache entries, even when the new hasher's output coincidentally
   matches.
+- `@cash.cache(chunk_max_items=..., chunk_max_bytes=...)` — iterator
+  results are now stored in chunks. Defaults are 1M items and 1GB
+  bytes; iterators below these thresholds land in a single chunk and
+  behave indistinguishably from a list. Larger iterators are split
+  across multiple backend keys and the retrieval iterator reads them
+  lazily. RAM bounded by chunk size on both write and read. Chunked
+  storage is on by default with no opt-in required.
 
 ### Changed
 - Ineffective-cache and store-failure events now emit
@@ -50,6 +57,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FileAccessTracker` now uses `contextvars.ContextVar` for active-
   tracker dispatch. Concurrent `asyncio.gather` and threaded callers
   are correctly isolated. No user-facing API change.
+- `cache_if` interaction with iterator-returning functions: predicate
+  is honored when the result fits in a single chunk. For multi-chunk
+  results, `cache_if` is bypassed and a one-shot
+  `CashCacheIneffectiveWarning` fires at the chunk_0 → chunk_1
+  transition. To keep gating active on large iterators, lower
+  `chunk_max_items` / `chunk_max_bytes` or materialize manually.
+
+### Backward compatibility
+- v1 iterator cache entries (written by 0.5.0b2 prior to chunked
+  storage, with `metadata['materialized_iterator']=True`) continue
+  to read correctly via a legacy code path. Old entries are
+  eventually replaced by chunked entries on the next compute miss;
+  no migration is required.
+- The `CachedIterator` class has been renamed to `_ListCachedIterator`
+  internally. The old name is kept as a deprecation-friendly alias
+  in `cash.core` for one release and will be removed in 0.6.0.
 
 ### Not yet supported
 - `@cash.cache` on `async def gen(): yield ...` (async generators)
