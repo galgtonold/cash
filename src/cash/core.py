@@ -389,6 +389,8 @@ class Cash:
         file_depends_on: str | list[str] | None = ...,
         ttl: int | None = ...,
         cache_if: Callable[[Any], bool] | None = ...,
+        chunk_max_items: int = ...,
+        chunk_max_bytes: int = ...,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
     def cache(
@@ -400,6 +402,8 @@ class Cash:
         file_depends_on: str | list[str] | None = None,
         ttl: int | None = None,
         cache_if: Callable[[Any], bool] | None = None,
+        chunk_max_items: int = 1_000_000,
+        chunk_max_bytes: int = 1_000_000_000,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
         """Decorator to cache a function's return value.
 
@@ -441,6 +445,18 @@ class Cash:
                 argument with no registered hasher, key-generation
                 error), the predicate is not consulted — nothing is
                 cached on that fallback path either.
+            chunk_max_items: When the decorated function returns an
+                iterator, close the current chunk after this many
+                items. Default ``1_000_000``. A chunk closes when
+                either ``chunk_max_items`` or ``chunk_max_bytes`` is
+                reached (whichever comes first). For iterators below
+                both thresholds, the entire result lands in a single
+                chunk and storage is indistinguishable from a list.
+            chunk_max_bytes: When the decorated function returns an
+                iterator, close the current chunk after this many
+                bytes (estimated via ``estimate_object_size``).
+                Default ``1_000_000_000`` (1 GB). See
+                ``chunk_max_items`` for the joint behavior.
 
         Returns:
             The decorated function with caching behavior.
@@ -454,6 +470,7 @@ class Cash:
             return lambda f: self.cache(
                 f, depends_on=depends_on, dynamic_depends_on=dynamic_depends_on,
                 file_depends_on=file_depends_on, ttl=ttl, cache_if=cache_if,
+                chunk_max_items=chunk_max_items, chunk_max_bytes=chunk_max_bytes,
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
@@ -471,9 +488,15 @@ class Cash:
             return func
 
         if inspect.iscoroutinefunction(func):
-            wrapper = self._make_async_wrapper(func, func_name, dynamic_depends_on, ttl, cache_if)
+            wrapper = self._make_async_wrapper(
+                func, func_name, dynamic_depends_on, ttl, cache_if,
+                chunk_max_items, chunk_max_bytes,
+            )
         else:
-            wrapper = self._make_wrapper(func, func_name, dynamic_depends_on, ttl, cache_if)
+            wrapper = self._make_wrapper(
+                func, func_name, dynamic_depends_on, ttl, cache_if,
+                chunk_max_items, chunk_max_bytes,
+            )
         return self._wrap_with_stats(func, func_name, wrapper)
 
     def _register_func(
@@ -658,6 +681,8 @@ class Cash:
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
         ttl: int | None,
         cache_if: Callable[[Any], bool] | None = None,
+        chunk_max_items: int = 1_000_000,
+        chunk_max_bytes: int = 1_000_000_000,
     ) -> Callable:
         """Build and return the core caching wrapper for *func*."""
 
@@ -745,6 +770,8 @@ class Cash:
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
         ttl: int | None,
         cache_if: Callable[[Any], bool] | None = None,
+        chunk_max_items: int = 1_000_000,
+        chunk_max_bytes: int = 1_000_000_000,
     ) -> Callable:
         """Build and return the async caching wrapper for *func*.
 

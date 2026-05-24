@@ -402,3 +402,34 @@ def test_list_cached_iterator_alias_still_imports():
     from cash.core import _ListCachedIterator, CachedIterator
     # The alias must point at the new internal class.
     assert CachedIterator is _ListCachedIterator
+
+
+def test_chunk_max_items_kwarg_accepted(tmp_path):
+    """Cash.cache(chunk_max_items=N) is a valid signature and does not
+    break the existing iterator-caching behavior."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_items=100)
+    def gen():
+        n["calls"] += 1
+        yield from range(5)
+
+    assert list(gen()) == [0, 1, 2, 3, 4]
+    assert list(gen()) == [0, 1, 2, 3, 4]
+    assert n["calls"] == 1
+
+
+def test_chunk_max_bytes_kwarg_accepted(tmp_path):
+    """Cash.cache(chunk_max_bytes=N) is a valid signature."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_bytes=1024)
+    def gen():
+        n["calls"] += 1
+        yield from range(5)
+
+    assert list(gen()) == [0, 1, 2, 3, 4]
+    assert list(gen()) == [0, 1, 2, 3, 4]
+    assert n["calls"] == 1
