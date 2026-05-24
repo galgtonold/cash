@@ -750,7 +750,7 @@ class Cash:
                 if _is_one_shot_iterator(res):
                     manifest, single_chunk_buffer = self._write_chunks(
                         res, cache_key, chunk_max_items, chunk_max_bytes,
-                        func_name, cache_if,
+                        func_name, cache_if, ttl=ttl,
                     )
                     execution_time = time.perf_counter() - call_start
 
@@ -769,7 +769,7 @@ class Cash:
 
                         if should_cache and single_chunk_buffer:
                             # Write the one chunk now that the predicate approved.
-                            self._write_one_chunk(cache_key, 0, single_chunk_buffer)
+                            self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
                             self._store_chunked_manifest(
                                 cache_key, func_name, manifest, metadata,
                                 ttl, current_state_hash, args_hash,
@@ -913,7 +913,7 @@ class Cash:
                 # (user → stats_wrapper → wrapper → _write_chunks → _warn_once).
                 manifest, single_chunk_buffer = self._write_chunks(
                     res, cache_key, chunk_max_items, chunk_max_bytes,
-                    func_name, cache_if, warn_stacklevel=5,
+                    func_name, cache_if, ttl=ttl, warn_stacklevel=5,
                 )
                 execution_time = time.perf_counter() - call_start
 
@@ -930,7 +930,7 @@ class Cash:
                             should_cache = False
 
                     if should_cache and single_chunk_buffer:
-                        self._write_one_chunk(cache_key, 0, single_chunk_buffer)
+                        self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
                         self._store_chunked_manifest(
                             cache_key, func_name, manifest, metadata,
                             ttl, current_state_hash, args_hash,
@@ -1536,6 +1536,7 @@ class Cash:
         func_name: str,
         cache_if: Callable[[Any], bool] | None,
         *,
+        ttl: int | None = None,
         warn_stacklevel: int = 6,
     ) -> tuple[dict[str, Any], list[Any] | None]:
         """Stream *iterator* into chunks, writing each chunk to the backend.
@@ -1595,7 +1596,7 @@ class Cash:
                         f"thresholds or materialize the iterator manually.",
                         stacklevel=warn_stacklevel,
                     )
-                self._write_one_chunk(cache_key, chunk_index, buffer)
+                self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
                 buffer = []
                 buffer_bytes = 0
                 chunk_index += 1
@@ -1635,7 +1636,7 @@ class Cash:
                     f"thresholds or materialize the iterator manually.",
                     stacklevel=warn_stacklevel,
                 )
-            self._write_one_chunk(cache_key, chunk_index, buffer)
+            self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
             chunk_index += 1
 
         manifest = {
@@ -1649,13 +1650,16 @@ class Cash:
         cache_key: str,
         chunk_index: int,
         chunk_buffer: list[Any],
+        ttl: int | None = None,
     ) -> None:
         """Write a single chunk to the backend.
 
         The chunk's metadata is minimal — the authoritative manifest
         lives at the canonical cache_key. We need *some* metadata for
         the serializer to round-trip correctly; the timestamp and the
-        key are enough.
+        key are enough. We also propagate the manifest's ``ttl`` so
+        ``Cash.cleanup()`` (without a ``max_age`` argument) can reclaim
+        expired chunks alongside the expired manifest.
         """
         chunk_key = f"{cache_key}:chunk_{chunk_index}"
         serializer = get_serializer(chunk_buffer)
@@ -1664,6 +1668,7 @@ class Cash:
             "timestamp": time.time(),
             "serializer_cls": type(serializer),
             "execution_time": 0.0,
+            "ttl": ttl,
         }
         try:
             self.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
