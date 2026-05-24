@@ -84,9 +84,11 @@ def reset_session() -> None:
 
     * It doesn't clear the on-disk cache directory — that's a separate
       operation (``Cash().clear_cache()`` or ``%cash_clear``).
-    * It doesn't unwind any ``FileAccessTracker`` monkey-patches that
-      are currently in flight — those self-heal on the next tracker
-      ``__enter__`` (see ``cash.notebook.file_tracker._unwrap_to_real``).
+    * It doesn't touch the ``FileAccessTracker`` dispatcher wrappers
+      installed on ``builtins.open``, ``pandas.read_csv``, and other
+      tracked I/O entry points. Those are permanent for the process
+      lifetime and tracker-agnostic — they no-op when no tracker is
+      active (see ``cash.notebook.file_tracker._active_tracker``).
     """
     global _global_cash
     _global_cash = None
