@@ -78,6 +78,40 @@ or another `register_hasher` entry). So a method on a `Loader`
 taking a pandas `DataFrame` benefits from both your `Loader` hasher
 and cash's built-in pandas hasher with no extra work.
 
+## Caching iterator-returning functions
+
+`@c.cache` on a function that returns a one-shot iterator (a generator,
+`map`/`filter` result, or custom iterator) eagerly materializes the
+iterator's values into a list, caches the list, and returns a wrapper
+that re-exposes the iterator protocol. Each call produces a fresh,
+independent iterator over the cached values:
+
+```python
+@c.cache
+def primes_below(n):
+    for p in slow_prime_generator():
+        if p >= n:
+            return
+        yield p
+
+result = primes_below(1000)        # first call: materializes + caches
+for p in result:                    # iterate freely
+    ...
+
+result2 = primes_below(1000)        # cache hit; fresh iterator
+list(result2)                       # gets the cached values
+```
+
+The trade-off: materialization is eager. If your generator is infinite,
+streams a multi-gigabyte database query, or is lazy-by-design (e.g. a
+search that the caller stops at the first match), do not decorate it
+with `@c.cache` — your process will hang or run out of memory at
+materialization time.
+
+The cached value is a `list` under the hood; the wrapper returned to
+your code does NOT support generator-specific methods (`send`,
+`throw`). Calling those raises `AttributeError`.
+
 ## Related
 
 - [`@cash.cache` API reference](api_reference.md)
