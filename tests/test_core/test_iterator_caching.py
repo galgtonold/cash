@@ -1,0 +1,251 @@
+"""@cash.cache on functions that return iterators/generators.
+
+The decorator materializes the iterator into a list, caches the list,
+and returns a CachedIterator wrapper that preserves the iterator
+protocol. Each call yields a fresh, independent iterator over the
+cached values.
+"""
+from __future__ import annotations
+
+import asyncio
+import types
+
+import pytest
+
+from cash import Cash
+
+
+def test_generator_function_caches(tmp_path):
+    """A generator-returning function is materialized, cached, and
+    subsequent calls return an iterator over the same values without
+    recomputing."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache
+    def gen(stop):
+        n["calls"] += 1
+        for i in range(stop):
+            yield i * 10
+
+    r1 = list(gen(5))
+    assert r1 == [0, 10, 20, 30, 40]
+    assert n["calls"] == 1
+
+    r2 = list(gen(5))  # hit
+    assert r2 == [0, 10, 20, 30, 40]
+    assert n["calls"] == 1, f"expected cache hit, got calls={n['calls']}"
+
+
+def test_generator_returns_independent_iterators(tmp_path):
+    """Two calls produce independent iterators over the same values
+    (consuming one does not affect the other)."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def gen():
+        yield 1
+        yield 2
+        yield 3
+
+    g1 = gen()
+    g2 = gen()
+    assert next(g1) == 1
+    assert next(g2) == 1
+    assert next(g1) == 2
+    assert next(g2) == 2
+    assert next(g1) == 3
+    with pytest.raises(StopIteration):
+        next(g1)
+    # g2 still has one element left
+    assert next(g2) == 3
+
+
+def test_map_filter_results_cached(tmp_path):
+    """map() and filter() results are one-shot iterators; they should
+    also be detected and materialized."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache
+    def double_evens(seq):
+        n["calls"] += 1
+        return map(lambda x: x * 2, filter(lambda x: x % 2 == 0, seq))
+
+    assert list(double_evens([1, 2, 3, 4, 5])) == [4, 8]
+    assert list(double_evens([1, 2, 3, 4, 5])) == [4, 8]
+    assert n["calls"] == 1
+
+
+def test_returned_value_satisfies_iterator_protocol(tmp_path):
+    """The returned wrapper must satisfy iter(x) is x — the iterator
+    protocol's reflexivity test."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def gen():
+        yield from range(3)
+
+    result = gen()
+    # iter(x) is x — what the user expects from a generator/iterator.
+    assert iter(result) is result, (
+        f"cached iterator must satisfy iter(x) is x; got type {type(result).__name__}"
+    )
+
+
+def test_send_raises_attribute_error(tmp_path):
+    """The wrapper does not support generator.send() — raises AttributeError
+    with a message pointing at caching as the cause."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def gen():
+        yield 1
+        yield 2
+
+    result = gen()
+    with pytest.raises(AttributeError, match="send"):
+        result.send(None)
+
+
+def test_throw_raises_attribute_error(tmp_path):
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def gen():
+        yield 1
+
+    result = gen()
+    with pytest.raises(AttributeError, match="throw"):
+        result.throw(ValueError())
+
+
+def test_close_stops_iteration(tmp_path):
+    """close() on the wrapper stops further iteration (subsequent next
+    raises StopIteration)."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def gen():
+        yield 1
+        yield 2
+        yield 3
+
+    result = gen()
+    assert next(result) == 1
+    result.close()
+    with pytest.raises(StopIteration):
+        next(result)
+
+
+def test_collections_pass_through_unchanged(tmp_path):
+    """list, dict, set, tuple, str — iterable but NOT one-shot — must
+    be cached as-is, not wrapped."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def f_list():
+        return [1, 2, 3]
+
+    @c.cache
+    def f_dict():
+        return {"a": 1, "b": 2}
+
+    @c.cache
+    def f_set():
+        return {1, 2, 3}
+
+    @c.cache
+    def f_tuple():
+        return (1, 2, 3)
+
+    @c.cache
+    def f_str():
+        return "hello"
+
+    # All should hit on the second call and return the same type as
+    # they did on the first call.
+    for fn, expected_type in (
+        (f_list, list), (f_dict, dict), (f_set, set),
+        (f_tuple, tuple), (f_str, str),
+    ):
+        r1 = fn()
+        r2 = fn()
+        assert type(r1) is expected_type
+        assert type(r2) is expected_type
+        assert r1 == r2
+
+
+def test_empty_generator_caches(tmp_path):
+    """An empty generator (yields nothing) still goes through the
+    materialize-and-cache path and returns an empty iterator on hit."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache
+    def gen():
+        n["calls"] += 1
+        return
+        yield  # makes it a generator function syntactically
+
+    assert list(gen()) == []
+    assert list(gen()) == []
+    assert n["calls"] == 1
+
+
+async def test_async_function_returning_iterator(tmp_path):
+    """An async def that RETURNS a sync iterator (not yields — that's an
+    async generator, handled separately at decoration time) should also
+    have its iterator materialized and cached."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache
+    async def make_iter(stop):
+        n["calls"] += 1
+        await asyncio.sleep(0)
+        return (i for i in range(stop))
+
+    r1 = list(await make_iter(4))
+    assert r1 == [0, 1, 2, 3]
+    r2 = list(await make_iter(4))
+    assert r2 == [0, 1, 2, 3]
+    assert n["calls"] == 1
+
+
+def test_cache_persists_across_instances(tmp_path):
+    """The cached list (not the wrapper) is what's persisted — so a
+    fresh Cash instance pointed at the same cache_dir should still
+    return the values via a fresh CachedIterator wrapper.
+
+    Uses an explicit FileBackend so we don't depend on TieredBackend's
+    smart-persistence floor (which gates short calls from reaching disk).
+    """
+    from cash.backends.file_backend import FileBackend
+    store = str(tmp_path / "store")
+    c1 = Cash(backend=FileBackend(store, flush_interval=0), register_magic=False)
+    n = {"calls": 0}
+
+    # Define the function inside a helper so __qualname__ is stable
+    # across the two Cash instances.
+    def _make(c, n):
+        @c.cache
+        def gen():
+            n["calls"] += 1
+            yield from [10, 20, 30]
+        return gen
+
+    g1 = _make(c1, n)
+    assert list(g1()) == [10, 20, 30]
+    c1.shutdown()
+
+    # New instance, same backend store
+    c2 = Cash(backend=FileBackend(store, flush_interval=0), register_magic=False)
+    g2 = _make(c2, n)
+    r = list(g2())
+    assert r == [10, 20, 30]
+    # The first instance computed once; the second should hit the
+    # persisted list and not recompute.
+    assert n["calls"] == 1, (
+        f"second instance should have hit the persisted cache (calls={n['calls']})"
+    )

@@ -47,6 +47,67 @@ T = TypeVar("T")
 
 __all__ = ["Cash"]
 
+
+class CachedIterator:
+    """Lazy iterator wrapper over a cached list.
+
+    Used by :meth:`Cash.cache` when a decorated function returns a
+    one-shot iterator (generator, ``map``/``filter`` result, custom
+    iterator). The function's yielded values are materialized into
+    a list and cached; on each call, a fresh ``CachedIterator`` is
+    returned that streams the cached list.
+
+    Iterator protocol is fully preserved: ``iter(x) is x``, ``__next__``,
+    and ``close()`` all work. Generator-specific protocol (``send``,
+    ``throw``) is NOT supported — a cached iterator is a replay of
+    materialized values, not a coroutine. Calling those methods raises
+    ``AttributeError`` with a message that points at caching as the
+    cause.
+    """
+
+    __slots__ = ("_iter",)
+
+    def __init__(self, items):
+        self._iter = iter(items)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._iter)
+
+    def close(self):
+        """Stop iteration. Subsequent ``next()`` raises ``StopIteration``."""
+        self._iter = iter(())
+
+    def send(self, value):
+        raise AttributeError(
+            "cached generator: .send() is not supported. The cached "
+            "iterator replays a previously materialized list. If you "
+            "need send() semantics, the function cannot be cached."
+        )
+
+    def throw(self, *args, **kwargs):
+        raise AttributeError(
+            "cached generator: .throw() is not supported. The cached "
+            "iterator replays a previously materialized list."
+        )
+
+
+def _is_one_shot_iterator(value: Any) -> bool:
+    """Return True if *value* is its own iterator (a one-shot consumable).
+
+    Matches Python generators, ``map``/``filter``/``zip`` results, and
+    custom iterators that return ``self`` from ``__iter__``. Returns
+    False for collections (``list``/``dict``/``set``/``tuple``/``str``/
+    ``range``) which are iterable but return fresh iterators on
+    ``iter()`` — those are safely cacheable as-is.
+    """
+    try:
+        return iter(value) is value
+    except TypeError:
+        return False
+
 class Cash:
     """Smart caching framework for Python functions and Jupyter notebooks.
 
@@ -525,6 +586,8 @@ class Cash:
             metadata, cached_data = self.backend.get(cache_key)
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
             if hit is not _CACHE_MISS:
+                if metadata and metadata.get('materialized_iterator'):
+                    return CachedIterator(hit)
                 return hit
 
             def _compute_and_store() -> Any:
@@ -540,13 +603,22 @@ class Cash:
                 accessed = tracker.get_accessed_files()
                 auto_file_deps = snapshot_file_deps(accessed) if accessed else None
 
-                self._attach_lineage(res, cache_key)
+                # Detect and materialize one-shot iterators so they can
+                # be cached. The list is what gets stored; the user sees
+                # a CachedIterator wrapper preserving the iterator protocol.
+                materialized = _is_one_shot_iterator(res)
+                if materialized:
+                    cached_value = list(res)
+                else:
+                    cached_value = res
+
+                self._attach_lineage(cached_value, cache_key)
                 execution_time = time.perf_counter() - call_start
 
                 should_cache = True
                 if cache_if is not None:
                     try:
-                        should_cache = bool(cache_if(res))
+                        should_cache = bool(cache_if(cached_value))
                     except Exception as e:
                         # Buggy user predicate must not fail the call.
                         # Treat as "do not cache" and log for diagnostics.
@@ -558,12 +630,16 @@ class Cash:
 
                 if should_cache:
                     self._store_in_cache(
-                        cache_key, func_name, res, metadata, ttl,
+                        cache_key, func_name, cached_value, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
+                        materialized_iterator=materialized,
                     )
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=execution_time, args_hash=args_hash, cache_key=cache_key)
-                return res
+
+                if materialized:
+                    return CachedIterator(cached_value)
+                return cached_value
 
             if self.use_locking:
                 return self._compute_with_lock(cache_key, func_name, ttl, args_hash, call_start, _compute_and_store)
@@ -615,6 +691,8 @@ class Cash:
                 args_hash, func_name, ttl,
             )
             if hit is not _CACHE_MISS:
+                if metadata and metadata.get('materialized_iterator'):
+                    return CachedIterator(hit)
                 return hit
 
             if self.use_locking:
@@ -636,13 +714,22 @@ class Cash:
             accessed = tracker.get_accessed_files()
             auto_file_deps = snapshot_file_deps(accessed) if accessed else None
 
-            self._attach_lineage(res, cache_key)
+            # Detect and materialize one-shot iterators so they can be
+            # cached. The list is what gets stored; the user sees a
+            # CachedIterator wrapper preserving the iterator protocol.
+            materialized = _is_one_shot_iterator(res)
+            if materialized:
+                cached_value = list(res)
+            else:
+                cached_value = res
+
+            self._attach_lineage(cached_value, cache_key)
             execution_time = time.perf_counter() - call_start
 
             should_cache = True
             if cache_if is not None:
                 try:
-                    should_cache = bool(cache_if(res))
+                    should_cache = bool(cache_if(cached_value))
                 except Exception as e:
                     # Buggy user predicate must not fail the call.
                     # Treat as "do not cache" and log for diagnostics.
@@ -654,16 +741,19 @@ class Cash:
 
             if should_cache:
                 self._store_in_cache(
-                    cache_key, func_name, res, metadata, ttl,
+                    cache_key, func_name, cached_value, metadata, ttl,
                     current_state_hash, args_hash, execution_time,
                     auto_file_deps=auto_file_deps,
+                    materialized_iterator=materialized,
                 )
             self._log_decorator_call(
                 func_name, cache_hit=False,
                 execution_time=execution_time,
                 args_hash=args_hash, cache_key=cache_key,
             )
-            return res
+            if materialized:
+                return CachedIterator(cached_value)
+            return cached_value
 
         return wrapper
 
@@ -1150,6 +1240,7 @@ class Cash:
         args_hash: str,
         execution_time: float = 0.0,
         auto_file_deps: dict[str, dict[str, float]] | None = None,
+        materialized_iterator: bool = False,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -1173,6 +1264,12 @@ class Cash:
                 # Each entry: path → {'mtime': float, 'size': int}
                 # Validated on subsequent get() via _auto_file_deps_fresh.
                 metadata['auto_file_deps'] = auto_file_deps
+            if materialized_iterator:
+                # The cached value is a list materialized from a one-shot
+                # iterator. On cache hit, the wrapper re-wraps the list
+                # in a CachedIterator so the user-facing protocol is
+                # preserved across the cache boundary.
+                metadata['materialized_iterator'] = True
 
             self.backend.set(cache_key, result, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
