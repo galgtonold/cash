@@ -863,3 +863,108 @@ def test_chunked_persists_across_instances(tmp_path):
         f"second instance must hit the chunked cache (calls={n_calls['x']})"
     )
     c2.shutdown()
+
+
+def test_chunked_storage_works_under_use_locking(tmp_path):
+    """When use_locking=True, a locked-path cache hit must return a proper
+    iterator wrapper, not the raw manifest dict.
+
+    Regression test for the bug where _compute_with_lock returned
+    locked_data directly (the manifest dict) for chunked entries,
+    bypassing the iterator_storage dispatch.
+
+    We simulate concurrency by pre-populating the cache, then calling
+    the decorated function — the wrapper's first backend.get returns a
+    fresh manifest, AND the locked re-read does too (TieredBackend RAM
+    tier is consistent). The locked path's return value must still be
+    a _ChunkedCachedIterator, not a dict.
+    """
+    from cash.core import _ChunkedCachedIterator, _ListCachedIterator
+
+    c = Cash(cache_dir=str(tmp_path), register_magic=False, use_locking=True)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_items=10)
+    def gen():
+        n["calls"] += 1
+        yield from range(25)
+
+    # Populate.
+    r1 = list(gen())
+    assert r1 == list(range(25))
+    assert n["calls"] == 1
+
+    # Most direct check: assert the returned value is a chunked iterator,
+    # not a dict.
+    result = gen()
+    assert not isinstance(result, dict), (
+        f"got raw manifest dict instead of iterator wrapper: {type(result).__name__}"
+    )
+    assert isinstance(result, (_ChunkedCachedIterator, _ListCachedIterator)), (
+        f"expected iterator wrapper, got {type(result).__name__}"
+    )
+    assert list(result) == list(range(25))
+    assert n["calls"] == 1  # still a hit
+
+
+def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
+    """Surgical reproducer for the _compute_with_lock dispatch bug.
+
+    The bug: _compute_with_lock does a double-checked re-read after
+    acquiring the lock. On a hit, it returned `locked_data` directly,
+    bypassing the metadata['iterator_storage'] dispatch — for chunked
+    entries the user got the raw manifest dict.
+
+    We patch the wrapper's first backend.get to return (None, None) so
+    the locked path is forced. The actual backend still has the entry,
+    so the locked re-read finds it. Without the fix, the user sees the
+    manifest dict; with the fix, they see a _ChunkedCachedIterator.
+    """
+    from unittest.mock import patch
+    from cash.core import _ChunkedCachedIterator
+
+    c = Cash(cache_dir=str(tmp_path), register_magic=False, use_locking=True)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_items=10)
+    def gen():
+        n["calls"] += 1
+        yield from range(25)
+
+    # Populate.
+    list(gen())
+    assert n["calls"] == 1
+
+    # Force the locked path: the wrapper's first backend.get returns
+    # (None, None), so the wrapper does NOT short-circuit at the hit
+    # branch. It falls into the compute path, which under use_locking
+    # delegates to _compute_with_lock, which does its OWN backend.get
+    # (the real one, not patched). The real one finds the entry. The
+    # return value must be a proper iterator wrapper.
+    real_get = c.backend.get
+    call_count = {"n": 0}
+
+    def fake_get(key):
+        call_count["n"] += 1
+        # First call (from wrapper's unlocked hit check) returns miss.
+        # Subsequent calls (from _compute_with_lock's locked re-read,
+        # and from _ChunkedCachedIterator's chunk reads) go to the
+        # real backend.
+        if call_count["n"] == 1:
+            return (None, None)
+        return real_get(key)
+
+    with patch.object(c.backend, "get", side_effect=fake_get):
+        result = gen()
+
+    assert not isinstance(result, dict), (
+        f"locked path returned raw manifest dict: {type(result).__name__}"
+    )
+    assert isinstance(result, _ChunkedCachedIterator), (
+        f"expected _ChunkedCachedIterator from locked path, got {type(result).__name__}"
+    )
+    # Iterating should yield the 25 cached items. Mock has been undone
+    # at this point, so chunk reads go through the real backend.
+    assert list(result) == list(range(25))
+    # And no recompute (the entry was already in the cache).
+    assert n["calls"] == 1
