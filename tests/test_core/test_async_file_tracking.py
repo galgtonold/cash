@@ -104,3 +104,90 @@ async def test_async_source_change_invalidates(tmp_path):
     assert r2 == 21, (
         f"async source-change did not invalidate the cache: got {r2}, expected 21"
     )
+
+
+async def test_async_gather_cache_hit_across_tasks(tmp_path):
+    """A second `asyncio.gather` of the same cached async function should
+    HIT the cache populated by the first gather — proven by a call counter,
+    not just a value-equality assertion.
+
+    The first gather has two parallel calls with the same args. Without
+    single-flight locking (out of scope for this release), both may miss
+    and both compute. After the first gather finishes the cache is
+    populated. The second, separately-awaited gather should produce zero
+    new computes.
+    """
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    path = tmp_path / "shared.txt"
+    path.write_text("v1")
+    n = {"calls": 0}
+
+    @c.cache
+    async def load():
+        await asyncio.sleep(0)
+        n["calls"] += 1
+        with open(path) as f:
+            return f.read()
+
+    # First gather populates the cache. With no async single-flight,
+    # both concurrent calls can both miss and both compute. Calls count
+    # after this is 1 or 2 depending on scheduling; we don't pin a
+    # specific value, we just record the baseline.
+    r1, r2 = await asyncio.gather(load(), load())
+    assert r1 == r2 == "v1"
+    initial_calls = n["calls"]
+    assert initial_calls >= 1, "expected at least one compute in the first gather"
+
+    # Second gather — same args, cache populated. Both task contexts
+    # should HIT. Zero new computes.
+    r3, r4 = await asyncio.gather(load(), load())
+    assert r3 == r4 == "v1"
+    assert n["calls"] == initial_calls, (
+        f"second gather recomputed: calls went from {initial_calls} to {n['calls']}. "
+        f"Cross-task cache hit is broken."
+    )
+
+
+async def test_async_invalidation_visible_to_separate_task(tmp_path):
+    """A file mutation made after one task populates the cache must be
+    observed by a SEPARATE async task (not just a sequential follow-up
+    await on the same task).
+
+    Concretely: gather task A → populate → mutate file → gather task B →
+    must miss + recompute → value reflects mutation. Proven via call
+    counter.
+    """
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    path = tmp_path / "shared.txt"
+    path.write_text("v1")
+    n = {"calls": 0}
+
+    @c.cache
+    async def load():
+        await asyncio.sleep(0)
+        n["calls"] += 1
+        with open(path) as f:
+            return f.read()
+
+    # Task A: populate
+    (a_val,) = await asyncio.gather(load())
+    assert a_val == "v1"
+    initial_calls = n["calls"]
+
+    # Mutate file
+    time.sleep(0.05)  # ensure mtime ticks
+    path.write_text("v2")
+    import os
+    future = time.time() + 60
+    os.utime(path, (future, future))
+
+    # Task B (fresh gather, not just a follow-up await): must observe
+    # the mutation and recompute.
+    (b_val,) = await asyncio.gather(load())
+    assert b_val == "v2", (
+        f"fresh task did not pick up the file change: got {b_val!r}"
+    )
+    assert n["calls"] > initial_calls, (
+        f"fresh task did not recompute after file mutation: "
+        f"calls stayed at {n['calls']} (was {initial_calls})"
+    )
