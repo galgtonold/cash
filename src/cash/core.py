@@ -9,6 +9,7 @@ from __future__ import annotations
 import atexit
 import functools
 import hashlib
+import inspect
 import logging
 import pickle
 import threading
@@ -246,7 +247,23 @@ class Cash:
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
-        wrapper = self._make_wrapper(func, func_name, dynamic_depends_on, ttl)
+
+        # Async generators are not cached; warn once and return unwrapped.
+        if inspect.isasyncgenfunction(func):
+            self._warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                "",
+                f"@cash.cache on {func_name}: async generators are not "
+                f"cached in this release. The function is returned unwrapped.",
+                stacklevel=3,
+            )
+            return func
+
+        if inspect.iscoroutinefunction(func):
+            wrapper = self._make_async_wrapper(func, func_name, dynamic_depends_on, ttl)
+        else:
+            wrapper = self._make_wrapper(func, func_name, dynamic_depends_on, ttl)
         return self._wrap_with_stats(func, func_name, wrapper)
 
     def _register_func(
@@ -480,6 +497,85 @@ class Cash:
 
         return wrapper
 
+    def _make_async_wrapper(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        ttl: int | None,
+    ) -> Callable:
+        """Build and return the async caching wrapper for *func*.
+
+        Mirrors :meth:`_make_wrapper` but the wrapper is ``async def``
+        and the underlying ``func()`` invocation is awaited inside a
+        ``FileAccessTracker`` block. Shared helpers (``_resolve_cache_key``,
+        ``_try_get_cached``, ``_store_in_cache``, ``_log_decorator_call``)
+        are sync and reused as-is.
+        """
+
+        @functools.wraps(func)
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            call_start = time.perf_counter()
+
+            if func_name not in self._analyzed:
+                self._analyze_dependencies(func)
+                self._analyzed.add(func_name)
+
+            key_result = self._resolve_cache_key(
+                func, func_name, dynamic_depends_on, args, kwargs, call_start
+            )
+            if key_result[0] is _CACHE_MISS:
+                # _resolve_cache_key called `func(*args, **kwargs)` on the
+                # unhashable/error path. For an async function that returns
+                # a coroutine — we must await it before handing back.
+                result_or_coro = key_result[1]
+                if inspect.iscoroutine(result_or_coro):
+                    return await result_or_coro
+                return result_or_coro
+            cache_key, current_state_hash, args_hash = key_result
+
+            metadata, cached_data = self.backend.get(cache_key)
+            hit = self._try_get_cached(
+                cache_key, metadata, cached_data, call_start,
+                args_hash, func_name, ttl,
+            )
+            if hit is not _CACHE_MISS:
+                return hit
+
+            if self.use_locking:
+                self._warn_once(
+                    CashCacheIneffectiveWarning,
+                    func_name,
+                    "",
+                    f"@cash.cache on {func_name}: use_locking=True is not "
+                    f"yet supported for async functions. Proceeding without lock.",
+                    stacklevel=5,
+                )
+
+            from cash.notebook.file_tracker import FileAccessTracker
+            from cash.notebook.cache_freshness import snapshot_file_deps
+            tracker = FileAccessTracker(getattr(func, '__globals__', None))
+            with tracker:
+                res = await func(*args, **kwargs)
+            accessed = tracker.get_accessed_files()
+            auto_file_deps = snapshot_file_deps(accessed) if accessed else None
+
+            self._attach_lineage(res, cache_key)
+            execution_time = time.perf_counter() - call_start
+            self._store_in_cache(
+                cache_key, func_name, res, metadata, ttl,
+                current_state_hash, args_hash, execution_time,
+                auto_file_deps=auto_file_deps,
+            )
+            self._log_decorator_call(
+                func_name, cache_hit=False,
+                execution_time=execution_time,
+                args_hash=args_hash, cache_key=cache_key,
+            )
+            return res
+
+        return wrapper
+
     def _delete_backend_entries(self, func_name: str) -> None:
         """Delete all backend cache entries whose key starts with *func_name*."""
         try:
@@ -491,12 +587,15 @@ class Cash:
             logger.debug("Failed to clear cache entries for %s", func_name)
 
     def _wrap_with_stats(self, func: Callable, func_name: str, wrapper: Callable) -> Callable:
-        """Wrap *wrapper* with hit/miss stat tracking and attach introspection API."""
+        """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
+
+        Dispatches on whether *func* is a coroutine function so the stats
+        drain (reading ``_decorator_call_log`` for the just-finished call)
+        happens AFTER the await for async, and synchronously otherwise.
+        """
         _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0}
 
-        @functools.wraps(func)
-        def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
-            result = wrapper(*args, **kwargs)
+        def _drain_stats() -> None:
             with self._decorator_call_log_lock:
                 for call in reversed(self._decorator_call_log):
                     if call['func_name'] == func_name:
@@ -506,7 +605,19 @@ class Cash:
                         else:
                             _stats['misses'] += 1
                         break
-            return result
+
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
+                result = await wrapper(*args, **kwargs)
+                _drain_stats()
+                return result
+        else:
+            @functools.wraps(func)
+            def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
+                result = wrapper(*args, **kwargs)
+                _drain_stats()
+                return result
 
         def cache_info() -> dict[str, Any]:
             """Return cache statistics for this function.
