@@ -274,3 +274,131 @@ def test_cache_if_predicate_sees_materialized_list_for_iterator_function(tmp_pat
     list(gen(3))
     list(gen(3))
     assert n["calls"] == 3, f"non-empty result should be cached (calls={n['calls']})"
+
+
+class _FakeBackend:
+    """Minimal in-memory backend for unit-testing _ChunkedCachedIterator
+    in isolation. Tracks .get() calls so we can verify lazy chunk reads.
+    """
+
+    def __init__(self, store):
+        # store: dict[str, list[Any]] — pre-arranged chunks keyed by full chunk_key.
+        self._store = dict(store)
+        self.get_calls = []
+
+    def get(self, key):
+        self.get_calls.append(key)
+        if key in self._store:
+            return ({}, self._store[key])
+        return (None, None)
+
+
+def test_chunked_iterator_lazy_chunk_reads():
+    """The iterator must only fetch a chunk when iteration enters it."""
+    from cash.core import _ChunkedCachedIterator
+
+    backend = _FakeBackend({
+        "K:chunk_0": [1, 2, 3],
+        "K:chunk_1": [4, 5, 6],
+        "K:chunk_2": [7, 8, 9],
+    })
+
+    class _FakeCash:
+        def __init__(self, backend):
+            self.backend = backend
+
+    cash = _FakeCash(backend)
+    it = _ChunkedCachedIterator(cash, "K", n_chunks=3)
+
+    # No reads until iteration starts.
+    assert backend.get_calls == []
+
+    # First next() pulls chunk_0.
+    assert next(it) == 1
+    assert backend.get_calls == ["K:chunk_0"]
+
+    # Remaining items in chunk_0: no new backend reads.
+    assert next(it) == 2
+    assert next(it) == 3
+    assert backend.get_calls == ["K:chunk_0"]
+
+    # Crossing into chunk_1 triggers exactly one new read.
+    assert next(it) == 4
+    assert backend.get_calls == ["K:chunk_0", "K:chunk_1"]
+
+
+def test_chunked_iterator_iter_is_self():
+    """_ChunkedCachedIterator must satisfy iter(x) is x (iterator protocol)."""
+    from cash.core import _ChunkedCachedIterator
+
+    class _EmptyCash:
+        class backend:
+            @staticmethod
+            def get(key):
+                return (None, None)
+
+    it = _ChunkedCachedIterator(_EmptyCash(), "K", n_chunks=0)
+    assert iter(it) is it
+
+
+def test_chunked_iterator_close_stops_iteration():
+    """After close(), next() raises StopIteration."""
+    from cash.core import _ChunkedCachedIterator
+
+    backend = _FakeBackend({"K:chunk_0": [1, 2, 3]})
+
+    class _FakeCash:
+        def __init__(self, backend):
+            self.backend = backend
+
+    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=1)
+    assert next(it) == 1
+    it.close()
+    with pytest.raises(StopIteration):
+        next(it)
+
+
+def test_chunked_iterator_send_throw_raise():
+    """send and throw raise AttributeError with a clear message."""
+    from cash.core import _ChunkedCachedIterator
+
+    class _EmptyCash:
+        class backend:
+            @staticmethod
+            def get(key):
+                return (None, None)
+
+    it = _ChunkedCachedIterator(_EmptyCash(), "K", n_chunks=0)
+    with pytest.raises(AttributeError, match="send"):
+        it.send(None)
+    with pytest.raises(AttributeError, match="throw"):
+        it.throw(ValueError())
+
+
+def test_chunked_iterator_missing_chunk_terminates_safely():
+    """If a chunk read returns (None, None) — e.g. chunk was evicted from
+    the backend — the iterator must terminate via StopIteration, not raise."""
+    from cash.core import _ChunkedCachedIterator
+
+    backend = _FakeBackend({
+        "K:chunk_0": [1, 2],
+        # chunk_1 is missing on purpose
+        "K:chunk_2": [5, 6],
+    })
+
+    class _FakeCash:
+        def __init__(self, backend):
+            self.backend = backend
+
+    it = _ChunkedCachedIterator(_FakeCash(backend), "K", n_chunks=3)
+    values = list(it)
+    # Chunk_0 yields [1, 2]; chunk_1 missing → iteration stops there.
+    assert values == [1, 2]
+
+
+def test_list_cached_iterator_alias_still_imports():
+    """CachedIterator was renamed to _ListCachedIterator. The original name
+    is kept as a deprecation-friendly alias for one release."""
+    from cash.core import _ListCachedIterator, CachedIterator
+    # The alias must point at the new internal class.
+    assert CachedIterator is _ListCachedIterator
