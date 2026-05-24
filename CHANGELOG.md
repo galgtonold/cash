@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0b2] - Unreleased
+
+### Added
+- `@cash.cache` now supports `async def` functions. Awaited results are
+  cached; auto-file-dep tracking works correctly under concurrent
+  `asyncio.gather`. (Async generators emit a `CashCacheIneffectiveWarning`
+  and are returned unwrapped — full async-gen caching is planned for
+  a later release.)
+- `cash.CashWarning`, `cash.CashCacheIneffectiveWarning`,
+  `cash.CashCacheStoreFailedWarning` exposed at the top level. Filter
+  via standard `warnings.filterwarnings(...)` — e.g. set
+  `CashCacheIneffectiveWarning` to `error` in CI to fail the build
+  when a deploy introduces an unpicklable arg.
+- New tutorial: `docs/caching-class-methods.md` — recipe for caching
+  methods on stateful objects (`Loader`, services, database wrappers)
+  via `cash.register_hasher`.
+
+### Changed
+- Ineffective-cache and store-failure events now emit
+  `warnings.warn(...)` instead of `logger.warning(...)`, deduplicated
+  per `(category, function, argument type)`. Users who relied on
+  silent failure should add `warnings.filterwarnings("ignore",
+  category=cash.CashWarning)` to their startup code.
+- `FileAccessTracker` now uses `contextvars.ContextVar` for active-
+  tracker dispatch. Concurrent `asyncio.gather` and threaded callers
+  are correctly isolated. No user-facing API change.
+
+### Not yet supported
+- `@cash.cache` on `async def gen(): yield ...` (async generators)
+  emits `CashCacheIneffectiveWarning` and returns the function
+  unwrapped.
+- `use_locking=True` combined with an async function emits
+  `CashCacheIneffectiveWarning` and proceeds unlocked.
+
 ## [0.5.0b1] - Beta Release
 
 ### Added
