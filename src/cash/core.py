@@ -865,8 +865,13 @@ class Cash:
                 args_hash, func_name, ttl,
             )
             if hit is not _CACHE_MISS:
-                if metadata and metadata.get('materialized_iterator'):
-                    return _ListCachedIterator(hit)
+                if metadata:
+                    storage = metadata.get('iterator_storage')
+                    if storage == 'chunked':
+                        n_chunks = metadata.get('n_chunks', 0)
+                        return _ChunkedCachedIterator(self, cache_key, n_chunks)
+                    if metadata.get('materialized_iterator'):
+                        return _ListCachedIterator(hit)
                 return hit
 
             if self.use_locking:
@@ -888,46 +893,90 @@ class Cash:
             accessed = tracker.get_accessed_files()
             auto_file_deps = snapshot_file_deps(accessed) if accessed else None
 
-            # Detect and materialize one-shot iterators so they can be
-            # cached. The list is what gets stored; the user sees a
-            # CachedIterator wrapper preserving the iterator protocol.
-            materialized = _is_one_shot_iterator(res)
-            if materialized:
-                cached_value = list(res)
-            else:
-                cached_value = res
+            # Iterator returns: chunked storage path.
+            if _is_one_shot_iterator(res):
+                # warn_stacklevel=5 for async: one fewer frame than sync
+                # because there's no _compute_and_store closure layer
+                # (user → stats_wrapper → wrapper → _write_chunks → _warn_once).
+                manifest, single_chunk_buffer = self._write_chunks(
+                    res, cache_key, chunk_max_items, chunk_max_bytes,
+                    func_name, cache_if, warn_stacklevel=5,
+                )
+                execution_time = time.perf_counter() - call_start
 
-            self._attach_lineage(cached_value, cache_key)
+                if single_chunk_buffer is not None:
+                    should_cache = True
+                    if cache_if is not None:
+                        try:
+                            should_cache = bool(cache_if(single_chunk_buffer))
+                        except Exception as e:
+                            logger.debug(
+                                "cache_if predicate raised for %s: %s; "
+                                "skipping cache", func_name, e,
+                            )
+                            should_cache = False
+
+                    if should_cache and single_chunk_buffer:
+                        self._write_one_chunk(cache_key, 0, single_chunk_buffer)
+                        self._store_chunked_manifest(
+                            cache_key, func_name, manifest, metadata,
+                            ttl, current_state_hash, args_hash,
+                            execution_time, auto_file_deps,
+                        )
+                    elif should_cache and not single_chunk_buffer:
+                        self._store_chunked_manifest(
+                            cache_key, func_name, manifest, metadata,
+                            ttl, current_state_hash, args_hash,
+                            execution_time, auto_file_deps,
+                        )
+
+                    self._log_decorator_call(
+                        func_name, cache_hit=False,
+                        execution_time=execution_time,
+                        args_hash=args_hash, cache_key=cache_key,
+                    )
+                    return _ListCachedIterator(single_chunk_buffer)
+
+                # Multi-chunk path.
+                self._store_chunked_manifest(
+                    cache_key, func_name, manifest, metadata,
+                    ttl, current_state_hash, args_hash,
+                    execution_time, auto_file_deps,
+                )
+                self._log_decorator_call(
+                    func_name, cache_hit=False,
+                    execution_time=execution_time,
+                    args_hash=args_hash, cache_key=cache_key,
+                )
+                return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
+
+            # Non-iterator return: single-blob path (unchanged).
+            self._attach_lineage(res, cache_key)
             execution_time = time.perf_counter() - call_start
 
             should_cache = True
             if cache_if is not None:
                 try:
-                    should_cache = bool(cache_if(cached_value))
+                    should_cache = bool(cache_if(res))
                 except Exception as e:
-                    # Buggy user predicate must not fail the call.
-                    # Treat as "do not cache" and log for diagnostics.
                     logger.debug(
-                        "cache_if predicate raised for %s: %s; skipping cache",
-                        func_name, e,
+                        "cache_if predicate raised for %s: %s; "
+                        "skipping cache", func_name, e,
                     )
                     should_cache = False
 
             if should_cache:
                 self._store_in_cache(
-                    cache_key, func_name, cached_value, metadata, ttl,
+                    cache_key, func_name, res, metadata, ttl,
                     current_state_hash, args_hash, execution_time,
                     auto_file_deps=auto_file_deps,
-                    materialized_iterator=materialized,
                 )
             self._log_decorator_call(
                 func_name, cache_hit=False,
                 execution_time=execution_time,
                 args_hash=args_hash, cache_key=cache_key,
             )
-            if materialized:
-                return _ListCachedIterator(cached_value)
-            return cached_value
+            return res
 
         return wrapper
 
