@@ -249,3 +249,28 @@ def test_cache_persists_across_instances(tmp_path):
     assert n["calls"] == 1, (
         f"second instance should have hit the persisted cache (calls={n['calls']})"
     )
+
+
+def test_cache_if_predicate_sees_materialized_list_for_iterator_function(tmp_path):
+    """When a function returns an iterator, the cache_if predicate
+    receives the MATERIALIZED LIST, not the raw generator. This is
+    the natural composition — predicates can use len(), bool(), etc."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    # Cache only when the materialized result is non-empty.
+    @c.cache(cache_if=lambda result: len(result) > 0)
+    def gen(stop):
+        n["calls"] += 1
+        for i in range(stop):
+            yield i
+
+    # stop=0 → empty list → predicate False → no cache
+    list(gen(0))
+    list(gen(0))
+    assert n["calls"] == 2, "empty-result calls should not be cached"
+
+    # stop=3 → non-empty list → predicate True → cached
+    list(gen(3))
+    list(gen(3))
+    assert n["calls"] == 3, f"non-empty result should be cached (calls={n['calls']})"

@@ -78,6 +78,9 @@ class CachedIterator:
 
     def close(self):
         """Stop iteration. Subsequent ``next()`` raises ``StopIteration``."""
+        # No generator to throw GeneratorExit into — the iterator is
+        # just a replay over a materialized list. Emptying the iterator
+        # is the right semantic equivalent.
         self._iter = iter(())
 
     def send(self, value):
@@ -90,7 +93,8 @@ class CachedIterator:
     def throw(self, *args, **kwargs):
         raise AttributeError(
             "cached generator: .throw() is not supported. The cached "
-            "iterator replays a previously materialized list."
+            "iterator replays a previously materialized list. If you "
+            "need throw() semantics, the function cannot be cached."
         )
 
 
@@ -350,6 +354,10 @@ class Cash:
                 raises, the failure is logged at debug level and the
                 result is treated as not-cacheable (the user's call
                 still returns the result).
+                If the cache key cannot be built at all (unhashable
+                argument with no registered hasher, key-generation
+                error), the predicate is not consulted — nothing is
+                cached on that fallback path either.
 
         Returns:
             The decorated function with caching behavior.
@@ -1225,6 +1233,14 @@ class Cash:
                     pd.util.hash_pandas_object(df).values.tobytes()
                 ).hexdigest()
             )
+
+            Note: when ``hasher_fn`` is a callable object (an instance
+            with ``__call__``), the source hash is derived from the
+            class's ``__call__.__code__`` — so two instances of the
+            same callable class share a source hash, even if they hold
+            different per-instance state. If your hasher's behavior
+            depends on instance state, prefer a function or lambda
+            that closes over the state explicitly.
         """
         src_hash = self._hash_callable_source(hasher_fn)
         self._type_hashers[type_] = (hasher_fn, src_hash)
