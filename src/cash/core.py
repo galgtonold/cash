@@ -240,6 +240,7 @@ class Cash:
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = ...,
         file_depends_on: str | list[str] | None = ...,
         ttl: int | None = ...,
+        cache_if: Callable[[Any], bool] | None = ...,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
     def cache(
@@ -250,6 +251,7 @@ class Cash:
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = None,
         file_depends_on: str | list[str] | None = None,
         ttl: int | None = None,
+        cache_if: Callable[[Any], bool] | None = None,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
         """Decorator to cache a function's return value.
 
@@ -275,6 +277,18 @@ class Cash:
                 is automatically invalidated when any tracked file changes.
                 Shorthand for ``depends_on=[FileDataSource("path")]``.
             ttl: Time-to-live in seconds. ``None`` means never expires.
+            cache_if: Optional predicate ``callable(result) -> bool``. When
+                provided, called with the function's return value after
+                computation. If it returns a falsy value, the result is
+                NOT stored in the cache (but is still returned to the
+                caller). Useful for skipping the caching of negative
+                results, e.g. ``cache_if=lambda r: r is not None``.
+                The predicate is only invoked when the function returns
+                normally; an exception from the function is re-raised
+                without consulting the predicate. If the predicate itself
+                raises, the failure is logged at debug level and the
+                result is treated as not-cacheable (the user's call
+                still returns the result).
 
         Returns:
             The decorated function with caching behavior.
@@ -287,7 +301,7 @@ class Cash:
         if func is None:
             return lambda f: self.cache(
                 f, depends_on=depends_on, dynamic_depends_on=dynamic_depends_on,
-                file_depends_on=file_depends_on, ttl=ttl,
+                file_depends_on=file_depends_on, ttl=ttl, cache_if=cache_if,
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
@@ -305,9 +319,9 @@ class Cash:
             return func
 
         if inspect.iscoroutinefunction(func):
-            wrapper = self._make_async_wrapper(func, func_name, dynamic_depends_on, ttl)
+            wrapper = self._make_async_wrapper(func, func_name, dynamic_depends_on, ttl, cache_if)
         else:
-            wrapper = self._make_wrapper(func, func_name, dynamic_depends_on, ttl)
+            wrapper = self._make_wrapper(func, func_name, dynamic_depends_on, ttl, cache_if)
         return self._wrap_with_stats(func, func_name, wrapper)
 
     def _register_func(
@@ -491,6 +505,7 @@ class Cash:
         func_name: str,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
         ttl: int | None,
+        cache_if: Callable[[Any], bool] | None = None,
     ) -> Callable:
         """Build and return the core caching wrapper for *func*."""
 
@@ -527,11 +542,26 @@ class Cash:
 
                 self._attach_lineage(res, cache_key)
                 execution_time = time.perf_counter() - call_start
-                self._store_in_cache(
-                    cache_key, func_name, res, metadata, ttl,
-                    current_state_hash, args_hash, execution_time,
-                    auto_file_deps=auto_file_deps,
-                )
+
+                should_cache = True
+                if cache_if is not None:
+                    try:
+                        should_cache = bool(cache_if(res))
+                    except Exception as e:
+                        # Buggy user predicate must not fail the call.
+                        # Treat as "do not cache" and log for diagnostics.
+                        logger.debug(
+                            "cache_if predicate raised for %s: %s; skipping cache",
+                            func_name, e,
+                        )
+                        should_cache = False
+
+                if should_cache:
+                    self._store_in_cache(
+                        cache_key, func_name, res, metadata, ttl,
+                        current_state_hash, args_hash, execution_time,
+                        auto_file_deps=auto_file_deps,
+                    )
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=execution_time, args_hash=args_hash, cache_key=cache_key)
                 return res
 
@@ -547,6 +577,7 @@ class Cash:
         func_name: str,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
         ttl: int | None,
+        cache_if: Callable[[Any], bool] | None = None,
     ) -> Callable:
         """Build and return the async caching wrapper for *func*.
 
@@ -607,11 +638,26 @@ class Cash:
 
             self._attach_lineage(res, cache_key)
             execution_time = time.perf_counter() - call_start
-            self._store_in_cache(
-                cache_key, func_name, res, metadata, ttl,
-                current_state_hash, args_hash, execution_time,
-                auto_file_deps=auto_file_deps,
-            )
+
+            should_cache = True
+            if cache_if is not None:
+                try:
+                    should_cache = bool(cache_if(res))
+                except Exception as e:
+                    # Buggy user predicate must not fail the call.
+                    # Treat as "do not cache" and log for diagnostics.
+                    logger.debug(
+                        "cache_if predicate raised for %s: %s; skipping cache",
+                        func_name, e,
+                    )
+                    should_cache = False
+
+            if should_cache:
+                self._store_in_cache(
+                    cache_key, func_name, res, metadata, ttl,
+                    current_state_hash, args_hash, execution_time,
+                    auto_file_deps=auto_file_deps,
+                )
             self._log_decorator_call(
                 func_name, cache_hit=False,
                 execution_time=execution_time,
