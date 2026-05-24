@@ -138,8 +138,10 @@ class Cash:
         # decorator metrics in the badge.
         self._decorator_call_log: list[dict[str, Any]] = []
         self._decorator_call_log_lock = threading.Lock()
-        # Custom type hasher registry: maps type → callable(value) → str
-        self._type_hashers: dict[type, Callable[[Any], str]] = {}
+        # Custom type hasher registry: maps type → (callable(value) → str, source hash).
+        # The source hash is embedded in the args_hash composition so that
+        # changing a hasher's body invalidates dependent cache entries.
+        self._type_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
 
         # Dedup keys for _warn_once: (category, func_name, arg_type_name).
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
@@ -187,6 +189,43 @@ class Cash:
         module = getattr(func, '__module__', None) or '__unknown__'
         qualname = getattr(func, '__qualname__', None) or func.__name__
         return f"{module}.{qualname}"
+
+    @staticmethod
+    def _hash_callable_source(fn: Callable) -> str:
+        """Return a stable hex digest representing *fn*'s body.
+
+        Used by :meth:`register_hasher` to embed the hasher's source
+        identity in the cache key, so that changing a hasher's body
+        invalidates dependent cache entries even when the hasher's
+        output coincidentally matches the old one.
+
+        Resolution order:
+
+        1. ``inspect.getsource(fn)`` — primary. Works for module-level
+           functions and lambdas defined in a discoverable source file.
+        2. ``fn.__code__.co_code`` — fallback. Works for functions defined
+           in a REPL or via ``exec()``. Bytecode is stable within a Python
+           version; a Python upgrade conservatively invalidates the cache.
+        3. ``fn.__call__.__code__.co_code`` — fallback for callable
+           instances (objects with ``__call__``). Two instances of the
+           same callable class share the same source hash.
+        4. ``type(fn).__qualname__`` — last resort. Doesn't differentiate
+           instances of the same class; the user gets stability within
+           a process but coarse cross-process behavior.
+        """
+        try:
+            src = inspect.getsource(fn)
+            return hashlib.sha256(src.encode("utf-8")).hexdigest()
+        except (OSError, TypeError):
+            pass
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            # Callable instance — try its __call__.__code__
+            call_method = getattr(fn, "__call__", None)
+            code = getattr(call_method, "__code__", None)
+        if code is not None:
+            return hashlib.sha256(code.co_code).hexdigest()
+        return hashlib.sha256(type(fn).__qualname__.encode("utf-8")).hexdigest()
 
 
     @overload
@@ -717,9 +756,12 @@ class Cash:
             def get_arg_hash(arg):
                 if hasattr(arg, '_cash_lineage_hash'):
                     return arg._cash_lineage_hash
-                for type_, hasher_fn in self._type_hashers.items():
+                for type_, (hasher_fn, src_hash) in self._type_hashers.items():
                     if isinstance(arg, type_):
-                        return hasher_fn(arg)
+                        # Embed the hasher source hash so that changing the
+                        # hasher's body invalidates dependent cache entries
+                        # even when the hasher's output coincidentally matches.
+                        return f"{src_hash}:{hasher_fn(arg)}"
                 # 3. Try built-in type hashers for common non-picklable types
                 builtin_hash = self._try_builtin_type_hash(arg)
                 if builtin_hash is not None:
@@ -1048,7 +1090,8 @@ class Cash:
                 ).hexdigest()
             )
         """
-        self._type_hashers[type_] = hasher_fn
+        src_hash = self._hash_callable_source(hasher_fn)
+        self._type_hashers[type_] = (hasher_fn, src_hash)
 
     def _store_in_cache(
         self,
