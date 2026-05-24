@@ -139,13 +139,34 @@ class TestUserNamespacePatching:
         normalised = os.path.realpath(str(test_file)).replace(os.sep, "/")
         assert normalised in tracker.get_accessed_files()
 
-    def test_restores_user_ns_open(self):
-        user_ns = {"open": open}
-        original = user_ns["open"]
+    def test_user_ns_open_inactive_outside_with_block(self, tmp_path: Path):
+        """Outside a `with tracker:` block, user_ns['open'] does not record reads.
+
+        The wrapper installed on user_ns['open'] is permanent under the
+        ContextVar design (patches are install-once-per-process), but the
+        wrapper is a no-op when no tracker is active.
+        """
+        path = tmp_path / "data.txt"
+        path.write_text("hello")
+        user_ns: dict = {"open": open}
         tracker = FileAccessTracker(user_ns=user_ns)
         with tracker:
-            pass
-        assert user_ns["open"] is original
+            # Inside the block, reads should be tracked.
+            with user_ns["open"](path) as f:
+                f.read()
+        assert any(r.endswith("data.txt") for r in tracker.get_accessed_files())
+
+        # Outside the block, a read against the (still-patched) user_ns['open']
+        # must NOT be added to this tracker.
+        before = set(tracker.get_accessed_files())
+        other_path = tmp_path / "after.txt"
+        other_path.write_text("nope")
+        with user_ns["open"](other_path) as f:
+            f.read()
+        after = set(tracker.get_accessed_files())
+        assert before == after, (
+            f"reads outside `with` block leaked into tracker: {after - before}"
+        )
 
 
 # ---------------------------------------------------------------------------

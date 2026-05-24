@@ -348,7 +348,10 @@ class FileAccessTracker:
         # hook installed on ``sys.meta_path`` is the shared one in
         # ``_shared_import_hook``, lazily installed by ``__enter__``.
         self.import_hook = PostImportHook(self)
-        self._token: Optional[contextvars.Token] = None
+        # Stack of ContextVar tokens, one per active __enter__. Supports
+        # re-entry of the same instance (an async function that reuses
+        # a tracker across awaits, or a sync caller using `with` twice).
+        self._token_stack: list[contextvars.Token] = []
 
     def __enter__(self):
         # Install permanent dispatcher patches. Each (module/dict, name)
@@ -361,13 +364,12 @@ class FileAccessTracker:
         with _install_lock:
             self._apply_patches()
         _ensure_import_hook_installed()
-        self._token = _active_tracker.set(self)
+        self._token_stack.append(_active_tracker.set(self))
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._token is not None:
-            _active_tracker.reset(self._token)
-            self._token = None
+        if self._token_stack:
+            _active_tracker.reset(self._token_stack.pop())
 
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
