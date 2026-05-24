@@ -614,3 +614,79 @@ async def test_async_chunked_storage_hit_via_chunked_iterator(tmp_path):
         f"expected _ChunkedCachedIterator on hit, got {type(result).__name__}"
     )
     assert list(result) == list(range(20))
+
+
+def test_cache_if_warning_fires_on_multi_chunk_transition(tmp_path):
+    """When cache_if is set and the result spans multiple chunks, a
+    CashCacheIneffectiveWarning fires once at the chunk_0 -> chunk_1
+    transition, and the result is cached without consulting the predicate."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    predicate_calls = {"n": 0}
+
+    def predicate(result):
+        predicate_calls["n"] += 1
+        return False  # would normally reject, but should be bypassed
+
+    @c.cache(chunk_max_items=10, cache_if=predicate)
+    def gen():
+        yield from range(25)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        r = list(gen())
+
+    assert r == list(range(25))
+
+    # Predicate should NOT have been consulted (multi-chunk).
+    assert predicate_calls["n"] == 0, (
+        f"predicate was called on multi-chunk result: {predicate_calls['n']} times"
+    )
+
+    # Exactly one CashCacheIneffectiveWarning about cache_if bypass.
+    ineffective = [
+        w for w in captured
+        if issubclass(w.category, CashCacheIneffectiveWarning)
+        and "cache_if was bypassed" in str(w.message)
+    ]
+    assert len(ineffective) == 1, (
+        f"expected one cache_if-bypassed warning, got "
+        f"{[str(w.message) for w in captured]}"
+    )
+
+    # The result was cached despite the predicate returning False.
+    n_calls = {"x": 0}
+    @c.cache(chunk_max_items=10, cache_if=predicate)
+    def gen2():
+        n_calls["x"] += 1
+        yield from range(25)
+
+    # New decorated function gen2 — fresh call:
+    list(gen2())  # compute (1 call)
+    list(gen2())  # hit, no recompute (still 1 call)
+    assert n_calls["x"] == 1
+
+
+def test_cache_if_single_chunk_predicate_honored(tmp_path):
+    """When the result fits in a single chunk, cache_if works exactly
+    as before: predicate False → result not cached, next call recomputes."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n_calls = {"x": 0}
+
+    @c.cache(chunk_max_items=1000, cache_if=lambda result: len(result) > 0)
+    def gen(stop):
+        n_calls["x"] += 1
+        yield from range(stop)
+
+    # Empty iterator — predicate False — not cached.
+    list(gen(0))
+    list(gen(0))
+    assert n_calls["x"] == 2, (
+        f"empty result with cache_if=lambda r: len(r) > 0 should not "
+        f"be cached (calls={n_calls['x']})"
+    )
+
+    # Non-empty — predicate True — cached.
+    list(gen(5))
+    list(gen(5))
+    assert n_calls["x"] == 3
