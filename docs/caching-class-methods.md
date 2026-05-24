@@ -81,43 +81,83 @@ and cash's built-in pandas hasher with no extra work.
 ## Caching iterator-returning functions
 
 `@c.cache` on a function that returns a one-shot iterator (a generator,
-`map`/`filter` result, or custom iterator) eagerly materializes the
-iterator's values into a list, caches the list, and returns a wrapper
-that re-exposes the iterator protocol. Each call produces a fresh,
-independent iterator over the cached values:
+`map`/`filter` result, or custom iterator) stores the iterator's values
+in chunks. Small iterators land in a single chunk and behave like a
+materialized list; large iterators split across multiple backend keys.
+On a cache hit, chunks are fetched lazily as the user iterates — RAM is
+bounded by chunk size, not by the total result size.
 
 ```python
 @c.cache
-def primes_below(n):
-    for p in slow_prime_generator():
-        if p >= n:
-            return
-        yield p
+def stream_rows():
+    for row in db.query("SELECT * FROM events"):
+        yield row
 
-result = primes_below(1000)        # first call: materializes + caches
-for p in result:                    # iterate freely
-    ...
-
-result2 = primes_below(1000)        # cache hit; fresh iterator
-list(result2)                       # gets the cached values
+for row in stream_rows():
+    process(row)
 ```
 
-The trade-off: materialization is eager. If your generator is infinite,
-streams a multi-gigabyte database query, or is lazy-by-design (e.g. a
-search that the caller stops at the first match), do not decorate it
-with `@c.cache` — your process will hang or run out of memory at
-materialization time.
+Two keyword-only parameters control the chunk boundaries:
 
-The cached value is a `list` under the hood; the wrapper returned to
-your code does NOT support generator-specific methods (`send`,
-`throw`). Calling those raises `AttributeError`.
+- `chunk_max_items` (default `1_000_000`) — close a chunk after this
+  many items.
+- `chunk_max_bytes` (default `1_000_000_000`) — close a chunk after this
+  many bytes (estimated via the cash size estimator).
 
-**Async generators are not supported.** A function defined as
-`async def gen(): yield ...` (Python's async-generator protocol) is
-returned unwrapped and emits a `CashCacheIneffectiveWarning`. The
-materialize-and-cache approach above applies only to sync iterators
-and to async functions that *return* (rather than `yield`) a sync
-iterator.
+A chunk closes when either threshold is reached. For most workloads
+the defaults are large enough that small iterators stay in a single
+chunk; large iterators auto-chunk without any opt-in.
+
+```python
+@c.cache(chunk_max_items=10_000)
+def smaller_chunks():
+    yield from db.query(...)
+```
+
+### Iterator protocol
+
+The object returned to your code preserves the iterator protocol
+(`iter(x) is x`, `__next__`, `close`). Generator-specific methods
+(`.send`, `.throw`) are not supported on the cached wrapper — a
+cached iterator replays stored values; it is not a coroutine. Calling
+those methods raises `AttributeError`.
+
+### `cache_if` with chunked storage
+
+When `cache_if` is provided alongside a chunked-iterator return:
+
+- **Single-chunk result:** the predicate runs on the materialized
+  chunk and decides whether to cache, exactly as for non-iterator
+  return values.
+- **Multi-chunk result:** the predicate cannot run without
+  materializing the full result (defeating chunking). At the moment
+  the second chunk is created, cash emits a one-shot
+  `CashCacheIneffectiveWarning` and proceeds to cache the result
+  without consulting the predicate. The warning is keyed per function
+  and fires once per process.
+
+To keep `cache_if` gating in effect on large iterators, either lower
+`chunk_max_items` / `chunk_max_bytes` so single-chunk is the common
+case, or materialize the iterator manually (`return list(generator)`)
+before returning.
+
+### Async generators are not supported
+
+A function defined as `async def gen(): yield ...` (Python's
+async-generator protocol) is returned unwrapped and emits a
+`CashCacheIneffectiveWarning`. The chunked-storage approach above
+applies to sync iterators and to async functions that *return*
+(rather than `yield`) a sync iterator.
+
+### Trade-offs
+
+The chunked path eagerly exhausts the underlying generator on the
+first call, even if the user only consumes the first few items. If
+your generator is infinite (`while True: yield ...`) or
+lazy-by-design (a search that the caller stops at the first match),
+do not decorate it with `@c.cache` — your process will not return
+from the first call. Per-call resume semantics are a planned future
+extension.
 
 ## Related
 
