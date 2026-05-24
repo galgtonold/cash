@@ -98,6 +98,7 @@ nav:
   - Tutorials:
     - Getting Started: tutorials/getting_started.md
     - Data Science Workflows: tutorials/data_science_workflows.md
+    - Caching Class Methods: caching-class-methods.md
     - Production Transition: tutorials/production_transition.md
     - Advanced Configuration: tutorials/advanced_configuration.md
     - Purity decorators: tutorials/purity.md
