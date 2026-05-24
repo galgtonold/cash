@@ -1552,6 +1552,27 @@ class Cash:
 
         # Multi-chunk path: flush the tail buffer if non-empty.
         if buffer:
+            # The threshold-hit branch in the for-loop fires the cache_if-
+            # bypass warning when chunk_1 fills via its own threshold. If
+            # chunk_1 is only PARTIALLY filled (we exhausted the iterator
+            # mid-chunk_1), the warning never fired there — but we are
+            # still committing to a multi-chunk result with cache_if
+            # bypassed. _warn_once dedups, so firing here is safe even if
+            # the for-loop already fired.
+            if chunk_index == 1 and cache_if is not None:
+                self._warn_once(
+                    CashCacheIneffectiveWarning,
+                    func_name,
+                    "",
+                    f"@cash.cache on {func_name}: cache_if was bypassed "
+                    f"because the result exceeded a single chunk "
+                    f"(chunk_max_items={chunk_max_items}, "
+                    f"chunk_max_bytes={chunk_max_bytes}). The result "
+                    f"is cached without consulting the predicate. To "
+                    f"keep cache_if gating in effect, lower the chunk "
+                    f"thresholds or materialize the iterator manually.",
+                    stacklevel=warn_stacklevel,
+                )
             self._write_one_chunk(cache_key, chunk_index, buffer)
             chunk_index += 1
 
