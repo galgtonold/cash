@@ -553,7 +553,8 @@ class Cash:
                     func_name,
                     "",
                     f"@cash.cache on {func_name}: use_locking=True is not "
-                    f"yet supported for async functions. Proceeding without lock.",
+                    f"yet supported for async functions. Proceeding without lock — "
+                    f"two concurrent awaits of the same key will compute redundantly.",
                     stacklevel=5,
                 )
 
