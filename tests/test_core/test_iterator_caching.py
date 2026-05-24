@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import asyncio
 import types
+import warnings
 
 import pytest
 
-from cash import Cash
+from cash import Cash, CashCacheIneffectiveWarning
 
 
 def test_generator_function_caches(tmp_path):
@@ -530,3 +531,43 @@ def test_chunked_storage_byte_threshold_closes_chunk_early(tmp_path):
     r2 = list(gen())
     assert r2 == r1
     assert n["calls"] == 1
+
+
+def test_cache_if_bypass_warning_fires_on_partial_last_chunk(tmp_path):
+    """Bug regression: when chunk_1 is created via the tail-flush path
+    (chunk_0 filled at the threshold, chunk_1 has a partial buffer),
+    the cache_if-bypass warning must still fire — we ARE committing to
+    multi-chunk caching with the predicate bypassed.
+
+    The original code only fired the warning when chunk_1's threshold
+    was hit; the partial-chunk_1 case slipped through silently.
+    """
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    predicate_calls = {"n": 0}
+
+    def predicate(result):
+        predicate_calls["n"] += 1
+        return False
+
+    @c.cache(chunk_max_items=10, cache_if=predicate)
+    def gen():
+        # 11 items → chunk_0 fills (10 items), chunk_1 gets 1 item via tail flush.
+        yield from range(11)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        r = list(gen())
+
+    assert r == list(range(11))
+    assert predicate_calls["n"] == 0  # bypassed
+
+    ineffective = [
+        w for w in captured
+        if issubclass(w.category, CashCacheIneffectiveWarning)
+        and "cache_if was bypassed" in str(w.message)
+    ]
+    assert len(ineffective) == 1, (
+        f"expected one cache_if-bypassed warning for partial chunk_1, got "
+        f"{[str(w.message) for w in captured]}"
+    )
