@@ -23,22 +23,25 @@ type into a cache key.
 import cash
 import hashlib
 
+c = cash.Cash()
+
 class Loader:
     def __init__(self, dataset_id, db_conn):
         self.dataset_id = dataset_id
         self._db = db_conn  # unpicklable; not part of identity
 
-c = cash.Cash()
+    @c.cache
+    def load(self, version):
+        return self._db.query(self.dataset_id, version)
+
 c.register_hasher(
     Loader,
     lambda self: hashlib.sha256(self.dataset_id.encode()).hexdigest(),
 )
-
-class Loader:
-    @c.cache
-    def load(self, version):
-        return self._db.query(self.dataset_id, version)
 ```
+
+Order matters: register the hasher after `Loader` is defined but before
+you call any `@c.cache` method on an instance.
 
 `register_hasher` is set once per type. Every `@c.cache` method that
 takes a `Loader` instance — whether as `self` or as a regular
