@@ -968,3 +968,80 @@ def test_use_locking_dispatches_chunked_on_locked_hit(tmp_path):
     assert list(result) == list(range(25))
     # And no recompute (the entry was already in the cache).
     assert n["calls"] == 1
+
+
+def test_chunked_chunks_inherit_manifest_ttl(tmp_path):
+    """Each chunk's metadata must carry the manifest's TTL so the
+    standard cleanup() pass can reclaim expired chunks alongside the
+    manifest. Without this, orphaned chunks accumulate after TTL
+    expires the manifest."""
+    from cash.backends.file_backend import FileBackend
+
+    backend = FileBackend(str(tmp_path / "fb"), flush_interval=0)
+    c = Cash(backend=backend, register_magic=False)
+
+    @c.cache(chunk_max_items=10, ttl=3600)
+    def gen():
+        yield from range(25)
+
+    list(gen())
+
+    # Inspect chunk metadata directly via backend.list_entries.
+    entries = backend.list_entries()
+    chunk_entries = [
+        e for e in entries
+        if "test_chunked_chunks_inherit_manifest_ttl" in e["key"]
+        and ":chunk_" in e["key"]
+    ]
+    assert len(chunk_entries) >= 1, (
+        f"expected at least one chunk entry; got {chunk_entries}"
+    )
+
+    # Each chunk must carry the manifest's ttl=3600.
+    for chunk_entry in chunk_entries:
+        _, metadata = backend.get(chunk_entry["key"]), None
+        # backend.get returns (metadata, value); list_entries gives us
+        # only the key. Re-fetch the metadata explicitly.
+        metadata_actual, _ = backend.get(chunk_entry["key"])
+        assert metadata_actual is not None
+        assert metadata_actual.get("ttl") == 3600, (
+            f"chunk {chunk_entry['key']} missing ttl=3600 "
+            f"(got ttl={metadata_actual.get('ttl')!r})"
+        )
+
+    backend.shutdown()
+
+
+def test_chunked_chunks_with_no_ttl_have_none(tmp_path):
+    """When the decorator has no ttl, chunks have ttl=None (the default).
+    This makes the chunks' metadata shape consistent with the manifest's.
+    """
+    from cash.backends.file_backend import FileBackend
+
+    backend = FileBackend(str(tmp_path / "fb"), flush_interval=0)
+    c = Cash(backend=backend, register_magic=False)
+
+    @c.cache(chunk_max_items=10)  # no ttl
+    def gen():
+        yield from range(25)
+
+    list(gen())
+
+    entries = backend.list_entries()
+    chunk_entries = [
+        e for e in entries
+        if "test_chunked_chunks_with_no_ttl_have_none" in e["key"]
+        and ":chunk_" in e["key"]
+    ]
+    assert len(chunk_entries) >= 1
+
+    for chunk_entry in chunk_entries:
+        metadata_actual, _ = backend.get(chunk_entry["key"])
+        assert metadata_actual is not None
+        # ttl key may be absent or explicitly None — both are equivalent.
+        assert metadata_actual.get("ttl") is None, (
+            f"chunk {chunk_entry['key']} has unexpected ttl="
+            f"{metadata_actual.get('ttl')!r}; expected None"
+        )
+
+    backend.shutdown()
