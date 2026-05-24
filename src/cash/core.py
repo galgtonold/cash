@@ -239,6 +239,11 @@ class Cash:
 
         Returns:
             The decorated function with caching behavior.
+
+        See Also:
+            ``docs/caching-class-methods.md`` for the recipe for caching
+            methods on stateful objects (databases, file handles,
+            connections) via :meth:`register_hasher`.
         """
         if func is None:
             return lambda f: self.cache(
