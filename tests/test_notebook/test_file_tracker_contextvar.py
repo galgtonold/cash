@@ -88,3 +88,24 @@ def test_nested_with_blocks(tmp_path):
     assert any(r.endswith("b.txt") for r in inner_files)
     # And the nesting boundary: b should NOT be in outer.
     assert not any(r.endswith("b.txt") for r in outer_files)
+
+
+def test_reentry_same_instance_via_stack(tmp_path):
+    """The same FileAccessTracker instance can be re-entered (nested with).
+    The token stack restores the previous ContextVar state on the inner exit."""
+    from cash.notebook.file_tracker import _active_tracker
+
+    p_a = tmp_path / "a.txt"; p_a.write_text("a")
+    t = FileAccessTracker()
+
+    assert _active_tracker.get() is None
+    with t:
+        assert _active_tracker.get() is t
+        with t:  # re-entry of the same instance
+            assert _active_tracker.get() is t
+            with open(p_a) as f:
+                f.read()
+        # After inner exit, the outer is still active.
+        assert _active_tracker.get() is t
+    # After outer exit, no tracker is active.
+    assert _active_tracker.get() is None
