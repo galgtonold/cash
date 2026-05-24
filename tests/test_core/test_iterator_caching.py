@@ -8,6 +8,7 @@ cached values.
 from __future__ import annotations
 
 import asyncio
+import time
 import types
 import warnings
 
@@ -690,3 +691,63 @@ def test_cache_if_single_chunk_predicate_honored(tmp_path):
     list(gen(5))
     list(gen(5))
     assert n_calls["x"] == 3
+
+
+def test_v1_legacy_entry_still_readable(tmp_path):
+    """An entry written by the v1 path (materialize-as-list, with
+    metadata['materialized_iterator']=True) must continue to be
+    readable via _ListCachedIterator. No migration is required."""
+    from cash.backends.file_backend import FileBackend
+    from cash.backends.serialization import get_serializer
+
+    backend = FileBackend(str(tmp_path / "fb"), flush_interval=0)
+    c = Cash(backend=backend, register_magic=False)
+    n_calls = {"x": 0}
+
+    @c.cache
+    def gen():
+        n_calls["x"] += 1
+        yield from [10, 20, 30]
+
+    # First, populate via the chunked path.
+    assert list(gen()) == [10, 20, 30]
+    # Wipe the chunked entry and replace with a v1-shaped entry under
+    # the SAME canonical cache_key.
+    entries = backend.list_entries()
+    canonical = next(
+        e["key"] for e in entries
+        if "test_v1_legacy_entry_still_readable" in e["key"]
+        and not e["key"].rsplit(":", 1)[-1].startswith("chunk_")
+    )
+    chunk_keys = [e["key"] for e in entries
+                  if e["key"].startswith(f"{canonical}:chunk_")]
+
+    for k in chunk_keys:
+        backend.delete(k)
+
+    # Hand-craft a v1 entry at the canonical key.
+    legacy_value = [10, 20, 30]
+    serializer = get_serializer(legacy_value)
+    legacy_metadata = {
+        "key": canonical,
+        "func_name": "test_v1_legacy_entry_still_readable",
+        "timestamp": time.time(),
+        "execution_time": 0.1,
+        "serializer_cls": type(serializer),
+        "ttl": None,
+        "args_hash": "fake",
+        "state_hash": "fake",
+        "materialized_iterator": True,  # the v1 flag
+    }
+    backend.set(canonical, legacy_value, legacy_metadata, serializer=serializer)
+
+    # Reset the in-process compute counter, then call again.
+    n_calls["x"] = 0
+    result = gen()
+    # Must be a _ListCachedIterator (v1 path).
+    from cash.core import _ListCachedIterator
+    assert isinstance(result, _ListCachedIterator)
+    assert list(result) == [10, 20, 30]
+    assert n_calls["x"] == 0, "v1 entry should hit; no recompute"
+
+    backend.shutdown()
