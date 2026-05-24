@@ -48,21 +48,16 @@ T = TypeVar("T")
 __all__ = ["Cash"]
 
 
-class CachedIterator:
-    """Lazy iterator wrapper over a cached list.
+class _ListCachedIterator:
+    """Lazy iterator wrapper over a fully-materialized cached list.
 
-    Used by :meth:`Cash.cache` when a decorated function returns a
-    one-shot iterator (generator, ``map``/``filter`` result, custom
-    iterator). The function's yielded values are materialized into
-    a list and cached; on each call, a fresh ``CachedIterator`` is
-    returned that streams the cached list.
+    Used by :meth:`Cash.cache` for legacy v1 cache entries (metadata
+    contains ``materialized_iterator=True``) AND for new entries that
+    fit in a single chunk. The function's yielded values are stored
+    as one Python list; this iterator streams them on each call.
 
-    Iterator protocol is fully preserved: ``iter(x) is x``, ``__next__``,
-    and ``close()`` all work. Generator-specific protocol (``send``,
-    ``throw``) is NOT supported — a cached iterator is a replay of
-    materialized values, not a coroutine. Calling those methods raises
-    ``AttributeError`` with a message that points at caching as the
-    cause.
+    See :class:`_ChunkedCachedIterator` for the multi-chunk variant
+    used for large iterators.
     """
 
     __slots__ = ("_iter",)
@@ -95,6 +90,94 @@ class CachedIterator:
             "cached generator: .throw() is not supported. The cached "
             "iterator replays a previously materialized list. If you "
             "need throw() semantics, the function cannot be cached."
+        )
+
+
+# Backwards-compatibility alias. The old name `CachedIterator` is kept
+# for one release to avoid breaking any user code that imported it
+# from cash.core directly. Will be removed in 0.6.0.
+CachedIterator = _ListCachedIterator
+
+
+class _ChunkedCachedIterator:
+    """Lazy iterator that reads cached chunks from the backend on demand.
+
+    Used by :meth:`Cash.cache` for iterator-returning functions whose
+    output spans multiple backend keys. Each chunk is fetched only
+    when the user iterates into it; chunks the user never reaches are
+    never read. The retrieval is RAM-bounded by chunk size.
+
+    The class satisfies the iterator protocol (``iter(x) is x``,
+    ``__next__``, ``close``); generator-specific methods (``send``,
+    ``throw``) raise ``AttributeError`` — the cached iterator is a
+    replay of stored values, not a coroutine.
+
+    Args:
+        cash: The owning :class:`Cash` instance (used for backend access).
+        cache_key: The canonical key under which the manifest is stored.
+            Chunk keys are derived as ``f"{cache_key}:chunk_{i}"``.
+        n_chunks: Total chunk count, taken from the manifest at construction.
+
+    The iterator is robust to chunk loss: if ``backend.get`` returns
+    ``(None, None)`` for any chunk (e.g. RAM-only eviction), iteration
+    terminates cleanly via ``StopIteration``. The next call to the
+    decorated function will see a cache miss and recompute.
+    """
+
+    __slots__ = ("_cash", "_cache_key", "_n_chunks",
+                 "_chunk_index", "_current_chunk_iter", "_closed")
+
+    def __init__(self, cash: Any, cache_key: str, n_chunks: int):
+        self._cash = cash
+        self._cache_key = cache_key
+        self._n_chunks = n_chunks
+        self._chunk_index = 0
+        self._current_chunk_iter = None
+        self._closed = False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._closed:
+            raise StopIteration
+        while True:
+            if self._current_chunk_iter is not None:
+                try:
+                    return next(self._current_chunk_iter)
+                except StopIteration:
+                    self._current_chunk_iter = None
+                    # Fall through to load the next chunk.
+            if self._chunk_index >= self._n_chunks:
+                raise StopIteration
+            chunk_key = f"{self._cache_key}:chunk_{self._chunk_index}"
+            _, chunk = self._cash.backend.get(chunk_key)
+            self._chunk_index += 1
+            if chunk is None:
+                # Chunk lost (eviction, partial cleanup). Safe termination —
+                # the next call to the decorated function will see a cache
+                # miss on the manifest and recompute from scratch.
+                raise StopIteration
+            self._current_chunk_iter = iter(chunk)
+
+    def close(self):
+        """Stop iteration. Subsequent ``next()`` raises ``StopIteration``."""
+        self._closed = True
+        self._current_chunk_iter = None
+
+    def send(self, value):
+        raise AttributeError(
+            "cached generator: .send() is not supported on chunked "
+            "iterators. The cached iterator replays values from the "
+            "backend. If you need send() semantics, the function "
+            "cannot be cached."
+        )
+
+    def throw(self, *args, **kwargs):
+        raise AttributeError(
+            "cached generator: .throw() is not supported on chunked "
+            "iterators. If you need throw() semantics, the function "
+            "cannot be cached."
         )
 
 
@@ -595,7 +678,7 @@ class Cash:
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
             if hit is not _CACHE_MISS:
                 if metadata and metadata.get('materialized_iterator'):
-                    return CachedIterator(hit)
+                    return _ListCachedIterator(hit)
                 return hit
 
             def _compute_and_store() -> Any:
@@ -646,7 +729,7 @@ class Cash:
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=execution_time, args_hash=args_hash, cache_key=cache_key)
 
                 if materialized:
-                    return CachedIterator(cached_value)
+                    return _ListCachedIterator(cached_value)
                 return cached_value
 
             if self.use_locking:
@@ -700,7 +783,7 @@ class Cash:
             )
             if hit is not _CACHE_MISS:
                 if metadata and metadata.get('materialized_iterator'):
-                    return CachedIterator(hit)
+                    return _ListCachedIterator(hit)
                 return hit
 
             if self.use_locking:
@@ -760,7 +843,7 @@ class Cash:
                 args_hash=args_hash, cache_key=cache_key,
             )
             if materialized:
-                return CachedIterator(cached_value)
+                return _ListCachedIterator(cached_value)
             return cached_value
 
         return wrapper
