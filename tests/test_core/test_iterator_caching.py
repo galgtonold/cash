@@ -571,3 +571,46 @@ def test_cache_if_bypass_warning_fires_on_partial_last_chunk(tmp_path):
         f"expected one cache_if-bypassed warning for partial chunk_1, got "
         f"{[str(w.message) for w in captured]}"
     )
+
+
+async def test_async_chunked_storage_multi_chunk(tmp_path):
+    """An async function returning a generator should chunk just like sync."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_items=10)
+    async def make_iter(stop):
+        n["calls"] += 1
+        await asyncio.sleep(0)
+        return (i for i in range(stop))
+
+    r1 = list(await make_iter(25))
+    assert r1 == list(range(25))
+    assert n["calls"] == 1
+
+    r2 = list(await make_iter(25))
+    assert r2 == list(range(25))
+    assert n["calls"] == 1
+
+
+async def test_async_chunked_storage_hit_via_chunked_iterator(tmp_path):
+    """Hit path on an async function returns a _ChunkedCachedIterator
+    when the cached entry is chunked."""
+    from cash.core import _ChunkedCachedIterator
+
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache(chunk_max_items=10)
+    async def make_iter():
+        await asyncio.sleep(0)
+        return (i for i in range(20))
+
+    # First call populates.
+    list(await make_iter())
+
+    # Second call: must return a _ChunkedCachedIterator (multi-chunk).
+    result = await make_iter()
+    assert isinstance(result, _ChunkedCachedIterator), (
+        f"expected _ChunkedCachedIterator on hit, got {type(result).__name__}"
+    )
+    assert list(result) == list(range(20))
