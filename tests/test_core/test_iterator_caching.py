@@ -751,3 +751,115 @@ def test_v1_legacy_entry_still_readable(tmp_path):
     assert n_calls["x"] == 0, "v1 entry should hit; no recompute"
 
     backend.shutdown()
+
+
+def test_empty_generator_chunked(tmp_path):
+    """An empty generator (yields nothing) writes a zero-chunk manifest
+    and returns an empty iterator on hit."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n_calls = {"x": 0}
+
+    @c.cache
+    def gen():
+        n_calls["x"] += 1
+        return
+        yield  # makes the function a generator syntactically
+
+    assert list(gen()) == []
+    assert list(gen()) == []  # hit
+    assert n_calls["x"] == 1
+
+
+def test_single_item_iterator_chunked(tmp_path):
+    """One-item iterators land in a single chunk."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def gen():
+        yield 42
+
+    assert list(gen()) == [42]
+    assert list(gen()) == [42]
+
+
+def test_item_larger_than_chunk_max_bytes(tmp_path):
+    """A single item that exceeds chunk_max_bytes still produces a chunk
+    containing that one item (we don't split items)."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n_calls = {"x": 0}
+
+    @c.cache(chunk_max_bytes=128)  # very small threshold
+    def gen():
+        n_calls["x"] += 1
+        yield "x" * 10_000  # one ~10KB item, well above threshold
+        yield "y" * 10_000
+
+    r1 = list(gen())
+    assert len(r1) == 2
+    assert n_calls["x"] == 1
+
+    r2 = list(gen())
+    assert r2 == r1
+    assert n_calls["x"] == 1
+
+
+def test_chunked_iterator_partial_consumption_then_hit(tmp_path):
+    """If the user only iterates the first 3 items, the next call still
+    hits the full cache (because the first call always exhausts the
+    generator)."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n_calls = {"x": 0}
+
+    @c.cache(chunk_max_items=10)
+    def gen():
+        n_calls["x"] += 1
+        yield from range(25)
+
+    # Partial consumption.
+    it = gen()
+    assert next(it) == 0
+    assert next(it) == 1
+    assert next(it) == 2
+    # Stop here. Drop the iterator.
+    del it
+
+    # n_calls is still 1 (generator was fully exhausted internally for
+    # caching, regardless of user's partial iteration).
+    assert n_calls["x"] == 1
+
+    # Next call gets the full cached result.
+    assert list(gen()) == list(range(25))
+    assert n_calls["x"] == 1  # still a hit
+
+
+def test_chunked_persists_across_instances(tmp_path):
+    """Chunked entries survive a fresh Cash instance pointed at the
+    same cache_dir."""
+    from cash.backends.file_backend import FileBackend
+
+    b1 = FileBackend(str(tmp_path / "fb"), flush_interval=0)
+    c1 = Cash(backend=b1, register_magic=False)
+    n_calls = {"x": 0}
+
+    def _make(c, n):
+        @c.cache(chunk_max_items=10)
+        def gen():
+            n["x"] += 1
+            yield from range(25)
+        return gen
+
+    g1 = _make(c1, n_calls)
+    assert list(g1()) == list(range(25))
+    assert n_calls["x"] == 1
+    c1.shutdown()
+
+    # New instance, same backend path.
+    b2 = FileBackend(str(tmp_path / "fb"), flush_interval=0)
+    c2 = Cash(backend=b2, register_magic=False)
+    g2 = _make(c2, n_calls)
+    r = list(g2())
+    assert r == list(range(25))
+    assert n_calls["x"] == 1, (
+        f"second instance must hit the chunked cache (calls={n_calls['x']})"
+    )
+    c2.shutdown()
