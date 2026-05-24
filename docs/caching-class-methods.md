@@ -112,6 +112,13 @@ The cached value is a `list` under the hood; the wrapper returned to
 your code does NOT support generator-specific methods (`send`,
 `throw`). Calling those raises `AttributeError`.
 
+**Async generators are not supported.** A function defined as
+`async def gen(): yield ...` (Python's async-generator protocol) is
+returned unwrapped and emits a `CashCacheIneffectiveWarning`. The
+materialize-and-cache approach above applies only to sync iterators
+and to async functions that *return* (rather than `yield`) a sync
+iterator.
+
 ## Related
 
 - [`@cash.cache` API reference](api_reference.md)

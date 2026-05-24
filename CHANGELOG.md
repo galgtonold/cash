@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New tutorial: `docs/caching-class-methods.md` — recipe for caching
   methods on stateful objects (`Loader`, services, database wrappers)
   via `cash.register_hasher`.
+- `@cash.cache(cache_if=callable)` — optional predicate that receives
+  the function's return value and returns a bool. When false, the
+  result is returned to the caller as normal but not stored in the
+  cache. Useful for skipping the caching of negative results
+  (`cache_if=lambda r: r is not None`). Predicate exceptions are
+  caught (debug-logged) and treated as false. Works on both sync and
+  async functions.
+- `@cash.cache` now caches functions that return one-shot iterators
+  (Python generators, `map`/`filter` results, custom iterators). The
+  iterator is eagerly materialized into a list, the list is cached,
+  and each call returns a fresh iterator over the cached values.
+  Generator-specific methods (`.send`, `.throw`) are not supported on
+  the cached wrapper. Not suitable for infinite or streaming
+  generators — see `docs/caching-class-methods.md` for the trade-off.
+- `cash.register_hasher(T, fn)` now hashes `fn`'s source (or
+  bytecode) at registration and embeds the hash in the cache key.
+  Changing the body of a registered hasher invalidates dependent
+  cache entries, even when the new hasher's output coincidentally
+  matches.
 
 ### Changed
 - Ineffective-cache and store-failure events now emit
