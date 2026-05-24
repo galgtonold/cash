@@ -433,3 +433,100 @@ def test_chunk_max_bytes_kwarg_accepted(tmp_path):
     assert list(gen()) == [0, 1, 2, 3, 4]
     assert list(gen()) == [0, 1, 2, 3, 4]
     assert n["calls"] == 1
+
+
+def test_chunked_storage_multi_chunk_round_trip(tmp_path):
+    """A generator yielding more items than chunk_max_items must produce
+    multiple chunks. The second call hits the cache and yields the same
+    values without recomputing."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_items=10)  # force multiple chunks for small generator
+    def gen():
+        n["calls"] += 1
+        yield from range(25)
+
+    r1 = list(gen())
+    assert r1 == list(range(25))
+    assert n["calls"] == 1
+
+    r2 = list(gen())  # hit
+    assert r2 == list(range(25))
+    assert n["calls"] == 1, f"expected cache hit, got calls={n['calls']}"
+
+
+def test_chunked_storage_persists_manifest_metadata(tmp_path):
+    """After a chunked write, the canonical key's metadata identifies
+    the storage type as 'chunked' and records n_chunks."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache(chunk_max_items=10)
+    def gen():
+        yield from range(25)
+
+    list(gen())  # populate
+
+    # Find the canonical cache key for this call. We don't introspect
+    # private internals — instead, iterate backend entries and find the
+    # manifest (the one without a :chunk_N suffix).
+    all_keys = [e['key'] for e in c.backend.list_entries() if e.get('key')]
+    manifest_keys = [k for k in all_keys
+                     if k.startswith("tests.test_core.test_iterator_caching")
+                     and not k.rsplit(":", 1)[-1].startswith("chunk_")]
+    assert len(manifest_keys) == 1, f"expected exactly one manifest, got {manifest_keys}"
+    canonical_key = manifest_keys[0]
+
+    metadata, _ = c.backend.get(canonical_key)
+    assert metadata is not None
+    assert metadata.get("iterator_storage") == "chunked"
+    assert metadata.get("n_chunks") == 3  # 25 items / 10 per chunk = 3 chunks
+
+
+def test_chunked_storage_single_chunk_below_thresholds(tmp_path):
+    """If the iterator fits in one chunk, storage produces exactly
+    one chunk entry and a manifest. Behavior matches v1 from the
+    user's perspective."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    @c.cache(chunk_max_items=1000)  # well above the 5-item generator
+    def gen():
+        n["calls"] += 1
+        yield from range(5)
+
+    assert list(gen()) == [0, 1, 2, 3, 4]
+    assert list(gen()) == [0, 1, 2, 3, 4]
+    assert n["calls"] == 1
+
+
+def test_chunked_storage_byte_threshold_closes_chunk_early(tmp_path):
+    """When chunk_max_bytes is reached before chunk_max_items, the
+    chunk closes at the byte boundary."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+    n = {"calls": 0}
+
+    # Each item is a large string; force the byte threshold before
+    # the item count threshold.
+    @c.cache(chunk_max_items=1000, chunk_max_bytes=4096)
+    def gen():
+        n["calls"] += 1
+        for _ in range(20):
+            yield "x" * 1024  # ~1 KiB per item
+
+    r1 = list(gen())
+    assert len(r1) == 20
+    assert all(s == "x" * 1024 for s in r1)
+    assert n["calls"] == 1
+
+    # Verify multiple chunks were written.
+    all_keys = [e['key'] for e in c.backend.list_entries() if e.get('key')]
+    chunk_keys = [k for k in all_keys if ":chunk_" in k]
+    assert len(chunk_keys) >= 2, (
+        f"expected the 4 KiB byte threshold to produce multiple chunks "
+        f"from 20 × 1 KiB items; got {chunk_keys}"
+    )
+
+    r2 = list(gen())
+    assert r2 == r1
+    assert n["calls"] == 1

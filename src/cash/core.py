@@ -702,8 +702,14 @@ class Cash:
             metadata, cached_data = self.backend.get(cache_key)
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
             if hit is not _CACHE_MISS:
-                if metadata and metadata.get('materialized_iterator'):
-                    return _ListCachedIterator(hit)
+                if metadata:
+                    storage = metadata.get('iterator_storage')
+                    if storage == 'chunked':
+                        n_chunks = metadata.get('n_chunks', 0)
+                        return _ChunkedCachedIterator(self, cache_key, n_chunks)
+                    if metadata.get('materialized_iterator'):
+                        # Legacy v1 entry — value is the full list.
+                        return _ListCachedIterator(hit)
                 return hit
 
             def _compute_and_store() -> Any:
@@ -719,43 +725,93 @@ class Cash:
                 accessed = tracker.get_accessed_files()
                 auto_file_deps = snapshot_file_deps(accessed) if accessed else None
 
-                # Detect and materialize one-shot iterators so they can
-                # be cached. The list is what gets stored; the user sees
-                # a CachedIterator wrapper preserving the iterator protocol.
-                materialized = _is_one_shot_iterator(res)
-                if materialized:
-                    cached_value = list(res)
-                else:
-                    cached_value = res
+                # Detect one-shot iterators and route them through the
+                # chunked-storage path.
+                if _is_one_shot_iterator(res):
+                    manifest, single_chunk_buffer = self._write_chunks(
+                        res, cache_key, chunk_max_items, chunk_max_bytes,
+                        func_name, cache_if,
+                    )
+                    execution_time = time.perf_counter() - call_start
 
-                self._attach_lineage(cached_value, cache_key)
+                    if single_chunk_buffer is not None:
+                        # Single-chunk path. Apply cache_if before writing.
+                        should_cache = True
+                        if cache_if is not None:
+                            try:
+                                should_cache = bool(cache_if(single_chunk_buffer))
+                            except Exception as e:
+                                logger.debug(
+                                    "cache_if predicate raised for %s: %s; "
+                                    "skipping cache", func_name, e,
+                                )
+                                should_cache = False
+
+                        if should_cache and single_chunk_buffer:
+                            # Write the one chunk now that the predicate approved.
+                            self._write_one_chunk(cache_key, 0, single_chunk_buffer)
+                            self._store_chunked_manifest(
+                                cache_key, func_name, manifest, metadata,
+                                ttl, current_state_hash, args_hash,
+                                execution_time, auto_file_deps,
+                            )
+                        elif should_cache and not single_chunk_buffer:
+                            # Empty iterator — still write a (zero-chunk) manifest
+                            # so a hit returns an empty iterator instead of recomputing.
+                            self._store_chunked_manifest(
+                                cache_key, func_name, manifest, metadata,
+                                ttl, current_state_hash, args_hash,
+                                execution_time, auto_file_deps,
+                            )
+                        # else: cache_if rejected — return result un-cached.
+
+                        self._log_decorator_call(
+                            func_name, cache_hit=False,
+                            execution_time=execution_time,
+                            args_hash=args_hash, cache_key=cache_key,
+                        )
+                        return _ListCachedIterator(single_chunk_buffer)
+
+                    # Multi-chunk path: chunks already written. Write manifest.
+                    self._store_chunked_manifest(
+                        cache_key, func_name, manifest, metadata,
+                        ttl, current_state_hash, args_hash,
+                        execution_time, auto_file_deps,
+                    )
+                    self._log_decorator_call(
+                        func_name, cache_hit=False,
+                        execution_time=execution_time,
+                        args_hash=args_hash, cache_key=cache_key,
+                    )
+                    return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
+
+                # Non-iterator return: existing single-blob path.
+                self._attach_lineage(res, cache_key)
                 execution_time = time.perf_counter() - call_start
 
                 should_cache = True
                 if cache_if is not None:
                     try:
-                        should_cache = bool(cache_if(cached_value))
+                        should_cache = bool(cache_if(res))
                     except Exception as e:
-                        # Buggy user predicate must not fail the call.
-                        # Treat as "do not cache" and log for diagnostics.
                         logger.debug(
-                            "cache_if predicate raised for %s: %s; skipping cache",
-                            func_name, e,
+                            "cache_if predicate raised for %s: %s; "
+                            "skipping cache", func_name, e,
                         )
                         should_cache = False
 
                 if should_cache:
                     self._store_in_cache(
-                        cache_key, func_name, cached_value, metadata, ttl,
+                        cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
-                        materialized_iterator=materialized,
                     )
-                self._log_decorator_call(func_name, cache_hit=False, execution_time=execution_time, args_hash=args_hash, cache_key=cache_key)
-
-                if materialized:
-                    return _ListCachedIterator(cached_value)
-                return cached_value
+                self._log_decorator_call(
+                    func_name, cache_hit=False,
+                    execution_time=execution_time,
+                    args_hash=args_hash, cache_key=cache_key,
+                )
+                return res
 
             if self.use_locking:
                 return self._compute_with_lock(cache_key, func_name, ttl, args_hash, call_start, _compute_and_store)
@@ -1406,6 +1462,185 @@ class Cash:
                 "",
                 f"@cash.cache on {func_name}: backend {backend_name} failed to store "
                 f"result ({type(e).__name__}: {e}). Compute succeeded; next call will recompute.",
+                stacklevel=6,
+            )
+
+    def _write_chunks(
+        self,
+        iterator: Any,
+        cache_key: str,
+        chunk_max_items: int,
+        chunk_max_bytes: int,
+        func_name: str,
+        cache_if: Callable[[Any], bool] | None,
+        *,
+        warn_stacklevel: int = 6,
+    ) -> tuple[dict[str, Any], list[Any] | None]:
+        """Stream *iterator* into chunks, writing each chunk to the backend.
+
+        Returns ``(manifest, single_chunk_buffer)``. The manifest is a
+        dict describing the layout (``n_chunks``, ``total_items``). The
+        ``single_chunk_buffer`` is non-None only when the iterator
+        exhausted before the first threshold was reached AND no chunks
+        have been written yet — i.e. the entire result fits in a single
+        chunk and the caller may want to apply ``cache_if`` to it before
+        committing.
+
+        When the buffer crosses a threshold and we close the second
+        chunk while ``cache_if is not None``, emit a one-shot
+        :class:`CashCacheIneffectiveWarning` documenting that the
+        predicate is bypassed for multi-chunk results.
+
+        ``warn_stacklevel`` controls which frame the bypass warning
+        attributes to. Default ``6`` is correct for the sync caller
+        (``user → stats_wrapper → wrapper → _compute_and_store →
+        _write_chunks → _warn_once``). Async callers pass ``5``
+        (one fewer frame — no ``_compute_and_store`` closure).
+
+        Chunks are written under keys ``f"{cache_key}:chunk_{i}"``.
+        Chunk metadata is minimal — the manifest at *cache_key* is the
+        authoritative entry; chunks themselves carry only enough
+        metadata for the backend to deserialize them (timestamp, key,
+        execution_time=0).
+        """
+        from cash.notebook.object_hashing import estimate_object_size
+
+        buffer: list[Any] = []
+        buffer_bytes = 0
+        chunk_index = 0
+        total_items = 0
+
+        for item in iterator:
+            buffer.append(item)
+            buffer_bytes += estimate_object_size(item)
+            total_items += 1
+
+            if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
+                # About to close the current chunk. If this is the
+                # transition to the second chunk AND cache_if is set,
+                # warn the user that the predicate is bypassed.
+                if chunk_index == 1 and cache_if is not None:
+                    self._warn_once(
+                        CashCacheIneffectiveWarning,
+                        func_name,
+                        "",
+                        f"@cash.cache on {func_name}: cache_if was bypassed "
+                        f"because the result exceeded a single chunk "
+                        f"(chunk_max_items={chunk_max_items}, "
+                        f"chunk_max_bytes={chunk_max_bytes}). The result "
+                        f"is cached without consulting the predicate. To "
+                        f"keep cache_if gating in effect, lower the chunk "
+                        f"thresholds or materialize the iterator manually.",
+                        stacklevel=warn_stacklevel,
+                    )
+                self._write_one_chunk(cache_key, chunk_index, buffer)
+                buffer = []
+                buffer_bytes = 0
+                chunk_index += 1
+
+        # Generator exhausted. If no chunks have been written yet AND
+        # there's a tail buffer, the full result fits in a single chunk —
+        # return the buffer so the caller can apply cache_if before
+        # committing.
+        if chunk_index == 0:
+            # Single-chunk case — defer the write so cache_if can gate it.
+            manifest = {
+                "n_chunks": 1 if buffer else 0,
+                "total_items": total_items,
+            }
+            return manifest, buffer
+
+        # Multi-chunk path: flush the tail buffer if non-empty.
+        if buffer:
+            self._write_one_chunk(cache_key, chunk_index, buffer)
+            chunk_index += 1
+
+        manifest = {
+            "n_chunks": chunk_index,
+            "total_items": total_items,
+        }
+        return manifest, None  # single_chunk_buffer is None for multi-chunk
+
+    def _write_one_chunk(
+        self,
+        cache_key: str,
+        chunk_index: int,
+        chunk_buffer: list[Any],
+    ) -> None:
+        """Write a single chunk to the backend.
+
+        The chunk's metadata is minimal — the authoritative manifest
+        lives at the canonical cache_key. We need *some* metadata for
+        the serializer to round-trip correctly; the timestamp and the
+        key are enough.
+        """
+        chunk_key = f"{cache_key}:chunk_{chunk_index}"
+        serializer = get_serializer(chunk_buffer)
+        chunk_metadata = {
+            "key": chunk_key,
+            "timestamp": time.time(),
+            "serializer_cls": type(serializer),
+            "execution_time": 0.0,
+        }
+        try:
+            self.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
+        except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
+            backend_name = type(self.backend).__name__
+            self._warn_once(
+                CashCacheStoreFailedWarning,
+                f"{cache_key}:chunk_{chunk_index}",
+                "",
+                f"@cash.cache: backend {backend_name} failed to store "
+                f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}). "
+                f"The cache entry will be incomplete on retrieval.",
+                stacklevel=4,
+            )
+
+    def _store_chunked_manifest(
+        self,
+        cache_key: str,
+        func_name: str,
+        manifest_data: dict[str, Any],
+        existing_metadata: dict[str, Any] | None,
+        ttl: int | None,
+        state_hash: str,
+        args_hash: str,
+        execution_time: float,
+        auto_file_deps: dict[str, dict[str, float]] | None,
+    ) -> None:
+        """Write the manifest entry for a chunked iterator at *cache_key*.
+
+        The value stored at the key is the manifest dict (``n_chunks``,
+        ``total_items``). The metadata flags this entry as chunked so
+        the hit path knows to use ``_ChunkedCachedIterator``.
+        """
+        try:
+            serializer = get_serializer(manifest_data)
+            metadata = {
+                "key": cache_key,
+                "func_name": func_name,
+                "timestamp": time.time(),
+                "execution_time": execution_time,
+                "serializer_cls": type(serializer),
+                "ttl": ttl,
+                "args_hash": args_hash,
+                "state_hash": state_hash,
+                "iterator_storage": "chunked",
+                "n_chunks": manifest_data["n_chunks"],
+                "total_items": manifest_data["total_items"],
+            }
+            if auto_file_deps:
+                metadata["auto_file_deps"] = auto_file_deps
+            self.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
+        except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
+            backend_name = type(self.backend).__name__
+            self._warn_once(
+                CashCacheStoreFailedWarning,
+                func_name,
+                "",
+                f"@cash.cache on {func_name}: backend {backend_name} failed "
+                f"to store chunked manifest ({type(e).__name__}: {e}). "
+                f"Compute succeeded; next call will recompute.",
                 stacklevel=6,
             )
 
