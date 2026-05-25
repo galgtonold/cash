@@ -26,3 +26,40 @@ def reset_cash_state(tmp_path, monkeypatch):
     if hasattr(cash, "_reset_default_for_tests"):
         cash._reset_default_for_tests()
     yield
+
+
+@pytest.fixture(autouse=True)
+def mock_aiohttp(monkeypatch):
+    """Replace aiohttp.ClientSession with a deterministic stub for doc tests."""
+    try:
+        import aiohttp
+    except ImportError:
+        yield
+        return
+
+    from contextlib import asynccontextmanager
+
+    class _FakeResponse:
+        def __init__(self, data):
+            self._data = data
+        async def json(self):
+            return self._data
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+
+    class _FakeSession:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return None
+        def get(self, url):
+            # Deterministic response so cache assertions work.
+            @asynccontextmanager
+            async def cm():
+                yield _FakeResponse({"url": url, "stub": True})
+            return cm()
+
+    monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _FakeSession())
+    yield
