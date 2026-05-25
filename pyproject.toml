@@ -132,6 +132,7 @@ markers = [
     "libraries: Real-world library integration (pandas, sklearn, etc.)",
     "stress: Comprehensive stress/regression tests",
     "slow: Tests that take longer than usual",
+    "docs_parity: Documentation feature-parity tests (extract code fences from docs and run them)",
 ]
 
 [tool.ruff]
