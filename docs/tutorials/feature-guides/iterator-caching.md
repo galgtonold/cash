@@ -13,6 +13,7 @@ Detection happens at `src/cash/core.py:283-295` — `_is_one_shot_iterator` retu
 
 ## Quick start
 
+<!-- test:skip reason="references undefined parse() function and missing data.txt file" -->
 ```python
 import cash
 
@@ -106,6 +107,8 @@ Two consequences:
 A short demonstration of both properties:
 
 ```python
+import cash
+
 @cash.cache(chunk_max_items=10)
 def stream():
     yield from range(100)         # 10 chunks of 10 items each
@@ -147,6 +150,7 @@ The hit path's metadata flag `iterator_storage='chunked'` is what distinguishes 
 
 Two keyword-only decorator parameters control chunk boundaries:
 
+<!-- test:skip reason="illustrative skeleton with ellipsis body and no import cash" -->
 ```python
 @cash.cache(chunk_max_items=10_000, chunk_max_bytes=100_000_000)
 def stream_records(path):

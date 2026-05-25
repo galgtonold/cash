@@ -56,6 +56,7 @@ See [Async Caching](../feature-guides/async-caching.md) for concurrency semantic
 
 If your function pulls from a moving source (web search, retrieval over a refreshed index, a model with non-zero temperature), give the cache a finite shelf life:
 
+<!-- test:skip reason="uses undefined rag_pipeline function; illustrative snippet" -->
 ```python
 @cash.cache(ttl=3600)  # 1 hour
 def web_search_with_llm(query):
@@ -97,6 +98,7 @@ When the model itself is non-deterministic, make that visible in the cache key:
 - **Include `seed` as an argument** when the provider supports it. With a fixed seed, sampled outputs become deterministic and cacheable.
 - **For non-seeded sampling, use `ttl=`.** Don't pretend the call is pure — give the cache an expiry.
 
+<!-- test:skip reason="redefines chat function overwriting the called version; claim counts would mismatch" -->
 ```python
 @cash.cache
 def chat(prompt: str, temperature: float = 0.0, seed: int | None = None):

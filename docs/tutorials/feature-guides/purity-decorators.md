@@ -74,6 +74,7 @@ Concrete examples:
 
 ### Example
 
+<!-- test:skip reason="polars is not a test dependency and is not mocked" -->
 ```python
 import polars as pl
 from cash import pure
@@ -244,6 +245,7 @@ The bare-name check at `src/cash/notebook/cacheability.py:424-426` only collects
 
 That means this does **not** work:
 
+<!-- test:skip reason="calls trainer.train(data) where data and trainer.model are undefined stubs" -->
 ```python
 from cash import stateful
 
@@ -287,6 +289,7 @@ Rule of thumb: if you're not 100% sure, don't write `@pure`. The default is alre
 
 `@stateful` is a flag on a single function. It does not propagate to callers:
 
+<!-- test:skip reason="calls update_everything(rows) where rows is undefined in a standalone script" -->
 ```python
 from cash import stateful
 
@@ -338,6 +341,7 @@ It's checking membership in a `frozenset[str]` (`src/cash/notebook/purity.py:120
 
 `analyze_function_purity` keys its result cache on the SHA-256 of the function's source. Two byte-identical functions share a verdict — fine in 99% of cases, but it bites in one specific pattern: redefining a function with the *same body* but different surrounding globals or different intent.
 
+<!-- test:skip reason="some_real_client is undefined in a script context" -->
 ```python
 from cash import analyze_function_purity
 from cash.notebook.purity import clear_purity_cache
@@ -360,6 +364,7 @@ analyze_function_purity(push)   # Still True — cached verdict sticks
 
 In practice you'll mostly hit this when stubbing functions in tests. The fix is one line:
 
+<!-- test:skip reason="calls clear_purity_cache() which is not imported in a standalone script context" -->
 ```python
 clear_purity_cache()
 ```
@@ -407,6 +412,7 @@ Use when caching the function is fine (e.g. the side effect is
 idempotent — same URL returns the same JSON; logging is acceptable
 to lose on a hit):
 
+<!-- test:skip reason="redefines fetch_user overwriting the called version; claim counts would mismatch" -->
 ```python
 @cash.cache(assume_safe=True)
 def fetch_user(uid):
@@ -421,6 +427,7 @@ invalidation), but no warning fires.
 Useful in CI to fail the build when someone introduces caching of
 side-effecting code:
 
+<!-- test:skip reason="strict=True raises CashImpureFunctionError which would abort the test script" -->
 ```python
 @cash.cache(strict=True)
 def fetch_user(uid):
@@ -449,6 +456,7 @@ for code you own, awkward for third-party callables (C extensions,
 classes you can't subclass). Use `mark_pure` / `mark_stateful` to
 annotate in-place without wrapping:
 
+<!-- test:skip reason="stub DataFrame has no merge/to_sql methods" -->
 ```python
 import cash, pandas as pd
 

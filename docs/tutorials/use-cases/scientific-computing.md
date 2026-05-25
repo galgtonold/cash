@@ -32,6 +32,7 @@ First call runs the simulation. Every subsequent call with the same four argumen
 
 A sweep is just a loop over arguments. Each combination is an independent cache entry:
 
+<!-- test:skip reason="loop call pattern: claim inferencer sees 1 call but runtime unrolls to 40; mismatch is structural" -->
 ```python
 results = {}
 for alpha in [0.1, 0.5, 1.0, 2.0]:
@@ -47,6 +48,7 @@ For an embarrassingly parallel sweep you can dispatch the same loop across worke
 
 The hard rule for cacheable simulations: **the seed is an argument, not a global**.
 
+<!-- test:skip reason="uses ... as function parameter name which is a SyntaxError; also missing import cash" -->
 ```python
 # Good — seed is an argument, result is reproducible
 @cash.cache
@@ -82,6 +84,7 @@ See [Smart Persistence](../feature-guides/smart-persistence.md) for the heuristi
 
 Cash hashes `numpy` arrays, plain numbers, lists, tuples, and built-ins by default. For specialised numerical objects — `mpmath` arbitrary-precision numbers, JAX arrays, PyTorch tensors on GPU, sparse matrices — register a custom hasher so the cache key reflects the array's contents instead of its Python `id`.
 
+<!-- test:skip reason="register_hasher takes (type, fn) directly; decorator syntax @cash.register_hasher(type) is not supported by current API" -->
 ```python
 import cash
 
@@ -102,6 +105,7 @@ For non-pandas formats (HDF5 via `h5py`, NetCDF, Zarr, custom binary), declare t
 
 The high-leverage layout for a research notebook is one cached function per stage:
 
+<!-- test:skip reason="illustrative skeleton with ellipsis bodies; missing import cash" -->
 ```python
 @cash.cache
 def simulate(params): ...

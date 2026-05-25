@@ -66,7 +66,34 @@ _DOC_NAMESPACES: dict[str, dict] = {
     "async-caching": {
         "price_api": _FakePriceAPI(),
     },
+    "caching-class-methods": {
+        "MyService": type("MyService", (), {}),
+    },
+    "scientific-computing": {
+        "MyArrayType": type("MyArrayType", (), {"tobytes": lambda self: b"stub"}),
+    },
+    "debugging-and-monitoring": {
+        "my_df": {"col": [1, 2, 3]},
+    },
 }
+
+
+PR2_DOCS = [
+    REPO_ROOT / "docs/tutorials/feature-guides/caching-class-methods.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/choosing-a-backend.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/controlling-cache-behavior.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/custom-file-sources.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/debugging-and-monitoring.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/iterator-caching.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/production-transition.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/purity-decorators.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/smart-persistence.md",
+    REPO_ROOT / "docs/tutorials/feature-guides/thread-safety.md",
+    REPO_ROOT / "docs/tutorials/use-cases/data-engineering.md",
+    REPO_ROOT / "docs/tutorials/use-cases/data-science.md",
+    REPO_ROOT / "docs/tutorials/use-cases/llm-api-calls.md",
+    REPO_ROOT / "docs/tutorials/use-cases/scientific-computing.md",
+]
 
 
 @pytest.mark.docs_parity
@@ -89,3 +116,32 @@ def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
         f"{doc_path}: no testable fences found "
         f"({len(result.skipped_fences)} skipped, total {result.total_fences})"
     )
+
+
+@pytest.mark.docs_parity
+@pytest.mark.parametrize(
+    "doc_path",
+    PR2_DOCS,
+    ids=lambda p: p.stem,
+)
+def test_doc_page_pr2(doc_path: Path, docs_coverage_recorder) -> None:
+    """Execute every python fence in the doc and assert documented cache claims."""
+    namespace_overrides = _DOC_NAMESPACES.get(doc_path.stem)
+    result = run_page(doc_path, namespace_overrides=namespace_overrides)
+    docs_coverage_recorder.append({
+        "page": str(doc_path.relative_to(REPO_ROOT)),
+        "tested_fences": result.tested_fences,
+        "total_fences": result.total_fences,
+        "skipped_fences": result.skipped_fences,
+    })
+    # Some docs are entirely notebook-cell fences; those are auto-skipped and
+    # produce 0 tested fences, which is expected (not a failure).
+    nb_cell_skips = sum(
+        1 for _, reason in result.skipped_fences if "nb-cell" in reason
+    )
+    non_nb_total = result.total_fences - nb_cell_skips
+    if non_nb_total > 0:
+        assert result.tested_fences >= 1, (
+            f"{doc_path}: no testable fences found "
+            f"({len(result.skipped_fences)} skipped, total {result.total_fences})"
+        )

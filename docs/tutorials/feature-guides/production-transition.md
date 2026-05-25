@@ -62,6 +62,7 @@ If `tracked_files` is empty but you *do* read external state — for instance, y
 
 The default (tiered RAM + file under `./.cash/`) is fine for most scripts. Production deployments usually want explicit control. See [Choosing a backend](choosing-a-backend.md) for selection logic; quick sketches:
 
+<!-- test:skip reason="requires redis package; RedisBackend import fails without it" -->
 ```python
 from cash import Cash, FileBackend
 from cash.backends import SQLiteBackend, RedisBackend
@@ -73,6 +74,7 @@ app = Cash(backend=RedisBackend(host="redis.internal", port=6379, db=0))        
 
 ### Step 5: Build a pipeline script
 
+<!-- test:skip reason="if __name__ == '__main__' guard prevents actual execution; claim inferencer would miscount" -->
 ```python
 # run_pipeline.py
 from cash import Cash, FileBackend
