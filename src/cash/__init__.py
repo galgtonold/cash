@@ -21,7 +21,7 @@ from .backends import CascadingBackend, FileBackend, InMemoryBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
 from .core import Cash, CacheExplanation
-from .data_source import FileDataSource
+from .data_source import DataSource, FileDataSource
 from .exceptions import (
     AmbiguousCellError,
     CacheBackendError,
@@ -335,6 +335,7 @@ __all__ = [
     "SQLiteBackend",
     "CascadingBackend",
     # Data sources (stable)
+    "DataSource",
     "FileDataSource",
     # Exceptions (stable)
     "CashError",
