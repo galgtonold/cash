@@ -50,11 +50,21 @@ _fake_sqlalchemy_engine = _types.SimpleNamespace(
 _fake_sqlalchemy = _types.SimpleNamespace(engine=_fake_sqlalchemy_engine)
 
 
+class _FakePriceAPI:
+    """Stub for price_api in async-caching.md TTL fence."""
+
+    async def get(self, symbol: str) -> dict:
+        return {"symbol": symbol, "price": 42.0}
+
+
 _DOC_NAMESPACES: dict[str, dict] = {
     "custom-hashers": {
         "MyPydanticModel": _MyPydanticModelStub,
         "DatasetConfig": _DatasetConfigStub,
         "sqlalchemy": _fake_sqlalchemy,
+    },
+    "async-caching": {
+        "price_api": _FakePriceAPI(),
     },
 }
 

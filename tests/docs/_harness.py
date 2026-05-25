@@ -100,6 +100,24 @@ class PageResult:
     claim_results: list[ClaimResult] = field(default_factory=list)
 
 
+def _apply_inject_comments(script: str) -> str:
+    """Replace ``# test:inject: <code>`` comment lines with the code.
+
+    Lines matching ``^(\\s*)# test:inject:\\s*(.+)$`` are replaced with
+    ``<indent><code>``, preserving indentation so injections inside function
+    bodies remain syntactically valid.  All other lines pass through unchanged.
+    """
+    out: list[str] = []
+    for raw_line in script.splitlines(keepends=True):
+        m = re.match(r"^(\s*)# test:inject:\s*(.+)$", raw_line.rstrip("\n"))
+        if m:
+            indent, code = m.group(1), m.group(2)
+            out.append(indent + code + "\n")
+        else:
+            out.append(raw_line)
+    return "".join(out)
+
+
 def run_page(
     md_path: Path,
     namespace_overrides: dict[str, Any] | None = None,
@@ -127,6 +145,7 @@ def run_page(
         return result
 
     script = "\n\n".join(pieces)
+    script = _apply_inject_comments(script)
     namespace: dict[str, Any] = {"__name__": "__cash_docs_test__"}
     if namespace_overrides:
         namespace.update(namespace_overrides)
