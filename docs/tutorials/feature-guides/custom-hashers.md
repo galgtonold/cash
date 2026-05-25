@@ -107,7 +107,6 @@ This is faster than serialising the whole object and gives you explicit control 
 
 For objects that hold a handle to an external resource — DB connections, S3 clients, HTTP sessions — hash the *target*, not the handle:
 
-<!-- test:skip reason="references undefined name sqlalchemy" -->
 ```python
 def hash_db_conn(conn):
     return hashlib.sha256(conn.url.encode()).hexdigest()
