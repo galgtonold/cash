@@ -77,7 +77,6 @@ A useful sanity check: call your hasher twice on freshly constructed-equal insta
 
 If your type already has a canonical bytes representation, use it:
 
-<!-- test:skip reason="references undefined name MyPydanticModel" -->
 ```python
 import hashlib, json
 import cash
@@ -94,7 +93,6 @@ Pydantic's `model_dump_json` is deterministic, total, and reasonably cheap. Same
 
 When only a handful of fields determine the output, hash those:
 
-<!-- test:skip reason="references undefined name DatasetConfig" -->
 ```python
 def hash_dataset_config(cfg):
     parts = (cfg.path, cfg.split, cfg.preprocessing_version, tuple(cfg.features))
