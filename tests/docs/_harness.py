@@ -9,6 +9,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from tests.docs._annotations import find_skip_for_fence
+
 
 _FENCE_RE = re.compile(
     r"^```python(?P<attrs>(?:\s+\{[^}]*\})?)\s*$"
@@ -52,12 +54,15 @@ def extract_fences(md_path: Path) -> list[Fence]:
                 body_lines.append(lines[j])
                 j += 1
             end_line = j + 1  # 1-based line of closing ```
+            skip_ann = find_skip_for_fence(lines, start_line)
             fences.append(
                 Fence(
                     code="\n".join(body_lines),
                     line_start=start_line,
                     line_end=end_line,
                     attrs=attrs,
+                    skip=skip_ann is not None,
+                    skip_reason=skip_ann.reason if skip_ann else None,
                 )
             )
             i = j + 1
