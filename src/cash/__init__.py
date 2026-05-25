@@ -20,7 +20,7 @@ from typing import Any
 from .backends import CascadingBackend, FileBackend, InMemoryBackend
 from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
-from .core import Cash
+from .core import Cash, CacheExplanation
 from .data_source import FileDataSource
 from .exceptions import (
     AmbiguousCellError,
@@ -31,11 +31,78 @@ from .exceptions import (
     CashCacheIneffectiveWarning,
     CashCacheStoreFailedWarning,
     CashError,
+    CashImpureFunctionError,
+    CashImpurityWarning,
     CashWarning,
     DependencyNotFoundError,
     UpstreamStateError,
 )
 from .notebook.purity import analyze_function_purity, is_pure, is_stateful, pure, stateful
+
+# ---------------------------------------------------------------------------
+# Annotation helpers for third-party callables
+# ---------------------------------------------------------------------------
+
+def mark_pure(func: Any) -> Any:
+    """Mark *func* as pure for cash's purity analyzer.
+
+    Use this on library functions you've audited and want the
+    analyzer to trust. Sets the same ``_cash_pure`` attribute the
+    `pure` decorator sets, so it composes with the existing
+    annotation system. Returns *func* unmodified (no wrapping).
+
+    Unlike `pure`, this does not wrap the function — the
+    attribute is set directly on the passed object. This matters for
+    third-party callables that may not survive wrapping (C extensions,
+    callable instances with strict signatures).
+
+    Example:
+
+        import pandas as pd
+        import cash
+
+        cash.mark_pure(pd.DataFrame.merge)
+
+    Returns:
+        The same callable, with ``_cash_pure = True`` attached if
+        possible. Silently no-ops on objects that don't allow
+        attribute setting.
+    """
+    try:
+        setattr(func, '_cash_pure', True)
+    except (AttributeError, TypeError):
+        pass
+    return func
+
+
+def mark_stateful(func: Any) -> Any:
+    """Mark *func* as stateful (side-effecting) for cash's purity analyzer.
+
+    Tells the analyzer to flag any call to *func* as an impure call
+    when analyzing a cached function. Sets the same
+    ``_cash_stateful`` attribute the `stateful` decorator sets.
+
+    Use on library functions whose impurity the analyzer can't see
+    (C extensions, database drivers, etc.) so that calling them
+    from a ``@cash.cache``-decorated function triggers the warning.
+
+    Example:
+
+        import pandas as pd
+        import cash
+
+        cash.mark_stateful(pd.DataFrame.to_sql)
+
+    Returns:
+        The same callable, with ``_cash_stateful = True`` attached
+        if possible. Silently no-ops on objects that don't allow
+        attribute setting.
+    """
+    try:
+        setattr(func, '_cash_stateful', True)
+    except (AttributeError, TypeError):
+        pass
+    return func
 
 __version__ = "0.5.0b1"
 
@@ -231,7 +298,7 @@ def __getattr__(name):
     """Proxy module-level attribute access to the global ``Cash`` singleton.
 
     Supported attributes: ``cache``, ``show_stats``, ``register_hasher``.
-    These are created lazily on first access via :func:`_get_global_cash`.
+    These are created lazily on first access via `_get_global_cash`.
     """
     if name == 'cache':
         return _get_global_cash().cache
@@ -244,6 +311,7 @@ def __getattr__(name):
 __all__ = [
     # Core API (stable)
     "Cash",
+    "CacheExplanation",
     "cache",
     "show_stats",
     "register_hasher",
@@ -255,6 +323,8 @@ __all__ = [
     "is_pure",
     "is_stateful",
     "analyze_function_purity",
+    "mark_pure",
+    "mark_stateful",
     # Configuration (stable)
     "get_config",
     "CashConfig",
@@ -275,10 +345,12 @@ __all__ = [
     "AmbiguousCellError",
     "UpstreamStateError",
     "CacheKeyComputationError",
+    "CashImpureFunctionError",
     # Warnings (stable)
     "CashWarning",
     "CashCacheIneffectiveWarning",
     "CashCacheStoreFailedWarning",
+    "CashImpurityWarning",
 ]
 
 # Experimental features are available via:
@@ -290,11 +362,11 @@ def load_ipython_extension(ipython):
     Called automatically by IPython/Jupyter when the user runs
     ``%load_ext cash`` or when cash is listed in ``ipython_config``.  Most
     users do not need to call this directly — plain ``import cash`` already
-    registers the magics via :func:`_auto_load_in_ipython`, and is the
+    registers the magics via `_auto_load_in_ipython`, and is the
     recommended entry point because it also exposes ``@cash.cache`` for
     decorator-style caching.
 
-    Delegates to :meth:`Cash.register_magic` on the global instance so
+    Delegates to `Cash.register_magic` on the global instance so
     that the magic shares the same backend and tracking state as any
     ``cash.cache`` calls in the same session.
     """

@@ -262,6 +262,14 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "requires_ipython: marks tests that require IPython"
     )
+    # CashImpurityWarning fires on the call-counter pattern that
+    # virtually every test uses (`n['calls'] += 1` to count invocations
+    # — a real scope mutation). Treating it as noise for the broad
+    # suite; dedicated purity tests opt back in with their own filter.
+    config.addinivalue_line(
+        "filterwarnings",
+        "ignore::cash.CashImpurityWarning",
+    )
 
 
 @pytest.fixture(autouse=True)
