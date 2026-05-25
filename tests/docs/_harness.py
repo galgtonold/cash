@@ -137,6 +137,11 @@ def run_page(
         if f.skip:
             result.skipped_fences.append((f.line_start, f.skip_reason or "<no reason>"))
             continue
+        if f.is_nb_cell:
+            result.skipped_fences.append(
+                (f.line_start, "nb-cell: requires IPython kernel (PR2+ scope)")
+            )
+            continue
         pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
         pieces.append("\n" * pad + f.code)
         result.tested_fences += 1

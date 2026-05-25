@@ -10,6 +10,7 @@ The mechanism is a one-time monkey-patch of the popular reader functions: when a
 
 ## Quick start
 
+<!-- test:skip reason="demonstrates file mutation (edit file between calls) which cannot be reproduced in a single script" -->
 ```python
 import cash
 import pandas as pd
@@ -49,6 +50,7 @@ For `open()`, the wrapper records the path only when the mode contains `'r'` or 
 
 `cache_info()` and `f.explain()` surface the recorded dictionary. After a compute, the entry's metadata holds `auto_file_deps`:
 
+<!-- test:skip reason="demonstrates file mutation between calls which cannot be reproduced in a single script" -->
 ```python
 import cash
 import pandas as pd
@@ -110,6 +112,7 @@ A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *
 
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` (`src/cash/core.py:2380-2458`) lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
+<!-- test:skip reason="fictional my_lib module cannot be registered without existing in sys.modules" -->
 ```python
 import cash
 

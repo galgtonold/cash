@@ -16,6 +16,7 @@ If the promotion policy returns `False` for a given call, the result lands in RA
 
 Smart persistence is on by default. Nothing to configure:
 
+<!-- test:skip reason="time.sleep(2) and undefined heavy_thing() make this unsuitable for automated testing" -->
 ```python
 import cash
 
@@ -38,6 +39,7 @@ After both calls, peek at the cache directory: only `slow`'s entry is on disk. `
 
 The active policy is built by `_build_smart_persistence_policy` (`src/cash/backends/factory.py:109-125`) and handed to the `TieredBackend` constructor at startup. Its body:
 
+<!-- test:skip reason="references undefined local variables min_persist_compute_s, small_result_bytes, threshold from surrounding factory closure" -->
 ```python
 def policy(execution_time: float, size_bytes: int) -> bool:
     if execution_time < min_persist_compute_s:   # 0.1 s
@@ -87,6 +89,8 @@ Two policy knobs are exposed via `CashConfig` (`src/cash/config.py:177-187`):
 Set them via any layer (`pyproject.toml [tool.cash]`, `CASH_*` env vars, or kwargs):
 
 ```python
+import cash
+
 cash.configure(smart_persistence_threshold=0.5)   # promote anything >0.5 s
 cash.configure(smart_persistence=False)           # force-disable; persist everything
 ```
@@ -100,6 +104,7 @@ The `TieredBackend.set` path records which tiers accepted the write in `metadata
 For debugging, enable verbose logging:
 
 ```python
+import cash
 import logging
 logging.basicConfig(level=logging.DEBUG)
 cash.configure(debug=True)
@@ -107,6 +112,7 @@ cash.configure(debug=True)
 
 The TieredBackend logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (`tiered_backend.py:139-140`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in (`src/cash/core.py:1470-1480`):
 
+<!-- test:skip reason="time.sleep(2) makes this unsuitable for automated testing" -->
 ```python
 @cash.cache
 def slow(x):
