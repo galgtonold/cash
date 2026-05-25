@@ -231,6 +231,16 @@
   max-width: 100%;
 }
 
+/* Edge label backgrounds are white by default (Mermaid injects an ID-scoped
+   style inside the SVG). Override both the span background and the rect fill
+   so the label text sits directly on the arrow without a white pill box. */
+.md-typeset .mermaid .edgeLabel {
+  background-color: transparent !important;
+}
+.md-typeset .mermaid .edgeLabel rect {
+  fill: none !important;
+}
+
 /* ─── Why Cash? page blocks ──────────────────────────────────────────── *
  * Custom layout for docs/why-cash.md. All colours come from --cash-*
  * tokens above — do not introduce new colour values here.               */

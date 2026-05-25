@@ -119,7 +119,7 @@ region = "us-east-1"
 ```
 
 Each tier's per-backend fields are documented at
-[backends.md](../api_reference.md#backends).
+[Backends](../api/backends.md).
 
 Per-field env-var overrides for tier entries: `CASH_TIER_<N>_<FIELD>`
 where `<N>` is the zero-based index. For example, to override only the

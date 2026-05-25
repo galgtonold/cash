@@ -80,7 +80,7 @@ lineage(result) = hash(code + sorted(input_lineages) + file_deps)
 ## Documentation
 
 - [Getting Started](getting-started/quickstart.md) — Installation and first steps
-- [API Reference](api_reference.md) — All magic commands and backends
+- [API Reference](api/index.md) — autodoc reference for every public symbol
 - [Architecture](notebook_caching_technical.md) — Technical deep dive
 - [Migration Guide](migration_guide.md) — Moving from lru_cache, joblib, etc.
 - [Contributing](contributing.md) — Development setup, testing, and code style

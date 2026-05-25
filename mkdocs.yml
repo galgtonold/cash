@@ -37,6 +37,7 @@ extra_javascript:
 
 plugins:
   - search
+  - autorefs
   - mermaid2:
       arguments:
         theme: base
@@ -59,8 +60,31 @@ plugins:
       handlers:
         python:
           options:
-            show_source: true
+            # Render the class/function heading itself (not just members).
             show_root_heading: true
+            # Short name: "Cash" not "cash.Cash" — the page title carries
+            # the module context already.
+            show_root_full_path: false
+            # No "view source on GitHub" links — keeps the page compact.
+            show_source: false
+            # Coloured badges next to each heading + TOC entry so readers
+            # can tell class vs function vs dataclass at a glance.
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            # Render signature on its own line below the heading so the
+            # heading text stays short and TOC entries don't blow up.
+            separate_signature: true
+            show_signature_annotations: true
+            # Make type annotations in signatures linkable.
+            signature_crossrefs: true
+            # Preserve source order so we don't shuffle related methods.
+            members_order: source
+            # Use the table layout for Args/Returns/Raises — denser than
+            # the spaced list layout.
+            docstring_section_style: table
+            # Members default to one level under the class/function, so
+            # H2 class -> H3 method renders naturally.
+            heading_level: 2
 
 markdown_extensions:
   - pymdownx.highlight:
@@ -87,11 +111,11 @@ nav:
     - Quick Start: getting-started/quickstart.md
     - Migration Guide: migration_guide.md
   - User Guide:
+    - Decorator (@cash.cache): decorator.md
     - Notebook Caching: notebook_caching_api.md
     - Reading the Cash Badge: badges.md
     - Magic Commands: magics.md
     - Annotations: annotations.md
-    - API Reference: api_reference.md
     - Configuration: getting-started/configuration.md
     - Command-line interface: cli.md
     - Cost model: cost-model.md
@@ -102,6 +126,17 @@ nav:
     - Production Transition: tutorials/production_transition.md
     - Advanced Configuration: tutorials/advanced_configuration.md
     - Purity decorators: tutorials/purity.md
+  - API Reference:
+    - Overview: api/index.md
+    - Cash class: api/cash.md
+    - Backends: api/backends.md
+    - Backend internals: api/backend_internals.md
+    - Purity & annotations: api/purity.md
+    - Configuration: api/config.md
+    - Data sources: api/data_sources.md
+    - Exceptions & warnings: api/exceptions.md
+    - Notebook integration: api/notebook.md
+    - Experimental: api/experimental.md
   - Technical Reference:
     - Architecture: notebook_caching_technical.md
     - Architecture Decisions: architecture_decisions.md

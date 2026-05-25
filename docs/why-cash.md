@@ -200,14 +200,14 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     Native built-in hashers cover pandas, numpy, polars, PyArrow, modin,
     and dask. For anything else — torch tensors, duckdb relations,
     custom domain types — register a hasher with `cash.register_hasher`.
-    See [API reference](api_reference.md#register_hasher).
+    See [API reference](api/cash.md#cash).
 
 ??? question "Notebooks only, or scripts too?"
     Both. The `@cash.cache` decorator works in plain Python scripts.
     The notebook integration (`%cash_on` and statement-level caching)
     is what the rest of this page focuses on, but the underlying engine
     is independent of Jupyter.
-    See [API reference](api_reference.md).
+    See [API reference](api/index.md).
 
 ### Overhead
 
