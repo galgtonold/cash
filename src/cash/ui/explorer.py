@@ -20,7 +20,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 class CacheExplorer:
+    """Inspect, search, and manage entries stored in a `Cash` backend.
+
+    Lets you list every cached entry with timestamps and source code,
+    preview cached values, or clear entries for a specific function —
+    all without touching the backend directly. Useful in notebooks
+    for answering "what's actually in my cache?" and in scripts for
+    targeted cache management.
+
+    Typically obtained via `Cash.explorer()` rather than constructed
+    directly:
+
+    ```python
+    import cash
+    c = cash.Cash()
+    explorer = c.explorer()
+    explorer.list_entries()         # all entries with metadata
+    explorer.to_dataframe()         # same, as a pandas DataFrame
+    explorer.get_preview(key)       # peek at a stored value
+    explorer.clear_function("my_module.my_func")  # surgical clear
+    ```
+
+    Status: experimental. Import via `cash.experimental.CacheExplorer`
+    if instantiating outside `Cash.explorer()`.
+    """
+
     def __init__(self, cash_app: Cash) -> None:
+        """
+        Args:
+            cash_app: The `Cash` instance whose backend will be inspected.
+        """
         self.app = cash_app
 
     def list_entries(self) -> list[dict[str, Any]]:

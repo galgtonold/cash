@@ -20,8 +20,8 @@ class _MultiBackendMixin:
     """Shared delegation logic for backends wrapping multiple sub-backends.
 
     Provides default implementations for methods that simply iterate over
-    ``self.backends`` and delegate.  Used by :class:`CascadingBackend` and
-    :class:`TieredBackend` (in ``tiered_backend.py``).
+    ``self.backends`` and delegate.  Used by `CascadingBackend` and
+    `TieredBackend` (in ``tiered_backend.py``).
     """
 
     backends: list[CacheBackend]
@@ -30,7 +30,7 @@ class _MultiBackendMixin:
         """Get only metadata for a cache key from the first backend that has it.
 
         Checks backends in order (fast → slow), returning the first hit.
-        Supports metadata-only entries written by :meth:`set_metadata_only`.
+        Supports metadata-only entries written by `set_metadata_only`.
         """
         for backend in self.backends:
             if hasattr(backend, 'get_metadata'):

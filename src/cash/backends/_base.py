@@ -192,22 +192,22 @@ class CacheMetadata(TypedDict, total=False):
 class CacheBackend(ABC):
     """Abstract base class for cache backends.
 
-    Error contract
-    --------------
-    * ``get()`` returns ``(None, None)`` for missing or corrupt entries.
-      Raises :class:`~cash.exceptions.CacheBackendError` on infrastructure
-      failures (disk I/O, network, permission errors).
-    * ``set()`` raises :class:`~cash.exceptions.CacheBackendError` on write
-      failures.  Implementations should clean up partial writes before raising.
-    * ``delete()`` and ``clear()`` raise
-      :class:`~cash.exceptions.CacheBackendError` on infrastructure failures.
+    **Error contract**
 
-    Tier-promotion hints
-    --------------------
-    * ``max_size_bytes`` — upper bound on object size this backend is happy
-      to host as a tier inside a :class:`TieredBackend`. ``None`` (default)
+    * `get()` returns `(None, None)` for missing or corrupt entries.
+      Raises `CacheBackendError` on infrastructure
+      failures (disk I/O, network, permission errors).
+    * `set()` raises `CacheBackendError` on write
+      failures.  Implementations should clean up partial writes before raising.
+    * `delete()` and `clear()` raise
+      `CacheBackendError` on infrastructure failures.
+
+    **Tier-promotion hints**
+
+    * `max_size_bytes` — upper bound on object size this backend is happy
+      to host as a tier inside a `TieredBackend`. `None` (default)
       means unbounded. The cap is a *promotion hint*, not a hard gate: a
-      bare-backend ``set()`` writes whatever you give it. Only the tiered
+      bare-backend `set()` writes whatever you give it. Only the tiered
       pipeline skips a tier whose cap the object exceeds.
     """
 
@@ -219,7 +219,7 @@ class CacheBackend(ABC):
         """Retrieve (metadata, value) from the cache.
 
         Returns ``(None, None)`` when *key* is not found.  Raises
-        :class:`~cash.exceptions.CacheBackendError` on infrastructure errors.
+        `CacheBackendError` on infrastructure errors.
         """
         ...
 
@@ -242,7 +242,7 @@ class CacheBackend(ABC):
     def delete(self, key: str) -> None:
         """Delete a value from the cache.
 
-        Raises :class:`~cash.exceptions.CacheBackendError` on infrastructure errors.
+        Raises `CacheBackendError` on infrastructure errors.
         """
         ...
 
@@ -250,7 +250,7 @@ class CacheBackend(ABC):
     def clear(self) -> None:
         """Clear all values from the cache.
 
-        Raises :class:`~cash.exceptions.CacheBackendError` on infrastructure errors.
+        Raises `CacheBackendError` on infrastructure errors.
         """
         ...
 
@@ -263,7 +263,7 @@ class CacheBackend(ABC):
         """Iterate over all items and delete those where ``is_expired(metadata)`` is True.
 
         Returns the number of deleted items.  The default implementation
-        scans :meth:`list_entries` and calls :meth:`delete` for each expired
+        scans `list_entries` and calls `delete` for each expired
         entry.  Subclasses may override for more efficient backend-native
         expiration (e.g. Redis TTL).
         """
@@ -279,7 +279,7 @@ class CacheBackend(ABC):
 
         Returns the metadata dict if the key exists, or ``None`` otherwise.
         The default implementation performs a full ``get()`` and discards the
-        value.  Subclasses (e.g. :class:`FileBackend`) may override for a
+        value.  Subclasses (e.g. `FileBackend`) may override for a
         more efficient metadata-only read path.
         """
         metadata, _ = self.get(key)
