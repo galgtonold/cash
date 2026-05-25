@@ -10,6 +10,7 @@ The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` sel
 
 ## Quick start
 
+<!-- test:skip reason="illustrative REPL snippet: top-level await against fake api.example.com URL; conflicts with the self-contained asyncio.run(main()) fence below when concatenated" -->
 ```python
 import cash
 import aiohttp
@@ -89,6 +90,7 @@ Two paths are explicitly opted out on the async side:
 
 The original motivation. API responses are deterministic in their input prompt and idempotent for cache purposes; the latency and dollar cost of a re-call dwarf the cache lookup. Wrap the outermost function whose inputs are stable across iteration:
 
+<!-- test:skip reason="references `anthropic.AsyncAnthropic` which is not a hard dep of cash; SDK not installed in dev env" -->
 ```python
 @cash.cache(ttl=3600)
 async def llm_complete(prompt: str, model: str = "claude-opus-4-7"):
@@ -105,6 +107,7 @@ See [LLM API Calls](../use-cases/llm-api-calls.md) for the full prompt-iteration
 
 A typical TTL pattern for "data is fine if it's under an hour old":
 
+<!-- test:skip reason="illustrative REPL snippet: references undefined `price_api`; top-level await with 61-minute-later TTL expiry is not runnable" -->
 ```python
 @cash.cache(ttl=3600)
 async def stock_quote(symbol):
@@ -122,6 +125,7 @@ The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper
 
 `asyncio.gather` over a cached async function gives you parallel hits on the same backend with no contention on the read path — each `get` is a sync call that returns immediately on hit:
 
+<!-- test:skip reason="illustrative skeleton: empty `...` body and undefined `uids`; top-level await is REPL-only" -->
 ```python
 @cash.cache
 async def fetch(uid):
@@ -136,6 +140,7 @@ Mind the lock caveat above: if `uids` contains the same id twice and both calls 
 
 Both shapes work; pick the one whose granularity matches your re-run unit:
 
+<!-- test:skip reason="illustrative side-by-side: references undefined `api`; defines `fetch_many` twice (name collision is intentional in the doc to contrast shapes)" -->
 ```python
 # Leaf-level caching: each fetch is cached independently.
 @cash.cache

@@ -5,7 +5,9 @@ PR1 scope: plain Python fences only. nb-cell handling deferred to PR2/PR3.
 
 from __future__ import annotations
 
+import asyncio
 import re
+from ast import PyCF_ALLOW_TOP_LEVEL_AWAIT
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -130,8 +132,16 @@ def run_page(
         namespace.update(namespace_overrides)
 
     try:
-        code_obj = compile(script, str(md_path), "exec")
-        exec(code_obj, namespace)
+        code_obj = compile(
+            script,
+            str(md_path),
+            "exec",
+            flags=PyCF_ALLOW_TOP_LEVEL_AWAIT,
+        )
+        # If the compiled code is a coroutine (top-level await), run it.
+        maybe_coro = eval(code_obj, namespace)
+        if asyncio.iscoroutine(maybe_coro):
+            asyncio.run(maybe_coro)
     except Exception as e:
         raise PageExecutionError(
             f"{md_path}: exec failed with {type(e).__name__}: {e}"
