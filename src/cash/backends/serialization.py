@@ -1,7 +1,7 @@
 """Serialization strategies for cache value persistence.
 
-Provides :class:`Serializer` (abstract base), :class:`PickleSerializer`,
-:class:`JSONSerializer`, and :class:`CloudPickleSerializer`.
+Provides `Serializer` (abstract base), `PickleSerializer`,
+`JSONSerializer`, and `CloudPickleSerializer`.
 """
 
 from __future__ import annotations

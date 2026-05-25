@@ -25,7 +25,7 @@ __all__ = ["FileBackend"]
 class FileBackend(CacheBackend):
     """File-based cache backend.
 
-    .. warning:: Uses :mod:`pickle` for serialization.  Cache files are
+    .. warning:: Uses `pickle` for serialization.  Cache files are
        assumed to originate from the local machine.  Do not load cache
        directories from untrusted sources — see :file:`SECURITY.md`.
     """

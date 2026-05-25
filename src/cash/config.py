@@ -44,36 +44,78 @@ _SUPPORTED_TIER_TYPES = frozenset({"memory", "file", "sqlite", "redis", "s3", "t
 
 @dataclass
 class TierConfig:
-    """One backend tier inside a TieredBackend stack.
+    """One backend tier inside a tiered stack.
 
     Only the fields relevant to the chosen ``type`` are read by the
     backend factory; the rest are left at their defaults so the same
-    TierConfig shape can carry every backend type without forcing the
-    user to wrap each one in a sum type.
+    ``TierConfig`` shape can carry every backend type without
+    forcing the user to wrap each one in a sum type.
+
+    Used inside ``CashConfig.tiers`` to describe a multi-backend
+    pipeline (e.g. ``[memory, redis, s3]``).
     """
 
     type: str
+    """Backend type. One of ``"memory"``, ``"file"``, ``"sqlite"``,
+    ``"redis"``, ``"s3"``, ``"tiered"``. Raises ``ValueError`` on
+    unknown values."""
+
     # memory / file / sqlite shared:
     max_size_bytes: int | None = None
+    """Per-tier size cap in bytes. Also serves as the
+    *promotion hint* — values larger than this skip this tier when
+    used inside a tiered stack."""
+
     default_ttl: int | None = None
+    """Default TTL in seconds for entries in this tier. Overridden
+    per-call by ``@cash.cache(ttl=...)``."""
+
     # memory:
     max_entries: int | None = None
+    """memory tier only — LRU entry cap."""
+
     # file:
     cache_dir: str | None = None
+    """file tier only — directory for the cache files. Defaults to
+    ``CashConfig.cache_dir`` when omitted."""
+
     compress: bool | None = None
+    """file tier only — gzip compression on/off. Defaults to
+    ``CashConfig.compress`` when omitted."""
+
     flush_interval: int | None = None
+    """file tier only — metadata flush interval (seconds)."""
+
     # sqlite:
     db_path: str | None = None
+    """sqlite tier only — path to the .db file."""
+
     wal_mode: bool | None = None
+    """sqlite tier only — enable WAL journal mode for better
+    concurrency. Default True."""
+
     # redis:
     host: str | None = None
+    """redis tier only — server hostname."""
+
     port: int | None = None
+    """redis tier only — server port."""
+
     db: int | None = None
+    """redis tier only — logical database number."""
+
     password: str | None = None
+    """redis tier only — AUTH password (if enabled)."""
+
     prefix: str | None = None
+    """redis tier only — key prefix."""
+
     # s3:
     bucket: str | None = None
+    """s3 tier only — bucket name."""
+
     region: str | None = None
+    """s3 tier only — AWS region (e.g. ``"us-east-1"``)."""
 
     def __post_init__(self) -> None:
         if self.type not in _SUPPORTED_TIER_TYPES:
@@ -87,51 +129,137 @@ class TierConfig:
 class CashConfig:
     """Cash configuration — single source of truth for every tunable.
 
-    Every field here is also exposed as ``CASH_<UPPERCASE>`` env var and
-    as a TOML key under ``[tool.cash]`` / ``[cash]``.
+    Every field below is also exposed as a `CASH_<UPPERCASE>` env var
+    (e.g. `CASH_CACHE_DIR`, `CASH_DEBUG=1`) and as a TOML key under
+    `[tool.cash]` (project) / `[cash]` (XDG user config). Resolution
+    precedence: kwargs > env vars > project TOML > user TOML >
+    defaults (see the module docstring above).
+
+    Fields are grouped below by purpose:
+
+    * **Cache location & file backend** — where to store, compress
+      vs raw, size cap, flush cadence.
+    * **Cost-aware policy** — the smart-persistence rules that
+      decide which results are expensive enough to write past RAM.
+    * **Observability** — debug toggles.
+    * **Backend selection (simple mode)** — pick one backend with
+      connection details inline.
+    * **Advanced — tier stack** — define an explicit `[memory →
+      redis → s3]` (or any) pipeline.
     """
 
     # --- Cache location & file backend defaults ---
     cache_dir: str = ".cash"
+    """Directory for the on-disk cache. Resolved to an absolute
+    path at startup so ``os.chdir()`` won't break later writes."""
+
     compress: bool = False
+    """When True, the file backend gzip-compresses each entry.
+    Trades CPU for disk space; usually only worth it for plain-text
+    blobs (CSV, JSON). Already-compressed formats (Parquet, joblib)
+    don't shrink much."""
+
     max_cache_size: int = 1024 ** 3
+    """Maximum total cache size in bytes (default 1 GiB). When the
+    file backend exceeds this, it evicts least-recently-accessed
+    entries until it fits."""
+
     max_memory_entries: int | None = None
+    """LRU entry cap for the in-memory tier. ``None`` (default)
+    means unlimited — eviction is driven by ``psutil`` memory
+    pressure instead. Set an integer to force a hard count limit."""
+
     flush_interval: int = 5
+    """Seconds between metadata flushes for the file backend. Lower
+    values reduce data loss on crash but increase disk I/O. Set to
+    0 to flush after every write (slowest, safest)."""
 
     # --- Cost-aware caching policy ---
     smart_persistence: bool = True
+    """When True (default), the tiered backend decides per-entry
+    whether to persist past RAM based on compute time vs storage
+    cost. Set False to persist everything (legacy behavior — wastes
+    disk for cheap-to-compute values)."""
+
     smart_persistence_threshold: float = 1.0
+    """Compute-time threshold (seconds) above which results
+    *always* persist past RAM, regardless of size. The default of
+    1 s means anything that took > 1 s to compute is worth saving."""
+
     min_execution_time_to_cache_seconds: float = 0.01
+    """Hard floor (seconds). Compute under this duration is never
+    promoted past RAM — disk I/O alone would cost more than
+    rerunning. Default 10 ms."""
+
     min_cache_savings_pct: float = 0.20
+    """Required time-savings fraction (0.0 – 1.0) for a tier to be
+    considered worthwhile. If a cache hit only saves 20% of the
+    compute cost, the entry isn't promoted. Default 0.20."""
+
     min_cache_fixed_budget_seconds: float = 0.05
+    """Per-call I/O budget (seconds). If the predicted serialise +
+    write cost exceeds this fraction of the compute saved, skip
+    the write. Pairs with ``min_cache_savings_pct``."""
 
     # --- Observability ---
     debug: bool = False
+    """When True, every cache decision logs at INFO level with the
+    reason ('HIT', 'MISS — file changed', 'SKIPPED — too cheap').
+    Useful for diagnosing 'why didn't this hit?' mysteries. Hot
+    field — flippable at runtime via ``cash.configure(debug=True)``."""
 
     # --- Backend selection (simple mode) ---
-    # "tiered" auto-builds [memory, file] from cache_dir + compress + ...
-    # Anything else builds a single backend of that type from the
-    # connection fields below.
     backend: str = "tiered"
+    """Backend selector. ``"tiered"`` (default) builds a RAM + disk
+    stack from ``cache_dir`` and ``compress``. ``"memory"`` /
+    ``"file"`` / ``"sqlite"`` / ``"redis"`` / ``"s3"`` builds a
+    single backend of that type from the connection fields below.
+    Ignored when ``tiers`` is non-empty."""
 
     # --- Redis connection details (simple mode) ---
     redis_host: str = "localhost"
+    """Redis server hostname. Used when ``backend="redis"`` or a
+    tier entry has ``type="redis"``."""
+
     redis_port: int = 6379
+    """Redis server port."""
+
     redis_db: int = 0
+    """Redis logical database number (0 – 15 in default config)."""
+
     redis_password: str | None = None
+    """Redis password if AUTH is enabled. Prefer the env var
+    ``CASH_REDIS_PASSWORD`` over committing this to TOML."""
+
     redis_prefix: str = "cash:"
+    """Key prefix for every entry written to Redis. Lets multiple
+    apps share one Redis without collisions. Strip with
+    ``redis_prefix=""`` if you really want a flat namespace."""
 
     # --- S3 connection details (simple mode) ---
     s3_bucket: str = ""
+    """S3 bucket name. Required when ``backend="s3"``."""
+
     s3_region: str = ""
+    """S3 region (e.g. ``"us-east-1"``). Optional if the bucket's
+    region is discoverable from the AWS config / IMDS."""
+
     s3_prefix: str = "cash/"
+    """Object key prefix for every entry written to S3. Same role
+    as ``redis_prefix``."""
 
     # --- Advanced: explicit tier list ---
-    # If non-empty, takes precedence over `backend` + simple-mode fields.
     tiers: list[TierConfig] = field(default_factory=list)
+    """Explicit tier stack — a list of ``TierConfig`` entries that
+    build a custom backend pipeline (e.g. ``[memory, redis, s3]``).
+    When non-empty, takes precedence over ``backend`` + the
+    simple-mode connection fields. Use this for multi-region or
+    multi-team setups where one backend isn't enough."""
 
     # --- Internal: source tracking for `cash --info` ---
     _source: str = "defaults"
+    """Internal — records which config layers contributed (e.g.
+    ``"kwargs+env+project"``). Surfaced by ``python -m cash info``."""
 
     def to_dict(self) -> dict[str, Any]:
         """Public field-value mapping (skips internal ``_source``)."""
@@ -362,7 +490,7 @@ def get_config(
             ``Cash(**kwargs)`` does internally).
 
     Returns:
-        The merged :class:`CashConfig`.
+        The merged `CashConfig`.
     """
     sources: list[str] = []
 

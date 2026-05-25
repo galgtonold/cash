@@ -17,7 +17,29 @@ from ..notebook.analysis import CodeAnalyzer
 logger = logging.getLogger(__name__)
 
 class CacheDebugger:
+    """Step-through inspector for the notebook cache decision pipeline.
+
+    Drives the same machinery that processes ``%cash_on``-decorated
+    cells, but stops between phases so you can inspect what Cash
+    sees and why it decided what it did. Useful for diagnosing
+    'why didn't this cell hit the cache?' when the badge isn't
+    detailed enough.
+
+    Status: experimental. Import via
+    ``cash.experimental.CacheDebugger`` and instantiate with an
+    active IPython shell.
+    """
+
     def __init__(self, shell, cash_instance=None):
+        """
+        Args:
+            shell: An active IPython shell (e.g. from
+                ``IPython.get_ipython()``) — provides ``user_ns`` and
+                the registered cash magics.
+            cash_instance: Optional explicit ``Cash`` instance. When
+                ``None``, the debugger looks one up from the shell's
+                registered magics.
+        """
         self.shell = shell
 
         # Handle case where user passes the module instead of instance
