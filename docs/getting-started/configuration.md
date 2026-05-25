@@ -314,3 +314,12 @@ global toggle. To opt a single statement out of caching (and therefore
 out of file-dependency tracking for that statement), use the
 `# @cash:no-cache` annotation described in the
 [Quick Start](quickstart.md#statement-level-annotations).
+
+## See also
+
+- [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md) —
+  decision guide for picking between RAM-only, tiered, Redis, S3, and
+  custom backend stacks for your workload.
+- [Smart persistence](../tutorials/feature-guides/smart-persistence.md) —
+  how `smart_persistence_threshold` and the cost-model knobs interact, and
+  when to override them.

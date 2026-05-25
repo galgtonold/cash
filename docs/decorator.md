@@ -433,6 +433,18 @@ but the individual chunk entries (keyed
   `mark_pure`, `mark_stateful`
 - [Caching class methods](tutorials/feature-guides/caching-class-methods.md) — recipe for
   stateful receivers via `register_hasher`
+- [Choosing a backend](tutorials/feature-guides/choosing-a-backend.md) —
+  picking RAM / disk / Redis / S3 tiers for your workload
+- [Custom hashers](tutorials/feature-guides/custom-hashers.md) —
+  `register_hasher` for non-picklable / domain-specific argument types
+- [Dynamic dependencies](tutorials/feature-guides/dynamic-dependencies.md) —
+  deeper walkthrough of `dynamic_depends_on=` patterns
+- [Async caching](tutorials/feature-guides/async-caching.md) —
+  `async def` functions, concurrency, and gotchas with locking
+- [Thread safety](tutorials/feature-guides/thread-safety.md) —
+  `use_locking`, concurrent decorator hits, and shared backends
+- [Production transition](tutorials/feature-guides/production-transition.md) —
+  moving notebook caches to long-lived services
 - [Configuration](getting-started/configuration.md) — picking a
   backend, tier stacks, TOML / env / programmatic resolution
 - [Notebook caching](notebook_caching_api.md) — the `%cash_on`

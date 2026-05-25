@@ -414,4 +414,4 @@ Or via environment variables (see the table in [Knobs you can tune](#knobs-you-c
 | Cost-model coefficients | [`cost_model.py:33-73`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py) |
 | `# @cash:persist` parse | [`annotations.py:48-49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) → [`statement_processor.py:559-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) |
 
-See also: [Annotations](annotations.md), [Reading the Cash Badge](badges.md), [Configuration](getting-started/configuration.md).
+See also: [Annotations](annotations.md), [Reading the Cash Badge](badges.md), [Configuration](getting-started/configuration.md), [Smart persistence tutorial](tutorials/feature-guides/smart-persistence.md).

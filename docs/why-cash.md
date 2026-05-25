@@ -274,3 +274,16 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     <p><a href="notebook_caching_technical.md"><strong>Architecture</strong></a> · <a href="architecture_decisions.md"><strong>ADRs</strong></a> · <a href="cost-model.md"><strong>Cost model</strong></a></p>
   </div>
 </div>
+
+### See it applied to your workflow
+
+End-to-end recipes for the workflows cash is built for:
+
+- [Data science](tutorials/use-cases/data-science.md) — exploratory notebooks
+  with expensive ETL, feature engineering, and model iteration.
+- [LLM API calls](tutorials/use-cases/llm-api-calls.md) — memoising expensive
+  completions, replaying prompts deterministically across runs.
+- [Data engineering](tutorials/use-cases/data-engineering.md) — pipeline-style
+  workflows where intermediate frames need to survive kernel restarts.
+- [Scientific computing](tutorials/use-cases/scientific-computing.md) —
+  simulations, parameter sweeps, and reproducibility against changing code.

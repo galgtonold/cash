@@ -140,3 +140,9 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 **Why:** The statement read a file via an API Cash doesn't intercept (a custom loader, a third-party library, a C extension). Cash can't tell whether the file changed, so it refuses to cache rather than risk staleness.
 
 **Fix:** Either (a) use a tracked loader if one will do (`pd.read_*`, `np.load`, `joblib.load`, `open()`), or (b) wrap your loader and register it via `cash.register_hasher()` so Cash knows how to fingerprint the input.
+
+## See also
+
+- [Debugging and monitoring](tutorials/feature-guides/debugging-and-monitoring.md) —
+  using the badge alongside `%cash_debug`, `func.explain()`, and `cache_info()`
+  to diagnose unexpected misses and silent skips.
