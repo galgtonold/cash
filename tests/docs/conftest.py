@@ -63,3 +63,38 @@ def mock_aiohttp(monkeypatch):
 
     monkeypatch.setattr(aiohttp, "ClientSession", lambda *a, **kw: _FakeSession())
     yield
+
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from _pytest.terminal import TerminalReporter
+
+
+# Module-level collector so test_doc_page can record results and the
+# terminal-summary hook can render them.
+_COVERAGE: list[dict[str, object]] = []
+
+
+@pytest.fixture
+def docs_coverage_recorder():
+    """Returned to tests that want to record their PageResult into the
+    session-wide coverage report. Wired into test_doc_page below."""
+    return _COVERAGE
+
+
+def pytest_terminal_summary(terminalreporter: "TerminalReporter", exitstatus: int, config) -> None:
+    if not _COVERAGE:
+        return
+    terminalreporter.write_sep("=", "docs feature-parity coverage")
+    for row in _COVERAGE:
+        page = row["page"]
+        tested = row["tested_fences"]
+        total = row["total_fences"]
+        skipped = row["skipped_fences"]
+        terminalreporter.write_line(
+            f"  {page}: {tested}/{total} fences tested"
+            + (f" ({len(skipped)} skipped)" if skipped else "")
+        )
+        for line, reason in skipped:
+            terminalreporter.write_line(f"      line {line}: {reason}")
