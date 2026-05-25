@@ -1,10 +1,18 @@
-# Tutorial: Data Science Workflows with Cash
+# Data Science Workflows
 
-This tutorial covers real-world data science patterns where Cash shines: loading large datasets, exploratory analysis, feature engineering, and model training.
+Data science iteration is the killer use case for Cash. You load data once, transform it twenty different ways, and re-run the notebook constantly. Without caching, every iteration pays the full I/O + compute cost. With Cash, only the parts that changed re-run.
 
-## Scenario: Customer Churn Analysis
+## The iteration-loop value proposition
 
-You're building a churn prediction model. The workflow involves loading data, cleaning, feature engineering, training, and evaluation — and you'll iterate on each step many times.
+The notebook workflow is: load a CSV, clean it, engineer features, train, evaluate, *change one line, repeat*. The change is usually small — a different aggregation, an extra feature, a tweaked hyperparameter — but in a vanilla notebook every cell from the change downward (and often everything above it after a kernel restart) reruns.
+
+Cash watches each statement. When you tweak the merge on line 4 of cell 4, the groupby on line 1 of cell 4 stays cached, the CSV loads above it stay cached, and only the merge and its downstream consumers recompute. The expensive parts — the 30s parquet read, the 10s aggregation — run once across an entire afternoon of iteration.
+
+Cash also picks the right serializer per type. For pandas DataFrames it writes Parquet automatically (`src/cash/backends/serialization.py:71-90`), so loading a 500MB frame from cache is a fast columnar read, not a pickle balloon.
+
+## Concrete walkthrough: customer churn analysis
+
+You're building a churn model. Load, clean, featurize, train, evaluate.
 
 ### Cell 1: Setup
 
@@ -18,61 +26,50 @@ import cash
 ```python { .nb-cell }
 import pandas as pd
 
-# Cash automatically tracks file dependencies
-# If customers.csv changes, this cell recomputes
 customers = pd.read_csv('customers.csv')
 transactions = pd.read_csv('transactions.csv')
 
 print(f"Customers: {len(customers)}, Transactions: {len(transactions)}")
 ```
 
-!!! tip "File Tracking"
-    Cash intercepts `pd.read_csv()`, `pd.read_parquet()`, `pd.read_excel()`,
-    and many other file-reading functions. If the file's content changes,
-    all dependent statements automatically recompute.
-
-When the CSV changes between runs, the badge above this cell shows a `COMPUTED` row whose miss reason names the file:
+Cash detects `pd.read_csv` automatically — change `customers.csv` and the cell re-runs. The badge spells out which file invalidated the cache:
 
 <iframe class="cash-badge" src="/_badges/miss_file_changed_customers.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+For non-pandas file readers (HDF5, custom binary formats, anything Cash doesn't intercept by default), see [Custom File Sources](../feature-guides/custom-file-sources.md).
 
 ### Cell 3: Data Cleaning
 
 ```python { .nb-cell }
-# Multiple statements — each cached independently
 customers = customers.dropna(subset=['email', 'signup_date'])
 customers['signup_date'] = pd.to_datetime(customers['signup_date'])
 transactions['date'] = pd.to_datetime(transactions['date'])
 ```
 
-If you change the `dropna` logic, only that statement and its dependents recompute. The `pd.to_datetime` calls stay cached.
+Each statement is cached independently. Change the `dropna` logic and only that statement (plus its dependents) recomputes.
 
 ### Cell 4: Feature Engineering
 
 ```python { .nb-cell }
 import numpy as np
 
-# Aggregate transaction features per customer
 tx_features = transactions.groupby('customer_id').agg(
     total_spend=('amount', 'sum'),
     avg_spend=('amount', 'mean'),
     tx_count=('amount', 'count'),
     last_purchase=('date', 'max'),
-    days_since_first=('date', lambda x: (x.max() - x.min()).days)
 ).reset_index()
 
-# Merge with customer data
 df = customers.merge(tx_features, on='customer_id', how='left')
-df['days_since_last'] = (pd.Timestamp.now() - df['last_purchase']).dt.days
 ```
 
 ### Cell 5: Model Training
 
 ```python { .nb-cell }
-from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
+from sklearn.model_selection import train_test_split
 
-features = ['total_spend', 'avg_spend', 'tx_count', 'days_since_last']
+features = ['total_spend', 'avg_spend', 'tx_count']
 X = df[features].fillna(0)
 y = df['churned']
 
@@ -83,139 +80,51 @@ model = RandomForestClassifier(n_estimators=100, random_state=42)
 model.fit(X_train, y_train)
 ```
 
-!!! tip "@cash:persist"
-    The `@cash:persist` annotation forces the model to be saved to disk.
-    If the kernel restarts, the trained model is restored from disk
-    instead of being retrained — even if training took 10 minutes.
+`@cash:persist` forces the trained model to disk. If the kernel restarts, the model is restored — even if training took ten minutes.
 
 ### Cell 6: Evaluation
 
 ```python { .nb-cell }
+from sklearn.metrics import classification_report
 y_pred = model.predict(X_test)
 print(classification_report(y_test, y_pred))
 ```
 
-## The Iteration Loop
+### The payoff
 
-Here's where Cash pays off. Suppose you tweak only the merge step in Cell 4 — for example, switching from a left join to an inner join to drop customers without transactions:
+Switch the merge in Cell 4 from `how='left'` to `how='inner'` and re-run the notebook:
 
-```python { .nb-cell }
-# Cell 4 (modified — only the merge line changed)
-tx_features = transactions.groupby('customer_id').agg(
-    total_spend=('amount', 'sum'),
-    avg_spend=('amount', 'mean'),
-    tx_count=('amount', 'count'),
-    last_purchase=('date', 'max'),
-    days_since_first=('date', lambda x: (x.max() - x.min()).days)
-).reset_index()
-
-# Changed: how='left' → how='inner'
-df = customers.merge(tx_features, on='customer_id', how='inner')
-df['days_since_last'] = (pd.Timestamp.now() - df['last_purchase']).dt.days
-```
-
-Re-run the notebook:
-
-- Cells 2-3 are **RESTORED** from cache (CSV loading stays fast)
-- In Cell 4, the groupby statement is **RESTORED** (its code didn't change), and only the merge statement **RECOMPUTES** (code changed)
-- Cells 5-6 **RECOMPUTE** (new `df` → new model → new evaluation)
-
-The Cell 4 badge shows that mix — the expensive groupby came from cache, only the merge ran:
+- Cells 2-3 **RESTORED** from cache.
+- In Cell 4, the groupby is **RESTORED** (code didn't change), only the merge **RECOMPUTES**.
+- Cells 5-6 **RECOMPUTE** (new `df` → new model → new evaluation).
 
 <iframe class="cash-badge" src="/_badges/workflows_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-Without Cash: 30s to reload CSVs + recompute aggregations on every iteration.
-With Cash: everything before your change loads in milliseconds.
+Without Cash: 30s of CSV reloads + aggregations on every iteration. With Cash: everything before your change loads in milliseconds.
 
-## Working with Large Files
+## Where Cash specifically helps in DS
 
-### Parquet Files
+- **Loading large CSV/parquet.** Pandas readers are intercepted automatically and DataFrames serialize as Parquet, so cached restores skip both the disk read and the pandas parsing path.
+- **Feature engineering iteration.** Each statement is cached independently, so tweaking one feature doesn't invalidate the dozen others above it.
+- **Model training with `@cash:persist`.** The trained estimator goes to disk, survives kernel restarts, and is restored on import — see [Smart Persistence](../feature-guides/smart-persistence.md).
+- **Notebook ↔ kernel-restart workflow.** When the kernel dies (OOM, package upgrade, accidental restart), the disk cache is still there. Re-running the notebook rehydrates everything Cash decided was worth persisting.
 
-```python
-# Cash tracks parquet files the same way as CSVs
-df = pd.read_parquet('large_dataset.parquet')
-```
+## Where to be careful in DS workflows
 
-### Multiple Data Sources
+- **Randomness without a seed.** `df.sample(100)` or `np.random.randn(...)` without a seed produces different values per call. Cash either warns or refuses to cache, depending on the call site. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for `@cash:allow-random`.
+- **In-place mutations to DataFrames.** `df.sort_values(..., inplace=True)` and friends mutate without returning. Cash can't detect the mutation reliably. Either return new frames (`df = df.sort_values(...)`) or mark the helper with `@stateful` — see [Purity Decorators](../feature-guides/purity-decorators.md).
+- **`datetime.now()` in transforms.** Wall-clock reads inside a cached statement bake the current time into the cache. Pull the timestamp outside the cached path, or skip caching for that statement.
 
-```python
-# Each file is tracked independently
-sales = pd.read_csv('sales_2024.csv')
-products = pd.read_csv('products.csv')
-regions = pd.read_parquet('regions.parquet')
+## Tips for data science workflows
 
-# If only products.csv changes, sales and regions stay cached
-combined = sales.merge(products, on='product_id').merge(regions, on='region_id')
-```
+1. **Separate data loading from transforms.** Loading a 500MB CSV takes 10s. Put it in its own cell so it stays cached when you tweak transforms downstream.
+2. **Use `@cash:persist` for trained models.** Anything that takes >10s and you want to survive a kernel restart belongs on disk, not just in the in-memory cache.
+3. **Use seeded RNG for reproducible sampling.** `np.random.seed(42)` before `df.sample(...)` lets Cash treat the result as deterministic and cache it.
 
-## Controlling Cache Behavior
+## Related
 
-### Skip Caching for API Calls
-
-```python
-# @cash:no-cache
-live_prices = api.get_current_prices()  # Always fetches fresh data
-```
-
-### Set Expiry for Volatile Data
-
-```python
-# @cash:ttl=300
-market_data = fetch_market_snapshot()  # Cached for 5 minutes
-```
-
-### Prevent Randomness Issues
-
-```python
-# Unseeded random calls produce warnings — Cash can't guarantee reproducibility
-# Option 1: Set a seed
-np.random.seed(42)
-sample = df.sample(100)
-
-# Option 2: Suppress the warning
-# @cash:allow-random
-sample = df.sample(100)
-```
-
-## Debugging Cache Behavior
-
-When something doesn't seem right:
-
-```python
-%cash_debug on
-```
-
-This raises the cash logger to DEBUG and prints labelled lines from each
-subsystem. Look for these prefixes to see what happened for each statement:
-
-- `[CACHE_KEY]` — how the cache key was constructed
-- `[CACHE_HIT_DEBUG]` — why a lookup hit or missed
-- `[UPSTREAM_DEBUG]` — what made an upstream cell re-run
-- `[LINEAGE_DEBUG]` — the inputs detected for a statement and their resolved lineage hashes
-- `[STATE]` — what the tracking state looks like at each step
-
-Check overall statistics:
-
-```python
-%cash_stats
-```
-
-```
-Cache Statistics:
-  Entries: 42
-  Hits: 156  |  Misses: 42  |  Hit Rate: 78.8%
-  Time Saved: 4m 32s
-  Storage: 128.5 MB (disk)
-```
-
-## Tips for Data Science Workflows
-
-1. **Put `%cash_on` in the first cell** — Everything after it is cached automatically.
-
-2. **Separate data loading from transforms** — Loading a 500MB CSV takes 10s. Put it in its own cell so it stays cached when you tweak transforms.
-
-3. **Use `@cash:persist` for expensive computations** — Model training, large aggregations, and anything that takes >10s should be persisted to survive kernel restarts.
-
-4. **Use `@cash:no-cache` for live data** — API calls, database queries with changing results, and real-time feeds should not be cached.
-
-5. **Check `%cash_stats` periodically** — If your hit rate is low, you might be inadvertently invalidating caches (e.g., using `datetime.now()` in transformations).
+- [Purity Decorators](../feature-guides/purity-decorators.md) — when Cash can't auto-detect that your transform is safe.
+- [Smart Persistence](../feature-guides/smart-persistence.md) — when Cash decides to write to disk.
+- [Choosing a Backend](../feature-guides/choosing-a-backend.md) — for larger-than-memory datasets.
+- [Debugging and Monitoring](../feature-guides/debugging-and-monitoring.md) — inspecting why a cell hit or missed.
+- [Production Transition](../feature-guides/production-transition.md) — when your notebook becomes a script.
