@@ -13,6 +13,15 @@ import cash
 %cash_on
 ```
 
+`import cash` auto-registers the IPython magics, so `%load_ext cash` is not required.
+
+!!! tip "Skip the boilerplate"
+    Run `cash autoload on` once and every new IPython/Jupyter kernel starts with
+    `import cash` plus `%cash_on` already executed. Use `%cash_off` to opt a single
+    notebook out, or `cash autoload off` to remove the hook. See the
+    [CLI reference](../cli.md) for the `--mode=available` variant if you'd
+    prefer to keep `%cash_on` explicit.
+
 ### Step 2: Write Code Normally
 
 ```python { .nb-cell }
@@ -170,12 +179,20 @@ model = train_model(data)       # Always saved to disk
 samples = np.random.randn(100)  # Suppress randomness warning
 ```
 
-## Next Steps
+## Explore Cash commands
 
-- [API Reference](../api/index.md) — autodoc for every public symbol
-- [Technical Architecture](../notebook_caching_technical.md) — How it works under the hood
-- [Migration Guide](../migration_guide.md) — Moving from other caching solutions
+Run `%cash_help` in any notebook for the full list of magics. A few you'll use often:
 
-## Next: read the badge
+- `%cash_stats` — hit/miss counts and time saved this session
+- `%cash_debug on` — log detailed cache decisions to the kernel output
+- `%cash_badge print` — switch to text-only badges (no HTML)
 
-Every cell now has a Cash badge. The badge tells you what was restored, what re-ran, and *why* — including the one or two things you can change to make a stubborn cell cache. See [Reading the Cash badge](../badges.md).
+See [Debugging and monitoring](../tutorials/feature-guides/debugging-and-monitoring.md) for the full diagnostic workflow.
+
+## What's next?
+
+- **[Why Cash?](../why-cash.md)** — Understand when Cash helps and when it doesn't.
+- **[Decorator guide](../decorator.md)** — Use `@cash.cache` in scripts and modules.
+- **[Reading the Cash Badge](../badges.md)** — Decode the chips that appear above cells.
+- **Tutorials by feature:** [Caching class methods](../tutorials/feature-guides/caching-class-methods.md), [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md), [Debugging and monitoring](../tutorials/feature-guides/debugging-and-monitoring.md).
+- **Tutorials by use case:** [Data science](../tutorials/use-cases/data-science.md), [LLM API calls](../tutorials/use-cases/llm-api-calls.md), [Data engineering](../tutorials/use-cases/data-engineering.md), [Scientific computing](../tutorials/use-cases/scientific-computing.md).
