@@ -26,8 +26,8 @@ return type. For walkthroughs that put symbols in context:
 
 - [Decorator guide](../decorator.md) — `@cash.cache` with examples and gotchas
 - [Notebook caching](../notebook_caching_api.md) — `%cash_on` and friends
-- [Purity tutorial](../tutorials/purity.md) — `@pure`, `@stateful`, decorator-side analyzer
-- [Caching class methods](../caching-class-methods.md) — recipe for stateful receivers
+- [Purity tutorial](../tutorials/feature-guides/purity-decorators.md) — `@pure`, `@stateful`, decorator-side analyzer
+- [Caching class methods](../tutorials/feature-guides/caching-class-methods.md) — recipe for stateful receivers
 - [Configuration page](../getting-started/configuration.md) — how the config layers interact
 
 ## Filtering Cash warnings

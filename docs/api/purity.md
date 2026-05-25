@@ -2,7 +2,7 @@
 
 The decorators and helpers that control what Cash considers safe to
 cache. For a walkthrough — when to use each, the auto-detection
-heuristic, common footguns — see the [Purity tutorial](../tutorials/purity.md).
+heuristic, common footguns — see the [Purity tutorial](../tutorials/feature-guides/purity-decorators.md).
 
 ## Imports
 

@@ -161,5 +161,5 @@ extension.
 
 ## Related
 
-- [`@cash.cache` API reference](api/cash.md)
-- [Production transition tutorial](tutorials/production_transition.md)
+- [`@cash.cache` API reference](../../api/cash.md)
+- [Production transition tutorial](production-transition.md)

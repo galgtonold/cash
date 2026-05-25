@@ -120,7 +120,7 @@ c.register_hasher(
 
 ### Change Backend
 
-`%cash_on` only accepts an optional `ttl=N` argument — it does not take backend or cache-dir flags. To pick a different backend or cache directory, construct a `Cash(backend=...)` instance programmatically before enabling the magic. See [Advanced Configuration](../tutorials/advanced_configuration.md) for a full example.
+`%cash_on` only accepts an optional `ttl=N` argument — it does not take backend or cache-dir flags. To pick a different backend or cache directory, construct a `Cash(backend=...)` instance programmatically before enabling the magic. See [Configuration](configuration.md) for a full example.
 
 ### Selective Caching
 

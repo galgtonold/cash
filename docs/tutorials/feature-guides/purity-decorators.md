@@ -508,7 +508,7 @@ notebook cell), and the parent's cache invalidates automatically.
 
 ## Related
 
-- [Decorator guide](../decorator.md) — `@cash.cache` walkthrough, including the purity-mode parameters.
-- [Annotations](../annotations.md) — `@cash:persist` / `@cash:no-cache` / `@cash:ttl=N`. If you want to control caching at the *statement* level instead of the function level (e.g. "this one cell with `train_model()` should never cache, even though `train_model` is fine elsewhere"), use an annotation.
-- [Reading the Cash Badge](../badges.md) — the badge shows you *why* a cell was or wasn't cached, including "Calls @stateful function" as a miss reason.
-- [Notebook Caching API](../notebook_caching_api.md) — the bigger picture of how Cash decides what to cache, of which the purity decorators are one input.
+- [Decorator guide](../../decorator.md) — `@cash.cache` walkthrough, including the purity-mode parameters.
+- [Annotations](../../annotations.md) — `@cash:persist` / `@cash:no-cache` / `@cash:ttl=N`. If you want to control caching at the *statement* level instead of the function level (e.g. "this one cell with `train_model()` should never cache, even though `train_model` is fine elsewhere"), use an annotation.
+- [Reading the Cash Badge](../../badges.md) — the badge shows you *why* a cell was or wasn't cached, including "Calls @stateful function" as a miss reason.
+- [Notebook Caching API](../../notebook_caching_api.md) — the bigger picture of how Cash decides what to cache, of which the purity decorators are one input.
