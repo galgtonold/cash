@@ -116,6 +116,36 @@ def mock_anthropic(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def parquet_stubs(tmp_path, monkeypatch):
+    """Create stub parquet files for dynamic-dependencies.md examples.
+
+    Creates ``data/features.parquet`` and ``data/labels.parquet`` under
+    ``tmp_path``, then ``chdir``s to ``tmp_path`` so relative paths in the
+    doc fences resolve correctly.  Also stubs ``pandas`` in ``sys.modules``
+    when the real package is not installed so ``pd.read_parquet`` succeeds.
+    """
+    import sys
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    (data_dir / "features.parquet").write_bytes(b"stub-features")
+    (data_dir / "labels.parquet").write_bytes(b"stub-labels")
+    monkeypatch.chdir(tmp_path)
+
+    if "pandas" not in sys.modules:
+        import types
+
+        fake_pd = types.ModuleType("pandas")
+        fake_pd.read_parquet = lambda path: {"path": str(path), "stub": True}
+        # Provide a sentinel DataFrame class so serialization.py's isinstance
+        # check (``isinstance(data, pd.DataFrame)``) doesn't raise AttributeError
+        # when cash tries to serialize non-pandas return values.
+        fake_pd.DataFrame = type("DataFrame", (), {})
+        monkeypatch.setitem(sys.modules, "pandas", fake_pd)
+    yield
+
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

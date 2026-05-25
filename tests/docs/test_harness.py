@@ -187,3 +187,25 @@ def test_run_page_fails_when_documented_cache_hit_does_not_happen(monkeypatch):
         assert f_result.actual_hits + f_result.actual_misses == 2
     finally:
         broken.unlink()
+
+
+def test_inject_comment_executes_as_code():
+    """# test:inject: lines are replaced with executable code before exec."""
+    from tests.docs._harness import run_page
+
+    injected = FIXTURES / "page_with_inject.md"
+    injected.write_text(
+        "# Inject Test\n\n"
+        "```python\n"
+        "x = 1\n"
+        "# test:inject: x = 99\n"
+        "y = x\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    try:
+        result = run_page(injected)
+        assert result.namespace["x"] == 99
+        assert result.namespace["y"] == 99   # y = x after inject replaced x
+    finally:
+        injected.unlink()

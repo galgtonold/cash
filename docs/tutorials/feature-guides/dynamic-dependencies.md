@@ -16,7 +16,6 @@ You could expand each case into one `@cash.cache` per dataset, but that doesn't 
 
 ## Quick start
 
-<!-- test:skip reason="reads non-existent parquet files; requires pandas + on-disk fixtures not available in harness" -->
 ```python
 import cash
 from cash import FileDataSource
@@ -29,11 +28,11 @@ def load(name: str):
     import pandas as pd
     return pd.read_parquet(f"data/{name}.parquet")
 
-load("features")          # MISS — compute + record data/features.parquet mtime
-load("features")          # HIT
-load("labels")            # MISS — different args AND different tracked file
-# (edit data/features.parquet on disk)
-load("features")          # MISS — dynamic dep mtime moved
+load("features")          # First call: cache miss — compute + record mtime
+load("features")          # cache hit
+load("labels")            # cache miss — different args and different tracked file
+# test:inject: import os, time as _t; _ts = _t.time() + 1; os.utime("data/features.parquet", (_ts, _ts))
+load("features")          # cache miss — dynamic dep mtime moved
 ```
 
 The resolver receives **the same positional and keyword arguments as the decorated function** and must return a `DataSource` instance (or a list of them, or a single one wrapped in a list). On every cache lookup Cash calls the resolver, hashes the returned source(s), and folds the digest into the cache key.

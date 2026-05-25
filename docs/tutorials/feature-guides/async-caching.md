@@ -109,16 +109,19 @@ See [LLM API Calls](../use-cases/llm-api-calls.md) for the full prompt-iteration
 
 A typical TTL pattern for "data is fine if it's under an hour old":
 
-<!-- test:skip reason="illustrative REPL snippet: references undefined `price_api`; top-level await with 61-minute-later TTL expiry is not runnable" -->
 ```python
 @cash.cache(ttl=3600)
 async def stock_quote(symbol):
     return await price_api.get(symbol)
 
-q1 = await stock_quote("ACME")           # MISS — hits the API
-q2 = await stock_quote("ACME")           # HIT  — cached value
-# ... 61 minutes later ...
-q3 = await stock_quote("ACME")           # MISS — TTL expired, refetches
+async def main():
+    q1 = await stock_quote("ACME")           # First call: cache miss — hits the API
+    q2 = await stock_quote("ACME")           # Second call: cache hit — cached value
+    # test:inject: import time as _t; _saved_time = _t.time; _t.time = lambda: _saved_time() + 7200
+    q3 = await stock_quote("ACME")           # cache miss — TTL expired, refetches
+    # test:inject: _t.time = _saved_time
+
+asyncio.run(main())
 ```
 
 The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper returns; expired entries fall through to the recompute branch and the await runs again. Test reference: `test_async_ttl_expires` at `tests/test_core/test_async_ttl.py:12`.
