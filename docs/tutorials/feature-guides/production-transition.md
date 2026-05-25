@@ -1,35 +1,35 @@
-# Tutorial: From Notebook to Production
+# From notebook to production
 
-This tutorial shows how to transition from Cash-cached notebooks to production-ready Python scripts and services, using Cash's decorator API for function-level caching.
+Your notebook proves the workflow. Moving to a script for production means swapping `%cash_on` for `@cash.cache`, but most of what you learned in the notebook still applies. This guide walks through the differences.
 
-## The Two Faces of Cash
+## The two APIs side by side
 
-Cash has two APIs designed for different stages of the development lifecycle:
+| | Notebook (`%cash_on`) | Script (`@cash.cache`) |
+|---|---|---|
+| **Caching unit** | Statement-level | Function-level |
+| **Activation** | Magic command in a cell | Decorator on a definition |
+| **Visibility** | Cash badges above each cell | `func.cache_info()` / `func.explain(...)` |
+| **Everything else** | File tracking, purity analysis, lineage, TTL, backend choice — identical | Same |
 
-| Stage | API | Caching Unit | Use Case |
-|-------|-----|-------------|----------|
-| **Exploration** | `%cash_on` (magics) | Statement-level | Jupyter notebooks, EDA, experiments |
-| **Production** | `@cash.cache` (decorator) | Function-level | Scripts, APIs, pipelines |
+The transition is mechanical: lift each cached statement into a function, decorate it, call it. The cache layer underneath doesn't change. Three things differ — caching unit (statement → function), activation (`%cash_on` → `@cash.cache`), visibility (badges → `cache_info()`). Everything else carries over: auto file tracking ([escape hatch](custom-file-sources.md) for non-standard access), purity analysis ([details](purity-decorators.md)), TTL and other annotations ([details](controlling-cache-behavior.md)), backend choice ([details](choosing-a-backend.md)).
 
-The transition is natural: wrap your notebook statements into functions, then decorate them.
+## Step-by-step migration
 
-## Step 1: Identify Cacheable Functions
+### Step 1: Identify expensive operations
 
-In your notebook, look for expensive operations:
+Open the notebook and look for the statements with long execution times — heavy I/O, model fits, joins on big frames. Those are your function boundaries.
 
 ```python { .nb-cell }
-# Notebook code (exploration)
 %cash_on
 
-df = pd.read_csv('data.csv')              # ← expensive I/O
-features = engineer_features(df)           # ← expensive computation
-model = train_model(features)              # ← very expensive
-predictions = model.predict(test_data)     # ← quick, but model-dependent
+df = pd.read_csv('data.csv')              # I/O
+features = engineer_features(df)           # compute
+model = train_model(features)              # very expensive
 ```
 
-## Step 2: Wrap in Functions with `@cash.cache`
+### Step 2: Wrap in functions
 
-Create a Python module:
+Lift each expensive statement into a function and decorate it. For the full decorator reference (parameters, wrapper methods, gotchas), see [`@cash.cache`](../../decorator.md).
 
 ```python
 # pipeline.py
@@ -38,102 +38,40 @@ import pandas as pd
 
 @cache
 def load_data(path: str) -> pd.DataFrame:
-    """Load and validate input data."""
-    df = pd.read_csv(path)
-    assert len(df) > 0, "Empty dataset"
-    return df
+    return pd.read_csv(path)
 
 @cache
 def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Create ML features from raw data."""
-    df = df.copy()
-    df['log_amount'] = np.log1p(df['amount'])
-    df['day_of_week'] = df['date'].dt.dayofweek
-    return df
-
-@cache
-def train_model(features: pd.DataFrame, target_col: str = 'churned'):
-    """Train a classification model."""
-    from sklearn.ensemble import RandomForestClassifier
-    X = features.drop(columns=[target_col])
-    y = features[target_col]
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X, y)
-    return model
+    return df.assign(log_amount=np.log1p(df['amount']))
 ```
 
-## Step 3: Use File Dependencies
+### Step 3: Verify auto file tracking
 
-For functions that depend on external files:
+Cash detects `open()`, `pd.read_csv`, `np.load`, and friends inside your function body and folds the file's `(mtime, size)` into the cache key automatically. Check that it picked them up:
 
 ```python
-from cash import Cash
-
-app = Cash()
-
-@app.cache(file_depends_on="data.csv")
-def load_data():
-    """Cache invalidates when data.csv changes."""
-    return pd.read_csv("data.csv")
-
-@app.cache(file_depends_on=["config.yaml", "schema.json"])
-def load_config():
-    """Multiple file dependencies."""
-    import yaml, json
-    with open("config.yaml") as f:
-        config = yaml.safe_load(f)
-    with open("schema.json") as f:
-        schema = json.load(f)
-    return config, schema
+load_data("data.csv")
+print(load_data.cache_info())
+# {'hits': 0, 'misses': 1, 'hit_rate': 0.0, 'total_time_saved': 0.0,
+#  'tracked_files': ['data.csv'], 'warnings': []}
 ```
 
-When one of the tracked files changes, the next call recomputes and the badge — visible if you call `load_data()` from a notebook — names the file in the `miss_reason`:
+If `tracked_files` is empty but you *do* read external state — for instance, you read from a URL, a database, or your own loader function — declare it explicitly with `file_depends_on=` or a custom `DataSource`. See [Custom file sources](custom-file-sources.md).
 
-<iframe class="cash-badge" src="/_badges/miss_file_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+### Step 4: Choose a backend
 
-## Step 4: Choose the Right Backend
-
-### Development (default)
-
-```python
-from cash import Cash
-
-# TieredBackend: fast in-memory L1 + persistent file L2
-app = Cash()  # Uses ~/.cash/ by default
-```
-
-### Production — File Backend
+The default (tiered RAM + file under `./.cash/`) is fine for most scripts. Production deployments usually want explicit control. See [Choosing a backend](choosing-a-backend.md) for selection logic; quick sketches:
 
 ```python
 from cash import Cash, FileBackend
+from cash.backends import SQLiteBackend, RedisBackend
 
-app = Cash(backend=FileBackend(
-    cache_dir="/var/cache/myapp",
-    max_size_bytes=10_000_000_000  # 10 GB limit
-))
+app = Cash(backend=FileBackend("/var/cache/myapp", max_size_bytes=10_000_000_000))   # size-capped disk
+app = Cash(backend=SQLiteBackend("cache.db"))                                        # single-file, transactional
+app = Cash(backend=RedisBackend(host="redis.internal", port=6379, db=0))             # shared across hosts
 ```
 
-### Production — SQLite Backend
-
-```python
-from cash.backends import SQLiteBackend
-
-app = Cash(backend=SQLiteBackend("cache.db"))
-```
-
-### Production — Redis Backend
-
-```python
-from cash.backends import RedisBackend
-
-app = Cash(backend=RedisBackend(
-    host="redis.internal",
-    port=6379,
-    db=0
-))
-```
-
-## Step 5: Build a Pipeline Script
+### Step 5: Build a pipeline script
 
 ```python
 # run_pipeline.py
@@ -141,10 +79,9 @@ from cash import Cash, FileBackend
 
 app = Cash(backend=FileBackend("./pipeline_cache"))
 
-@app.cache(file_depends_on="data/raw.csv")
+@app.cache
 def extract():
-    import pandas as pd
-    return pd.read_csv("data/raw.csv")
+    return pd.read_csv("data/raw.csv")          # auto-tracked
 
 @app.cache
 def transform(df):
@@ -156,65 +93,49 @@ def transform(df):
 def train(df):
     from sklearn.linear_model import LogisticRegression
     X, y = df.drop('target', axis=1), df['target']
-    model = LogisticRegression()
-    model.fit(X, y)
-    return model
+    return LogisticRegression().fit(X, y)
 
 if __name__ == "__main__":
-    raw = extract()
-    clean = transform(raw)
-    model = train(clean)
-    
-    # Check cache stats (cache_info is attached to the decorated function, not its return value)
-    print(train.cache_info())  # hits, misses, hit_rate, total_time_saved
+    model = train(transform(extract()))
+    print(extract.cache_info())
+    print(transform.cache_info())
+    print(train.cache_info())
 ```
 
-On first run: everything computes and caches.
-On subsequent runs: if `data/raw.csv` hasn't changed, every stage restores from cache. From a notebook, the badge above each stage looks like this:
+First run: everything computes and caches. Subsequent runs: if `data/raw.csv` hasn't changed, every stage restores and `cache_info()` shows hits with non-zero `total_time_saved`.
 
-<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+### Step 6: Inspect what the cache is doing
 
-## Step 6: Cache Introspection
+`cache_info()` covers routine monitoring; when something looks off (unexpected misses, stale results), reach for `func.explain(*args)`. See [Debugging and monitoring](debugging-and-monitoring.md).
 
-The decorator API provides introspection methods:
+## Notebook ↔ decorator bridge
 
-```python
-@app.cache
-def my_function(x):
-    return x ** 2
-
-# Run the function
-result = my_function(42)
-
-# Introspection
-print(my_function.cache_info())     # Hit/miss stats
-my_function.cache_clear()           # Clear this function's cache
-```
-
-## Notebook ↔ Decorator Bridge
-
-Cash connects both APIs. When you use `@cash.cache` inside a notebook with `%cash_on`, the decorator results appear in the notebook badges with condensed metrics:
+You don't have to pick one. A `@cash.cache`-decorated function called from a `%cash_on` notebook shows up in the cell badge with condensed metrics, so you can keep iterating in the notebook while the production wrappers stay in the module:
 
 ```python { .nb-cell }
-# In a notebook with %cash_on
+%cash_on
+from pipeline import train          # @cash.cache lives in the module
 
-from cash import cache
-
-@cache
-def slow_computation(x):
-    import time; time.sleep(2)
-    return x * 42
-
-# The badge shows both the statement cache AND the decorator cache
-result = slow_computation(10)
+model = train(features)              # badge reports the decorator hit
 ```
 
-## Migration Checklist
+## Migration checklist
 
-- [ ] Identify expensive operations in notebooks
-- [ ] Wrap each operation in a function with `@cache` or `@app.cache`
-- [ ] Add `file_depends_on` for file-dependent functions
-- [ ] Choose appropriate backend for production environment
-- [ ] Add `cache_info()` calls to monitoring/logging
-- [ ] Test that cache invalidation works correctly (change inputs, verify recomputation)
-- [ ] Set up TTL for time-sensitive data: `@app.cache(ttl=3600)`
+- [ ] Identify expensive notebook statements
+- [ ] Wrap each in a function and decorate with `@cache` / `@app.cache`
+- [ ] Verify `cache_info()['tracked_files']` lists the inputs you expect
+- [ ] Choose a backend for the production environment
+- [ ] Add `cache_info()` to logging or end-of-run output
+- [ ] Test invalidation: change an input, rerun, confirm recomputation
+
+If applicable:
+
+- [ ] Add `file_depends_on=` for non-standard file access (URLs, custom loaders) — see [Custom file sources](custom-file-sources.md)
+- [ ] Set `ttl=` for time-sensitive data
+
+## Related
+
+- [`@cash.cache`](../../decorator.md) — full decorator reference
+- [Choosing a backend](choosing-a-backend.md)
+- [Custom file sources](custom-file-sources.md)
+- [Debugging and monitoring](debugging-and-monitoring.md)
