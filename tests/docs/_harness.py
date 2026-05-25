@@ -129,3 +129,120 @@ def run_page(md_path: Path, namespace_overrides: dict[str, Any] | None = None) -
 
     result.namespace = namespace
     return result
+
+
+import ast
+
+
+@dataclass
+class CacheClaim:
+    function: str
+    expected_hits: int
+    expected_misses: int
+
+
+# Patterns that downgrade a call to "expected to miss" via comment proximity.
+_MISS_HINT = re.compile(
+    r"#.*?(cache\s*miss|first\s+call|fresh|computed|EXECUTED|recompute|API\s+call|invalidat)",
+    re.IGNORECASE,
+)
+# Patterns that mark a call as "expected to hit" via comment proximity.
+_HIT_HINT = re.compile(
+    r"#.*?(cache\s*hit|second\s+call|instant|RESTORED|cached)",
+    re.IGNORECASE,
+)
+
+
+def _is_cache_decorator(deco: ast.expr) -> bool:
+    """Match @cash.cache, @cache, @c.cache, @app.cache (any 'cache' attribute name)."""
+    if isinstance(deco, ast.Attribute) and deco.attr == "cache":
+        return True
+    if isinstance(deco, ast.Name) and deco.id == "cache":
+        return True
+    if isinstance(deco, ast.Call):
+        return _is_cache_decorator(deco.func)
+    return False
+
+
+def _is_stateful_decorator(deco: ast.expr) -> bool:
+    if isinstance(deco, ast.Attribute) and deco.attr == "stateful":
+        return True
+    if isinstance(deco, ast.Name) and deco.id == "stateful":
+        return True
+    return False
+
+
+def infer_claims(source: str) -> list[CacheClaim]:
+    """Parse the source, find @cash.cache-decorated functions, and infer the
+    expected (hits, misses) per function based on call counts, unique argument
+    tuples, and any inline-comment overrides.
+    """
+    tree = ast.parse(source)
+
+    cached_funcs: set[str] = set()
+    stateful_funcs: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for deco in node.decorator_list:
+                if _is_cache_decorator(deco):
+                    cached_funcs.add(node.name)
+                elif _is_stateful_decorator(deco):
+                    stateful_funcs.add(node.name)
+
+    # Map each call to its function name and arg tuple (text representation).
+    lines = source.splitlines()
+    calls: dict[str, list[tuple[str, int]]] = {}  # func -> [(args_repr, lineno)]
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            target_name = None
+            if isinstance(node.func, ast.Name):
+                target_name = node.func.id
+            elif isinstance(node.func, ast.Attribute):
+                target_name = node.func.attr
+            if target_name is None:
+                continue
+            if target_name not in cached_funcs and target_name not in stateful_funcs:
+                continue
+            args_repr = ",".join(
+                ast.unparse(a) if hasattr(ast, "unparse") else repr(a) for a in node.args
+            )
+            calls.setdefault(target_name, []).append((args_repr, node.lineno))
+
+    claims: list[CacheClaim] = []
+    for func, sites in calls.items():
+        if func in stateful_funcs:
+            claims.append(
+                CacheClaim(function=func, expected_hits=0, expected_misses=len(sites))
+            )
+            continue
+        # Count comment-tagged misses/hits and infer the rest from arg uniqueness.
+        explicit_miss = 0
+        explicit_hit = 0
+        ambiguous: list[tuple[str, int]] = []
+        for args_repr, lineno in sites:
+            line_text = lines[lineno - 1] if 1 <= lineno <= len(lines) else ""
+            if _MISS_HINT.search(line_text):
+                explicit_miss += 1
+            elif _HIT_HINT.search(line_text):
+                explicit_hit += 1
+            else:
+                ambiguous.append((args_repr, lineno))
+        # For ambiguous calls, infer: first call per unique args = miss, rest = hits.
+        seen: dict[str, int] = {}
+        ambig_hits = 0
+        ambig_misses = 0
+        for args_repr, _ in ambiguous:
+            n = seen.get(args_repr, 0)
+            if n == 0:
+                ambig_misses += 1
+            else:
+                ambig_hits += 1
+            seen[args_repr] = n + 1
+        claims.append(
+            CacheClaim(
+                function=func,
+                expected_hits=explicit_hit + ambig_hits,
+                expected_misses=explicit_miss + ambig_misses,
+            )
+        )
+    return claims
