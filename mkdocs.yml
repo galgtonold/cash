@@ -120,12 +120,25 @@ nav:
     - Command-line interface: cli.md
     - Cost model: cost-model.md
   - Tutorials:
-    - Getting Started: tutorials/getting_started.md
-    - Data Science Workflows: tutorials/data_science_workflows.md
-    - Caching Class Methods: caching-class-methods.md
-    - Production Transition: tutorials/production_transition.md
-    - Advanced Configuration: tutorials/advanced_configuration.md
-    - Purity decorators: tutorials/purity.md
+    - Feature Guides:
+      - Caching Class Methods: tutorials/feature-guides/caching-class-methods.md
+      - Purity Decorators: tutorials/feature-guides/purity-decorators.md
+      - Production Transition: tutorials/feature-guides/production-transition.md
+      - Choosing a Backend: tutorials/feature-guides/choosing-a-backend.md
+      - Controlling Cache Behavior: tutorials/feature-guides/controlling-cache-behavior.md
+      - Debugging and Monitoring: tutorials/feature-guides/debugging-and-monitoring.md
+      - Custom File Sources: tutorials/feature-guides/custom-file-sources.md
+      - Custom Hashers: tutorials/feature-guides/custom-hashers.md
+      - Dynamic Dependencies: tutorials/feature-guides/dynamic-dependencies.md
+      - Iterator Caching: tutorials/feature-guides/iterator-caching.md
+      - Smart Persistence: tutorials/feature-guides/smart-persistence.md
+      - Async Caching: tutorials/feature-guides/async-caching.md
+      - Thread Safety: tutorials/feature-guides/thread-safety.md
+    - Use Cases:
+      - Data Science: tutorials/use-cases/data-science.md
+      - LLM API Calls: tutorials/use-cases/llm-api-calls.md
+      - Data Engineering: tutorials/use-cases/data-engineering.md
+      - Scientific Computing: tutorials/use-cases/scientific-computing.md
   - API Reference:
     - Overview: api/index.md
     - Cash class: api/cash.md
