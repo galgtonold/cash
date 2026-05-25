@@ -72,6 +72,22 @@ def extract_fences(md_path: Path) -> list[Fence]:
     return fences
 
 
+class PageExecutionError(RuntimeError):
+    """Raised when a docs-parity page fails to exec."""
+
+
+@dataclass
+class ClaimResult:
+    claim: "CacheClaim"
+    actual_hits: int
+    actual_misses: int
+    matched: bool
+
+
+class ClaimMismatchError(AssertionError):
+    """Raised when a documented hit/miss claim does not match actual cache state."""
+
+
 @dataclass
 class PageResult:
     page: Path
@@ -79,19 +95,15 @@ class PageResult:
     tested_fences: int
     skipped_fences: list[tuple[int, str]] = field(default_factory=list)
     namespace: dict[str, Any] = field(default_factory=dict)
+    claim_results: list[ClaimResult] = field(default_factory=list)
 
 
-class PageExecutionError(RuntimeError):
-    """Raised when a docs-parity page fails to exec."""
-
-
-def run_page(md_path: Path, namespace_overrides: dict[str, Any] | None = None) -> PageResult:
-    """Concatenate every non-skipped python fence and exec the result in
-    a single fresh namespace.
-
-    Raises PageExecutionError if any statement raises, with a message that
-    names the markdown file and the offending line range.
-    """
+def run_page(
+    md_path: Path,
+    namespace_overrides: dict[str, Any] | None = None,
+    strict_claims: bool = True,
+) -> PageResult:
+    """Concatenate non-skipped fences, exec, then verify cache claims."""
     fences = extract_fences(md_path)
 
     result = PageResult(
@@ -105,7 +117,6 @@ def run_page(md_path: Path, namespace_overrides: dict[str, Any] | None = None) -
         if f.skip:
             result.skipped_fences.append((f.line_start, f.skip_reason or "<no reason>"))
             continue
-        # Pad with blank lines so a tracelog's lineno aligns with the markdown file.
         pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
         pieces.append("\n" * pad + f.code)
         result.tested_fences += 1
@@ -119,7 +130,6 @@ def run_page(md_path: Path, namespace_overrides: dict[str, Any] | None = None) -
         namespace.update(namespace_overrides)
 
     try:
-        # Compile with the markdown file's path so tracebacks point at the .md
         code_obj = compile(script, str(md_path), "exec")
         exec(code_obj, namespace)
     except Exception as e:
@@ -128,6 +138,48 @@ def run_page(md_path: Path, namespace_overrides: dict[str, Any] | None = None) -
         ) from e
 
     result.namespace = namespace
+
+    # Now verify cache claims by introspecting the decorated functions left
+    # in `namespace`. For each `@cash.cache` function the harness inferred,
+    # call .cache_info() and compare with the claim.
+    claims = infer_claims(script)
+    for claim in claims:
+        fn = namespace.get(claim.function)
+        if fn is None or not hasattr(fn, "cache_info"):
+            # Function not in the post-exec namespace (e.g. stateful funcs
+            # whose decorator returns the original). Skip the assertion;
+            # mark as matched only if claim expected 0 hits/0 misses.
+            actual_hits, actual_misses = 0, 0
+            matched = claim.expected_hits == 0 and claim.expected_misses == 0
+        else:
+            info = fn.cache_info()
+            actual_hits = info.get("hits", 0)
+            actual_misses = info.get("misses", 0)
+            matched = (
+                actual_hits == claim.expected_hits
+                and actual_misses == claim.expected_misses
+            )
+        result.claim_results.append(
+            ClaimResult(
+                claim=claim,
+                actual_hits=actual_hits,
+                actual_misses=actual_misses,
+                matched=matched,
+            )
+        )
+
+    if strict_claims:
+        mismatches = [r for r in result.claim_results if not r.matched]
+        if mismatches:
+            lines = [f"{md_path}: cache claim mismatch:"]
+            for r in mismatches:
+                lines.append(
+                    f"  {r.claim.function}: "
+                    f"expected hits={r.claim.expected_hits} misses={r.claim.expected_misses}, "
+                    f"got hits={r.actual_hits} misses={r.actual_misses}"
+                )
+            raise ClaimMismatchError("\n".join(lines))
+
     return result
 
 
