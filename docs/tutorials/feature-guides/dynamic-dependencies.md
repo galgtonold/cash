@@ -16,6 +16,7 @@ You could expand each case into one `@cash.cache` per dataset, but that doesn't 
 
 ## Quick start
 
+<!-- test:skip reason="reads non-existent parquet files; requires pandas + on-disk fixtures not available in harness" -->
 ```python
 import cash
 from cash import FileDataSource
@@ -55,6 +56,7 @@ Two consequences of step 3 worth pinning down:
 
 The resolver can return:
 
+<!-- test:skip reason="illustration: `def load(...)` literal ellipsis params is a SyntaxError; references undefined file_resolver, schema_resolver" -->
 ```python
 # One source
 def one(filename):
@@ -90,6 +92,7 @@ The resolver must return one of:
 
 To track something other than an mtime, write a `DataSource` subclass. The interface is three methods (`src/cash/data_source.py:10-23`):
 
+<!-- test:skip reason="`from cash import DataSource` not exported from top-level package; symbol lives at cash.data_source.DataSource (API gap, see #TODO)" -->
 ```python
 import hashlib
 from cash import DataSource
@@ -117,6 +120,7 @@ class EnvVarSource(DataSource):
 
 ### Don't return raw values expecting them to be hashed
 
+<!-- test:skip reason="anti-pattern: lambda returns raw string, dropped by isinstance(ds, DataSource) gate; also references undefined `os` and `cash` (imports in earlier fence skipped)" -->
 ```python
 @cash.cache(dynamic_depends_on=lambda: os.environ.get("MODEL_VERSION", "v1"))
 def predict(features):
