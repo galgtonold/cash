@@ -10,8 +10,8 @@ The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` sel
 
 ## Quick start
 
-<!-- test:skip reason="illustrative REPL snippet: top-level await against fake api.example.com URL; conflicts with the self-contained asyncio.run(main()) fence below when concatenated" -->
 ```python
+import asyncio
 import cash
 import aiohttp
 
@@ -21,8 +21,11 @@ async def fetch_user(uid):
         async with s.get(f"https://api.example.com/users/{uid}") as r:
             return await r.json()
 
-user = await fetch_user(42)   # MISS — runs the request, awaits, caches the JSON dict
-user = await fetch_user(42)   # HIT  — returns the cached dict; no HTTP, no await of func
+async def main():
+    user = await fetch_user(42)   # First call: cache miss — runs the request
+    user = await fetch_user(42)   # Second call: cache hit — returns the cached dict
+
+asyncio.run(main())
 ```
 
 No async-specific decorator flag. `@cash.cache` recognises the coroutine function and wires up the async wrapper automatically.
