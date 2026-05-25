@@ -154,6 +154,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `use_locking=True` combined with an async function emits
   `CashCacheIneffectiveWarning` and proceeds unlocked.
 
+### Documentation
+- **Tutorials section restructured** into two subsections: Feature
+  Guides (task-oriented "how do I do X with Cash") and Use Cases
+  (domain-driven workflows).
+- **10 new feature guides** under `docs/tutorials/feature-guides/`:
+  Choosing a Backend, Controlling Cache Behavior, Debugging and
+  Monitoring, Custom File Sources, Custom Hashers, Dynamic
+  Dependencies, Iterator Caching, Smart Persistence, Async Caching,
+  and Thread Safety. Each is grounded in `src/cash/` source citations
+  and reflects the *actual* behavior — several guides correct prior
+  misconceptions (e.g. `dynamic_depends_on` requires a `DataSource`
+  instance, only Redis implements real locking, smart-persistence
+  config fields are notebook-only).
+- **3 new use case tutorials** under `docs/tutorials/use-cases/`:
+  LLM API Calls, Data Engineering, Scientific Computing — each
+  tightly focused on where Cash adds value in the domain.
+- **Production Transition** slimmed from ~220 to ~140 lines: it now
+  covers only the migration story, with decorator mechanics deferred
+  to `docs/decorator.md` and `file_depends_on` reframed as an escape
+  hatch for non-standard file access.
+- **Data Science** use case tightened from ~220 to ~130 lines:
+  removed generic file-dependency teaching (now automatic), kept the
+  iteration-loop value proposition as the central message.
+- **Advanced Configuration** monolithic page split into the three
+  focused guides above.
+- **Getting Started tutorial** absorbed into
+  `docs/getting-started/quickstart.md` to eliminate duplicate
+  on-ramps; `cli.md`'s autoload hook and the magic-commands roundup
+  now live in the unified quickstart.
+- User Guide pages (`decorator.md`, `annotations.md`, `badges.md`,
+  `getting-started/configuration.md`, `why-cash.md`,
+  `notebook_caching_api.md`, `cost-model.md`, `index.md`) gained
+  cross-references to the new tutorials where appropriate.
+
 ## [0.5.0b1] - Beta Release
 
 ### Added
