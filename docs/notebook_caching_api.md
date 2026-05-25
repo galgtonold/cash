@@ -561,3 +561,14 @@ except Exception as e:
 ❌ Don't cache code that reads from stdin
 ❌ Don't expect caching of closures over mutable state
 ❌ Don't use identical cell content in multiple cells (causes ambiguity)
+
+---
+
+## See also
+
+- [Purity decorators](tutorials/feature-guides/purity-decorators.md) —
+  `@pure` / `@stateful` and `mark_pure` / `mark_stateful` for declaring
+  function-level purity so the notebook tracker treats helpers correctly.
+- [Controlling cache behavior](tutorials/feature-guides/controlling-cache-behavior.md) —
+  end-to-end tour of the annotation directives (`# @cash:persist`,
+  `no-cache`, `ttl=`) and how they interact with the cost model.

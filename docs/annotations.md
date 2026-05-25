@@ -311,4 +311,10 @@ For source-diving:
 - `no-cache` short-circuit: [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py)
 - Tests: [`tests/test_notebook/test_annotations.py`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py)
 
+## See also
+
+- [Controlling cache behavior](tutorials/feature-guides/controlling-cache-behavior.md) —
+  end-to-end walkthrough of the annotation directives alongside `cache_if=`,
+  `ttl=`, and `force_persist` in a realistic notebook.
+
 [regex]: https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py
