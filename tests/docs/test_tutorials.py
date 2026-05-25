@@ -21,6 +21,35 @@ PR1_DOCS = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Per-doc namespace overrides: inject stubs for types referenced by doc
+# fences that are real working examples but reference type names defined
+# elsewhere (e.g. in user application code).
+# ---------------------------------------------------------------------------
+
+class _MyPydanticModelStub:
+    """Minimal stub satisfying custom-hashers.md fence 3 (hash_pydantic)."""
+    def model_dump_json(self) -> str:
+        return '{"stub": true}'
+
+
+class _DatasetConfigStub:
+    """Minimal stub satisfying custom-hashers.md fence 4 (hash_dataset_config)."""
+    def __init__(self) -> None:
+        self.path = "/data/test.csv"
+        self.split = "train"
+        self.preprocessing_version = 1
+        self.features = ["f1", "f2"]
+
+
+_DOC_NAMESPACES: dict[str, dict] = {
+    "custom-hashers": {
+        "MyPydanticModel": _MyPydanticModelStub,
+        "DatasetConfig": _DatasetConfigStub,
+    },
+}
+
+
 @pytest.mark.docs_parity
 @pytest.mark.parametrize(
     "doc_path",
@@ -29,7 +58,8 @@ PR1_DOCS = [
 )
 def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
     """Execute every python fence in the doc and assert documented cache claims."""
-    result = run_page(doc_path)
+    namespace_overrides = _DOC_NAMESPACES.get(doc_path.stem)
+    result = run_page(doc_path, namespace_overrides=namespace_overrides)
     docs_coverage_recorder.append({
         "page": str(doc_path.relative_to(REPO_ROOT)),
         "tested_fences": result.tested_fences,
