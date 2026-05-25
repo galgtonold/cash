@@ -190,4 +190,4 @@ Two things to watch:
 - [Controlling Cache Behavior](controlling-cache-behavior.md) — `ttl=` and `cache_if=` for the other two invalidation axes.
 - [Debugging and Monitoring](debugging-and-monitoring.md) — `f.explain()` shows the dynamic state hash and surfaces resolver errors.
 - [Decorator (`@cash.cache`)](../../decorator.md) — full kwarg reference for `dynamic_depends_on=`, `depends_on=`, and `file_depends_on=`.
-- [Caching Class Methods](../caching-class-methods.md) — when the resolver wants to read fields off `self`.
+- [Caching Class Methods](caching-class-methods.md) — when the resolver wants to read fields off `self`.

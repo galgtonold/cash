@@ -59,6 +59,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          paths: [src]
           options:
             # Render the class/function heading itself (not just members).
             show_root_heading: true
