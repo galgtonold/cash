@@ -30,7 +30,7 @@ class CacheDebugger:
     active IPython shell.
     """
 
-    def __init__(self, shell, cash_instance=None):
+    def __init__(self, shell: Any, cash_instance: Any | None = None) -> None:
         """
         Args:
             shell: An active IPython shell (e.g. from

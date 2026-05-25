@@ -600,8 +600,8 @@ class Cash:
             The decorated function with caching behavior.
 
         See Also:
-            [Caching class methods](../caching-class-methods.md) for
-            the recipe for caching methods on stateful objects
+            [Caching class methods](../tutorials/feature-guides/caching-class-methods.md)
+            for the recipe for caching methods on stateful objects
             (databases, file handles, connections) via
             [`register_hasher`][cash.Cash.register_hasher].
         """
