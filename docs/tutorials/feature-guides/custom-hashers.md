@@ -41,6 +41,7 @@ That's the entire workflow. `cash.register_hasher` is a top-level helper that pr
 
 `register_hasher` lives at `src/cash/core.py:1936-1970`. The signature is straightforward:
 
+<!-- test:skip reason="signature illustration only" -->
 ```python
 def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str]) -> None: ...
 ```
@@ -76,6 +77,7 @@ A useful sanity check: call your hasher twice on freshly constructed-equal insta
 
 If your type already has a canonical bytes representation, use it:
 
+<!-- test:skip reason="references undefined name MyPydanticModel" -->
 ```python
 import hashlib, json
 import cash
@@ -92,6 +94,7 @@ Pydantic's `model_dump_json` is deterministic, total, and reasonably cheap. Same
 
 When only a handful of fields determine the output, hash those:
 
+<!-- test:skip reason="references undefined name DatasetConfig" -->
 ```python
 def hash_dataset_config(cfg):
     parts = (cfg.path, cfg.split, cfg.preprocessing_version, tuple(cfg.features))
@@ -106,6 +109,7 @@ This is faster than serialising the whole object and gives you explicit control 
 
 For objects that hold a handle to an external resource — DB connections, S3 clients, HTTP sessions — hash the *target*, not the handle:
 
+<!-- test:skip reason="references undefined name sqlalchemy" -->
 ```python
 def hash_db_conn(conn):
     return hashlib.sha256(conn.url.encode()).hexdigest()
@@ -158,6 +162,7 @@ There's no API to remove a registration. The `_type_hashers` dict is intentional
 
 When a custom hasher misbehaves, two probes catch most bugs:
 
+<!-- test:skip reason="snippet shown out of context (references undefined w1, model, data)" -->
 ```python
 # 1. Call the hasher manually on representative inputs.
 h1 = hash_model(MyModel("a", w1))
