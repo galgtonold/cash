@@ -1,7 +1,7 @@
 """Main Cash class — decorator-based caching with automatic dependency tracking.
 
-Provides the :class:`Cash` entry point for ``@cash.cache`` function-level
-caching and the :meth:`Cash.notebook` bridge for Jupyter integration.
+Provides the `Cash` entry point for ``@cash.cache`` function-level
+caching and the `Cash.notebook` bridge for Jupyter integration.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ import threading
 import time
 import warnings
 from collections.abc import Callable
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
 from .backends import CacheBackend, CacheMetadata, CascadingBackend, FileBackend, InMemoryBackend
@@ -31,9 +32,12 @@ from .exceptions import (
     CacheExpiredError,
     CashCacheIneffectiveWarning,
     CashCacheStoreFailedWarning,
+    CashImpureFunctionError,
+    CashImpurityWarning,
 )
 from .graph import DependencyGraph
 from .notebook.analysis import CodeAnalyzer
+from .purity_analyzer import PurityReport, get_analyzer
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -45,18 +49,83 @@ _CACHE_MISS = object()
 P = ParamSpec("P")
 T = TypeVar("T")
 
-__all__ = ["Cash"]
+__all__ = ["Cash", "CacheExplanation"]
+
+
+# Reason codes returned by `Cash._explain_call` / ``f.explain(...)``.
+# Kept as module-level constants so external code can match against them
+# without string-typo risk: ``if e.reason == EXPLAIN_HIT: ...``.
+EXPLAIN_HIT = "hit"
+EXPLAIN_KEY_UNCOMPUTABLE = "key_uncomputable"
+EXPLAIN_NO_ENTRY = "no_entry"
+EXPLAIN_TTL_EXPIRED = "ttl_expired"
+EXPLAIN_FILE_CHANGED = "file_changed"
+
+
+@dataclass(frozen=True)
+class CacheExplanation:
+    """Why a specific call would hit or miss the cache *right now*.
+
+    Returned by ``f.explain(*args, **kwargs)`` on any ``@cash.cache``-wrapped
+    function. Inspecting an explanation does NOT mutate stats, call the
+    underlying function, or write to the backend — it only reads what the
+    cache already knows.
+
+    Attributes:
+        would_hit: True if the next call with these args would return a
+            cached value (without recomputing).
+        reason: Short stable string identifying the outcome. One of:
+            ``"hit"``, ``"key_uncomputable"``, ``"no_entry"``,
+            ``"ttl_expired"``, ``"file_changed"``.
+        func_name: Module-qualified name of the cached function.
+        cache_key: The cache key computed for these args, or ``None``
+            when key generation failed (``reason == "key_uncomputable"``).
+        details: Reason-specific extras. Common keys:
+
+            * ``hit``: ``cached_at`` (unix ts), ``execution_time_saved`` (s),
+              ``cache_age_seconds``.
+            * ``key_uncomputable``: ``arg_type`` (qualname or ``"<unknown>"``),
+              ``error`` (exception type+message), ``hint``.
+            * ``no_entry``: ``hint``. If a sibling entry with the same
+              args_hash but a different state_hash exists, also includes
+              ``source_changed=True`` and ``previous_cache_key``.
+            * ``ttl_expired``: ``ttl_seconds``, ``age_seconds``, ``cached_at``.
+            * ``file_changed``: ``changed_files`` (dict of path → reason).
+    """
+
+    would_hit: bool
+    reason: str
+    func_name: str
+    cache_key: str | None = None
+    details: dict[str, Any] = field(default_factory=dict)
+
+    def __str__(self) -> str:
+        verdict = "HIT" if self.would_hit else "MISS"
+        lines = [f"[{verdict}] {self.func_name} — {self.reason}"]
+        if self.cache_key:
+            lines.append(f"  cache_key: {self.cache_key}")
+        for k, v in self.details.items():
+            if isinstance(v, dict):
+                lines.append(f"  {k}:")
+                for kk, vv in v.items():
+                    lines.append(f"    {kk}: {vv}")
+            else:
+                lines.append(f"  {k}: {v}")
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 class _ListCachedIterator:
     """Lazy iterator wrapper over a fully-materialized cached list.
 
-    Used by :meth:`Cash.cache` for legacy v1 cache entries (metadata
+    Used by `Cash.cache` for legacy v1 cache entries (metadata
     contains ``materialized_iterator=True``) AND for new entries that
     fit in a single chunk. The function's yielded values are stored
     as one Python list; this iterator streams them on each call.
 
-    See :class:`_ChunkedCachedIterator` for the multi-chunk variant
+    See `_ChunkedCachedIterator` for the multi-chunk variant
     used for large iterators.
     """
 
@@ -102,7 +171,7 @@ CachedIterator = _ListCachedIterator
 class _ChunkedCachedIterator:
     """Lazy iterator that reads cached chunks from the backend on demand.
 
-    Used by :meth:`Cash.cache` for iterator-returning functions whose
+    Used by `Cash.cache` for iterator-returning functions whose
     output spans multiple backend keys. Each chunk is fetched only
     when the user iterates into it; chunks the user never reaches are
     never read. The retrieval is RAM-bounded by chunk size.
@@ -113,7 +182,7 @@ class _ChunkedCachedIterator:
     replay of stored values, not a coroutine.
 
     Args:
-        cash: The owning :class:`Cash` instance (used for backend access).
+        cash: The owning `Cash` instance (used for backend access).
         cache_key: The canonical key under which the manifest is stored.
             Chunk keys are derived as ``f"{cache_key}:chunk_{i}"``.
         n_chunks: Total chunk count, taken from the manifest at construction.
@@ -181,6 +250,36 @@ class _ChunkedCachedIterator:
         )
 
 
+def _make_opaque_issue(func_name: str, opaque_list: str) -> Any:
+    """Build a synthetic `PurityIssue` for opaque callees
+    encountered in ``strict`` mode. Defined at module scope so the
+    ``_surface_purity`` import stays local."""
+    from .purity_analyzer import ISSUE_IMPURE_CALL, PurityIssue
+    return PurityIssue(
+        kind=ISSUE_IMPURE_CALL,
+        description=f"opaque callees (strict): {opaque_list}",
+        where=func_name,
+        line=0,
+    )
+
+
+def _format_issues_summary(func_name: str, issues: list[Any]) -> str:
+    """Pretty-print a list of `PurityIssue` records, grouped
+    by their ``where`` field. Used by both the warning body and the
+    strict-mode exception body so users get the same diagnostic.
+    """
+    by_where: dict[str, list[Any]] = {}
+    for i in issues:
+        by_where.setdefault(i.where, []).append(i)
+    lines = []
+    for where in sorted(by_where):
+        lines.append(f"  in {where}:")
+        for issue in by_where[where]:
+            line_part = f"line {issue.line}: " if issue.line else ""
+            lines.append(f"    {line_part}[{issue.kind}] {issue.description}")
+    return "\n".join(lines)
+
+
 def _is_one_shot_iterator(value: Any) -> bool:
     """Return True if *value* is its own iterator (a one-shot consumable).
 
@@ -215,7 +314,7 @@ class Cash:
         use_locking: Enable double-checked locking for thread-safe caching.
         config_path: Path to custom config TOML file.
 
-    Example::
+    Example:
 
         from cash import Cash
         c = Cash()
@@ -295,6 +394,24 @@ class Cash:
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
         self._warning_keys_seen: set[tuple[type[Warning], str, str]] = set()
 
+        # Per-function rolling log of recent warning emissions, surfaced
+        # via ``f.cache_info()['warnings']``. Each entry is
+        # ``{'category': str, 'message': str, 'timestamp': float}``.
+        # Capped at ``_func_warnings_max`` entries per function so a
+        # noisy function can't grow this dict unboundedly. Guarded by
+        # ``_decorator_call_log_lock``.
+        self._func_warnings: dict[str, list[dict[str, Any]]] = {}
+        self._func_warnings_max = 20
+
+        # Per-function purity mode set at decoration time:
+        # ``"warn"`` (default) | ``"silent"`` (assume_safe=True) |
+        # ``"strict"`` (raises). Read on first call.
+        self._purity_modes: dict[str, str] = {}
+        # Per-function purity report cache. Populated on first call.
+        # Helper source hashes from this report fold into the cache
+        # key state hash so cross-process helper edits invalidate.
+        self._purity_reports: dict[str, PurityReport] = {}
+
         atexit.register(self.shutdown)
 
         if register_magic:
@@ -342,7 +459,7 @@ class Cash:
     def _hash_callable_source(fn: Callable) -> str:
         """Return a stable hex digest representing *fn*'s body.
 
-        Used by :meth:`register_hasher` to embed the hasher's source
+        Used by `register_hasher` to embed the hasher's source
         identity in the cache key, so that changing a hasher's body
         invalidates dependent cache entries even when the hasher's
         output coincidentally matches the old one.
@@ -391,6 +508,8 @@ class Cash:
         cache_if: Callable[[Any], bool] | None = ...,
         chunk_max_items: int = ...,
         chunk_max_bytes: int = ...,
+        strict: bool = ...,
+        assume_safe: bool = ...,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
     def cache(
@@ -404,6 +523,8 @@ class Cash:
         cache_if: Callable[[Any], bool] | None = None,
         chunk_max_items: int = 1_000_000,
         chunk_max_bytes: int = 1_000_000_000,
+        strict: bool = False,
+        assume_safe: bool = False,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
         """Decorator to cache a function's return value.
 
@@ -438,9 +559,9 @@ class Cash:
                 The predicate is only invoked when the function returns
                 normally; an exception from the function is re-raised
                 without consulting the predicate. If the predicate itself
-                raises, the failure is logged at debug level and the
-                result is treated as not-cacheable (the user's call
-                still returns the result).
+                raises, a one-shot `CashCacheIneffectiveWarning`
+                fires and the result is treated as not-cacheable (the
+                user's call still returns the result).
                 If the cache key cannot be built at all (unhashable
                 argument with no registered hasher, key-generation
                 error), the predicate is not consulted — nothing is
@@ -457,23 +578,50 @@ class Cash:
                 bytes (estimated via ``estimate_object_size``).
                 Default ``1_000_000_000`` (1 GB). See
                 ``chunk_max_items`` for the joint behavior.
+            strict: When ``True``, raise `CashImpureFunctionError`
+                on first call if the analyzer finds any purity issues
+                (known-impure calls, scope mutations, explicit
+                dynamism, or discarded calls to non-known-pure
+                callees). Also promotes the analyzer's optimistic
+                opaque-leaf treatment: opaque callees become issues.
+                Use in CI to fail builds that introduce caching of
+                side-effecting code. Mutually exclusive with
+                ``assume_safe``.
+            assume_safe: When ``True``, suppress the
+                `CashImpurityWarning` even when the analyzer
+                finds issues. Use when you've audited the function
+                and know caching is correct (the side effect is
+                idempotent, the dynamism is bounded, etc.). The
+                analyzer still runs because it captures helper
+                source hashes for cache invalidation. Mutually
+                exclusive with ``strict``.
 
         Returns:
             The decorated function with caching behavior.
 
         See Also:
-            ``docs/caching-class-methods.md`` for the recipe for caching
-            methods on stateful objects (databases, file handles,
-            connections) via :meth:`register_hasher`.
+            [Caching class methods](../caching-class-methods.md) for
+            the recipe for caching methods on stateful objects
+            (databases, file handles, connections) via
+            [`register_hasher`][cash.Cash.register_hasher].
         """
+        if strict and assume_safe:
+            raise ValueError(
+                "@cash.cache: strict=True and assume_safe=True are mutually "
+                "exclusive. strict raises on purity issues; assume_safe silences "
+                "them. Pick one."
+            )
+
         if func is None:
             return lambda f: self.cache(
                 f, depends_on=depends_on, dynamic_depends_on=dynamic_depends_on,
                 file_depends_on=file_depends_on, ttl=ttl, cache_if=cache_if,
                 chunk_max_items=chunk_max_items, chunk_max_bytes=chunk_max_bytes,
+                strict=strict, assume_safe=assume_safe,
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
+        self._purity_modes[func_name] = ("strict" if strict else "silent" if assume_safe else "warn")
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):
@@ -497,7 +645,10 @@ class Cash:
                 func, func_name, dynamic_depends_on, ttl, cache_if,
                 chunk_max_items, chunk_max_bytes,
             )
-        return self._wrap_with_stats(func, func_name, wrapper)
+        return self._wrap_with_stats(
+            func, func_name, wrapper,
+            dynamic_depends_on=dynamic_depends_on, ttl=ttl,
+        )
 
     def _register_func(
         self,
@@ -594,6 +745,229 @@ class Cash:
             self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='error', cache_key='')
             return (_CACHE_MISS, result, 'error')
 
+    def _explain_call(
+        self,
+        func: Callable,
+        func_name: str,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        ttl: int | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> CacheExplanation:
+        """Return why a call with these args would hit or miss the cache.
+
+        Pure introspection — does NOT call ``func``, does NOT touch
+        `Cash` stats, does NOT emit warnings, and does NOT
+        mutate the backend. Mirrors the logic of `_resolve_cache_key`
+        + `_try_get_cached` so that the answer reflects what would
+        actually happen on the next real call.
+
+        See `CacheExplanation` for the return shape.
+        """
+        # Build cache key (silently — explain() does not warn).
+        try:
+            current_state_hash = self._get_dependency_state_hash(func_name, set())
+        except (TypeError, ValueError, RuntimeError) as e:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    'error': f'{type(e).__name__}: {e}',
+                    'hint': 'Dependency state hash computation raised.',
+                },
+            )
+
+        try:
+            dynamic_state_hash = self._resolve_dynamic_dependencies_silent(
+                dynamic_depends_on, args, kwargs,
+            )
+        except (TypeError, ValueError, RuntimeError, AttributeError, OSError) as e:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    'error': f'{type(e).__name__}: {e}',
+                    'hint': 'dynamic_depends_on resolver raised.',
+                },
+            )
+
+        try:
+            args_hash = self._serialize_args(func_name, args, kwargs)
+        except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
+            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    'arg_type': arg_type_name,
+                    'error': f'{type(e).__name__}: {e}',
+                    'hint': (
+                        f'Register a hasher via cash.register_hasher({arg_type_name}, ...)'
+                        if arg_type_name != '<unknown>'
+                        else 'Could not identify the offending argument.'
+                    ),
+                },
+            )
+
+        if args_hash is None:
+            arg_type_name = self._first_unhashable_arg_type(args, kwargs)
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    'arg_type': arg_type_name,
+                    'hint': (
+                        f'Register a hasher via cash.register_hasher({arg_type_name}, ...)'
+                        if arg_type_name != '<unknown>'
+                        else 'Could not identify the offending argument; likely a nested unpicklable value.'
+                    ),
+                },
+            )
+
+        cache_key = self._compute_cache_key(
+            func_name, current_state_hash, dynamic_state_hash, args_hash,
+        )
+
+        metadata, _data = self.backend.get(cache_key)
+        if metadata is None:
+            details: dict[str, Any] = {}
+            sibling = self._find_sibling_key(func_name, args_hash, cache_key)
+            if sibling is not None:
+                details['source_changed'] = True
+                details['previous_cache_key'] = sibling
+                details['hint'] = (
+                    'A cache entry exists for these arguments but a different '
+                    'code/dependency state. Likely the function source or a '
+                    'tracked dependency changed since the last write.'
+                )
+            else:
+                details['hint'] = (
+                    'No matching cache entry. First call with these arguments, '
+                    'or the cache was cleared.'
+                )
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_NO_ENTRY,
+                func_name=func_name,
+                cache_key=cache_key,
+                details=details,
+            )
+
+        # TTL check — match _validate_ttl semantics: only if ttl was set
+        # at decoration time.
+        if ttl is not None:
+            timestamp = metadata.get('timestamp', 0)
+            age = time.time() - timestamp
+            if age > ttl:
+                return CacheExplanation(
+                    would_hit=False,
+                    reason=EXPLAIN_TTL_EXPIRED,
+                    func_name=func_name,
+                    cache_key=cache_key,
+                    details={
+                        'ttl_seconds': ttl,
+                        'age_seconds': age,
+                        'cached_at': timestamp,
+                    },
+                )
+
+        # Auto-tracked file deps freshness.
+        snap = metadata.get('auto_file_deps') or {}
+        if snap:
+            import os
+            stale: dict[str, str] = {}
+            for path, recorded in snap.items():
+                try:
+                    st = os.stat(path)
+                except OSError:
+                    stale[path] = 'file missing'
+                    continue
+                if st.st_mtime != recorded.get('mtime'):
+                    stale[path] = 'mtime changed'
+                elif st.st_size != recorded.get('size'):
+                    stale[path] = 'size changed'
+            if stale:
+                return CacheExplanation(
+                    would_hit=False,
+                    reason=EXPLAIN_FILE_CHANGED,
+                    func_name=func_name,
+                    cache_key=cache_key,
+                    details={'changed_files': stale},
+                )
+
+        timestamp = metadata.get('timestamp', 0)
+        return CacheExplanation(
+            would_hit=True,
+            reason=EXPLAIN_HIT,
+            func_name=func_name,
+            cache_key=cache_key,
+            details={
+                'cached_at': timestamp,
+                'cache_age_seconds': time.time() - timestamp if timestamp else None,
+                'execution_time_saved': metadata.get('execution_time', 0.0),
+            },
+        )
+
+    def _resolve_dynamic_dependencies_silent(
+        self,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> str:
+        """Variant of `_resolve_dynamic_dependencies` that re-raises
+        instead of warning — used by `_explain_call` so introspection
+        never emits warnings as a side effect."""
+        if not dynamic_depends_on:
+            return ""
+        dynamic_state_parts = []
+        resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
+        for resolver in resolvers:
+            ds_result = resolver(*args, **kwargs)
+            dss = ds_result if isinstance(ds_result, list) else [ds_result]
+            for ds in dss:
+                if isinstance(ds, DataSource):
+                    if hasattr(ds, '_get_mtime'):
+                        dynamic_state_parts.append(str(ds._get_mtime()))
+                    else:
+                        dynamic_state_parts.append(str(ds.has_changed()))
+        if dynamic_state_parts:
+            return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode('utf-8')).hexdigest()
+        return ""
+
+    def _find_sibling_key(
+        self, func_name: str, args_hash: str, current_key: str,
+    ) -> str | None:
+        """Return a stored cache key with the same args_hash but a different
+        state_hash, or ``None`` if no such entry exists or the backend
+        does not expose ``keys()``.
+
+        Used by `_explain_call` to detect source-changed misses:
+        if the args part of the key matches an older entry but the
+        state hash differs, the user's function (or a tracked
+        dependency) changed since the last write.
+        """
+        try:
+            if not hasattr(self.backend, 'keys'):
+                return None
+            prefix = f"{func_name}:"
+            suffix = f":{args_hash}"
+            for key in self.backend.keys():
+                if (
+                    isinstance(key, str)
+                    and key.startswith(prefix)
+                    and key.endswith(suffix)
+                    and key != current_key
+                    and ":chunk_" not in key
+                ):
+                    return key
+        except (OSError, RuntimeError, AttributeError):
+            return None
+        return None
+
     @staticmethod
     def _first_unhashable_arg_type(args: tuple, kwargs: dict) -> str:
         """Return the qualname of the first non-built-in arg type, or '<unknown>'.
@@ -645,8 +1019,8 @@ class Cash:
                 return cached_data
             except CacheExpiredError:
                 pass
-            except (TypeError, KeyError):
-                logger.debug("Cache hit but validation failed for %s", func_name)
+            except (TypeError, KeyError) as e:
+                self._warn_metadata_invalid(func_name, e)
         return _CACHE_MISS
 
     @staticmethod
@@ -655,7 +1029,7 @@ class Cash:
         still has the same (mtime, size) on disk.
 
         Auto-tracked deps are captured during the first compute via
-        :class:`cash.notebook.file_tracker.FileAccessTracker` and stored
+        `cash.notebook.file_tracker.FileAccessTracker` and stored
         as ``{path: {'mtime': float, 'size': int}}``. If a recorded path
         is gone or its (mtime, size) changed, we invalidate the cache
         so the next compute re-reads the file. A path that disappears
@@ -689,8 +1063,8 @@ class Cash:
         - neither → returns *hit* directly (non-iterator return type).
 
         Used by all three cache-hit paths in this module:
-        :meth:`_make_wrapper` (sync unlocked), :meth:`_compute_with_lock`
-        (sync locked re-read), and :meth:`_make_async_wrapper`. Keeping
+        `_make_wrapper` (sync unlocked), `_compute_with_lock`
+        (sync locked re-read), and `_make_async_wrapper`. Keeping
         the dispatch in one place ensures the three paths can't drift.
         """
         if metadata:
@@ -761,10 +1135,7 @@ class Cash:
                             try:
                                 should_cache = bool(cache_if(single_chunk_buffer))
                             except Exception as e:
-                                logger.debug(
-                                    "cache_if predicate raised for %s: %s; "
-                                    "skipping cache", func_name, e,
-                                )
+                                self._warn_cache_if_raised(func_name, e)
                                 should_cache = False
 
                         if should_cache and single_chunk_buffer:
@@ -814,10 +1185,7 @@ class Cash:
                     try:
                         should_cache = bool(cache_if(res))
                     except Exception as e:
-                        logger.debug(
-                            "cache_if predicate raised for %s: %s; "
-                            "skipping cache", func_name, e,
-                        )
+                        self._warn_cache_if_raised(func_name, e)
                         should_cache = False
 
                 if should_cache:
@@ -851,7 +1219,7 @@ class Cash:
     ) -> Callable:
         """Build and return the async caching wrapper for *func*.
 
-        Mirrors :meth:`_make_wrapper` but the wrapper is ``async def``
+        Mirrors `_make_wrapper` but the wrapper is ``async def``
         and the underlying ``func()`` invocation is awaited inside a
         ``FileAccessTracker`` block. Shared helpers (``_resolve_cache_key``,
         ``_try_get_cached``, ``_store_in_cache``, ``_log_decorator_call``)
@@ -923,10 +1291,7 @@ class Cash:
                         try:
                             should_cache = bool(cache_if(single_chunk_buffer))
                         except Exception as e:
-                            logger.debug(
-                                "cache_if predicate raised for %s: %s; "
-                                "skipping cache", func_name, e,
-                            )
+                            self._warn_cache_if_raised(func_name, e, stacklevel=6)
                             should_cache = False
 
                     if should_cache and single_chunk_buffer:
@@ -972,10 +1337,7 @@ class Cash:
                 try:
                     should_cache = bool(cache_if(res))
                 except Exception as e:
-                    logger.debug(
-                        "cache_if predicate raised for %s: %s; "
-                        "skipping cache", func_name, e,
-                    )
+                    self._warn_cache_if_raised(func_name, e, stacklevel=6)
                     should_cache = False
 
             if should_cache:
@@ -1003,12 +1365,29 @@ class Cash:
         except (OSError, RuntimeError, KeyError):
             logger.debug("Failed to clear cache entries for %s", func_name)
 
-    def _wrap_with_stats(self, func: Callable, func_name: str, wrapper: Callable) -> Callable:
+    def _wrap_with_stats(
+        self,
+        func: Callable,
+        func_name: str,
+        wrapper: Callable,
+        *,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = None,
+        ttl: int | None = None,
+    ) -> Callable:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
 
         Dispatches on whether *func* is a coroutine function so the stats
         drain (reading ``_decorator_call_log`` for the just-finished call)
         happens AFTER the await for async, and synchronously otherwise.
+
+        Attaches the introspection API:
+
+        * ``cache_info()`` — hit/miss stats plus a rolling list of recent
+          warnings emitted for this function.
+        * ``cache_clear()`` — drop backend entries, reset stats, drop the
+          warning log + dedup marks so re-warnings can fire.
+        * ``explain(*args, **kwargs)`` — return a `CacheExplanation`
+          for that specific call (sync, even on async wrappers).
         """
         _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0}
 
@@ -1037,33 +1416,72 @@ class Cash:
                 return result
 
         def cache_info() -> dict[str, Any]:
-            """Return cache statistics for this function.
+            """Return cache statistics + recent warnings for this function.
 
             Returns:
-                Dict with keys: hits, misses, hit_rate, total_time_saved.
+                Dict with keys:
+
+                * ``hits`` (int) — cache hits since this wrapper was created.
+                * ``misses`` (int) — cache misses (including key-uncomputable
+                  and store-failed paths).
+                * ``hit_rate`` (float) — ``hits / (hits + misses)``, or 0.0.
+                * ``total_time_saved`` (float) — sum of execution times that
+                  were avoided by serving from cache.
+                * ``warnings`` (list[dict]) — rolling log of recent warning
+                  emissions for this function. Each entry has ``category``,
+                  ``message``, ``timestamp``. Capped at the last
+                  ``_func_warnings_max`` (default 20) so it can't grow
+                  unboundedly. Useful for spotting silent misbehavior
+                  (cache_if predicate raised, lock failure, etc.) when
+                  ``warnings.simplefilter`` swallowed the stderr emission.
             """
             total = _stats['hits'] + _stats['misses']
             hit_rate = _stats['hits'] / total if total > 0 else 0.0
+            with self._decorator_call_log_lock:
+                warnings_log = list(self._func_warnings.get(func_name, []))
             return {
                 'hits': _stats['hits'],
                 'misses': _stats['misses'],
                 'hit_rate': hit_rate,
                 'total_time_saved': _stats['total_time_saved'],
+                'warnings': warnings_log,
             }
 
         def cache_clear() -> None:
             """Clear all cached results for this function.
 
             Removes all cache entries whose key starts with the function name.
-            Resets hit/miss statistics.
+            Resets hit/miss statistics, drops the per-function warnings log,
+            and forgets ``_warn_once`` dedup marks for this function so the
+            next misbehavior re-warns instead of being silently swallowed.
             """
             _stats['hits'] = 0
             _stats['misses'] = 0
             _stats['total_time_saved'] = 0.0
             self._delete_backend_entries(func_name)
+            with self._decorator_call_log_lock:
+                self._func_warnings.pop(func_name, None)
+                # Drop dedup marks for this function so future misbehavior
+                # re-warns the user instead of staying silent.
+                self._warning_keys_seen = {
+                    k for k in self._warning_keys_seen if k[1] != func_name
+                }
+
+        def explain(*args: Any, **kwargs: Any) -> CacheExplanation:
+            """Return why the next call with these args would hit or miss.
+
+            See `CacheExplanation` for the return shape. Inspection
+            only — does not call the underlying function, mutate stats,
+            or write to the backend. Safe to call from sync code even
+            on async-wrapped functions.
+            """
+            return self._explain_call(
+                func, func_name, dynamic_depends_on, ttl, args, kwargs,
+            )
 
         stats_wrapper.cache_info = cache_info
         stats_wrapper.cache_clear = cache_clear
+        stats_wrapper.explain = explain
         stats_wrapper.__wrapped__ = func
         return stats_wrapper
 
@@ -1298,11 +1716,13 @@ class Cash:
                         self._validate_ttl(locked_metadata, ttl)
                         self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
                         return self._wrap_iterator_hit(cache_key, locked_metadata, locked_data)
-                    except (TypeError, KeyError, CacheExpiredError):
-                        logger.debug("Cache validation failed under lock for %s", func_name)
+                    except CacheExpiredError:
+                        pass
+                    except (TypeError, KeyError) as e:
+                        self._warn_metadata_invalid(func_name, e, stacklevel=6)
                 return compute_and_store()
         except (OSError, RuntimeError, TimeoutError) as e:
-            logger.warning("Locking failed for %s, proceeding without lock: %s", func_name, e)
+            self._warn_lock_failed(func_name, e, stacklevel=4)
         return compute_and_store()
 
     def _compute_cache_key(self, func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
@@ -1386,6 +1806,70 @@ class Cash:
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
 
+    def _warn_cache_if_raised(
+        self, func_name: str, error: BaseException, *, stacklevel: int = 7,
+    ) -> None:
+        """Surface a raised ``cache_if`` predicate as a user-visible warning.
+
+        Previously this was a ``logger.debug`` — invisible to anyone not
+        explicitly configuring logging. Promoted to a one-shot
+        `CashCacheIneffectiveWarning` so a buggy predicate is
+        diagnosed instead of silently disabling the cache.
+        """
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "cache_if",
+            f"@cash.cache on {func_name}: cache_if predicate raised "
+            f"{type(error).__name__} ({error}). The result is returned "
+            f"un-cached and will be recomputed on the next call. Fix "
+            f"the predicate or remove cache_if= to restore caching.",
+            stacklevel=stacklevel,
+        )
+
+    def _warn_metadata_invalid(
+        self, func_name: str, error: BaseException, *, stacklevel: int = 5,
+    ) -> None:
+        """Surface a malformed cache-metadata read as a user-visible warning.
+
+        Happens when a backend returns a metadata dict missing the
+        expected keys (e.g. a partially-written entry from an older
+        cash version, or a corrupted file on disk). The call falls
+        through to recompute — but the user should know.
+        """
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "metadata_invalid",
+            f"@cash.cache on {func_name}: a stored cache entry's metadata "
+            f"could not be validated ({type(error).__name__}: {error}). "
+            f"Treating as a miss and recomputing. This usually means the "
+            f"entry was written by an older cash version or partially "
+            f"corrupted; clearing the cache for this function may help.",
+            stacklevel=stacklevel,
+        )
+
+    def _warn_lock_failed(
+        self, func_name: str, error: BaseException, *, stacklevel: int = 5,
+    ) -> None:
+        """Surface a backend-locking failure as a user-visible warning.
+
+        Previously this was ``logger.warning`` — visible to anyone who
+        wired up logging.warning, but invisible to anyone running with
+        default config. Promoted to a CashCacheIneffectiveWarning so
+        the user notices the implicit race risk.
+        """
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "lock_failed",
+            f"@cash.cache on {func_name}: backend lock acquisition failed "
+            f"({type(error).__name__}: {error}). Proceeding without lock — "
+            f"concurrent calls with the same args may compute redundantly. "
+            f"Investigate the backend (disk full, permissions, broken lockfile?).",
+            stacklevel=stacklevel,
+        )
+
     def _warn_once(
         self,
         category: type[Warning],
@@ -1418,6 +1902,18 @@ class Cash:
             if key in self._warning_keys_seen:
                 return
             self._warning_keys_seen.add(key)
+            # Also record in per-function rolling log so the warning is
+            # discoverable after the fact via ``f.cache_info()['warnings']``
+            # — even if the user missed the stderr emission.
+            entry = {
+                'category': category.__name__,
+                'message': message,
+                'timestamp': time.time(),
+            }
+            log = self._func_warnings.setdefault(func_name, [])
+            log.append(entry)
+            if len(log) > self._func_warnings_max:
+                del log[: len(log) - self._func_warnings_max]
         warnings.warn(message, category=category, stacklevel=stacklevel)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
@@ -1449,7 +1945,7 @@ class Cash:
             hasher_fn: A callable that takes a value of ``type_`` and returns
                 a deterministic hash string.
 
-        Example::
+        Example:
 
             import pandas as pd
             from cash import Cash
@@ -1551,7 +2047,7 @@ class Cash:
 
         When the buffer crosses a threshold and we close the second
         chunk while ``cache_if is not None``, emit a one-shot
-        :class:`CashCacheIneffectiveWarning` documenting that the
+        `CashCacheIneffectiveWarning` documenting that the
         predicate is bypassed for multi-chunk results.
 
         ``warn_stacklevel`` controls which frame the bypass warning
@@ -1760,7 +2256,7 @@ class Cash:
         return self.backend.cleanup_expired(is_expired)
 
     def explorer(self) -> CacheExplorer:
-        """Return a :class:`CacheExplorer` instance for interactive cache browsing."""
+        """Return a `CacheExplorer` instance for interactive cache browsing."""
         from .ui.explorer import CacheExplorer
         return CacheExplorer(self)
 
@@ -1800,36 +2296,183 @@ class Cash:
             logger.debug("IPython not available. Magic commands not registered.")
 
     def _analyze_dependencies(self, func: Callable[..., Any]) -> None:
-        """Static analysis to find calls to other cached functions."""
+        """Static analysis: find calls to other cached functions AND
+        run the purity analyzer on this function + its module-bounded
+        helpers.
+
+        The purity report's ``helper_source_hashes`` are stored on
+        ``self._purity_reports[func_name]`` and folded into the cache
+        key state hash by `_get_dependency_state_hash` so a
+        helper edit invalidates the parent's cache.
+
+        Issues from the report are surfaced to the user per the
+        function's purity mode (warn / silent / strict).
+        """
         func_name = self._get_func_key(func)
         called_names = CodeAnalyzer.find_called_functions(func, self.functions)
         for called in called_names:
             if called != func_name:
                 self.graph.add_dependency(func_name, called)
 
-    def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:
+        # Run the purity analyzer once per (function, source_hash).
+        # The analyzer caches by source hash globally so this is
+        # cheap on repeated registrations.
+        try:
+            report = get_analyzer().analyze(func)
+        except (OSError, TypeError, SyntaxError, RecursionError) as e:
+            # Analyzer must never break caching. On error, treat as
+            # clean — the user's compute still runs.
+            logger.debug("Purity analyzer failed for %s: %s", func_name, e)
+            report = PurityReport()
+        self._purity_reports[func_name] = report
+
+        mode = self._purity_modes.get(func_name, "warn")
+        self._surface_purity(func_name, report, mode)
+
+    def _surface_purity(
+        self, func_name: str, report: PurityReport, mode: str,
+    ) -> None:
+        """Turn a `PurityReport` into warnings or an exception.
+
+        Called once per function on first call (after first
+        ``_analyze_dependencies``).
+
+        * ``warn`` (default): one-shot `CashImpurityWarning`
+          summarising issues; also recorded in
+          ``cache_info()['warnings']``.
+        * ``silent`` (``assume_safe=True``): the user has audited
+          this; suppress the warning. The report is still stored
+          so helper source hashes invalidate correctly.
+        * ``strict``: raise `CashImpureFunctionError`. Opaque
+          callees count as issues in this mode (paranoid).
         """
-        Register a custom file dependency handler.
+        issues = list(report.issues)
+        if mode == "strict" and report.opaque_callees:
+            opaque_list = ", ".join(report.opaque_callees[:5])
+            if len(report.opaque_callees) > 5:
+                opaque_list += f", … +{len(report.opaque_callees) - 5} more"
+            issues.append(_make_opaque_issue(func_name, opaque_list))
+
+        if not issues:
+            return
+        if mode == "silent":
+            return
+
+        summary = _format_issues_summary(func_name, issues)
+        if mode == "strict":
+            raise CashImpureFunctionError(
+                f"@cash.cache(strict=True) on {func_name}: purity issues "
+                f"detected. Either fix the function, mark callees with "
+                f"@pure / @stateful, or relax to assume_safe=True.\n{summary}"
+            )
+        # mode == "warn"
+        self._warn_once(
+            CashImpurityWarning,
+            func_name,
+            "purity",
+            f"@cash.cache on {func_name}: the analyzer found likely "
+            f"side effects or scope mutations. Cached results may not "
+            f"reflect side-effect intent. Suppress with "
+            f"@cash.cache(assume_safe=True) after auditing, or refactor.\n{summary}",
+            stacklevel=6,
+        )
+
+    def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:
+        """Register a custom file-dependency handler.
+
+        Cash already intercepts the popular reader functions
+        (``pd.read_csv``, ``np.load``, ``open``, ``json.load``,
+        etc.) so any cached function that uses them gets automatic
+        file-dep tracking. Use this method when your code reads
+        files via a custom or vendored reader that Cash doesn't
+        know about yet.
+
+        The handler is a closure-style factory: Cash gives it the
+        original function and a ``track_callback(path)``; it returns
+        a replacement function that calls ``track_callback`` for
+        each file path it touches and then forwards to the original.
+        The wrapper is installed on the target module so all callers
+        — yours and any library code — get tracking transparently.
 
         Args:
-            module_name: Name of the module (e.g., 'my_lib').
-            func_name: Name of the function to track (e.g., 'read_data'). Supports wildcards like 'read_*'.
-            handler_factory: A function that takes (original_function, track_callback)
-                             and returns a wrapper function.
+            module_name: The module that owns the reader function
+                (e.g. ``"my_lib"``, ``"my_lib.io"``). Use a dotted
+                path for nested modules.
+            func_name: The reader function's name in that module
+                (e.g. ``"read_data"``). Supports glob wildcards like
+                ``"read_*"`` to track several readers at once.
+            handler_factory: Factory that produces the wrapper. Must
+                accept two arguments —
+                ``(original_function, track_callback)`` — and return
+                a callable with the same signature as the original.
+                See *Example* below for the exact shape.
 
-                             Example handler_factory:
-                             def my_handler(original_func, track_callback):
-                                 def wrapper(path, *args, **kwargs):
-                                     track_callback(path)
-                                     return original_func(path, *args, **kwargs)
-                                 return wrapper
+        Example:
+
+            ```python
+            import cash
+
+            c = cash.Cash()
+
+            # my_lib.read_data(path) reads a custom binary format.
+            # Make any cached function calling it invalidate when
+            # the file on disk changes.
+            def custom_reader_handler(original_func, track_callback):
+                def wrapper(path, *args, **kwargs):
+                    track_callback(path)              # record the dep
+                    return original_func(path, *args, **kwargs)
+                return wrapper
+
+            c.register_file_handler("my_lib", "read_data", custom_reader_handler)
+
+            @c.cache
+            def load_features():
+                import my_lib
+                return my_lib.read_data("/data/features.bin")
+                # ^ when /data/features.bin changes, cache invalidates
+            ```
+
+            For multiple reader names in one go:
+
+            ```python
+            c.register_file_handler("my_lib", "read_*", custom_reader_handler)
+            # Catches read_data, read_metadata, read_index, ...
+            ```
+
+        Notes:
+            * The wrapper replaces the attribute on the live module
+              object — so existing imports
+              (``from my_lib import read_data``) still see the
+              original unwrapped version. Track callers that go
+              through the module namespace
+              (``my_lib.read_data(...)``).
+            * Inside the wrapper, call ``track_callback(path)`` with
+              the **absolute or resolvable** path you want recorded.
+              Relative paths are resolved against ``os.getcwd()`` at
+              tracking time.
+            * Tracking is on the file's ``(mtime, size)``; downstream
+              cache-key computation is automatic.
         """
         from .notebook.file_tracker import FileDependencyRegistry
         registry = FileDependencyRegistry()
         registry.register(module_name, func_name, handler_factory)
 
     def _get_dependency_state_hash(self, node: str, visited: set[str]) -> str:
-        """Compute a dependency state hash recursively for the given graph node."""
+        """Compute a dependency state hash recursively for the given graph node.
+
+        Folds in three sources of state:
+
+        1. The node's own source hash (for functions) or data-source
+           mtime/change marker.
+        2. Recursively, each graph dependency's state hash.
+        3. **Transitive helper source hashes** captured by the purity
+           analyzer for this function. This is what makes editing a
+           plain (non-``@cash.cache``-decorated) helper invalidate
+           the parent's cache key — a previously latent bug.
+           Hashes are sorted for determinism; the helper's own
+           qualname is excluded (its hash equals the node's own
+           source_hash already, included above).
+        """
         if node in visited:
             return ""
         visited.add(node)
@@ -1852,7 +2495,63 @@ class Cash:
             dep_hash = self._get_dependency_state_hash(dep, visited)
             hashes.append(dep_hash)
 
+        # 3. Transitive helper source hashes from the purity analyzer.
+        # Sort to keep determinism; skip the node's own qualname so
+        # we don't double-count source state already in step 1.
+        #
+        # For each helper, re-resolve via sys.modules per call so an
+        # in-process redefinition (notebook cell rerun, REPL) picks
+        # up the new source. The recorded snapshot is the fallback
+        # when the helper can't be re-resolved (deleted/renamed
+        # since analysis).
+        report = self._purity_reports.get(node)
+        if report is not None and report.helper_source_hashes:
+            current = self._current_helper_hashes(report)
+            for qual in sorted(report.helper_source_hashes):
+                if qual == node:
+                    continue
+                hashes.append(f"helper:{qual}:{current.get(qual, report.helper_source_hashes[qual])}")
+
         return hashlib.sha256(":".join(hashes).encode('utf-8')).hexdigest()
+
+    def _current_helper_hashes(self, report: PurityReport) -> dict[str, str]:
+        """Return current source hashes for every helper in *report*.
+
+        Re-resolves each helper from ``sys.modules`` via the recorded
+        ``(module_name, attr_chain)`` path, then hashes its source via
+        `_hash_callable_source`. Resolution failures (helper
+        was deleted, renamed, or never recorded a path) are skipped —
+        the caller falls back to the analysis-time snapshot.
+
+        Costs ~5-30μs per helper for typical counts. Called once per
+        cached function per call, inside ``_get_dependency_state_hash``.
+
+        The point of this method (vs. using the recorded snapshot)
+        is to catch in-process helper redefinitions. In a notebook,
+        a cell that rebinds ``helper`` to a new function object
+        will change the resolved callable here, change its source
+        hash, change the cache key, and force a recompute.
+        """
+        import sys
+        current: dict[str, str] = {}
+        for qual, (mod_name, attr_chain) in report.helper_resolution_paths.items():
+            mod = sys.modules.get(mod_name)
+            if mod is None:
+                continue
+            obj: Any = mod
+            for attr in attr_chain:
+                obj = getattr(obj, attr, None)
+                if obj is None:
+                    break
+            if obj is None or not callable(obj):
+                continue
+            try:
+                current[qual] = self._hash_callable_source(obj)
+            except (OSError, TypeError, AttributeError):
+                # Hashing failed (e.g. C extension swap) — fall back
+                # to recorded snapshot on the caller side.
+                continue
+        return current
 
     def shutdown(self) -> None:
         """Cleanup resources (e.g. wait for async writes)."""

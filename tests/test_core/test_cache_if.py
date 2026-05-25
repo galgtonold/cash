@@ -74,8 +74,10 @@ def test_cache_if_mixed_outcomes(tmp_path):
 
 def test_cache_if_predicate_exception_skips_store(tmp_path):
     """A buggy predicate that raises must not fail the user's call.
-    The result is returned; nothing is cached; the user sees no warning
-    (debug log only)."""
+    The result is returned; nothing is cached; the user gets a one-shot
+    CashCacheIneffectiveWarning so the silent disablement is visible."""
+    from cash import CashCacheIneffectiveWarning
+
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     n = {"calls": 0}
 
@@ -87,14 +89,26 @@ def test_cache_if_predicate_exception_skips_store(tmp_path):
         n["calls"] += 1
         return x * 3
 
-    # Function call must succeed even though predicate raises.
-    assert f(7) == 21
-    # Predicate raises again → still no cache.
-    assert f(7) == 21
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        # Function call must succeed even though predicate raises.
+        assert f(7) == 21
+        # Predicate raises again → still no cache, but no second warning.
+        assert f(7) == 21
     assert n["calls"] == 2, (
         f"buggy predicate must not allow caching; expected 2 computes, "
         f"got {n['calls']}"
     )
+    # Exact category match — CashImpurityWarning subclasses
+    # CashCacheIneffectiveWarning and would also be emitted because
+    # `n["calls"] += 1` is a scope mutation. We're asserting on the
+    # cache_if-raised warning specifically.
+    ineffective = [w for w in captured if w.category is CashCacheIneffectiveWarning]
+    assert len(ineffective) == 1, [str(w.message) for w in captured]
+    msg = str(ineffective[0].message)
+    assert "cache_if" in msg
+    assert "RuntimeError" in msg
+    assert "predicate is broken" in msg
 
 
 async def test_cache_if_async_caches_normally(tmp_path):

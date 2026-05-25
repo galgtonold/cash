@@ -1,6 +1,6 @@
 """Custom exception hierarchy for Cash.
 
-All Cash-specific exceptions derive from :class:`CashError`, enabling
+All Cash-specific exceptions derive from `CashError`, enabling
 callers to handle any Cash failure with a single ``except CashError``
 while still distinguishing between error categories when needed.
 """
@@ -16,9 +16,11 @@ __all__ = [
     "AmbiguousCellError",
     "UpstreamStateError",
     "CacheKeyComputationError",
+    "CashImpureFunctionError",
     "CashWarning",
     "CashCacheIneffectiveWarning",
     "CashCacheStoreFailedWarning",
+    "CashImpurityWarning",
 ]
 
 class CashError(Exception):
@@ -44,7 +46,7 @@ class CacheExpiredError(CashError):
 class DependencyNotFoundError(CashError, ImportError):
     """Raised when an optional backend dependency is missing.
 
-    Inherits from both :class:`CashError` and :class:`ImportError` so
+    Inherits from both `CashError` and `ImportError` so
     that existing ``except ImportError`` handlers continue to work.
     """
 
@@ -60,6 +62,16 @@ class UpstreamStateError(CashError):
 
 class CacheKeyComputationError(CashError):
     """Raised when a cache key cannot be computed for a statement."""
+
+class CashImpureFunctionError(CashError):
+    """Raised by ``@cash.cache(strict=True)`` on first call when the
+    decorated function (or one of its module-bounded helpers) has
+    side effects, mutates external state, or uses explicit dynamism.
+
+    The exception body lists each detected reason with line numbers
+    so the user can fix the function or relax the analysis via
+    ``assume_safe=True`` / ``@cash.mark_pure(callee)`` / refactoring.
+    """
 
 # ---------------------------------------------------------------------------
 # Warnings (not errors — runtime advisories surfaced via warnings.warn)
@@ -89,4 +101,22 @@ class CashCacheStoreFailedWarning(CashWarning):
 
     Typical causes: serializer cannot handle the return type, disk
     full, Redis disconnected mid-set, S3 credential expiry.
+    """
+
+class CashImpurityWarning(CashCacheIneffectiveWarning):
+    """The decorated function (or a module-bounded helper) has
+    detected side effects, scope mutations, or explicit dynamism.
+
+    Caching may still produce the "right" return value on a hit,
+    but the side effect runs only on the first call. Common causes:
+    network/file writes, ``logging``/``print``, mutation of globals,
+    ``eval``/``exec``, calling a parameter as a function.
+
+    Subclasses `CashCacheIneffectiveWarning` so existing
+    ``warnings.filterwarnings('ignore', category=CashCacheIneffective\
+Warning)`` filters continue to catch it. Filter more precisely with
+    ``CashImpurityWarning`` directly.
+
+    Promote to ``error`` in CI to fail the build when an impure
+    function is cached without ``assume_safe=True``.
     """
