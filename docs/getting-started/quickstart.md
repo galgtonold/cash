@@ -76,13 +76,24 @@ result = expensive_function(1, 2)
 # Second call: instant!
 result = expensive_function(1, 2)
 
-# Check stats
+# Check stats — now includes recent warnings for this function.
 print(expensive_function.cache_info())
-# {'hits': 1, 'misses': 1, 'hit_rate': 0.5, 'total_time_saved': 0.001}
+# {'hits': 1, 'misses': 1, 'hit_rate': 0.5,
+#  'total_time_saved': 5.001, 'warnings': []}
+
+# Diagnose why a call would hit or miss — pure introspection.
+print(expensive_function.explain(1, 2))
+# [HIT] __main__.expensive_function — hit
+#   cache_key: ...
+#   cached_at: ..., execution_time_saved: 5.001
 
 # Clear cache for this function
 expensive_function.cache_clear()
 ```
+
+Full walkthrough including `ttl`, `cache_if`, async support,
+`strict`/`assume_safe` for the purity analyzer, and iterator caching:
+see the [decorator guide](../decorator.md).
 
 ### File Dependency Shorthand
 
@@ -161,7 +172,7 @@ samples = np.random.randn(100)  # Suppress randomness warning
 
 ## Next Steps
 
-- [API Reference](../api_reference.md) — All magic commands
+- [API Reference](../api/index.md) — autodoc for every public symbol
 - [Technical Architecture](../notebook_caching_technical.md) — How it works under the hood
 - [Migration Guide](../migration_guide.md) — Moving from other caching solutions
 

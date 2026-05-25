@@ -366,21 +366,149 @@ clear_purity_cache()
 
 `clear_purity_cache` is a public helper (`src/cash/notebook/purity.py:313-317`) — call it in `setUp` / a pytest fixture / wherever you redefine functions and want fresh analysis.
 
+## Purity on the decorator (`@cash.cache`)
+
+Everything above is the *notebook* story (`%cash_on` decides per-statement
+what to cache based on purity). The same machinery now runs on
+`@cash.cache`-decorated functions too — with three opt-in modes that map
+cleanly to "I want a warning", "I want it silent", and "I want it to
+fail CI".
+
+### Default: warn at first call
+
+```python
+import cash
+
+@cash.cache
+def fetch_user(uid):
+    return requests.get(f"https://api/{uid}").json()
+
+fetch_user(42)
+# CashImpurityWarning: @cash.cache on __main__.fetch_user: the analyzer
+# found likely side effects or scope mutations. Cached results may not
+# reflect side-effect intent. Suppress with @cash.cache(assume_safe=True)
+# after auditing, or refactor.
+#   in __main__.fetch_user:
+#     line 2: [impure_call] requests.get() — known I/O / side-effecting
+```
+
+The function is still cached. The warning is one-shot per
+`(function, reason)`, so noisy hot loops don't flood the log. The
+emitted warning is also stored on the wrapper:
+
+```python
+fetch_user.cache_info()["warnings"]
+# [{'category': 'CashImpurityWarning', 'message': '...', 'timestamp': ...}]
+```
+
+### `assume_safe=True` — silence after auditing
+
+Use when caching the function is fine (e.g. the side effect is
+idempotent — same URL returns the same JSON; logging is acceptable
+to lose on a hit):
+
+```python
+@cash.cache(assume_safe=True)
+def fetch_user(uid):
+    return requests.get(f"https://api/{uid}").json()
+```
+
+The analyzer still runs (its helper-source-hashes are needed for cache
+invalidation), but no warning fires.
+
+### `strict=True` — fail loud
+
+Useful in CI to fail the build when someone introduces caching of
+side-effecting code:
+
+```python
+@cash.cache(strict=True)
+def fetch_user(uid):
+    return requests.get(f"https://api/{uid}").json()
+
+fetch_user(42)
+# Traceback (most recent call last):
+#   ...
+# cash.CashImpureFunctionError: @cash.cache(strict=True) on
+# __main__.fetch_user: purity issues detected. Either fix the function,
+# mark callees with @pure / @stateful, or relax to assume_safe=True.
+#   in __main__.fetch_user:
+#     line 2: [impure_call] requests.get() — known I/O / side-effecting
+```
+
+In strict mode, opaque callees (functions whose source we can't read)
+also count as issues — the paranoid setting.
+
+`strict=True` and `assume_safe=True` are mutually exclusive; passing
+both raises `ValueError` at decoration time.
+
+### `cash.mark_pure(func)` and `cash.mark_stateful(func)`
+
+The `@pure` and `@stateful` decorators wrap the function — convenient
+for code you own, awkward for third-party callables (C extensions,
+classes you can't subclass). Use `mark_pure` / `mark_stateful` to
+annotate in-place without wrapping:
+
+```python
+import cash, pandas as pd
+
+# We've audited and know this is fine — silence the analyzer for it.
+cash.mark_pure(pd.DataFrame.merge)
+
+# This one really does write to disk — tell the analyzer.
+cash.mark_stateful(pd.DataFrame.to_sql)
+```
+
+Now any `@cash.cache`d function whose body calls `pd.DataFrame.merge`
+won't flag on it, and any function whose body calls
+`pd.DataFrame.to_sql` will.
+
+### What the analyzer looks at
+
+The decorator-side analyzer walks the function body AND
+**module-bounded helpers** (functions defined in the same top-level
+package, or any non-installed-library code) and any **closure-bound
+helpers** reachable through `__globals__` / `__closure__`. For each,
+it flags:
+
+- **Impure calls** — `requests.post`, `os.system`, file writes,
+  `logging.*`, pandas `inplace=True`, …
+- **Dynamic patterns** — `eval`/`exec`/`compile`,
+  `getattr(obj, name)()` with non-constant name, calling a parameter
+  as a function
+- **Discarded calls** — `f(x)` as a statement (return thrown away)
+  when `f` isn't known-pure
+- **Scope mutations** — `global`/`nonlocal`, attribute/subscript
+  assignment, augmented-assign
+
+Stops at library boundaries (anything under `site-packages` /
+stdlib) — those are trusted unless you `mark_stateful` them
+explicitly.
+
+A nice side-effect of the same walk: helper source hashes flow into
+the cache key. Edit a helper (in another file, or even live in a
+notebook cell), and the parent's cache invalidates automatically.
+
 ## API reference (compact)
 
 | Symbol | Import path | Type | Effect |
 |---|---|---|---|
 | `pure` | `from cash import pure` | decorator | Sets `_cash_pure = True`. Cash skips the stateful check for bare-name calls to this function. |
 | `stateful` | `from cash import stateful` | decorator | Sets `_cash_stateful = True`. Cash refuses to cache any cell that calls this by bare name. |
+| `mark_pure(func)` | `from cash import mark_pure` | in-place marker | Sets `_cash_pure = True` on *func* without wrapping. For third-party callables. |
+| `mark_stateful(func)` | `from cash import mark_stateful` | in-place marker | Sets `_cash_stateful = True` on *func* without wrapping. |
 | `is_pure(func)` | `from cash import is_pure` | bool | Marker-only check. Does not analyze source. |
 | `is_stateful(func)` | `from cash import is_stateful` | bool | Marker-only check. |
 | `analyze_function_purity(func, user_ns=None)` | `from cash import analyze_function_purity` | bool | AST-based heuristic. Result is SHA-256-cached. |
 | `is_known_pure(name)` | `from cash.notebook.purity import is_known_pure` | bool | Membership check against the builtin allow-list. **Takes a string.** |
 | `KNOWN_PURE_BUILTINS` | `from cash.notebook.purity import KNOWN_PURE_BUILTINS` | `frozenset[str]` | The stdlib allow-list. |
 | `clear_purity_cache()` | `from cash.notebook.purity import clear_purity_cache` | `None` | Clears the SHA-256 result cache. Testing/debug use. |
+| `CashImpurityWarning` | `from cash import CashImpurityWarning` | warning class | Emitted by `@cash.cache` (default mode) when the analyzer finds issues. Subclasses `CashCacheIneffectiveWarning`. |
+| `CashImpureFunctionError` | `from cash import CashImpureFunctionError` | exception class | Raised by `@cash.cache(strict=True)` instead of warning. |
 
 ## Related
 
+- [Decorator guide](../decorator.md) — `@cash.cache` walkthrough, including the purity-mode parameters.
 - [Annotations](../annotations.md) — `@cash:persist` / `@cash:no-cache` / `@cash:ttl=N`. If you want to control caching at the *statement* level instead of the function level (e.g. "this one cell with `train_model()` should never cache, even though `train_model` is fine elsewhere"), use an annotation.
 - [Reading the Cash Badge](../badges.md) — the badge shows you *why* a cell was or wasn't cached, including "Calls @stateful function" as a miss reason.
 - [Notebook Caching API](../notebook_caching_api.md) — the bigger picture of how Cash decides what to cache, of which the purity decorators are one input.

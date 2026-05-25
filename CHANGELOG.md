@@ -47,6 +47,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across multiple backend keys and the retrieval iterator reads them
   lazily. RAM bounded by chunk size on both write and read. Chunked
   storage is on by default with no opt-in required.
+- `f.explain(*args, **kwargs)` — every `@cash.cache`-decorated function
+  now exposes an `explain()` method that returns a `CacheExplanation`
+  describing whether the next call with those args would hit or miss
+  the cache, and *why*. Reasons include `hit`, `key_uncomputable`
+  (unhashable arg), `no_entry` (with `source_changed` detection when a
+  sibling entry exists), `ttl_expired`, and `file_changed` (with the
+  list of changed paths). Pure introspection — never calls the
+  function, mutates stats, or writes to the backend. Available on
+  async-wrapped functions too. `CacheExplanation` is exported from the
+  top-level `cash` package.
+- `f.cache_info()` now includes a `warnings` key — a rolling log of
+  recent `CashWarning` emissions for that function (capped at the
+  last 20). Lets users discover silent misbehavior after the fact
+  even when `warnings.simplefilter` swallowed the stderr emission.
+  `f.cache_clear()` now also resets this log and forgets dedup marks
+  so future misbehavior re-warns.
+- **Purity analyzer on the decorator** — `@cash.cache` now AST-walks
+  the decorated function body and its module-bounded helpers on
+  first call, flagging known-impure calls (`requests.post`,
+  `os.system`, file-write methods, `logging.info`, …), scope
+  mutations (`global`, `nonlocal`, attribute/subscript assignment),
+  explicit dynamism (`eval`/`exec`/`compile`, `getattr(obj, name)()`
+  with non-constant `name`, calling a parameter as a function), and
+  discarded calls to non-known-pure callees. Surfaced as a one-shot
+  `CashImpurityWarning` per `(function, reason)`. Two opt-in modes:
+  - `@cash.cache(strict=True)` — raises `CashImpureFunctionError`
+    on first call if any issue is found. Also promotes opaque
+    callees (no source) to issues. Use in CI to fail builds that
+    introduce caching of side-effecting code.
+  - `@cash.cache(assume_safe=True)` — silences the warning when
+    you've audited the function and know caching is correct (e.g.
+    a memoized API call where the side effect is idempotent). The
+    analyzer still runs because helper source hashes feed the
+    cache key.
+  Mutually exclusive — passing both raises `ValueError` at
+  decoration time.
+- `cash.mark_pure(func)` / `cash.mark_stateful(func)` — module-level
+  helpers to annotate third-party callables you've audited. Sets
+  the existing `_cash_pure` / `_cash_stateful` attributes the
+  analyzer respects. Returns *func* unmodified (no wrapping), so
+  it's safe to call on C extensions and callable instances.
+- `CashImpurityWarning` (subclass of `CashCacheIneffectiveWarning`)
+  and `CashImpureFunctionError` (subclass of `CashError`) exported
+  from the top-level `cash` package.
+- **Latent-bug fix: helper-source-hash cache invalidation.**
+  Previously, editing a plain helper called from a `@cash.cache`d
+  function did NOT invalidate the cache — only edits to `@cash.cache`d
+  callees were tracked. Now the same analyzer walk captures source
+  hashes (and module-resolution paths) of every analyzed user-code
+  helper. On every call, helpers are re-resolved from `sys.modules`
+  and re-hashed, with current hashes folded into the cache key.
+  This catches both cross-process edits (new run = new hash = new
+  key) and in-process redefinitions (notebook cell rerun, REPL
+  rebind, hot-reload). Per-call overhead is ~5-30μs for typical
+  helper counts. The fallback to the recorded snapshot kicks in
+  when re-resolution fails (helper deleted/renamed since analysis).
+- Purity analyzer now recurses through **closure variables** in
+  addition to `__globals__`. A `@cash.cache`d function defined
+  inside another function (e.g. a factory pattern) gets its sibling
+  helpers analyzed for impurity, scope mutations, and dynamic
+  patterns. Closure helpers contribute to the cache-key state hash
+  via the analysis-time snapshot (they have no stable
+  `sys.modules` path for re-resolution, so per-call invalidation
+  defers to the snapshot — which is the right behavior since
+  closures are re-created fresh each time the enclosing function
+  runs).
 
 ### Changed
 - Ineffective-cache and store-failure events now emit
@@ -54,6 +120,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per `(category, function, argument type)`. Users who relied on
   silent failure should add `warnings.filterwarnings("ignore",
   category=cash.CashWarning)` to their startup code.
+- Three previously-silent failure paths now emit
+  `CashCacheIneffectiveWarning` instead of a `logger.debug` /
+  `logger.warning` line that nobody read: a `cache_if=` predicate that
+  raises (was: silent skip), backend lock acquisition failure (was:
+  proceeded unlocked with only a debug log), and a stored entry whose
+  metadata fails validation (was: silently treated as miss). Same
+  per-`(category, function, reason)` dedup as the existing warnings.
 - `FileAccessTracker` now uses `contextvars.ContextVar` for active-
   tracker dispatch. Concurrent `asyncio.gather` and threaded callers
   are correctly isolated. No user-facing API change.

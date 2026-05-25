@@ -99,19 +99,31 @@ Re-run the notebook:
 ## Function caching outside notebooks
 
 ```python
-from cash import cache
+import cash
 
-@cache
+@cash.cache
 def expensive(x):
     return x ** 2 + sum(range(x))
 
 expensive(1_000_000)            # first call: computed
 expensive(1_000_000)            # cache hit
-expensive.cache_info()          # {'hits': 1, 'misses': 1, 'hit_rate': 0.5, ...}
+expensive.cache_info()
+# {'hits': 1, 'misses': 1, 'hit_rate': 0.5,
+#  'total_time_saved': 0.045, 'warnings': []}
 expensive.cache_clear()
+
+# Diagnose why a call hits or misses, without invoking the function:
+expensive.explain(1_000_000)
+# [HIT] __main__.expensive — hit
+#   cache_key: ...
+#   cached_at: 1779637032.79, execution_time_saved: 0.045
 ```
 
-For more, see [docs/](docs/).
+Decorate impure functions (LLM calls, HTTP fetches, file writes) and
+Cash warns by default that the side effect will only run on the first
+call. Pass `assume_safe=True` to silence after auditing, or
+`strict=True` to make CI fail when impure code gets cached. Full
+walkthrough in [docs/decorator.md](docs/decorator.md).
 
 ---
 
@@ -145,11 +157,11 @@ Full CLI reference: [docs/cli.md](docs/cli.md).
 | `%cash_repair` | Fix corrupted cache; `--full` clears everything |
 | `%cash_feedback` | How to report bugs / give feedback |
 
-Full list: [docs/api_reference.md](docs/api_reference.md).
+Full list: [docs/api/](docs/api/index.md).
 
 ## Backends
 
-`TieredBackend` (RAM L1 + disk L2) is the default and the right choice for almost everyone. Other options if you need them: `InMemory`, `File`, `SQLite`, `Redis`, `S3`. See [docs/api_reference.md](docs/api_reference.md#backends).
+`TieredBackend` (RAM L1 + disk L2) is the default and the right choice for almost everyone. Other options if you need them: `InMemory`, `File`, `SQLite`, `Redis`, `S3`. See [docs/api/backends.md](docs/api/backends.md).
 
 ## Where does the cache live?
 
