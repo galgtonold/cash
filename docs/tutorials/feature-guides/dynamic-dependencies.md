@@ -92,7 +92,6 @@ The resolver must return one of:
 
 To track something other than an mtime, write a `DataSource` subclass. The interface is three methods (`src/cash/data_source.py:10-23`):
 
-<!-- test:skip reason="`from cash import DataSource` not exported from top-level package; symbol lives at cash.data_source.DataSource (API gap, see #TODO)" -->
 ```python
 import hashlib
 from cash import DataSource
