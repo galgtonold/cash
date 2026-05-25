@@ -8,6 +8,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from tests.docs._annotations import find_skip_for_fence
 
@@ -69,3 +70,62 @@ def extract_fences(md_path: Path) -> list[Fence]:
         else:
             i += 1
     return fences
+
+
+@dataclass
+class PageResult:
+    page: Path
+    total_fences: int
+    tested_fences: int
+    skipped_fences: list[tuple[int, str]] = field(default_factory=list)
+    namespace: dict[str, Any] = field(default_factory=dict)
+
+
+class PageExecutionError(RuntimeError):
+    """Raised when a docs-parity page fails to exec."""
+
+
+def run_page(md_path: Path, namespace_overrides: dict[str, Any] | None = None) -> PageResult:
+    """Concatenate every non-skipped python fence and exec the result in
+    a single fresh namespace.
+
+    Raises PageExecutionError if any statement raises, with a message that
+    names the markdown file and the offending line range.
+    """
+    fences = extract_fences(md_path)
+
+    result = PageResult(
+        page=md_path,
+        total_fences=len(fences),
+        tested_fences=0,
+    )
+
+    pieces: list[str] = []
+    for f in fences:
+        if f.skip:
+            result.skipped_fences.append((f.line_start, f.skip_reason or "<no reason>"))
+            continue
+        # Pad with blank lines so a tracelog's lineno aligns with the markdown file.
+        pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
+        pieces.append("\n" * pad + f.code)
+        result.tested_fences += 1
+
+    if not pieces:
+        return result
+
+    script = "\n\n".join(pieces)
+    namespace: dict[str, Any] = {"__name__": "__cash_docs_test__"}
+    if namespace_overrides:
+        namespace.update(namespace_overrides)
+
+    try:
+        # Compile with the markdown file's path so tracebacks point at the .md
+        code_obj = compile(script, str(md_path), "exec")
+        exec(code_obj, namespace)
+    except Exception as e:
+        raise PageExecutionError(
+            f"{md_path}: exec failed with {type(e).__name__}: {e}"
+        ) from e
+
+    result.namespace = namespace
+    return result
