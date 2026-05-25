@@ -88,3 +88,53 @@ def test_run_page_surfaces_exec_errors_with_location():
         assert "ValueError" in str(exc_info.value)
     finally:
         broken.unlink()
+
+
+def test_infer_claims_finds_cached_functions():
+    from tests.docs._harness import infer_claims
+
+    src = (FIXTURES / "page_with_decorator.md").read_text()
+    # Pull just the fence content for the test
+    fence_code = src.split("```python\n", 1)[1].split("```", 1)[0]
+    claims = infer_claims(fence_code)
+
+    # double() is called twice with same args; expect 1 hit + 1 miss
+    assert any(c.function == "double" for c in claims)
+    double_claim = next(c for c in claims if c.function == "double")
+    assert double_claim.expected_hits == 1
+    assert double_claim.expected_misses == 1
+
+
+def test_infer_claims_handles_no_cache_marker():
+    from tests.docs._harness import infer_claims
+
+    src = (FIXTURES / "page_with_no_cache.md").read_text()
+    fence_code = src.split("```python\n", 1)[1].split("```", 1)[0]
+    claims = infer_claims(fence_code)
+
+    # @cash.stateful means get_time() should never be cached
+    assert any(c.function == "get_time" for c in claims)
+    get_time_claim = next(c for c in claims if c.function == "get_time")
+    assert get_time_claim.expected_hits == 0
+    assert get_time_claim.expected_misses >= 2
+
+
+def test_infer_claims_respects_inline_miss_comments():
+    from tests.docs._harness import infer_claims
+
+    src = '''
+import cash
+
+@cash.cache
+def fetch(url, _seed=0):
+    return _seed
+
+a = fetch("u1")        # First call: cache miss
+b = fetch("u1")        # Second call: cache hit
+c = fetch("u2")        # Cache miss: different args
+'''
+    claims = infer_claims(src)
+    fetch_claim = next(c for c in claims if c.function == "fetch")
+    # 3 calls, 2 unique arg tuples -> 1 hit + 2 misses
+    assert fetch_claim.expected_hits == 1
+    assert fetch_claim.expected_misses == 2
