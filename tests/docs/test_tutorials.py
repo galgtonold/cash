@@ -42,10 +42,19 @@ class _DatasetConfigStub:
         self.features = ["f1", "f2"]
 
 
+import types as _types
+
+_fake_sqlalchemy_engine = _types.SimpleNamespace(
+    Engine=type("Engine", (), {"url": "sqlite:///stub.db"})
+)
+_fake_sqlalchemy = _types.SimpleNamespace(engine=_fake_sqlalchemy_engine)
+
+
 _DOC_NAMESPACES: dict[str, dict] = {
     "custom-hashers": {
         "MyPydanticModel": _MyPydanticModelStub,
         "DatasetConfig": _DatasetConfigStub,
+        "sqlalchemy": _fake_sqlalchemy,
     },
 }
 

@@ -93,7 +93,6 @@ Two paths are explicitly opted out on the async side:
 
 The original motivation. API responses are deterministic in their input prompt and idempotent for cache purposes; the latency and dollar cost of a re-call dwarf the cache lookup. Wrap the outermost function whose inputs are stable across iteration:
 
-<!-- test:skip reason="references `anthropic.AsyncAnthropic` which is not a hard dep of cash; SDK not installed in dev env" -->
 ```python
 @cash.cache(ttl=3600)
 async def llm_complete(prompt: str, model: str = "claude-opus-4-7"):

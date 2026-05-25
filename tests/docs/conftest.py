@@ -65,6 +65,57 @@ def mock_aiohttp(monkeypatch):
     yield
 
 
+@pytest.fixture(autouse=True)
+def mock_anthropic(monkeypatch):
+    """Stub out anthropic.AsyncAnthropic for doc tests.
+
+    Injects a fake module when anthropic is not installed so fences that
+    import or reference the SDK run without errors. When the real package
+    IS installed this fixture no-ops so integration tests can use the real SDK.
+    """
+    import sys
+    if "anthropic" in sys.modules:
+        yield
+        return
+
+    import types
+
+    class _FakeContent:
+        text = "stub response text"
+
+    class _FakeMessage:
+        content = [_FakeContent()]
+
+    class _FakeMessages:
+        async def create(self, **kwargs):
+            return _FakeMessage()
+
+    class _FakeClient:
+        def __init__(self):
+            self.messages = _FakeMessages()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return None
+
+    class _FakeAsyncAnthropic:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __aenter__(self):
+            return _FakeClient()
+
+        async def __aexit__(self, *args):
+            return None
+
+    fake_mod = types.ModuleType("anthropic")
+    fake_mod.AsyncAnthropic = _FakeAsyncAnthropic
+    monkeypatch.setitem(sys.modules, "anthropic", fake_mod)
+    yield
+
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
