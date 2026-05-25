@@ -161,5 +161,7 @@ extension.
 
 ## Related
 
-- [`@cash.cache` API reference](../../api/cash.md)
-- [Production transition tutorial](production-transition.md)
+- [Custom Hashers](custom-hashers.md) — register hashers for any type, not just bound methods.
+- [Purity Decorators](purity-decorators.md) — control what Cash treats as deterministic.
+- [Iterator Caching](iterator-caching.md) — the chunked storage system that handles generator returns.
+- [Decorator (`@cash.cache`)](../../decorator.md) — the underlying decorator API.
