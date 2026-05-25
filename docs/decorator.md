@@ -30,7 +30,7 @@ Don't use it for:
   computation alone will dominate the runtime)
 
 For methods on stateful objects (database handles, model wrappers,
-etc.) see the dedicated [caching class methods](caching-class-methods.md)
+etc.) see the dedicated [caching class methods](tutorials/feature-guides/caching-class-methods.md)
 recipe.
 
 ---
@@ -190,7 +190,7 @@ Three modes:
   audited and know caching is correct (e.g., a memoized API call where
   the side effect is idempotent / harmless on hit).
 
-See [Purity tutorial](tutorials/purity.md) for the full story including
+See [Purity tutorial](tutorials/feature-guides/purity-decorators.md) for the full story including
 `@pure`, `@stateful`, and `mark_pure`/`mark_stateful` for third-party
 callables.
 
@@ -381,7 +381,7 @@ Loader("a.csv").load()   # MISS — different self objects = different args_hash
 
 Two `Loader` instances with the same `path` produce two separate cache
 entries because `self` (a different object each time) is part of the
-args. Fix via [`register_hasher`](caching-class-methods.md):
+args. Fix via [`register_hasher`](tutorials/feature-guides/caching-class-methods.md):
 
 ```python
 cash.register_hasher(Loader, lambda l: hashlib.sha256(l.path.encode()).hexdigest())
@@ -429,9 +429,9 @@ but the individual chunk entries (keyed
 ## Where to go next
 
 - [API reference — Cash class](api/cash.md) — exhaustive signatures
-- [Purity tutorial](tutorials/purity.md) — `@pure`, `@stateful`,
+- [Purity tutorial](tutorials/feature-guides/purity-decorators.md) — `@pure`, `@stateful`,
   `mark_pure`, `mark_stateful`
-- [Caching class methods](caching-class-methods.md) — recipe for
+- [Caching class methods](tutorials/feature-guides/caching-class-methods.md) — recipe for
   stateful receivers via `register_hasher`
 - [Configuration](getting-started/configuration.md) — picking a
   backend, tier stacks, TOML / env / programmatic resolution

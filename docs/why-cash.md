@@ -148,7 +148,7 @@ The same four cells, run through four lifecycle events — first run, re-run, ke
       <li>Your notebook is a single cell with no expensive steps.</li>
       <li>You're writing a pure I/O script (API ingestion, network polling) — caching is at the wrong layer.</li>
       <li>You need hard real-time behaviour.</li>
-      <li>Your cells <em>intentionally</em> produce different output each run — though see the <a href="tutorials/purity.md"><code>@stateful</code> decorator</a> for the nuanced case.</li>
+      <li>Your cells <em>intentionally</em> produce different output each run — though see the <a href="tutorials/feature-guides/purity-decorators.md"><code>@stateful</code> decorator</a> for the nuanced case.</li>
     </ul>
   </div>
 </div>
@@ -192,7 +192,7 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 ??? question "What about in-place mutations like `df['x'] = 0`?"
     Cash uses AST-based mutation detection to flag in-place mutations
     so cached objects can be invalidated correctly.
-    See [the mutation pattern in the data-science tutorial](tutorials/data_science_workflows.md).
+    See [the mutation pattern in the data-science tutorial](tutorials/use-cases/data-science.md).
 
 ### Coverage
 
