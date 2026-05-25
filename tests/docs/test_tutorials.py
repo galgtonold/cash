@@ -27,9 +27,15 @@ PR1_DOCS = [
     PR1_DOCS,
     ids=lambda p: p.stem,
 )
-def test_doc_page(doc_path: Path) -> None:
+def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
     """Execute every python fence in the doc and assert documented cache claims."""
     result = run_page(doc_path)
+    docs_coverage_recorder.append({
+        "page": str(doc_path.relative_to(REPO_ROOT)),
+        "tested_fences": result.tested_fences,
+        "total_fences": result.total_fences,
+        "skipped_fences": result.skipped_fences,
+    })
     assert result.tested_fences >= 1, (
         f"{doc_path}: no testable fences found "
         f"({len(result.skipped_fences)} skipped, total {result.total_fences})"
