@@ -33,10 +33,9 @@ class _MultiBackendMixin:
         Supports metadata-only entries written by `set_metadata_only`.
         """
         for backend in self.backends:
-            if hasattr(backend, 'get_metadata'):
-                meta = backend.get_metadata(key)
-                if meta is not None:
-                    return meta
+            meta = backend.get_metadata(key)
+            if meta is not None:
+                return meta
         return None
 
     def set_metadata_only(self, key: str, metadata: dict) -> None:
