@@ -280,11 +280,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         print("   Run %cash_help for available commands.")
         # Report existing cache state if available
         try:
-            backend = self._cash_instance.backend
-            if hasattr(backend, 'list_entries'):
-                entries = backend.list_entries()
-                if entries:
-                    print(f"   Found existing cache with {len(entries)} entries.")
+            entries = self._cash_instance.backend.list_entries()
+            if entries:
+                print(f"   Found existing cache with {len(entries)} entries.")
         except (OSError, AttributeError, TypeError):
             pass
         # One-time hint: cash reads upstream cells from the .ipynb file on
@@ -517,13 +515,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             'debug_enabled': self._debug,
         }
 
-        # Add cache stats if available
+        # Add cache entry count if available
         try:
             backend = self._cash_instance.backend
-            if hasattr(backend, 'stats'):
-                status['cache_stats'] = backend.stats()
-            else:
-                status['cache_stats'] = {'keys': len(list(backend.keys())) if hasattr(backend, 'keys') else 'unknown'}
+            status['cache_stats'] = {'keys': len(backend.list_entries())}
         except (AttributeError, TypeError, OSError) as exc:
             logger.debug("Failed to retrieve cache stats: %s", exc)
             status['cache_stats'] = {}

@@ -101,9 +101,6 @@ class CashAdminMagicsMixin:
         print("[Verify] Checking cache integrity...")
 
         try:
-            if not hasattr(backend, 'list_entries'):
-                print("[Info] Backend does not support listing entries.")
-                return
             total, healthy, corrupted, issues = self._verify_backend_entries(backend, fix_mode)
         except (OSError, AttributeError, TypeError) as e:
             print(f"[Error] Error accessing backend: {e}")

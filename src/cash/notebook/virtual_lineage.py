@@ -120,19 +120,17 @@ class VirtualLineage:
     def _get_metadata_only(self, cache_key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the full value.
 
-        Uses backend.get_metadata() if available (FileBackend), otherwise
-        falls back to backend.get() which deserializes everything.
-        This optimization avoids expensive deserialization of large cached
-        objects (e.g., DataFrames) when only metadata is needed.
+        Delegates to ``backend.get_metadata()``, which every
+        :class:`cash.backends.CacheBackend` provides (the base supplies a
+        ``get()``-discard-value fallback; ``FileBackend`` overrides for a
+        cheaper metadata-only read path). Lets callers skip the expensive
+        deserialization of large cached objects (e.g. DataFrames) when
+        only metadata is needed.
         """
         backend = self.cash_instance.backend if self.cash_instance else None
         if backend is None:
             return None
-        if hasattr(backend, 'get_metadata'):
-            return backend.get_metadata(cache_key)
-        # Fallback for backends without get_metadata (e.g., InMemoryBackend)
-        metadata, _ = backend.get(cache_key)
-        return metadata
+        return backend.get_metadata(cache_key)
 
     def _get_cached_ast(self, code: str) -> ast.Module | None:
         """Parse code with AST caching. Returns None on SyntaxError."""
