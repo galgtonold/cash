@@ -30,7 +30,6 @@ def _decide(
     variable_lineage: dict | None = None,
     is_stateful_call=lambda _name: False,
     scan_forbidden=lambda _code, _user_ns, _tree: [],
-    should_skip_variable=lambda _name, _val: False,
 ):
     tree, analysis = _analysis(code)
     return decide_cacheability(
@@ -44,7 +43,6 @@ def _decide(
         variable_lineage=variable_lineage or {},
         is_stateful_call=is_stateful_call,
         scan_forbidden=scan_forbidden,
-        should_skip_variable=should_skip_variable,
     )
 
 
@@ -190,12 +188,22 @@ class TestMissingLineage:
         )
         assert cacheable is True
 
-    def test_should_skip_variable_callback_honored(self):
-        """If the predicate says skip, no lineage is required."""
+    def test_module_input_does_not_need_lineage(self):
+        """Module-type inputs are lineage-exempt: their source is captured elsewhere."""
+        import os as os_mod
         cacheable, _ = _decide(
-            "y = f()", inputs={"f"}, outputs={"y"},
-            user_ns={"f": lambda: 1}, variable_lineage={},
-            should_skip_variable=lambda name, val: True,
+            "y = os.getcwd()", inputs={"os"}, outputs={"y"},
+            user_ns={"os": os_mod}, variable_lineage={},
+        )
+        assert cacheable is True
+
+    def test_private_callable_input_does_not_need_lineage(self):
+        """Private callables are lineage-exempt (bound methods etc.)."""
+        class _Helper:
+            def __call__(self): return 1
+        cacheable, _ = _decide(
+            "y = _h()", inputs={"_h"}, outputs={"y"},
+            user_ns={"_h": _Helper()}, variable_lineage={},
         )
         assert cacheable is True
 

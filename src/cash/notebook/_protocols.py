@@ -94,12 +94,24 @@ class TrackingState:
     | executed_cell_hashes         | —               | W (after exec)    | R (rarely)        |
     | variable_lineage             | R (badge)       | W (after exec)    | R+W (reset/sync)  |
     | executed_file_deps           | —               | W (after exec)    | R (stale check)   |
+    | executed_file_mtimes         | —               | W (after exec)    | —                 |
     | variable_hashes              | R (badge)       | W (after exec)    | —                 |
     | variable_sources             | R (badge)       | W (after exec)    | —                 |
     | current_session_hashes       | —               | W (after exec)    | —                 |
     | vars_with_mutation_lineage   | —               | W / ControlStruct | R (skip lineage)  |
     | executed_input_lineages      | —               | W (after exec)    | R (lineage check) |
+    | granular_preserved_vars      | —               | W (lineage build) | R (module inv.)   |
+    | module_attribute_deps        | —               | W (lineage build) | R (module inv.)   |
+    | from_import_sources          | —               | W (lineage build) | R (module inv.)   |
     +------------------------------+-----------------+-------------------+-------------------+
+
+    The last four fields used to live as instance attributes on
+    ``StatementProcessor`` and were threaded into ``StatementFileDeps`` /
+    ``StatementLineageBuilder`` by reference.  They were moved onto
+    ``TrackingState`` so the four siblings of ``StatementProcessor`` can
+    receive state as a method parameter rather than aliasing dict refs
+    in their own ``set_tracking_state`` (which no longer exists on those
+    siblings).
     """
 
     # Written by StatementProcessor after each statement execution.
@@ -139,6 +151,25 @@ class TrackingState:
     # Written by StatementProcessor; read by UpstreamChecker (Pass 1 lineage check).
     # Stores the lineage snapshot of each input at the time of execution.
     executed_input_lineages: dict[str, dict[str, str]] = field(default_factory=dict)
+
+    # Written by StatementFileDeps (via StatementProcessor) after each execution.
+    # Per-variable mtime snapshots of accessed files; used together with
+    # ``executed_file_deps`` for fast direct-file staleness detection.
+    executed_file_mtimes: dict[str, dict[str, float]] = field(default_factory=dict)
+
+    # Written by StatementLineageBuilder when a tracked module is re-imported.
+    # Read by module_invalidator. Maps module_name -> {var_names} whose stored
+    # input lineages need refreshing once the import statement re-executes.
+    granular_preserved_vars: dict[str, set[str]] = field(default_factory=dict)
+
+    # Written by StatementLineageBuilder; read by module_invalidator.
+    # Per-variable record of which module attributes contributed: maps
+    # var_name -> {module_name -> {attr1, attr2, ...}}.
+    module_attribute_deps: dict[str, dict[str, set[str]]] = field(default_factory=dict)
+
+    # Written by StatementLineageBuilder; read by module_invalidator.
+    # Maps var_name -> source_module_name for ``from X import Y`` bindings.
+    from_import_sources: dict[str, str] = field(default_factory=dict)
 
     # The single seam for reading/writing variable lineage. Wraps
     # ``variable_lineage`` as its backing dict so callers that still mutate

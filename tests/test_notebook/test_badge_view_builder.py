@@ -18,7 +18,6 @@ from cash.notebook.badge_renderer.view import (
 from cash.notebook.badge_renderer.view_builder import (
     build_bug_report_url,
     build_interactive_badge,
-    build_status_badge,
     map_status,
 )
 from cash.notebook.cache_status import CacheStatus
@@ -334,16 +333,3 @@ def test_bug_report_url_under_size_limit() -> None:
         "notebook_source": huge_cells,
     })
     assert len(url) <= 7800 + len("https://github.com/galgtonold/cash/issues/new?title=...&body=")
-
-
-# ---------------------------------------------------------------------------
-# StatusBadge
-# ---------------------------------------------------------------------------
-
-def test_status_badge_round_trips_through_view_builder() -> None:
-    sb = build_status_badge(
-        status=CacheStatus.RESTORED, execution_time=0.01, time_saved=0.5,
-        source="RAM", storage=["RAM", "DISK"],
-    )
-    assert sb.status is BadgeStatus.RESTORED
-    assert sb.storage_tiers == ("RAM", "DISK")

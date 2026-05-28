@@ -519,8 +519,8 @@ class TestSkipWithoutRestore:
         
         # Check that file mtimes are tracked
         sp = cash_magics._statement_processor
-        if 'content' in sp.executed_file_mtimes:
-            mtimes = sp.executed_file_mtimes['content']
+        if 'content' in sp._tracking_state.executed_file_mtimes:
+            mtimes = sp._tracking_state.executed_file_mtimes['content']
             assert len(mtimes) > 0, "File mtimes should be tracked"
 
 

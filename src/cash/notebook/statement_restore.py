@@ -36,9 +36,8 @@ import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from IPython.display import HTML, display, publish_display_data
+from IPython.display import display, publish_display_data
 
-from .cache_status import CacheStatus
 from .randomness import restore_rng_state
 
 if TYPE_CHECKING:
@@ -61,16 +60,17 @@ def _get_statement_code_and_hash(
 class StatementRestorer:
     """Hydrate a statement's outputs from a cached payload.
 
-    Holds aliased references to the tracking-state dicts and the
-    sibling :class:`StatementFileDeps` (for file-dep restoration).
-    Mutates ``user_ns`` and tracking state directly; replays captured
-    display output via IPython.
+    Stateless apart from the shell reference and the optional content
+    hasher; all :class:`TrackingState` access happens through the
+    ``tracking_state`` method parameter.  Holds the sibling
+    :class:`StatementFileDeps` for file-dep restoration.  Mutates
+    ``user_ns`` and ``tracking_state`` directly; replays captured display
+    output via IPython.
     """
 
     def __init__(
         self,
         shell: 'ShellProtocol',
-        tracking_state: 'TrackingState',
         file_deps: 'StatementFileDeps',
         compute_hash: Callable[[Any], str] | None = None,
         debug: bool = False,
@@ -79,16 +79,6 @@ class StatementRestorer:
         self._file_deps = file_deps
         self.compute_hash = compute_hash
         self.debug = debug
-        self.set_tracking_state(tracking_state)
-
-    def set_tracking_state(self, state: 'TrackingState') -> None:
-        """Re-wire individual tracking-state dict references (alias pattern)."""
-        self.lineage = state.lineage
-        self.variable_hashes = state.variable_hashes
-        self.variable_sources = state.variable_sources
-        self.current_session_hashes = state.current_session_hashes
-        self.executed_cell_codes = state.executed_cell_codes
-        self.executed_cell_hashes = state.executed_cell_hashes
 
     @staticmethod
     def persist_metadata_only(
@@ -105,11 +95,11 @@ class StatementRestorer:
 
     def restore_from_cache(
         self,
+        tracking_state: 'TrackingState',
         cached_data: Any,
         metadata: 'StatementCacheMetadata | None',
         silent: bool,
         process_start: float,
-        render_badge: bool = True,
     ) -> None:
         """Restore a cached statement's outputs into ``user_ns`` and replay display."""
         t_restore = time.time()
@@ -133,14 +123,14 @@ class StatementRestorer:
 
             t_var = time.time()
             for var_name, value in restored_vars.items():
-                self._restore_one_var(var_name, value, metadata)
+                self._restore_one_var(tracking_state, var_name, value, metadata)
 
-            self._file_deps.restore_from_metadata(restored_vars, metadata)
+            self._file_deps.restore_from_metadata(tracking_state, restored_vars, metadata)
             var_restore_time = time.time() - t_var
 
             output_replay_time = 0.0
             if not silent:
-                output_replay_time = self._replay_cached_outputs(stdout, stderr, rich_outputs, metadata, render_badge)
+                output_replay_time = self._replay_cached_outputs(stdout, stderr, rich_outputs)
 
             restore_time = time.time() - t_restore
             total_time = time.time() - process_start
@@ -161,6 +151,7 @@ class StatementRestorer:
 
     def _restore_one_var(
         self,
+        tracking_state: 'TrackingState',
         var_name: str,
         value: Any,
         metadata: 'StatementCacheMetadata | None',
@@ -171,23 +162,24 @@ class StatementRestorer:
         if metadata:
             output_lineages = metadata.get('output_lineages', {})
             if var_name in output_lineages:
-                self.lineage.record(var_name, output_lineages[var_name], value=value)
+                tracking_state.lineage.record(var_name, output_lineages[var_name], value=value)
 
             stored_code, stored_hash = _get_statement_code_and_hash(metadata)
             if stored_hash:
-                if var_name not in self.executed_cell_hashes:
-                    self.executed_cell_hashes[var_name] = set()
-                self.executed_cell_hashes[var_name].add(stored_hash)
+                if var_name not in tracking_state.executed_cell_hashes:
+                    tracking_state.executed_cell_hashes[var_name] = set()
+                tracking_state.executed_cell_hashes[var_name].add(stored_hash)
             if stored_code:
-                self.executed_cell_codes[var_name] = stored_code
+                tracking_state.executed_cell_codes[var_name] = stored_code
 
-        self._record_restored_var_hash(var_name, value, metadata)
+        self._record_restored_var_hash(tracking_state, var_name, value, metadata)
 
         if metadata and 'key' in metadata:
-            self.variable_sources[var_name] = metadata['key']
+            tracking_state.variable_sources[var_name] = metadata['key']
 
     def _record_restored_var_hash(
         self,
+        tracking_state: 'TrackingState',
         var_name: str,
         value: Any,
         metadata: 'StatementCacheMetadata | None',
@@ -197,13 +189,13 @@ class StatementRestorer:
         if type_name in ('DataFrame', 'Series', 'ndarray'):
             lineage_hash = (metadata.get('output_lineages', {}) if metadata else {}).get(var_name)
             if lineage_hash:
-                self.variable_hashes.setdefault(var_name, set()).add(lineage_hash)
-                self.current_session_hashes[var_name] = lineage_hash
+                tracking_state.variable_hashes.setdefault(var_name, set()).add(lineage_hash)
+                tracking_state.current_session_hashes[var_name] = lineage_hash
         elif self.compute_hash:
             try:
                 content_hash = self.compute_hash(value)
-                self.variable_hashes.setdefault(var_name, set()).add(content_hash)
-                self.current_session_hashes[var_name] = content_hash
+                tracking_state.variable_hashes.setdefault(var_name, set()).add(content_hash)
+                tracking_state.current_session_hashes[var_name] = content_hash
             except (TypeError, ValueError, AttributeError, RecursionError) as e:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] Could not hash restored variable '%s': %s", var_name, e)
@@ -213,33 +205,16 @@ class StatementRestorer:
         stdout: str,
         stderr: str,
         rich_outputs: list,
-        metadata: 'StatementCacheMetadata | None',
-        render_badge: bool,
     ) -> float:
-        """Replay stdout/stderr/rich outputs and render the RESTORED badge.
+        """Replay stdout/stderr/rich outputs.
 
         Returns elapsed seconds (for timing-debug accounting).
         """
-        from .badge_renderer import render_status_badge
-
         t_output = time.time()
         if stdout:
             print(stdout, end='')
         if stderr:
             print(stderr, end='', file=sys.stderr)
-
-        saved_time = metadata.get('execution_time', 0.0) if metadata else 0.0
-        source = metadata.get('source') if metadata else None
-        storage = metadata.get('storage') if metadata else None
-        if render_badge:
-            html = render_status_badge(
-                CacheStatus.RESTORED,
-                time_saved=saved_time, source=source, storage=storage,
-            )
-            try:
-                display(HTML(html))
-            except (ImportError, TypeError, ValueError):
-                logger.debug("[STATEMENT_RESTORE] Failed to display status badge HTML")
 
         for output in rich_outputs:
             if isinstance(output, dict) and 'data' in output:

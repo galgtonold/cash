@@ -146,7 +146,7 @@ class ModuleInvalidator:
         self, mod_name: str, processor: StatementProcessor, reloaded_mod: Any
     ) -> None:
         """Category 2: clear/refresh non-callable from-imports (constants) from *mod_name*."""
-        for var_name, src_mod in list(processor.from_import_sources.items()):
+        for var_name, src_mod in list(processor._tracking_state.from_import_sources.items()):
             if src_mod != mod_name and not src_mod.startswith(mod_name + '.'):
                 continue
             processor.executed_cell_codes.pop(var_name, None)
@@ -209,7 +209,7 @@ class ModuleInvalidator:
             if self._debug:
                 print(f"[GRANULAR] Preserving '{var_name}': no symbols changed in '{input_var}'")
             return 'preserve'
-        var_attrs = processor.module_attribute_deps.get(var_name, {}).get(input_var)
+        var_attrs = processor._tracking_state.module_attribute_deps.get(var_name, {}).get(input_var)
         if var_attrs:
             if var_attrs & changed_syms:
                 if self._debug:
@@ -249,7 +249,7 @@ class ModuleInvalidator:
         processor.executed_cell_codes.pop(var_name, None)
         processor.executed_input_lineages.pop(var_name, None)
         processor.current_session_hashes.pop(var_name, None)
-        processor.module_attribute_deps.pop(var_name, None)
+        processor._tracking_state.module_attribute_deps.pop(var_name, None)
         if self._debug:
             print(f"[MODULE_INVALIDATE] Cleared lineage for dependent var '{var_name}'")
 
@@ -263,7 +263,7 @@ class ModuleInvalidator:
         input_map = processor.executed_input_lineages.get(var_name, {})
         for mod_name_key in old_module_lineages:
             if mod_name_key in input_map:
-                processor._granular_preserved_vars.setdefault(mod_name_key, set()).add(var_name)
+                processor._tracking_state.granular_preserved_vars.setdefault(mod_name_key, set()).add(var_name)
                 if self._debug:
                     print(f"[GRANULAR] Registered '{var_name}' for deferred lineage update on '{mod_name_key}'")
 
