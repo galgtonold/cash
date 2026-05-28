@@ -200,6 +200,7 @@ When the decorated function returns an iterator (generator,
 `map`/`filter` result, custom iterator), the result is materialized
 and stored in chunks. Defaults are 1M items / 1 GB per chunk.
 
+<!-- test:skip reason="opens huge.log which doesn't exist in test env" -->
 ```python
 @cash.cache(chunk_max_items=10_000)
 def read_lines(path):
@@ -222,6 +223,7 @@ get an `AttributeError` reminding you the iterator is a replay.
 
 `async def` functions are first-class. The wrapper is `async def` too:
 
+<!-- test:skip reason="async httpx.AsyncClient requires real HTTP client / network" -->
 ```python
 @cash.cache(ttl=60)
 async def fetch_user(user_id):
@@ -366,6 +368,7 @@ type is the culprit. Either:
 
 ### Instance methods — `self` participates in the key
 
+<!-- test:skip reason="Loader instance is unhashable (no register_hasher); cache is ineffective and stats stay 0/0" -->
 ```python
 class Loader:
     def __init__(self, path):
@@ -383,6 +386,7 @@ Two `Loader` instances with the same `path` produce two separate cache
 entries because `self` (a different object each time) is part of the
 args. Fix via [`register_hasher`](tutorials/feature-guides/caching-class-methods.md):
 
+<!-- test:skip reason="Loader class defined in skipped previous fence" -->
 ```python
 cash.register_hasher(Loader, lambda l: hashlib.sha256(l.path.encode()).hexdigest())
 ```

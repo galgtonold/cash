@@ -242,6 +242,7 @@ processing as `%cash_on` (upstream simulation, file tracking, badge rendering).
 
 **Example:**
 
+<!-- test:skip reason="illustrative — references missing big.csv; stub pandas returns dict without .groupby" -->
 ```python
 %%cash ttl=600
 import pandas as pd
@@ -530,6 +531,7 @@ resolution, the speedup line reports `n/a`.
 
 The arming pattern in practice:
 
+<!-- test:skip reason="illustrative — references undefined pd and missing big.csv" -->
 ```python
 %cash_benchmark 5 --compare
 # next cell:

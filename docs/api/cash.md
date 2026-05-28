@@ -35,6 +35,7 @@ below).
 When you don't need a custom `Cash` configuration, the top-level
 `cash` module proxies to a lazily-created singleton:
 
+<!-- test:skip reason="references undefined MyType / my_hasher (illustrative)" -->
 ```python
 import cash
 

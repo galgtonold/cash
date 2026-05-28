@@ -121,7 +121,6 @@ So a `pd.read_csv` that takes 50 ms and produces a 10 MB frame stays in RAM; a m
 
 ## `RedisBackend`
 
-<!-- test:skip reason="requires redis package and a live Redis server" -->
 ```python
 from cash import Cash
 from cash.backends import RedisBackend
@@ -149,7 +148,6 @@ Two Redis keys per entry — `{prefix}{key}:meta` and `{prefix}{key}:data` — w
 
 ## `S3Backend`
 
-<!-- test:skip reason="requires boto3 package and AWS credentials" -->
 ```python
 from cash import Cash
 from cash.backends import S3Backend

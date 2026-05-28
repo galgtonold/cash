@@ -13,7 +13,6 @@ ETL pipelines re-process the same data over and over during development, debuggi
 
 Each step is a `@cash.cache`'d function. The result is a dependency graph the cache figures out for you:
 
-<!-- test:skip reason="if __name__ == '__main__' guard prevents execution; functions are never called" -->
 ```python
 import cash
 import pandas as pd
@@ -84,7 +83,6 @@ The same pipeline invoked twice with the same arguments is a cache hit on every 
 
 For backfills, encode the period as an argument:
 
-<!-- test:skip reason="references cash and pd without imports; illustrative snippet only" -->
 ```python
 @cash.cache
 def extract(source_path, date):
@@ -112,7 +110,6 @@ When the *code* changes, Cash sees the new function source and invalidates downs
 
 In a pipeline run, you want to know which steps hit and which missed:
 
-<!-- test:skip reason="references extract/normalize/aggregate defined in the skipped main pipeline fence" -->
 ```python
 print(extract.cache_info())
 print(normalize.cache_info())
@@ -131,7 +128,6 @@ Cash slots into orchestrators without ceremony — each Airflow task, Prefect fl
 - **Shared cache directory.** If workers are distributed, point Cash at shared storage (NFS for on-prem, S3 for cloud). Otherwise each worker has its own cache and you lose cross-worker hits.
 - **TTL on freshness-sensitive steps.** For data that goes stale on a known cadence (daily exchange rates, hourly inventory snapshots), set `ttl=` so the cache expires automatically and the next call re-fetches.
 
-<!-- test:skip reason="uses cash and requests without imports in this fence" -->
 ```python
 @cash.cache(ttl=3600)  # refresh every hour
 def fetch_exchange_rates():

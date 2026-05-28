@@ -87,6 +87,7 @@ The entry point for notebook integration. Provides:
 - **Execution Hook**: Intercepts cell execution via `pre_run_cell` event
 - **State Management**: Maintains tracking dictionaries for variables
 
+<!-- test:skip reason="source-code excerpt: references undefined Magics class" -->
 ```python
 class CashMagics(Magics):
     def __init__(self, shell, cash_instance):
@@ -107,6 +108,7 @@ Static analysis of Python code using AST:
 - **Scope Handling**: Tracks local vs. global scope in functions/classes
 - **Magic Stripping**: Removes Jupyter magics before parsing
 
+<!-- test:skip reason="source-code excerpt: ABC class with abstractmethod" -->
 ```python
 class CodeAnalyzer:
     @staticmethod
@@ -172,6 +174,7 @@ Where:
 
 ### Example
 
+<!-- test:skip reason="illustrative pseudo-code (references undefined SHA256)" -->
 ```python
 # Statement: df = df.sort_values('date')
 # Inputs: df (lineage: abc123...)
@@ -233,6 +236,7 @@ lineage(x) = SHA256(
 
 ### Lineage Propagation Example
 
+<!-- test:skip reason="illustrative pseudo-code (references undefined SHA256, lineage)" -->
 ```python
 # Cell 1
 a = 1                    # lineage(a) = SHA256("a = 1:")
@@ -251,6 +255,7 @@ If `a = 1` changes to `a = 10`:
 
 ### Lineage Storage
 
+<!-- test:skip reason="illustrative dict literal at top level" -->
 ```python
 # In _variable_lineage dict:
 {
@@ -305,6 +310,7 @@ The `UpstreamChecker._simulate_and_find_changes()` method:
 
 The system only checks variables that are **actually needed** by the current cell:
 
+<!-- test:skip reason="illustrative pseudo-code (references undefined self)" -->
 ```python
 # Cell being executed requires only 'ticker_stats'
 required_inputs = {'ticker_stats'}
@@ -326,6 +332,7 @@ Loops and conditionals receive special handling for fine-grained caching.
 
 Instead of caching an entire loop as one unit:
 
+<!-- test:skip reason="illustrative pseudo-code (calls undefined compute_stats / stats)" -->
 ```python
 # This loop has 4 iterations, each cached separately
 for ticker in ["AAPL", "MSFT", "GOOGL", "TSLA"]:
@@ -340,6 +347,7 @@ Each iteration gets a unique cache key incorporating:
 
 ### Iteration Context Hash
 
+<!-- test:skip reason="source-code excerpt: references hashlib without import" -->
 ```python
 def compute_context_hash(context: Dict[str, Any]) -> str:
     """Compute a hash of the iteration context."""
@@ -370,6 +378,7 @@ statement_key = SHA256(
 
 ### Branch Caching for Conditionals
 
+<!-- test:skip reason="illustrative pseudo-code (references undefined condition)" -->
 ```python
 if condition:
     # Branch A - cached with context "branch=if"
@@ -407,6 +416,7 @@ flowchart TD
 
 For deep dependency chains, the system can restore from the **last cached state** without re-executing all intermediate steps:
 
+<!-- test:skip reason="illustrative pseudo-code (just comments)" -->
 ```python
 # Instead of re-running:
 # df = pd.read_csv('data.csv')    # 5s
@@ -452,6 +462,7 @@ Where `func_source_hashes` includes the SHA256 of every callable input's source 
 
 When a local module function is called, Cash doesn't just track that function's source — it transitively expands to track **all modules that the function's module imports**. This means changing a deeply-nested dependency invalidates all caches that ultimately depend on it.
 
+<!-- test:skip reason="illustrative comment-only fence" -->
 ```python
 # my_utils.py imports from my_helpers.py
 # Changing my_helpers.py invalidates caches that call functions from my_utils.py
@@ -461,6 +472,7 @@ When a local module function is called, Cash doesn't just track that function's 
 
 Functions are identified by `module.qualname` (e.g. `my_module.process`), not just their `__qualname__`. This prevents collisions when different modules define functions with the same name:
 
+<!-- test:skip reason="illustrative comment-only fence" -->
 ```python
 # Both have qualname "dep", but different module-qualified keys:
 # notebook cell: "__main__.dep"
@@ -471,6 +483,7 @@ Functions are identified by `module.qualname` (e.g. `my_module.process`), not ju
 
 For imported functions from external modules:
 
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_track my_module           # Register module for change detection
 %cash_track my_module --reload  # Force reload (clears .pyc cache)
@@ -506,6 +519,7 @@ flowchart TD
 
 Each `@cash.cache` call records an entry in `Cash._decorator_call_log`:
 
+<!-- test:skip reason="illustrative dict literal at top level" -->
 ```python
 {
     'func_name': 'my_module.process',   # Module-qualified key
@@ -605,6 +619,7 @@ Cash uses AST analysis to detect in-place mutations that could break caching cor
 
 ### The Mutation Problem
 
+<!-- test:skip reason="illustrative pseudo-code (Cell 1/Cell 2 separators)" -->
 ```python
 # Cell 1
 data = [1, 2, 3]           # Cached: data = [1, 2, 3]
@@ -662,6 +677,7 @@ The `RandomnessDetector` scans AST nodes for calls to random functions across mu
 
 The detector also tracks `seed()` calls. If a random module has been seeded, subsequent random calls are considered deterministic:
 
+<!-- test:skip reason="illustrative pseudo-code (Cell 1/Cell 2 separators)" -->
 ```python
 # Cell 1
 np.random.seed(42)    # Seed detected → numpy.random marked as seeded
@@ -736,6 +752,7 @@ cache_key = SHA256(
 
 ### Custom File Handler Registration
 
+<!-- test:skip reason="references missing FileDependencyRegistry handler factory" -->
 ```python
 from cash.notebook.file_tracker import FileDependencyRegistry
 
@@ -763,6 +780,7 @@ Cash records the full computational provenance of every variable, enabling depen
 
 Each time a variable is computed/restored/skipped, a `ProvenanceRecord` is stored:
 
+<!-- test:skip reason="@dataclass requires the class's __module__ to be in sys.modules" -->
 ```python
 @dataclass
 class ProvenanceRecord:
@@ -778,6 +796,7 @@ class ProvenanceRecord:
 
 ### Dependency Graph Traversal
 
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_provenance df --graph
 ```
@@ -797,6 +816,7 @@ The `get_dependencies()` method performs transitive closure — following inputs
 
 ### Timeline View
 
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_provenance --time
 ```
@@ -828,6 +848,7 @@ flowchart TD
 
 ### Usage
 
+<!-- test:skip reason="requires backend instance — illustrative" -->
 ```python
 from cash.backends.lazy import make_lazy_loader
 
@@ -868,6 +889,7 @@ flowchart TD
 
 ### Statement Processing Detail
 
+<!-- test:skip reason="source-code excerpt: references self / undefined helpers" -->
 ```python
 def process_statement(self, code, ttl=None, ...):
     # 1. Pre-checks
@@ -1005,6 +1027,7 @@ The default `TieredBackend` uses:
 2. **L2 (FileBackend)**: Persistent, survives restarts
 
 Promotion policy:
+<!-- test:skip reason="source-code excerpt: references undefined disk_bandwidth" -->
 ```python
 def should_persist(execution_time: float, size_bytes: int) -> bool:
     # Skip disk for items faster than 1.0s
@@ -1026,6 +1049,7 @@ def should_persist(execution_time: float, size_bytes: int) -> bool:
 
 Enable debug mode for detailed logging:
 
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug on
 ```
@@ -1044,6 +1068,7 @@ Key debug prefixes:
 
 ### Debug Output Formats
 
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_debug on         # Human-readable console output (default)
 %cash_debug json       # JSON-formatted log records
@@ -1055,6 +1080,7 @@ Key debug prefixes:
 
 Cash includes a structured logging system that captures events with machine-readable metadata:
 
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
 %cash_log             # Show recent log events
 %cash_log cache_hit   # Filter by event type

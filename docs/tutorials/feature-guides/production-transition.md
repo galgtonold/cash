@@ -21,6 +21,7 @@ Open the notebook and look for the statements with long execution times — heav
 
 ```python { .nb-cell }
 %cash_on
+# test:inject: import pandas as pd
 
 df = pd.read_csv('data.csv')              # I/O
 features = engineer_features(df)           # compute
@@ -62,10 +63,9 @@ If `tracked_files` is empty but you *do* read external state — for instance, y
 
 The default (tiered RAM + file under `./.cash/`) is fine for most scripts. Production deployments usually want explicit control. See [Choosing a backend](choosing-a-backend.md) for selection logic; quick sketches:
 
-<!-- test:skip reason="requires redis package; RedisBackend import fails without it" -->
 ```python
-from cash import Cash, FileBackend
-from cash.backends import SQLiteBackend, RedisBackend
+from cash import Cash, FileBackend, SQLiteBackend
+from cash.backends import RedisBackend
 
 app = Cash(backend=FileBackend("/var/cache/myapp", max_size_bytes=10_000_000_000))   # size-capped disk
 app = Cash(backend=SQLiteBackend("cache.db"))                                        # single-file, transactional
@@ -74,9 +74,9 @@ app = Cash(backend=RedisBackend(host="redis.internal", port=6379, db=0))        
 
 ### Step 5: Build a pipeline script
 
-<!-- test:skip reason="if __name__ == '__main__' guard prevents actual execution; claim inferencer would miscount" -->
 ```python
 # run_pipeline.py
+import pandas as pd
 from cash import Cash, FileBackend
 
 app = Cash(backend=FileBackend("./pipeline_cache"))
@@ -118,6 +118,7 @@ You don't have to pick one. A `@cash.cache`-decorated function called from a `%c
 %cash_on
 from pipeline import train          # @cash.cache lives in the module
 
+# test:inject: features = {"stub": True}
 model = train(features)              # badge reports the decorator hit
 ```
 

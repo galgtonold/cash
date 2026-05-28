@@ -28,6 +28,7 @@ ts = datetime.utcnow()           # never cached
 
 Annotations are matched by a single regex at [`src/cash/notebook/annotations.py:33`][regex]:
 
+<!-- test:skip reason="source-code excerpt: references re module without import" -->
 ```python
 ANNOTATION_PATTERN = re.compile(r'#\s*@cash:([\w-]+)(?:=(\d+))?')
 ```
@@ -76,6 +77,7 @@ This is the right directive when a statement has observable side effects or prod
 
 Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py):
 
+<!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
 if annotation is not None and annotation.no_cache:
     return False, ['@cash:no-cache annotation']

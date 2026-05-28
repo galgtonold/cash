@@ -159,7 +159,6 @@ There's no API to remove a registration. The `_type_hashers` dict is intentional
 
 When a custom hasher misbehaves, two probes catch most bugs:
 
-<!-- test:skip reason="snippet shown out of context (references undefined w1, model, data)" -->
 ```python
 # 1. Call the hasher manually on representative inputs.
 h1 = hash_model(MyModel("a", w1))
@@ -167,6 +166,7 @@ h2 = hash_model(MyModel("a", w1))     # fresh copy
 assert h1 == h2, "hasher is not deterministic"
 
 # 2. Use explain() to see the resulting cache key.
+# test:inject: model = MyModel("a", w1)
 explanation = evaluate.explain(model, data)
 print(explanation.cache_key)
 ```

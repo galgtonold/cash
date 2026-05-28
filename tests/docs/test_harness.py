@@ -112,11 +112,9 @@ def test_infer_claims_handles_no_cache_marker():
     fence_code = src.split("```python\n", 1)[1].split("```", 1)[0]
     claims = infer_claims(fence_code)
 
-    # @cash.stateful means get_time() should never be cached
-    assert any(c.function == "get_time" for c in claims)
-    get_time_claim = next(c for c in claims if c.function == "get_time")
-    assert get_time_claim.expected_hits == 0
-    assert get_time_claim.expected_misses >= 2
+    # @cash.stateful-only functions don't have cache_info(), so no claim is
+    # generated for them — the harness skips assertion entirely.
+    assert not any(c.function == "get_time" for c in claims)
 
 
 def test_infer_claims_respects_inline_miss_comments():

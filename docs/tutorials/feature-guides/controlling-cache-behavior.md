@@ -41,6 +41,7 @@ That's the whole language. Stack annotations on consecutive lines above a statem
 Use when the statement is non-deterministic, side-effectful, or just cheaper to recompute than to look up.
 
 ```python { .nb-cell }
+# test:inject: import requests
 # @cash:no-cache
 current_time = datetime.now()
 

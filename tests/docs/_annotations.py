@@ -63,3 +63,33 @@ def find_skip_for_fence(lines: list[str], fence_start_line: int) -> SkipAnnotati
         # Non-blank, non-skip-comment line: stop.
         return None
     return None
+
+
+_EXPECT_RAISES_RE = re.compile(r"<!--\s*test:expect-raises\s*-->")
+
+
+def find_expect_raises_for_fence(lines: list[str], fence_start_line: int) -> bool:
+    """Walk backwards from a fence's opening ```python line looking for a
+    test:expect-raises HTML comment. Stops at the first non-blank, non-
+    annotation line.
+
+    Returns True if found, else False.
+    """
+    # fence_start_line is 1-based; lines is 0-based.
+    i = fence_start_line - 2  # the line just before the ```python line
+    while i >= 0:
+        line = lines[i].strip()
+        if line == "":
+            i -= 1
+            continue
+        if line.startswith("<!--") and "test:expect-raises" in line:
+            if _EXPECT_RAISES_RE.search(line):
+                return True
+            return False
+        # Allow walking past test:skip annotations (so order doesn't matter).
+        if line.startswith("<!--") and "test:skip" in line:
+            i -= 1
+            continue
+        # Non-blank, non-annotation line: stop.
+        return False
+    return False
