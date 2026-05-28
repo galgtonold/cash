@@ -478,8 +478,10 @@ def get_config(
     """Resolve the merged Cash configuration.
 
     Args:
-        config_path: Legacy parameter — if given, treated as a user-level
-            TOML file (overrides ``user_config_path``).
+        config_path: Convenience override for per-script use (the form
+            documented as ``Cash(config_path=...)``). When given, the
+            file is treated as a user-level TOML and merged on top of
+            ``user_config_path``.
         user_config_path: Path to the user-scoped config (the XDG
             location). Pass ``None`` to skip the user layer entirely;
             omit to use the default location.
@@ -512,11 +514,12 @@ def get_config(
             _merge(merged, user_data)
             sources.append(f"user:{user_path}")
 
-    # Layer 2b: legacy config_path argument (treated as user override)
+    # Layer 2b: explicit ``Cash(config_path=...)`` override (merged on
+    # top of the user-scoped layer)
     if config_path is not None:
-        legacy_data = _load_toml_config(Path(config_path))
-        if legacy_data:
-            _merge(merged, legacy_data)
+        override_data = _load_toml_config(Path(config_path))
+        if override_data:
+            _merge(merged, override_data)
             sources.append(f"file:{config_path}")
 
     # Layer 3: project TOML

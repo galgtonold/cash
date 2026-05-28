@@ -335,9 +335,9 @@ class Cash:
         config_path: str | None = None,
         **config_overrides: Any,
     ) -> None:
-        # Map the legacy explicit kwargs into the overrides dict so the
-        # config layer treats them with the same priority as any other
-        # constructor-supplied override (highest).
+        # Map the explicit convenience kwargs (cache_dir, compress, debug)
+        # into the overrides dict so the config layer treats them with the
+        # same priority as any other constructor-supplied override (highest).
         for key, val in (("cache_dir", cache_dir), ("compress", compress), ("debug", debug)):
             if val is not None:
                 config_overrides.setdefault(key, val)
