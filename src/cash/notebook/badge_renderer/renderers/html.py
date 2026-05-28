@@ -842,9 +842,10 @@ def _dots(
     this entry; the row-level kind colour (cached/exec/warn) still
     derives from the row's status.
 
-    Fallback chain when no configured tier list is available (legacy
-    callers, standalone tests): use this row's own ``storage_tiers``;
-    otherwise render a single empty dot.
+    Fallback chain when no configured tier list is available (e.g.
+    a standalone renderer test that builds a row directly without
+    going through ``render_html``): use this row's own
+    ``storage_tiers``; otherwise render a single empty dot.
     """
     written = {t.upper() for t in storage_tiers}
     src_upper = (source or "").upper()
@@ -884,7 +885,7 @@ def _dots(
     # Tier list resolution:
     # 1. caller-supplied configured tiers (explicit kwarg wins)
     # 2. the render-pass ContextVar set by render_html
-    # 3. this row's own storage_tiers (legacy / standalone-test fallback)
+    # 3. this row's own storage_tiers (standalone-test fallback)
     # 4. a single empty placeholder so the cell always has at least one dot
     if configured_tiers is None:
         configured_tiers = _CONFIGURED_TIERS.get()

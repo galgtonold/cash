@@ -630,12 +630,8 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
     # statement writes. Do NOT fall through to ``metrics['outputs']`` — that
     # key holds rich/display objects (IPython.utils.capture.RichOutput), not
     # variable names, and ``str()``-ing them leaks ``<RichOutput at 0x..>``
-    # into the badge's "Produced" field. ``output_vars`` key is never
-    # populated anywhere; kept as a no-op fallback for forward compatibility.
-    raw_outputs = m.get("evaluated_vars")
-    if raw_outputs is None:
-        raw_outputs = m.get("output_vars")
-    output_vars = tuple(x for x in _tup_str(raw_outputs) if not x.startswith("<"))
+    # into the badge's "Produced" field.
+    output_vars = tuple(x for x in _tup_str(m.get("evaluated_vars")) if not x.startswith("<"))
     restored_vars = _tup_str(m.get("restored_vars"))
 
     raw_decorator = m.get("decorator_calls", []) or []
@@ -918,7 +914,7 @@ def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = N
         st = str(m.get("status", "")).replace("CacheStatus.", "")
         t = m.get("total_time") or m.get("execution_time") or 0.0
         saved = m.get("saved_time") or 0.0
-        outs_raw = m.get("output_vars", []) or m.get("outputs", [])
+        outs_raw = m.get("outputs", [])
         outs = ", ".join(o for o in (outs_raw or []) if isinstance(o, str))
         outs_str = f" | {outs}" if outs else ""
         badge_lines.append(f"  {st:>8} | {t:>6.3f}s | saved {saved:>6.3f}s | {code}{outs_str}")
