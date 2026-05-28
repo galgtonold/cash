@@ -120,13 +120,10 @@ class CacheExplanation:
 class _ListCachedIterator:
     """Lazy iterator wrapper over a fully-materialized cached list.
 
-    Used by `Cash.cache` for legacy v1 cache entries (metadata
-    contains ``materialized_iterator=True``) AND for new entries that
-    fit in a single chunk. The function's yielded values are stored
-    as one Python list; this iterator streams them on each call.
-
-    See `_ChunkedCachedIterator` for the multi-chunk variant
-    used for large iterators.
+    Returned on cache hit when the function's output fit in a single
+    chunk: the yielded values are stored as one Python list and this
+    iterator streams them on each call. See `_ChunkedCachedIterator`
+    for the multi-chunk variant used for large iterators.
     """
 
     __slots__ = ("_iter",)
@@ -160,12 +157,6 @@ class _ListCachedIterator:
             "iterator replays a previously materialized list. If you "
             "need throw() semantics, the function cannot be cached."
         )
-
-
-# Backwards-compatibility alias. The old name `CachedIterator` is kept
-# for one release to avoid breaking any user code that imported it
-# from cash.core directly. Will be removed in 0.6.0.
-CachedIterator = _ListCachedIterator
 
 
 class _ChunkedCachedIterator:
@@ -1056,24 +1047,20 @@ class Cash:
     ) -> Any:
         """Wrap a cache-hit value in the right iterator class.
 
-        Reads ``metadata['iterator_storage']`` to decide:
-        - ``'chunked'`` → returns a fresh ``_ChunkedCachedIterator``.
-        - legacy ``materialized_iterator=True`` (v1 entries) → returns
-          ``_ListCachedIterator(hit)``.
-        - neither → returns *hit* directly (non-iterator return type).
+        Iterators (including the single-chunk case) are stored under
+        an ``iterator_storage='chunked'`` manifest plus N chunk
+        entries; on hit they're returned as a fresh
+        ``_ChunkedCachedIterator``. Non-iterator return types live as
+        a single blob and are returned as *hit* directly.
 
         Used by all three cache-hit paths in this module:
         `_make_wrapper` (sync unlocked), `_compute_with_lock`
         (sync locked re-read), and `_make_async_wrapper`. Keeping
         the dispatch in one place ensures the three paths can't drift.
         """
-        if metadata:
-            storage = metadata.get('iterator_storage')
-            if storage == 'chunked':
-                n_chunks = metadata.get('n_chunks', 0)
-                return _ChunkedCachedIterator(self, cache_key, n_chunks)
-            if metadata.get('materialized_iterator'):
-                return _ListCachedIterator(hit)
+        if metadata and metadata.get('iterator_storage') == 'chunked':
+            n_chunks = metadata.get('n_chunks', 0)
+            return _ChunkedCachedIterator(self, cache_key, n_chunks)
         return hit
 
     def _make_wrapper(
@@ -1980,7 +1967,6 @@ class Cash:
         args_hash: str,
         execution_time: float = 0.0,
         auto_file_deps: dict[str, dict[str, float]] | None = None,
-        materialized_iterator: bool = False,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -2004,12 +1990,6 @@ class Cash:
                 # Each entry: path → {'mtime': float, 'size': int}
                 # Validated on subsequent get() via _auto_file_deps_fresh.
                 metadata['auto_file_deps'] = auto_file_deps
-            if materialized_iterator:
-                # The cached value is a list materialized from a one-shot
-                # iterator. On cache hit, the wrapper re-wraps the list
-                # in a CachedIterator so the user-facing protocol is
-                # preserved across the cache boundary.
-                metadata['materialized_iterator'] = True
 
             self.backend.set(cache_key, result, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:

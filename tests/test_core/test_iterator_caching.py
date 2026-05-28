@@ -1,9 +1,9 @@
 """@cash.cache on functions that return iterators/generators.
 
-The decorator materializes the iterator into a list, caches the list,
-and returns a CachedIterator wrapper that preserves the iterator
-protocol. Each call yields a fresh, independent iterator over the
-cached values.
+The decorator streams the iterator into one or more chunk entries,
+then returns a fresh wrapper (_ChunkedCachedIterator on cache hit)
+that preserves the iterator protocol. Each call yields a fresh,
+independent iterator over the cached values.
 """
 from __future__ import annotations
 
@@ -216,9 +216,9 @@ async def test_async_function_returning_iterator(tmp_path):
 
 
 def test_cache_persists_across_instances(tmp_path):
-    """The cached list (not the wrapper) is what's persisted — so a
+    """The cached chunks (not the wrapper) are what's persisted — so a
     fresh Cash instance pointed at the same cache_dir should still
-    return the values via a fresh CachedIterator wrapper.
+    return the values via a fresh iterator wrapper.
 
     Uses an explicit FileBackend so we don't depend on TieredBackend's
     smart-persistence floor (which gates short calls from reaching disk).
@@ -396,14 +396,6 @@ def test_chunked_iterator_missing_chunk_terminates_safely():
     values = list(it)
     # Chunk_0 yields [1, 2]; chunk_1 missing → iteration stops there.
     assert values == [1, 2]
-
-
-def test_list_cached_iterator_alias_still_imports():
-    """CachedIterator was renamed to _ListCachedIterator. The original name
-    is kept as a deprecation-friendly alias for one release."""
-    from cash.core import _ListCachedIterator, CachedIterator
-    # The alias must point at the new internal class.
-    assert CachedIterator is _ListCachedIterator
 
 
 def test_chunk_max_items_kwarg_accepted(tmp_path):
@@ -691,66 +683,6 @@ def test_cache_if_single_chunk_predicate_honored(tmp_path):
     list(gen(5))
     list(gen(5))
     assert n_calls["x"] == 3
-
-
-def test_v1_legacy_entry_still_readable(tmp_path):
-    """An entry written by the v1 path (materialize-as-list, with
-    metadata['materialized_iterator']=True) must continue to be
-    readable via _ListCachedIterator. No migration is required."""
-    from cash.backends.file_backend import FileBackend
-    from cash.backends.serialization import get_serializer
-
-    backend = FileBackend(str(tmp_path / "fb"), flush_interval=0)
-    c = Cash(backend=backend, register_magic=False)
-    n_calls = {"x": 0}
-
-    @c.cache
-    def gen():
-        n_calls["x"] += 1
-        yield from [10, 20, 30]
-
-    # First, populate via the chunked path.
-    assert list(gen()) == [10, 20, 30]
-    # Wipe the chunked entry and replace with a v1-shaped entry under
-    # the SAME canonical cache_key.
-    entries = backend.list_entries()
-    canonical = next(
-        e["key"] for e in entries
-        if "test_v1_legacy_entry_still_readable" in e["key"]
-        and not e["key"].rsplit(":", 1)[-1].startswith("chunk_")
-    )
-    chunk_keys = [e["key"] for e in entries
-                  if e["key"].startswith(f"{canonical}:chunk_")]
-
-    for k in chunk_keys:
-        backend.delete(k)
-
-    # Hand-craft a v1 entry at the canonical key.
-    legacy_value = [10, 20, 30]
-    serializer = get_serializer(legacy_value)
-    legacy_metadata = {
-        "key": canonical,
-        "func_name": "test_v1_legacy_entry_still_readable",
-        "timestamp": time.time(),
-        "execution_time": 0.1,
-        "serializer_cls": type(serializer),
-        "ttl": None,
-        "args_hash": "fake",
-        "state_hash": "fake",
-        "materialized_iterator": True,  # the v1 flag
-    }
-    backend.set(canonical, legacy_value, legacy_metadata, serializer=serializer)
-
-    # Reset the in-process compute counter, then call again.
-    n_calls["x"] = 0
-    result = gen()
-    # Must be a _ListCachedIterator (v1 path).
-    from cash.core import _ListCachedIterator
-    assert isinstance(result, _ListCachedIterator)
-    assert list(result) == [10, 20, 30]
-    assert n_calls["x"] == 0, "v1 entry should hit; no recompute"
-
-    backend.shutdown()
 
 
 def test_empty_generator_chunked(tmp_path):
