@@ -178,8 +178,9 @@ class CashConfig:
     smart_persistence: bool = True
     """When True (default), the tiered backend decides per-entry
     whether to persist past RAM based on compute time vs storage
-    cost. Set False to persist everything (legacy behavior — wastes
-    disk for cheap-to-compute values)."""
+    cost. Set False to persist everything unconditionally — useful
+    for deterministic benchmarks, wasteful for cheap-to-compute
+    values."""
 
     smart_persistence_threshold: float = 1.0
     """Compute-time threshold (seconds) above which results
