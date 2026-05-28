@@ -1,6 +1,15 @@
 """Harness for running documentation code fences as tests.
 
-PR1 scope: plain Python fences only. nb-cell handling deferred to PR2/PR3.
+Supports two execution paths:
+
+- The plain ``exec()`` path concatenates non-skipped fences into a single
+  script and runs them together. Cache claims are inferred by AST analysis.
+- The IPython ``InteractiveShell`` path runs each fence as a separate cell
+  so magic commands (``%cash_on``, ``%%cash``) and ``{ .nb-cell }`` fences
+  can execute as they would in a notebook.
+
+``run_page`` chooses the path automatically based on fence content
+(``use_ipy='auto'``).
 """
 
 from __future__ import annotations
@@ -12,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tests.docs._annotations import find_skip_for_fence
+from tests.docs._annotations import find_expect_raises_for_fence, find_skip_for_fence
 
 
 _FENCE_RE = re.compile(
@@ -32,6 +41,7 @@ class Fence:
     attrs: str = ""  # raw attrs string, e.g. "{ .nb-cell }"
     skip: bool = False
     skip_reason: str | None = None
+    expect_raises: bool = False
 
     @property
     def is_nb_cell(self) -> bool:
@@ -58,6 +68,7 @@ def extract_fences(md_path: Path) -> list[Fence]:
                 j += 1
             end_line = j + 1  # 1-based line of closing ```
             skip_ann = find_skip_for_fence(lines, start_line)
+            expect_raises = find_expect_raises_for_fence(lines, start_line)
             fences.append(
                 Fence(
                     code="\n".join(body_lines),
@@ -66,6 +77,7 @@ def extract_fences(md_path: Path) -> list[Fence]:
                     attrs=attrs,
                     skip=skip_ann is not None,
                     skip_reason=skip_ann.reason if skip_ann else None,
+                    expect_raises=expect_raises,
                 )
             )
             i = j + 1
@@ -118,13 +130,237 @@ def _apply_inject_comments(script: str) -> str:
     return "".join(out)
 
 
+def _run_page_ipy(
+    md_path: Path,
+    fences: list[Fence],
+    namespace_overrides: dict[str, Any] | None,
+    strict_claims: bool,
+) -> PageResult:
+    """Run page fences through an in-process IPython ``InteractiveShell``.
+
+    Each fence becomes one ``shell.run_cell()`` call. State persists across
+    cells within the page, matching how a notebook would behave. After the
+    page completes (success or failure), the shell singleton is cleared so
+    the next page starts clean.
+    """
+    from IPython.core.interactiveshell import InteractiveShell
+
+    shell = InteractiveShell.instance()
+
+    # Register Cash's magics on the shell so %cash_on / %%cash / etc. work.
+    # The plain-exec conftest fixture patches Cash.register_magic to a no-op,
+    # so we bypass that by importing and registering directly here.
+    try:
+        from cash.notebook.magics import CashMagics
+        import cash as _cash_mod
+
+        _cash_instance = _cash_mod.Cash()
+        magics = CashMagics(shell, _cash_instance)
+        shell.register_magics(magics)
+    except Exception:
+        # If magic registration fails, fences using `%foo` will surface a
+        # clear UsageError below — we don't want a registration failure to
+        # silently swallow other diagnostic value.
+        pass
+
+    if namespace_overrides:
+        shell.user_ns.update(namespace_overrides)
+
+    result = PageResult(
+        page=md_path,
+        total_fences=len(fences),
+        tested_fences=0,
+    )
+
+    try:
+        tested_code_pieces: list[str] = []
+        # Track inclusive (start, end) line ranges within the concatenated
+        # ``script_for_claims`` that correspond to expect-raises fences. Calls
+        # inside those ranges are excluded from claim inference because the
+        # try/except may have prevented them from running — and even when they
+        # did run, the wrapper may have hit a stale cache rather than the fresh
+        # decoration the fence appears to make.
+        expect_raises_ranges: list[tuple[int, int]] = []
+        _running_line = 1  # 1-based; tracks current line in concatenated script
+
+        for f in fences:
+            if f.skip:
+                result.skipped_fences.append(
+                    (f.line_start, f.skip_reason or "<no reason>")
+                )
+                continue
+            # Note: nb-cell fences are NOT skipped here — they run through IPython.
+
+            code = _apply_inject_comments(f.code)
+
+            if f.expect_raises:
+                # Wrap the whole cell in try/except so a raise doesn't abort the page.
+                indented = "\n".join("    " + line for line in code.splitlines())
+                code = f"try:\n{indented}\nexcept Exception:\n    pass\n"
+
+            cell_result = shell.run_cell(code, store_history=False)
+
+            if (
+                cell_result.error_before_exec is not None
+                or cell_result.error_in_exec is not None
+            ):
+                if not f.expect_raises:
+                    err = cell_result.error_before_exec or cell_result.error_in_exec
+                    raise PageExecutionError(
+                        f"{md_path}: cell at line {f.line_start} failed: "
+                        f"{type(err).__name__}: {err}"
+                    )
+
+            result.tested_fences += 1
+            # Record the (start, end) range of this fence's lines in the
+            # concatenated script (used below for expect-raises exclusion).
+            fence_lines = f.code.count("\n") + 1
+            piece_start = _running_line
+            piece_end = _running_line + fence_lines - 1
+            if f.expect_raises:
+                expect_raises_ranges.append((piece_start, piece_end))
+            # +2 for the "\n\n" separator added by "\n\n".join below.
+            _running_line = piece_end + 2
+            tested_code_pieces.append(f.code)  # raw (pre-inject) for AST claim inference
+
+        result.namespace = dict(shell.user_ns)
+
+        # Claim inference: parse concatenated raw code, check cache_info in shell.user_ns.
+        script = "\n\n".join(tested_code_pieces)
+        script_with_injects = _apply_inject_comments(script)
+        # Strip magic-command lines so ast.parse() doesn't choke on `%foo` / `%%foo`.
+        script_for_claims = _strip_magic_lines(script_with_injects)
+        try:
+            claims = infer_claims(
+                script_for_claims, exclude_line_ranges=expect_raises_ranges
+            )
+        except SyntaxError:
+            # If we still can't parse (e.g. some odd magic-laden cell), skip
+            # claim inference rather than abort the whole page.
+            claims = []
+
+        for claim in claims:
+            fn = shell.user_ns.get(claim.function)
+            if fn is None or not hasattr(fn, "cache_info"):
+                actual_hits, actual_misses = 0, 0
+                matched = claim.expected_hits == 0 and claim.expected_misses == 0
+            else:
+                info = fn.cache_info()
+                actual_hits = info.get("hits", 0)
+                actual_misses = info.get("misses", 0)
+                matched = (
+                    actual_hits == claim.expected_hits
+                    and actual_misses == claim.expected_misses
+                )
+            result.claim_results.append(
+                ClaimResult(
+                    claim=claim,
+                    actual_hits=actual_hits,
+                    actual_misses=actual_misses,
+                    matched=matched,
+                )
+            )
+
+        if strict_claims:
+            mismatches = [r for r in result.claim_results if not r.matched]
+            if mismatches:
+                lines = [f"{md_path}: cache claim mismatch:"]
+                for r in mismatches:
+                    lines.append(
+                        f"  {r.claim.function}: "
+                        f"expected hits={r.claim.expected_hits} "
+                        f"misses={r.claim.expected_misses}, "
+                        f"got hits={r.actual_hits} misses={r.actual_misses}"
+                    )
+                raise ClaimMismatchError("\n".join(lines))
+
+        return result
+    finally:
+        InteractiveShell.clear_instance()
+
+
+def _strip_magic_lines(source: str) -> str:
+    """Comment out IPython magic-command lines so ``ast.parse`` succeeds.
+
+    - Line magics (``%foo ...``): commented out.
+    - Cell magic headers (``%%foo ...``): commented out; their body lines are
+      preserved verbatim because they are data, not Python syntax.
+    - Lines inside a cell-magic body are passed through unchanged.
+    """
+    out: list[str] = []
+    in_cell_magic_body = False
+    for raw in source.splitlines(keepends=True):
+        stripped = raw.lstrip()
+        if in_cell_magic_body:
+            # Blank line ends the cell-magic body.
+            if stripped == "" or stripped == "\n":
+                in_cell_magic_body = False
+            out.append(raw)
+            continue
+        if stripped.startswith("%%"):
+            indent = raw[: len(raw) - len(stripped)]
+            out.append(f"{indent}# {stripped}")
+            in_cell_magic_body = True
+            continue
+        if stripped.startswith("%"):
+            indent = raw[: len(raw) - len(stripped)]
+            out.append(f"{indent}# {stripped}")
+            continue
+        out.append(raw)
+    return "".join(out)
+
+
 def run_page(
     md_path: Path,
     namespace_overrides: dict[str, Any] | None = None,
     strict_claims: bool = True,
+    use_ipy: "str | bool" = "auto",
 ) -> PageResult:
-    """Concatenate non-skipped fences, exec, then verify cache claims."""
+    """Concatenate non-skipped fences, exec, then verify cache claims.
+
+    When ``use_ipy='auto'`` (default), automatically routes through an
+    IPython ``InteractiveShell`` when the page contains ``{ .nb-cell }``
+    fences or fences whose first non-empty, non-comment line is a magic
+    command (``%foo`` or ``%%foo``). Set ``use_ipy=False`` to force the
+    plain ``exec()`` path; ``use_ipy=True`` forces the IPython path.
+    """
     fences = extract_fences(md_path)
+
+    if use_ipy == "auto":
+        try:
+            import IPython  # noqa: F401
+
+            _ipy_available = True
+        except ImportError:
+            _ipy_available = False
+
+        if _ipy_available:
+            def _fence_needs_ipy(f: Fence) -> bool:
+                if f.skip:
+                    return False
+                if f.is_nb_cell:
+                    return True
+                # If ANY non-empty non-comment line is a magic command, route
+                # the whole page through IPython. Magic commands embedded in
+                # otherwise-plain Python blocks (e.g. ``import cash`` followed
+                # by ``%cash_on``) require the IPython execution path because
+                # ``exec()`` rejects ``%foo`` as a SyntaxError.
+                for line in f.code.splitlines():
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith("#"):
+                        continue
+                    if stripped.startswith("%"):
+                        return True
+                return False
+
+            use_ipy_actual = any(_fence_needs_ipy(f) for f in fences)
+        else:
+            use_ipy_actual = False
+    else:
+        use_ipy_actual = bool(use_ipy)
+
+    if use_ipy_actual:
+        return _run_page_ipy(md_path, fences, namespace_overrides, strict_claims)
 
     result = PageResult(
         page=md_path,
@@ -133,6 +369,7 @@ def run_page(
     )
 
     pieces: list[str] = []
+    expect_raises_ranges: list[tuple[int, int]] = []
     for f in fences:
         if f.skip:
             result.skipped_fences.append((f.line_start, f.skip_reason or "<no reason>"))
@@ -143,7 +380,19 @@ def run_page(
             )
             continue
         pad = max(0, f.line_start - sum(p.count("\n") + 2 for p in pieces) - 1)
-        pieces.append("\n" * pad + f.code)
+        # Compute the start line of this fence's body in the assembled script.
+        # The script line numbers match md line numbers because of padding.
+        body_start = f.line_start + 1  # first body line (after the ```python line)
+        body_end = f.line_end - 1  # last body line (before the closing ```)
+        if f.expect_raises:
+            indented = "\n".join("    " + line for line in f.code.splitlines())
+            wrapped = "try:\n" + indented + "\nexcept Exception:\n    pass"
+            pieces.append("\n" * pad + wrapped)
+            # Track the original body line range so infer_claims can skip
+            # calls inside it (they may not execute due to the raise).
+            expect_raises_ranges.append((body_start, body_end))
+        else:
+            pieces.append("\n" * pad + f.code)
         result.tested_fences += 1
 
     if not pieces:
@@ -176,7 +425,7 @@ def run_page(
     # Now verify cache claims by introspecting the decorated functions left
     # in `namespace`. For each `@cash.cache` function the harness inferred,
     # call .cache_info() and compare with the claim.
-    claims = infer_claims(script)
+    claims = infer_claims(script, exclude_line_ranges=expect_raises_ranges)
     for claim in claims:
         fn = namespace.get(claim.function)
         if fn is None or not hasattr(fn, "cache_info"):
@@ -258,28 +507,114 @@ def _is_stateful_decorator(deco: ast.expr) -> bool:
     return False
 
 
-def infer_claims(source: str) -> list[CacheClaim]:
+def _get_ancestor_types(tree: ast.AST) -> dict[int, set[type]]:
+    """Build a map from node id -> set of ancestor node types."""
+    ancestors: dict[int, set[type]] = {}
+
+    def _walk(node, parent_types):
+        ancestors[id(node)] = set(parent_types)
+        new_types = parent_types | {type(node)}
+        for child in ast.iter_child_nodes(node):
+            _walk(child, new_types)
+
+    _walk(tree, set())
+    return ancestors
+
+
+def _find_main_guard_nodes(tree: ast.AST) -> set[int]:
+    """Return IDs of all AST nodes inside ``if __name__ == "__main__"`` blocks.
+
+    Matches both orderings of the comparison:
+
+    - ``__name__ == "__main__"`` (canonical form)
+    - ``"__main__" == __name__`` (reversed form; rare but legal)
+    """
+    guarded_ids: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.If):
+            test = node.test
+            is_main_guard = False
+            if isinstance(test, ast.Compare):
+                if (len(test.ops) == 1 and isinstance(test.ops[0], ast.Eq)
+                        and len(test.comparators) == 1):
+                    # Canonical: __name__ == "__main__"
+                    if (isinstance(test.left, ast.Name) and test.left.id == "__name__"
+                            and isinstance(test.comparators[0], ast.Constant)
+                            and test.comparators[0].value == "__main__"):
+                        is_main_guard = True
+                    # Reversed: "__main__" == __name__
+                    elif (isinstance(test.left, ast.Constant)
+                            and test.left.value == "__main__"
+                            and isinstance(test.comparators[0], ast.Name)
+                            and test.comparators[0].id == "__name__"):
+                        is_main_guard = True
+            if is_main_guard:
+                for child in ast.walk(node):
+                    guarded_ids.add(id(child))
+    return guarded_ids
+
+
+def infer_claims(
+    source: str,
+    exclude_line_ranges: list[tuple[int, int]] | None = None,
+) -> list[CacheClaim]:
     """Parse the source, find @cash.cache-decorated functions, and infer the
     expected (hits, misses) per function based on call counts, unique argument
     tuples, and any inline-comment overrides.
+
+    ``exclude_line_ranges`` is a list of (start, end) inclusive line-number
+    ranges in *source* (1-based) whose calls should be excluded from claim
+    inference — used for fences annotated with ``test:expect-raises`` where
+    the calls may never run.
     """
     tree = ast.parse(source)
+    ancestors = _get_ancestor_types(tree)
+    main_guard_ids = _find_main_guard_nodes(tree)
+    exclude_ranges = list(exclude_line_ranges or [])
 
+    def _in_exclude_range(lineno: int) -> bool:
+        return any(start <= lineno <= end for start, end in exclude_ranges)
+
+    # Find all function definitions with their decorators and line numbers.
+    # Track the LAST definition line for each function name.
     cached_funcs: set[str] = set()
     stateful_funcs: set[str] = set()
+    last_def_line: dict[str, int] = {}  # func_name -> last definition lineno
+
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for deco in node.decorator_list:
-                if _is_cache_decorator(deco):
-                    cached_funcs.add(node.name)
-                elif _is_stateful_decorator(deco):
-                    stateful_funcs.add(node.name)
+            has_cache = any(_is_cache_decorator(d) for d in node.decorator_list)
+            has_stateful = any(_is_stateful_decorator(d) for d in node.decorator_list)
+            if has_cache:
+                cached_funcs.add(node.name)
+                last_def_line[node.name] = max(last_def_line.get(node.name, 0), node.lineno)
+            elif has_stateful:
+                stateful_funcs.add(node.name)
+                last_def_line[node.name] = max(last_def_line.get(node.name, 0), node.lineno)
 
     # Map each call to its function name and arg tuple (text representation).
     lines = source.splitlines()
     calls: dict[str, list[tuple[str, int]]] = {}  # func -> [(args_repr, lineno)]
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
+            # Skip calls inside loops
+            node_ancestors = ancestors.get(id(node), set())
+            if ast.For in node_ancestors or ast.While in node_ancestors:
+                continue
+            # Skip calls inside function/class bodies — those only run if the
+            # enclosing function is called, which is rare in doc examples.
+            if (ast.FunctionDef in node_ancestors
+                    or ast.AsyncFunctionDef in node_ancestors
+                    or ast.Lambda in node_ancestors
+                    or ast.ClassDef in node_ancestors):
+                continue
+            # Skip calls inside if __name__ == "__main__" guards
+            if id(node) in main_guard_ids:
+                continue
+            # Skip calls inside expect-raises fences (may not actually run)
+            if _in_exclude_range(node.lineno):
+                continue
+
             target_name = None
             if isinstance(node.func, ast.Name):
                 target_name = node.func.id
@@ -289,6 +624,9 @@ def infer_claims(source: str) -> list[CacheClaim]:
                 continue
             if target_name not in cached_funcs and target_name not in stateful_funcs:
                 continue
+            # Only count calls AFTER the last definition of this function.
+            if node.lineno <= last_def_line.get(target_name, 0):
+                continue
             args_repr = ",".join(
                 ast.unparse(a) if hasattr(ast, "unparse") else repr(a) for a in node.args
             )
@@ -296,6 +634,10 @@ def infer_claims(source: str) -> list[CacheClaim]:
 
     claims: list[CacheClaim] = []
     for func, sites in calls.items():
+        # Bug 3: @stateful-only functions don't have cache_info(), so don't
+        # generate a claim for them (only generate when also @cache-decorated).
+        if func in stateful_funcs and func not in cached_funcs:
+            continue
         if func in stateful_funcs:
             claims.append(
                 CacheClaim(function=func, expected_hits=0, expected_misses=len(sites))

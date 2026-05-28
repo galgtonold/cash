@@ -32,7 +32,6 @@ First call runs the simulation. Every subsequent call with the same four argumen
 
 A sweep is just a loop over arguments. Each combination is an independent cache entry:
 
-<!-- test:skip reason="loop call pattern: claim inferencer sees 1 call but runtime unrolls to 40; mismatch is structural" -->
 ```python
 results = {}
 for alpha in [0.1, 0.5, 1.0, 2.0]:
@@ -48,19 +47,18 @@ For an embarrassingly parallel sweep you can dispatch the same loop across worke
 
 The hard rule for cacheable simulations: **the seed is an argument, not a global**.
 
-<!-- test:skip reason="uses ... as function parameter name which is a SyntaxError; also missing import cash" -->
 ```python
 # Good — seed is an argument, result is reproducible
 @cash.cache
-def simulate(..., seed: int):
+def simulate(n_steps: int, dt: float, alpha: float, seed: int):
     rng = np.random.default_rng(seed)
-    ...
+    return rng.standard_normal(n_steps)
 
 # Bad — np.random.seed() inside the function bakes the *first* observed state
 @cash.cache
-def simulate(...):
+def simulate_bad(n_steps: int):
     np.random.seed(42)        # don't do this inside a cached function
-    return np.random.randn(1000)
+    return np.random.randn(n_steps)
 ```
 
 Cash scans your notebook for unseeded RNG calls and warns when it finds them — the warning is the cache telling you that what's saved won't match what a fresh re-run would produce. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for the `# @cash:allow-random` escape hatch and the full list of detected RNG calls.
@@ -84,13 +82,13 @@ See [Smart Persistence](../feature-guides/smart-persistence.md) for the heuristi
 
 Cash hashes `numpy` arrays, plain numbers, lists, tuples, and built-ins by default. For specialised numerical objects — `mpmath` arbitrary-precision numbers, JAX arrays, PyTorch tensors on GPU, sparse matrices — register a custom hasher so the cache key reflects the array's contents instead of its Python `id`.
 
-<!-- test:skip reason="register_hasher takes (type, fn) directly; decorator syntax @cash.register_hasher(type) is not supported by current API" -->
 ```python
 import cash
 
-@cash.register_hasher(MyArrayType)
 def hash_my_array(arr):
     return arr.tobytes()  # or arr.numpy().tobytes(), etc.
+
+cash.register_hasher(MyArrayType, hash_my_array)
 ```
 
 See [Custom Hashers](../feature-guides/custom-hashers.md) for the full hook surface and worked examples for the common scientific types.
@@ -105,8 +103,8 @@ For non-pandas formats (HDF5 via `h5py`, NetCDF, Zarr, custom binary), declare t
 
 The high-leverage layout for a research notebook is one cached function per stage:
 
-<!-- test:skip reason="illustrative skeleton with ellipsis bodies; missing import cash" -->
 ```python
+# test:inject: import cash
 @cash.cache
 def simulate(params): ...
 

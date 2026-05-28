@@ -45,6 +45,7 @@ jupyter nbconvert --to html \
 
 ### Programmatic usage
 
+<!-- test:skip reason="reads notebook.ipynb which doesn't exist in test env" -->
 ```python
 from cash.nbconvert import CashStripPreprocessor
 import nbformat

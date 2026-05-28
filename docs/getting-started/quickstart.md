@@ -24,6 +24,7 @@ import cash
 
 ### Step 2: Write Code Normally
 
+<!-- test:skip reason="illustrative — references missing large_dataset.csv" -->
 ```python { .nb-cell }
 import pandas as pd
 import numpy as np
@@ -51,6 +52,7 @@ See [Reading the Cash badge](../badges.md) for the full anatomy and every status
 
 Cash caches at the **statement level**, not the cell level. This means:
 
+<!-- test:skip reason="illustrative — references undefined column 'old_col'/'category' on stub DataFrame" -->
 ```python { .nb-cell }
 # Statement 1: cached independently
 df = pd.read_csv('data.csv')
@@ -68,6 +70,7 @@ If you change Statement 2, only Statement 2 and 3 re-execute. Statement 1 stays 
 
 For caching function results outside notebooks:
 
+<!-- test:skip reason="ends with cache_clear() which resets stats and breaks inferred hit/miss claims" -->
 ```python
 import cash
 
@@ -107,6 +110,7 @@ see the [decorator guide](../decorator.md).
 ### File Dependency Shorthand
 
 ```python
+# test:inject: import cash; c = cash.Cash()
 @c.cache(file_depends_on="data.csv")
 def load_data():
     return pd.read_csv("data.csv")
@@ -133,6 +137,7 @@ c.register_hasher(
 
 ### Selective Caching
 
+<!-- test:skip reason="illustrative — references missing data.csv columns and requires matplotlib" -->
 ```python { .nb-cell }
 # Cache a single cell
 %%cash
@@ -165,6 +170,7 @@ Supported file operations:
 
 Control caching for individual statements with comment annotations:
 
+<!-- test:skip reason="illustrative — references undefined api/get_stock_prices/train_model/data" -->
 ```python { .nb-cell }
 # @cash:no-cache
 result = api.fetch_data()       # Always re-executed

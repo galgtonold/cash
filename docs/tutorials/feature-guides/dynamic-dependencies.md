@@ -118,8 +118,9 @@ class EnvVarSource(DataSource):
 
 ### Don't return raw values expecting them to be hashed
 
-<!-- test:skip reason="anti-pattern: lambda returns raw string, dropped by isinstance(ds, DataSource) gate; also references undefined `os` and `cash` (imports in earlier fence skipped)" -->
 ```python
+# test:inject: import os
+# test:inject: import cash
 @cash.cache(dynamic_depends_on=lambda: os.environ.get("MODEL_VERSION", "v1"))
 def predict(features):
     ...

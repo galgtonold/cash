@@ -30,6 +30,7 @@ The README's claim that "TieredBackend is smart about what reaches disk" refers 
 
 For each output variable, the gate computes a predicted restore time, then compares it to a budget derived from the statement's actual execution time. Cited from [`statement_processor.py:1591-1596`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
 
+<!-- test:skip reason="source-code excerpt: incomplete if-body and references undefined names" -->
 ```python
 max_acceptable_restore = max(
     fixed_budget,
@@ -82,6 +83,7 @@ The coefficients live in the `_COEFFS` table at [`cost_model.py:33-73`](https://
 
 The gate measures cost against the **first tier** of the backend, not the slowest. From [`statement_processor.py:1506-1511`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
 
+<!-- test:skip reason="source-code excerpt: references undefined names (backend_type, backend)" -->
 ```python
 if backend_type == 'TieredBackend' and hasattr(backend, 'backends') and backend.backends:
     primary_backend_type = type(backend.backends[0]).__name__
@@ -97,6 +99,7 @@ The default Cash setup is `TieredBackend([InMemoryBackend, FileBackend])`. Filte
 
 Before filter 1 even runs, there's an earlier short-circuit at [`statement_processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
 
+<!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
 if not force_persist and not file_dependencies:
     if execution_time < min_exec_time:        # default 0.01 s
@@ -118,6 +121,7 @@ This filter only matters if you're using `TieredBackend` (the default). With a s
 
 `_create_default_backend` at [`core.py:204-247`](https://github.com/galgtonold/cash/blob/main/src/cash/core.py) constructs the closure used as the tier-promotion policy. Pulled verbatim from [`core.py:226-244`](https://github.com/galgtonold/cash/blob/main/src/cash/core.py):
 
+<!-- test:skip reason="source-code excerpt: references undefined name 'threshold' from outer closure" -->
 ```python
 min_persist_compute_s = 0.1                     # HARDCODED
 small_result_bytes = 64 * 1024                  # HARDCODED — 64 KB
@@ -151,6 +155,7 @@ The 100 MB/s disk bandwidth is also hardcoded; on NVMe or RAM-disk you may be un
 
 The promotion check is gated by `force_persist` in [`tiered_backend.py:99-102`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py):
 
+<!-- test:skip reason="source-code excerpt: references undefined names (metadata, self)" -->
 ```python
 force_persist = metadata.get('force_persist', False)
 
@@ -218,6 +223,7 @@ A different mechanism — opts out *earlier*, at the cacheability decision in [`
 
 When a statement reads a file Cash knows about (auto-detected, or declared via `file_depends_on=` on a `@cash.cache`-decorated function), filter 1 is bypassed at [`statement_processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
 
+<!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
 if force_persist or has_file_dependencies:
     return False, None, largest_prediction
@@ -231,6 +237,7 @@ Filter 2 still runs — file-dependent values can be RAM-only if compute was sub
 
 The skip reason is built at [`statement_processor.py:1600-1605`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
 
+<!-- test:skip reason="source-code excerpt: references undefined names (var_name, size_mb, etc.)" -->
 ```python
 reason = (
     f"Restoring '{var_name}' ({size_mb:.0f} MB {type_name}) would take "
@@ -330,6 +337,7 @@ The annotation must be honoured at the cheap-floor ([`statement_processor.py:167
 
 `_resolve_backend` at [`cost_model.py:82`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py) coerces anything that isn't `"ram"` or `"disk"` to `"disk"`:
 
+<!-- test:skip reason="source-code excerpt: references undefined name _KNOWN_BACKENDS" -->
 ```python
 def _resolve_backend(backend_kind: str) -> str:
     return backend_kind if backend_kind in _KNOWN_BACKENDS else "disk"
@@ -360,11 +368,13 @@ Cross-region or public-internet S3 is 5–10× slower; users with those topologi
 
 ### `cash.notebook.cost_model`
 
+<!-- test:skip reason="signature-only excerpt with ellipsis body" -->
 ```python
 def resolve_family(value_type_name: str) -> str: ...
 ```
 Maps a Python `type(value).__name__` to one of the eight families above, or `"_GENERIC"`.
 
+<!-- test:skip reason="signature-only excerpts with ellipsis body" -->
 ```python
 def estimated_serialize_time(value_type_name: str, size_bytes: int, backend_kind: str) -> float: ...
 def estimated_restore_time(value_type_name: str, size_bytes: int, backend_kind: str) -> float: ...
@@ -377,6 +387,7 @@ The persistence decision uses `estimated_restore_time` (not serialize) because t
 
 The relevant fields (see [`src/cash/config.py:32-51`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py)):
 
+<!-- test:skip reason="source-code excerpt: @dataclass not imported in fence" -->
 ```python
 @dataclass
 class CashConfig:

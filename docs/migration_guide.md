@@ -41,6 +41,7 @@ import cash
 ## From joblib.Memory
 
 **Before (joblib):**
+<!-- test:skip reason="joblib.Memory tries to pickle the stub df argument" -->
 ```python
 from joblib import Memory
 

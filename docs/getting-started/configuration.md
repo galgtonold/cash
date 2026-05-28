@@ -300,6 +300,7 @@ removed.
 
 Cash automatically tracks file reads through common libraries:
 
+<!-- test:skip reason="reads files (data.csv, array.npy, model.pkl, file.txt) that don't exist in test env" -->
 ```python
 df = pd.read_csv('data.csv')        # pandas (all read_* functions)
 arr = np.load('array.npy')           # numpy

@@ -130,7 +130,7 @@ The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper
 
 `asyncio.gather` over a cached async function gives you parallel hits on the same backend with no contention on the read path — each `get` is a sync call that returns immediately on hit:
 
-<!-- test:skip reason="illustrative skeleton: empty `...` body and undefined `uids`; top-level await is REPL-only" -->
+<!-- test:skip reason="top-level await re-enters event loop already running asyncio.run(main()) earlier on the page" -->
 ```python
 @cash.cache
 async def fetch(uid):
@@ -145,7 +145,6 @@ Mind the lock caveat above: if `uids` contains the same id twice and both calls 
 
 Both shapes work; pick the one whose granularity matches your re-run unit:
 
-<!-- test:skip reason="illustrative side-by-side: references undefined `api`; defines `fetch_many` twice (name collision is intentional in the doc to contrast shapes)" -->
 ```python
 # Leaf-level caching: each fetch is cached independently.
 @cash.cache

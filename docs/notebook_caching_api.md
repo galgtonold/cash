@@ -44,6 +44,7 @@ Disable automatic caching.
 
 Cache a specific cell (when auto-caching is off).
 
+<!-- test:skip reason="illustrative — references undefined pd and missing data.csv" -->
 ```python
 %%cash
 df = pd.read_csv('data.csv')
@@ -188,6 +189,7 @@ class CodeAnalyzer:
 
 **Example:**
 
+<!-- test:skip reason="CodeAnalyzer is an internal class with no public analyze_code_block method" -->
 ```python
 inputs, outputs = CodeAnalyzer.analyze_code_block("""
 df = pd.read_csv('data.csv')
@@ -372,6 +374,7 @@ class ControlStructureProcessor:
 
 Result from processing a control structure.
 
+<!-- test:skip reason="@dataclass requires the class's __module__ to be in sys.modules" -->
 ```python
 @dataclass
 class ControlStructureResult:
@@ -487,6 +490,7 @@ for the complete table.
 
 Each statement returns metrics in this format:
 
+<!-- test:skip reason="illustrative dict literal at top level (not a runnable script)" -->
 ```python
 {
     'status': str,           # 'COMPUTED', 'RESTORED', 'SKIPPED', 'ERROR', or 'UNKNOWN'
@@ -505,6 +509,7 @@ Each statement returns metrics in this format:
 
 When a statement invokes `@cash.cache` decorated functions, the `decorator_calls` list contains entries like:
 
+<!-- test:skip reason="illustrative dict literal at top level (not a runnable script)" -->
 ```python
 {
     'func_name': 'my_module.process',  # Module-qualified function name
