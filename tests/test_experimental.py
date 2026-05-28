@@ -132,51 +132,12 @@ class TestDependencyGraph:
         assert "func_b" in g.get_dependencies("func_a")
         assert "func_a" in g.get_dependents("func_b")
 
-    def test_get_all_dependents(self):
-        """Get transitive dependents."""
-        g = DependencyGraph()
-        g.add_dependency("func_a", "func_b")  # a depends on b
-        g.add_dependency("func_b", "func_c")  # b depends on c
-
-        # If c changes, b and a are affected
-        all_deps = g.get_all_dependents("func_c")
-        assert "func_b" in all_deps
-        assert "func_a" in all_deps
-
-    def test_get_all_dependents_no_self(self):
-        """get_all_dependents excludes the node itself."""
-        g = DependencyGraph()
-        g.add_dependency("func_a", "func_b")
-        all_deps = g.get_all_dependents("func_b")
-        assert "func_b" not in all_deps
-
-    def test_get_all_dependents_cycle_safe(self):
-        """get_all_dependents handles cycles without infinite loop."""
-        g = DependencyGraph()
-        g.add_dependency("a", "b")
-        g.add_dependency("b", "a")  # Cycle
-        all_deps = g.get_all_dependents("a")
-        assert "b" in all_deps
-
     def test_clear(self):
         """Clear removes all nodes and edges."""
         g = DependencyGraph()
         g.add_dependency("a", "b")
         g.clear()
         assert g.get_dependencies("a") == set()
-
-    def test_diamond_dependency(self):
-        """Diamond dependency pattern works."""
-        g = DependencyGraph()
-        # d depends on b and c, both depend on a
-        g.add_dependency("d", "b")
-        g.add_dependency("d", "c")
-        g.add_dependency("b", "a")
-        g.add_dependency("c", "a")
-
-        # If a changes, b, c, and d are all affected
-        all_deps = g.get_all_dependents("a")
-        assert all_deps == {"b", "c", "d"}
 
     def test_multiple_dependencies(self):
         """A node can have multiple dependencies."""
@@ -192,7 +153,8 @@ class TestDependencyGraph:
         """Isolated node has no dependents or dependencies."""
         g = DependencyGraph()
         g.add_node("isolated")
-        assert g.get_all_dependents("isolated") == set()
+        assert g.get_dependents("isolated") == set()
+        assert g.get_dependencies("isolated") == set()
 
     def test_nonexistent_node(self):
         """Querying nonexistent node returns empty set."""

@@ -38,37 +38,6 @@ class TestDependencyGraph:
         g.add_dependency("B", "C")
         assert g.get_dependents("C") == {"A", "B"}
 
-    def test_get_all_dependents_transitive(self):
-        g = DependencyGraph()
-        # A depends on B, B depends on C
-        g.add_dependency("A", "B")
-        g.add_dependency("B", "C")
-        # Changing C should cascade to B and A
-        all_deps = g.get_all_dependents("C")
-        assert all_deps == {"A", "B"}
-
-    def test_get_all_dependents_no_self(self):
-        g = DependencyGraph()
-        g.add_dependency("A", "B")
-        all_deps = g.get_all_dependents("B")
-        assert "B" not in all_deps
-
-    def test_get_all_dependents_diamond(self):
-        """Diamond dependency: A->B, A->C, B->D, C->D. Changing D cascades to B, C, A."""
-        g = DependencyGraph()
-        g.add_dependency("A", "B")
-        g.add_dependency("A", "C")
-        g.add_dependency("B", "D")
-        g.add_dependency("C", "D")
-        all_deps = g.get_all_dependents("D")
-        assert all_deps == {"A", "B", "C"}
-
-    def test_get_all_dependents_leaf_node(self):
-        g = DependencyGraph()
-        g.add_dependency("A", "B")
-        # A is a leaf (no one depends on A)
-        assert g.get_all_dependents("A") == set()
-
     def test_clear(self):
         g = DependencyGraph()
         g.add_dependency("A", "B")
@@ -83,15 +52,6 @@ class TestDependencyGraph:
         g.add_dependency("A", "B")
         assert g.get_dependencies("A") == {"B"}
         assert g.get_dependents("B") == {"A"}
-
-    def test_cycle_handling(self):
-        """Graph allows cycles; get_all_dependents should terminate."""
-        g = DependencyGraph()
-        g.add_dependency("A", "B")
-        g.add_dependency("B", "A")
-        # Should not infinite-loop
-        all_deps = g.get_all_dependents("A")
-        assert "B" in all_deps
 
     def test_visualize_without_pyvis(self, capsys):
         """Visualize gracefully handles missing pyvis."""

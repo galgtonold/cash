@@ -1,8 +1,4 @@
-"""Variable dependency graph for tracking lineage relationships.
-
-This module is the primary home for :class:`DependencyGraph`.
-``cash.ui.graph`` re-exports it for backwards compatibility.
-"""
+"""Variable dependency graph for tracking lineage relationships."""
 
 from __future__ import annotations
 
@@ -52,23 +48,6 @@ class DependencyGraph:
     def get_dependencies(self, node: str) -> set[str]:
         """Get immediate dependencies of a node (children)."""
         return self._dependencies.get(node, set())
-
-    def get_all_dependents(self, node: str) -> set[str]:
-        """Get all transitive dependents of a node (cascading)."""
-        visited = set()
-        stack = [node]
-
-        while stack:
-            current = stack.pop()
-            if current in visited:
-                continue
-            visited.add(current)
-
-            for dependent in self._dependents.get(current, []):
-                stack.append(dependent)
-
-        visited.remove(node)  # Exclude the node itself
-        return visited
 
     def clear(self) -> None:
         self._dependents.clear()
