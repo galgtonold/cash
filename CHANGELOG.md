@@ -51,10 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now exposes an `explain()` method that returns a `CacheExplanation`
   describing whether the next call with those args would hit or miss
   the cache, and *why*. Reasons include `hit`, `key_uncomputable`
-  (unhashable arg), `no_entry` (with `source_changed` detection when a
-  sibling entry exists), `ttl_expired`, and `file_changed` (with the
-  list of changed paths). Pure introspection — never calls the
-  function, mutates stats, or writes to the backend. Available on
+  (unhashable arg), `no_entry`, `ttl_expired`, and `file_changed`
+  (with the list of changed paths). Pure introspection — never calls
+  the function, mutates stats, or writes to the backend. Available on
   async-wrapped functions too. `CacheExplanation` is exported from the
   top-level `cash` package.
 - `f.cache_info()` now includes a `warnings` key — a rolling log of
