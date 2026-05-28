@@ -16,11 +16,9 @@ checks, freshness), execute statements, or replay output.  Those are
 ::class:`CacheFreshnessChecker`'s, ``StatementProcessor``'s, and
 :class:`StatementRestorer`'s jobs, respectively.
 
-Carries the heaviest state surface of the four siblings — it needs
-many tracking-state dict refs plus processor-owned dicts
-(``_granular_preserved_vars``, ``module_attribute_deps``,
-``from_import_sources``).  Treat that as the cost of consolidating the
-lineage-building logic into one cohesive class.
+All :class:`TrackingState` access happens through the ``tracking_state``
+method parameter on the public entries.  The builder holds no aliased
+dict references and has no ``set_tracking_state`` re-wiring step.
 """
 
 from __future__ import annotations
@@ -48,45 +46,25 @@ logger = logging.getLogger(__name__)
 class StatementLineageBuilder:
     """Compute + record lineage hashes for statement outputs.
 
-    Holds aliased references to many tracking-state dicts plus three
-    processor-owned dicts (``_granular_preserved_vars``,
-    ``module_attribute_deps``, ``from_import_sources``).  The
-    processor-owned dicts are passed by reference at construction; the
-    tracking-state dicts are aliased via :meth:`set_tracking_state`.
+    Holds permanent dependencies (shell, function tracker, file-deps
+    sibling, optional content hasher) but no aliased dict references.
+    All :class:`TrackingState` access flows through the
+    ``tracking_state`` method parameter on the public entries.
     """
 
     def __init__(
         self,
         shell: 'ShellProtocol',
-        tracking_state: 'TrackingState',
         function_tracker: 'FunctionTracker',
         file_deps: 'StatementFileDeps',
-        granular_preserved_vars: dict[str, set[str]],
-        module_attribute_deps: dict[str, dict[str, set[str]]],
-        from_import_sources: dict[str, str],
         compute_hash: Callable[[Any], str] | None = None,
         debug: bool = False,
     ) -> None:
         self.shell = shell
         self.function_tracker = function_tracker
         self._file_deps = file_deps
-        self._granular_preserved_vars = granular_preserved_vars
-        self.module_attribute_deps = module_attribute_deps
-        self.from_import_sources = from_import_sources
         self.compute_hash = compute_hash
         self.debug = debug
-        self.set_tracking_state(tracking_state)
-
-    def set_tracking_state(self, state: 'TrackingState') -> None:
-        """Re-wire individual tracking-state dict refs (alias pattern)."""
-        self.variable_lineage = state.variable_lineage
-        self.executed_input_lineages = state.executed_input_lineages
-        self.lineage = state.lineage
-        self.executed_cell_hashes = state.executed_cell_hashes
-        self.executed_cell_codes = state.executed_cell_codes
-        self.variable_sources = state.variable_sources
-        self.variable_hashes = state.variable_hashes
-        self.current_session_hashes = state.current_session_hashes
 
     # ------------------------------------------------------------------
     # Public entries
@@ -94,6 +72,7 @@ class StatementLineageBuilder:
 
     def capture_and_track_variables(
         self,
+        tracking_state: 'TrackingState',
         outputs: set[str],
         inputs: set[str],
         code: str,
@@ -119,8 +98,8 @@ class StatementLineageBuilder:
             value = user_ns[var_name]
             captured_vars[var_name] = value
 
-            input_lineage_hashes, input_lineage_map = self._build_input_lineages(inputs, user_ns)
-            self.executed_input_lineages[var_name] = input_lineage_map
+            input_lineage_hashes, input_lineage_map = self._build_input_lineages(tracking_state, inputs, user_ns)
+            tracking_state.executed_input_lineages[var_name] = input_lineage_map
 
             func_lineage_component = ""
             func_source_hashes = self.function_tracker.get_callable_source_hashes(inputs, user_ns)
@@ -130,7 +109,7 @@ class StatementLineageBuilder:
 
             # Include tracked module source hash in lineage.
             module_lineage_component = self._compute_module_lineage_component(
-                value, var_name, code, tree
+                tracking_state, value, var_name, code, tree
             )
 
             # Compute lineage hash for the output variable
@@ -139,42 +118,42 @@ class StatementLineageBuilder:
 
             # Record via LineageStore so the dict entry and ``_cash_lineage_hash``
             # are written together and cannot drift.
-            self.lineage.record(var_name, output_lineage_hash, value=value)
+            tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
 
-            self._apply_granular_module_update(var_name, value, output_lineage_hash)
+            self._apply_granular_module_update(tracking_state, var_name, value, output_lineage_hash)
 
-            if var_name not in self.executed_cell_hashes:
-                self.executed_cell_hashes[var_name] = set()
-            self.executed_cell_hashes[var_name].add(source_hash)
+            if var_name not in tracking_state.executed_cell_hashes:
+                tracking_state.executed_cell_hashes[var_name] = set()
+            tracking_state.executed_cell_hashes[var_name].add(source_hash)
 
-            self.executed_cell_codes[var_name] = code
+            tracking_state.executed_cell_codes[var_name] = code
 
-            self._update_module_attribute_deps(var_name, code, user_ns)
-            self._update_variable_content_hashes(var_name, value, output_lineage_hash)
+            self._update_module_attribute_deps(tracking_state, var_name, code, user_ns)
+            self._update_variable_content_hashes(tracking_state, var_name, value, output_lineage_hash)
 
-            self.variable_sources[var_name] = cache_key
+            tracking_state.variable_sources[var_name] = cache_key
 
-            self._file_deps.update_for_var(var_name, accessed_files, inputs, value)
+            self._file_deps.update_for_var(tracking_state, var_name, accessed_files, inputs, value)
 
         return captured_vars
 
-    def build_output_lineages(self, outputs: set[str]) -> dict[str, str]:
+    def build_output_lineages(self, tracking_state: 'TrackingState', outputs: set[str]) -> dict[str, str]:
         """Collect ``{var: lineage_hash}`` for all outputs that have a lineage."""
-        return {v: self.variable_lineage[v] for v in outputs if v in self.variable_lineage}
+        return {v: tracking_state.variable_lineage[v] for v in outputs if v in tracking_state.variable_lineage}
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
     def _build_input_lineages(
-        self, inputs: set[str], user_ns: dict,
+        self, tracking_state: 'TrackingState', inputs: set[str], user_ns: dict,
     ) -> tuple[list[str], dict[str, str]]:
         """Build input lineage hashes list and map for a set of input variables."""
         input_lineage_hashes: list[str] = []
         input_lineage_map: dict[str, str] = {}
         for input_var in inputs:
-            if input_var in self.variable_lineage:
-                lineage = self.variable_lineage[input_var]
+            if input_var in tracking_state.variable_lineage:
+                lineage = tracking_state.variable_lineage[input_var]
                 input_lineage_hashes.append(lineage)
                 input_lineage_map[input_var] = lineage
             elif input_var in user_ns:
@@ -188,20 +167,20 @@ class StatementLineageBuilder:
         return input_lineage_hashes, input_lineage_map
 
     def _apply_granular_module_update(
-        self, var_name: str, value: Any, output_lineage_hash: str,
+        self, tracking_state: 'TrackingState', var_name: str, value: Any, output_lineage_hash: str,
     ) -> None:
         """Apply deferred granular lineage update when a tracked module is re-imported."""
-        if isinstance(value, types.ModuleType) and var_name in self._granular_preserved_vars:
-            preserved = self._granular_preserved_vars.pop(var_name)
+        if isinstance(value, types.ModuleType) and var_name in tracking_state.granular_preserved_vars:
+            preserved = tracking_state.granular_preserved_vars.pop(var_name)
             for pv in preserved:
-                pv_inputs = self.executed_input_lineages.get(pv)
+                pv_inputs = tracking_state.executed_input_lineages.get(pv)
                 if pv_inputs is not None and var_name in pv_inputs:
                     pv_inputs[var_name] = output_lineage_hash
                     if self.debug:
                         logger.debug("[GRANULAR] Deferred update: '%s'.'%s' -> %s...", pv, var_name, output_lineage_hash[:12])
 
     def _update_module_attribute_deps(
-        self, var_name: str, code: str, user_ns: dict,
+        self, tracking_state: 'TrackingState', var_name: str, code: str, user_ns: dict,
     ) -> None:
         """Update granular module attribute dependency tracking for *var_name*."""
         try:
@@ -212,37 +191,38 @@ class StatementLineageBuilder:
                 if isinstance(input_val, types.ModuleType) and input_name in self.function_tracker._tracked_modules:
                     mod_deps[input_name] = attrs
             if mod_deps:
-                self.module_attribute_deps[var_name] = mod_deps
-            elif var_name in self.module_attribute_deps:
-                del self.module_attribute_deps[var_name]
+                tracking_state.module_attribute_deps[var_name] = mod_deps
+            elif var_name in tracking_state.module_attribute_deps:
+                del tracking_state.module_attribute_deps[var_name]
         except (AttributeError, TypeError, ValueError, SyntaxError):
             logger.debug("[PROCESSOR] Module attribute tracking failed for '%s', falling back to full invalidation", var_name)
-            self.module_attribute_deps.pop(var_name, None)
+            tracking_state.module_attribute_deps.pop(var_name, None)
 
     def _update_variable_content_hashes(
-        self, var_name: str, value: Any, output_lineage_hash: str,
+        self, tracking_state: 'TrackingState', var_name: str, value: Any, output_lineage_hash: str,
     ) -> None:
         """Update variable_hashes and current_session_hashes for *var_name*."""
         type_name = type(value).__name__
         if type_name in ('DataFrame', 'Series', 'ndarray'):
             # For large objects, use lineage hash as proxy for content hash
-            if var_name not in self.variable_hashes:
-                self.variable_hashes[var_name] = set()
-            self.variable_hashes[var_name].add(output_lineage_hash)
-            self.current_session_hashes[var_name] = output_lineage_hash
+            if var_name not in tracking_state.variable_hashes:
+                tracking_state.variable_hashes[var_name] = set()
+            tracking_state.variable_hashes[var_name].add(output_lineage_hash)
+            tracking_state.current_session_hashes[var_name] = output_lineage_hash
         elif self.compute_hash:
             try:
                 content_hash = self.compute_hash(value)
-                if var_name not in self.variable_hashes:
-                    self.variable_hashes[var_name] = set()
-                self.variable_hashes[var_name].add(content_hash)
-                self.current_session_hashes[var_name] = content_hash
+                if var_name not in tracking_state.variable_hashes:
+                    tracking_state.variable_hashes[var_name] = set()
+                tracking_state.variable_hashes[var_name].add(content_hash)
+                tracking_state.current_session_hashes[var_name] = content_hash
             except (TypeError, ValueError, AttributeError, pickle.PicklingError) as e:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] Could not hash captured variable '%s': %s", var_name, e)
 
     def _compute_module_lineage_component(
         self,
+        tracking_state: 'TrackingState',
         value: Any,
         var_name: str,
         code: str,
@@ -275,7 +255,7 @@ class StatementLineageBuilder:
             obj_module = getattr(value, '__module__', None)
             if not (obj_module and obj_module in self.function_tracker._tracked_modules):
                 return ""
-            self.from_import_sources[var_name] = obj_module
+            tracking_state.from_import_sources[var_name] = obj_module
             mod_obj = sys.modules.get(obj_module)
             mod_file = getattr(mod_obj, '__file__', None) if mod_obj else None
             if not (mod_file and os.path.isfile(mod_file)):
@@ -288,11 +268,11 @@ class StatementLineageBuilder:
             return f":from_mod_src:{mod_source_hash}"
 
         # Non-callable: parse the AST to find the source module.
-        return self._resolve_import_module_lineage(var_name, code, tree)
+        return self._resolve_import_module_lineage(tracking_state, var_name, code, tree)
 
-    def _lookup_from_import_mod_hash(self, var_name: str, from_mod: str) -> str:
+    def _lookup_from_import_mod_hash(self, tracking_state: 'TrackingState', var_name: str, from_mod: str) -> str:
         """Return a ``:from_mod_src:<hash>`` lineage fragment for a tracked from-import module."""
-        self.from_import_sources[var_name] = from_mod
+        tracking_state.from_import_sources[var_name] = from_mod
         if from_mod not in self.function_tracker._tracked_modules:
             return ""
         mod_obj = sys.modules.get(from_mod)
@@ -308,6 +288,7 @@ class StatementLineageBuilder:
 
     def _resolve_import_module_lineage(
         self,
+        tracking_state: 'TrackingState',
         var_name: str,
         code: str,
         tree: ast.Module | None = None,
@@ -327,5 +308,5 @@ class StatementLineageBuilder:
                 imported_name = alias.asname or alias.name
                 if imported_name != var_name:
                     continue
-                return self._lookup_from_import_mod_hash(var_name, node.module)
+                return self._lookup_from_import_mod_hash(tracking_state, var_name, node.module)
         return ""

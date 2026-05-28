@@ -151,7 +151,7 @@ class IfHandler:
             return result.computed_iterations > 0
         stmt_code = ast.unparse(body_node)
         modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
-        metrics = self.statement_processor.process_statement(modified_code, ttl, silent, render_badge=False)
+        metrics = self.statement_processor.process_statement(modified_code, ttl, silent)
         metrics['control_context'] = branch_hash
         metrics['branch_label'] = branch_label
         _helpers.flush_metrics_output(metrics)

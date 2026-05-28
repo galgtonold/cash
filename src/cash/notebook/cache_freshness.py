@@ -68,37 +68,24 @@ def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
 class CacheFreshnessChecker:
     """Decide whether a cache entry is still fresh.
 
-    Holds :class:`TrackingState` and the cache backend by reference;
-    never mutates them.  ``last_miss_reason`` is updated as a
-    side-effect whenever a check rejects an entry, so the badge can
-    surface "why did this cell re-run?" in expanded row detail.
+    Holds the cache backend by reference and a transient
+    ``last_miss_reason`` for badge attribution.  All :class:`TrackingState`
+    access happens through the ``tracking_state`` method parameter — no
+    aliased dict references on this instance.
     """
 
     def __init__(
         self,
-        tracking_state: 'TrackingState',
         backend: Any,
         debug: bool = False,
     ) -> None:
         self._backend = backend
         self.debug = debug
         self.last_miss_reason: str | None = None
-        self.set_tracking_state(tracking_state)
-
-    def set_tracking_state(self, state: 'TrackingState') -> None:
-        """Re-wire individual dict references from *state*.
-
-        Matches the alias-not-store pattern used throughout the codebase
-        (``StatementProcessor``, ``NotebookSimulator``).  Tests can rebind
-        these attributes on the orchestrator (e.g. ``processor.variable_sources
-        = {...}``) and the freshness checker stays consistent via its own
-        rebind below.
-        """
-        self.variable_sources = state.variable_sources
-        self.executed_file_deps = state.executed_file_deps
 
     def check_cache(
         self,
+        tracking_state: 'TrackingState',
         cache_key: str,
         ttl: int | None,
         inputs: set[str] | None = None,
@@ -125,7 +112,7 @@ class CacheFreshnessChecker:
             # CRITICAL: also check file dependencies inherited from INPUT variables.
             # Fixes the bug where `df` cell was cached even when the source CSV changed.
             if cached_data and inputs:
-                cached_data = self._invalidate_if_input_file_changed(inputs, cached_data)
+                cached_data = self._invalidate_if_input_file_changed(tracking_state, inputs, cached_data)
 
         return metadata, cached_data, cache_check_time
 
@@ -184,7 +171,7 @@ class CacheFreshnessChecker:
                 return None
         return cached_data
 
-    def _input_file_changed(self, input_var: str, fpath: str) -> bool:
+    def _input_file_changed(self, tracking_state: 'TrackingState', input_var: str, fpath: str) -> bool:
         """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached."""
         resolved = resolve_file_dep_path(fpath)
         if resolved is None:
@@ -192,7 +179,7 @@ class CacheFreshnessChecker:
             if self.debug:
                 logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
             return True
-        source_cache_key = self.variable_sources.get(input_var)
+        source_cache_key = tracking_state.variable_sources.get(input_var)
         if not source_cache_key:
             return False
         source_meta, _ = self._backend.get(source_cache_key)
@@ -219,10 +206,10 @@ class CacheFreshnessChecker:
             return True
         return False
 
-    def _invalidate_if_input_file_changed(self, inputs: set[str], cached_data: Any) -> Any:
+    def _invalidate_if_input_file_changed(self, tracking_state: 'TrackingState', inputs: set[str], cached_data: Any) -> Any:
         """Return None if any file dep of an input variable has changed since it was computed."""
         for input_var in inputs:
-            for fpath in self.executed_file_deps.get(input_var, ()):
-                if self._input_file_changed(input_var, fpath):
+            for fpath in tracking_state.executed_file_deps.get(input_var, ()):
+                if self._input_file_changed(tracking_state, input_var, fpath):
                     return None
         return cached_data

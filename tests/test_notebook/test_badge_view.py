@@ -29,7 +29,6 @@ from cash.notebook.badge_renderer.view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
-    StatusBadge,
 )
 
 
@@ -116,13 +115,3 @@ def test_fully_populated_tree_is_hashable() -> None:
 
     assert hash(badge) == hash(badge)  # determinism
     assert {badge} == {badge}
-
-
-def test_status_badge_is_a_distinct_root() -> None:
-    """``StatusBadge`` is the compact non-interactive root, not nested under InteractiveBadge."""
-    sb = StatusBadge(
-        status=BadgeStatus.RESTORED,
-        execution_time_s=0.01, time_saved_s=0.5,
-        source="RAM", storage_tiers=("RAM", "DISK"),
-    )
-    assert sb.storage_tiers == ("RAM", "DISK")

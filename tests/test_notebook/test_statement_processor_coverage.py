@@ -3,8 +3,9 @@ from cash.notebook.cache_status import CacheStatus
 Tests for StatementProcessor methods that need additional coverage.
 
 Targets: _check_cache (stale format, file deps, TTL), _create_error_result,
-         _update_mutation_lineages, _should_skip_variable, _handle_execution_error,
-         file dep propagation, module lineage, forbidden function scan error
+         _update_mutation_lineages, _handle_execution_error,
+         file dep propagation, module lineage, forbidden function scan error,
+         lineage-exemption predicate (via cacheability_decision._is_lineage_exempt).
 """
 import pytest
 import os
@@ -52,7 +53,7 @@ class TestCheckCache:
 
     def test_cache_miss_returns_none(self, processor_fixture):
         processor, _, _ = processor_fixture
-        metadata, cached_data, time_taken = processor._freshness.check_cache("nonexistent_key", None)
+        metadata, cached_data, time_taken = processor._freshness.check_cache(processor._tracking_state,"nonexistent_key", None)
         assert cached_data is None
 
     def test_ttl_expiration(self, processor_fixture):
@@ -67,7 +68,7 @@ class TestCheckCache:
         backend.set(cache_key, cached_data, metadata)
         
         # TTL of 10 seconds - entry should be expired
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, 10)
+        result_meta, result_data, _ = processor._freshness.check_cache(processor._tracking_state,cache_key, 10)
         assert result_data is None
 
     def test_ttl_not_expired(self, processor_fixture):
@@ -81,7 +82,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, 3600)
+        result_meta, result_data, _ = processor._freshness.check_cache(processor._tracking_state,cache_key, 3600)
         assert result_data is not None
 
     def test_file_dep_missing_file(self, processor_fixture):
@@ -96,7 +97,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(processor._tracking_state,cache_key, None)
         assert result_data is None
 
     def test_file_dep_changed_mtime(self, processor_fixture, tmp_path):
@@ -114,7 +115,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(processor._tracking_state,cache_key, None)
         assert result_data is None
 
     def test_file_dep_unchanged(self, processor_fixture, tmp_path):
@@ -133,7 +134,7 @@ class TestCheckCache:
         cached_data = {'variables': {'x': 42}}
         backend.set(cache_key, cached_data, metadata)
 
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None)
+        result_meta, result_data, _ = processor._freshness.check_cache(processor._tracking_state,cache_key, None)
         assert result_data is not None
 
     def test_input_file_dep_invalidation(self, processor_fixture, tmp_path):
@@ -143,9 +144,8 @@ class TestCheckCache:
         test_file.write_text("a,b\n1,2\n")
         current_mtime = os.path.getmtime(str(test_file))
         
-        # Set up input var's file dependencies — mutate the shared dict so the
-        # freshness checker (which holds its own ref via set_tracking_state)
-        # sees the update too.
+        # Set up input var's file dependencies — mutate the shared TrackingState
+        # dict so the freshness checker (which reads it per-call) sees the update.
         processor.executed_file_deps['df'] = {str(test_file)}
 
         # Store source cache entry for the input variable with OLD mtime
@@ -167,45 +167,42 @@ class TestCheckCache:
         cached_data = {'variables': {'result': 100}}
         backend.set(cache_key, cached_data, metadata)
         
-        result_meta, result_data, _ = processor._freshness.check_cache(cache_key, None, inputs={'df'})
+        result_meta, result_data, _ = processor._freshness.check_cache(processor._tracking_state,cache_key, None, inputs={'df'})
         assert result_data is None
 
 
 # ============================================================================
-# _should_skip_variable
+# _is_lineage_exempt
 # ============================================================================
 
-class TestShouldSkipVariable:
-    """Test _should_skip_variable method."""
+from cash.notebook.cacheability_decision import _is_lineage_exempt
 
-    def test_skip_module(self, processor_fixture):
-        processor, _, _ = processor_fixture
+
+class TestIsLineageExempt:
+    """Test the lineage-exemption predicate."""
+
+    def test_skip_module(self):
         import os as os_mod
-        assert processor._should_skip_variable('os', os_mod) is True
+        assert _is_lineage_exempt('os', os_mod) is True
 
-    def test_skip_get_ipython(self, processor_fixture):
-        processor, _, _ = processor_fixture
-        assert processor._should_skip_variable('get_ipython', lambda: None) is True
+    def test_skip_get_ipython(self):
+        assert _is_lineage_exempt('get_ipython', lambda: None) is True
 
-    def test_skip_private_callable(self, processor_fixture):
-        processor, _, _ = processor_fixture
+    def test_skip_private_callable(self):
         func = MagicMock()
         func.__self__ = MagicMock()
-        assert processor._should_skip_variable('_private', func) is True
+        assert _is_lineage_exempt('_private', func) is True
 
-    def test_dont_skip_regular_variable(self, processor_fixture):
-        processor, _, _ = processor_fixture
-        assert processor._should_skip_variable('x', 42) is False
+    def test_dont_skip_regular_variable(self):
+        assert _is_lineage_exempt('x', 42) is False
 
-    def test_dont_skip_user_function(self, processor_fixture):
-        processor, _, _ = processor_fixture
+    def test_dont_skip_user_function(self):
         def my_func():
             pass
-        assert processor._should_skip_variable('my_func', my_func) is False
+        assert _is_lineage_exempt('my_func', my_func) is False
 
-    def test_dont_skip_list(self, processor_fixture):
-        processor, _, _ = processor_fixture
-        assert processor._should_skip_variable('data', [1, 2, 3]) is False
+    def test_dont_skip_list(self):
+        assert _is_lineage_exempt('data', [1, 2, 3]) is False
 
 
 # ============================================================================
@@ -312,7 +309,7 @@ class TestFileDependencyPropagation:
         # Simulate that 'df' has file deps — mutate the shared dicts so
         # sibling sub-components (StatementFileDeps) see the update too.
         processor.executed_file_deps['df'] = {str(test_file)}
-        processor.executed_file_mtimes['df'] = {str(test_file): os.path.getmtime(str(test_file))}
+        processor._tracking_state.executed_file_mtimes['df'] = {str(test_file): os.path.getmtime(str(test_file))}
         
         # Set up 'df' in namespace (as a list to avoid pandas dependency)
         shell.user_ns['df'] = [1, 2, 3]
@@ -335,7 +332,7 @@ class TestFileDependencyPropagation:
         
         # Mutate the shared dicts so StatementFileDeps sees the update too.
         processor.executed_file_deps['data'] = {str(test_file)}
-        processor.executed_file_mtimes['data'] = {str(test_file): os.path.getmtime(str(test_file))}
+        processor._tracking_state.executed_file_mtimes['data'] = {str(test_file): os.path.getmtime(str(test_file))}
         
         shell.user_ns['data'] = [1, 2, 3]
         processor.variable_lineage['data'] = 'data_lineage'
@@ -407,35 +404,3 @@ class TestPurityChecks:
         assert shell.user_ns.get('result') == 8
         # Should NOT have stateful uncacheable reason
         assert not any('stateful' in r.lower() for r in metrics.get('uncacheable_reasons', []))
-
-
-# ============================================================================
-# _render_status_badge
-# ============================================================================
-
-class TestRenderStatusBadge:
-    """Test _render_status_badge (standalone usage)."""
-
-    def test_render_restored_badge(self, processor_fixture):
-        """Should not crash when rendering RESTORED badge."""
-        processor, _, _ = processor_fixture
-        # Should not raise
-        processor._render_status_badge(
-            'RESTORED', 
-            execution_time=0.1, 
-            time_saved=2.5, 
-            source='memory',
-            storage=['InMemory']
-        )
-
-    def test_render_computed_badge(self, processor_fixture):
-        processor, _, _ = processor_fixture
-        processor._render_status_badge(
-            'COMPUTED', 
-            execution_time=1.5,
-            storage=['InMemory', 'File']
-        )
-
-    def test_render_with_no_extras(self, processor_fixture):
-        processor, _, _ = processor_fixture
-        processor._render_status_badge('SKIPPED')

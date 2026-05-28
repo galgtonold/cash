@@ -239,7 +239,7 @@ def _tee_output() -> Generator[Any, None, None]:
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
 try:
-    from IPython.display import HTML, display, publish_display_data
+    from IPython.display import display, publish_display_data
     from IPython.utils.io import capture_output
     HAS_IPYTHON = True
 except ImportError:
@@ -338,30 +338,24 @@ class StatementProcessor:
         self.set_tracking_state(tracking_state or TrackingState())
 
         # Cache-freshness checker (TTL / file-dep / input-file invalidation).
-        # Holds the same tracking_state ref so set_tracking_state propagates.
+        # Stateless w.r.t. tracking state — receives it per call.
         self._freshness = CacheFreshnessChecker(
-            tracking_state=self._tracking_state,
             backend=cash_instance.backend if cash_instance is not None else None,
             debug=debug,
         )
 
-        self.executed_file_mtimes = {}  # var_name -> {filepath: mtime} at time of last execution
-
-        # Statement-level file-dep tracker. Shares executed_file_deps (from
-        # tracking_state) and executed_file_mtimes (owned here) by reference.
-        self._file_deps = StatementFileDeps(
-            tracking_state=self._tracking_state,
-            executed_file_mtimes=self.executed_file_mtimes,
-            debug=debug,
-        )
+        # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
+        # receives it per call. ``executed_file_deps`` and ``executed_file_mtimes``
+        # live on TrackingState.
+        self._file_deps = StatementFileDeps(debug=debug)
 
         # Statement-level cache restorer. Hydrates outputs from a cached
         # payload + replays stdout/stderr/rich-outputs.  Distinct from the
         # variable-granular Restorer in restore.py (owned by CashMagics);
-        # see CONTEXT.md for the unit-of-work distinction.
+        # see CONTEXT.md for the unit-of-work distinction.  Stateless w.r.t.
+        # tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(
             shell=shell,
-            tracking_state=self._tracking_state,
             file_deps=self._file_deps,
             compute_hash=compute_hash_fn,
             debug=debug,
@@ -371,32 +365,15 @@ class StatementProcessor:
         # import statements for modules that need re-execution after source changes.
         self.recently_reloaded_modules: set[str] = set()
 
-        # Per-variable tracking of which module attributes are used.
-        # Maps var_name -> {module_name: {attr1, attr2, ...}}
-        self.module_attribute_deps: dict[str, dict[str, set[str]]] = {}
-
-        # Tracks variables that were granularly preserved during module invalidation.
-        # Maps module_name -> set of var_names whose stored input lineages need
-        # to be updated once the import statement re-executes.
-        self._granular_preserved_vars: dict[str, set[str]] = {}
-
-        # Track which variables came from which module via "from X import Y".
-        # Maps var_name -> module_name.
-        self.from_import_sources: dict[str, str] = {}
-
         # Statement-level lineage builder. Owns the lineage hash + content
         # hash + module-source hash bookkeeping for each output variable.
-        # Shares tracking_state and three processor-owned dicts
-        # (_granular_preserved_vars, module_attribute_deps,
-        # from_import_sources) by reference.
+        # Stateless w.r.t. tracking state — receives it per call.  The three
+        # dicts it writes (``granular_preserved_vars``, ``module_attribute_deps``,
+        # ``from_import_sources``) live on TrackingState.
         self._lineage = StatementLineageBuilder(
             shell=shell,
-            tracking_state=self._tracking_state,
             function_tracker=self.function_tracker,
             file_deps=self._file_deps,
-            granular_preserved_vars=self._granular_preserved_vars,
-            module_attribute_deps=self.module_attribute_deps,
-            from_import_sources=self.from_import_sources,
             compute_hash=compute_hash_fn,
             debug=debug,
         )
@@ -429,8 +406,11 @@ class StatementProcessor:
         This is the preferred way to configure tracking state.  All fields
         are aliases to the same mutable containers so mutations are visible
         across ``CashMagics``, ``StatementProcessor``, and ``UpstreamChecker``.
-        Sibling sub-components (e.g. ``CacheFreshnessChecker``) receive the
-        same reference via propagation here.
+
+        The four sibling sub-components (``_freshness``, ``_file_deps``,
+        ``_stmt_restorer``, ``_lineage``) receive ``TrackingState`` as a
+        method parameter and hold no aliased dict references, so no
+        propagation step is required here.
         """
 
         self._tracking_state = state
@@ -444,18 +424,8 @@ class StatementProcessor:
         self.executed_file_deps = state.executed_file_deps
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
-        # Propagate to sibling sub-components (created in __init__ after the
-        # first set_tracking_state, so guard with hasattr).
-        if hasattr(self, '_freshness'):
-            self._freshness.set_tracking_state(state)
-        if hasattr(self, '_file_deps'):
-            self._file_deps.set_tracking_state(state)
-        if hasattr(self, '_stmt_restorer'):
-            self._stmt_restorer.set_tracking_state(state)
-        if hasattr(self, '_lineage'):
-            self._lineage.set_tracking_state(state)
 
-    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, render_badge: bool = True, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
+    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
 
@@ -466,7 +436,6 @@ class StatementProcessor:
             code: Python code to execute
             ttl: Time-to-live for cache entry (seconds)
             silent: If True, suppress output display
-            render_badge: If True, render status badge immediately (default True)
             annotation: Optional CacheAnnotation for cache control directives
             occurrence_index: Zero-based occurrence index for duplicate statements
                 within the same cell. Used to generate unique cache keys when
@@ -533,7 +502,6 @@ class StatementProcessor:
                 variable_lineage=self.variable_lineage,
                 is_stateful_call=self._check_callable_stateful,
                 scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
-                should_skip_variable=self._should_skip_variable,
             )
             if not cacheable:
                 metrics['uncacheable_reasons'].extend(reasons)
@@ -544,12 +512,12 @@ class StatementProcessor:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         if cached_data:
-            hit_result = self._handle_cache_hit(cached_data, metadata, silent, render_badge, cache_key, inputs, metrics, process_start)
+            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
             if hit_result is not None:
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = self._execute_and_drain(
-            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, render_badge,
+            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent,
         )
         if error_metrics is not None:
             return error_metrics
@@ -603,7 +571,7 @@ class StatementProcessor:
     ) -> tuple[StatementCacheMetadata | None, Any | None, float]:
         """Run cache lookup unless *skip_cache* is set."""
         if not skip_cache:
-            return self._freshness.check_cache(cache_key, ttl, inputs)
+            return self._freshness.check_cache(self._tracking_state, cache_key, ttl, inputs)
         if self.debug:
             logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
@@ -617,7 +585,6 @@ class StatementProcessor:
         metrics: ProcessResult,
         process_start: float,
         silent: bool,
-        render_badge: bool,
     ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
         """Execute the statement, drain decorator calls, populate stdout/stderr in metrics.
 
@@ -651,7 +618,7 @@ class StatementProcessor:
         if decorator_calls:
             metrics['decorator_calls'] = decorator_calls
 
-        self._display_execution_output(captured, execution_time, silent, render_badge, stream_output, metrics)
+        self._display_execution_output(captured, execution_time, silent, stream_output, metrics)
         metrics['execution_time'] = execution_time
 
         if not result.success:
@@ -691,7 +658,7 @@ class StatementProcessor:
             logger.debug("%s Failed to auto-track local imports", _LOG_PROCESSOR)
 
         captured_vars = self._lineage.capture_and_track_variables(
-            outputs, inputs, code, source_hash,
+            self._tracking_state, outputs, inputs, code, source_hash,
             cache_key=cache_key, accessed_files=accessed_files, tree=tree,
         )
 
@@ -753,7 +720,6 @@ class StatementProcessor:
         cached_data: Any,
         metadata: StatementCacheMetadata | None,
         silent: bool,
-        render_badge: bool,
         cache_key: str,
         inputs: set[str],
         metrics: ProcessResult,
@@ -770,7 +736,7 @@ class StatementProcessor:
                 logger.debug("%s Input lineages used: %s", _LOG_CACHE_HIT, [(v, self.variable_lineage.get(v, 'NONE')[:16] + '...') for v in inputs if v not in ['get_ipython', '__builtins__', 'print']])
                 if metadata:
                     logger.debug("%s Stored lineages in cache: %s", _LOG_CACHE_HIT, [(k, v[:16]+'...') for k,v in metadata.get('output_lineages', {}).items()])
-            self._stmt_restorer.restore_from_cache(cached_data, metadata, silent, process_start, render_badge)
+            self._stmt_restorer.restore_from_cache(self._tracking_state, cached_data, metadata, silent, process_start)
 
             metrics['status'] = CacheStatus.RESTORED
             metrics['saved_time'] = metadata.get('execution_time', 0.0) if metadata else 0.0
@@ -891,22 +857,18 @@ class StatementProcessor:
             else:
                 display(output)
 
-    def _display_execution_output(self, captured: Any, execution_time: float, silent: bool, render_badge: bool, stream_output: bool, metrics: ProcessResult) -> None:
+    def _display_execution_output(self, captured: Any, execution_time: float, silent: bool, stream_output: bool, metrics: ProcessResult) -> None:
         """Display captured stdout/stderr/rich outputs after execution."""
         if stream_output:
             # User already saw output in real-time via _TeeWriter.
             metrics['_output_flushed'] = True
             if not silent:
-                if render_badge:
-                    self._render_status_badge(CacheStatus.COMPUTED, execution_time=execution_time)
                 self._publish_rich_outputs(captured.outputs)
         elif not silent:
             if captured.stdout:
                 print(captured.stdout, end='')
             if captured.stderr:
                 print(captured.stderr, end='', file=sys.stderr)
-            if render_badge:
-                self._render_status_badge(CacheStatus.COMPUTED, execution_time=execution_time)
             self._publish_rich_outputs(captured.outputs)
 
     def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False) -> tuple[Any, Any, float, set[str]]:
@@ -991,7 +953,7 @@ class StatementProcessor:
 
     def _update_state_tracking(self, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], source_hash: str, cache_key: str, tree: ast.Module | None = None) -> None:
         """Update lineage and variable tracking."""
-        self._lineage.capture_and_track_variables(outputs, inputs, code, source_hash, cache_key=cache_key, accessed_files=accessed_files, tree=tree)
+        self._lineage.capture_and_track_variables(self._tracking_state, outputs, inputs, code, source_hash, cache_key=cache_key, accessed_files=accessed_files, tree=tree)
 
     def _save_to_cache(self, cache_key: str, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], execution_time: float, ttl: int | None, captured: Any, process_start: float, source_hash: str, captured_vars: dict[str, Any], force_persist: bool = False) -> StatementCacheMetadata | None:
         if getattr(result, 'skipped', False):
@@ -1281,7 +1243,7 @@ class StatementProcessor:
                 'key': cache_key,
                 'skipped_reason': skip_reason,
                 'metadata_only': True,
-                'output_lineages': self._lineage.build_output_lineages(outputs),
+                'output_lineages': self._lineage.build_output_lineages(self._tracking_state, outputs),
             }
             if prediction is not None:
                 skip_metadata['cost_model_size_bytes'] = prediction['size_bytes']
@@ -1306,7 +1268,7 @@ class StatementProcessor:
             'key': cache_key,
             'file_dependencies': snapshot_file_deps(file_dependencies),
             'force_persist': force_persist,
-            'output_lineages': self._lineage.build_output_lineages(outputs),
+            'output_lineages': self._lineage.build_output_lineages(self._tracking_state, outputs),
         }
         if prediction is not None:
             metadata['cost_model_size_bytes'] = prediction['size_bytes']
@@ -1392,13 +1354,6 @@ class StatementProcessor:
 
         hash_time = time.time() - t2
         return inputs, outputs, source_hash, cache_key, analysis_time, hash_time
-
-    def _should_skip_variable(self, var_name: str, val: Any) -> bool:
-        """Check if a variable should be skipped for hashing."""
-        if isinstance(val, types.ModuleType) or var_name == 'get_ipython':
-            return True
-
-        return bool(callable(val) and (var_name.startswith('_') or hasattr(val, '__self__')))
 
     def _print_cache_debug(
         self,
@@ -1490,27 +1445,6 @@ class StatementProcessor:
             logger.debug("[SILENT] Error in statement: %s", result.error)
         return False
 
-    def _render_status_badge(
-        self,
-        status: str,
-        execution_time: float = 0.0,
-        time_saved: float = 0.0,
-        source: str | None = None,
-        storage: Any = None,
-    ) -> None:
-        """Render a simple status badge (delegates to badge_renderer)."""
-        from .badge_renderer import render_status_badge
-        html = render_status_badge(
-            status,
-            execution_time=execution_time,
-            time_saved=time_saved,
-            source=source,
-            storage=storage,
-        )
-        try:
-            display(HTML(html))
-        except (ImportError, TypeError, ValueError):
-            logger.debug("[PROCESSOR] Failed to display status badge HTML")
 
 from .file_tracker import FileAccessTracker
 

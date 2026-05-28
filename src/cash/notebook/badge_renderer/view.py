@@ -305,26 +305,6 @@ class InteractiveBadge:
     configured_tiers: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
-class StatusBadge:
-    """Compact non-interactive badge (the binary restored/computed pill).
-
-    Produced from a single ``ProcessResult``-like dict by the view-builder.
-    Today ``render_status_badge`` uses only a two-colour palette; the IR
-    keeps the same prop set so the renderer can decide whether to expand
-    the palette in the future without changing the data model.
-    """
-
-    status: BadgeStatus
-    execution_time_s: float
-    time_saved_s: float
-    source: str | None = None
-    storage_tiers: tuple[str, ...] = ()
-    # Same role as InteractiveBadge.configured_tiers — drives the compact
-    # pill's dot strip (one dot per configured tier, in order).
-    configured_tiers: tuple[str, ...] = ()
-
-
 __all__ = [
     "BadgeStatus",
     "SectionKind",
@@ -344,5 +324,4 @@ __all__ = [
     "BadgeHeader",
     "BugReportLink",
     "InteractiveBadge",
-    "StatusBadge",
 ]

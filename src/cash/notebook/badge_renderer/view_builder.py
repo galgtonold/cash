@@ -33,7 +33,6 @@ from .view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
-    StatusBadge,
 )
 
 # Statuses that don't represent a "ran" or "restored" data operation. They
@@ -1084,29 +1083,8 @@ def build_interactive_badge(
     )
 
 
-def build_status_badge(
-    *,
-    status: Any,
-    execution_time: float,
-    time_saved: float = 0.0,
-    source: str | None = None,
-    storage: Any = (),
-    configured_tiers: tuple[str, ...] = (),
-) -> StatusBadge:
-    """Build a :class:`StatusBadge` (the compact non-interactive pill)."""
-    return StatusBadge(
-        status=map_status(status),
-        execution_time_s=float(execution_time),
-        time_saved_s=float(time_saved),
-        source=source,
-        storage_tiers=_tup_str(storage),
-        configured_tiers=tuple(configured_tiers),
-    )
-
-
 __all__ = [
     "build_interactive_badge",
-    "build_status_badge",
     "build_bug_report_url",
     "map_status",
 ]

@@ -180,7 +180,7 @@ class TryHandler:
             else:
                 stmt_code = ast.unparse(body_node)
                 modified_code = f"# control_context: {ctx_hash}\n{stmt_code}"
-                metrics = self.statement_processor.process_statement(modified_code, ttl, silent, render_badge=False)
+                metrics = self.statement_processor.process_statement(modified_code, ttl, silent)
                 metrics['control_context'] = ctx_hash
                 metrics['branch_label'] = ctx_label
                 _helpers.flush_metrics_output(metrics)
@@ -229,7 +229,7 @@ class TryHandler:
                 stmt_code = ast.unparse(body_node)
                 modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
                 try:
-                    metrics = self.statement_processor.process_statement(modified_code, ttl, silent, render_badge=False)
+                    metrics = self.statement_processor.process_statement(modified_code, ttl, silent)
                 except Exception as e:  # noqa: BLE001 - catching user-raised exceptions from statement execution
                     caught_exception = e
                     try_body_succeeded = False

@@ -728,7 +728,7 @@ class UpstreamChecker:
                     if not ctrl_result.success:
                         raise ctrl_result.error or RuntimeError("Error in upstream control structure")
                 else:
-                    result = process_callback(stmt_code, global_ttl, silent=False, render_badge=False)
+                    result = process_callback(stmt_code, global_ttl, silent=False)
                     if self.debug:
                         logger.debug("[UPSTREAM] Callback result for '%s...': %s", stmt_code[:20], result)
                     if result:

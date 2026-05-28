@@ -8,14 +8,8 @@ The visual surface is documented in
 
 from __future__ import annotations
 
-from cash.notebook.badge_renderer.renderers.html import (
-    render_html,
-    render_status_badge_html,
-)
-from cash.notebook.badge_renderer.view_builder import (
-    build_interactive_badge,
-    build_status_badge,
-)
+from cash.notebook.badge_renderer.renderers.html import render_html
+from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.cache_status import CacheStatus
 
 
@@ -197,17 +191,6 @@ def test_running_state_summary_when_step_info_provided() -> None:
     ))
     assert "PROCESSING" in html
     assert "(2/5)" in html
-
-
-def test_status_badge_renders_compact_inline_pill() -> None:
-    html = render_status_badge_html(build_status_badge(
-        status=CacheStatus.RESTORED, execution_time=0.01, time_saved=0.5,
-        source="RAM", storage=["RAM"],
-    ))
-    assert "RESTORED" in html
-    assert "RAM" in html
-    # Saved-time is now formatted with the v3 ↑ glyph (matching row chips).
-    assert "0.50s" in html
 
 
 def test_syntax_highlighting_wraps_keywords() -> None:

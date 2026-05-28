@@ -28,12 +28,11 @@ from contextvars import ContextVar
 from typing import Any
 
 # Active tier list for the current render pass — set at the top of
-# ``render_html`` / ``render_status_badge_html`` from the badge's
-# ``configured_tiers`` field. ``_dots()`` reads it through ``.get()``
-# so every row, control body, iteration row, and tooltip drawer in one
-# render shares the same tier rack without each helper taking a kwarg.
-# Reset to ``()`` at the start of each render to prevent leakage between
-# successive renders in the same thread.
+# ``render_html`` from the badge's ``configured_tiers`` field. ``_dots()``
+# reads it through ``.get()`` so every row, control body, iteration row,
+# and tooltip drawer in one render shares the same tier rack without each
+# helper taking a kwarg. Reset to ``()`` at the start of each render to
+# prevent leakage between successive renders in the same thread.
 _CONFIGURED_TIERS: ContextVar[tuple[str, ...]] = ContextVar(
     "_CONFIGURED_TIERS", default=(),
 )
@@ -56,7 +55,6 @@ from ..view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
-    StatusBadge,
 )
 from ._pytoken import highlight_python
 
@@ -885,7 +883,7 @@ def _dots(
 
     # Tier list resolution:
     # 1. caller-supplied configured tiers (explicit kwarg wins)
-    # 2. the render-pass ContextVar set by render_html / render_status_badge_html
+    # 2. the render-pass ContextVar set by render_html
     # 3. this row's own storage_tiers (legacy / standalone-test fallback)
     # 4. a single empty placeholder so the cell always has at least one dot
     if configured_tiers is None:
@@ -2061,50 +2059,4 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
         + "</div>"
         + "</details>"
         + "</div>"
-    )
-
-
-def render_status_badge_html(badge: StatusBadge) -> str:
-    """Render the compact non-interactive status pill in v3 chip styling.
-
-    Uses the same time-chip foreground/background pair the row chip uses,
-    so the compact pill reads as a stand-alone version of the chip family
-    rather than a hand-tuned legacy badge. Storage tiers render as dot
-    indicators (matching the row tier dots) instead of text.
-    """
-    kind = theme.kind_of(badge.status.value)
-    label = badge.status.value.upper()
-    fg = theme.chip_fg(kind)
-    bg = theme.chip_bg(kind)
-    # Build storage dots — one per configured tier, in order. Filled when
-    # this entry was stored to that tier, hollow otherwise. Falls back to
-    # the per-entry storage list when no configured tier list is
-    # available (legacy / standalone-test path).
-    tier_dots = ""
-    pill_tiers = badge.configured_tiers or badge.storage_tiers
-    if pill_tiers:
-        written = {t.upper() for t in badge.storage_tiers}
-        dot_color = theme.rail_color(badge.status.value)
-        pieces = []
-        for tier in pill_tiers:
-            filled = tier.upper() in written
-            style = (
-                f'display:inline-block;width:6px;height:6px;border-radius:50%;'
-                f'margin-left:3px;vertical-align:middle;'
-                + (f'background:{dot_color};'
-                   if filled else
-                   f'background:transparent;border:1px solid {dot_color};')
-            )
-            pieces.append(f'<span style="{style}" title="{_esc(tier)}"></span>')
-        tier_dots = "".join(pieces)
-    saved = f' · ↑{badge.time_saved_s:.2f}s' if badge.time_saved_s > 0 else ""
-    source = f' · {_esc(badge.source)}' if badge.source else ""
-    return (
-        f'<span style="display:inline-flex;align-items:center;gap:6px;'
-        f'padding:2px 8px;border-radius:4px;background:{bg};color:{fg};'
-        f'font-family:{theme.FONT_MONO};font-size:11px;font-weight:600;'
-        f'letter-spacing:0.04em;">'
-        f"{_esc(label)}{tier_dots}"
-        f'<span style="font-weight:500;color:{theme.INK_3};">'
-        f"{badge.execution_time_s:.3f}s{saved}{source}</span></span>"
     )

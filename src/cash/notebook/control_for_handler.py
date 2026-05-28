@@ -286,7 +286,7 @@ class ForLoopHandler:
         context_hash = compute_context_hash(iteration_context)
         modified_code = f"# __iteration_context__: {context_hash}\n{code}"
 
-        result = self.statement_processor.process_statement(modified_code, ttl, silent, render_badge=False)
+        result = self.statement_processor.process_statement(modified_code, ttl, silent)
 
         # Attach human-readable loop variable values to the metrics
         loop_vars = {

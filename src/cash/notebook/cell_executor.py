@@ -589,7 +589,7 @@ class CellExecutor:
         """Process one non-control statement with caching; return updated buffer."""
         metrics = self._statement_processor.process_statement(
             stmt_code, self._magics._global_ttl, silent=True,
-            render_badge=False, annotation=annotation,
+            annotation=annotation,
             occurrence_index=occurrence_index,
         )
         if not metrics:

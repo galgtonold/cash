@@ -107,28 +107,20 @@ def read_module_source_hash(mod_file: str, dep_files: set[str] | None = None) ->
 class StatementFileDeps:
     """Stateful per-statement file-dependency tracker.
 
-    Holds aliased dict references to ``executed_file_deps`` (from
-    :class:`TrackingState`) and ``executed_file_mtimes`` (owned by
-    ``StatementProcessor``).  Mutations are visible to all sharers via
-    the aliased references.
+    Stateless apart from a ``debug`` flag.  All :class:`TrackingState`
+    access happens through the ``tracking_state`` method parameter, which
+    owns both ``executed_file_deps`` and ``executed_file_mtimes``.
     """
 
     def __init__(
         self,
-        tracking_state: 'TrackingState',
-        executed_file_mtimes: dict[str, dict[str, float]],
         debug: bool = False,
     ) -> None:
-        self.executed_file_mtimes = executed_file_mtimes
         self.debug = debug
-        self.set_tracking_state(tracking_state)
-
-    def set_tracking_state(self, state: 'TrackingState') -> None:
-        """Re-wire ``executed_file_deps`` from *state* (the TrackingState dict)."""
-        self.executed_file_deps = state.executed_file_deps
 
     def update_for_var(
         self,
+        tracking_state: 'TrackingState',
         var_name: str,
         accessed_files: set[str] | None,
         inputs: set[str],
@@ -148,39 +140,43 @@ class StatementFileDeps:
            derived from a DataFrame (``n_rows = len(df)``) should not be
            invalidated when the source CSV changes.
         """
+        executed_file_deps = tracking_state.executed_file_deps
+        executed_file_mtimes = tracking_state.executed_file_mtimes
         # 1. Direct file dependencies from this statement's execution.
         if accessed_files:
-            if var_name not in self.executed_file_deps:
-                self.executed_file_deps[var_name] = set()
-            self.executed_file_deps[var_name].update(accessed_files)
-            if var_name not in self.executed_file_mtimes:
-                self.executed_file_mtimes[var_name] = {}
+            if var_name not in executed_file_deps:
+                executed_file_deps[var_name] = set()
+            executed_file_deps[var_name].update(accessed_files)
+            if var_name not in executed_file_mtimes:
+                executed_file_mtimes[var_name] = {}
             for fpath in accessed_files:
                 with contextlib.suppress(OSError):  # File may have been deleted between execution and capture
-                    self.executed_file_mtimes[var_name][fpath] = os.path.getmtime(fpath)
+                    executed_file_mtimes[var_name][fpath] = os.path.getmtime(fpath)
         # 2. Propagate file dependencies from input variables (unless output is scalar).
-        self.inherit_from_inputs(var_name, inputs, value)
+        self.inherit_from_inputs(tracking_state, var_name, inputs, value)
 
-    def inherit_from_inputs(self, var_name: str, inputs: set[str], value: Any) -> None:
+    def inherit_from_inputs(self, tracking_state: 'TrackingState', var_name: str, inputs: set[str], value: Any) -> None:
         """Propagate file deps from *inputs* to *var_name*, skipping scalar outputs."""
+        executed_file_deps = tracking_state.executed_file_deps
+        executed_file_mtimes = tracking_state.executed_file_mtimes
         is_scalar = isinstance(value, _SCALAR_TYPES)
         if not is_scalar:
             for input_var in inputs:
-                if input_var not in self.executed_file_deps:
+                if input_var not in executed_file_deps:
                     continue
-                if var_name not in self.executed_file_deps:
-                    self.executed_file_deps[var_name] = set()
-                self.executed_file_deps[var_name].update(self.executed_file_deps[input_var])
-                if input_var in self.executed_file_mtimes:
-                    if var_name not in self.executed_file_mtimes:
-                        self.executed_file_mtimes[var_name] = {}
-                    self.executed_file_mtimes[var_name].update(self.executed_file_mtimes[input_var])
+                if var_name not in executed_file_deps:
+                    executed_file_deps[var_name] = set()
+                executed_file_deps[var_name].update(executed_file_deps[input_var])
+                if input_var in executed_file_mtimes:
+                    if var_name not in executed_file_mtimes:
+                        executed_file_mtimes[var_name] = {}
+                    executed_file_mtimes[var_name].update(executed_file_mtimes[input_var])
                 if self.debug:
                     logger.debug(
                         "[CACHE DEBUG] Propagated file deps from '%s' to '%s': %s",
-                        input_var, var_name, self.executed_file_deps[input_var],
+                        input_var, var_name, executed_file_deps[input_var],
                     )
-        elif self.debug and any(iv in self.executed_file_deps for iv in inputs):
+        elif self.debug and any(iv in executed_file_deps for iv in inputs):
             logger.debug(
                 "[FILE_DEPS] Skipping file dep propagation for scalar '%s' (type: %s)",
                 var_name, type(value).__name__,
@@ -188,6 +184,7 @@ class StatementFileDeps:
 
     def restore_from_metadata(
         self,
+        tracking_state: 'TrackingState',
         restored_vars: dict,
         metadata: 'StatementCacheMetadata | None',
     ) -> None:
@@ -208,6 +205,8 @@ class StatementFileDeps:
             path: split_file_dep_value(stored)[0]
             for path, stored in file_deps.items()
         }
+        executed_file_deps = tracking_state.executed_file_deps
+        executed_file_mtimes = tracking_state.executed_file_mtimes
         for var_name in restored_vars:
-            self.executed_file_deps.setdefault(var_name, set()).update(file_deps.keys())
-            self.executed_file_mtimes.setdefault(var_name, {}).update(mtime_map)
+            executed_file_deps.setdefault(var_name, set()).update(file_deps.keys())
+            executed_file_mtimes.setdefault(var_name, {}).update(mtime_map)
