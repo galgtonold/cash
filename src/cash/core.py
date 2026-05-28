@@ -42,6 +42,12 @@ from .purity_analyzer import PurityReport, get_analyzer
 # Configure Logging
 logger = logging.getLogger(__name__)
 
+try:
+    from IPython import get_ipython
+except ImportError:  # IPython not installed
+    def get_ipython():  # type: ignore[misc]
+        return None
+
 # Sentinel object used by wrapper helpers to signal a cache miss without
 # conflicting with any legitimate cached value (including None).
 _CACHE_MISS = object()
@@ -329,10 +335,11 @@ class Cash:
         cache_dir: str | None = None,
         backends: list[CacheBackend] | None = None,
         compress: bool | None = None,
-        register_magic: bool = True,
+        register_magic: bool | None = None,
         debug: bool | None = None,
         use_locking: bool = False,
         config_path: str | None = None,
+        verbose: bool = False,
         **config_overrides: Any,
     ) -> None:
         # Map the explicit convenience kwargs (cache_dir, compress, debug)
@@ -368,6 +375,7 @@ class Cash:
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
+        self.verbose = verbose
 
         # Decorator call log for notebook integration.
         # Each entry is a dict with: func_name, cache_hit (bool), execution_time,
@@ -394,6 +402,10 @@ class Cash:
         self._func_warnings: dict[str, list[dict[str, Any]]] = {}
         self._func_warnings_max = 20
 
+        # Registry of wrapped (stats) functions for clear_all() support.
+        # Maps func_name -> stats_wrapper (the object returned to the user).
+        self._wrapped_funcs: dict[str, Any] = {}
+
         # Per-function purity mode set at decoration time:
         # ``"warn"`` (default) | ``"silent"`` (assume_safe=True) |
         # ``"strict"`` (raises). Read on first call.
@@ -405,7 +417,9 @@ class Cash:
 
         atexit.register(self.shutdown)
 
-        if register_magic:
+        # register_magic=None (default) auto-detects: only register when an
+        # active IPython session exists.  True forces registration; False skips.
+        if register_magic is True or (register_magic is None and get_ipython() is not None):
             self.register_magic()
 
     @property
@@ -1345,10 +1359,11 @@ class Cash:
     def _delete_backend_entries(self, func_name: str) -> None:
         """Delete all backend cache entries whose key starts with *func_name*."""
         try:
-            if hasattr(self.backend, 'keys'):
-                for key in list(self.backend.keys()):
-                    if key.startswith(f"{func_name}:"):
-                        self.backend.delete(key)
+            prefix = f"{func_name}:"
+            for entry in self.backend.list_entries():
+                key = entry.get('key', '')
+                if key.startswith(prefix):
+                    self.backend.delete(key)
         except (OSError, RuntimeError, KeyError):
             logger.debug("Failed to clear cache entries for %s", func_name)
 
@@ -1470,6 +1485,7 @@ class Cash:
         stats_wrapper.cache_clear = cache_clear
         stats_wrapper.explain = explain
         stats_wrapper.__wrapped__ = func
+        self._wrapped_funcs[func_name] = stats_wrapper
         return stats_wrapper
 
     def _register_static_dependencies(
@@ -1792,6 +1808,9 @@ class Cash:
         }
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
+        if self.verbose:
+            status = 'hit' if cache_hit else 'miss'
+            logger.info('cash %s: %s (%.3fs)', status, func_name, execution_time)
 
     def _warn_cache_if_raised(
         self, func_name: str, error: BaseException, *, stacklevel: int = 7,
@@ -2274,6 +2293,15 @@ class Cash:
                 logger.debug("No active IPython session found. Magic commands not registered.")
         except ImportError:
             logger.debug("IPython not available. Magic commands not registered.")
+
+    def clear_all(self) -> None:
+        """Clear cached results for every function registered with this instance.
+
+        Equivalent to calling ``f.cache_clear()`` on every ``@cash.cache``-decorated
+        function. Resets hit/miss statistics and removes all backend entries.
+        """
+        for wrapped in self._wrapped_funcs.values():
+            wrapped.cache_clear()
 
     def _analyze_dependencies(self, func: Callable[..., Any]) -> None:
         """Static analysis: find calls to other cached functions AND
