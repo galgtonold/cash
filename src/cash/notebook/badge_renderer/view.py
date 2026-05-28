@@ -160,9 +160,10 @@ class ForLoopGroup:
     suppress_head: bool = False
     # Body of the for-loop in source order: a mixed tuple of
     # ``LoopStatement`` (direct body stmts) and ``SectionItem`` (nested
-    # for-loops, control-groups). Renderer iterates this and dispatches
-    # by type. ``stmts`` and ``nested`` above remain populated for
-    # back-compat with callers that don't yet read ``body``.
+    # for-loops, control-groups). Renderers iterate this when they need
+    # source order; the type-segregated ``stmts`` / ``nested`` views
+    # above stay because aggregation passes (timing sums, status roll-up)
+    # walk only one type at a time.
     body: tuple[Any, ...] = ()
 
 

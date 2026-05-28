@@ -1,8 +1,7 @@
 """Text-mode badge entry point.
 
-Thin shim over the BadgeView pipeline. Kept as a separate module so the
-existing import (``from cash.notebook.badge_renderer import print_text_badge``)
-stays valid; the actual rendering work lives in :mod:`.renderers.text`.
+Counterpart of :mod:`._badge` for plain-text output. Builds the
+:class:`BadgeView` and prints it via :mod:`.renderers.text`.
 """
 
 from __future__ import annotations

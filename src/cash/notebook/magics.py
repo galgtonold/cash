@@ -864,7 +864,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             duration_ms = m.get('execution_time', 0.0) * 1000
             # ``rich_outputs`` holds IPython rich-display objects, NOT variable
             # names — never source variable names from it.
-            outputs = m.get('restored_vars', []) or m.get('output_vars', []) or m.get('evaluated_vars', [])
+            outputs = m.get('restored_vars', []) or m.get('evaluated_vars', [])
             inputs_list = list(m.get('inputs', []))
             # Outputs may contain rich-display dicts; provenance/audit only
             # care about string variable names.
