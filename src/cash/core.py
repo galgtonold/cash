@@ -92,9 +92,7 @@ class CacheExplanation:
               ``cache_age_seconds``.
             * ``key_uncomputable``: ``arg_type`` (qualname or ``"<unknown>"``),
               ``error`` (exception type+message), ``hint``.
-            * ``no_entry``: ``hint``. If a sibling entry with the same
-              args_hash but a different state_hash exists, also includes
-              ``source_changed=True`` and ``previous_cache_key``.
+            * ``no_entry``: ``hint``.
             * ``ttl_expired``: ``ttl_seconds``, ``age_seconds``, ``cached_at``.
             * ``file_changed``: ``changed_files`` (dict of path → reason).
     """
@@ -839,27 +837,17 @@ class Cash:
 
         metadata, _data = self.backend.get(cache_key)
         if metadata is None:
-            details: dict[str, Any] = {}
-            sibling = self._find_sibling_key(func_name, args_hash, cache_key)
-            if sibling is not None:
-                details['source_changed'] = True
-                details['previous_cache_key'] = sibling
-                details['hint'] = (
-                    'A cache entry exists for these arguments but a different '
-                    'code/dependency state. Likely the function source or a '
-                    'tracked dependency changed since the last write.'
-                )
-            else:
-                details['hint'] = (
-                    'No matching cache entry. First call with these arguments, '
-                    'or the cache was cleared.'
-                )
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_NO_ENTRY,
                 func_name=func_name,
                 cache_key=cache_key,
-                details=details,
+                details={
+                    'hint': (
+                        'No matching cache entry. First call with these arguments, '
+                        'or the cache was cleared.'
+                    ),
+                },
             )
 
         # TTL check — match _validate_ttl semantics: only if ttl was set
@@ -942,36 +930,6 @@ class Cash:
         if dynamic_state_parts:
             return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode('utf-8')).hexdigest()
         return ""
-
-    def _find_sibling_key(
-        self, func_name: str, args_hash: str, current_key: str,
-    ) -> str | None:
-        """Return a stored cache key with the same args_hash but a different
-        state_hash, or ``None`` if no such entry exists or the backend
-        does not expose ``keys()``.
-
-        Used by `_explain_call` to detect source-changed misses:
-        if the args part of the key matches an older entry but the
-        state hash differs, the user's function (or a tracked
-        dependency) changed since the last write.
-        """
-        try:
-            if not hasattr(self.backend, 'keys'):
-                return None
-            prefix = f"{func_name}:"
-            suffix = f":{args_hash}"
-            for key in self.backend.keys():
-                if (
-                    isinstance(key, str)
-                    and key.startswith(prefix)
-                    and key.endswith(suffix)
-                    and key != current_key
-                    and ":chunk_" not in key
-                ):
-                    return key
-        except (OSError, RuntimeError, AttributeError):
-            return None
-        return None
 
     @staticmethod
     def _first_unhashable_arg_type(args: tuple, kwargs: dict) -> str:

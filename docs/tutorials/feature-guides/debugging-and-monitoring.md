@@ -52,33 +52,12 @@ The return value is a `CacheExplanation` dataclass (`src/cash/core.py:65-117`) w
 | `reason` | Meaning | Key `details` |
 |---|---|---|
 | `hit` | Next call returns cached value. | `cached_at`, `cache_age_seconds`, `execution_time_saved` |
-| `no_entry` | First call with these args, or cache was cleared, or source changed. | `hint`; `source_changed=True` + `previous_cache_key` if a sibling exists |
+| `no_entry` | No matching cache entry — first call with these args, the cache was cleared, or the function source / a tracked dependency changed since the last write. | `hint` |
 | `ttl_expired` | Entry exists but the configured `ttl` has elapsed. | `ttl_seconds`, `age_seconds`, `cached_at` |
 | `file_changed` | An auto-tracked file dependency's mtime or size moved. | `changed_files: {path: reason}` |
 | `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
 
-The full logic lives in `_explain_call` at `src/cash/core.py:748-913` — it walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing.
-
-### Sibling-key detection — "why didn't this hit?"
-
-The most useful detail `explain()` adds is **sibling-key detection** for `no_entry` outcomes (`src/cash/core.py:838-851`). When a miss is for "same arguments, different state hash", it means an entry *exists* for these args but Cash is keyed off a different source/dependency snapshot. That's the classic "I edited a helper and now my cell re-runs" symptom:
-
-```python
-@cash.cache
-def featurize(df):
-    return _normalize(df)  # imagine you edited _normalize since the last run
-
-featurize.explain(my_df)
-# [MISS] __main__.featurize — no_entry
-#   cache_key: __main__.featurize:b7e2...:...
-#   source_changed: True
-#   previous_cache_key: __main__.featurize:9a3c...:...
-#   hint: A cache entry exists for these arguments but a different
-#         code/dependency state. Likely the function source or a
-#         tracked dependency changed since the last write.
-```
-
-When `source_changed` is `True`, look at what you edited — function body, a tracked `depends_on` callable, or a transitive helper module. When it's `False`, the args are genuinely new (or the cache was cleared).
+`_explain_call` in `src/cash/core.py` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing.
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 
@@ -178,7 +157,7 @@ Start with `cache_info().warnings` (decorator) or `%cash_stats` (notebook). Look
 - `CashImpurityWarning` — analyzer found `requests.get` / `datetime.now()` / similar in the function body. See [Purity Decorators](purity-decorators.md).
 - `CashCacheIneffectiveWarning` — args weren't hashable, or the value was too big to promote past RAM, or a `cache_if` predicate excluded the call.
 
-Once the obvious culprits are gone and the rate is still low, run `f.explain(...)` for a sample call and check whether the `reason` is mostly `no_entry` with `source_changed=True` (you're editing helpers between runs) or `key_uncomputable` (need a custom hasher).
+Once the obvious culprits are gone and the rate is still low, run `f.explain(...)` for a sample call and check whether the `reason` is mostly `no_entry` (you're editing helpers between runs, args genuinely vary, or the cache was cleared) or `key_uncomputable` (need a custom hasher).
 
 ### "Cell I didn't change is recomputing"
 

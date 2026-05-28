@@ -180,9 +180,9 @@ def test_explain_str_format_for_miss(tmp_path):
     assert "no_entry" in text
 
 
-def test_explain_source_changed_detected(tmp_path):
+def test_explain_after_source_edit_returns_no_entry(tmp_path):
     """When the user redefines the function (different body, same name+args),
-    explain() should detect the sibling key and flag source_changed."""
+    explain() should report no_entry under the new source hash."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
@@ -199,11 +199,6 @@ def test_explain_source_changed_detected(tmp_path):
     e = f.explain(5)
     assert e.would_hit is False
     assert e.reason == "no_entry"
-    # The sibling-detection is best-effort: it requires backend.keys().
-    # If the test backend supports it, source_changed should be set.
-    if "source_changed" in e.details:
-        assert e.details["source_changed"] is True
-        assert "previous_cache_key" in e.details
 
 
 async def test_explain_on_async_wrapper(tmp_path):
