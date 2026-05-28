@@ -80,9 +80,8 @@ because not every backend populates every field — always use
 
 Cash itself adds a few decorator-specific fields too — `serializer_cls`,
 `args_hash`, `state_hash`, `func_name`, `auto_file_deps`,
-`iterator_storage`, `n_chunks`, `materialized_iterator`. These are
-internal: a custom backend should round-trip whatever metadata it's
-given without inspecting it.
+`iterator_storage`, `n_chunks`. These are internal: a custom backend
+should round-trip whatever metadata it's given without inspecting it.
 
 ---
 

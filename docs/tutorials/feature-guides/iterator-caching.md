@@ -13,8 +13,9 @@ Detection happens at `src/cash/core.py:283-295` — `_is_one_shot_iterator` retu
 
 ## Quick start
 
-<!-- test:skip reason="references undefined parse() function and missing data.txt file" -->
 ```python
+# test:inject: def parse(line): return line.strip()
+# test:inject: open("data.txt", "w").write("foo\nbar\nbaz\n")
 import cash
 
 @cash.cache
@@ -144,17 +145,19 @@ Two practical implications:
 - **Across-process replay works out of the box.** Pointing a fresh `Cash` instance at the same `cache_dir` recovers iterators just like scalar returns. Test reference: `test_chunked_persists_across_instances` at `tests/test_core/test_iterator_caching.py:835`.
 - **L1-only entries can be partial after eviction.** A `TieredBackend` with a small RAM ceiling may evict chunk_5 of a 20-chunk result while keeping chunks 0–4 and 6–19 plus the manifest. The next iteration terminates at chunk_4 (the missing-chunk path described above), and the next call recomputes from scratch. If you want stable cross-process iterators, configure a file-tier backend so the chunks land on disk.
 
-The hit path's metadata flag `iterator_storage='chunked'` is what distinguishes a chunked manifest from a scalar list return that happens to live under a similar key (`src/cash/core.py:1070-1077`). A pre-0.5 entry without that flag is read through the legacy `materialized_iterator=True` path, which loads the full list and wraps it in `_ListCachedIterator` — same external behavior, different on-disk shape.
+The hit path's metadata flag `iterator_storage='chunked'` is what distinguishes a chunked manifest from a scalar list return that happens to live under a similar key (`src/cash/core.py:1070-1077`). Anything without that flag is returned as-is, which is the right thing for non-iterator return types.
 
 ## Configuration
 
 Two keyword-only decorator parameters control chunk boundaries:
 
-<!-- test:skip reason="illustrative skeleton with ellipsis body and no import cash" -->
 ```python
+import cash
+
 @cash.cache(chunk_max_items=10_000, chunk_max_bytes=100_000_000)
 def stream_records(path):
-    ...
+    # Yield records one-by-one; Cash chunks them automatically.
+    return iter(range(100))
 ```
 
 | Knob | Default | Effect |
