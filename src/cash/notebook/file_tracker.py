@@ -74,7 +74,7 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
     """Install dispatcher patches on a module. Idempotent — skips any
     target whose current attribute is already a dispatcher wrapper.
 
-    Called from :meth:`FileAccessTracker._patch_module` and from
+    Called from :meth:`FileAccessTracker._apply_patches` and from
     :class:`_PatchingLoader.exec_module` (post-import). The dispatcher
     wrappers route via ``_active_tracker`` so they're tracker-agnostic
     — one install serves all trackers.
@@ -110,8 +110,9 @@ def _unwrap_to_real(func: Any) -> Any:
     """Walk a chain of FileAccessTracker wrappers down to the original
     callable. Returns ``func`` unchanged if it isn't a wrapper.
 
-    Used by :meth:`FileAccessTracker._patch_module` and ``_patch_user_ns``
-    so a fresh tracker can self-heal past wrappers left behind by a
+    Used by :func:`_install_module_patches` and
+    :meth:`FileAccessTracker._patch_user_ns` so a fresh tracker can
+    self-heal past wrappers left behind by a
     prior tracker that failed to unpatch (e.g. an exception during
     ``__exit__``, an orphaned tracker, etc.). Without this, the sentinel
     check ``_is_file_tracker_patch`` would cause the new tracker to skip
@@ -207,11 +208,11 @@ class FileDependencyRegistry:
     def _create_open_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Handler for open()-like functions.
 
-        ``track_callback`` is kept in the signature for backwards
-        compatibility with custom handlers registered via
-        :meth:`FileDependencyRegistry.register`. It is ignored — the
-        wrapper consults ``_active_tracker`` at call time so the
-        same patch can serve any number of concurrent trackers.
+        ``track_callback`` is part of the user-facing handler factory
+        signature (see :meth:`FileDependencyRegistry.register`) so
+        custom factories can record the access. The built-in handlers
+        ignore the argument and consult ``_active_tracker`` directly —
+        that way one patch serves any number of concurrent trackers.
         """
         def tracked_open(file, *args, **kwargs):
             mode = args[0] if args else kwargs.get('mode', 'r')
@@ -226,9 +227,9 @@ class FileDependencyRegistry:
     def _create_path_arg_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
         """Generic handler for functions where the first argument is a path.
 
-        ``track_callback`` kept for backwards compatibility — see
-        :meth:`_create_open_handler`. The wrapper consults
-        ``_active_tracker`` at call time.
+        ``track_callback`` is part of the user-facing factory signature
+        — see :meth:`_create_open_handler`. The built-in wrapper
+        consults ``_active_tracker`` directly.
         """
         def tracked_func(path_or_buf, *args, **kwargs):
             if isinstance(path_or_buf, (str, bytes, os.PathLike)):
@@ -241,15 +242,12 @@ class FileDependencyRegistry:
 class PostImportHook(importlib.abc.MetaPathFinder):
     """Intercepts imports of registered modules to patch them after loading.
 
-    Under the ContextVar refactor a single shared hook is installed
-    once on ``sys.meta_path`` (see ``_shared_import_hook`` below). The
-    ``tracker`` argument is accepted for backwards compatibility but is
-    not used — the hook drives module patching via
-    :func:`_install_module_patches`, which routes file reads via
-    ``_active_tracker`` rather than a captured tracker instance.
+    A single shared hook is installed once on ``sys.meta_path`` (see
+    ``_shared_import_hook`` below). Module patching is tracker-agnostic
+    — :func:`_install_module_patches` routes file reads via
+    ``_active_tracker`` so the same patches serve every tracker.
     """
-    def __init__(self, tracker: Optional["FileAccessTracker"] = None):
-        self.tracker = tracker  # legacy, unused
+    def __init__(self) -> None:
         self._skip: set[str] = set()  # Avoid recursion
 
     def find_spec(self, fullname, path, target=None):
@@ -340,14 +338,8 @@ class FileAccessTracker:
     """
     def __init__(self, user_ns=None):
         self.accessed_files = set()
-        self.patches = []
         self.user_ns = user_ns or {}
         self.registry = FileDependencyRegistry()
-        # Kept for backwards compatibility — third-party code may
-        # inspect or reference ``tracker.import_hook``. The actual
-        # hook installed on ``sys.meta_path`` is the shared one in
-        # ``_shared_import_hook``, lazily installed by ``__enter__``.
-        self.import_hook = PostImportHook(self)
         # Stack of ContextVar tokens, one per active __enter__. Supports
         # re-entry of the same instance (an async function that reuses
         # a tracker across awaits, or a sync caller using `with` twice).
@@ -387,7 +379,7 @@ class FileAccessTracker:
 
     def _apply_patches(self):
         # 1. Patch Builtins
-        self._patch_module('builtins', builtins)
+        _install_module_patches('builtins', builtins)
 
         # 2. Patch User Namespace (for interactive sessions showing 'open')
         self._patch_user_ns()
@@ -400,29 +392,11 @@ class FileAccessTracker:
 
             if mod_name in sys.modules:
                 module = sys.modules[mod_name]
-                self._patch_module(mod_name, module)
-
-    def _find_patch_targets(self, func_pattern: str, module_obj: Any) -> list:
-        """Return the list of attribute names to patch on *module_obj*.
-
-        Backwards-compatible shim — delegates to the module-level
-        :func:`_find_patch_targets`.
-        """
-        return _find_patch_targets(func_pattern, module_obj)
-
-    def _patch_module(self, module_name: str, module_obj: Any):
-        """Patch functions in a module based on registry.
-
-        Backwards-compatible shim — delegates to the module-level
-        :func:`_install_module_patches` which is tracker-agnostic
-        (uses ``_dispatch_track`` + ``_active_tracker``).
-        """
-        _install_module_patches(module_name, module_obj)
+                _install_module_patches(mod_name, module)
 
     def _patch_user_ns(self):
-        """Patch open in user namespace (IPython specific). Like
-        ``_patch_module``, this self-heals by walking past any leaked
-        wrappers to the real callable."""
+        """Patch open in user namespace (IPython specific). Self-heals
+        by walking past any leaked wrappers to the real callable."""
         # Handle user_ns['open'] — skip if dispatcher already installed.
         if 'open' in self.user_ns and not getattr(
             self.user_ns['open'], '_is_file_tracker_patch', False
@@ -434,7 +408,6 @@ class FileAccessTracker:
             wrapper._original_func = real_open
 
             self.user_ns['open'] = wrapper
-            self.patches.append((self.user_ns, 'open', real_open))
 
         # Handle user_ns['__builtins__']['open'] (if dict)
         if '__builtins__' in self.user_ns:
@@ -449,19 +422,4 @@ class FileAccessTracker:
                 wrapper._original_func = real_open
 
                 bs['open'] = wrapper
-                self.patches.append((bs, 'open', real_open))
-
-    def _unpatch(self):
-        """DEPRECATED: with the ContextVar refactor patches are permanent.
-        Kept here for backwards compatibility with any callers that may
-        have hard-coded references. Safe no-op when patches are not present."""
-        for obj, name, original in reversed(self.patches):
-            try:
-                if isinstance(obj, dict):
-                    obj[name] = original
-                else:
-                    setattr(obj, name, original)
-            except (AttributeError, TypeError, KeyError) as e:
-                logger.debug("[FILE_TRACKER] Failed to unpatch %s: %s", name, e)
-        self.patches.clear()
 
