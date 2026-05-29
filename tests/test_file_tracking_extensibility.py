@@ -66,12 +66,19 @@ class TestFileTrackingExtensibility(unittest.TestCase):
 
     def test_wildcard_registration(self):
         registry = FileDependencyRegistry()
-        
+
         mock_lib = MagicMock()
         sys.modules['wildlib'] = mock_lib
-        mock_lib.load_data = MagicMock(return_value="data")
-        mock_lib.load_config = MagicMock(return_value="config")
-        
+        # Real functions, not MagicMocks: the install-once skip checks
+        # getattr(fn, '_is_file_tracker_patch', False), and a MagicMock
+        # returns a truthy child for that, so the patcher would skip it.
+        def load_data(path):
+            return "data"
+        def load_config(path):
+            return "config"
+        mock_lib.load_data = load_data
+        mock_lib.load_config = load_config
+
         # Register wildcard
         def path_handler(original, tracker):
             def wrapper(path, *args, **kwargs):
