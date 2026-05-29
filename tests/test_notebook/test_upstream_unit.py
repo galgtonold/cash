@@ -7,9 +7,7 @@ and have the expected interface, improving test coverage visibility.
 import pytest
 from unittest.mock import MagicMock
 
-from cash.notebook.upstream import UpstreamChecker
-from cash.notebook.notebook_simulator import NotebookSimulator
-from cash.notebook.virtual_lineage import VirtualLineage
+from cash.notebook.upstream import NotebookSimulator, UpstreamChecker
 
 
 class TestUpstreamCheckerImport:
@@ -22,19 +20,20 @@ class TestUpstreamCheckerImport:
         assert hasattr(UpstreamChecker, "check_and_reexecute")
 
     def test_has_update_virtual_lineage(self):
-        # Lives on the extracted VirtualLineage phase now.
-        assert hasattr(VirtualLineage, "_update_virtual_lineage")
+        # Exposed via NotebookSimulator's class-level alias; the implementation
+        # lives on the internal VirtualLineage phase.
+        assert hasattr(NotebookSimulator, "_update_virtual_lineage")
 
     def test_has_extracted_helpers(self):
-        """Verify the extracted helper methods exist on VirtualLineage."""
+        """Verify the extracted helper methods are reachable via NotebookSimulator."""
         expected_helpers = [
             "_validate_file_freshness",
             "_resolve_input_lineage",
             "_compute_module_source_hash",
         ]
         for name in expected_helpers:
-            assert hasattr(VirtualLineage, name), (
-                f"VirtualLineage missing helper method {name}"
+            assert hasattr(NotebookSimulator, name), (
+                f"NotebookSimulator missing helper method {name}"
             )
 
 
@@ -121,7 +120,7 @@ class TestUpstreamCheckerSetTrackingState:
             "        x = i + j\n"
         )
         outer_for = tree.body[0]
-        nodes = list(VirtualLineage._iter_body_nodes(outer_for))
+        nodes = list(NotebookSimulator._iter_body_nodes(outer_for))
         # Inner ``for`` plus the ``x = i + j`` assignment inside it.
         assert any(isinstance(n, ast.Assign) for n in nodes)
 

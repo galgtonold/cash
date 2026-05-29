@@ -27,8 +27,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from cash.notebook._protocols import TrackingState
-from cash.notebook.notebook_simulator import NotebookSimulator
-from cash.notebook.upstream import UpstreamChecker
+from cash.notebook.upstream import NotebookSimulator, UpstreamChecker
 
 
 # ---------------------------------------------------------------------------

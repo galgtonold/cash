@@ -17,18 +17,18 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from .control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
+from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from ..control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
-from .server_discovery import get_notebook_cells  # noqa: F401  re-exported for test patching
-from .simulator_types import (  # noqa: F401  re-exported (private renames)
+from ..server_discovery import get_notebook_cells  # noqa: F401  re-exported for test patching
+from ._types import (  # noqa: F401  re-exported (private renames)
     IncrementalStartResult as _IncrementalStartResult,
     SimulationCacheEntry as _SimulationCacheEntry,
     TraceEntry as _TraceEntry,
     apply_collected_mutations,
 )
-from .virtual_lineage import (  # noqa: F401  re-exported (imported by upstream.py via .notebook_simulator)
+from .virtual_lineage import (  # noqa: F401  re-exported (imported by upstream/checker.py via .simulator)
     VirtualLineage,
     _BUILTIN_NAMES,
     _FORWARD_PROBE_PLACEHOLDER,
@@ -123,10 +123,19 @@ class NotebookSimulator:
         apply_collected_mutations(self._virtual_lineage._restores, self._tracking_state)
         apply_collected_mutations(self._classifier._restores, self._tracking_state)
 
-    # --- Class-level static-method aliases (tests access on the class) ---
+    # --- Class-level method aliases (tests access on the class) ---
+    # Static helpers usable directly; instance-method aliases are present so
+    # ``hasattr(NotebookSimulator, '...')`` checks succeed after the
+    # VirtualLineage extraction (ADR-009) and the package extraction
+    # (ADR-010). Instance-method aliases are unbound and not intended to be
+    # called through NotebookSimulator at runtime — call them via the
+    # underlying VirtualLineage instance (`self._virtual_lineage`).
     _validate_file_freshness = VirtualLineage._validate_file_freshness
     _stat_file_deps = VirtualLineage._stat_file_deps
     _iter_body_nodes = VirtualLineage._iter_body_nodes
+    _update_virtual_lineage = VirtualLineage._update_virtual_lineage
+    _resolve_input_lineage = VirtualLineage._resolve_input_lineage
+    _compute_module_source_hash = VirtualLineage._compute_module_source_hash
 
     # --- Narrow public API for UpstreamChecker (avoid private reach-ins) ---
 

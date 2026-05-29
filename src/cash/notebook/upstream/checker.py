@@ -7,11 +7,11 @@ import re
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ..exceptions import AmbiguousCellError, UpstreamStateError
-from .server_discovery import get_notebook_cells, get_notebook_cells_with_ids
-from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from .analysis import CodeAnalyzer
-from .notebook_simulator import (  # noqa: F401  re-exports for tests + downstream modules
+from ...exceptions import AmbiguousCellError, UpstreamStateError
+from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
+from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from ..analysis import CodeAnalyzer
+from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
     NotebookSimulator,
     _BUILTIN_NAMES,
     _FORWARD_PROBE_PLACEHOLDER,
@@ -20,10 +20,10 @@ from .notebook_simulator import (  # noqa: F401  re-exports for tests + downstre
     _TraceEntry,
     _normalize_stmt,
 )
-from .control_structures import is_control_structure
+from ..control_structures import is_control_structure
 
 if TYPE_CHECKING:
-    from .statement_processor import ProcessResult
+    from ..statement_processor import ProcessResult
 
 __all__ = ["UpstreamChecker", "UpstreamResult"]
 
@@ -446,7 +446,7 @@ class UpstreamChecker:
             cell_id, required_inputs, current_cell_outputs
         )
 
-        from .server_discovery import invalidate_notebook_path_cache
+        from ..server_discovery import invalidate_notebook_path_cache
         invalidate_notebook_path_cache()
         return None
 
@@ -463,7 +463,7 @@ class UpstreamChecker:
         be ``None``, which the caller should treat as "return early with empty".
         ``notebook_cells`` is ``None`` when no notebook file exists.
         """
-        from .server_discovery import get_notebook_path
+        from ..server_discovery import get_notebook_path
         notebook_path = get_notebook_path()
         notebook_cells = get_notebook_cells(notebook_path)
 

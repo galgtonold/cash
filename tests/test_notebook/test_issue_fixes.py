@@ -568,8 +568,8 @@ for item in data:
             data = json.loads(notebook_path.read_text(encoding='utf-8'))
             return [c['source'] for c in data['cells'] if c['cell_type'] == 'code']
 
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
                 mock_get_cells.side_effect = get_cells
                 mock_get_ids.return_value = []
 
@@ -622,8 +622,8 @@ for item in data:
             data = json.loads(notebook_path.read_text(encoding='utf-8'))
             return [c['source'] for c in data['cells'] if c['cell_type'] == 'code']
 
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
                 mock_get_cells.side_effect = get_cells
                 mock_get_ids.return_value = []
 
@@ -667,8 +667,8 @@ for k, v in pairs:
             data = json.loads(notebook_path.read_text(encoding='utf-8'))
             return [c['source'] for c in data['cells'] if c['cell_type'] == 'code']
 
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
                 mock_get_cells.side_effect = get_cells
                 mock_get_ids.return_value = []
 

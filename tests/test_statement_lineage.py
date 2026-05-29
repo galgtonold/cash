@@ -89,8 +89,8 @@ class TestStatementLineage(unittest.TestCase):
         
         self.create_notebook([cell1_v1, cell2])
         
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
             def get_cells(_path=None):
                 with open(self.notebook_path, 'r', encoding='utf-8') as f:
                     nb = json.load(f)
@@ -171,8 +171,8 @@ class TestStatementLineage(unittest.TestCase):
         
         self.create_notebook([cell1, cell2])
         
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
             def get_cells(_path=None):
                 with open(self.notebook_path, 'r', encoding='utf-8') as f:
                     nb = json.load(f)
@@ -233,8 +233,8 @@ class TestStatementLineage(unittest.TestCase):
 
         self.create_notebook([cell1, cell2])
 
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
             def get_cells(_path=None):
                 with open(self.notebook_path, 'r', encoding='utf-8') as f:
                     nb = json.load(f)

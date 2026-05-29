@@ -18,7 +18,7 @@ class TestUpstreamSafety(unittest.TestCase):
         self.hashes = state.executed_cell_hashes
         self.lineage = state.variable_lineage
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
     def test_lineage_projection_safety(self, mock_get_cells):
         print("\n=== TEST: Lineage Projection Safety ===")
         

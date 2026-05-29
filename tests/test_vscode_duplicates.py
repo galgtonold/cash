@@ -14,8 +14,8 @@ from cash.backends import InMemoryBackend
 
 # Patch locations where get_notebook_cells is used (upstream module only)
 PATCH_TARGETS = {
-    'upstream_cells': 'cash.notebook.upstream.get_notebook_cells',
-    'upstream_cells_ids': 'cash.notebook.upstream.get_notebook_cells_with_ids',
+    'upstream_cells': 'cash.notebook.upstream.checker.get_notebook_cells',
+    'upstream_cells_ids': 'cash.notebook.upstream.checker.get_notebook_cells_with_ids',
 }
 
 

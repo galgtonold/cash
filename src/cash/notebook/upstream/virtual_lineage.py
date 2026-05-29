@@ -19,14 +19,14 @@ import types
 from collections.abc import Callable
 from typing import Any
 
-from ..utils import resolve_file_dep_path
-from ._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from .analysis import CodeAnalyzer
-from .cache_freshness import split_file_dep_value
-from .cache_key import CacheKeyContext, compute_cache_key
-from .cache_status import CacheStatus
-from .control_structures import extract_target_names, get_control_structure_type, is_control_structure
-from .simulator_types import (
+from ...utils import resolve_file_dep_path
+from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from ..analysis import CodeAnalyzer
+from ..cache_freshness import split_file_dep_value
+from ..cache_key import CacheKeyContext, compute_cache_key
+from ..cache_status import CacheStatus
+from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from ._types import (
     IncrementalStartResult as _IncrementalStartResult,
     RestoreCollector,
     SimulationCacheEntry as _SimulationCacheEntry,
@@ -1989,7 +1989,7 @@ class VirtualLineage:
 
         Excludes loop target variables and built-ins.
         """
-        from .cacheability import analyze_statement
+        from ..cacheability import analyze_statement
 
         mutated_vars: set[str] = set()
 

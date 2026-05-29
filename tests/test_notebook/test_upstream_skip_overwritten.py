@@ -42,8 +42,8 @@ def upstream_checker():
 class TestSkipOverwrittenVarUnit:
     """Unit tests for the backwards scan optimization."""
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
-    @patch('cash.notebook.upstream.get_notebook_cells_with_ids')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids')
     def test_fully_redefined_var_stops_cascade(self, mock_cells_ids, mock_cells, upstream_checker):
         """
         If x is produced by stmt A then fully redefined by stmt B,
@@ -86,8 +86,8 @@ class TestSkipOverwrittenVarUnit:
             f"Earlier definition should NOT be scheduled: {result}"
         )
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
-    @patch('cash.notebook.upstream.get_notebook_cells_with_ids')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids')
     def test_mutation_still_needs_earlier_def(self, mock_cells_ids, mock_cells, upstream_checker):
         """
         If x is first defined, then mutated (x['a'] = ...), the mutation
@@ -122,8 +122,8 @@ class TestSkipOverwrittenVarUnit:
             f"Expected 2 statements (definition + mutation), got {len(result)}: {result}"
         )
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
-    @patch('cash.notebook.upstream.get_notebook_cells_with_ids')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids')
     def test_try_except_skipped_when_later_full_redef(self, mock_cells_ids, mock_cells, upstream_checker):
         """
         Reproduces the exact bug from the issue:

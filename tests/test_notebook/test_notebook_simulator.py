@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from cash.notebook._protocols import TrackingState
-from cash.notebook.notebook_simulator import NotebookSimulator
+from cash.notebook.upstream import NotebookSimulator
 
 
 def _make_simulator(*, debug: bool = False) -> NotebookSimulator:

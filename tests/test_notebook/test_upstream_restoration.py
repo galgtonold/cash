@@ -16,7 +16,7 @@ class TestUpstreamRestoration(unittest.TestCase):
         self.checker = UpstreamChecker(self.shell, debug=True)
         self.checker.set_tracking_state(TrackingState())
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
     def test_restore_unsaved_extension(self, mock_get_cells):
         print("\n=== TEST: Unsaved Extension Restoration ===")
         

@@ -4,11 +4,11 @@ import logging
 import re
 from typing import TYPE_CHECKING
 
-from .analysis import CodeAnalyzer
+from ..analysis import CodeAnalyzer
 
 if TYPE_CHECKING:
-    from cash.notebook.mismatch_classifier import MismatchClassifier
-    from cash.notebook.virtual_lineage import VirtualLineage
+    from .mismatch_classifier import MismatchClassifier
+    from .virtual_lineage import VirtualLineage
 
 logger = logging.getLogger(__name__)
 

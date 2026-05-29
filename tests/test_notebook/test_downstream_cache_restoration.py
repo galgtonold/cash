@@ -50,8 +50,8 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         lineage_str = f"{source_hash}:{':'.join(sorted_lineages)}"
         return hashlib.sha256(lineage_str.encode('utf-8')).hexdigest()
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
-    @patch('cash.notebook.upstream.get_notebook_cells_with_ids')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids')
     def test_downstream_cache_is_used_over_intermediate_reexecution(self, mock_get_cells_ids, mock_get_cells):
         """
         Scenario:
@@ -158,8 +158,8 @@ class TestDownstreamCacheRestoration(unittest.TestCase):
         
         print("✓ Test passed: Sort step correctly restored from cache")
 
-    @patch('cash.notebook.upstream.get_notebook_cells')
-    @patch('cash.notebook.upstream.get_notebook_cells_with_ids')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells')
+    @patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids')
     def test_simulation_detects_missing_vars_as_broken(self, mock_get_cells_ids, mock_get_cells):
         """
         When memory AND cache are empty (kernel restart with no prior cache),

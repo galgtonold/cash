@@ -12,10 +12,10 @@ import logging
 import re
 import types
 
-from ._protocols import TrackingState
-from .analysis import CodeAnalyzer
-from .cache_status import CacheStatus
-from .simulator_types import RestoreCollector, apply_collected_mutations
+from .._protocols import TrackingState
+from ..analysis import CodeAnalyzer
+from ..cache_status import CacheStatus
+from ._types import RestoreCollector, apply_collected_mutations
 from .virtual_lineage import VirtualLineage, _BUILTIN_NAMES, _normalize_stmt
 
 __all__ = ["MismatchClassifier"]

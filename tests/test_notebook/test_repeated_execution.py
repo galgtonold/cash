@@ -95,8 +95,8 @@ class TestRepeatedExecution:
             json.dump(notebook, f)
         
         try:
-            with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-                 patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+            with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+                 patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
                     def get_cells_1(_path=None):
                         with open(notebook_path, encoding='utf-8') as nf:
                             data = json.load(nf)
@@ -189,8 +189,8 @@ class TestRepeatedExecution:
             json.dump(notebook, f)
         
         try:
-            with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-                 patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+            with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+                 patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
                     def get_cells_2(_path=None):
                         with open(notebook_path, encoding='utf-8') as nf:
                             data = json.load(nf)

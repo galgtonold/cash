@@ -621,8 +621,8 @@ class TestAccumulatorInitSkip:
                 data = json.load(nf)
                 return [cell['source'] for cell in data['cells'] if cell['cell_type'] == 'code']
 
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
             mock_get_cells.side_effect = get_cells_v1
             mock_get_ids.return_value = []
 
@@ -651,8 +651,8 @@ class TestAccumulatorInitSkip:
                 data = json.load(nf)
                 return [cell['source'] for cell in data['cells'] if cell['cell_type'] == 'code']
 
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells, \
-             patch('cash.notebook.upstream.get_notebook_cells_with_ids') as mock_get_ids:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells, \
+             patch('cash.notebook.upstream.checker.get_notebook_cells_with_ids') as mock_get_ids:
             mock_get_cells.side_effect = get_cells_v2
             mock_get_ids.return_value = []
 

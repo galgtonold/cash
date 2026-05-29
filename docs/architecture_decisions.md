@@ -225,3 +225,39 @@ Extract the simulator's transitive method closure (76 methods reachable from `_s
 - The pre-existing duplicate `_handle_lineage_mismatch` definition (Phase 1's 7-param body was shadowed by Phase 2's 14-param body in the original class) is removed. Observable behavior preserved: the 7-arg call site in `_check_lineage_based` was always inside a `try/except (TypeError, ...)`, so it has been silently no-op'd for the entire history of the file. Filed as a latent bug for future work.
 - Test code that previously reached into `UpstreamChecker._method(...)` was migrated to `UpstreamChecker.simulator._method(...)`. A transitional `__getattr__` / `__setattr__` shim was used during the initial extraction and then removed (~92 mechanical edits across 9 test files). Class-level method-existence tests (`hasattr(UpstreamChecker, '_validate_file_freshness')`) now point at `NotebookSimulator` — the new home.
 - Tests that constructed an `UpstreamChecker` and then rebound shared-state fields (`checker.executed_file_deps = {}`, `checker.cash_instance = mock_cash`) were updated to pass a fresh `TrackingState()` or `cash_instance` through the constructor. Rebinding after construction would diverge the checker's view from the simulator's view, since both hold their own references.
+
+---
+
+## ADR-010: Co-locate the Upstream Subsystem as a Package
+
+**Status:** Accepted
+**Date:** 2026-05-29
+**Context:** ADR-009 extracted `NotebookSimulator` from `UpstreamChecker` but left the six resulting files (`upstream.py`, `notebook_simulator.py`, `virtual_lineage.py`, `reexecution_planner.py`, `mismatch_classifier.py`, `simulator_types.py`) as flat peers among ~39 other top-level modules in `src/cash/notebook/`. The orchestrator-owns-simulator relationship documented in ADR-009 is invisible in the filesystem, and three of the six files carry disambiguator prefixes (`notebook_`, `simulator_`) that only made sense at the flat top level.
+
+### Decision
+Collapse the six files into one `upstream/` package. The package re-exports exactly three symbols — `UpstreamChecker`, `UpstreamResult`, `NotebookSimulator` — and treats the rest (`VirtualLineage`, `MismatchClassifier`, `ReexecutionPlanner`, the value-type IR) as package-internal. Files are renamed to drop the prefixes that the package path now provides:
+
+```
+upstream/__init__.py             # re-exports public + private-to-tests symbols
+upstream/checker.py              # was upstream.py
+upstream/simulator.py            # was notebook_simulator.py
+upstream/virtual_lineage.py
+upstream/reexecution_planner.py
+upstream/mismatch_classifier.py
+upstream/_types.py               # was simulator_types.py — leading _ marks IR as internal
+```
+
+### Rationale
+- **Locality.** The simulator's helpers live one folder deep next to the simulator and the orchestrator, not scattered alphabetically among 39 unrelated modules. A reader searching for "simulation" or "virtual lineage" lands inside one folder.
+- **Honest seam.** ADR-009 named `NotebookSimulator` as a deliberate test surface (constructible with just a `TrackingState` + `SimpleNamespace`); the package's `__init__.py` is the first place that statement is enforced in code. `VirtualLineage`, `ReexecutionPlanner`, and the IR types stop being importable from outside the package — they are implementation details, and now look like it.
+- **Filename context.** `notebook_simulator.py` only carried the `notebook_` prefix because it sat next to `notebook_caching`-shaped peers. Inside `upstream/`, `simulator.py` is unambiguous.
+- **Completes ADR-009.** The class extraction was Phase 1; the package extraction is Phase 2 of the same refactor.
+
+### Consequences
+- The public production import path (`from cash.notebook.upstream import UpstreamChecker`) is unchanged — `upstream` resolves to a package instead of a module.
+- Three test files migrate `from cash.notebook.notebook_simulator import NotebookSimulator` → `from cash.notebook.upstream import NotebookSimulator`.
+- One test (`tests/test_notebook/test_upstream_unit.py`) that imported `VirtualLineage` directly is rewritten to drive it through `NotebookSimulator`, the documented test seam.
+- Three test files importing the private `_SimulationCacheEntry` / `_FORWARD_PROBE_PLACEHOLDER` symbols from `cash.notebook.upstream` continue to work — those symbols are re-exported (with their leading underscores intact) from `upstream/__init__.py`.
+- Internal imports between the six files become relative (`from .virtual_lineage import VirtualLineage`).
+- No backward-compatibility shims at the old paths. The subsystem has no external (non-test) callers beyond `UpstreamChecker`, so shims would be pure cost.
+- Future architecture reviews that re-suggest flattening this back out should consult this ADR.

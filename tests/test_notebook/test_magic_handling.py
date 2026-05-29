@@ -122,7 +122,7 @@ class TestMagicHandling(unittest.TestCase):
         
         self.create_notebook([cell1, cell2])
         
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells:
             def get_cells(_path=None):
                 with open(self.notebook_path, 'r', encoding='utf-8') as f:
                     nb = json.load(f)

@@ -26,8 +26,8 @@ class TestIssueReproduction(unittest.TestCase):
         self.checker = UpstreamChecker(self.shell, debug=True)
         self.checker.set_tracking_state(TrackingState())
 
-    @patch('cash.notebook.reexecution_planner.CodeAnalyzer', MockCodeAnalyzer)
-    @patch('cash.notebook.notebook_simulator.get_notebook_cells')
+    @patch('cash.notebook.upstream.reexecution_planner.CodeAnalyzer', MockCodeAnalyzer)
+    @patch('cash.notebook.upstream.simulator.get_notebook_cells')
     def test_unused_broken_var_triggers_restore(self, mock_get_cells):
         print("\n=== TEST: Unused Broken Variable Triggering Restore ===")
         
@@ -94,7 +94,7 @@ class TestIssueReproduction(unittest.TestCase):
                     
                     # When unparsing stmt from cell1, return cell1_code
                     with patch('ast.unparse', return_value=cell1_code), \
-                         patch('cash.notebook.notebook_simulator.is_control_structure', return_value=False):
+                         patch('cash.notebook.upstream.simulator.is_control_structure', return_value=False):
                         # Execute Check for cell2
                         # Note: cell_code=cell2_code. REQUIRED INPUTS match what we setup.
                         all_metrics, _, _ = self.checker._check_notebook_based(

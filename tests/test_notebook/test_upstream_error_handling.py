@@ -141,7 +141,7 @@ class TestUpstreamErrorHandling(unittest.TestCase):
         cell2 = "result = x * 2"
         self.create_notebook([cell1_v1, cell2])
         
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells:
             def get_cells():
                 with open(self.notebook_path, 'r', encoding='utf-8') as f:
                     nb = json.load(f)
@@ -199,7 +199,7 @@ class TestUpstreamErrorHandling(unittest.TestCase):
         cell2 = "result = x * 2"
         self.create_notebook([cell1_v1, cell2])
         
-        with patch('cash.notebook.upstream.get_notebook_cells') as mock_get_cells:
+        with patch('cash.notebook.upstream.checker.get_notebook_cells') as mock_get_cells:
             def get_cells():
                 with open(self.notebook_path, 'r', encoding='utf-8') as f:
                     nb = json.load(f)
