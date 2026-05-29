@@ -14,7 +14,7 @@ from datetime import datetime
 # Any is used at IPython API boundaries where types come from the shell's dynamic
 # namespace (user_ns, execution info objects).  These cannot be typed more precisely
 # without declaring a hard IPython dependency in production code.
-from typing import Any, TypedDict
+from typing import Any
 
 from IPython.core.magic import Magics, cell_magic, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
@@ -41,41 +41,9 @@ from ..provenance import ProvenanceTracker
 from ..statement import ProcessResult, StatementProcessor
 from ..upstream import UpstreamChecker
 
+from ._types import CellMetrics, StatementSummary, TimingBreakdown
+
 __all__ = ["CashMagics"]
-
-# ---------------------------------------------------------------------------
-# TypedDicts for internal data structures
-# ---------------------------------------------------------------------------
-
-class TimingBreakdown(TypedDict, total=False):
-    """Phase-level timing accumulated during ``_execute_cell``."""
-
-    badge_init: float
-    total_restore_time: float
-    total_execution_time: float
-    upstream_check: float
-    upstream_check_raw: float
-    badge_progress: float
-
-class StatementSummary(TypedDict):
-    """Per-statement summary stored in ``CellMetrics.statements``."""
-
-    code: str
-    status: str | None
-    execution_time: float
-    saved_time: float
-    outputs: list[str]
-    is_upstream: bool
-
-class CellMetrics(TypedDict):
-    """Structure of ``_last_cell_metrics`` exposed by ``%cash_status``."""
-
-    statements: list[StatementSummary]
-    total_time: float
-    total_restored_time: float
-    total_computed_time: float
-    upstream_metrics: list[ProcessResult]
-    status: str | None
 
 logger = logging.getLogger(__name__)
 

@@ -61,7 +61,8 @@ from ..statement import ProcessResult
 
 if TYPE_CHECKING:
     from ..lineage_store import TrackingState
-    from .magics import CashMagics, TimingBreakdown
+    from ._types import TimingBreakdown
+    from .magics import CashMagics
     from ..module_invalidator import ModuleInvalidator
     from ..restore import Restorer
     from ..statement import StatementProcessor

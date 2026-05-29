@@ -376,3 +376,4 @@ Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `Cel
 - `src/cash/notebook/__init__.py`'s lazy `__getattr__` for `CashMagics` repoints at `from .ipython.magics import CashMagics`.
 - `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement_processor.py` → `statement/processor.py`).
 - No backward-compatibility shims at the old paths.
+- The three metrics TypedDicts (`TimingBreakdown`, `StatementSummary`, `CellMetrics`) are extracted to `ipython/_types.py` (mirroring `upstream/_types.py`) so `magics.py` is just the orchestrator file. `CashSession` stays in `magics.py` for now — it carries instance state (`provenance`, `audit`) rather than being pure data, so it doesn't belong in `_types.py`.
