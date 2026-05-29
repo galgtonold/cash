@@ -102,6 +102,29 @@ for i in range(10):
     assert 'i' in outputs
     assert 'range' in inputs
 
+def test_class_keyword_base_is_input():
+    """A metaclass/keyword base expression is visited as an input (analysis.py 141)."""
+    code = """
+class Widget(metaclass=RegistryMeta):
+    pass
+    """
+    inputs, outputs = CodeAnalyzer.analyze_code_block(code)
+    assert 'Widget' in outputs
+    assert 'RegistryMeta' in inputs, "metaclass keyword value should be detected as input"
+
+
+def test_attribute_store_on_call_result():
+    """Attribute store whose base is a call (no simple name) records no modified object.
+
+    Exercises the falsy `_extract_base_name` branch in visit_Attribute (arc 216->222).
+    """
+    code = "get_obj().attr = 5"
+    inputs, outputs = CodeAnalyzer.analyze_code_block(code)
+    # The base is a Call, so no module-level object name is captured as output.
+    assert 'attr' not in outputs
+    assert 'get_obj' in inputs
+
+
 def test_import_scope():
     """Test imports."""
     code = """

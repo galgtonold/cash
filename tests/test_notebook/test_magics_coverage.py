@@ -126,6 +126,13 @@ class TestCashStatus:
         result = magics.cash_status("dict")
         assert 'x' in result['executed_codes']
 
+    def test_last_cell_metrics_empty_status_is_none(self, magics_fixture):
+        """A cell that produced no statement metrics yields overall status None (magics.py 778)."""
+        magics, _, _ = magics_fixture
+        magics._update_last_cell_metrics([], 0.0)
+        assert magics._last_cell_metrics['status'] is None
+        assert magics._last_cell_metrics['statements'] == []
+
 
 # ============================================================================
 # _capture_cell_id

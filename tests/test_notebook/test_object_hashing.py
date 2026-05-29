@@ -73,6 +73,30 @@ class TestComputeHash:
         h = compute_hash(lock)
         assert isinstance(h, str)
 
+    def test_hash_large_list_samples(self):
+        """Lists with >200 items hash by length + head/tail sample, not full pickle."""
+        h = compute_hash(list(range(300)))
+        # Same length but different head/tail must differ.
+        assert h != compute_hash([-1] + list(range(1, 300)))
+        # Identical large lists must match.
+        assert h == compute_hash(list(range(300)))
+
+    def test_hash_large_dict_samples(self):
+        """Dicts with >200 keys hash by length + sorted-key sample (object_hashing 53-54)."""
+        big = {i: i for i in range(300)}
+        h = compute_hash(big)
+        assert isinstance(h, str) and len(h) == 64
+        assert h == compute_hash({i: i for i in range(300)})
+        # A different key in the sampled prefix changes the hash.
+        alt = {i: i for i in range(1, 301)}
+        assert h != compute_hash(alt)
+
+    def test_hash_large_set_samples(self):
+        """Sets with >200 items hash by length + sorted sample, not full pickle."""
+        h = compute_hash(set(range(300)))
+        assert isinstance(h, str) and len(h) == 64
+        assert h == compute_hash(set(range(300)))
+
 
 # ============================================================================
 # calculate_memory_size
