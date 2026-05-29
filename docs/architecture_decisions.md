@@ -342,3 +342,37 @@ Internal (not re-exported): the three handler classes, and everything in `helper
 - Three test files (`test_control_for_handler.py`, `test_control_if_handler.py`, `test_control_try_handler.py`) and one site in `test_notebook/test_control_structures.py` (importing `flush_metrics_output`) migrate to the full internal paths (`cash.notebook.control_structures.for_handler.ForLoopHandler`, etc.). The handler classes and `helpers.py` symbols are internal; this matches the precedent from ADR-011 for `StatementRestorer`.
 - Internal cluster imports become relative (`from .processor import is_control_structure`, `from .helpers import ...`).
 - No backward-compatibility shims at the old paths.
+
+---
+
+## ADR-013: Co-locate the IPython Adapter as a Package
+
+**Status:** Accepted
+**Date:** 2026-05-29
+**Context:** `CONTEXT.md` repeatedly refers to "the IPython adapter (`CashMagics`)" as if it were a distinct architectural concept, but the four files that make up the adapter (`magics.py`, `magic_admin.py`, `cell_executor.py`, `error_display.py`) lived as flat peers in `src/cash/notebook/`. The adapter concept was named in prose but not in the filesystem.
+
+### Decision
+Collapse the four files into one `ipython/` package. Files are mostly unchanged in name; `magic_admin.py` drops its `magic_` prefix since the parent path now provides context:
+
+```
+ipython/__init__.py            # re-exports CashMagics (the only public symbol)
+ipython/magics.py              # unchanged — CashMagics (the IPython Magics subclass)
+ipython/admin.py               # was magic_admin.py — CashAdminMagicsMixin
+ipython/cell_executor.py       # unchanged — CellExecutor, _PipelineCompleted, etc.
+ipython/error_display.py       # unchanged — show_clean_error
+```
+
+Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `CellExecutor`, the value types `TimingBreakdown` / `StatementSummary` / `CellMetrics` / `CashSession`, `show_clean_error`, the internal sentinels `_EarlyReturn` / `_PipelineSyntaxError` / `_PipelineCompleted`) is package-internal.
+
+### Rationale
+- **Names a documented concept.** `CONTEXT.md` already says "the IPython adapter"; the package makes that statement structural.
+- **Honest acknowledgement: one adapter, hypothetical seam.** By the *one adapter = hypothetical seam* rule, this is not yet a real seam — only `CashMagics` exists; no Marimo or headless adapter is in flight. Accepted because the **locality** win is real today (four files in one folder) and the **naming** win matches CONTEXT.md vocabulary.
+- **Consistency with ADRs 010-012.** Same pattern: collapse a documented unit into a package, expose a small public surface, drop the `magic_` prefix where the package path provides context.
+
+### Consequences
+- The biggest test migration of the four refactors: ~30 test files migrate `from cash.notebook.magics import CashMagics` → `from cash.notebook.ipython import CashMagics`.
+- Patch-target migrations: `@patch('cash.notebook.magics.display')`, `@patch('cash.notebook.magics.publish_display_data')`, `@patch('cash.notebook.magics.get_notebook_cells')` → repointed at `cash.notebook.ipython.magics.X`. `@patch('cash.notebook.cell_executor.CodeAnalyzer.analyze_code_block')` → `cash.notebook.ipython.cell_executor.CodeAnalyzer.analyze_code_block`.
+- One test (`test_vscode_cell_id_path.py`) that imports `CellExecutor` directly migrates to the full internal path `cash.notebook.ipython.cell_executor.CellExecutor`.
+- `src/cash/notebook/__init__.py`'s lazy `__getattr__` for `CashMagics` repoints at `from .ipython.magics import CashMagics`.
+- `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement_processor.py` → `statement/processor.py`).
+- No backward-compatibility shims at the old paths.

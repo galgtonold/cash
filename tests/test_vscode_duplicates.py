@@ -7,7 +7,7 @@ import os
 # Ensure src is in path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.core import Cash
 from cash.backends import InMemoryBackend
 
@@ -100,7 +100,7 @@ class TestVSCodeDuplicates(unittest.TestCase):
         # Should not crash - either runs normally or falls back
         self.magics._original_run_cell.assert_called()
 
-    @patch('cash.notebook.cell_executor.CodeAnalyzer.analyze_code_block')
+    @patch('cash.notebook.ipython.cell_executor.CodeAnalyzer.analyze_code_block')
     def test_syntax_error_handling(self, mock_analyze):
         """Test that SyntaxError in user code is delegated to original run_cell."""
         mock_analyze.side_effect = SyntaxError("invalid syntax")

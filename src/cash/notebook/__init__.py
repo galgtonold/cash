@@ -9,11 +9,11 @@ from .upstream import UpstreamChecker
 
 
 # Lazy imports to break circular dependency chain:
-#   magics → statement_processor → core → notebook/__init__ → magics
+#   ipython.magics → statement.processor → core → notebook/__init__ → ipython.magics
 # CashMagics and StatementProcessor are deferred to first access.
 def __getattr__(name):
     if name == 'CashMagics':
-        from .magics import CashMagics
+        from .ipython import CashMagics
         return CashMagics
     if name == 'StatementProcessor':
         from .statement import StatementProcessor

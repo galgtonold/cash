@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock
 from cash.core import Cash
 from cash.exceptions import CashError
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.ui.debugger import CacheDebugger
 from cash.backends import InMemoryBackend
 

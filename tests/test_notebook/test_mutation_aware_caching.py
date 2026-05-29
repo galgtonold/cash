@@ -10,7 +10,7 @@ by lineage alone.
 
 import pytest
 from unittest.mock import MagicMock
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.cacheability import analyze_statement
 from cash.core import Cash
 from cash.backends import InMemoryBackend

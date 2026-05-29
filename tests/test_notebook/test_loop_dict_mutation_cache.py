@@ -12,7 +12,7 @@ import tempfile
 import os
 from unittest.mock import MagicMock, patch
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.core import Cash
 from cash.backends import InMemoryBackend
 from traitlets.config.configurable import Configurable

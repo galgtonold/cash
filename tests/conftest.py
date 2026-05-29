@@ -14,7 +14,7 @@ import sys
 
 from cash import Cash
 from cash.backends import InMemoryBackend, FileBackend
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from traitlets.config import Configurable
 
 

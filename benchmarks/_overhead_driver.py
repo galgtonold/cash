@@ -87,7 +87,7 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric]) -> None:
     re-instantiations.
     """
     from cash.core import Cash
-    from cash.notebook.magics import CashMagics
+    from cash.notebook.ipython.magics import CashMagics
     from cash.notebook.statement import StatementProcessor
 
     # Patch process_statement() at class level so all instances (including those

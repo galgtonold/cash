@@ -6,7 +6,7 @@ import os
 # Add src to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.core import Cash
 
 class MockShell:

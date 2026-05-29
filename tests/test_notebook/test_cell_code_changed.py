@@ -11,7 +11,7 @@ cache lookup path: COMPUTED on first run, RESTORED on subsequent identical runs.
 import pytest
 from unittest.mock import MagicMock
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
 from cash.backends import InMemoryBackend

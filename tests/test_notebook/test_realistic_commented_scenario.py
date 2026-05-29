@@ -47,7 +47,7 @@ capture_output_mock.return_value.__enter__ = MagicMock(return_value=MockCaptured
 capture_output_mock.return_value.__exit__ = MagicMock(return_value=False)
 sys.modules['IPython.utils.io'].capture_output = capture_output_mock
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from traitlets.config.configurable import Configurable
@@ -97,7 +97,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
             self.shell.user_ns.clear()
 
     @pytest.mark.xfail(reason="Known failure: commented-out line cache invalidation")
-    @patch('cash.notebook.magics.get_notebook_cells')
+    @patch('cash.notebook.ipython.magics.get_notebook_cells')
     def test_exact_user_scenario(self, mock_get_cells):
         """
         Test the EXACT scenario:
@@ -156,7 +156,7 @@ class TestRealisticCommentedCodeScenario(unittest.TestCase):
         self.assertIn('month', self.shell.user_ns['df_clean'].columns)
     
     @pytest.mark.xfail(reason="Known failure: commented-out line cache invalidation")
-    @patch('cash.notebook.magics.get_notebook_cells')
+    @patch('cash.notebook.ipython.magics.get_notebook_cells')
     def test_saved_notebook_with_commented_line(self, mock_get_cells):
         """
         Test when user HAS saved the notebook with the commented line.

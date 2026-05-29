@@ -151,7 +151,7 @@ def _run_page_ipy(
     # The plain-exec conftest fixture patches Cash.register_magic to a no-op,
     # so we bypass that by importing and registering directly here.
     try:
-        from cash.notebook.magics import CashMagics
+        from cash.notebook.ipython.magics import CashMagics
         import cash as _cash_mod
 
         _cash_instance = _cash_mod.Cash()

@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 import time
 from cash.core import Cash
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 
 from traitlets.config import Configurable
@@ -245,7 +245,7 @@ final_value = result * multiplier
         # Also patch publish_display_data to avoid IPython initialization issues
         with patch('cash.notebook.statement.processor.capture_output') as mock_capture, \
              patch('cash.notebook.statement.processor.publish_display_data'), \
-             patch('cash.notebook.magics.publish_display_data'):
+             patch('cash.notebook.ipython.magics.publish_display_data'):
             # Configure mock context manager
             mock_captured = MagicMock()
             mock_captured.stdout = ""
@@ -267,7 +267,7 @@ final_value = result * multiplier
         # 2. Second run: Cache hit -> Replay
         # We need to patch publish_display_data in both modules where it can be called
         with patch('cash.notebook.statement.processor.publish_display_data') as mock_publish_sp, \
-             patch('cash.notebook.magics.publish_display_data') as mock_publish_magics:
+             patch('cash.notebook.ipython.magics.publish_display_data') as mock_publish_magics:
             self.magics.cash("", cell)
             
             # Verify publish_display_data was called in at least one location

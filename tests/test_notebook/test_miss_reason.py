@@ -21,7 +21,7 @@ from traitlets.config import Configurable
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 
 
 class _MockShell(Configurable):

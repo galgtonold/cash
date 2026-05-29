@@ -3,7 +3,7 @@ Test for dependency invalidation when upstream cells change.
 """
 import pytest
 from unittest.mock import MagicMock
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from traitlets.config.configurable import Configurable

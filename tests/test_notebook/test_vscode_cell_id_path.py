@@ -182,8 +182,8 @@ class TestEarlyCellIdCapture:
     @pytest.fixture
     def magics_fixture(self):
         """Minimal CashMagics fixture with a mock shell."""
-        from cash.notebook.cell_executor import CellExecutor
-        from cash.notebook.magics import CashMagics
+        from cash.notebook.ipython.cell_executor import CellExecutor
+        from cash.notebook.ipython.magics import CashMagics
 
         shell = MagicMock()
         shell.user_ns = {}

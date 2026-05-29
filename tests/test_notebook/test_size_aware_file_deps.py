@@ -208,7 +208,7 @@ class TestReadCsvCachingUnit:
     @pytest.fixture
     def magics_fixture(self):
         """Provide CashMagics + mock shell for testing."""
-        from cash.notebook.magics import CashMagics
+        from cash.notebook.ipython.magics import CashMagics
         from unittest.mock import MagicMock
 
         backend = InMemoryBackend()

@@ -19,27 +19,27 @@ from typing import Any, TypedDict
 from IPython.core.magic import Magics, cell_magic, line_magic, magics_class
 from IPython.display import HTML, display, publish_display_data
 
-from ..core import Cash
-from ..utils import safe_text
-from . import badge_renderer as _badge
-from ._protocols import ShellProtocol
-from .audit import AuditLogger
-from .cache_status import CacheStatus
+from ...core import Cash
+from ...utils import safe_text
+from .. import badge_renderer as _badge
+from .._protocols import ShellProtocol
+from ..audit import AuditLogger
+from ..cache_status import CacheStatus
 from .cell_executor import (
     CellExecutor,
     _EarlyReturn,
     _PipelineCompleted,
     _PipelineSyntaxError,
 )
-from .control_structures import ControlStructureProcessor
+from ..control_structures import ControlStructureProcessor
 from .error_display import show_clean_error as _show_clean_error_impl
-from .magic_admin import CashAdminMagicsMixin
-from .module_invalidator import ModuleInvalidator
-from .object_hashing import compute_hash
-from .restore import Restorer
-from .provenance import ProvenanceTracker
-from .statement import ProcessResult, StatementProcessor
-from .upstream import UpstreamChecker
+from .admin import CashAdminMagicsMixin
+from ..module_invalidator import ModuleInvalidator
+from ..object_hashing import compute_hash
+from ..restore import Restorer
+from ..provenance import ProvenanceTracker
+from ..statement import ProcessResult, StatementProcessor
+from ..upstream import UpstreamChecker
 
 __all__ = ["CashMagics"]
 
@@ -140,7 +140,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._executed_cell_raw_codes = set()  # Set of raw cell codes executed this session (used in repair/reset)
 
         # Shared tracking state — single owner of all lineage/dependency dicts
-        from ._protocols import TrackingState
+        from .._protocols import TrackingState
         self._tracking_state = TrackingState()
 
         self._init_processing_components(shell, cash_instance)
@@ -266,7 +266,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         # Invalidate notebook path cache so we re-discover the current notebook
         # (fixes Issue 23: switching notebooks within the same kernel session)
-        from .server_discovery import invalidate_notebook_path_cache
+        from ..server_discovery import invalidate_notebook_path_cache
         invalidate_notebook_path_cache()
 
         # Clear upstream checker's simulation and AST caches to prevent stale
@@ -329,14 +329,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             print("Cache debug output disabled.")
         elif mode == 'json':
             self._debug = True
-            from ..logging import setup_logging
+            from ...logging import setup_logging
             self._log_handler = setup_logging(
                 level=logging.DEBUG, json_output=True)
             print("Cache debug output enabled (JSON format).")
         elif mode == 'file' and len(parts) > 1:
             log_path = parts[1]
             self._debug = True
-            from ..logging import setup_logging
+            from ...logging import setup_logging
             self._log_handler = setup_logging(
                 level=logging.DEBUG, log_file=log_path)
             print(f"Cache debug output enabled (logging to {log_path}).")
@@ -554,7 +554,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """If cell_id is a VS Code URI, seed the notebook-path cache from it."""
         if not cell_id:
             return
-        from .server_discovery import extract_notebook_path_from_vscode_cell_id, set_notebook_path
+        from ..server_discovery import extract_notebook_path_from_vscode_cell_id, set_notebook_path
         nb_path = extract_notebook_path_from_vscode_cell_id(cell_id)
         if nb_path:
             set_notebook_path(nb_path)
@@ -927,7 +927,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # --- Notebook source (actual .ipynb cell contents on disk) ---
         notebook_cells: list[str] = []
         try:
-            from .server_discovery import get_notebook_cells
+            from ..server_discovery import get_notebook_cells
             notebook_cells = get_notebook_cells() or []
         except Exception:
             pass

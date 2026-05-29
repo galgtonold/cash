@@ -34,7 +34,7 @@ class Magics:
 
 sys.modules['IPython.core.magic'].Magics = Magics
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 from cash.core import Cash
 from traitlets.config.configurable import Configurable

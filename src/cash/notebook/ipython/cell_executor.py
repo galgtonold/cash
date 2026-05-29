@@ -51,22 +51,22 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
 
-from ..exceptions import AmbiguousCellError
-from ._protocols import ShellProtocol
-from .analysis import CodeAnalyzer
-from .annotations import get_statement_annotations
-from .cache_status import CacheStatus
-from .control_structures import is_control_structure
-from .statement import ProcessResult
+from ...exceptions import AmbiguousCellError
+from .._protocols import ShellProtocol
+from ..analysis import CodeAnalyzer
+from ..annotations import get_statement_annotations
+from ..cache_status import CacheStatus
+from ..control_structures import is_control_structure
+from ..statement import ProcessResult
 
 if TYPE_CHECKING:
-    from .lineage_store import TrackingState
+    from ..lineage_store import TrackingState
     from .magics import CashMagics, TimingBreakdown
-    from .module_invalidator import ModuleInvalidator
-    from .restore import Restorer
-    from .statement import StatementProcessor
-    from .upstream import UpstreamChecker
-    from .control_structures import ControlStructureProcessor
+    from ..module_invalidator import ModuleInvalidator
+    from ..restore import Restorer
+    from ..statement import StatementProcessor
+    from ..upstream import UpstreamChecker
+    from ..control_structures import ControlStructureProcessor
 
 import logging
 

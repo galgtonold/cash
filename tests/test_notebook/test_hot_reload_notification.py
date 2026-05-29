@@ -4,7 +4,7 @@ from unittest.mock import MagicMock, patch
 from traitlets.config import Configurable
 
 from cash.core import Cash
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 
 
@@ -95,7 +95,7 @@ class TestHotReloadNotification:
         # Test rendering via _render_interactive_badge with patched display
         with patch.object(magics, 'shell') as mock_shell:
             mock_shell.user_ns = shell.user_ns
-            with patch('cash.notebook.magics.display'):
+            with patch('cash.notebook.ipython.magics.display'):
                 magics._render_interactive_badge(
                     [notification],
                     display_id="test-id",

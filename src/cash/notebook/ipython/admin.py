@@ -1,7 +1,7 @@
 """Administrative magic commands extracted from CashMagics.
 
 This module provides a mixin class with utility / diagnostic / benchmark
-magic commands.  The mixin is inherited by :class:`~cash.notebook.magics.CashMagics`
+magic commands.  The mixin is inherited by :class:`~cash.notebook.ipython.magics.CashMagics`
 so that IPython recognises these commands automatically.
 """
 
@@ -78,7 +78,7 @@ class CashAdminMagicsMixin:
     """Mixin providing administrative / diagnostic / benchmark magic commands.
 
     All methods expect ``self`` to be a fully-initialised
-    :class:`~cash.notebook.magics.CashMagics` instance (i.e. attributes such
+    :class:`~cash.notebook.ipython.magics.CashMagics` instance (i.e. attributes such
     as ``self._cash_instance``, ``self._tracking_state.variable_lineage``, etc. are available).
     """
 
@@ -569,7 +569,7 @@ class CashAdminMagicsMixin:
         """Return the active CashLogHandler, or None if not found."""
         handler = getattr(self, '_log_handler', None)
         if handler is None:
-            from ..logging import CashLogHandler
+            from ...logging import CashLogHandler
             cash_logger = logging.getLogger("cash")
             for h in cash_logger.handlers:
                 if isinstance(h, CashLogHandler):

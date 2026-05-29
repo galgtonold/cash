@@ -5,7 +5,7 @@ import os
 import time
 import tempfile
 from unittest.mock import MagicMock, patch
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
 from cash.backends import InMemoryBackend

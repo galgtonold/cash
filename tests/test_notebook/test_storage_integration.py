@@ -7,7 +7,7 @@ import shutil
 import tempfile
 import time
 from unittest.mock import MagicMock
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.core import Cash
 from cash.backends import InMemoryBackend, FileBackend
 from traitlets.config.configurable import Configurable

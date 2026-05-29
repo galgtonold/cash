@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 from traitlets.config import Configurable
 
 from cash.core import Cash
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 
 

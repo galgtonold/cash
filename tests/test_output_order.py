@@ -3,7 +3,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 import pytest
 
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.cache_status import CacheStatus
 
 
@@ -54,7 +54,7 @@ class TestOutputOrdering(unittest.TestCase):
         from cash.notebook.audit import AuditLogger
         self.magics._session.audit = AuditLogger()
 
-    @patch('cash.notebook.magics.publish_display_data')
+    @patch('cash.notebook.ipython.magics.publish_display_data')
     @patch('builtins.print')
     @pytest.mark.skip(reason="Pre-existing failure: deeply mocked test needs updating for current _execute_cell flow")
     @patch('uuid.uuid4', return_value='TEST-UUID')

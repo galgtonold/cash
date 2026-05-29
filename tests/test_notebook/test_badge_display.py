@@ -14,7 +14,7 @@ from unittest.mock import MagicMock, patch
 from traitlets.config import Configurable
 
 from cash.core import Cash
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 from cash.notebook.cache_status import CacheStatus
 
@@ -69,7 +69,7 @@ class TestIterationContextStripping:
             'status': CacheStatus.COMPUTED, 'total_time': 0.5, 'outputs': ['result'],
         }]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_id')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -106,7 +106,7 @@ class TestExpandableSkippedSteps:
              'total_time': 0.5, 'outputs': ['result']},
         ]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_skip')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -125,7 +125,7 @@ class TestExpandableSkippedSteps:
         ] + [{'code': 'current()', 'status': CacheStatus.COMPUTED,
               'total_time': 0.1, 'outputs': ['r']}]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_count')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -140,7 +140,7 @@ class TestExpandableSkippedSteps:
              'total_time': 0.1, 'outputs': ['r']},
         ]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_singular')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -160,7 +160,7 @@ class TestExpandableSkippedSteps:
              'total_time': 0.1, 'outputs': ['r']},
         ]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_skip_loop')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -188,7 +188,7 @@ class TestUpstreamLoopGrouping:
              'total_time': 0.5, 'outputs': ['result']},
         ]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_upstream_loop')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -207,7 +207,7 @@ class TestUpstreamLoopGrouping:
              'total_time': 0.1, 'outputs': ['r']},
         ]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_upstream_only_skip')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -268,7 +268,7 @@ class TestRenderInteractiveBadge:
     def test_badge_mode_off(self, magics_fixture):
         magics, _shell, _backend = magics_fixture
         magics._badge_mode = 'off'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(
                 [{'code': 'x=1', 'status': CacheStatus.COMPUTED, 'total_time': 0.1, 'outputs': ['x']}],
                 display_id='test_off',
@@ -283,7 +283,7 @@ class TestRenderInteractiveBadge:
             {'code': 'compute()', 'status': CacheStatus.COMPUTED, 'total_time': 0.3, 'outputs': ['r']},
         ]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_sections')
             html_str = _extract_html(mock_display)
             assert html_str is not None
@@ -297,7 +297,7 @@ class TestRenderInteractiveBadge:
         metrics = [{'code': 'x = 1', 'status': CacheStatus.COMPUTED,
                     'total_time': 0.1, 'outputs': ['x']}]
         magics._badge_mode = 'html'
-        with patch('cash.notebook.magics.display') as mock_display:
+        with patch('cash.notebook.ipython.magics.display') as mock_display:
             magics._render_interactive_badge(metrics, display_id='test_no_upstream')
             html_str = _extract_html(mock_display)
             assert html_str is not None

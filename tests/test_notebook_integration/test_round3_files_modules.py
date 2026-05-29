@@ -173,7 +173,7 @@ class TestDiskPersistenceRestore:
             f"""import time
 from cash import Cash
 from cash.backends import FileBackend
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 
 backend = FileBackend(cache_dir='{cache_dir_str}')
 ip = get_ipython()

@@ -24,7 +24,7 @@ from unittest.mock import MagicMock, patch
 from traitlets.config import Configurable
 from cash import Cash
 from cash.backends import InMemoryBackend
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 import contextlib
 
 # Force caching regardless of the 10 ms min-execution-time floor.

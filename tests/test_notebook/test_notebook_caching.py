@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
-from cash.notebook.magics import CashMagics
+from cash.notebook.ipython.magics import CashMagics
 from cash.notebook.annotations import CacheAnnotation
 from cash.core import Cash
 from cash.backends import InMemoryBackend
