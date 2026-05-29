@@ -135,6 +135,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CashCacheIneffectiveWarning` fires at the chunk_0 → chunk_1
   transition. To keep gating active on large iterators, lower
   `chunk_max_items` / `chunk_max_bytes` or materialize manually.
+- **Decorator caches without an explicit `ttl` now honor the backend's
+  `default_ttl`.** Cache metadata moved to frozen dataclasses whose
+  `to_dict()` omits unset (`None`) fields, so an entry created without a
+  per-call `ttl` no longer writes `ttl=None` into its metadata. Backends
+  treat a *missing* `ttl` key as "apply my `default_ttl`", so e.g.
+  `FileBackend(default_ttl=3600)` now expires such entries after an hour
+  instead of keeping them forever. Previously the producer stamped
+  `ttl=None`, leaving the key *present* and suppressing the backend
+  default. To keep entries non-expiring on a backend with a
+  `default_ttl`, omit `default_ttl` or use a separate backend instance.
 
 ### Backward compatibility
 - v1 iterator cache entries (written by 0.5.0b2 prior to chunked

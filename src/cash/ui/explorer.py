@@ -94,21 +94,14 @@ class CacheExplorer:
         """
         Get a string preview of the cached value.
         """
-        metadata, value_bytes = self.app.backend.get(key)
+        _metadata, value_bytes = self.app.backend.get(key)
         if value_bytes is None:
             return "Value not found in cache."
 
         try:
-            # Deserialize
             from ..backends.serialization import PickleSerializer
-            # We need to import other serializers if used, but for now assume Pickle or try to load class
-            # The metadata has 'serializer_cls', but it's a string representation or class?
-            # In core.py: 'serializer_cls': type(serializer) -> <class '...'>
-            # We need to instantiate it.
-
-            # Simple fallback: use PickleSerializer if default
-            # Or try to find the class.
-            # For now, let's just use PickleSerializer as it's the default.
+            # Preview always assumes the default Pickle serializer; the stored
+            # serializer_cls is not yet honored here.
             serializer = PickleSerializer()
             value = serializer.deserialize(value_bytes)
 

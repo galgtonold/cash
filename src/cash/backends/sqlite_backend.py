@@ -14,7 +14,7 @@ from typing import Any
 
 from cash.exceptions import CacheSerializationError
 
-from ._base import CacheBackend, CacheMetadata, PendingWrites
+from ._base import CacheBackend, MetadataDict, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -88,7 +88,7 @@ class SQLiteBackend(CacheBackend):
         ''')
         self._conn.commit()
 
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key so we never miss it.
         self._writes.wait(key)
         with self._lock:
@@ -141,7 +141,7 @@ class SQLiteBackend(CacheBackend):
                     f"Failed to deserialize cache entry '{key}': {e}"
                 ) from e
 
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         """Serialize on the calling thread, INSERT in the background."""
         if metadata is None:
             metadata = {}

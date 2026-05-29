@@ -32,10 +32,10 @@ from typing import TYPE_CHECKING
 
 from ...utils import resolve_file_dep_path
 from ..file_dep_snapshot import split_file_dep_value
+from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
     from .._protocols import TrackingState
-    from .processor import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +76,12 @@ class CacheFreshnessChecker:
         self.last_miss_reason = None
 
         t3 = time.time()
-        metadata, cached_data = self._backend.get(cache_key)
+        raw_metadata, cached_data = self._backend.get(cache_key)
+        metadata = (
+            StatementCacheMetadata.from_dict(raw_metadata)
+            if raw_metadata is not None
+            else None
+        )
         cache_check_time = time.time() - t3
 
         if cached_data and metadata:
@@ -99,7 +104,7 @@ class CacheFreshnessChecker:
         self, metadata: 'StatementCacheMetadata', cached_data: Any, ttl: int,
     ) -> Any:
         """Return None if the cache entry has exceeded *ttl* seconds, else return *cached_data*."""
-        timestamp = metadata.get('timestamp', 0)
+        timestamp = metadata.timestamp or 0
         age = time.time() - timestamp
         if age > ttl:
             self.last_miss_reason = f"cache TTL expired ({age:.0f}s old, limit {ttl}s)"
@@ -112,7 +117,7 @@ class CacheFreshnessChecker:
         self, metadata: 'StatementCacheMetadata', cached_data: Any,
     ) -> Any:
         """Return None if any direct file dep in *metadata* is missing or modified."""
-        file_deps = metadata.get('file_dependencies', {})
+        file_deps = metadata.file_dependencies or {}
         for fpath, stored in file_deps.items():
             resolved = resolve_file_dep_path(fpath)
             if resolved is None:
@@ -157,10 +162,11 @@ class CacheFreshnessChecker:
         source_cache_key = tracking_state.variable_sources.get(input_var)
         if not source_cache_key:
             return False
-        source_meta, _ = self._backend.get(source_cache_key)
-        if not source_meta:
+        raw_source_meta, _ = self._backend.get(source_cache_key)
+        if not raw_source_meta:
             return False
-        source_file_deps = source_meta.get('file_dependencies', {})
+        source_meta = StatementCacheMetadata.from_dict(raw_source_meta)
+        source_file_deps = source_meta.file_dependencies or {}
         if fpath not in source_file_deps:
             return False
         stored_mtime, stored_size = split_file_dep_value(source_file_deps[fpath])

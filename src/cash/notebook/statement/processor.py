@@ -23,6 +23,7 @@ from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.server_discovery import get_notebook_path
+from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.lineage import StatementLineageBuilder
@@ -72,29 +73,6 @@ class DecoratorCallMetric(TypedDict, total=False):
     func_name: str
     cache_hit: bool
     execution_time: float
-
-class StatementCacheMetadata(TypedDict, total=False):
-    """Metadata stored alongside cached statement results."""
-
-    timestamp: float
-    inputs: list[str]
-    outputs: list[str]
-    execution_time: float
-    source_hash: str
-    code: str
-    key: str
-    # path -> {"mtime": float, "size": int}
-    file_dependencies: dict[str, dict[str, float]]
-    force_persist: bool
-    output_lineages: dict[str, str]
-    storage: list[str]
-    source: str
-    skipped_reason: str
-    metadata_only: bool
-    cost_model_size_bytes: int
-    cost_model_restore_seconds: float
-    cost_model_type_name: str
-    cost_model_family: str
 
 class ProcessResult(_ProcessResultRequired, total=False):
     """Typed dictionary for the return value of ``StatementProcessor.process_statement()``.
@@ -679,14 +657,15 @@ class StatementProcessor:
         elif self.debug:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
 
-        if saved_metadata and 'storage' in saved_metadata:
-            metrics['storage'] = saved_metadata['storage']
-        if saved_metadata and 'skipped_reason' in saved_metadata:
-            metrics['skipped_reason'] = saved_metadata['skipped_reason']
+        if saved_metadata and saved_metadata.storage is not None:
+            metrics['storage'] = saved_metadata.storage
+        if saved_metadata and saved_metadata.skipped_reason is not None:
+            metrics['skipped_reason'] = saved_metadata.skipped_reason
         if saved_metadata:
             for k in _COST_MODEL_KEYS:
-                if k in saved_metadata:
-                    metrics[k] = saved_metadata[k]
+                value = getattr(saved_metadata, k)
+                if value is not None:
+                    metrics[k] = value
 
         metrics['total_time'] = time.time() - process_start
         self.analytics_manager.record_event(
@@ -733,27 +712,28 @@ class StatementProcessor:
                 logger.debug("%s Cache hit for key: %s...", _LOG_CACHE_HIT, cache_key[:20])
                 logger.debug("%s Input lineages used: %s", _LOG_CACHE_HIT, [(v, self.variable_lineage.get(v, 'NONE')[:16] + '...') for v in inputs if v not in ['get_ipython', '__builtins__', 'print']])
                 if metadata:
-                    logger.debug("%s Stored lineages in cache: %s", _LOG_CACHE_HIT, [(k, v[:16]+'...') for k,v in metadata.get('output_lineages', {}).items()])
+                    logger.debug("%s Stored lineages in cache: %s", _LOG_CACHE_HIT, [(k, v[:16]+'...') for k,v in (metadata.output_lineages or {}).items()])
             self._stmt_restorer.restore_from_cache(self._tracking_state, cached_data, metadata, silent, process_start)
 
             metrics['status'] = CacheStatus.RESTORED
-            metrics['saved_time'] = metadata.get('execution_time', 0.0) if metadata else 0.0
-            metrics['restored_vars'] = metadata.get('outputs', []) if metadata else []
+            metrics['saved_time'] = (metadata.execution_time or 0.0) if metadata else 0.0
+            metrics['restored_vars'] = (metadata.outputs or []) if metadata else []
             # Carry the stored input list through so provenance/audit can
             # reconstruct the dependency graph on a cache hit, not just on
             # a fresh compute.
-            metrics['inputs'] = list(metadata.get('inputs', []) if metadata else [])
+            metrics['inputs'] = list((metadata.inputs or []) if metadata else [])
             metrics['total_time'] = time.time() - process_start
 
             if metadata:
-                if 'source' in metadata:
-                    metrics['source'] = metadata['source']
-                    metrics['storage'] = [metadata['source']]
-                elif 'storage' in metadata:
-                    metrics['storage'] = metadata['storage']
+                if metadata.source is not None:
+                    metrics['source'] = metadata.source
+                    metrics['storage'] = [metadata.source]
+                elif metadata.storage is not None:
+                    metrics['storage'] = metadata.storage
                 for k in _COST_MODEL_KEYS:
-                    if k in metadata:
-                        metrics[k] = metadata[k]
+                    value = getattr(metadata, k)
+                    if value is not None:
+                        metrics[k] = value
 
             self.analytics_manager.record_event(
                 status='HIT',
@@ -1230,49 +1210,53 @@ class StatementProcessor:
             captured_vars, execution_time, force_persist,
             has_file_dependencies=bool(file_dependencies),
         )
-        if should_skip:
-            skip_metadata: StatementCacheMetadata = {
-                'timestamp': time.time(),
-                'inputs': list(inputs),
-                'outputs': list(outputs),
-                'execution_time': execution_time,
-                'source_hash': source_hash,
-                'code': code,
-                'key': cache_key,
-                'skipped_reason': skip_reason,
-                'metadata_only': True,
-                'output_lineages': self._lineage.build_output_lineages(self._tracking_state, outputs),
+        # Cost-model prediction fields are shared by both the skip and the
+        # full-store branches; build them once.
+        cost_fields: dict[str, Any] = {}
+        if prediction is not None:
+            cost_fields = {
+                'cost_model_size_bytes': prediction['size_bytes'],
+                'cost_model_restore_seconds': prediction['restore_seconds'],
+                'cost_model_type_name': prediction['type_name'],
+                'cost_model_family': prediction['family'],
             }
-            if prediction is not None:
-                skip_metadata['cost_model_size_bytes'] = prediction['size_bytes']
-                skip_metadata['cost_model_restore_seconds'] = prediction['restore_seconds']
-                skip_metadata['cost_model_type_name'] = prediction['type_name']
-                skip_metadata['cost_model_family'] = prediction['family']
+
+        if should_skip:
+            skip_metadata = StatementCacheMetadata(
+                timestamp=time.time(),
+                inputs=list(inputs),
+                outputs=list(outputs),
+                execution_time=execution_time,
+                source_hash=source_hash,
+                code=code,
+                key=cache_key,
+                skipped_reason=skip_reason,
+                metadata_only=True,
+                output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
+                **cost_fields,
+            )
             try:
                 backend = self.cash_instance.backend if self.cash_instance else None
                 if backend is not None:
-                    self._stmt_restorer.persist_metadata_only(backend, cache_key, skip_metadata)
+                    self._stmt_restorer.persist_metadata_only(backend, cache_key, skip_metadata.to_dict())
             except (OSError, TypeError, ValueError, AttributeError):
                 logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
             return skip_metadata
 
-        metadata: StatementCacheMetadata = {
-            'timestamp': time.time(),
-            'inputs': list(inputs),
-            'outputs': list(outputs),
-            'execution_time': execution_time,
-            'source_hash': source_hash,
-            'code': code,
-            'key': cache_key,
-            'file_dependencies': snapshot_file_deps(file_dependencies),
-            'force_persist': force_persist,
-            'output_lineages': self._lineage.build_output_lineages(self._tracking_state, outputs),
-        }
-        if prediction is not None:
-            metadata['cost_model_size_bytes'] = prediction['size_bytes']
-            metadata['cost_model_restore_seconds'] = prediction['restore_seconds']
-            metadata['cost_model_type_name'] = prediction['type_name']
-            metadata['cost_model_family'] = prediction['family']
+        metadata = StatementCacheMetadata(
+            timestamp=time.time(),
+            inputs=list(inputs),
+            outputs=list(outputs),
+            execution_time=execution_time,
+            source_hash=source_hash,
+            code=code,
+            key=cache_key,
+            file_dependencies=snapshot_file_deps(file_dependencies),
+            force_persist=force_persist,
+            output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
+            ttl=ttl,
+            **cost_fields,
+        )
 
         payload = {
             'variables': self._filter_safe_vars(captured_vars),
@@ -1285,18 +1269,21 @@ class StatementProcessor:
             'rng_state': capture_rng_state(),
         }
 
-        if ttl is not None:
-            metadata['ttl'] = ttl
+        # Dict-on-the-wire: the backend round-trips a plain dict and may
+        # inject the resolved ``storage`` destinations back into it. We
+        # re-wrap that mutated dict at the end so the returned view carries
+        # the storage info on to the badge metrics.
+        wire = metadata.to_dict()
 
         try:
-            self.cash_instance.backend.set(cache_key, payload, metadata)
+            self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
             logger.warning("[CACHE] Failed to write to cache backend: %s", e)
 
         try:
             backend = self.cash_instance.backend
             if backend is not None:
-                self._stmt_restorer.persist_metadata_only(backend, cache_key, metadata)
+                self._stmt_restorer.persist_metadata_only(backend, cache_key, wire)
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("[PROCESSOR] Best-effort metadata persistence failed")
 
@@ -1307,7 +1294,7 @@ class StatementProcessor:
             logger.debug("[TIMING] Store: %.1fms | OVERALL: %.1fms", store_time*1000, total_time*1000)
             logger.debug("[CACHE DEBUG] Stored in cache: %s", cache_key)
 
-        return metadata
+        return StatementCacheMetadata.from_dict(wire)
 
     def _analyze_and_hash(self, code: str, occurrence_index: int = 0, tree: ast.Module | None = None) -> tuple[set[str], set[str], str, str, float, float]:
         """Analyze code and compute hashes.

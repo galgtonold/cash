@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, CacheMetadata, MetadataDict
 from .cascading_backend import CascadingBackend
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
@@ -22,6 +22,7 @@ except ImportError:
 __all__ = [
     'CacheBackend',
     'CacheMetadata',
+    'MetadataDict',
     'InMemoryBackend',
     'FileBackend',
     'CascadingBackend',

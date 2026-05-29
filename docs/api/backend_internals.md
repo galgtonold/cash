@@ -55,10 +55,33 @@ disk for DataFrames), see the `Serializer` hierarchy and the
 
 ---
 
-The typed-dict shape every backend's `metadata` parameter and
-`list_entries` row conforms to. All fields are optional (`total=False`)
-because not every backend populates every field — always use
-`metadata.get(key)`, not direct subscript.
+### The metadata channel is an opaque dict
+
+A backend's `metadata` parameter and each `list_entries` row are a plain
+`MetadataDict = dict[str, Any]`. **Inside a backend, treat it as opaque:**
+round-trip whatever you're given, use `metadata.get(key)` / presence
+checks (`'x' not in metadata`) rather than direct subscript, and never
+assume a field exists — not every producer populates every field.
+
+The typed `CacheMetadata` dataclass (and the notebook layer's
+`StatementCacheMetadata`) is the *cash-layer edge* view, **not** something
+backends ever receive. Producers build one and call `.to_dict()` just
+before `set()`; consumers call `from_dict()` on what `get()` returns. The
+channel is polymorphic — both dataclass shapes plus backend-private keys
+flow through the same dict. See [ADR-014](../architecture_decisions.md)
+for the full rationale.
+
+Two wire-contract rules follow from this and matter to backend authors:
+
+- **`to_dict()` omits `None` fields.** An *unset* field is *absent* from
+  the dict, not present-with-`None`. This is load-bearing for `default_ttl`
+  (below): read ttl as `metadata.get('ttl', self._default_ttl)` and treat a
+  **missing** `ttl` key as "apply my default." A decorator cache created
+  without an explicit `ttl` omits the key entirely, so your `default_ttl`
+  takes effect.
+- **`from_dict()` is lenient.** Backend-private keys you inject (e.g.
+  `FileBackend`'s `compressed`) and stale keys from older versions are
+  ignored at the cash edge, so you can stamp whatever bookkeeping you need.
 
 ::: cash.backends.CacheMetadata
 
@@ -72,7 +95,7 @@ because not every backend populates every field — always use
 | `access_count` | `int` | Updated by backends that track frequency |
 | `size` | `int` | Backends that track size (`FileBackend`, `SQLite`, RAM with `max_size_bytes`) |
 | `storage` | `list[str]` | Tier labels for the entry (e.g. `["RAM", "DISK"]`) |
-| `ttl` | `int` | Set by `Cash.cache(ttl=...)` |
+| `ttl` | `int` | Set by `Cash.cache(ttl=...)`; **absent** when unset, which is how backend `default_ttl` applies |
 | `execution_time` | `float` | Set by the decorator; used by `TieredBackend`'s smart-persistence policy |
 | `outputs` | `list[str]` | Set by the notebook statement processor |
 | `lineage_hash` | `str` | Set by the notebook statement processor |

@@ -9,11 +9,18 @@ import threading
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
-from typing import Any, TypedDict
+from dataclasses import dataclass, fields
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["CacheMetadata", "CacheBackend", "PendingWrites"]
+__all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "PendingWrites"]
+
+# The metadata channel backends actually see: an opaque dict they round-trip
+# without inspecting (the channel is polymorphic — both CacheMetadata and the
+# notebook layer's StatementCacheMetadata flow through it as plain dicts). The
+# typed CacheMetadata view lives only at the cash-layer edges.
+MetadataDict = dict[str, Any]
 
 
 class PendingWrites:
@@ -167,26 +174,64 @@ class PendingWrites:
         self._executor.shutdown(wait=wait)
 
 
-class CacheMetadata(TypedDict, total=False):
-    """Typed dictionary describing cache entry metadata.
+@dataclass(frozen=True)
+class CacheMetadata:
+    """Typed, in-memory view of a decorator cache entry's metadata.
 
-    Fields are populated by backends during ``set()`` and returned by
-    ``get()``.  Not all fields are present on every entry — ``total=False``
-    marks all keys as optional so callers must use ``.get()`` for
-    non-guaranteed fields.
+    This is the *edge* representation: producers (the ``@cash.cache``
+    decorator) build one and call :meth:`to_dict` before handing it to a
+    backend; consumers call :meth:`from_dict` on what a backend returns.
+    Backends themselves never see this class — they round-trip a plain
+    ``dict`` opaquely (the metadata channel is polymorphic; the notebook
+    layer pushes a differently-shaped ``StatementCacheMetadata`` through
+    the same channel).
+
+    Every field is optional and defaults to ``None`` — "absent" and
+    "unset" are deliberately collapsed (a frozen dataclass field always
+    has a value). :meth:`to_dict` omits ``None`` fields so the on-the-wire
+    dict matches the historical "only-set-keys" shape, and :meth:`from_dict`
+    ignores unknown keys and defaults missing ones, so it tolerates caches
+    written by older or newer versions.
     """
 
-    key: str
-    created_at: float
-    last_access: float
-    access_count: int
-    size: int
-    storage: list[str]
-    ttl: int
-    execution_time: float
-    outputs: list[str]
-    lineage_hash: str
-    source: str  # Backend source identifier (e.g. 'RAM', 'disk')
+    key: str | None = None
+    created_at: float | None = None
+    last_access: float | None = None
+    access_count: int | None = None
+    size: int | None = None
+    storage: list[str] | None = None
+    ttl: int | None = None
+    execution_time: float | None = None
+    outputs: list[str] | None = None
+    lineage_hash: str | None = None
+    source: str | None = None  # Backend source identifier (e.g. 'RAM', 'disk')
+    # Decorator-stamped identity / lineage fields.
+    func_name: str | None = None
+    args_hash: str | None = None
+    state_hash: str | None = None
+    timestamp: float | None = None
+    auto_file_deps: dict[str, dict[str, float]] | None = None
+    iterator_storage: str | None = None
+    n_chunks: int | None = None
+    # Deserialization instruction; round-tripped so get() can rebuild the value.
+    serializer_cls: type | None = None
+    # Notebook-annotation flags consumed by TieredBackend / lineage.
+    force_persist: bool | None = None
+    metadata_only: bool | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        """Plain dict of set fields, omitting ``None`` (the wire format)."""
+        return {
+            f.name: value
+            for f in fields(self)
+            if (value := getattr(self, f.name)) is not None
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CacheMetadata:
+        """Build from a backend dict, ignoring unknown keys."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 class CacheBackend(ABC):
@@ -215,7 +260,7 @@ class CacheBackend(ABC):
     max_size_bytes: int | None = None
 
     @abstractmethod
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         """Retrieve (metadata, value) from the cache.
 
         Returns ``(None, None)`` when *key* is not found.  Raises
@@ -224,7 +269,7 @@ class CacheBackend(ABC):
         ...
 
     @abstractmethod
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Any | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Any | None = None) -> None:
         """Set a value in the cache with optional metadata.
 
         Args:
@@ -274,7 +319,7 @@ class CacheBackend(ABC):
                 count += 1
         return count
 
-    def get_metadata(self, key: str) -> CacheMetadata | None:
+    def get_metadata(self, key: str) -> MetadataDict | None:
         """Get only metadata for a cache key without deserializing the value.
 
         Returns the metadata dict if the key exists, or ``None`` otherwise.

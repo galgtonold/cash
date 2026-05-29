@@ -13,6 +13,7 @@ from typing import Any
 
 from ..exceptions import CashError
 from ..notebook.analysis import CodeAnalyzer
+from ..notebook.statement import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -175,10 +176,14 @@ class CacheDebugger:
             ).hexdigest()
             cache_key = f"stmt:{combined_hash}"
 
-            metadata, cached_data = self.cash.backend.get(cache_key)
+            raw_metadata, cached_data = self.cash.backend.get(cache_key)
+            metadata = (
+                StatementCacheMetadata.from_dict(raw_metadata)
+                if raw_metadata is not None
+                else None
+            )
             status = "HIT" if cached_data else "MISS"
-            execution_time = metadata.get('execution_time') if metadata else None
-            memory_size = metadata.get('memory_size') if metadata else None
+            execution_time = metadata.execution_time if metadata else None
 
             results.append({
                 'code': stmt_code,
@@ -188,7 +193,6 @@ class CacheDebugger:
                 'status': status,
                 'outputs': list(outputs),
                 'execution_time': execution_time,
-                'memory_size': memory_size,
             })
 
         return results

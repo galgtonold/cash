@@ -14,7 +14,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from ._base import CacheBackend, CacheMetadata, PendingWrites
+from ._base import CacheBackend, MetadataDict, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -179,7 +179,7 @@ class FileBackend(CacheBackend):
         except (OSError, pickle.PickleError):
             return None
 
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._ensure_initialized()
         # Wait for any in-flight write for this key so we never return
         # stale-or-missing data when get() races set().
@@ -279,7 +279,7 @@ class FileBackend(CacheBackend):
             self._metadata_cache[key] = metadata
             self._current_size_bytes += metadata['size'] + actual_meta_size
 
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
         a subsequent ``get(key)`` waits for the write."""

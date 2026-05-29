@@ -12,7 +12,7 @@ import time
 from collections.abc import Callable
 from typing import Any
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, MetadataDict
 from .serialization import Serializer
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ class InMemoryBackend(CacheBackend):
             max_entries: Maximum number of cache entries. When exceeded, LRU eviction is triggered.
                          None means unlimited entries (eviction only via memory pressure).
         """
-        self._store: dict[str, tuple[CacheMetadata, Any]] = {}  # Stores (metadata, value)
+        self._store: dict[str, tuple[MetadataDict, Any]] = {}  # Stores (metadata, value)
         self.max_memory_percent = max_memory_percent
         self.check_interval = check_interval
         self.max_entries = max_entries
@@ -58,7 +58,7 @@ class InMemoryBackend(CacheBackend):
             logger.debug("Could not deep-copy value for key %r, returning reference", key)
             return value
 
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         if key in self._store:
             metadata, value = self._store[key]
 
@@ -69,7 +69,7 @@ class InMemoryBackend(CacheBackend):
             return metadata, self._safe_deep_copy(value, key)
         return None, None
 
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         metadata = self._init_metadata(metadata, key)
 
         if 'storage' not in metadata:

@@ -377,3 +377,36 @@ Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `Cel
 - `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement_processor.py` → `statement/processor.py`).
 - No backward-compatibility shims at the old paths.
 - The three metrics TypedDicts (`TimingBreakdown`, `StatementSummary`, `CellMetrics`) are extracted to `ipython/_types.py` (mirroring `upstream/_types.py`) so `magics.py` is just the orchestrator file. `CashSession` stays in `magics.py` for now — it carries instance state (`provenance`, `audit`) rather than being pure data, so it doesn't belong in `_types.py`.
+
+---
+
+## ADR-014: Cache Metadata as Frozen Dataclasses at the Edges (Placement B)
+
+**Status:** Accepted
+**Date:** 2026-05-29
+**Context:** Cache-entry metadata was passed around as `TypedDict`s, so every consumer reached into it with string-keyed `.get('field', default)` calls. This was verbose, untyped at the access site, and easy to typo. We wanted typed attribute access (`meta.execution_time`) without giving up the backends' freedom to round-trip arbitrary keys.
+
+### Decision
+Metadata is modeled as two **sibling frozen dataclasses** — `CacheMetadata` (decorator layer, in `backends/_base.py`) and `StatementCacheMetadata` (notebook layer, in `notebook/statement/_metadata.py`) — but conversion happens **only at the cash-layer edges** ("Placement B"):
+
+- **Producers** build a dataclass and call `.to_dict()` immediately before `backend.set(...)`.
+- **Consumers** call `from_dict(...)` immediately after `backend.get(...)`.
+- **Backends never see the dataclass.** They round-trip an opaque `MetadataDict = dict[str, Any]`. The channel is deliberately polymorphic: both dataclass shapes — plus backend-private keys (`compressed`, `size`, `created_at`, `last_access`, `access_count`, `serializer_cls`, `source`, `storage`) — flow through it as plain dicts.
+
+Wire contract for both dataclasses:
+- `to_dict()` **omits `None` fields**, preserving the historical "only-set-keys" dict shape so backend presence-checks (`'x' not in metadata`) keep working.
+- `from_dict()` is **lenient**: unknown keys (legacy aliases like `cell_code`/`cell_hash`, backend-private keys) are ignored; missing keys default to `None`.
+
+### Rationale
+- **Dict-on-the-wire, dataclass-in-memory.** The persisted format stays a plain dict; we never pickle the dataclass, so on-disk caches written by older/newer versions stay readable.
+- **Backends stay schema-agnostic.** A backend injecting its own bookkeeping keys (e.g. `FileBackend` stamping `compressed`) needs no schema change — those keys are simply dropped by `from_dict` at the cash layer, which doesn't need them.
+- **Leaf module breaks the import cycle.** `StatementCacheMetadata` lives in a dependency-free `_metadata.py` so `processor.py` and its siblings (`freshness`, `file_deps`, `restore`) can all import it at runtime without re-introducing the `processor → freshness → processor` cycle.
+
+### Consequences
+- **Deliberate ttl normalization (behavior change).** The old producers stamped `ttl=None` into the wire dict when no per-call ttl was given, which left the key *present* and so suppressed `FileBackend`/`SqliteBackend` `default_ttl` (their `if 'ttl' not in metadata` / `metadata.get('ttl', default)` checks saw a `None` value). Because `to_dict()` now omits `None`, an unset ttl falls through to the backend default. **Decorator caches without an explicit `ttl` now expire under the backend's `default_ttl`** where previously they never expired. Guarded by `tests/test_core/test_ttl.py::test_default_ttl_applies_without_explicit_ttl`.
+- **Storage back-propagation preserved.** The full-store path routes a mutable `wire = metadata.to_dict()` through `backend.set` (which may inject the resolved `storage` tiers) and re-wraps it via `from_dict(wire)` so the returned view carries `storage` on to the badge metrics.
+- **Plain-dict consumers left as-is.** `notebook/restore.py` (reads legacy `cell_code`/`cell_hash` aliases outside the schema), `notebook/upstream/virtual_lineage.py` (own `_get_metadata_only` returning a dict), `notebook/ipython/admin.py` (verbatim export/import passthrough), and `ui/explorer.py`'s `list_entries()` (backend *listing* shape, which carries `size`) intentionally keep reading the opaque dict — they are not part of the typed surface.
+
+### Alternatives Considered
+- **Single shared dataclass for both layers**: rejected — the decorator and statement layers carry genuinely different field sets; a union type would be mostly-`None` either way and obscure which fields each layer owns.
+- **Dataclass all the way into the backends**: rejected — it would force every backend to know the schema and would break the polymorphic channel that lets two unrelated shapes share one storage path.

@@ -42,8 +42,9 @@ from ..randomness import restore_rng_state
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState
+    from ._metadata import StatementCacheMetadata
     from .file_deps import StatementFileDeps
-    from .processor import ProcessResult, StatementCacheMetadata
+    from .processor import ProcessResult
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _get_statement_code_and_hash(
     """Return stored statement code and hash from cache metadata."""
     if not metadata:
         return None, None
-    return metadata.get('code'), metadata.get('source_hash')
+    return metadata.code, metadata.source_hash
 
 
 class StatementRestorer:
@@ -160,7 +161,7 @@ class StatementRestorer:
         self.shell.user_ns[var_name] = value
 
         if metadata:
-            output_lineages = metadata.get('output_lineages', {})
+            output_lineages = metadata.output_lineages or {}
             if var_name in output_lineages:
                 tracking_state.lineage.record(var_name, output_lineages[var_name], value=value)
 
@@ -174,8 +175,8 @@ class StatementRestorer:
 
         self._record_restored_var_hash(tracking_state, var_name, value, metadata)
 
-        if metadata and 'key' in metadata:
-            tracking_state.variable_sources[var_name] = metadata['key']
+        if metadata and metadata.key is not None:
+            tracking_state.variable_sources[var_name] = metadata.key
 
     def _record_restored_var_hash(
         self,
@@ -187,7 +188,7 @@ class StatementRestorer:
         """Update variable_hashes / current_session_hashes for a single restored variable."""
         type_name = type(value).__name__
         if type_name in ('DataFrame', 'Series', 'ndarray'):
-            lineage_hash = (metadata.get('output_lineages', {}) if metadata else {}).get(var_name)
+            lineage_hash = ((metadata.output_lineages or {}) if metadata else {}).get(var_name)
             if lineage_hash:
                 tracking_state.variable_hashes.setdefault(var_name, set()).add(lineage_hash)
                 tracking_state.current_session_hashes[var_name] = lineage_hash

@@ -33,7 +33,7 @@ from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
     from .._protocols import TrackingState
-    from .processor import StatementCacheMetadata
+    from ._metadata import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -191,7 +191,7 @@ class StatementFileDeps:
         """Propagate file deps from cached metadata back into the tracking dicts."""
         if not metadata:
             return
-        file_deps = metadata.get('file_dependencies', {})
+        file_deps = metadata.file_dependencies or {}
         if not file_deps:
             return
         from ..file_dep_snapshot import split_file_dep_value

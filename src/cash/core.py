@@ -835,8 +835,8 @@ class Cash:
             func_name, current_state_hash, dynamic_state_hash, args_hash,
         )
 
-        metadata, _data = self.backend.get(cache_key)
-        if metadata is None:
+        raw_metadata, _data = self.backend.get(cache_key)
+        if raw_metadata is None:
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_NO_ENTRY,
@@ -850,10 +850,12 @@ class Cash:
                 },
             )
 
+        metadata = CacheMetadata.from_dict(raw_metadata)
+
         # TTL check — match _validate_ttl semantics: only if ttl was set
         # at decoration time.
         if ttl is not None:
-            timestamp = metadata.get('timestamp', 0)
+            timestamp = metadata.timestamp or 0
             age = time.time() - timestamp
             if age > ttl:
                 return CacheExplanation(
@@ -869,7 +871,7 @@ class Cash:
                 )
 
         # Auto-tracked file deps freshness.
-        snap = metadata.get('auto_file_deps') or {}
+        snap = metadata.auto_file_deps or {}
         if snap:
             import os
             stale: dict[str, str] = {}
@@ -892,7 +894,7 @@ class Cash:
                     details={'changed_files': stale},
                 )
 
-        timestamp = metadata.get('timestamp', 0)
+        timestamp = metadata.timestamp or 0
         return CacheExplanation(
             would_hit=True,
             reason=EXPLAIN_HIT,
@@ -901,7 +903,7 @@ class Cash:
             details={
                 'cached_at': timestamp,
                 'cache_age_seconds': time.time() - timestamp if timestamp else None,
-                'execution_time_saved': metadata.get('execution_time', 0.0),
+                'execution_time_saved': metadata.execution_time or 0.0,
             },
         )
 
@@ -954,7 +956,7 @@ class Cash:
     def _try_get_cached(
         self,
         cache_key: str,
-        metadata: Any,
+        metadata: CacheMetadata | None,
         cached_data: Any,
         call_start: float,
         args_hash: str,
@@ -965,11 +967,11 @@ class Cash:
 
         Key-presence is determined by ``metadata is not None`` — the
         backend contract is that absent keys return ``(None, None)``,
-        so a non-None metadata dict with a ``None`` data value still
+        so a non-None metadata view with a ``None`` data value still
         counts as a hit (a function that legitimately returned ``None``).
 
         Auto-tracked file dependencies stored in
-        ``metadata['auto_file_deps']`` are re-stat'd here; any file with
+        ``metadata.auto_file_deps`` are re-stat'd here; any file with
         a different mtime/size than recorded forces a miss so the
         function re-reads the changed file.
         """
@@ -987,8 +989,8 @@ class Cash:
         return _CACHE_MISS
 
     @staticmethod
-    def _auto_file_deps_fresh(metadata: dict[str, Any]) -> bool:
-        """Return True if every file recorded in ``metadata['auto_file_deps']``
+    def _auto_file_deps_fresh(metadata: CacheMetadata) -> bool:
+        """Return True if every file recorded in ``metadata.auto_file_deps``
         still has the same (mtime, size) on disk.
 
         Auto-tracked deps are captured during the first compute via
@@ -998,7 +1000,7 @@ class Cash:
         so the next compute re-reads the file. A path that disappears
         is also a change.
         """
-        snap = metadata.get('auto_file_deps') or {}
+        snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
         import os
@@ -1014,7 +1016,7 @@ class Cash:
     def _wrap_iterator_hit(
         self,
         cache_key: str,
-        metadata: dict[str, Any] | None,
+        metadata: CacheMetadata | None,
         hit: Any,
     ) -> Any:
         """Wrap a cache-hit value in the right iterator class.
@@ -1030,8 +1032,8 @@ class Cash:
         (sync locked re-read), and `_make_async_wrapper`. Keeping
         the dispatch in one place ensures the three paths can't drift.
         """
-        if metadata and metadata.get('iterator_storage') == 'chunked':
-            n_chunks = metadata.get('n_chunks', 0)
+        if metadata and metadata.iterator_storage == 'chunked':
+            n_chunks = metadata.n_chunks or 0
             return _ChunkedCachedIterator(self, cache_key, n_chunks)
         return hit
 
@@ -1060,7 +1062,8 @@ class Cash:
                 return key_result[1]
             cache_key, current_state_hash, args_hash = key_result
 
-            metadata, cached_data = self.backend.get(cache_key)
+            raw_metadata, cached_data = self.backend.get(cache_key)
+            metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
             if hit is not _CACHE_MISS:
                 return self._wrap_iterator_hit(cache_key, metadata, hit)
@@ -1206,7 +1209,8 @@ class Cash:
                 return result_or_coro
             cache_key, current_state_hash, args_hash = key_result
 
-            metadata, cached_data = self.backend.get(cache_key)
+            raw_metadata, cached_data = self.backend.get(cache_key)
+            metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
             hit = self._try_get_cached(
                 cache_key, metadata, cached_data, call_start,
                 args_hash, func_name, ttl,
@@ -1319,7 +1323,7 @@ class Cash:
         try:
             prefix = f"{func_name}:"
             for entry in self.backend.list_entries():
-                key = entry.get('key', '')
+                key = CacheMetadata.from_dict(entry).key or ''
                 if key.startswith(prefix):
                     self.backend.delete(key)
         except (OSError, RuntimeError, KeyError):
@@ -1669,7 +1673,11 @@ class Cash:
         """Compute with double-checked locking; falls back to unlocked on error."""
         try:
             with self.backend.lock(cache_key):
-                locked_metadata, locked_data = self.backend.get(cache_key)
+                raw_locked_metadata, locked_data = self.backend.get(cache_key)
+                locked_metadata = (
+                    CacheMetadata.from_dict(raw_locked_metadata)
+                    if raw_locked_metadata is not None else None
+                )
                 # Use metadata presence (not data presence) as the
                 # existence test — see _try_get_cached for rationale.
                 if locked_metadata is not None:
@@ -1691,7 +1699,7 @@ class Cash:
 
     def _validate_ttl(self, metadata: CacheMetadata | None, ttl: int | None) -> None:
         if ttl is not None and metadata:
-            timestamp = metadata.get('timestamp', 0)
+            timestamp = metadata.timestamp or 0
             if time.time() - timestamp > ttl:
                 raise CacheExpiredError("Cache expired")
 
@@ -1948,27 +1956,26 @@ class Cash:
         try:
             serializer = get_serializer(result)
 
-            metadata = {
-                'key': cache_key,
-                'func_name': func_name,
-                'timestamp': time.time(),
+            meta = CacheMetadata(
+                key=cache_key,
+                func_name=func_name,
+                timestamp=time.time(),
                 # The decorator's measured wall-clock cost. ``TieredBackend``
                 # reads this to decide whether the value is expensive enough
                 # to promote past RAM (otherwise the smart-persistence
                 # policy gates everything at the 0.1s floor, and script
                 # runs that recompute the same cheap value forever).
-                'execution_time': execution_time,
-                'serializer_cls': type(serializer),
-                'ttl': ttl,
-                'args_hash': args_hash,
-                'state_hash': state_hash,
-            }
-            if auto_file_deps:
-                # Each entry: path → {'mtime': float, 'size': int}
+                execution_time=execution_time,
+                serializer_cls=type(serializer),
+                ttl=ttl,
+                args_hash=args_hash,
+                state_hash=state_hash,
+                # Each entry: path → {'mtime': float, 'size': int}.
                 # Validated on subsequent get() via _auto_file_deps_fresh.
-                metadata['auto_file_deps'] = auto_file_deps
+                auto_file_deps=auto_file_deps or None,
+            )
 
-            self.backend.set(cache_key, result, metadata, serializer=serializer)
+            self.backend.set(cache_key, result, meta.to_dict(), serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
             backend_name = type(self.backend).__name__
             self._warn_once(
@@ -2116,13 +2123,13 @@ class Cash:
         """
         chunk_key = f"{cache_key}:chunk_{chunk_index}"
         serializer = get_serializer(chunk_buffer)
-        chunk_metadata = {
-            "key": chunk_key,
-            "timestamp": time.time(),
-            "serializer_cls": type(serializer),
-            "execution_time": 0.0,
-            "ttl": ttl,
-        }
+        chunk_metadata = CacheMetadata(
+            key=chunk_key,
+            timestamp=time.time(),
+            serializer_cls=type(serializer),
+            execution_time=0.0,
+            ttl=ttl,
+        ).to_dict()
         try:
             self.backend.set(chunk_key, chunk_buffer, chunk_metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
@@ -2157,21 +2164,19 @@ class Cash:
         """
         try:
             serializer = get_serializer(manifest_data)
-            metadata = {
-                "key": cache_key,
-                "func_name": func_name,
-                "timestamp": time.time(),
-                "execution_time": execution_time,
-                "serializer_cls": type(serializer),
-                "ttl": ttl,
-                "args_hash": args_hash,
-                "state_hash": state_hash,
-                "iterator_storage": "chunked",
-                "n_chunks": manifest_data["n_chunks"],
-                "total_items": manifest_data["total_items"],
-            }
-            if auto_file_deps:
-                metadata["auto_file_deps"] = auto_file_deps
+            metadata = CacheMetadata(
+                key=cache_key,
+                func_name=func_name,
+                timestamp=time.time(),
+                execution_time=execution_time,
+                serializer_cls=type(serializer),
+                ttl=ttl,
+                args_hash=args_hash,
+                state_hash=state_hash,
+                iterator_storage="chunked",
+                n_chunks=manifest_data["n_chunks"],
+                auto_file_deps=auto_file_deps or None,
+            ).to_dict()
             self.backend.set(cache_key, manifest_data, metadata, serializer=serializer)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
             backend_name = type(self.backend).__name__
@@ -2197,17 +2202,18 @@ class Cash:
         """
         now = time.time()
 
-        def is_expired(metadata):
+        def is_expired(raw_metadata):
             try:
-                timestamp = metadata.get('timestamp', 0)
+                metadata = CacheMetadata.from_dict(raw_metadata)
+                timestamp = metadata.timestamp or 0
                 age = now - timestamp
 
                 if max_age is not None and age > max_age:
                     return True
 
-                stored_ttl = metadata.get('ttl')
+                stored_ttl = metadata.ttl
                 return bool(stored_ttl is not None and age > stored_ttl)
-            except (TypeError, KeyError, ValueError):
+            except (AttributeError, TypeError, ValueError):
                 return True
 
         return self.backend.cleanup_expired(is_expired)

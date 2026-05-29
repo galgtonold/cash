@@ -8,7 +8,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, MetadataDict
 from .serialization import Serializer
 
 logger = logging.getLogger(__name__)
@@ -124,7 +124,7 @@ class CascadingBackend(_MultiBackendMixin, CacheBackend):
     def __init__(self, backends: list[CacheBackend]) -> None:
         self.backends = backends
 
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)
             # Presence test: metadata-None means key absent. A non-None
@@ -139,6 +139,6 @@ class CascadingBackend(_MultiBackendMixin, CacheBackend):
                 return metadata, value
         return None, None
 
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         for backend in self.backends:
             backend.set(key, value, metadata, serializer)

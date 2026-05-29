@@ -6,7 +6,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from ._base import CacheBackend, CacheMetadata
+from ._base import CacheBackend, MetadataDict
 from .cascading_backend import _MultiBackendMixin
 from .serialization import Serializer
 
@@ -46,7 +46,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # If execution time is much larger than read time, cache it.
         return execution_time > read_time
 
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         for i, backend in enumerate(self.backends):
             metadata, value = backend.get(key)
             # Key-presence test: metadata is None when the child backend
@@ -75,7 +75,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 return metadata, value
         return None, None
 
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         if not self.backends:
             return
 

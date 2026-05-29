@@ -9,7 +9,7 @@ from typing import Any
 
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
-from ._base import CacheBackend, CacheMetadata, PendingWrites
+from ._base import CacheBackend, MetadataDict, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 try:
@@ -69,7 +69,7 @@ class RedisBackend(CacheBackend):
     def _get_keys(self, key: str) -> tuple[str, str]:
         return f"{self.prefix}{key}:meta", f"{self.prefix}{key}:data"
 
-    def get(self, key: str) -> tuple[CacheMetadata | None, Any | None]:
+    def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key.
         self._writes.wait(key)
         meta_key, data_key = self._get_keys(key)
@@ -99,7 +99,7 @@ class RedisBackend(CacheBackend):
                 return None, None
         return None, None
 
-    def set(self, key: str, value: Any, metadata: CacheMetadata | None = None, serializer: Serializer | None = None) -> None:
+    def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         """Serialize on the calling thread, run the pipeline in background."""
         meta_key, data_key = self._get_keys(key)
 
