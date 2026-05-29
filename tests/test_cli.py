@@ -46,10 +46,11 @@ class TestCLIVersion:
 
     def test_version_outputs(self, capsys):
         from types import SimpleNamespace
+        import cash
         cmd_version(SimpleNamespace())
         captured = capsys.readouterr()
         assert "cash" in captured.out
-        assert "0.2.0" in captured.out
+        assert cash.__version__ in captured.out
 
 
 class TestCLIInfo:
