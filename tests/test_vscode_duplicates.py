@@ -100,15 +100,15 @@ class TestVSCodeDuplicates(unittest.TestCase):
         # Should not crash - either runs normally or falls back
         self.magics._original_run_cell.assert_called()
 
-    @patch('cash.notebook.magics.CodeAnalyzer.analyze_code_block')
+    @patch('cash.notebook.cell_executor.CodeAnalyzer.analyze_code_block')
     def test_syntax_error_handling(self, mock_analyze):
         """Test that SyntaxError in user code is delegated to original run_cell."""
         mock_analyze.side_effect = SyntaxError("invalid syntax")
-        
+
         cell_content = "if True \n print('missing colon')"
-        
+
         self.magics._execute_cell(cell_content)
-        
+
         self.magics._original_run_cell.assert_called_with(cell_content)
 
     @patch(PATCH_TARGETS['upstream_cells_ids'])
