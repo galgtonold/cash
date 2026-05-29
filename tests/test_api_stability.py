@@ -36,21 +36,27 @@ def test_core_exports_stable():
     """Test that core __init__ exports only stable APIs."""
     import cash
     expected_stable = {
-        'Cash', 'cache', 'show_stats',
+        # Core API
+        'Cash', 'CacheExplanation', 'cache', 'show_stats',
+        'register_hasher', 'reset_session', 'configure',
+        # Purity declarations
         'pure', 'stateful', 'is_pure', 'is_stateful',
-        'analyze_function_purity',
+        'analyze_function_purity', 'mark_pure', 'mark_stateful',
+        # Configuration
+        'get_config', 'CashConfig', 'create_default_config',
+        # Backends
         'InMemoryBackend', 'FileBackend', 'SQLiteBackend',
         'CascadingBackend',
-        'FileDataSource',
-        'get_config', 'CashConfig', 'create_default_config',
-        'register_hasher',
-        'reset_session',
-        'configure',
+        # Data sources
+        'DataSource', 'FileDataSource',
         # Exception hierarchy
         'CashError', 'CacheBackendError', 'CacheExpiredError',
         'CacheSerializationError', 'DependencyNotFoundError',
         'AmbiguousCellError', 'UpstreamStateError',
-        'CacheKeyComputationError',
+        'CacheKeyComputationError', 'CashImpureFunctionError',
+        # Warnings
+        'CashWarning', 'CashCacheIneffectiveWarning',
+        'CashCacheStoreFailedWarning', 'CashImpurityWarning',
     }
     actual = set(cash.__all__)
     assert actual == expected_stable
