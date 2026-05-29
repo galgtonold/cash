@@ -98,6 +98,7 @@ Re-run the notebook:
 
 ## Function caching outside notebooks
 
+<!-- test:skip reason="ends with cache_clear() which resets stats and breaks inferred hit/miss claims" -->
 ```python
 import cash
 
@@ -110,13 +111,14 @@ expensive(1_000_000)            # cache hit
 expensive.cache_info()
 # {'hits': 1, 'misses': 1, 'hit_rate': 0.5,
 #  'total_time_saved': 0.045, 'warnings': []}
-expensive.cache_clear()
 
 # Diagnose why a call hits or misses, without invoking the function:
 expensive.explain(1_000_000)
 # [HIT] __main__.expensive — hit
 #   cache_key: ...
 #   cached_at: 1779637032.79, execution_time_saved: 0.045
+
+expensive.cache_clear()
 ```
 
 Decorate impure functions (LLM calls, HTTP fetches, file writes) and
