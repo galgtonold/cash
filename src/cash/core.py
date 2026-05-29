@@ -2246,17 +2246,22 @@ class Cash:
         """Register IPython magic commands (``%cash_on``, ``%%cash``, etc.)."""
         try:
             from IPython import get_ipython
-
-            from .notebook.magics import CashMagics
-
-            ip = get_ipython()
-            if ip:
-                magics = CashMagics(ip, self)
-                ip.register_magics(magics)
-            else:
-                logger.debug("No active IPython session found. Magic commands not registered.")
         except ImportError:
             logger.debug("IPython not available. Magic commands not registered.")
+            return
+
+        ip = get_ipython()
+        if ip is None:
+            logger.debug("No active IPython session found. Magic commands not registered.")
+            return
+
+        # Internal import — must always succeed when IPython is present.
+        # Kept outside the ImportError guard above so a broken import path
+        # surfaces loudly instead of masquerading as "IPython not available".
+        from .notebook.ipython.magics import CashMagics
+
+        magics = CashMagics(ip, self)
+        ip.register_magics(magics)
 
     def clear_all(self) -> None:
         """Clear cached results for every function registered with this instance.

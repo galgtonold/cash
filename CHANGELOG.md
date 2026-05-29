@@ -146,6 +146,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default. To keep entries non-expiring on a backend with a
   `default_ttl`, omit `default_ttl` or use a separate backend instance.
 
+### Fixed
+- **IPython magics (`%cash_on`, `%%cash`, …) failed to register on
+  `%load_ext cash` / `import cash`.** `Cash.register_magic()` imported
+  `CashMagics` from a stale module path (left over from the ADR-013
+  move into the `cash.notebook.ipython` package), and the resulting
+  `ImportError` was swallowed by a guard meant only for "IPython not
+  installed" — so auto-load silently registered nothing. The internal
+  import now targets `cash.notebook.ipython.magics` and sits outside the
+  IPython-availability guard, so a broken path surfaces loudly instead
+  of masquerading as a missing dependency.
+
 ### Backward compatibility
 - v1 iterator cache entries (written by 0.5.0b2 prior to chunked
   storage, with `metadata['materialized_iterator']=True`) continue

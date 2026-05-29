@@ -7,6 +7,12 @@ from cash.backends import InMemoryBackend
 
 from traitlets.config import Configurable
 
+# Captured at import time, before conftest's autouse ``disable_auto_magic_
+# registration`` fixture stubs ``Cash.register_magic`` to a no-op. The
+# registration regression test below calls this real implementation directly
+# to exercise the path that fixture otherwise hides.
+_REAL_REGISTER_MAGIC = Cash.register_magic
+
 class MockShell(Configurable):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -323,6 +329,38 @@ final_value = result * multiplier
                 parse_annotation_line(line),
                 f"Help-text line does not parse as a real annotation: {line!r}",
             )
+
+
+def test_register_magic_registers_cash_on():
+    """``Cash.register_magic()`` imports ``CashMagics`` from the post-ADR-013
+    path and registers it on the active shell.
+
+    Regression guard: ``register_magic`` imported ``CashMagics`` from the
+    pre-refactor path ``cash.notebook.magics`` (moved to
+    ``cash.notebook.ipython.magics`` by ADR-013) *inside* the method's
+    ``except ImportError`` guard. The stale import raised
+    ``ModuleNotFoundError`` — a subclass of ``ImportError`` — which the guard
+    swallowed as "IPython not available". So ``%load_ext cash`` silently
+    registered nothing and ``%cash_on`` came back "not found". The import now
+    lives outside the guard, so a broken path raises loudly instead.
+
+    A fake shell stands in for a real ``InteractiveShell`` so the check is
+    immune to the cross-test IPython-singleton pollution that only surfaces in
+    the full-suite single-process run. End-to-end registration against a real
+    kernel is covered by the notebook-integration suite.
+    """
+    shell = MockShell()
+    shell.register_magics = MagicMock()
+
+    cash = Cash(backend=InMemoryBackend(), register_magic=False)
+
+    with patch('IPython.get_ipython', return_value=shell):
+        # Call the real implementation, not conftest's no-op stub.
+        _REAL_REGISTER_MAGIC(cash)
+
+    shell.register_magics.assert_called_once()
+    (registered_magics,), _ = shell.register_magics.call_args
+    assert isinstance(registered_magics, CashMagics)
 
 
 if __name__ == '__main__':
