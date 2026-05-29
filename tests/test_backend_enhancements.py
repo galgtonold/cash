@@ -213,7 +213,7 @@ class TestSQLiteBackend:
         db = SQLiteBackend(str(tmp_path / 'cache.db'))
         db.set('k1', 'v1')
         meta, _ = db.get('k1')
-        assert 'SQLite' in meta.get('storage', [])
+        assert 'SQLITE' in meta.get('storage', [])
         db.shutdown()
 
     def test_concurrent_access(self, tmp_path):
