@@ -21,7 +21,7 @@ class TestLoopCodeCapture(unittest.TestCase):
         shell.user_ns = {'range': range}
 
         sp = MagicMock()
-        sp.process = MagicMock(return_value={
+        sp.process_statement = MagicMock(return_value={
             'status': CacheStatus.COMPUTED,
             'execution_time': 0.01,
             'stdout': '',
@@ -43,15 +43,15 @@ for i in range(3):
         csp.process(node)
 
         # 2 body statements × 3 iterations = 6 calls
-        self.assertEqual(sp.process.call_count, 6)
+        self.assertEqual(sp.process_statement.call_count, 6)
 
         # Each call should have iteration context and body statement code
-        for call in sp.process.call_args_list:
+        for call in sp.process_statement.call_args_list:
             passed_code = call[0][0]
             self.assertIn('# __iteration_context__:', passed_code)
 
         # Check that both body statements are covered
-        all_codes = [call[0][0] for call in sp.process.call_args_list]
+        all_codes = [call[0][0] for call in sp.process_statement.call_args_list]
         has_x = any('x = i * 10' in c for c in all_codes)
         has_y = any("y = {'a': x}" in c for c in all_codes)
         self.assertTrue(has_x, "Body statement 'x = i * 10' not found")
