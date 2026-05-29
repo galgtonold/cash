@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.control_if_handler import IfHandler
+from cash.notebook.control_structures.if_handler import IfHandler
 
 
 @pytest.fixture

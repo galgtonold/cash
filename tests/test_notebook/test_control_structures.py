@@ -550,7 +550,7 @@ class TestOutputFlushing:
 
     def test_flush_metrics_output_helper(self):
         """flush_metrics_output should print stdout/stderr and mark as flushed."""
-        from cash.notebook.control_structure_helpers import flush_metrics_output
+        from cash.notebook.control_structures.helpers import flush_metrics_output
 
         metrics = {'stdout': 'hello\n', 'stderr': 'warn\n'}
         import io
@@ -568,7 +568,7 @@ class TestOutputFlushing:
 
     def test_flush_no_output_still_marks_flushed(self):
         """Metrics with no stdout/stderr should still be marked as flushed."""
-        from cash.notebook.control_structure_helpers import flush_metrics_output
+        from cash.notebook.control_structures.helpers import flush_metrics_output
 
         metrics = {'stdout': '', 'stderr': ''}
         flush_metrics_output(metrics)

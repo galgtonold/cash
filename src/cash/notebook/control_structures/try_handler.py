@@ -13,7 +13,7 @@ optimisation.
 
 It does NOT own:
 - Shared lineage / mutation / badge helpers (in
-  :mod:`control_structure_helpers`).
+  :mod:`control_structures.helpers`).
 - Dispatch of nested control structures (delegated back through the
   orchestrator passed at construction time).
 """
@@ -23,11 +23,11 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
-from cash.notebook import control_structure_helpers as _helpers
-from cash.notebook.cache_status import CacheStatus
+from . import helpers as _helpers
+from ..cache_status import CacheStatus
 
 if TYPE_CHECKING:
-    from .statement import ProcessResult
+    from ..statement import ProcessResult
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +68,7 @@ class TryHandler:
         gets its own cache key, storage info, and timing — and ``print()``
         calls are never suppressed by the SKIPPED optimisation.
         """
-        from .control_structures import ControlStructureResult
+        from .processor import ControlStructureResult
 
         all_metrics: list[ProcessResult] = []
         cached_count = 0
@@ -164,7 +164,7 @@ class TryHandler:
         Used for else and finally branches of try/except where no per-statement
         lineno tagging is needed.
         """
-        from .control_structures import is_control_structure
+        from .processor import is_control_structure
 
         cached = computed = 0
         for body_node in body_nodes:
@@ -203,7 +203,7 @@ class TryHandler:
         all_metrics: list,
     ) -> tuple[bool, Exception | None, int, int]:
         """Execute the try-body statements; return (succeeded, caught_exc, cached, computed)."""
-        from .control_structures import is_control_structure
+        from .processor import is_control_structure
 
         cached = computed = 0
         try_body_succeeded = True

@@ -7,7 +7,7 @@ helpers that all per-strategy handlers (for / if / try) plus the single-unit
 fallback share.  It is import-only: handlers and the orchestrator import the
 functions here; the helpers never call back into a handler.
 
-Extracted from ``control_structures.py`` so that ``ForLoopHandler``,
+Extracted from ``control_structures/processor.py`` so that ``ForLoopHandler``,
 ``IfHandler``, and ``TryHandler`` can stay focused on strategy-specific
 logic without each carrying a copy of the lineage-update plumbing.
 """
@@ -93,7 +93,7 @@ def update_lineage_after_execution(
 
     # Exclude loop target variables — they are not mutations
     if isinstance(node, ast.For):
-        from .control_structures import extract_target_names
+        from .processor import extract_target_names
         target_names = set(extract_target_names(node.target))
         mutated_vars -= target_names
 
@@ -124,7 +124,7 @@ def get_body_nodes(node: ast.AST) -> list[ast.AST]:
 
 def get_expression_iterable_lineage(shell, statement_processor, iter_node: ast.AST) -> str | None:
     """Compute lineage for a complex iterable expression by analyzing its inputs."""
-    from .analysis import CodeAnalyzer
+    from ..analysis import CodeAnalyzer
     iter_code = ast.unparse(iter_node)
     try:
         inputs, _ = CodeAnalyzer.analyze_code_block(iter_code)
@@ -172,8 +172,8 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
     (subscript assignment, method calls like ``.append()``, augmented
     assigns, attribute assignments).
     """
-    from .control_structures import is_control_structure
-    from .cacheability import analyze_statement
+    from .processor import is_control_structure
+    from ..cacheability import analyze_statement
 
     mutated_vars: set = set()
     for body_node in body_nodes:

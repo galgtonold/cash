@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from cash.notebook.cache_status import CacheStatus
-from cash.notebook.control_for_handler import ForLoopHandler
+from cash.notebook.control_structures.for_handler import ForLoopHandler
 
 
 # ---------------------------------------------------------------------------

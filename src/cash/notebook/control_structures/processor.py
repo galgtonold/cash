@@ -36,11 +36,11 @@ import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from cash.notebook.cache_status import CacheStatus
-from cash.notebook import control_structure_helpers as _helpers
+from ..cache_status import CacheStatus
+from . import helpers as _helpers
 
 if TYPE_CHECKING:
-    from .statement import ProcessResult
+    from ..statement import ProcessResult
 
 __all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
 
@@ -187,9 +187,9 @@ class ControlStructureProcessor:
         self.debug = debug
         # Per-strategy handlers — constructed once.  Each owns the
         # strategy-specific logic; the orchestrator stays thin.
-        from .control_for_handler import ForLoopHandler
-        from .control_if_handler import IfHandler
-        from .control_try_handler import TryHandler
+        from .for_handler import ForLoopHandler
+        from .if_handler import IfHandler
+        from .try_handler import TryHandler
         self._for_handler = ForLoopHandler(shell, statement_processor, debug, dispatcher=self)
         self._if_handler = IfHandler(shell, statement_processor, debug, dispatcher=self)
         self._try_handler = TryHandler(shell, statement_processor, debug, dispatcher=self)

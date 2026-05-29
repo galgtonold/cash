@@ -10,7 +10,7 @@ so the badge groups them by branch.
 
 It does NOT own:
 - Shared lineage / mutation / badge helpers (in
-  :mod:`control_structure_helpers`).
+  :mod:`control_structures.helpers`).
 - Dispatch of nested control structures (delegated back through the
   orchestrator passed at construction time).
 """
@@ -21,11 +21,11 @@ import hashlib
 import logging
 from typing import TYPE_CHECKING
 
-from cash.notebook import control_structure_helpers as _helpers
-from cash.notebook.cache_status import CacheStatus
+from . import helpers as _helpers
+from ..cache_status import CacheStatus
 
 if TYPE_CHECKING:
-    from .statement import ProcessResult
+    from ..statement import ProcessResult
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +64,7 @@ class IfHandler:
 
         Falls back to ``_execute_as_single_unit`` if condition evaluation fails.
         """
-        from .control_structures import ControlStructureResult
+        from .processor import ControlStructureResult
 
         all_metrics: list[ProcessResult] = []
         cached_count = 0
@@ -137,7 +137,7 @@ class IfHandler:
         all_metrics: list,
     ) -> bool:
         """Execute one statement from an if-branch; return True if computed (not cached)."""
-        from .control_structures import is_control_structure
+        from .processor import is_control_structure
 
         if is_control_structure(body_node):
             result = self.dispatcher.process(body_node, ttl, silent, None)

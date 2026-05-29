@@ -10,7 +10,7 @@ body statement through the statement processor with an
 
 It does NOT own:
 - Shared lineage / mutation / badge helpers (in
-  :mod:`control_structure_helpers`).
+  :mod:`control_structures.helpers`).
 - Dispatch of nested ``if`` / ``try`` / single-unit fallback (delegated
   back through the orchestrator passed at construction time).
 
@@ -23,11 +23,11 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 
-from cash.notebook import control_structure_helpers as _helpers
-from cash.notebook.cache_status import CacheStatus
+from . import helpers as _helpers
+from ..cache_status import CacheStatus
 
 if TYPE_CHECKING:
-    from .statement import ProcessResult
+    from ..statement import ProcessResult
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +96,7 @@ class ForLoopHandler:
         loops with many iterations of cheap array operations), the loop is
         executed as a single cacheable unit instead of per-iteration.
         """
-        from .control_structures import (
+        from .processor import (
             ControlStructureResult,
             extract_target_names,
         )
@@ -202,7 +202,7 @@ class ForLoopHandler:
         parent_context: dict | None,
     ) -> bool:
         """Process a single loop iteration; return True if fully cached."""
-        from .control_structures import (
+        from .processor import (
             bind_target_values,
             build_iteration_context,
             compute_context_hash,
@@ -281,7 +281,7 @@ class ForLoopHandler:
         statements like ``a.append(x)`` or ``d[k] = v`` and set
         ``skip_cache=True``, ensuring they always re-execute.
         """
-        from .control_structures import compute_context_hash
+        from .processor import compute_context_hash
 
         context_hash = compute_context_hash(iteration_context)
         modified_code = f"# __iteration_context__: {context_hash}\n{code}"

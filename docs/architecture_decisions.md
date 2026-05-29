@@ -302,3 +302,43 @@ notebook/statement/freshness.py   # CacheFreshnessChecker class only; was cache_
 - Internal cluster imports become relative (`from .lineage import StatementLineageBuilder`).
 - No backward-compatibility shims at the old paths.
 - The TypedDicts (`ProcessResult`, `StatementCacheMetadata`, `DecoratorCallMetric`, `_ProcessResultRequired`) stay inside `processor.py` for now. Extracting them into `statement/_types.py` (mirroring `upstream/_types.py`) is a separate, optional refactor.
+
+---
+
+## ADR-012: Co-locate the Control-Structure Strategy as a Package
+
+**Status:** Accepted
+**Date:** 2026-05-29
+**Context:** `CONTEXT.md` described `ControlStructureProcessor` as the orchestrator of a strategy pattern: three handler classes (`ForLoopHandler`, `IfHandler`, `TryHandler`) plus a shared-helpers module. The five files (`control_structures.py`, `control_for_handler.py`, `control_if_handler.py`, `control_try_handler.py`, `control_structure_helpers.py`) lived as flat peers in `src/cash/notebook/`. The `control_*` prefix on four of them was doing the work a folder should do.
+
+### Decision
+Collapse the five files into one `control_structures/` package. Files are renamed to drop the `control_*` prefixes that the package path now provides:
+
+```
+control_structures/__init__.py        # re-exports public symbols
+control_structures/processor.py       # was control_structures.py
+control_structures/for_handler.py     # was control_for_handler.py
+control_structures/if_handler.py      # was control_if_handler.py
+control_structures/try_handler.py     # was control_try_handler.py
+control_structures/helpers.py         # was control_structure_helpers.py
+```
+
+Public surface (re-exported from `__init__.py`):
+- `ControlStructureProcessor` (orchestrator)
+- `ControlStructureResult` (return type)
+- Pure AST helpers used cross-cluster: `is_control_structure`, `get_control_structure_type`, `extract_target_names`, `contains_break_or_continue`, `bind_target_values`, `build_iteration_context`, `compute_context_hash`
+
+Internal (not re-exported): the three handler classes, and everything in `helpers.py`.
+
+### Rationale
+- **Locality.** Five files documented as a composition unit become one folder. The orchestrator/handler/helpers relationship is now structural, not just naming convention.
+- **Naming.** The `control_*` prefix on four files only existed because they sat among ~30 unrelated peers. Inside `control_structures/`, the parent path provides the disambiguation.
+- **Public AST helpers stay re-exported.** Unlike `cache_freshness.py`'s `snapshot_file_deps` (which crossed *subsystems* and warranted extraction in ADR-011), the AST helpers here only cross *clusters* inside the notebook subsystem — `upstream/` and the handlers themselves use them. Re-exporting from `__init__.py` keeps existing import paths stable without leaking implementation details.
+- **Consistency with ADR-010 and ADR-011.** Same pattern: collapse a documented composition unit into a package, expose a small public surface, rename files for context.
+
+### Consequences
+- Production import paths stay valid: `from cash.notebook.control_structures import is_control_structure` etc. work for callers that imported public AST helpers or `ControlStructureProcessor` from the old flat module.
+- Cross-cluster callers (`cell_executor`, `magics`, `upstream/checker`, `upstream/simulator`, `upstream/virtual_lineage`) don't need import changes — they were already using public symbols at the package-resolved path.
+- Three test files (`test_control_for_handler.py`, `test_control_if_handler.py`, `test_control_try_handler.py`) and one site in `test_notebook/test_control_structures.py` (importing `flush_metrics_output`) migrate to the full internal paths (`cash.notebook.control_structures.for_handler.ForLoopHandler`, etc.). The handler classes and `helpers.py` symbols are internal; this matches the precedent from ADR-011 for `StatementRestorer`.
+- Internal cluster imports become relative (`from .processor import is_control_structure`, `from .helpers import ...`).
+- No backward-compatibility shims at the old paths.
