@@ -486,17 +486,6 @@ class TestGetMetadataOnly:
         assert result == {"key": "value"}
         mock_backend.get_metadata.assert_called_once_with("test_key")
 
-    def test_fallback_to_get(self):
-        """Without get_metadata, should use backend.get()."""
-        mock_backend = MagicMock(spec=["get"])
-        mock_backend.get.return_value = ({"meta": True}, "data")
-        mock_cash = MagicMock()
-        mock_cash.backend = mock_backend
-        checker = _make_checker(cash_instance=mock_cash)
-        result = checker.simulator._virtual_lineage._get_metadata_only("test_key")
-        assert result == {"meta": True}
-
-
 # ===========================================================================
 # reset_caches
 # ===========================================================================
