@@ -286,12 +286,17 @@ class SQLiteBackend(CacheBackend):
 
     def entry_count(self) -> int:
         """Get the number of cache entries."""
+        # Bulk read: drain in-flight writes first so the count reflects
+        # every set() that has already returned (same barrier as
+        # list_entries / clear / cleanup_expired).
+        self._writes.wait_all()
         with self._lock:
             cursor = self._conn.execute('SELECT COUNT(*) FROM cache_entries')
             return cursor.fetchone()[0]
 
     def total_size(self) -> int:
         """Get total data size in bytes."""
+        self._writes.wait_all()
         with self._lock:
             cursor = self._conn.execute('SELECT COALESCE(SUM(size_bytes), 0) FROM cache_entries')
             return cursor.fetchone()[0]
