@@ -46,8 +46,12 @@ def test_run_notebook_cash_on_captures_statement_metrics(tmp_path):
 
 def test_run_notebook_cash_on_cold_then_warm_status_shifts(tmp_path):
     """Same cells run twice against the same cache dir: second run should
-    have at least one RESTORED status (the cache is now populated)."""
-    cells = [CodeCell(index=0, notebook_cell_index=0, source="z = 7 * 6\n")]
+    have at least one RESTORED status (the cache is now populated).
+
+    ``# @cash:persist`` forces the value to disk. Without it the cost model
+    declines to persist a trivial statement (compute is cheaper than a
+    restore), so no value file is written and the warm run recomputes."""
+    cells = [CodeCell(index=0, notebook_cell_index=0, source="# @cash:persist\nz = 7 * 6\n")]
     first = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path)
     second = run_notebook(cells, cash_enabled=True, cache_dir=tmp_path)
     first_statuses = [m.status for m in first[0].statement_metrics]
