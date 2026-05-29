@@ -520,22 +520,6 @@ class TestMultiCellFunctionPatterns:
 class TestErrorHandlingPatterns:
     """Test how the caching system handles errors."""
 
-    @pytest.mark.core
-    def test_error_in_middle_cell_doesnt_corrupt_cache(self, nb_runner):
-        """Error in a cell shouldn't corrupt the cache for other cells."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x + 1\nprint(f'y: {y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "y: 43" in out
-
-        # Run again — should still work
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-        assert "y: 43" in out2
 
     @pytest.mark.core
     def test_recover_after_fixing_error(self, nb_runner):

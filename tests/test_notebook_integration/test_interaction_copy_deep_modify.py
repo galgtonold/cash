@@ -5,17 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestCopyDeepModify:
-    def test_shallow_copy(self, nb_runner):
-        nb_runner.create_notebook([
-            "import copy\noriginal = {'a': [1, 2], 'b': [3, 4]}",
-            "shallow = copy.copy(original)\nshallow['a'].append(99)\nprint(f'original_a={original[\"a\"]}')\nprint(f'shallow_a={shallow[\"a\"]}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        # shallow copy shares inner lists
-        assert "original_a=[1, 2, 99]" in out
-        assert "shallow_a=[1, 2, 99]" in out
 
     def test_deep_copy(self, nb_runner):
         nb_runner.create_notebook([

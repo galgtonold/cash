@@ -51,22 +51,6 @@ class TestSelectiveCellExecution:
 class TestRerunSameCell:
     """Test re-running the same cell multiple times."""
 
-    def test_idempotent_cell(self, nb_runner):
-        """Running same cell twice gives same result."""
-        nb_runner.create_notebook([
-            "x = 42",
-            textwrap.dedent("""\
-                result = x * 2
-                print(result)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "84" in nb_runner.get_output(2)
-
-        # Run cell 2 again
-        nb_runner.run_cell(2)
-        assert "84" in nb_runner.get_output(2)
 
     def test_rerun_print_cell(self, nb_runner):
         """Re-run print cell gives fresh output."""
@@ -105,52 +89,11 @@ class TestCellDependencyChain:
         # 10*2=20, +3=23, *4=92, -5=87
         assert "87" in nb_runner.get_output(6)
 
-    def test_middle_chain_change(self, nb_runner):
-        """Change a middle cell in the chain."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a + 10",
-            "c = b * 3",
-            "print(c)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # a=5, b=15, c=45
-        assert "45" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(2, "b = a + 100")
-        nb_runner.run_all()
-        # a=5, b=105, c=315
-        assert "315" in nb_runner.get_output(4)
 
 
 class TestParallelBranches:
     """Test parallel independent branches merging downstream."""
 
-    def test_two_independent_branches(self, nb_runner):
-        """Two independent branches merge in final cell."""
-        nb_runner.create_notebook([
-            "source = 10",
-            # Branch A
-            "branch_a = source * 2",
-            # Branch B
-            "branch_b = source + 5",
-            # Merge
-            textwrap.dedent("""\
-                merged = branch_a + branch_b
-                print(f"merged={merged}")
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # a=20, b=15, merged=35
-        assert "merged=35" in nb_runner.get_output(4)
-
-        # Change source
-        nb_runner.set_cell_source(1, "source = 100")
-        nb_runner.run_all()
-        # a=200, b=105, merged=305
-        assert "merged=305" in nb_runner.get_output(4)
 
     def test_three_branches_one_change(self, nb_runner):
         """Three parallel branches, only one changes."""

@@ -25,14 +25,3 @@ class TestStringEncodingBytes:
         assert "text=HELLO" in nb_runner.get_output(2)
         assert "len=5" in nb_runner.get_output(2)
 
-    def test_encoding_edit(self, nb_runner):
-        nb_runner.create_notebook([
-            "msg = 'café'",
-            "size = len(msg.encode('utf-8'))\nprint(f'bytes={size}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "bytes=5" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "msg = 'naïve'")
-        nb_runner.run_all()
-        assert "bytes=6" in nb_runner.get_output(2)

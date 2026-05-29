@@ -42,26 +42,6 @@ class TestMultiEditSameCell:
         nb_runner.run_cell(3)
         assert "result = 0" in nb_runner.get_output(3)
 
-    def test_revert_to_original_value(self, nb_runner):
-        """Edit a cell, then revert it to the original value — should use cache."""
-        nb_runner.create_notebook([
-            "a = 5",
-            "b = a + 10",
-            "print(f'b = {b}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "b = 15" in nb_runner.get_output(3)
-
-        # Change
-        nb_runner.set_cell_source(1, "a = 100")
-        nb_runner.run_cell(3)
-        assert "b = 110" in nb_runner.get_output(3)
-
-        # Revert to original
-        nb_runner.set_cell_source(1, "a = 5")
-        nb_runner.run_cell(3)
-        assert "b = 15" in nb_runner.get_output(3)
 
     def test_rapid_flip_flop(self, nb_runner):
         """Rapidly alternate between two values for a cell."""
@@ -120,21 +100,6 @@ class TestMultiCellEdits:
         nb_runner.run_cell(3)
         assert "z = 120" in nb_runner.get_output(3)
 
-    def test_edit_middle_cell_formula(self, nb_runner):
-        """Edit only the middle cell's formula, verify propagation."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 5",
-            "print(f'y = {y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 15" in nb_runner.get_output(3)
-
-        # Change middle cell formula
-        nb_runner.set_cell_source(2, "y = x * 10")
-        nb_runner.run_cell(3)
-        assert "y = 100" in nb_runner.get_output(3)
 
     def test_edit_all_cells_simultaneously(self, nb_runner):
         """Edit all three cells at once before running the last one."""

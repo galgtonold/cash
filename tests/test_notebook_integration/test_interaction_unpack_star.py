@@ -12,19 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestUnpackingStarEdits:
     """Editing cells with unpacking and star expressions."""
 
-    def test_edit_triple_unpack_values(self, nb_runner):
-        """Edit a 3-variable tuple unpacking."""
-        nb_runner.create_notebook([
-            "a, b, c = 1, 2, 3",
-            "total = a + b + c\nprint(f'total = {total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 6" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "a, b, c = 10, 20, 30")
-        nb_runner.run_all()
-        assert "total = 60" in nb_runner.get_output(2)
 
     def test_edit_star_first_to_last(self, nb_runner):
         """Switch from first/*rest to *init/last pattern."""

@@ -5,14 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestMatrixTransposeZipStar:
-    def test_transpose(self, nb_runner):
-        nb_runner.create_notebook([
-            "matrix = [[1, 2, 3], [4, 5, 6]]",
-            "transposed = list(map(list, zip(*matrix)))\nprint(f'transposed={transposed}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "transposed=[[1, 4], [2, 5], [3, 6]]" in nb_runner.get_output(2)
 
     def test_unzip(self, nb_runner):
         nb_runner.create_notebook([

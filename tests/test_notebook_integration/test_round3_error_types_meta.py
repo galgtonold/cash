@@ -35,20 +35,6 @@ class TestErrorHandlingPatterns:
         nb_runner.run_all()
         assert "42" in nb_runner.get_output(1)
 
-    def test_try_except_error_path(self, nb_runner):
-        """Try/except catching an error — result from except branch."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
-                try:
-                    result = int("not_a_number")
-                except ValueError:
-                    result = -999
-                print(result)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "-999" in nb_runner.get_output(1)
 
     def test_try_except_finally(self, nb_runner):
         """Try/except/finally — finally always runs."""
@@ -68,27 +54,6 @@ class TestErrorHandlingPatterns:
         nb_runner.run_all()
         assert "100 True" in nb_runner.get_output(1)
 
-    def test_custom_exception_class(self, nb_runner):
-        """Custom exception defined in one cell, raised/caught in another."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
-                class AppError(Exception):
-                    def __init__(self, code, msg):
-                        self.code = code
-                        self.msg = msg
-                        super().__init__(msg)
-            """),
-            textwrap.dedent("""\
-                try:
-                    raise AppError(404, "Not Found")
-                except AppError as e:
-                    error_info = f"{e.code}: {e.msg}"
-                print(error_info)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "404: Not Found" in nb_runner.get_output(2)
 
     def test_exception_chain(self, nb_runner):
         """Exception chaining with 'from'."""

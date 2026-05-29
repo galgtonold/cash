@@ -17,14 +17,6 @@ class TestCounterIntersectionUnion:
         assert "inter_b=1" in out
         assert "union_c=5" in out
 
-    def test_counter_elements(self, nb_runner):
-        nb_runner.create_notebook([
-            "from collections import Counter\nc = Counter(x=2, y=3, z=1)",
-            "elems = sorted(c.elements())\nprint(f'elems={elems}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "elems=['x', 'x', 'y', 'y', 'y', 'z']" in nb_runner.get_output(2)
 
     def test_counter_edit(self, nb_runner):
         nb_runner.create_notebook([

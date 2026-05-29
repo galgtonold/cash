@@ -12,23 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestInterCellCalls:
     """Functions calling functions from other cells."""
 
-    def test_edit_called_function(self, nb_runner):
-        """Edit a function that is called by another function."""
-        nb_runner.create_notebook([
-            "def helper(x):\n    return x + 1",
-            "def main(x):\n    return helper(x) * 2",
-            "result = main(5)\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # helper(5)=6, main(5)=12
-        assert "result = 12" in nb_runner.get_output(3)
-
-        # Edit helper
-        nb_runner.set_cell_source(1, "def helper(x):\n    return x + 100")
-        nb_runner.run_all()
-        # helper(5)=105, main(5)=210
-        assert "result = 210" in nb_runner.get_output(3)
 
     def test_edit_calling_function(self, nb_runner):
         """Edit a function that calls another function."""

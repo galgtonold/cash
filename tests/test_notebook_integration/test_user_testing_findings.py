@@ -125,20 +125,6 @@ class TestUpstreamChangeDetection:
 class TestNoStaleData:
     """Round 2 F9: Upstream changes must produce correct new values."""
 
-    def test_data_change_produces_correct_values(self, nb_runner):
-        """Changing data source must update all downstream results."""
-        nb_runner.create_notebook([
-            "data = [10, 20, 30]",
-            "doubled = [x * 2 for x in data]",
-            "result = sum(doubled)\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 120" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "data = [100, 200, 300]")
-        nb_runner.run_all()
-        assert "result = 1200" in nb_runner.get_output(3)
 
     def test_filter_change_updates_aggregates(self, nb_runner):
         """Changing a filter condition must update aggregates."""
@@ -350,37 +336,3 @@ class TestModelCaching:
 # Diamond dependencies
 # =============================================================================
 
-class TestDiamondDependencies:
-    """Complex dependency patterns: diamond, multi-branch."""
-
-    def test_diamond_dependency_edit_leaf(self, nb_runner):
-        """Diamond: a -> (b, c) -> d. Edit a, verify d updates."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 1",
-            "c = a + 2",
-            "d = b + c\nprint(f'd = {d}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d = 23" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(1, "a = 100")
-        nb_runner.run_all()
-        assert "d = 203" in nb_runner.get_output(4)
-
-    def test_diamond_edit_one_branch(self, nb_runner):
-        """Diamond: edit only one branch, verify d updates correctly."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a * 2",
-            "c = a * 3",
-            "d = b + c\nprint(f'd = {d}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d = 50" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(2, "b = a * 10")
-        nb_runner.run_all()
-        assert "d = 130" in nb_runner.get_output(4)

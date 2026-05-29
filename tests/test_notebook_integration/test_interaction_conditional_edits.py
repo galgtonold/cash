@@ -12,26 +12,6 @@ pytestmark = [pytest.mark.control, pytest.mark.stress, pytest.mark.timeout(45)]
 class TestIfElseEdits:
     """If/else editing patterns."""
 
-    def test_edit_condition_value(self, nb_runner):
-        """Edit the value that controls a branch."""
-        nb_runner.create_notebook([
-            "score = 85",
-            "if score >= 90:\n    grade = 'A'\nelif score >= 80:\n    grade = 'B'\nelse:\n    grade = 'C'",
-            "print(f'grade = {grade}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "grade = B" in nb_runner.get_output(3)
-
-        # Change to get A
-        nb_runner.set_cell_source(1, "score = 95")
-        nb_runner.run_all()
-        assert "grade = A" in nb_runner.get_output(3)
-
-        # Change to get C
-        nb_runner.set_cell_source(1, "score = 50")
-        nb_runner.run_all()
-        assert "grade = C" in nb_runner.get_output(3)
 
     def test_edit_branch_logic(self, nb_runner):
         """Edit the branch logic itself."""

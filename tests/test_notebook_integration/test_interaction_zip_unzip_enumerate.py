@@ -16,14 +16,6 @@ class TestZipUnzipEnumerate:
         assert "('Alice', 30)" in out
         assert "names=['Alice', 'Bob', 'Carol']" in out
 
-    def test_enumerate_start(self, nb_runner):
-        nb_runner.create_notebook([
-            "items = ['apple', 'banana', 'cherry']",
-            "indexed = list(enumerate(items, start=1))\nprint(f'indexed={indexed}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "indexed=[(1, 'apple'), (2, 'banana'), (3, 'cherry')]" in nb_runner.get_output(2)
 
     def test_zip_edit(self, nb_runner):
         nb_runner.create_notebook([

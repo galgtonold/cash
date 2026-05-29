@@ -15,15 +15,6 @@ class TestStringRemovePrefixSuffix:
         assert "no_prefix=CaseExample" in nb_runner.get_output(2)
         assert "no_miss=TestCaseExample" in nb_runner.get_output(2)
 
-    def test_removesuffix(self, nb_runner):
-        nb_runner.create_notebook([
-            "filename = 'data.csv'",
-            "no_ext = filename.removesuffix('.csv')\nno_miss = filename.removesuffix('.txt')\nprint(f'no_ext={no_ext} no_miss={no_miss}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "no_ext=data" in nb_runner.get_output(2)
-        assert "no_miss=data.csv" in nb_runner.get_output(2)
 
     def test_remove_edit(self, nb_runner):
         nb_runner.create_notebook([

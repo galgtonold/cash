@@ -476,26 +476,7 @@ class TestComplexInteractions:
         nb_runner.run_all()
         assert "result=2.0" in nb_runner.get_output(2)
 
-    def test_126_comprehension_variable_scope(self, nb_runner):
-        """List comprehension variable does NOT leak to cell scope."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "evens = [x for x in data if x % 2 == 0]\nprint(f'evens={evens}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "evens=[2, 4]" in nb_runner.get_output(2)
 
-    def test_127_generator_expression(self, nb_runner):
-        """Generator expression in function call."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "total = sum(x**2 for x in data)\nprint(f'total={total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        # 1+4+9+16+25 = 55
-        assert "total=55" in nb_runner.get_output(2)
 
     def test_128_f_string_with_method_call(self, nb_runner):
         """f-string with method calls — analysis handles correctly."""

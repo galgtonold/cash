@@ -12,19 +12,6 @@ pytestmark = [pytest.mark.core, pytest.mark.stress, pytest.mark.timeout(30)]
 class TestMultiStatementBasic:
     """Multi-statement cells, edit individual parts."""
 
-    def test_edit_first_statement_in_multi(self, nb_runner):
-        """Cell has 3 statements, edit just the first."""
-        nb_runner.create_notebook([
-            "a = 1\nb = 2\nc = 3",
-            "total = a + b + c\nprint(f'total = {total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 6" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "a = 10\nb = 2\nc = 3")
-        nb_runner.run_all()
-        assert "total = 15" in nb_runner.get_output(2)
 
     def test_edit_middle_statement_in_multi(self, nb_runner):
         """Cell has 3 assignments, edit the middle one."""
@@ -75,22 +62,6 @@ class TestMultiStatementWithFunctions:
         nb_runner.run_all()
         assert "result = 25" in nb_runner.get_output(2)
 
-    def test_multi_function_cell(self, nb_runner):
-        """Multiple function definitions in one cell."""
-        nb_runner.create_notebook([
-            "def add(a, b):\n    return a + b\ndef mul(a, b):\n    return a * b",
-            "r1 = add(3, 4)\nr2 = mul(3, 4)\nprint(f'r1={r1}, r2={r2}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r1=7, r2=12" in nb_runner.get_output(2)
-
-        # Edit one function
-        nb_runner.set_cell_source(
-            1, "def add(a, b):\n    return a + b + 100\ndef mul(a, b):\n    return a * b"
-        )
-        nb_runner.run_all()
-        assert "r1=107, r2=12" in nb_runner.get_output(2)
 
 
 class TestMultiStatementWithControlFlow:

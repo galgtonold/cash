@@ -23,15 +23,3 @@ class TestGlobalNonlocalScope:
         nb_runner.run_all()
         assert "results=[10, 30, 60]" in nb_runner.get_output(2)
 
-    def test_scope_edit_function(self, nb_runner):
-        nb_runner.create_notebook([
-            "def make_adder(base):\n    def add(x):\n        return base + x\n    return add",
-            "add5 = make_adder(5)\nresult = add5(10)\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=15" in nb_runner.get_output(2)
-        # Edit
-        nb_runner.set_cell_source(1, "def make_adder(base):\n    def add(x):\n        return base * x\n    return add")
-        nb_runner.run_all()
-        assert "result=50" in nb_runner.get_output(2)

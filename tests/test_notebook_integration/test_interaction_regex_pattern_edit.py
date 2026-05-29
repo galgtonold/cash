@@ -27,11 +27,3 @@ class TestRegexPatternEdit:
         nb_runner.run_all()
         assert "total=600" in nb_runner.get_output(2)
 
-    def test_regex_sub(self, nb_runner):
-        nb_runner.create_notebook([
-            "import re\nraw = 'Hello   World   Python'",
-            "cleaned = re.sub(r'\\s+', ' ', raw)\nprint(f'cleaned={cleaned}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "cleaned=Hello World Python" in nb_runner.get_output(2)

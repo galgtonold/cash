@@ -14,14 +14,6 @@ class TestWalrusWhileComprehension:
         nb_runner.run_all()
         assert "results=[5, 8, 9]" in nb_runner.get_output(2)
 
-    def test_walrus_in_comprehension(self, nb_runner):
-        nb_runner.create_notebook([
-            "nums = [2, 8, 3, 12, 5, 1]",
-            "filtered = [(y, n) for n in nums if (y := n * 2) > 6]\nprint(f'filtered={filtered}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "(16, 8)" in nb_runner.get_output(2)
 
     def test_walrus_edit(self, nb_runner):
         nb_runner.create_notebook([

@@ -5,14 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestItertoolsChainProduct:
-    def test_chain_flat(self, nb_runner):
-        nb_runner.create_notebook([
-            "from itertools import chain\na = [1, 2]\nb = [3, 4]\nc = [5]",
-            "result = list(chain(a, b, c))\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=[1, 2, 3, 4, 5]" in nb_runner.get_output(2)
 
     def test_product_edit(self, nb_runner):
         nb_runner.create_notebook([

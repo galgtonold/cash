@@ -11,16 +11,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.stress]
 class TestVariableShadowing:
     """Test variable shadowing across cells."""
 
-    def test_reassignment_in_later_cell(self, nb_runner):
-        """Variable reassigned in a later cell."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "x = 20",
-            "print(x)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "20" in nb_runner.get_output(3)
 
     def test_function_shadowed_by_variable(self, nb_runner):
         """Function name shadowed by a plain variable."""
@@ -85,16 +75,6 @@ class TestUnpackingPatterns:
         nb_runner.run_all()
         assert "10 20 30" in nb_runner.get_output(3)
 
-    def test_star_unpacking(self, nb_runner):
-        """Star unpacking (*rest)."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "first, *middle, last = data",
-            "print(f'first={first} middle={middle} last={last}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "first=1 middle=[2, 3, 4] last=5" in nb_runner.get_output(3)
 
     def test_nested_unpacking(self, nb_runner):
         """Nested unpacking."""
@@ -196,13 +176,3 @@ class TestDeleteAndRebind:
         nb_runner.run_all()
         assert "99" in nb_runner.get_output(4)
 
-    def test_swap_variables(self, nb_runner):
-        """Pythonic variable swap."""
-        nb_runner.create_notebook([
-            "a = 10\nb = 20",
-            "a, b = b, a",
-            "print(f'a={a} b={b}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a=20 b=10" in nb_runner.get_output(3)

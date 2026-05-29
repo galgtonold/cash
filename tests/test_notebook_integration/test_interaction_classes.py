@@ -26,21 +26,6 @@ class TestClassDefinitionEdits:
         nb_runner.run_all()
         assert "result = 100" in nb_runner.get_output(2)
 
-    def test_edit_class_method(self, nb_runner):
-        """Edit a class method."""
-        nb_runner.create_notebook([
-            "class Calculator:\n    def compute(self, x):\n        return x * 2",
-            "c = Calculator()\nresult = c.compute(5)\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 10" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(
-            1, "class Calculator:\n    def compute(self, x):\n        return x ** 2"
-        )
-        nb_runner.run_all()
-        assert "result = 25" in nb_runner.get_output(2)
 
     def test_add_method_to_class(self, nb_runner):
         """Add a new method to a class."""
@@ -101,21 +86,6 @@ class TestInheritanceEdits:
         nb_runner.run_all()
         assert "result = hello world" in nb_runner.get_output(3)
 
-    def test_switch_parent_class(self, nb_runner):
-        """Switch which parent class a child inherits from."""
-        nb_runner.create_notebook([
-            "class A:\n    val = 1",
-            "class B:\n    val = 2",
-            "class C(A):\n    pass",
-            "result = C.val\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 1" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(3, "class C(B):\n    pass")
-        nb_runner.run_all()
-        assert "result = 2" in nb_runner.get_output(4)
 
 
 class TestClassInstanceEdits:

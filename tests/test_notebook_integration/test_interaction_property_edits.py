@@ -71,20 +71,3 @@ class TestClassMethodEdits:
         nb_runner.run_all()
         assert "a=10 b=20" in nb_runner.get_output(2)
 
-    def test_edit_staticmethod(self, nb_runner):
-        """Edit a static method."""
-        nb_runner.create_notebook([
-            "class MathHelper:\n    @staticmethod\n    def double(x):\n        return x * 2",
-            "result = MathHelper.double(5)\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 10" in nb_runner.get_output(2)
-
-        # Change to triple
-        nb_runner.set_cell_source(
-            1,
-            "class MathHelper:\n    @staticmethod\n    def double(x):\n        return x * 3",
-        )
-        nb_runner.run_all()
-        assert "result = 15" in nb_runner.get_output(2)

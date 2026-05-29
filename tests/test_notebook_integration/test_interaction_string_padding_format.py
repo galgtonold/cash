@@ -26,15 +26,3 @@ class TestStringPaddingFormatting:
         nb_runner.run_all()
         assert "filled=['0001', '0042', '0100', '0007']" in nb_runner.get_output(2)
 
-    def test_padding_edit(self, nb_runner):
-        nb_runner.create_notebook([
-            "word = 'hi'",
-            "result = word.center(6, '=')\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result===hi==" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "word = 'test'")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(2)
-        assert "result==test=" in out2

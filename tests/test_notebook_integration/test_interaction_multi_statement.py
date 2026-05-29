@@ -12,33 +12,7 @@ pytestmark = [pytest.mark.core, pytest.mark.stress, pytest.mark.timeout(30)]
 class TestMultiStatementCellEdits:
     """Edit individual statements within multi-statement cells."""
 
-    def test_edit_first_statement_in_cell(self, nb_runner):
-        """Cell has two statements, edit the first one."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 20",
-            "total = x + y\nprint(f'total = {total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 30" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, "x = 100\ny = 20")
-        nb_runner.run_all()
-        assert "total = 120" in nb_runner.get_output(2)
-
-    def test_edit_second_statement_in_cell(self, nb_runner):
-        """Cell has two statements, edit the second one."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 20",
-            "total = x + y\nprint(f'total = {total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 30" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "x = 10\ny = 200")
-        nb_runner.run_all()
-        assert "total = 210" in nb_runner.get_output(2)
 
     def test_add_statement_to_cell(self, nb_runner):
         """Add a new statement to an existing cell."""

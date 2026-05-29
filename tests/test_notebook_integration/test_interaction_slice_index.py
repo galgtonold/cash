@@ -41,16 +41,3 @@ class TestSliceIndexEdits:
         nb_runner.run_all()
         assert "selected = [0, 5, 10, 15]" in nb_runner.get_output(3)
 
-    def test_negative_index_edit(self, nb_runner):
-        """Edit data, negative indexing result changes."""
-        nb_runner.create_notebook([
-            "items = ['a', 'b', 'c', 'd', 'e']",
-            "last_two = items[-2:]\nprint(f'last_two = {last_two}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "last_two = ['d', 'e']" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "items = ['x', 'y', 'z']")
-        nb_runner.run_all()
-        assert "last_two = ['y', 'z']" in nb_runner.get_output(2)

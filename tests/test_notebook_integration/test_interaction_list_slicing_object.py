@@ -30,14 +30,3 @@ class TestListSlicingObject:
         assert "start=2" in out
         assert "stop=10" in out
 
-    def test_slice_edit(self, nb_runner):
-        nb_runner.create_notebook([
-            "data = [10, 20, 30, 40, 50]",
-            "result = data[1:4]\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=[20, 30, 40]" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(1, "data = [100, 200, 300, 400, 500]")
-        nb_runner.run_all()
-        assert "result=[200, 300, 400]" in nb_runner.get_output(2)

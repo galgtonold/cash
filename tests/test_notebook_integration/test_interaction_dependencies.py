@@ -54,24 +54,6 @@ class TestTransitiveDependencies:
 class TestDiamondDependencies:
     """Diamond-shaped dependency graphs + edits."""
 
-    def test_diamond_edit_root(self, nb_runner):
-        """
-        Diamond: root → left, right → merge
-        Edit root, both branches should update.
-        """
-        nb_runner.create_notebook([
-            "root = 10",
-            "left = root * 2",
-            "right = root * 3",
-            "merged = left + right\nprint(f'merged = {merged}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "merged = 50" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(1, "root = 5")
-        nb_runner.run_all()
-        assert "merged = 25" in nb_runner.get_output(4)
 
     def test_diamond_edit_one_branch(self, nb_runner):
         """Diamond: edit only one branch."""

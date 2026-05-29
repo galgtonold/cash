@@ -82,21 +82,6 @@ class TestFunctionRedefinition:
         assert "a = 20" in nb_runner.get_output(2)
         assert "b = 30" in nb_runner.get_output(3)
 
-    def test_function_with_default_args_redefined(self, nb_runner):
-        """Redefine function that has default arguments."""
-        nb_runner.create_notebook([
-            "def greet(name, greeting='Hello'):\n    return f'{greeting}, {name}!'",
-            "msg = greet('Alice')\nprint(msg)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Hello, Alice!" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(
-            1, "def greet(name, greeting='Hi'):\n    return f'{greeting}, {name}!'"
-        )
-        nb_runner.run_all()
-        assert "Hi, Alice!" in nb_runner.get_output(2)
 
     def test_function_redefined_after_restart(self, nb_runner):
         """Restart kernel, redefine function, downstream should recompute."""

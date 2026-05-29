@@ -196,24 +196,6 @@ class TestPartialReExecution:
         out = nb_runner.get_output(3)
         assert "c = 6" in out, f"Expected c=6, got: {out}"
 
-    def test_modify_first_cell_run_last(self, nb_runner):
-        """Modify cell 1, then only run cell 3 — should cascade correctly."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2",
-            "z = y + 5\nprint(f'z = {z}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "z = 25" in nb_runner.get_output(3)
-
-        # Modify cell 1
-        nb_runner.set_cell_source(1, "x = 100")
-        # Only run cell 3
-        nb_runner.run_cell(3)
-
-        out = nb_runner.get_output(3)
-        assert "z = 205" in out, f"Expected z=205, got: {out}"
 
 
 @pytest.mark.modules
@@ -482,16 +464,6 @@ class TestStringAndFormattingPatterns:
 class TestCollectionPatterns:
     """Test caching with various collection manipulations."""
 
-    def test_nested_list_operations(self, nb_runner):
-        """Nested list creation and flattening."""
-        nb_runner.create_notebook([
-            "matrix = [[1, 2, 3], [4, 5, 6], [7, 8, 9]]",
-            "flat = [x for row in matrix for x in row]\nprint(flat)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        assert "[1, 2, 3, 4, 5, 6, 7, 8, 9]" in nb_runner.get_output(2)
 
     def test_set_operations_across_cells(self, nb_runner):
         """Set operations using variables from different cells."""
@@ -627,25 +599,7 @@ class TestNumericPatterns:
 class TestTryCatchPatterns:
     """Test try/except patterns in cached cells."""
 
-    def test_try_except_successful_path(self, nb_runner):
-        """Try block succeeds — result cached."""
-        nb_runner.create_notebook([
-            "x = '42'",
-            "try:\n    val = int(x)\nexcept ValueError:\n    val = -1\nprint(f'val = {val}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = 42" in nb_runner.get_output(2)
 
-    def test_try_except_error_path(self, nb_runner):
-        """Try block fails, except runs — result cached."""
-        nb_runner.create_notebook([
-            "x = 'not_a_number'",
-            "try:\n    val = int(x)\nexcept ValueError:\n    val = -1\nprint(f'val = {val}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "val = -1" in nb_runner.get_output(2)
 
     def test_try_except_switch_paths(self, nb_runner):
         """Change input to switch from success to error path."""

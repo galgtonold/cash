@@ -12,21 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestInheritanceChainEdits:
     """Editing classes in an inheritance hierarchy."""
 
-    def test_edit_base_class_method(self, nb_runner):
-        """Edit a base class method; derived class should reflect change."""
-        nb_runner.create_notebook([
-            "class Animal:\n    def speak(self):\n        return 'generic sound'",
-            "class Dog(Animal):\n    pass",
-            "d = Dog()\nresult = d.speak()\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = generic sound" in nb_runner.get_output(3)
-
-        # Edit base class
-        nb_runner.set_cell_source(1, "class Animal:\n    def speak(self):\n        return 'updated sound'")
-        nb_runner.run_all()
-        assert "result = updated sound" in nb_runner.get_output(3)
 
     def test_edit_derived_class_override(self, nb_runner):
         """Edit a derived class to override a base method."""

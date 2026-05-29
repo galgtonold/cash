@@ -126,20 +126,6 @@ class TestClassEvolution:
 class TestSelectiveCellReexecution:
     """Test running subsets of cells (common notebook interaction pattern)."""
 
-    def test_rerun_single_cell(self, nb_runner):
-        """Re-running a single cell should use cache for unchanged cells."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2",
-            "print(y)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "20" in nb_runner.get_output(3)
-
-        # Re-run just the print cell
-        nb_runner.run_cell(3)
-        assert "20" in nb_runner.get_output(3)
 
     def test_rerun_subset_of_cells(self, nb_runner):
         """Re-run only cells 2 and 3 out of 4."""

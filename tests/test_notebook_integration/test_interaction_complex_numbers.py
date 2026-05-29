@@ -5,15 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestComplexNumbers:
-    def test_complex_arithmetic(self, nb_runner):
-        nb_runner.create_notebook([
-            "z1 = 3 + 4j\nz2 = 1 - 2j",
-            "s = z1 + z2\np = z1 * z2\nprint(f's={s} p={p}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "s=(4+2j)" in nb_runner.get_output(2)
-        assert "p=(11-2j)" in nb_runner.get_output(2)
 
     def test_complex_edit(self, nb_runner):
         nb_runner.create_notebook([

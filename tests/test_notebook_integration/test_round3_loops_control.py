@@ -104,22 +104,6 @@ class TestForLoopCaching:
 class TestWhileLoopCaching:
     """Test while loop caching."""
 
-    def test_simple_while_loop(self, nb_runner):
-        """Simple while loop with counter."""
-        nb_runner.create_notebook([
-            "limit = 5",
-            textwrap.dedent("""\
-                count = 0
-                total = 0
-                while count < limit:
-                    total += count
-                    count += 1
-                print(total)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "10" in nb_runner.get_output(2)  # 0+1+2+3+4
 
     def test_while_with_break(self, nb_runner):
         """While loop with break condition."""

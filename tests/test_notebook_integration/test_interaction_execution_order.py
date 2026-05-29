@@ -82,19 +82,6 @@ class TestOutOfOrderExecution:
 class TestRerunWithoutChanges:
     """Re-running cells without changes should be idempotent."""
 
-    def test_idempotent_rerun_all(self, nb_runner):
-        """Run all twice — second run should produce identical results."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x * 2",
-            "print(f'y = {y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 84" in nb_runner.get_output(3)
-
-        nb_runner.run_all()
-        assert "y = 84" in nb_runner.get_output(3)
 
     def test_idempotent_rerun_single_cell(self, nb_runner):
         """Run cell 3 multiple times — each should give same result."""

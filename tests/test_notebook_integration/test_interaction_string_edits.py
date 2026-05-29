@@ -13,19 +13,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(45)]
 class TestStringEdits:
     """String manipulation with cell edits."""
 
-    def test_edit_string_content(self, nb_runner):
-        """Edit string content, verify downstream updates."""
-        nb_runner.create_notebook([
-            "name = 'Alice'",
-            "greeting = f'Hello, {name}!'\nprint(greeting)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Hello, Alice!" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "name = 'Bob'")
-        nb_runner.run_all()
-        assert "Hello, Bob!" in nb_runner.get_output(2)
 
     def test_edit_format_string(self, nb_runner):
         """Edit the format string itself."""

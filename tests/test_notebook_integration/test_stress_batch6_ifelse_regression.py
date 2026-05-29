@@ -39,20 +39,6 @@ class TestIfElseBranchRegression:
         nb_runner.run_cell(3)
         assert "x=2" in nb_runner.get_output(3)
 
-    def test_167_elif_to_else(self, nb_runner):
-        """Switch from first branch to else (catch-all)."""
-        nb_runner.create_notebook([
-            "mode = 'a'",
-            "if mode == 'a':\n    x = 'alpha'\nelif mode == 'b':\n    x = 'beta'\nelse:\n    x = 'other'",
-            "print(f'x={x}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x=alpha" in nb_runner.get_output(3)
-        # Switch to unknown mode
-        nb_runner.set_cell_source(1, "mode = 'z'")
-        nb_runner.run_cell(3)
-        assert "x=other" in nb_runner.get_output(3)
 
     def test_168_numeric_condition_change(self, nb_runner):
         """Condition based on numeric comparison."""

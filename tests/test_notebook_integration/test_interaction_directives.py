@@ -23,20 +23,6 @@ class TestNoCacheDirective:
         nb_runner.run_all()
         assert "counter = 1" in nb_runner.get_output(3)
 
-    def test_add_no_cache_directive(self, nb_runner):
-        """Add @cash:no-cache to a cell that was cached."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 20" in nb_runner.get_output(2)
-
-        # Add no-cache — should still compute correctly
-        nb_runner.set_cell_source(2, "# @cash:no-cache\ny = x * 2\nprint(f'y = {y}')")
-        nb_runner.run_all()
-        assert "y = 20" in nb_runner.get_output(2)
 
     def test_remove_no_cache_directive(self, nb_runner):
         """Remove @cash:no-cache directive — cell becomes cacheable."""

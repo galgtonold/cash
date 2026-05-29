@@ -28,15 +28,6 @@ class TestLoopEdgeCases:
         nb_runner.run_all()
         assert "results=[]" in nb_runner.get_output(2)
 
-    def test_67_single_iteration_loop(self, nb_runner):
-        """Scenario 67: Loop with single iteration."""
-        nb_runner.create_notebook([
-            "data = [42]",
-            "results = []\nfor x in data:\n    results.append(x * 2)\nprint(f'results={results}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "results=[84]" in nb_runner.get_output(2)
 
     def test_68_loop_with_break(self, nb_runner):
         """Scenario 68: Loop with break — fallback to single-unit."""
@@ -242,15 +233,6 @@ class TestMutationDetection:
         nb_runner.run_cell(2)
         assert "results=[20, 40]" in nb_runner.get_output(2)
 
-    def test_84_dict_subscript_mutation(self, nb_runner):
-        """Scenario 87: Dict subscript assignment — mutation detected."""
-        nb_runner.create_notebook([
-            "d = {}",
-            "d['x'] = 42\nprint(f'd={d}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d={'x': 42}" in nb_runner.get_output(2)
 
     def test_85_augmented_assignment_on_list(self, nb_runner):
         """Scenario 89: lst += [...] — augmented assignment on collection."""

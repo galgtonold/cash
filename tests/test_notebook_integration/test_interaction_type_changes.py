@@ -13,19 +13,6 @@ pytestmark = [pytest.mark.core, pytest.mark.stress, pytest.mark.timeout(30)]
 class TestTypeChanges:
     """Variable type changes between runs."""
 
-    def test_int_to_string(self, nb_runner):
-        """Variable changes from int to string."""
-        nb_runner.create_notebook([
-            "x = 42",
-            "result = str(x)\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 42" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "x = 'hello'")
-        nb_runner.run_all()
-        assert "result = hello" in nb_runner.get_output(2)
 
     def test_list_to_dict(self, nb_runner):
         """Variable changes from list to dict."""

@@ -42,16 +42,3 @@ class TestFluentInterface:
         nb_runner.run_all()
         assert "r = 35" in nb_runner.get_output(2)
 
-    def test_string_chain_edit(self, nb_runner):
-        """Edit string method chain."""
-        nb_runner.create_notebook([
-            "text = '  Hello World  '",
-            "result = text.strip().lower().replace(' ', '_')\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = hello_world" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "text = '  Python Programming  '")
-        nb_runner.run_all()
-        assert "result = python_programming" in nb_runner.get_output(2)

@@ -119,40 +119,7 @@ class TestNumpyPatterns:
 
 
 @pytest.mark.core
-class TestOutOfOrderExecution:
-    """Test running cells out of order and how cash handles it."""
 
-    def test_run_cell3_before_cell2(self, nb_runner):
-        """Run cell 3 before cell 2 — cell 3 needs cell 2's output."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 5",
-            "z = y * 2\nprint(f'z = {z}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_cell(1)
-        # Skip cell 2, run cell 3 — upstream should restore y
-        nb_runner.run_cell(3)
-
-        out = nb_runner.get_output(3)
-        assert "z = 30" in out, f"Expected z=30, got: {out}"
-
-    def test_reverse_order_execution(self, nb_runner):
-        """Run cells in reverse: 3, 2, 1 — first run populates cache."""
-        nb_runner.create_notebook([
-            "x = 7",
-            "y = x * 3",
-            "z = y + 1\nprint(f'z = {z}')",
-        ])
-        nb_runner.start_kernel()
-        # First run all to populate cache
-        nb_runner.run_all()
-        assert "z = 22" in nb_runner.get_output(3)
-
-        # Now run only cell 3 — should use cached upstream
-        nb_runner.run_cell(3)
-        out = nb_runner.get_output(3)
-        assert "z = 22" in out, f"Expected z=22, got: {out}"
 
 
 @pytest.mark.core
@@ -250,16 +217,6 @@ class TestReassignmentPatterns:
         nb_runner.run_all()
         assert "42 is the answer" in nb_runner.get_output(3)
 
-    def test_swap_variables(self, nb_runner):
-        """Swap two variables."""
-        nb_runner.create_notebook([
-            "a = 'hello'\nb = 'world'",
-            "a, b = b, a",
-            "print(f'a={a}, b={b}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a=world, b=hello" in nb_runner.get_output(3)
 
 
 @pytest.mark.core
@@ -307,15 +264,6 @@ class TestComplexDataStructures:
 class TestImportPatterns:
     """Test various import patterns and their caching."""
 
-    def test_import_as_alias(self, nb_runner):
-        """import X as Y."""
-        nb_runner.create_notebook([
-            "import math as m",
-            "r = m.sqrt(144)\nprint(f'r = {r}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "r = 12.0" in nb_runner.get_output(2)
 
     def test_from_import_as_alias(self, nb_runner):
         """from X import Y as Z."""

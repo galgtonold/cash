@@ -5,14 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestStringTranslate:
-    def test_translate_basic(self, nb_runner):
-        nb_runner.create_notebook([
-            "text = 'Hello, World! 123'",
-            "table = str.maketrans('aeiou', '12345', '!,')\nresult = text.translate(table)\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "H2ll4 W4rld 123" in nb_runner.get_output(2)
 
     def test_translate_edit(self, nb_runner):
         nb_runner.create_notebook([

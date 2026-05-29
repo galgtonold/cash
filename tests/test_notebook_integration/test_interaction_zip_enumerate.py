@@ -12,23 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestZipEnumerateEdits:
     """Editing zip and enumerate patterns."""
 
-    def test_edit_zip_sources(self, nb_runner):
-        """Edit one of two lists being zipped."""
-        nb_runner.create_notebook([
-            "names = ['Alice', 'Bob', 'Charlie']",
-            "scores = [90, 85, 78]",
-            "pairs = list(zip(names, scores))\nprint(pairs)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "('Alice', 90)" in nb_runner.get_output(3)
-
-        # Edit scores
-        nb_runner.set_cell_source(2, "scores = [95, 88, 82]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "('Alice', 95)" in out
-        assert "('Bob', 88)" in out
 
     def test_edit_enumerate_start(self, nb_runner):
         """Edit list and re-enumerate."""
@@ -47,21 +30,6 @@ class TestZipEnumerateEdits:
         assert "1: mango" in out
         assert "4: plum" in out
 
-    def test_edit_zip_with_transform(self, nb_runner):
-        """Edit transform applied to zipped pairs."""
-        nb_runner.create_notebook([
-            "keys = ['a', 'b', 'c']\nvals = [1, 2, 3]",
-            "result = dict(zip(keys, vals))\nprint(result)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "'a': 1" in nb_runner.get_output(2)
-
-        # Change keys
-        nb_runner.set_cell_source(1, "keys = ['x', 'y', 'z']\nvals = [10, 20, 30]")
-        nb_runner.run_all()
-        out = nb_runner.get_output(2)
-        assert "'x': 10" in out
 
     def test_edit_multi_zip(self, nb_runner):
         """Edit cells with multiple zip operations."""

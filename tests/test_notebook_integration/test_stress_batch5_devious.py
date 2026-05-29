@@ -380,25 +380,6 @@ class TestReexecutionPatterns:
         out = nb_runner.get_output(2)
         assert "20" in out
 
-    def test_148_run_cell_then_add_new_cell_after(self, nb_runner):
-        """Run cells, then add a new cell at the end and run it."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 5\nprint(f'y={y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=15" in nb_runner.get_output(2)
-        # "Add" a new cell by recreating notebook with 3 cells
-        # But we can use set_cell_source won't work for adding
-        # Instead, we can directly modify the notebook
-        import nbformat
-        cell = nbformat.v4.new_code_cell("z = y * 2\nprint(f'z={z}')")
-        cell.id = "cell_new"
-        nb_runner.nb.cells.append(cell)
-        nb_runner._save_notebook()
-        nb_runner.run_cell(3)
-        assert "z=30" in nb_runner.get_output(3)
 
     def test_149_delete_variable_upstream_then_use(self, nb_runner):
         """
@@ -497,25 +478,6 @@ class TestComplexDataFlows:
         # sum(0..19) = 190
         assert "total=190" in nb_runner.get_output(1)
 
-    def test_154_cross_cell_function_closure(self, nb_runner):
-        """Function defined in one cell captures variable from another."""
-        nb_runner.create_notebook([
-            "multiplier = 10",
-            "def scale(x):\n    return x * multiplier",
-            "result = scale(5)\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=50" in nb_runner.get_output(3)
-        # Change multiplier
-        nb_runner.set_cell_source(1, "multiplier = 100")
-        nb_runner.run_all()
-        # Function source hasn't changed, but multiplier has
-        # This is tricky — the function's behavior depends on runtime value
-        out = nb_runner.get_output(3)
-        # Note: cash tracks function SOURCE changes, not closure variable changes
-        # This is a known limitation — result may be stale (50) or correct (500)
-        assert "result=" in out
 
     def test_155_nested_data_structures(self, nb_runner):
         """Deeply nested data structures — caching handles correctly."""

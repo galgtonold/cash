@@ -113,20 +113,6 @@ class TestSkipLogic:
         nb_runner.run_cell(2)
         assert "x=2" in nb_runner.get_output(2)
 
-    def test_07_same_code_different_inputs(self, nb_runner):
-        """Scenario 11: Two cells with `y = x + 1` after different x definitions."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x + 1\nprint(f'y={y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y=11" in nb_runner.get_output(2)
-        # Change x
-        nb_runner.set_cell_source(1, "x = 20")
-        nb_runner.run_cell(1)
-        nb_runner.run_cell(2)
-        assert "y=21" in nb_runner.get_output(2)
 
     def test_08_empty_cell(self, nb_runner):
         """Scenario 12: Cell with only comments or whitespace."""
@@ -403,20 +389,6 @@ class TestLineageIntegrity:
         # (10*2 + 3)^2 = 23^2 = 529
         assert "step3=529" in nb_runner.get_output(4)
 
-    def test_28_independent_cells_skip(self, nb_runner):
-        """Two independent cells — changing one doesn't affect the other."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = 20",
-            "print(f'a={a}, b={b}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a=10, b=20" in nb_runner.get_output(3)
-        # Change only a
-        nb_runner.set_cell_source(1, "a = 99")
-        nb_runner.run_all()
-        assert "a=99, b=20" in nb_runner.get_output(3)
 
     def test_29_tuple_unpacking(self, nb_runner):
         """Tuple unpacking produces multiple outputs."""

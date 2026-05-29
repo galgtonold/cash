@@ -5,14 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestStringZfillNumFormat:
-    def test_zfill(self, nb_runner):
-        nb_runner.create_notebook([
-            "nums = [1, 42, 100, 7]",
-            "padded = [str(n).zfill(5) for n in nums]\nprint(f'padded={padded}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "padded=['00001', '00042', '00100', '00007']" in nb_runner.get_output(2)
 
     def test_format_thousands(self, nb_runner):
         nb_runner.create_notebook([

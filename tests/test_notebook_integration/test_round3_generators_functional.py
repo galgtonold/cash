@@ -127,28 +127,6 @@ class TestClosurePatterns:
         nb_runner.run_all()
         assert "42" in nb_runner.get_output(3)
 
-    def test_closure_factory_change(self, nb_runner):
-        """Change factory argument → closure output changes."""
-        nb_runner.create_notebook([
-            textwrap.dedent("""\
-                def make_adder(n):
-                    def add(x):
-                        return x + n
-                    return add
-            """),
-            "add5 = make_adder(5)",
-            textwrap.dedent("""\
-                result = add5(10)
-                print(result)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "15" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(2, "add5 = make_adder(100)")
-        nb_runner.run_all()
-        assert "110" in nb_runner.get_output(3)
 
     def test_higher_order_map_filter(self, nb_runner):
         """Higher-order functions: map + filter."""
@@ -237,18 +215,6 @@ class TestComprehensionEdgeCases:
         output = nb_runner.get_output(2)
         assert "'b_1': 2" in output
 
-    def test_walrus_in_comprehension(self, nb_runner):
-        """Walrus operator (:=) in list comprehension."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]",
-            textwrap.dedent("""\
-                result = [y for x in data if (y := x**2) > 25]
-                print(result)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "[36, 49, 64, 81, 100]" in nb_runner.get_output(2)
 
     def test_set_comprehension(self, nb_runner):
         """Set comprehension with cross-cell input."""

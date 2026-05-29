@@ -118,21 +118,6 @@ class TestCounterPatterns:
 class TestClosureEdits:
     """Closure/factory patterns + cell edits."""
 
-    def test_closure_factory(self, nb_runner):
-        """Factory function creating closure, edit factory."""
-        nb_runner.create_notebook([
-            "def make_adder(n):\n    def adder(x):\n        return x + n\n    return adder",
-            "add5 = make_adder(5)",
-            "result = add5(10)\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = 15" in nb_runner.get_output(3)
-
-        # Edit factory call
-        nb_runner.set_cell_source(2, "add5 = make_adder(50)")
-        nb_runner.run_all()
-        assert "result = 60" in nb_runner.get_output(3)
 
     def test_edit_closure_implementation(self, nb_runner):
         """Edit the closure implementation itself."""

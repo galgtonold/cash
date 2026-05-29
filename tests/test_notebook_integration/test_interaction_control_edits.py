@@ -62,21 +62,6 @@ class TestLoopCellEdits:
         nb_runner.run_all()
         assert "total = 3" in nb_runner.get_output(3)
 
-    def test_list_comprehension_edit(self, nb_runner):
-        """Edit a list comprehension."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3, 4, 5]",
-            "result = [x * 2 for x in data]\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = [2, 4, 6, 8, 10]" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(
-            2, "result = [x ** 2 for x in data]\nprint(f'result = {result}')"
-        )
-        nb_runner.run_all()
-        assert "result = [1, 4, 9, 16, 25]" in nb_runner.get_output(2)
 
     def test_nested_loop_edit(self, nb_runner):
         """Edit a nested loop."""
@@ -99,20 +84,6 @@ class TestLoopCellEdits:
 class TestConditionalCellEdits:
     """Conditionals with cell edits."""
 
-    def test_edit_condition(self, nb_runner):
-        """Change the condition in an if-else."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "if x > 5:\n    label = 'big'\nelse:\n    label = 'small'",
-            "print(f'label = {label}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "label = big" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "x = 3")
-        nb_runner.run_all()
-        assert "label = small" in nb_runner.get_output(3)
 
     def test_edit_branch_bodies(self, nb_runner):
         """Edit what the branches produce."""

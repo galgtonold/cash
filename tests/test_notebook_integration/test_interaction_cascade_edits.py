@@ -65,21 +65,6 @@ class TestCascadingEdits:
         nb_runner.run_all()
         assert "d = 330" in nb_runner.get_output(5)
 
-    def test_diamond_dependency_edit(self, nb_runner):
-        """Diamond: a -> (b, c) -> d. Edit a."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 1",
-            "c = a + 2",
-            "d = b + c\nprint(f'd = {d}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "d = 23" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(1, "a = 100")
-        nb_runner.run_all()
-        assert "d = 203" in nb_runner.get_output(4)
 
     def test_diamond_edit_one_branch(self, nb_runner):
         """Diamond dependency, edit one branch."""

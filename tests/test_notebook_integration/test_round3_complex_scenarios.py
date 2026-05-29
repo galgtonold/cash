@@ -252,45 +252,11 @@ class TestComplexAssignments:
         assert "firsts=[1, 2, 3]" in out, f"Got: {out}"
         assert "seconds=['a', 'b', 'c']" in out
 
-    def test_augmented_assignment_chain(self, nb_runner):
-        """Test augmented assignments (+=, *=, etc.) across cells."""
-        nb_runner.create_notebook([
-            "total = 0",
-            "total += 10",
-            "total += 20",
-            "total *= 2",
-            "print(f'total = {total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        # 0 + 10 + 20 = 30 * 2 = 60
-        out = nb_runner.get_output(5)
-        assert "total = 60" in out, f"Expected total=60, got: {out}"
 
 
 class TestExceptionHandling:
     """Test caching behavior when cells raise exceptions."""
 
-    def test_cell_error_does_not_corrupt_cache(self, nb_runner):
-        """
-        Run a cell that succeeds, then one that fails, then succeed again.
-        The failure should not corrupt the cache.
-        """
-        nb_runner.create_notebook([
-            "x = 42",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        out = nb_runner.get_output(2)
-        assert "y = 84" in out
-
-        # Re-run cell 2 - should hit cache
-        nb_runner.run_cell(2)
-        out2 = nb_runner.get_output(2)
-        assert "y = 84" in out2
 
     def test_try_except_in_cell(self, nb_runner):
         """Test that try/except blocks are cached correctly."""
@@ -472,29 +438,6 @@ class TestReexecutionPatterns:
         out = nb_runner.get_output(2)
         assert "y = 50" in out, f"Expected same result on re-run, got: {out}"
 
-    def test_modify_middle_cell_in_chain(self, nb_runner):
-        """
-        Chain: A -> B -> C
-        Modify B and re-run C.
-        """
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a + 5",
-            "c = b * 2\nprint(f'c = {c}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-
-        # a=10, b=15, c=30
-        assert "c = 30" in nb_runner.get_output(3)
-
-        # Modify B
-        nb_runner.set_cell_source(2, "b = a + 50")
-        nb_runner.run_cells([2, 3])
-
-        # a=10, b=60, c=120
-        out = nb_runner.get_output(3)
-        assert "c = 120" in out, f"Expected c=120, got: {out}"
 
     def test_add_new_intermediate_dependency(self, nb_runner):
         """

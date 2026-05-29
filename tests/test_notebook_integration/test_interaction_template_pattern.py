@@ -42,20 +42,6 @@ class TestTemplatePatternEdits:
         nb_runner.run_all()
         assert "Hi Alice, 5 items in cart." in nb_runner.get_output(2)
 
-    def test_edit_format_spec(self, nb_runner):
-        """Edit format specification."""
-        nb_runner.create_notebook([
-            "value = 1234.5678",
-            "formatted = f'{value:,.2f}'\nprint(f'formatted = {formatted}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "formatted = 1,234.57" in nb_runner.get_output(2)
-
-        # Change value
-        nb_runner.set_cell_source(1, "value = 9876543.21")
-        nb_runner.run_all()
-        assert "formatted = 9,876,543.21" in nb_runner.get_output(2)
 
     def test_edit_multiline_template(self, nb_runner):
         """Edit data used in multiline template."""

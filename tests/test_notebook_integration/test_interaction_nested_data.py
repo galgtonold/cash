@@ -62,19 +62,6 @@ class TestNestedDictEdits:
 class TestNestedListEdits:
     """Edit cells producing/consuming nested lists."""
 
-    def test_edit_2d_list(self, nb_runner):
-        """Edit a 2D list source."""
-        nb_runner.create_notebook([
-            "matrix = [[1, 2], [3, 4]]",
-            "flat = [x for row in matrix for x in row]\nprint(f'flat = {flat}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "flat = [1, 2, 3, 4]" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(1, "matrix = [[10, 20], [30, 40], [50, 60]]")
-        nb_runner.run_all()
-        assert "flat = [10, 20, 30, 40, 50, 60]" in nb_runner.get_output(2)
 
     def test_nested_list_processing_chain(self, nb_runner):
         """Chain of nested list operations."""

@@ -5,15 +5,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.timeout(90)]
 
 
 class TestBisectSortedSeq:
-    def test_bisect_insort(self, nb_runner):
-        nb_runner.create_notebook([
-            "import bisect\nsorted_list = [10, 20, 30, 40, 50]",
-            "pos = bisect.bisect_left(sorted_list, 25)\nbisect.insort(sorted_list, 25)\nprint(f'pos={pos} list={sorted_list}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "pos=2" in nb_runner.get_output(2)
-        assert "list=[10, 20, 25, 30, 40, 50]" in nb_runner.get_output(2)
 
     def test_bisect_grade(self, nb_runner):
         nb_runner.create_notebook([

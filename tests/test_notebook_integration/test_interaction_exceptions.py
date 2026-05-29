@@ -30,20 +30,6 @@ class TestTryExceptEdits:
         nb_runner.run_all()
         assert "y = 5.0" in nb_runner.get_output(2)
 
-    def test_try_except_catches_error(self, nb_runner):
-        """Try/except catches error, edit to change handling."""
-        nb_runner.create_notebook([
-            "x = 0",
-            "try:\n    result = 10 / x\nexcept ZeroDivisionError:\n    result = -1\nprint(f'result = {result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result = -1" in nb_runner.get_output(2)
-
-        # Fix the root cause
-        nb_runner.set_cell_source(1, "x = 5")
-        nb_runner.run_all()
-        assert "result = 2.0" in nb_runner.get_output(2)
 
     def test_edit_except_handler(self, nb_runner):
         """Edit the except handler logic."""

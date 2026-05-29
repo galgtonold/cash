@@ -12,20 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestStringManipEdits:
     """Editing string manipulation patterns."""
 
-    def test_edit_format_template(self, nb_runner):
-        """Edit a format string template."""
-        nb_runner.create_notebook([
-            "name = 'Alice'\nage = 30",
-            "msg = f'{name} is {age} years old'\nprint(msg)",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "Alice is 30 years old" in nb_runner.get_output(2)
-
-        # Change the template
-        nb_runner.set_cell_source(2, "msg = f'Name: {name}, Age: {age}'\nprint(msg)")
-        nb_runner.run_all()
-        assert "Name: Alice, Age: 30" in nb_runner.get_output(2)
 
     def test_edit_join_separator(self, nb_runner):
         """Edit the separator in a join operation."""

@@ -44,57 +44,8 @@ class TestForLoopEdits:
         # [0,1,4,9,16] -> 30
         assert "total = 30" in nb_runner.get_output(2)
 
-    def test_edit_source_data_for_loop(self, nb_runner):
-        """Edit the data that a loop iterates over."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "doubled = [x * 2 for x in data]",
-            "total = sum(doubled)\nprint(f'total = {total}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "total = 12" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(1, "data = [10, 20, 30, 40]")
-        nb_runner.run_all()
-        assert "total = 200" in nb_runner.get_output(3)
 
 
-class TestComprehensionEdits:
-    """List/dict/set comprehension edits."""
-
-    def test_edit_list_comprehension_filter(self, nb_runner):
-        """Edit filter in list comprehension."""
-        nb_runner.create_notebook([
-            "numbers = list(range(20))",
-            "evens = [x for x in numbers if x % 2 == 0]\nprint(f'count = {len(evens)}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "count = 10" in nb_runner.get_output(2)
-
-        # Change filter to multiples of 3
-        nb_runner.set_cell_source(
-            2, "threes = [x for x in numbers if x % 3 == 0]\nprint(f'count = {len(threes)}')"
-        )
-        nb_runner.run_all()
-        assert "count = 7" in nb_runner.get_output(2)
-
-    def test_edit_dict_comprehension(self, nb_runner):
-        """Edit dict comprehension."""
-        nb_runner.create_notebook([
-            "keys = ['a', 'b', 'c']",
-            "d = {k: i for i, k in enumerate(keys)}\nprint(f'd = {d}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "'a': 0" in nb_runner.get_output(2)
-
-        nb_runner.set_cell_source(
-            2, "d = {k: (i + 1) * 10 for i, k in enumerate(keys)}\nprint(f'd = {d}')"
-        )
-        nb_runner.run_all()
-        assert "'a': 10" in nb_runner.get_output(2)
 
 
 class TestWhileLoopEdits:

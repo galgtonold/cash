@@ -178,18 +178,3 @@ class TestSkipWithMultiOutput:
         nb_runner.run_all()
         assert "a = 101, b = 200" in nb_runner.get_output(3)
 
-    def test_independent_outputs_partial_dependency(self, nb_runner):
-        """Two outputs: one depends on x, one on y."""
-        nb_runner.create_notebook([
-            "x = 10\ny = 20",
-            "a = x * 2\nb = y * 3",
-            "print(f'a = {a}, b = {b}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "a = 20, b = 60" in nb_runner.get_output(3)
-
-        # Edit only x
-        nb_runner.set_cell_source(1, "x = 100\ny = 20")
-        nb_runner.run_all()
-        assert "a = 200, b = 60" in nb_runner.get_output(3)

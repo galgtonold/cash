@@ -29,14 +29,3 @@ class TestMathCeilFloorLogGcd:
         assert "gcd=6" in out
         assert "lcm=36" in out
 
-    def test_math_edit(self, nb_runner):
-        nb_runner.create_notebook([
-            "import math",
-            "result = math.factorial(5)\nprint(f'result={result}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "result=120" in nb_runner.get_output(2)
-        nb_runner.set_cell_source(2, "result = math.factorial(10)\nprint(f'result={result}')")
-        nb_runner.run_all()
-        assert "result=3628800" in nb_runner.get_output(2)

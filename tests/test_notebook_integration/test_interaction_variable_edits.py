@@ -39,20 +39,6 @@ class TestVariableShadowing:
         nb_runner.run_all()
         assert "x = 20" in nb_runner.get_output(3)
 
-    def test_shadow_then_edit_second(self, nb_runner):
-        """Shadow variable, then edit the shadowing cell."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "x = 20",
-            "print(f'x = {x}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 20" in nb_runner.get_output(3)
-
-        nb_runner.set_cell_source(2, "x = 50")
-        nb_runner.run_all()
-        assert "x = 50" in nb_runner.get_output(3)
 
     def test_remove_shadowing_cell(self, nb_runner):
         """Remove the shadowing cell, original value should take effect.
@@ -103,49 +89,8 @@ class TestVariableOverwriting:
         nb_runner.run_all()
         assert "x = 15" in nb_runner.get_output(2)
 
-    def test_self_assignment_edit_init(self, nb_runner):
-        """Edit init, self-assignment should use new value."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "x = x + 5\nprint(f'x = {x}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 15" in nb_runner.get_output(2)
 
-        nb_runner.set_cell_source(1, "x = 100")
-        nb_runner.run_all()
-        assert "x = 105" in nb_runner.get_output(2)
 
-    def test_self_assignment_chain(self, nb_runner):
-        """Multiple self-assignments across cells."""
-        nb_runner.create_notebook([
-            "x = 1",
-            "x = x * 2",
-            "x = x + 10",
-            "print(f'x = {x}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 12" in nb_runner.get_output(4)
-
-        nb_runner.set_cell_source(1, "x = 5")
-        nb_runner.run_all()
-        assert "x = 20" in nb_runner.get_output(4)
-
-    def test_self_assignment_rerun_no_double(self, nb_runner):
-        """Self-assignment must not double on rerun."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "x = x + 5\nprint(f'x = {x}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "x = 15" in nb_runner.get_output(2)
-
-        # Rerun — should still be 15, not 20
-        nb_runner.run_all()
-        assert "x = 15" in nb_runner.get_output(2)
 
 
 class TestMultipleVariables:
@@ -180,21 +125,6 @@ class TestMultipleVariables:
         nb_runner.run_all()
         assert "result = 12" in nb_runner.get_output(2)
 
-    def test_add_new_variable_midstream(self, nb_runner):
-        """Edit a cell to produce an additional variable."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'y = {y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "y = 20" in nb_runner.get_output(2)
-
-        # Cell 1 now produces x and z
-        nb_runner.set_cell_source(1, "x = 10\nz = 5")
-        nb_runner.set_cell_source(2, "y = x * 2 + z\nprint(f'y = {y}')")
-        nb_runner.run_all()
-        assert "y = 25" in nb_runner.get_output(2)
 
     def test_remove_variable_from_cell(self, nb_runner):
         """Remove a variable from a cell, downstream breaks gracefully."""

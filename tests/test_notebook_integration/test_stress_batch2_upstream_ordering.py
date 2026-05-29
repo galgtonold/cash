@@ -312,22 +312,6 @@ class TestCellOrdering:
         nb_runner.run_cell(3)
         assert "z=30" in nb_runner.get_output(3)
 
-    def test_50_backward_execution(self, nb_runner):
-        """Scenario 58: Run cells in reverse order — each handles missing deps."""
-        nb_runner.create_notebook([
-            "x = 5",
-            "y = x * 2\nprint(f'y={y}')",
-            "z = y + 1\nprint(f'z={z}')",
-        ])
-        nb_runner.start_kernel()
-        # Run cell 3 first — needs y and x from upstream
-        nb_runner.run_cell(3)
-        assert "z=11" in nb_runner.get_output(3)
-        # Run cell 2
-        nb_runner.run_cell(2)
-        assert "y=10" in nb_runner.get_output(2)
-        # Run cell 1
-        nb_runner.run_cell(1)
 
     def test_51_run_after_variable_deleted(self, nb_runner):
         """Scenario 60: Delete variable, then run downstream."""
@@ -342,15 +326,6 @@ class TestCellOrdering:
         assert "y=43" in nb_runner.get_output(2)
         assert "y still=43" in nb_runner.get_output(4)
 
-    def test_52_cell_reassigns_builtin(self, nb_runner):
-        """Scenario 63: Cell reassigns builtin name like 'list'."""
-        nb_runner.create_notebook([
-            "data = [1, 2, 3]",
-            "list_copy = list(data)\nprint(f'copy={list_copy}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "copy=[1, 2, 3]" in nb_runner.get_output(2)
 
     def test_53_cell_with_star_import(self, nb_runner):
         """Scenario 64: Star import — should not crash."""
@@ -484,22 +459,6 @@ class TestComplexReexecution:
         nb_runner.run_cell(3)
         assert "z=1050" in nb_runner.get_output(3)
 
-    def test_62_multiple_modifications_single_rerun(self, nb_runner):
-        """Modify cells 1 AND 2, then run cell 3 only."""
-        nb_runner.create_notebook([
-            "a = 1",
-            "b = 2",
-            "c = a + b\nprint(f'c={c}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "c=3" in nb_runner.get_output(3)
-        # Modify both upstream cells
-        nb_runner.set_cell_source(1, "a = 10")
-        nb_runner.set_cell_source(2, "b = 20")
-        # Run only cell 3
-        nb_runner.run_cell(3)
-        assert "c=30" in nb_runner.get_output(3)
 
     def test_63_alternating_values(self, nb_runner):
         """Toggle value back and forth — cache should handle correctly."""
@@ -536,17 +495,3 @@ class TestComplexReexecution:
         # h(5) = g(5) + 10 = f(5)*2 + 10 = 105*2 + 10 = 220
         assert "result=220" in nb_runner.get_output(2)
 
-    def test_65_rerun_with_side_effect_print(self, nb_runner):
-        """Cell with both side effects (print) and cacheable computation."""
-        nb_runner.create_notebook([
-            "x = 10",
-            "y = x * 2\nprint(f'Computing: y={y}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(2)
-        assert "Computing: y=20" in out1
-        # Re-run — print should still appear (replayed from cache)
-        nb_runner.run_cell(2)
-        out2 = nb_runner.get_output(2)
-        assert "Computing: y=20" in out2

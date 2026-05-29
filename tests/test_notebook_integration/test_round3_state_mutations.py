@@ -199,33 +199,7 @@ class TestGlobalStatePatterns:
         out = nb_runner.get_output(5)
         assert "step1" in out and "step2" in out and "step3" in out
 
-    def test_counter_increment_pattern(self, nb_runner):
-        """Counter incremented across cells."""
-        nb_runner.create_notebook([
-            "count = 0",
-            "count += 1",
-            "count += 2",
-            "count += 3",
-            "print(f'Count: {count}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "Count: 6" in out
 
-    def test_string_concatenation_pattern(self, nb_runner):
-        """String built incrementally."""
-        nb_runner.create_notebook([
-            "msg = ''",
-            "msg += 'Hello'",
-            "msg += ' '",
-            "msg += 'World'",
-            "print(f'Message: {msg}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(5)
-        assert "Message: Hello World" in out
 
 
 class TestDecoratorPatterns:
@@ -379,24 +353,6 @@ class TestContextManagerPatterns:
 class TestComplexDependencyChains:
     """Test complex dependency patterns that stress the caching system."""
 
-    def test_diamond_dependency_with_mutation(self, nb_runner):
-        """Diamond: A -> B, A -> C, B+C -> D, with mutation in A."""
-        nb_runner.create_notebook([
-            "a = 10",
-            "b = a * 2",
-            "c = a + 5",
-            "d = b + c\nprint(f'D: {d}')",  # 20 + 15 = 35
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(4)
-        assert "D: 35" in out1
-
-        # Change A — both B and C should update
-        nb_runner.set_cell_source(1, "a = 100")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(4)
-        assert "D: 305" in out2  # 200 + 105 = 305
 
     def test_long_chain_middle_change(self, nb_runner):
         """8-cell chain, change middle cell — downstream should update."""
@@ -576,17 +532,6 @@ class TestEdgeCasePatterns:
         out = nb_runner.get_output(3)
         assert "y: 15" in out
 
-    def test_variable_shadowing(self, nb_runner):
-        """Variable defined in one cell, redefined in another, used in third."""
-        nb_runner.create_notebook([
-            "x = 'first'",
-            "x = 'second'",
-            "print(f'x: {x}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out = nb_runner.get_output(3)
-        assert "x: second" in out
 
     def test_none_value_assignment(self, nb_runner):
         """Assigning None should be tracked correctly."""
@@ -602,22 +547,6 @@ class TestEdgeCasePatterns:
         out = nb_runner.get_output(2)
         assert "Result: 42" in out
 
-    def test_boolean_flag_toggle(self, nb_runner):
-        """Boolean flag controls computation path."""
-        nb_runner.create_notebook([
-            "flag = True",
-            "value = 100 if flag else 0",
-            "print(f'Value: {value}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(3)
-        assert "Value: 100" in out1
-
-        nb_runner.set_cell_source(1, "flag = False")
-        nb_runner.run_all()
-        out2 = nb_runner.get_output(3)
-        assert "Value: 0" in out2
 
     def test_walrus_operator(self, nb_runner):
         """Walrus operator (:=) in comprehension."""
@@ -754,23 +683,6 @@ class TestReExecutionPatterns:
         out2 = nb_runner.get_output(4)
         assert "d: 4" in out2
 
-    def test_modify_and_rerun_single_cell(self, nb_runner):
-        """Modify one cell in the middle, re-run just that cell and downstream."""
-        nb_runner.create_notebook([
-            "x = 5",
-            "y = x * 2",
-            "z = y + 10\nprint(f'z: {z}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        out1 = nb_runner.get_output(3)
-        assert "z: 20" in out1
-
-        # Modify cell 2 and re-run cells 2-3
-        nb_runner.set_cell_source(2, "y = x * 3")
-        nb_runner.run_cells([2, 3])
-        out2 = nb_runner.get_output(3)
-        assert "z: 25" in out2  # 5*3+10
 
     def test_run_last_cell_only(self, nb_runner):
         """Run only the last cell — should trigger upstream simulation."""

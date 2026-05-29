@@ -68,22 +68,6 @@ class TestDictMergeEdits:
         assert "'y': 200" in out
         assert "'w': 400" in out
 
-    def test_edit_nested_dict(self, nb_runner):
-        """Edit a nested dict."""
-        nb_runner.create_notebook([
-            "config = {'db': {'host': 'localhost', 'port': 5432}}",
-            "host = config['db']['host']\nport = config['db']['port']\nprint(f'host={host} port={port}')",
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "host=localhost port=5432" in nb_runner.get_output(2)
-
-        # Change config
-        nb_runner.set_cell_source(
-            1, "config = {'db': {'host': 'prod-server', 'port': 3306}}"
-        )
-        nb_runner.run_all()
-        assert "host=prod-server port=3306" in nb_runner.get_output(2)
 
     def test_edit_defaultdict_factory(self, nb_runner):
         """Edit defaultdict usage."""

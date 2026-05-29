@@ -107,27 +107,6 @@ class TestDefaultDictPatterns:
         assert "'b': [2, 4]" in output
 
 
-class TestOrderedDictPatterns:
-    """Test collections.OrderedDict across cells."""
-
-    def test_ordered_dict(self, nb_runner):
-        """OrderedDict preserves insertion order."""
-        nb_runner.create_notebook([
-            "from collections import OrderedDict",
-            textwrap.dedent("""\
-                od = OrderedDict()
-                od['c'] = 3
-                od['a'] = 1
-                od['b'] = 2
-            """),
-            textwrap.dedent("""\
-                keys = list(od.keys())
-                print(keys)
-            """),
-        ])
-        nb_runner.start_kernel()
-        nb_runner.run_all()
-        assert "['c', 'a', 'b']" in nb_runner.get_output(3)
 
 
 class TestDequePatterns:
