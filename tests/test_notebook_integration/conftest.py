@@ -8,6 +8,7 @@ This module provides fixtures for running notebook integration tests with:
 4. Cell modification support via file updates
 """
 
+import os
 import pytest
 import nbformat
 from nbclient import NotebookClient
@@ -631,6 +632,25 @@ except Exception:
         elif self.client:
             async def _shutdown():
                 try:
+                    # COVERAGE EXPERIMENT (env-gated, no-op in normal runs):
+                    # ipykernel exits via os._exit(), which skips the atexit
+                    # hook that coverage.process_startup() relies on to flush.
+                    # So we explicitly save the kernel's coverage data *while
+                    # the channels are still alive*, before SIGKILL.
+                    if os.environ.get("COVERAGE_PROCESS_START") and self.client.kc:
+                        save_code = (
+                            "import coverage as _cov\n"
+                            "_c = _cov.Coverage.current()\n"
+                            "if _c is not None:\n"
+                            "    _c.save()\n"
+                        )
+                        try:
+                            await self.client.kc._async_execute_interactive(
+                                save_code, store_history=False,
+                                output_hook=lambda msg: None,
+                            )
+                        except Exception:
+                            pass
                     if self.client.kc:
                         self.client.kc.stop_channels()
                     if self.client.km and self.client.km.has_kernel:

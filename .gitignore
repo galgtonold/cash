@@ -188,3 +188,11 @@ examples/large_scale_projects/PROJECT_PLAN.md
 
 # Superpowers working docs (specs/plans/notes; not part of the public repo)
 docs/superpowers/
+
+# Integration-test analysis tooling lives in covtools/ (tracked), but its
+# generated artifacts are not version-controlled: covrun/ holds coverage runs,
+# removal lists, and keep/redundant sets; the inventory files are regenerated
+# by analyze_integration_tests.py. Run the tooling to recreate them locally.
+covrun/
+/integration_inventory.json
+/integration_inventory.md
