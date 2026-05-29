@@ -5,7 +5,7 @@ Verifies that the StatementProcessor class and its TypedDicts can be
 imported and instantiated directly, improving test coverage visibility.
 """
 
-from cash.notebook.statement_processor import (
+from cash.notebook.statement import (
     ProcessResult,
     StatementProcessor,
     _ProcessResultRequired,

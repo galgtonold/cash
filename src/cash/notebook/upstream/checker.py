@@ -23,7 +23,7 @@ from .simulator import (  # noqa: F401  re-exports for tests + downstream module
 from ..control_structures import is_control_structure
 
 if TYPE_CHECKING:
-    from ..statement_processor import ProcessResult
+    from ..statement import ProcessResult
 
 __all__ = ["UpstreamChecker", "UpstreamResult"]
 

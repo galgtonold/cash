@@ -18,7 +18,7 @@ import pytest
 import pandas as pd
 import numpy as np
 
-from cash.notebook.statement_processor import StatementProcessor
+from cash.notebook.statement import StatementProcessor
 from cash.core import Cash
 from cash.backends import InMemoryBackend, FileBackend
 from traitlets.config.configurable import Configurable

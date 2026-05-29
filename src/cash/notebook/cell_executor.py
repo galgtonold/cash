@@ -57,14 +57,14 @@ from .analysis import CodeAnalyzer
 from .annotations import get_statement_annotations
 from .cache_status import CacheStatus
 from .control_structures import is_control_structure
-from .statement_processor import ProcessResult
+from .statement import ProcessResult
 
 if TYPE_CHECKING:
     from .lineage_store import TrackingState
     from .magics import CashMagics, TimingBreakdown
     from .module_invalidator import ModuleInvalidator
     from .restore import Restorer
-    from .statement_processor import StatementProcessor
+    from .statement import StatementProcessor
     from .upstream import UpstreamChecker
     from .control_structures import ControlStructureProcessor
 

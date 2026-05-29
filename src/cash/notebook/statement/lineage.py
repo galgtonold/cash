@@ -33,12 +33,12 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
-from .statement_file_deps import compute_file_hash_component, read_module_source_hash
+from .file_deps import compute_file_hash_component, read_module_source_hash
 
 if TYPE_CHECKING:
-    from ._protocols import ShellProtocol, TrackingState
-    from .function_tracker import FunctionTracker
-    from .statement_file_deps import StatementFileDeps
+    from .._protocols import ShellProtocol, TrackingState
+    from ..function_tracker import FunctionTracker
+    from .file_deps import StatementFileDeps
 
 logger = logging.getLogger(__name__)
 

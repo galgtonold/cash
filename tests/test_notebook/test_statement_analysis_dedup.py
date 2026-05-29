@@ -51,11 +51,11 @@ def test_analyze_statement_called_once_per_processed_statement(magics_fixture):
     magics, shell, _ = magics_fixture
 
     real_analyze = __import__(
-        "cash.notebook.statement_processor", fromlist=["analyze_statement"]
+        "cash.notebook.statement.processor", fromlist=["analyze_statement"]
     ).analyze_statement
 
     with patch(
-        "cash.notebook.statement_processor.analyze_statement",
+        "cash.notebook.statement.processor.analyze_statement",
         wraps=real_analyze,
     ) as spy:
         magics.cash("", "y = 1 + 2")

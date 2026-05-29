@@ -38,7 +38,7 @@ from .module_invalidator import ModuleInvalidator
 from .object_hashing import compute_hash
 from .restore import Restorer
 from .provenance import ProvenanceTracker
-from .statement_processor import ProcessResult, StatementProcessor
+from .statement import ProcessResult, StatementProcessor
 from .upstream import UpstreamChecker
 
 __all__ = ["CashMagics"]

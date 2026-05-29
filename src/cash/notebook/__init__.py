@@ -16,7 +16,7 @@ def __getattr__(name):
         from .magics import CashMagics
         return CashMagics
     if name == 'StatementProcessor':
-        from .statement_processor import StatementProcessor
+        from .statement import StatementProcessor
         return StatementProcessor
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 

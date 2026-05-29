@@ -17,18 +17,16 @@ from typing import Any, TypedDict
 
 from cash.exceptions import CacheBackendError, CacheKeyComputationError, CacheSerializationError
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from cash.notebook.cache_freshness import (
-    CacheFreshnessChecker,
-    snapshot_file_deps,
-)
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
+from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.server_discovery import get_notebook_path
-from cash.notebook.statement_file_deps import StatementFileDeps
-from cash.notebook.statement_lineage import StatementLineageBuilder
-from cash.notebook.statement_restore import StatementRestorer
+from cash.notebook.statement.file_deps import StatementFileDeps
+from cash.notebook.statement.freshness import CacheFreshnessChecker
+from cash.notebook.statement.lineage import StatementLineageBuilder
+from cash.notebook.statement.restore import StatementRestorer
 
 __all__ = [
     "StatementCacheMetadata",
@@ -282,14 +280,14 @@ except ImportError:
         for obj in objs:
             print(obj)
 
-from ..analytics import AnalyticsManager
-from .analysis import CodeAnalyzer
-from .annotations import CacheAnnotation
-from .function_tracker import FunctionTracker
-from .cacheability import StatementAnalysis, analyze_statement
-from .cacheability_decision import decide_cacheability
-from .purity import analyze_function_purity
-from .randomness import (
+from ...analytics import AnalyticsManager
+from ..analysis import CodeAnalyzer
+from ..annotations import CacheAnnotation
+from ..function_tracker import FunctionTracker
+from ..cacheability import StatementAnalysis, analyze_statement
+from ..cacheability_decision import decide_cacheability
+from ..purity import analyze_function_purity
+from ..randomness import (
     RandomnessDetector,
     capture_rng_state,
     restore_rng_state,
@@ -1446,5 +1444,5 @@ class StatementProcessor:
         return False
 
 
-from .file_tracker import FileAccessTracker
+from ..file_tracker import FileAccessTracker
 

@@ -12,7 +12,7 @@ from traitlets.config.configurable import Configurable
 
 from cash.core import Cash
 from cash.backends import InMemoryBackend
-from cash.notebook.statement_processor import StatementProcessor
+from cash.notebook.statement import StatementProcessor
 
 _COST_MODEL_KEYS = (
     'cost_model_size_bytes',

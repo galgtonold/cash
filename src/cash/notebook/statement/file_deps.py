@@ -28,12 +28,12 @@ import logging
 import os
 from typing import TYPE_CHECKING, Any
 
-from ..utils import normalize_path
-from .server_discovery import get_notebook_path
+from ...utils import normalize_path
+from ..server_discovery import get_notebook_path
 
 if TYPE_CHECKING:
-    from ._protocols import TrackingState
-    from .statement_processor import StatementCacheMetadata
+    from .._protocols import TrackingState
+    from .processor import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
@@ -194,10 +194,7 @@ class StatementFileDeps:
         file_deps = metadata.get('file_dependencies', {})
         if not file_deps:
             return
-        # Local import to avoid a circular dep with cache_freshness — both
-        # this module and cache_freshness need split_file_dep_value, but
-        # cache_freshness imports nothing from us.
-        from .cache_freshness import split_file_dep_value
+        from ..file_dep_snapshot import split_file_dep_value
 
         # ``executed_file_mtimes`` historically holds {path: float}; flatten
         # the new {'mtime': ..., 'size': ...} form back to a bare mtime here.

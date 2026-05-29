@@ -5,7 +5,7 @@ import time
 import tempfile
 import pandas as pd
 from unittest.mock import MagicMock
-from cash.notebook.statement_processor import StatementProcessor
+from cash.notebook.statement import StatementProcessor
 from cash.core import Cash
 
 class TestFileTracking(unittest.TestCase):

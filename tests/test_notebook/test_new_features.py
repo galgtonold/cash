@@ -331,7 +331,7 @@ class TestSizeAwareCaching:
     @staticmethod
     def _make_processor():
         """Create a minimal StatementProcessor for testing."""
-        from cash.notebook.statement_processor import StatementProcessor
+        from cash.notebook.statement import StatementProcessor
         mock_shell = MagicMock()
         mock_shell.user_ns = {}
         mock_cash = MagicMock()

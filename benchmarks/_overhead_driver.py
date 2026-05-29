@@ -88,7 +88,7 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric]) -> None:
     """
     from cash.core import Cash
     from cash.notebook.magics import CashMagics
-    from cash.notebook.statement_processor import StatementProcessor
+    from cash.notebook.statement import StatementProcessor
 
     # Patch process_statement() at class level so all instances (including those
     # built later inside magics) are observed.  We store the original on the

@@ -192,7 +192,7 @@ class TestStatementProcessorMetadataPersistence:
 
     def test_persist_metadata_only_calls_backend(self, tmp_path):
         """persist_metadata_only should call set_metadata_only on the backend."""
-        from cash.notebook.statement_restore import StatementRestorer
+        from cash.notebook.statement.restore import StatementRestorer
         from cash.backends import FileBackend, CascadingBackend, InMemoryBackend
 
         file_backend = FileBackend(cache_dir=str(tmp_path))
@@ -211,7 +211,7 @@ class TestStatementProcessorMetadataPersistence:
 
     def test_persist_metadata_only_noop_for_unsupported_backend(self):
         """persist_metadata_only should be a no-op for backends without the method."""
-        from cash.notebook.statement_restore import StatementRestorer
+        from cash.notebook.statement.restore import StatementRestorer
 
         # A backend that doesn't support set_metadata_only
         class DummyBackend:
@@ -339,7 +339,7 @@ class TestTieredBackendMetadataOnly:
         _persist_metadata_only should still persist the metadata."""
         from cash.backends import InMemoryBackend, FileBackend
         from cash.backends.tiered_backend import TieredBackend
-        from cash.notebook.statement_restore import StatementRestorer
+        from cash.notebook.statement.restore import StatementRestorer
 
         l1 = InMemoryBackend()
         l2 = FileBackend(cache_dir=str(tmp_path))

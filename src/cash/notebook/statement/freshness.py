@@ -3,9 +3,7 @@
 Owns the operation "is this cache entry still valid?" — TTL expiry,
 direct file-dependency changes, and input-file change propagation.
 
-Single public method: :meth:`CacheFreshnessChecker.check_cache`.  Five
-private helpers (TTL, direct file, input file, etc.) plus two
-module-level file-snapshot utilities used by sibling sub-systems.
+Single public method: :meth:`CacheFreshnessChecker.check_cache`.
 
 **Anti-god-class rule (load-bearing):** this module is freshness
 checks only.  It does **not** mutate :class:`TrackingState` and does
@@ -17,6 +15,12 @@ display.
 Distinct from [[Cacheability decision]] (which is the *pre-execution*
 "should we cache this statement at all?" question).  This is the
 *post-execution* "is the entry we already have still good?" question.
+
+The two file-snapshot helpers (`snapshot_file_deps`, `split_file_dep_value`)
+that used to live alongside `CacheFreshnessChecker` were extracted to
+``cash.notebook.file_dep_snapshot`` before this module moved into the
+``statement/`` package (ADR-011): they have cross-cluster callers and don't
+belong inside ``statement/``.
 """
 
 from __future__ import annotations
@@ -24,46 +28,17 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
-from ..utils import resolve_file_dep_path
+from ...utils import resolve_file_dep_path
+from ..file_dep_snapshot import split_file_dep_value
 
 if TYPE_CHECKING:
-    from ._protocols import TrackingState
-    from .statement_processor import StatementCacheMetadata
+    from .._protocols import TrackingState
+    from .processor import StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
-# File-snapshot helpers — used by this module and (later) by StatementFileDeps
-# ---------------------------------------------------------------------------
-
-def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, float]]:
-    """Return ``{path: {'mtime': mtime, 'size': size}}`` for paths that exist."""
-    snapshot: dict[str, dict[str, float]] = {}
-    for f in paths:
-        try:
-            st = os.stat(f)
-        except OSError:
-            continue
-        snapshot[f] = {'mtime': st.st_mtime, 'size': st.st_size}
-    return snapshot
-
-
-def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
-    """Return ``(mtime, size_or_None)`` from a file-dep snapshot dict.
-
-    Snapshots are written as ``{'mtime': float, 'size': int}``; ``size`` may be
-    absent for callers that only record mtime, in which case the size check is
-    skipped downstream.
-    """
-    return float(value.get('mtime', 0.0)), value.get('size')
-
-
-# ---------------------------------------------------------------------------
-# CacheFreshnessChecker
-# ---------------------------------------------------------------------------
 
 class CacheFreshnessChecker:
     """Decide whether a cache entry is still fresh.

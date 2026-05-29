@@ -25,10 +25,10 @@ from typing import TYPE_CHECKING, Any
 
 from ..utils import resolve_file_dep_path
 from ._protocols import ShellProtocol
-from .cache_freshness import split_file_dep_value
+from .file_dep_snapshot import split_file_dep_value
 from .cache_status import CacheStatus
 from .object_hashing import compute_hash
-from .statement_processor import ProcessResult
+from .statement import ProcessResult
 
 if TYPE_CHECKING:
     from .lineage_store import TrackingState  # only for typing

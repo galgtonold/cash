@@ -92,7 +92,7 @@ def run_notebook_force_cache(
     from IPython.core.interactiveshell import InteractiveShell
     from cash.core import Cash
     from cash.notebook.magics import CashMagics
-    from cash.notebook.statement_processor import StatementProcessor
+    from cash.notebook.statement import StatementProcessor
 
     shell = InteractiveShell.instance()
     shell.reset(new_session=True)

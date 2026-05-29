@@ -1071,7 +1071,7 @@ class Cash:
                 # are recorded as implicit cache dependencies — a later
                 # mtime/size change forces a recompute.
                 from cash.notebook.file_tracker import FileAccessTracker
-                from cash.notebook.cache_freshness import snapshot_file_deps
+                from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None))
                 with tracker:
                     res = func(*args, **kwargs)
@@ -1226,7 +1226,7 @@ class Cash:
                 )
 
             from cash.notebook.file_tracker import FileAccessTracker
-            from cash.notebook.cache_freshness import snapshot_file_deps
+            from cash.notebook.file_dep_snapshot import snapshot_file_deps
             tracker = FileAccessTracker(getattr(func, '__globals__', None))
             with tracker:
                 res = await func(*args, **kwargs)

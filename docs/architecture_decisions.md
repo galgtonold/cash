@@ -261,3 +261,44 @@ upstream/_types.py               # was simulator_types.py — leading _ marks IR
 - Internal imports between the six files become relative (`from .virtual_lineage import VirtualLineage`).
 - No backward-compatibility shims at the old paths. The subsystem has no external (non-test) callers beyond `UpstreamChecker`, so shims would be pure cost.
 - Future architecture reviews that re-suggest flattening this back out should consult this ADR.
+
+---
+
+## ADR-011: Co-locate StatementProcessor and its Siblings as a Package
+
+**Status:** Accepted
+**Date:** 2026-05-29
+**Context:** `CONTEXT.md` describes `StatementProcessor` as the owner of four sibling classes (`CacheFreshnessChecker`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) sharing one `TrackingState` and one `ProcessResult` schema. The five files lived as flat peers in `src/cash/notebook/`, contradicting the documented ownership story. Additionally, `cache_freshness.py` carried two module-level helpers (`snapshot_file_deps`, `split_file_dep_value`) that are *not* sibling-of-StatementProcessor concerns — they are used by the decorator subsystem (`src/cash/core.py`), the variable-granular `Restorer`, and `upstream/virtual_lineage.py`. Bundling them into `statement/` would force unrelated callers to reach into a package they otherwise don't care about.
+
+### Decision
+Collapse the four sibling files plus `StatementProcessor` into one `statement/` package. The package re-exports exactly four production symbols — `StatementProcessor`, `ProcessResult`, `StatementCacheMetadata`, `DecoratorCallMetric` — plus two private symbols for test-patching paths (`_TeeWriter`, `_tee_output`). The siblings (`CacheFreshnessChecker`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) are package-internal.
+
+To keep the package honest, the two cross-cluster helpers in `cache_freshness.py` are extracted to a new top-level sibling module before the move:
+
+```
+notebook/file_dep_snapshot.py    # NEW — snapshot_file_deps + split_file_dep_value
+                                  # Pure file-dep snapshot utilities used cross-subsystem.
+
+notebook/statement/__init__.py
+notebook/statement/processor.py   # was statement_processor.py
+notebook/statement/lineage.py     # was statement_lineage.py
+notebook/statement/restore.py     # was statement_restore.py
+notebook/statement/file_deps.py   # was statement_file_deps.py
+notebook/statement/freshness.py   # CacheFreshnessChecker class only; was cache_freshness.py
+```
+
+### Rationale
+- **Locality.** Five files that already form a composition unit (one orchestrator + four owned siblings) become one folder. CONTEXT.md's "four siblings of StatementProcessor" framing now matches the filesystem.
+- **Honest split.** `cache_freshness.py` was carrying two roles: the `CacheFreshnessChecker` class (a true StatementProcessor sibling) and two pure module-level helpers consumed by unrelated subsystems. Splitting the file *before* the move keeps `statement/` from accidentally becoming a dependency of the decorator path. Future maintainers won't see `from cash.notebook.statement.freshness import snapshot_file_deps` in `core.py` and wonder why the decorator is reaching into the notebook's statement package.
+- **Filename context.** The `statement_*` prefixes on four of the files were disambiguators at the flat top level; once inside `statement/`, the parent package provides the context. The class names (`StatementProcessor`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) are unchanged — only the filenames are shortened.
+- **Consistency with ADR-010.** Same pattern: collapse a documented composition unit into a package, expose a small public surface, rename files for context.
+
+### Consequences
+- The public production import path becomes `from cash.notebook.statement import StatementProcessor` (instead of `cash.notebook.statement_processor`). All seven sibling notebook modules (`magics`, `cell_executor`, `restore`, `module_invalidator`, `control_for_handler`, `control_if_handler`, `control_try_handler`, `control_structures`) update their imports.
+- `src/cash/core.py` updates its two `cache_freshness.snapshot_file_deps` imports to `file_dep_snapshot.snapshot_file_deps`. The decorator path no longer reaches into a notebook subpackage for this utility.
+- `upstream/virtual_lineage.py` updates `from ..cache_freshness import split_file_dep_value` to `from ..file_dep_snapshot import split_file_dep_value`. (`upstream/` was extracted in ADR-010.)
+- Three sites in `tests/test_notebook/test_metadata_only_persistence.py` that imported `StatementRestorer` directly migrate to the full internal path (`cash.notebook.statement.restore.StatementRestorer`). The class is internal but the static method `persist_metadata_only` has no clean wrapper on `StatementProcessor` today.
+- Eight sites in `tests/test_notebook/test_control_structures.py` that imported `_TeeWriter` / `_tee_output` from `cash.notebook.statement_processor` migrate to `cash.notebook.statement` — both symbols are private re-exports.
+- Internal cluster imports become relative (`from .lineage import StatementLineageBuilder`).
+- No backward-compatibility shims at the old paths.
+- The TypedDicts (`ProcessResult`, `StatementCacheMetadata`, `DecoratorCallMetric`, `_ProcessResultRequired`) stay inside `processor.py` for now. Extracting them into `statement/_types.py` (mirroring `upstream/_types.py`) is a separate, optional refactor.

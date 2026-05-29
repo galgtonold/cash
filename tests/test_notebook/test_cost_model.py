@@ -95,7 +95,7 @@ def test_cost_model_is_called_from_statement_processor_decision(monkeypatch, tmp
 
     from cash.backends import FileBackend
     from cash.core import Cash
-    from cash.notebook.statement_processor import StatementProcessor
+    from cash.notebook.statement import StatementProcessor
 
     backend = FileBackend(str(tmp_path))
     cash = Cash(backend=backend, register_magic=False)

@@ -40,7 +40,7 @@ from cash.notebook.cache_status import CacheStatus
 from cash.notebook import control_structure_helpers as _helpers
 
 if TYPE_CHECKING:
-    from .statement_processor import ProcessResult
+    from .statement import ProcessResult
 
 __all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
 

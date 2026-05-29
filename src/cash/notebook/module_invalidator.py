@@ -30,7 +30,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from ._protocols import ShellProtocol
     from .function_tracker import FunctionTracker
-    from .statement_processor import StatementProcessor
+    from .statement import StatementProcessor
 
 logger = logging.getLogger(__name__)
 

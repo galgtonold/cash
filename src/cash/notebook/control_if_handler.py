@@ -25,7 +25,7 @@ from cash.notebook import control_structure_helpers as _helpers
 from cash.notebook.cache_status import CacheStatus
 
 if TYPE_CHECKING:
-    from .statement_processor import ProcessResult
+    from .statement import ProcessResult
 
 logger = logging.getLogger(__name__)
 

@@ -38,12 +38,12 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
 
-from .randomness import restore_rng_state
+from ..randomness import restore_rng_state
 
 if TYPE_CHECKING:
-    from ._protocols import ShellProtocol, TrackingState
-    from .statement_file_deps import StatementFileDeps
-    from .statement_processor import ProcessResult, StatementCacheMetadata
+    from .._protocols import ShellProtocol, TrackingState
+    from .file_deps import StatementFileDeps
+    from .processor import ProcessResult, StatementCacheMetadata
 
 logger = logging.getLogger(__name__)
 
