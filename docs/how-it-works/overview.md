@@ -20,29 +20,41 @@ The trust thesis is simple: Cash recomputes whenever something relevant changed,
   <span class="cash-coreloop-step">track</span>
 </div>
 
-```mermaid
-flowchart TD
-    NB["<b>User Notebook</b><br/><code>%cash_on</code><br/><code>df = pd.read_csv('data.csv')</code><br/><code>df = df.sort_values('date')</code><br/><code>result = df.groupby('x').sum()</code>"]
-    MAGICS["<b>CashMagics</b><br/>Intercepts cell execution via IPython hooks<br/>Coordinates all caching components<br/>Manages variable tracking dictionaries<br/>Records provenance for every statement<br/>Drains decorator call log for badge integration"]
-    CA["<b>CodeAnalyzer</b><br/>Parse AST · Find I/O · Strip magic"]
-    UC["<b>UpstreamChecker</b><br/>Detect changes · Simulate · Re-exec"]
-    SP["<b>StatementProcessor</b><br/>Execute · Cache · Track lineage"]
-    FT["<b>FunctionTracker</b><br/>Hash sources · Module reload"]
-    MD["<b>MutationDetector</b><br/>AST scan · In-place mutation · Skip"]
-    DB["<b>Decorator Bridge</b><br/>Call log · drain() · Badge metrics"]
-    CS["<b>ControlStructure Processor</b><br/>for/while · Per-iteration keys · Branch caching"]
-    FILE["<b>FileTracker</b><br/>Intercept file reads<br/>pandas/numpy/polars/open/joblib<br/>Hash file content"]
-    RAND["<b>Randomness & SideEffect Detectors</b><br/>Unseeded RNG · Side effect scan<br/>Purity checks · <code>@cash:</code> annotations"]
-    BACK["<b>Cache Backend</b><br/>TieredBackend default: L1=InMemory, L2=FileBackend<br/>Also: SQLite, Redis, S3, Cascading<br/>Optional LazyProxy for deferred deserialization"]
-    KEY["<b>cache_key.py</b><br/>Single source of truth for <code>compute_cache_key()</code><br/>Used by StatementProcessor and UpstreamChecker<br/>(simulation, virtual restore, skip checks)"]
-
-    NB --> MAGICS
-    MAGICS --> CA & UC & SP & FT & MD & DB
-    SP --> CS & FILE & RAND
-    CS --> BACK
-    FILE --> BACK
-    KEY --> BACK
-```
+<div class="cash-arch" role="img" aria-label="How a computation flows through Cash. Your notebook statements and decorated calls enter CashMagics, the coordinator. For each statement or call it runs four jobs — analyze, safety checks, key and look up, and track lineage — and reads from or writes to the tiered cache backend.">
+  <div class="cash-arch-node cash-arch-entry">
+    <span class="cash-arch-title">Your code</span>
+    <span class="cash-arch-sub"><code>%cash_on</code> notebook statements &middot; <code>@cash.cache</code> functions</span>
+  </div>
+  <div class="cash-arch-arrow" aria-hidden="true"></div>
+  <div class="cash-arch-node cash-arch-hub">
+    <span class="cash-arch-title">CashMagics &mdash; the coordinator</span>
+    <span class="cash-arch-sub">Intercepts every statement and call &middot; tracks variables &middot; records provenance for the badge</span>
+  </div>
+  <div class="cash-arch-arrow" aria-hidden="true"></div>
+  <div class="cash-arch-grid">
+    <div class="cash-arch-node">
+      <span class="cash-arch-title">Analyze</span>
+      <span class="cash-arch-sub">Parse the AST to find which files and variables the code reads and writes.</span>
+    </div>
+    <div class="cash-arch-node">
+      <span class="cash-arch-title">Safety checks</span>
+      <span class="cash-arch-sub">Mutation, side-effect, randomness and purity detectors veto anything unsound to cache.</span>
+    </div>
+    <div class="cash-arch-node">
+      <span class="cash-arch-title">Key &amp; look up</span>
+      <span class="cash-arch-sub">Fingerprint the code with its inputs, then check the backend &mdash; execute fresh or restore.</span>
+    </div>
+    <div class="cash-arch-node">
+      <span class="cash-arch-title">Track lineage</span>
+      <span class="cash-arch-sub">Record what each result depends on, and fold decorator hits into the badge.</span>
+    </div>
+  </div>
+  <div class="cash-arch-arrow" aria-hidden="true"></div>
+  <div class="cash-arch-node cash-arch-backend">
+    <span class="cash-arch-title">Cache backend</span>
+    <span class="cash-arch-sub">TieredBackend &mdash; L1 in-memory &rarr; L2 on disk &middot; pluggable: SQLite, Redis, S3</span>
+  </div>
+</div>
 
 ## One core, two front-ends
 
