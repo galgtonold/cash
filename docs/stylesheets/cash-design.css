@@ -778,3 +778,39 @@
     8% { background: var(--cash-green); color: #fff; transform: translateY(-2px); }
   }
 }
+
+/* ─── How Cash Works: promotion explorer (page 7) ────────────────────── */
+.cash-promotion-explorer {
+  margin: 1.25em 0;
+  padding: 16px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg-section);
+}
+.cash-pe-controls { display: flex; flex-wrap: wrap; gap: 18px; }
+.cash-pe-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; }
+.cash-pe-cap { font-size: 13px; font-weight: 600; color: var(--cash-ink-2); }
+.cash-pe-cap output { font-family: var(--cash-font-mono); color: var(--cash-ink); }
+.cash-pe-field input[type="range"] { width: 100%; accent-color: var(--cash-green); }
+.cash-pe-panel {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+  background: var(--cash-bg);
+}
+.cash-pe-panel.persist { background: var(--cash-green-bg); border-color: var(--cash-green); }
+.cash-pe-panel.ram { background: var(--cash-ochre-bg); border-color: var(--cash-ochre); }
+.cash-pe-pill {
+  display: inline-block;
+  font-family: var(--cash-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: var(--cash-radius-sm);
+  color: #fff;
+}
+.cash-pe-panel.persist .cash-pe-pill { background: var(--cash-green); }
+.cash-pe-panel.ram .cash-pe-pill { background: var(--cash-ochre); }
+.cash-pe-why { margin: 0.6em 0 0; font-size: 14px; line-height: 1.5; color: var(--cash-ink-2); }
