@@ -12,28 +12,6 @@ import pandas as pd
 # Add src to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../../src')))
 
-# Mock IPython
-import types
-ipython_mock = types.ModuleType('IPython')
-ipython_mock.__path__ = []
-sys.modules['IPython'] = ipython_mock
-sys.modules['IPython.core'] = types.ModuleType('IPython.core')
-sys.modules['IPython.display'] = MagicMock()
-sys.modules['IPython.utils'] = types.ModuleType('IPython.utils')
-sys.modules['IPython.utils.io'] = MagicMock()
-sys.modules['IPython.core.magic'] = MagicMock()
-def pass_through(cls):
-    return cls
-sys.modules['IPython.core.magic'].magics_class = pass_through
-sys.modules['IPython.core.magic'].line_magic = pass_through
-sys.modules['IPython.core.magic'].cell_magic = pass_through
-
-class Magics:
-    def __init__(self, shell):
-        self.shell = shell
-
-sys.modules['IPython.core.magic'].Magics = Magics
-
 from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 from cash.core import Cash

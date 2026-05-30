@@ -11,6 +11,30 @@ from pathlib import Path
 from unittest.mock import MagicMock
 from io import StringIO
 import sys
+import os
+
+# ---------------------------------------------------------------------------
+# Crash visibility (ALL workers): dump a C-level traceback when a worker dies
+# silently. This lives in the ROOT conftest so every xdist worker enables it at
+# startup, regardless of which test modules it ends up running. (The notebook
+# conftest only loads for notebook modules, so a worker running unit tests would
+# otherwise have no faulthandler installed - which is why earlier dumps were
+# empty.) Per-PID file survives xdist's stderr capture. CASH_TEST_FAULTHANDLER=0
+# to disable. Inspect after a crash: %TEMP%/cash_faulthandler/worker_*.log
+# ---------------------------------------------------------------------------
+if os.environ.get("CASH_TEST_FAULTHANDLER", "1") == "1":
+    import faulthandler as _faulthandler
+    import tempfile as _tempfile
+
+    _FH_DIR = os.path.join(_tempfile.gettempdir(), "cash_faulthandler")
+    try:
+        os.makedirs(_FH_DIR, exist_ok=True)
+        _FH_FILE = open(  # noqa: SIM115 - kept open for the worker's lifetime
+            os.path.join(_FH_DIR, f"worker_{os.getpid()}.log"), "w"
+        )
+        _faulthandler.enable(file=_FH_FILE, all_threads=True)
+    except OSError:
+        _faulthandler.enable(all_threads=True)
 
 from cash import Cash
 from cash.backends import InMemoryBackend, FileBackend
@@ -270,33 +294,3 @@ def pytest_configure(config):
         "filterwarnings",
         "ignore::cash.CashImpurityWarning",
     )
-
-
-@pytest.fixture(autouse=True)
-def cleanup_sys_modules_between_tests():
-    """
-    Clean up IPython mocks from sys.modules between tests.
-
-    Many unit test files mock IPython modules at import time, polluting
-    sys.modules. This fixture removes those mocks after each test to
-    prevent cross-test contamination.
-    """
-    yield  # Run the test
-
-    import sys
-    from unittest.mock import MagicMock
-    import types
-
-    ipython_modules_to_remove = []
-    for module_name in list(sys.modules.keys()):
-        if module_name.startswith('IPython'):
-            module = sys.modules[module_name]
-            if isinstance(module, MagicMock) or isinstance(module, types.ModuleType) and (not hasattr(module, '__file__') or module.__file__ is None):
-                ipython_modules_to_remove.append(module_name)
-
-    for module_name in ipython_modules_to_remove:
-        del sys.modules[module_name]
-
-
-
-

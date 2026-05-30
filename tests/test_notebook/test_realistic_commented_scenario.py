@@ -15,38 +15,6 @@ import numpy as np
 # Add src to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
-# Mock IPython
-sys.modules['IPython'] = MagicMock()
-sys.modules['IPython.core.magic'] = MagicMock()
-def pass_through(cls):
-    return cls
-sys.modules['IPython.core.magic'].magics_class = pass_through
-sys.modules['IPython.core.magic'].line_magic = pass_through
-sys.modules['IPython.core.magic'].cell_magic = pass_through
-
-class Magics:
-    def __init__(self, shell):
-        self.shell = shell
-sys.modules['IPython.core.magic'].Magics = Magics
-
-sys.modules['IPython.display'] = MagicMock()
-sys.modules['IPython.utils.io'] = MagicMock()
-
-# Mock capture_output
-class MockCaptured:
-    def __init__(self):
-        self.stdout = ""
-        self.stderr = ""
-        self.outputs = []
-    
-    def show(self):
-        pass
-
-capture_output_mock = MagicMock()
-capture_output_mock.return_value.__enter__ = MagicMock(return_value=MockCaptured())
-capture_output_mock.return_value.__exit__ = MagicMock(return_value=False)
-sys.modules['IPython.utils.io'].capture_output = capture_output_mock
-
 from cash.notebook.ipython.magics import CashMagics
 from cash.backends import InMemoryBackend
 from cash.core import Cash
