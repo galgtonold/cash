@@ -35,6 +35,7 @@ extra_javascript:
   - javascripts/why-cash-calculator.js
   - javascripts/why-cash-matrix.js
   - javascripts/invalidation-playground.js
+  - javascripts/cacheability-checker.js
 
 plugins:
   - search

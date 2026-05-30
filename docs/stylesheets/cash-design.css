@@ -687,3 +687,58 @@
     100% { box-shadow: 0 0 0 8px rgba(230, 81, 0, 0); }
   }
 }
+
+/* ─── How Cash Works: cacheability checker (page 4) ──────────────────── */
+.cash-cacheability-checker {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+  margin: 1.25em 0;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .cash-cacheability-checker { grid-template-columns: 1fr; }
+}
+.cash-cc-list { display: flex; flex-direction: column; gap: 6px; }
+.cash-cc-snippet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg);
+  cursor: pointer;
+}
+.cash-cc-snippet code { background: transparent; padding: 0; font-size: 13px; }
+.cash-cc-snippet:hover { border-color: var(--cash-ochre); }
+.cash-cc-snippet.active { border-color: var(--cash-ink-2); box-shadow: inset 3px 0 0 0 var(--cash-ink-2); }
+.cash-cc-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.cash-cc-dot.ok { background: var(--cash-green); }
+.cash-cc-dot.warn { background: var(--cash-ochre); }
+.cash-cc-dot.no { background: var(--cash-danger); }
+.cash-cc-panel {
+  padding: 14px 16px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+  background: var(--cash-bg-section);
+}
+.cash-cc-panel.ok { background: var(--cash-green-bg); border-color: var(--cash-green); }
+.cash-cc-panel.warn { background: var(--cash-ochre-bg); border-color: var(--cash-ochre); }
+.cash-cc-panel.no { background: var(--cash-changed-bg); border-color: var(--cash-danger); }
+.cash-cc-verdict { display: flex; align-items: baseline; gap: 4px; }
+.cash-cc-pill {
+  font-family: var(--cash-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: var(--cash-radius-sm);
+  color: #fff;
+}
+.cash-cc-panel.ok .cash-cc-pill { background: var(--cash-green); }
+.cash-cc-panel.warn .cash-cc-pill { background: var(--cash-ochre); }
+.cash-cc-panel.no .cash-cc-pill { background: var(--cash-danger); }
+.cash-cc-why { margin: 0.6em 0 0; font-size: 14px; line-height: 1.5; color: var(--cash-ink-2); }
