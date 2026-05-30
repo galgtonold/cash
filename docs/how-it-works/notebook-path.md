@@ -86,8 +86,8 @@ statement_key = SHA256("stmt:" + source_hash + ":" +
 
 The payoff is **partial cache hits**: edit the `AAPL` case and only that
 iteration recomputes; `MSFT` and `GOOGL` still hit. Conditionals work the same
-way — only the branch that actually ran is cached (`branch=if` vs
-`branch=else`), so unused branches never pollute the key space.
+way — only the branch that actually ran is cached, keyed on which branch
+executed (`if` vs `else`), so unused branches never pollute the key space.
 
 ## Picking up after a kernel restart
 
