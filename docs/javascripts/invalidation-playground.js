@@ -25,13 +25,19 @@
   ];
 
   function staleSet(changed) {
-    // A cell is stale if it is the changed node or depends (transitively) on a stale cell.
+    // A cell is stale if it is the changed node or depends (transitively) on a
+    // stale cell. Recursive marking is order-independent: it stays correct even
+    // if a cell's dep points to a higher index.
     var stale = {};
     if (changed === null) return stale;
-    for (var i = 0; i < CELLS.length; i++) {
-      if (i === changed) stale[i] = true;
-      else if (CELLS[i].dep !== null && stale[CELLS[i].dep]) stale[i] = true;
+    function mark(i) {
+      if (stale[i]) return;
+      stale[i] = true;
+      for (var j = 0; j < CELLS.length; j++) {
+        if (CELLS[j].dep === i) mark(j);
+      }
     }
+    mark(changed);
     return stale;
   }
 
@@ -61,7 +67,7 @@
           b.classList.remove("active");
         });
         if (current !== null) btn.classList.add("active");
-        render(t.node, current === null ? null : t.node);
+        render(current === null ? null : t.node);
       });
       controls.appendChild(btn);
     });
@@ -70,7 +76,7 @@
     root.appendChild(chain);
     root.appendChild(status);
 
-    function render(_clicked, changed) {
+    function render(changed) {
       var stale = staleSet(changed === undefined ? null : changed);
       chain.innerHTML = "";
       CELLS.forEach(function (cell, i) {
@@ -93,7 +99,7 @@
         : n + " of 4 cells recompute; " + (4 - n) + " still hit the cache.";
     }
 
-    render(null, null);
+    render(null);
   }
 
   function init() {

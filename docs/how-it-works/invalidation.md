@@ -8,9 +8,9 @@ A change in any cell propagates transitively through the lineage chain: if `raw`
 
 ## Finding your notebook
 
-To check upstream cells, Cash must read the live `.ipynb` file. It locates it through a prioritised fallback chain: first it queries the **Jupyter Server REST API** (reliable when running inside JupyterLab or classic Notebook); if that is unavailable it reads **VS Code injected variables** set by the Jupyter extension; then it falls back to the **`ipynbname` library** if installed; and finally it performs a **filesystem scan** rooted at the current working directory. The resolved path is cached in memory for five minutes, and the cache is cleared whenever you switch notebooks via `%cash_on`.
+To check upstream cells, Cash must read the live `.ipynb` file. It locates it through a prioritised fallback chain: first it reads the **VS Code injected variable** (`__vsc_ipynb_file__`) set by the Jupyter extension; if that is absent it tries the **`ipynbname` library** when installed; and finally it queries the **Jupyter Server REST API** (reliable inside JupyterLab or the classic Notebook). The resolved path is cached in memory for five minutes, and the cache is cleared whenever you switch notebooks via `%cash_on`.
 
-Graceful degradation is by design. If notebook discovery fails entirely — for example in a plain IPython REPL or an environment where none of the four mechanisms succeed — Cash disables upstream checking rather than guessing. The current cell still uses its own code and input hashes, but stale-upstream detection is simply skipped. Cash never invalidates against a notebook it cannot see.
+Graceful degradation is by design. If notebook discovery fails entirely — for example in a plain IPython REPL or an environment where none of the three mechanisms succeed — Cash disables upstream checking rather than guessing. Notably, it does **not** fall back to scanning the filesystem for the most-recently-modified `.ipynb`: that heuristic can silently pick the wrong notebook, so Cash skips upstream detection instead. The current cell still uses its own code and input hashes, but stale-upstream detection is simply skipped. Cash never invalidates against a notebook it cannot see.
 
 ## Upstream simulation
 
