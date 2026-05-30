@@ -8,7 +8,7 @@ four segments:
 
 ```
 cache_key = f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
-#               └ func ┘ └ state ┘  └ dynamic ┘  └ args ┘
+#             └ func ┘    └ state ┘    └ dynamic ┘    └ args ┘
 ```
 
 Each segment answers a different "did anything change?" question:
