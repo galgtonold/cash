@@ -115,6 +115,6 @@ imported inside an IPython session (or via `%load_ext cash` / the
 `cash autoload on` CLI hook). You normally interact with it via the
 magic commands themselves — see [Magic Commands](../magics.md).
 
-::: cash.notebook.magics.CashMagics
+::: cash.notebook.ipython.magics.CashMagics
     options:
       members: false
