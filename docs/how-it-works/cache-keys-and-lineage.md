@@ -101,7 +101,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 Cash follows a priority ladder when computing a hash for an object:
 
-1. **`_cash_hash` attribute** — if the object carries this attribute, it is used directly; it participates in lineage tracking and is the cheapest option.
+1. **`_cash_lineage_hash` attribute** — if the object carries this attribute, it is used directly; it participates in lineage tracking and is the cheapest option.
 2. **Registered type hashers** — checked next; any hasher added via `register_hasher()` takes precedence over the built-ins.
 3. **Built-in type hashers** — the library defaults for pandas, numpy, polars, and friends (see table above).
 4. **`pickle.dumps()`** — a content-based fallback for arbitrary Python objects.
