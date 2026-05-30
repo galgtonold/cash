@@ -132,18 +132,12 @@ When performing interactive user-testing (cell-by-cell execution with edits):
 4. Verify no regressions in related test files
 
 
-Use parallel test execution (`-n auto`) for integration tests, but be cautious of random failures.
+**Parallel by default.** `pyproject.toml` sets `addopts = "-n 16 --dist loadscope"`, so every `pytest` run is parallel (pytest-xdist ships in the `dev` extra). Integration tests spend ~90% of wall-clock blocked on per-test Jupyter kernel boot/IPC, so a serial run pins one core and leaves the rest idle. The worker count is pinned (not `-n auto`) because the suite is boot-throttle-bound, not CPU-bound: a sweep found ~2× the boot throttle (16 ≈ 2×`CASH_TEST_BOOT_THROTTLE`) both fastest and most stable, while oversubscribing only queues kernel boots and destabilizes the run. `loadscope` keeps each module/class on a single worker, preserving the per-file ordering unit tests rely on. For interactive debugging (pdb, `-s`, single-stepping) disable parallelism with `-n0`.
 
 ### Test Isolation
-**CRITICAL: Unit tests mock IPython in sys.modules, which breaks integration tests.**
+Unit tests use **real IPython** with a `MockShell(Configurable)` (see `conftest.py` and `tests/test_notebook/`), not a `sys.modules['IPython'] = MagicMock()` mock. Do not reintroduce module-level IPython mocking — it pollutes `sys.modules` for whatever module xdist schedules next on the same worker and resurfaces the cross-test contamination this suite was cleaned up to avoid.
 
-Some unit tests (`test_statement_lineage.py`, `test_output_order.py`) mock IPython modules at import time. To prevent sys.modules pollution:
-
-1. **Test ordering**: `conftest.py` has `pytest_collection_modifyitems` to run integration tests AFTER unit tests
-2. **Module cleanup**: Auto-fixture `cleanup_sys_modules_between_tests` removes IPython mocks before integration tests
-3. **Per-module cleanup**: Problematic test files have module-scoped fixtures to restore sys.modules state
-
-**DO NOT run integration tests individually after running unit tests without restarting pytest** - the cleanup only happens during full test runs.
+**Process-global IPython singleton.** `InteractiveShell.instance()` registers a process-wide singleton, so `get_ipython()` returns a live shell for the rest of the worker even after the test that created it finishes. Any test that calls `.instance()` (the overhead-benchmark drivers, the docs harness) MUST clear it in teardown via `InteractiveShell.clear_instance()` — otherwise downstream tests that assume no active shell break (e.g. `reset_session()` re-creates the global Cash; `Cash()` auto-registers magics). `tests/test_benchmarks_overhead/conftest.py` and `tests/docs/_harness.py` already do this.
 
 ### Test Commands
 

@@ -20,6 +20,121 @@ import concurrent.futures
 import threading
 from queue import Queue, Empty
 import atexit
+import os
+import signal
+import sys
+
+# Crash visibility (faulthandler) is installed in the ROOT conftest
+# (tests/conftest.py) so it covers every worker, not just notebook workers.
+
+# Opt-in warm-kernel reuse (off by default so the standard run boots a fresh
+# kernel per test). When CASH_TEST_REUSE_KERNEL=1, each xdist worker keeps a
+# single long-lived kernel alive and resets its state between tests instead of
+# paying the ~1.8s boot cost every time. See _WarmKernel below.
+_REUSE_KERNEL = os.environ.get("CASH_TEST_REUSE_KERNEL") == "1"
+
+# ---------------------------------------------------------------------------
+# Cross-process kernel-boot throttle.
+#
+# At -n auto (32 workers here) the full suite crashes: workers spawn Jupyter
+# kernel subprocesses faster than the OS can absorb (each kernel = several zmq
+# sockets + an asyncio loop), workers die ("node down: Not properly terminated")
+# and xdist's loadscope scheduler then aborts the whole session with an
+# INTERNALERROR KeyError. The deaths cluster around kernel *creation* - a boot
+# storm when warm kernels all spin up at once, continuous create/destroy churn
+# without reuse - not around test execution.
+#
+# This caps how many kernels may be *booting* simultaneously across ALL xdist
+# workers, so creation pressure stays bounded while test execution keeps full
+# parallelism. Shared state lives in a temp dir; a mkdir spin-lock guards the
+# read-modify-write, and stale entries (from a crashed worker) expire by TTL so
+# a slot is never lost permanently. Cap = CASH_TEST_BOOT_THROTTLE (default 8);
+# set 0 to disable.
+# ---------------------------------------------------------------------------
+import time
+import json
+import tempfile
+from contextlib import contextmanager
+
+_BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
+_BOOT_DIR = os.path.join(tempfile.gettempdir(), "cash_kernel_boot_throttle")
+_BOOT_STATE = os.path.join(_BOOT_DIR, "active.json")
+_BOOT_LOCK = os.path.join(_BOOT_DIR, "lock.d")
+_BOOT_ENTRY_TTL = 90.0  # a boot never takes this long; older entry = dead worker
+_BOOT_LOCK_TTL = 15.0   # lock is held only for a quick RMW; older = dead holder
+
+
+def _boot_lock_acquire():
+    while True:
+        try:
+            os.mkdir(_BOOT_LOCK)
+            return
+        except FileExistsError:
+            try:
+                if time.time() - os.path.getmtime(_BOOT_LOCK) > _BOOT_LOCK_TTL:
+                    os.rmdir(_BOOT_LOCK)
+                    continue
+            except OSError:
+                pass
+            time.sleep(0.02)
+
+
+def _boot_lock_release():
+    try:
+        os.rmdir(_BOOT_LOCK)
+    except OSError:
+        pass
+
+
+def _boot_state_read():
+    try:
+        with open(_BOOT_STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _boot_state_write(state):
+    try:
+        with open(_BOOT_STATE, "w") as f:
+            json.dump(state, f)
+    except OSError:
+        pass
+
+
+@contextmanager
+def _boot_throttle():
+    """Block until fewer than _BOOT_CAP kernels are booting, then hold a slot."""
+    if _BOOT_CAP <= 0:
+        yield
+        return
+    os.makedirs(_BOOT_DIR, exist_ok=True)
+    token = f"{os.getpid()}-{time.time_ns()}"
+    while True:
+        _boot_lock_acquire()
+        try:
+            now = time.time()
+            active = {k: v for k, v in _boot_state_read().items()
+                      if now - v < _BOOT_ENTRY_TTL}
+            if len(active) < _BOOT_CAP:
+                active[token] = now
+                _boot_state_write(active)
+                break
+            _boot_state_write(active)  # persist the TTL pruning
+        finally:
+            _boot_lock_release()
+        time.sleep(0.2)
+    try:
+        yield
+    finally:
+        _boot_lock_acquire()
+        try:
+            active = _boot_state_read()
+            active.pop(token, None)
+            _boot_state_write(active)
+        finally:
+            _boot_lock_release()
+
 
 # ---------------------------------------------------------------------------
 # Python 3.14+ compatibility: nest_asyncio + asyncio.timeout() is broken.
@@ -33,7 +148,15 @@ def _make_async_runner():
     Returns ``(loop, run_async_fn)`` where *run_async_fn* submits coroutines
     to the loop running in a daemon thread.
     """
-    loop = asyncio.new_event_loop()
+    # On Windows the default loop is the Proactor loop, which can't do the
+    # add_reader() that zmq needs - so pyzmq/tornado silently spins up an EXTRA
+    # "selector" thread per loop. That doubled the per-test thread leak AND made
+    # loop.close() race that orphan thread (WinError 10038 "not a socket"). A
+    # SelectorEventLoop drives zmq directly: no helper thread, clean close.
+    if sys.platform == "win32":
+        loop = asyncio.SelectorEventLoop()
+    else:
+        loop = asyncio.new_event_loop()
 
     def _run(loop: asyncio.AbstractEventLoop) -> None:
         asyncio.set_event_loop(loop)
@@ -41,12 +164,82 @@ def _make_async_runner():
 
     thread = threading.Thread(target=_run, args=(loop,), daemon=True)
     thread.start()
+    # Stash the thread on the loop so _close_async_runner() can join it on
+    # teardown instead of leaking the thread + loop (and their OS handles).
+    loop._cash_thread = thread  # type: ignore[attr-defined]
 
     def run_async(coro):
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result(timeout=120)
 
     return loop, run_async
+
+
+def _close_async_runner(loop) -> None:
+    """Stop, join, and close a runner created by :func:`_make_async_runner`.
+
+    Each NotebookTestRunner spins up its own loop + daemon thread. Previously
+    shutdown() abandoned them ("cleaned up at exit"), leaking one thread/loop
+    (plus self-pipe handles) per test - thousands by the end of a full run on a
+    worker that handles many notebook modules. Closing them here keeps the
+    worker's handle/thread count flat.
+    """
+    if loop is None:
+        return
+    try:
+        loop.call_soon_threadsafe(loop.stop)
+    except Exception:
+        pass
+    thread = getattr(loop, "_cash_thread", None)
+    if thread is not None:
+        try:
+            thread.join(timeout=5)
+        except Exception:
+            pass
+    try:
+        loop.close()
+    except Exception:
+        pass
+
+
+def _force_kill_kernel(km) -> None:
+    """Terminate a kernel's OS process directly from the calling thread.
+
+    The fresh-boot path uses an AsyncKernelManager whose
+    ``_async_shutdown_kernel()`` awaits the provisioner on a background loop, and
+    that await can deadlock on a Future that never resolves. A wedged teardown
+    stalls the xdist worker long enough for the master to declare it "node down",
+    and under ``--dist loadscope`` the master then hangs the WHOLE session
+    (observed: 15h) instead of recovering. Killing the PID needs no event loop and
+    can't deadlock, so a single kernel can never take the run down with it.
+    """
+    if km is None:
+        return
+    pid = None
+    prov = getattr(km, "provisioner", None)
+    if prov is not None:
+        pid = getattr(prov, "pid", None)
+    if pid is None:
+        kernel = getattr(km, "kernel", None)  # legacy jupyter_client: a Popen
+        if kernel is not None:
+            pid = getattr(kernel, "pid", None)
+    if pid:
+        try:
+            os.kill(pid, signal.SIGTERM)  # Windows: maps to TerminateProcess
+        except (OSError, ProcessLookupError):
+            pass
+    # Drop the connection file etc. so force-killing thousands of kernels over a
+    # full run doesn't litter the Jupyter runtime dir. cleanup_resources() is
+    # sync on a sync KernelManager (pool/warm) but a coroutine on an
+    # AsyncKernelManager (fresh path); the process is already dead and there's no
+    # live loop to await on here, so just close the coroutine to avoid a
+    # "never awaited" warning.
+    try:
+        res = km.cleanup_resources()
+        if asyncio.iscoroutine(res):
+            res.close()
+    except Exception:
+        pass
 
 
 # Module-level runner used only by KernelPool (which is rarely used).
@@ -263,6 +456,209 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
 
 
 # =============================================================================
+# WARM KERNEL (opt-in reuse) - one persistent kernel per xdist worker
+# =============================================================================
+
+class _WarmKernel:
+    """A single long-lived kernel reused across tests within one worker process.
+
+    Boots the kernel + initialises cash exactly once (so CashMagics' pre_run_cell
+    hook and run_cell monkey-patch are installed exactly once - re-running
+    %load_ext is a no-op via IPython's extension registry, which avoids the
+    hook-stacking trap). Between tests, prepare_for_test() makes the namespace
+    and cash state look fresh without re-registering anything.
+    """
+
+    def __init__(self, kernel_name: str = 'python3'):
+        self.kernel_name = kernel_name
+        self.km = None
+        self.kc = None
+        # All kernel I/O for this warm kernel runs on its own dedicated loop so
+        # the async kernel client is never driven across event loops (the
+        # likely cause of the old pool's hangs).
+        self.loop, self.run_async = _make_async_runner()
+        self._initialized = False
+
+    def boot(self) -> None:
+        from jupyter_client import KernelManager
+        km = KernelManager(kernel_name=self.kernel_name)
+        # Throttle holds a slot through wait-for-ready (the whole startup window
+        # is where the resource pressure lives), so only _BOOT_CAP kernels boot
+        # at once across all workers.
+        with _boot_throttle():
+            km.start_kernel()
+            kc = km.client()
+            kc.start_channels()
+
+            async def _wait_ready():
+                await kc._async_wait_for_ready(timeout=30)
+
+            self.run_async(_wait_ready())
+        self.km = km
+        self.kc = kc
+
+    def _exec(self, code: str) -> None:
+        self.run_async(
+            self.kc._async_execute_interactive(
+                code, store_history=False, output_hook=lambda msg: None
+            )
+        )
+
+    def prepare_for_test(self, work_dir: Path, nb_path: Path) -> None:
+        """Reset the kernel so it behaves like a freshly booted one.
+
+        Clears the user namespace, repoints cwd + notebook path at this test's
+        tmp dir, rebuilds a fresh default cache backend at this cwd (so no prior
+        test's cached entries produce spurious RESTORED hits), clears CashMagics'
+        tracking dicts, and purges test-authored modules from sys.modules (so a
+        prior test's same-named module can't shadow this test's). Then ensures
+        cash is loaded + enabled (idempotent).
+        """
+        path_str = str(nb_path).replace('\\', '\\\\')
+        dir_str = str(work_dir).replace('\\', '\\\\')
+        # Clear the namespace in its OWN execution. reset() rebinds user_ns to a
+        # fresh dict; if we assigned __vsc_ipynb_file__ in the same cell the
+        # assignment would land in the old (captured) globals dict and be
+        # invisible afterwards, breaking cash's notebook-path discovery.
+        self._exec("get_ipython().reset(new_session=False)")
+        # Repoint cwd + notebook path at THIS test's tmp dir (separate exec, so
+        # it runs against the new user_ns).
+        self._exec(f"import os as _os\n_os.chdir(r'{dir_str}')\n__vsc_ipynb_file__ = r'{path_str}'")
+        # Drop & rebuild the cash singleton so NO in-memory tracking state leaks
+        # from the previous test. reset_session() gives a fresh Cash (its backend
+        # is rebuilt lazily against THIS test's cwd, so no prior test's cached
+        # entries produce spurious RESTORED hits) and cleanly re-registers the
+        # magics (run_cell hook + pre_run_cell handler) without nesting wrappers.
+        # This replaces hand-clearing ~20 tracking dicts, which kept missing
+        # attributes (lineage, variable hashes, simulator caches) and leaked
+        # state across reused tests. Then re-enable auto-caching on the fresh
+        # instance (a fresh Cash starts with caching off).
+        self._exec("import cash as _cash\nfrom cash import Cash\n_cash.reset_session()")
+        self._exec("%cash_on")
+        # Purge test-authored modules from sys.modules so a stale same-named
+        # module from a prior test can't shadow this test's import. Runs last,
+        # after cash state is rebuilt, so its baseline snapshot includes cash.
+        self._exec(_REUSE_PURGE_TEST_MODULES)
+
+    def shutdown(self) -> None:
+        if self.km is None:
+            return
+        # Force-kill rather than await _async_shutdown_kernel: that await can
+        # deadlock on this warm kernel's loop and, at session end, hang the whole
+        # worker (and the loadscope session). See _force_kill_kernel.
+        try:
+            if self.kc:
+                self.kc.stop_channels()
+        except Exception:
+            pass
+        _force_kill_kernel(self.km)
+        self.km = None
+        self.kc = None
+        # The warm kernel owns its loop + thread for the worker's lifetime; close
+        # them now instead of leaving a dangling daemon thread at process exit.
+        _close_async_runner(self.loop)
+        self.loop = None
+        self.run_async = None
+
+
+# Reset snippet run in-kernel between reused tests. A freshly booted kernel
+# starts with a clean sys.modules AND a clean sys.path; reset(new_session=False)
+# touches neither, so we emulate a fresh boot here:
+#
+#   1. sys.path: restore to the first-test baseline. Tests that import a local
+#      module do `sys.path.insert(0, str(tmp_path))` in a cell; in a warm kernel
+#      that absolute tmp_path would otherwise linger and shadow a later test's
+#      same-named module (e.g. one test's helpers.py defining greet() resolving
+#      ahead of another's helpers.py defining double(), which relies on cwd).
+#      The baseline still contains '' (cwd-relative), so each test re-adds its
+#      own path in its own cell and cwd-based imports keep working.
+#   2. sys.modules: purge test-authored modules so a stale same-named module
+#      from a prior test can't be returned by import. Heavy library modules
+#      (pandas/numpy/etc., under stdlib or site-packages) stay cached for speed -
+#      re-importing them would defeat warm-kernel reuse and they don't change.
+_REUSE_PURGE_TEST_MODULES = """
+try:
+    import sys as _sys, os as _os, importlib as _il
+    _base = getattr(_sys, '_cash_test_baseline_modules', None)
+    if _base is None:
+        # First reused test: snapshot the post-%cash_on module set and sys.path
+        # as the protected baseline (stdlib + cash + cash deps, clean import
+        # roots). Only state introduced by tests AFTER this point is reset.
+        _sys._cash_test_baseline_modules = frozenset(_sys.modules)
+        _sys._cash_test_baseline_syspath = list(_sys.path)
+    else:
+        _baseline_path = getattr(_sys, '_cash_test_baseline_syspath', None)
+        if _baseline_path is not None:
+            _sys.path[:] = list(_baseline_path)
+
+        _roots = set()
+        for _p in (_sys.base_prefix, _sys.prefix,
+                   _sys.base_exec_prefix, _sys.exec_prefix):
+            if _p:
+                _roots.add(_os.path.normcase(_os.path.abspath(_p)))
+        try:
+            import site as _site
+            for _sp in list(_site.getsitepackages()) + [_site.getusersitepackages()]:
+                if _sp:
+                    _roots.add(_os.path.normcase(_os.path.abspath(_sp)))
+        except Exception:
+            pass
+
+        def _cash_is_library(_name, _mod):
+            # Protect the package under test by name (its submodules may be
+            # imported lazily and aren't always in the baseline, and re-importing
+            # them could break isinstance identity for live cash objects).
+            if _name == 'cash' or _name.startswith('cash.'):
+                return True
+            _f = getattr(_mod, '__file__', None)
+            if not _f:
+                _pth = getattr(_mod, '__path__', None)
+                if _pth:
+                    try:
+                        _f = list(_pth)[0]
+                    except Exception:
+                        _f = None
+            if not _f:
+                # No file (builtin/namespace/dynamic) and not in baseline:
+                # purge to match a fresh kernel.
+                return False
+            _fn = _os.path.normcase(_os.path.abspath(_f))
+            return any(_fn.startswith(_r) for _r in _roots)
+
+        for _name in [n for n in _sys.modules if n not in _base]:
+            _mod = _sys.modules.get(_name)
+            if _mod is None:
+                continue
+            if _cash_is_library(_name, _mod):
+                continue
+            try:
+                del _sys.modules[_name]
+            except Exception:
+                pass
+        try:
+            _il.invalidate_caches()
+        except Exception:
+            pass
+except Exception:
+    pass
+"""
+
+
+# One warm kernel per worker process (module-level singleton).
+_warm_kernel: Optional['_WarmKernel'] = None
+
+
+def _get_warm_kernel(kernel_name: str = 'python3') -> '_WarmKernel':
+    global _warm_kernel
+    if _warm_kernel is None:
+        wk = _WarmKernel(kernel_name)
+        wk.boot()
+        atexit.register(wk.shutdown)
+        _warm_kernel = wk
+    return _warm_kernel
+
+
+# =============================================================================
 # NOTEBOOK TEST RUNNER
 # =============================================================================
 
@@ -314,8 +710,13 @@ class NotebookTestRunner:
         self._kernel_started = False
         self._cash_initialized = False
         self._pooled_kernel: Optional[Dict] = None
-        # Each runner gets its own event loop to avoid cross-test contamination
-        self._loop, self._run_async = _make_async_runner()
+        self._warm: Optional['_WarmKernel'] = None
+        # Each runner gets its own event loop to avoid cross-test contamination.
+        # Created lazily in start_kernel() (and torn down in shutdown()) so a
+        # runner that is never started - or one using the shared warm loop -
+        # doesn't create and leak a loop + thread.
+        self._loop = None
+        self._run_async = None
     
     def load(self, notebook_path: Union[str, Path]) -> 'NotebookTestRunner':
         """
@@ -369,9 +770,32 @@ class NotebookTestRunner:
             kernel_name=self.kernel_name,
             resources={'metadata': {'path': str(self.work_dir)}}
         )
-        
+
         cash_already_initialized = False
-        
+
+        # Warm-kernel reuse (opt-in). Only for the common with_cash=True path;
+        # with_cash=False tests want a bare kernel with no cash hooks installed,
+        # which a persistent warm kernel can't provide, so they fall through to a
+        # fresh boot below.
+        if _REUSE_KERNEL and with_cash:
+            wk = _get_warm_kernel(self.kernel_name)
+            self._warm = wk
+            # Drive ALL kernel I/O on the warm kernel's own loop so the async
+            # client is never used across event loops.
+            self._loop = wk.loop
+            self._run_async = wk.run_async
+            self.client.km = wk.km
+            self.client.kc = wk.kc
+            self._kernel_started = True
+            wk.prepare_for_test(self.work_dir, self.nb_path)
+            self._cash_initialized = True
+            return self
+
+        # Fresh-boot path (no reuse): this runner drives its own kernel I/O, so
+        # lazily create its dedicated loop now (closed again in shutdown()).
+        if self._loop is None:
+            self._loop, self._run_async = _make_async_runner()
+
         if self.use_pool:
             # Try to get a pre-warmed kernel from the pool
             pool = get_kernel_pool()
@@ -403,15 +827,19 @@ class NotebookTestRunner:
     
     def _start_new_kernel(self) -> None:
         """Start a new kernel (not from pool)."""
-        self.client.km = self.client.create_kernel_manager()
-        self.client.start_new_kernel(cwd=str(self.work_dir))
-        self.client.kc = self.client.km.client()
-        self.client.kc.start_channels()
-        
-        async def _wait_ready():
-            await self.client.kc._async_wait_for_ready(timeout=30)
-        
-        self._run_async(_wait_ready())
+        # Same throttle as warm-kernel boot: without reuse this path runs once
+        # per test, so the cap also smooths the create/destroy churn that kills
+        # workers mid-run at -n auto.
+        with _boot_throttle():
+            self.client.km = self.client.create_kernel_manager()
+            self.client.start_new_kernel(cwd=str(self.work_dir))
+            self.client.kc = self.client.km.client()
+            self.client.kc.start_channels()
+
+            async def _wait_ready():
+                await self.client.kc._async_wait_for_ready(timeout=30)
+
+            self._run_async(_wait_ready())
     
     def _inject_notebook_path(self) -> None:
         """Inject the notebook path into the kernel namespace.
@@ -620,6 +1048,18 @@ except Exception:
     
     def shutdown(self) -> None:
         """Shutdown the kernel."""
+        if self._warm is not None:
+            # Reuse mode: leave the warm kernel alive for the next test. Drop
+            # this test's big variables now to free memory; full state reset
+            # happens in prepare_for_test() at the next start_kernel().
+            try:
+                self._warm._exec("get_ipython().reset(new_session=False)")
+            except Exception:
+                pass
+            self._warm = None
+            self._kernel_started = False
+            self.client = None
+            return
         if self._pooled_kernel and self.use_pool:
             # Return kernel to pool for reuse
             try:
@@ -629,24 +1069,23 @@ except Exception:
                 pass
             self._pooled_kernel = None
         elif self.client:
-            async def _shutdown():
-                try:
-                    if self.client.kc:
-                        self.client.kc.stop_channels()
-                    if self.client.km and self.client.km.has_kernel:
-                        await self.client.km._async_shutdown_kernel(now=True)
-                except Exception:
-                    pass
-            
+            # Tear the kernel down without the async shutdown coroutine, which
+            # can deadlock on the background loop (see _force_kill_kernel).
+            # stop_channels() is sync + bounded; the PID kill is loop-independent.
             try:
-                self._run_async(_shutdown())
+                if self.client.kc:
+                    self.client.kc.stop_channels()
             except Exception:
                 pass
-        
+            _force_kill_kernel(self.client.km)
+
         self._kernel_started = False
-        # Replace the event loop so a subsequent start_kernel() works.
-        # The old loop's thread is a daemon and will be cleaned up at exit.
-        self._loop, self._run_async = _make_async_runner()
+        # Close this runner's loop + background thread instead of leaking them.
+        # A subsequent start_kernel() lazily creates a fresh loop, so restart
+        # still works without abandoning the old one.
+        _close_async_runner(self._loop)
+        self._loop = None
+        self._run_async = None
     
     def __enter__(self) -> 'NotebookTestRunner':
         return self
