@@ -591,3 +591,34 @@
 .md-typeset .note > summary::after {
   color: var(--cash-info);
 }
+
+/* ─── How Cash Works: core-loop step strip (Overview) ────────────────── */
+.cash-coreloop {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 1em 0 1.5em;
+}
+.cash-coreloop-step {
+  font-family: var(--cash-font-mono);
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg-section);
+  color: var(--cash-ink-2);
+  border: 1px solid var(--cash-rule-strong);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cash-coreloop-step {
+    animation: cash-coreloop-pulse 6s ease-in-out infinite;
+  }
+  .cash-coreloop-step:nth-child(1) { animation-delay: 0s; }
+  .cash-coreloop-step:nth-child(2) { animation-delay: 1.2s; }
+  .cash-coreloop-step:nth-child(3) { animation-delay: 2.4s; }
+  .cash-coreloop-step:nth-child(4) { animation-delay: 3.6s; }
+  .cash-coreloop-step:nth-child(5) { animation-delay: 4.8s; }
+  @keyframes cash-coreloop-pulse {
+    0%, 80%, 100% { background: var(--cash-bg-section); color: var(--cash-ink-2); border-color: var(--cash-rule-strong); }
+    10%, 20%      { background: var(--cash-green-bg);  color: var(--cash-green);  border-color: var(--cash-green); }
+  }
+}
