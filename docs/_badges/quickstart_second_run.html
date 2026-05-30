@@ -344,6 +344,11 @@ label.c3-row { cursor: pointer; }
 
 .c3-rail { width: 5px; align-self: stretch; }
 .c3-rail-soft { opacity: 0.5; }
+/* Upstream rows are de-emphasised by softening their rail. This is a
+   section-level fact (the row lives in the UPSTREAM section), so it lives
+   here as a cascade off the section-body wrapper rather than as a per-row
+   class the view layer has to stamp on every StatementRow. */
+.c3-upstream-body .c3-rail { opacity: 0.5; }
 
 .c3-code {
   /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules

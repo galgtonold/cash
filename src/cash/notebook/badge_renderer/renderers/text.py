@@ -39,8 +39,8 @@ def _header_line(h: BadgeHeader) -> str:
             if h.total_exec_s else "⚙️ EXECUTED")
 
 
-def _row_tag(row: StatementRow) -> str:
-    prefix = "⬆️" if row.is_upstream else _status_icon(row.status)
+def _row_tag(row: StatementRow, *, is_upstream: bool) -> str:
+    prefix = "⬆️" if is_upstream else _status_icon(row.status)
     label = _status_label(row.status, row)
     return f"{prefix} {label}"
 
@@ -79,9 +79,9 @@ def _status_label(status: BadgeStatus, row: StatementRow) -> str:
     return status.value.upper()
 
 
-def _row_line(row: StatementRow) -> str:
+def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     code = row.code.splitlines()[0][:theme.HEADER_MAX_LEN] if row.code else ""
-    tag = _row_tag(row)
+    tag = _row_tag(row, is_upstream=is_upstream)
     if row.status is BadgeStatus.RESTORED:
         return f"  {tag}: {code}  (saved {row.time_s:.2f}s)"
     if row.status is BadgeStatus.SKIPPED:
@@ -104,14 +104,13 @@ def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
         code=it.code,
         time_s=it.time_s,
         storage_tiers=it.storage_tiers,
-        is_upstream=is_upstream,
     )
-    return _row_line(pseudo)
+    return _row_line(pseudo, is_upstream=is_upstream)
 
 
 def _item_lines(item: SectionItem, *, is_upstream: bool) -> list[str]:
     if isinstance(item, StatementRow):
-        return [_row_line(item)]
+        return [_row_line(item, is_upstream=is_upstream)]
     if isinstance(item, ForLoopGroup):
         out: list[str] = []
         for ls in item.stmts:
@@ -119,9 +118,9 @@ def _item_lines(item: SectionItem, *, is_upstream: bool) -> list[str]:
                 out.append(_iteration_line(it, is_upstream=is_upstream))
         return out
     if isinstance(item, ControlGroup):
-        return [_row_line(r) for r in item.rows]
+        return [_row_line(r, is_upstream=is_upstream) for r in item.rows]
     if isinstance(item, ControlGroupSingle):
-        return [_row_line(item.row)]
+        return [_row_line(item.row, is_upstream=is_upstream)]
     if isinstance(item, SkippedBucket):
         out = []
         for sub in item.items:

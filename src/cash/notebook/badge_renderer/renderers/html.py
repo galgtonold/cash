@@ -407,6 +407,11 @@ label.c3-row {{ cursor: pointer; }}
 
 .c3-rail {{ width: 5px; align-self: stretch; }}
 .c3-rail-soft {{ opacity: 0.5; }}
+/* Upstream rows are de-emphasised by softening their rail. This is a
+   section-level fact (the row lives in the UPSTREAM section), so it lives
+   here as a cascade off the section-body wrapper rather than as a per-row
+   class the view layer has to stamp on every StatementRow. */
+.c3-upstream-body .c3-rail {{ opacity: 0.5; }}
 
 .c3-code {{
   /* !important throughout: Jupyter's .jp-RenderedHTMLCommon pre rules
@@ -1083,7 +1088,6 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     status = row.status
     kind = theme.kind_of(status.value)
     rail = theme.rail_color(status.value)
-    rail_soft = " c3-rail-soft" if row.is_upstream else ""
 
     # Notification rows (WARNING / FUNCTION_CHANGED / MODULE_RELOADED / ERROR)
     # get a text pill in the time chip and skip the timing bar. The row code
@@ -1135,7 +1139,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         f'<div class="c3-rowx">'
         f'<input type="checkbox" class="c3-rxtog" id="{rid}">'
         f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}">'
-        f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+        f'<span class="c3-rail" style="background:{rail};"></span>'
         f"{code_html}"
         f"{dots}"
         f"{bar}"
@@ -1346,7 +1350,7 @@ def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:
     return "exec"  # mixed -> exec coloring; rail picks blue via rail_color('mixed') below
 
 
-def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool) -> str:
+def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
     """Render one ForLoopGroup as **one** for-header row + N body-line rows.
 
     A loop with several body statements (the common case) used to emit
@@ -1358,7 +1362,6 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
     """
     if not g.stmts and not g.nested:
         return ""
-    rail_soft = " c3-rail-soft" if is_upstream else ""
 
     # ---- aggregate across every iteration of every body statement -----
     all_iters = [it for stmt in g.stmts for it in stmt.iterations]
@@ -1441,7 +1444,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
             f'<div class="c3-rowx">'
             f'<input type="checkbox" class="c3-rxtog" id="{head_rid}">'
             f'<label class="c3-row c3-loop-head" for="{head_rid}" data-kind="{head_kind}">'
-            f'<span class="c3-rail{rail_soft}" style="background:{head_rail};"></span>'
+            f'<span class="c3-rail" style="background:{head_rail};"></span>'
             f'<pre class="c3-code">{_code_html(loop_header)}</pre>'
             f'<span class="c3-loop-meta">{_esc(head_meta)}</span>'
             f"{_tbar(head_total_time, max_time, head_kind)}"
@@ -1494,7 +1497,7 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float, *, is_upstream: bool)
                 f"</div>"
             )
         else:
-            body_pieces.append(_render_section_item(item, max_time, is_upstream=is_upstream))
+            body_pieces.append(_render_section_item(item, max_time))
 
     # Wrap the entire body in ONE shared .c3-ctrl-body so everything sits
     # at the same indent level — matching Python's 4-space convention
@@ -1548,7 +1551,7 @@ def _control_group_html(cg: ControlGroup, max_time: float) -> str:
         elif isinstance(r, StatementRow):
             body_parts.append(_static_statement_row_html(r, max_time, indented=True))
         else:
-            body_parts.append(_render_section_item(r, max_time, is_upstream=False))
+            body_parts.append(_render_section_item(r, max_time))
     body_rows = "".join(body_parts)
     head = (
         f'<div class="c3-ctrl">'
@@ -1577,7 +1580,6 @@ def _static_statement_row_html(
     status = row.status
     kind = theme.kind_of(status.value)
     rail = theme.rail_color(status.value)
-    rail_soft = " c3-rail-soft" if row.is_upstream else ""
     code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
     dots = _dots(
         status=status,
@@ -1589,7 +1591,7 @@ def _static_statement_row_html(
     chip = _time_chip(row.time_s, row.saved_time_s, kind)
     return (
         f'<div class="c3-row" data-kind="{kind}" data-status="{status.value}">'
-        f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+        f'<span class="c3-rail" style="background:{rail};"></span>'
         f"{code_html}"
         f"{dots}"
         f"{bar}"
@@ -1621,10 +1623,9 @@ def _multiline_control_html(row: StatementRow, max_time: float) -> str:
     status = row.status
     kind = theme.kind_of(status.value)
     rail = theme.rail_color(status.value)
-    rail_soft = " c3-rail-soft" if row.is_upstream else ""
     head = (
         f'<div class="c3-row c3-loop-head" data-kind="{kind}">'
-        f'<span class="c3-rail{rail_soft}" style="background:{rail};"></span>'
+        f'<span class="c3-rail" style="background:{rail};"></span>'
         f'<pre class="c3-code">{_code_html(head_line)}</pre>'
         f'<span class="c3-loop-meta">{len(body_lines)} stmt{"s" if len(body_lines) != 1 else ""}</span>'
         f"{_tbar(row.time_s, max_time, kind)}"
@@ -1665,7 +1666,7 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
         f"saved {sb.total_saved_time_s:.2f}s"
         if sb.total_saved_time_s > theme.MIN_TIME_DISPLAY_S else "—"
     )
-    body = "".join(_render_section_item(i, max_time, is_upstream=True) for i in sb.items)
+    body = "".join(_render_section_item(i, max_time) for i in sb.items)
     return (
         f'<details class="c3-skipped">'
         f'<summary title="{_esc(title)}">'
@@ -1788,11 +1789,11 @@ def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
 # Section dispatch
 # ---------------------------------------------------------------------------
 
-def _render_section_item(item: SectionItem, max_time: float, *, is_upstream: bool) -> str:
+def _render_section_item(item: SectionItem, max_time: float) -> str:
     if isinstance(item, StatementRow):
         return _statement_row_html(item, max_time)
     if isinstance(item, ForLoopGroup):
-        return _for_loop_group_html(item, max_time, is_upstream=is_upstream)
+        return _for_loop_group_html(item, max_time)
     if isinstance(item, ControlGroup):
         return _control_group_html(item, max_time)
     if isinstance(item, ControlGroupSingle):
@@ -1961,7 +1962,7 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
     body_html = ""
     upstream = next((s for s in badge.sections if s.kind is SectionKind.UPSTREAM), None)
     if upstream is not None and upstream.items:
-        rows = "".join(_render_section_item(i, max_time, is_upstream=True) for i in upstream.items)
+        rows = "".join(_render_section_item(i, max_time) for i in upstream.items)
         n = sum(1 for i in upstream.items if not isinstance(i, SkippedBucket))
         up_saved = sum(_item_saved_time(i) for i in upstream.items)
         up_exec = sum(_item_total_time(i) for i in upstream.items)
@@ -2029,7 +2030,7 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
             continue
         body_html += _section_label(section.kind, section.header)
         for item in section.items:
-            body_html += _render_section_item(item, max_time, is_upstream=False)
+            body_html += _render_section_item(item, max_time)
 
     sparkline = _sparkline_html(badge)
     chips = _filter_chips_html(badge.header)

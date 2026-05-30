@@ -619,7 +619,7 @@ def _strip_context_comments(code: str) -> str:
 # Row builders
 # ---------------------------------------------------------------------------
 
-def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) -> StatementRow:
+def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
     """Translate one metric dict into a :class:`StatementRow`."""
     status = map_status(m.get("status"))
 
@@ -669,7 +669,6 @@ def _statement_row_from_metric(m: dict[str, Any], *, is_upstream: bool = False) 
         restored_vars=restored_vars,
         uncacheable_reasons=_tup_str(m.get("uncacheable_reasons")),
         skipped_reason=m.get("skipped_reason") or None,
-        is_upstream=is_upstream,
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
@@ -696,11 +695,11 @@ def _iteration_row(m: dict[str, Any]) -> IterationRow:
 # Grouped-item translation
 # ---------------------------------------------------------------------------
 
-def _section_item_from_grouped(item: dict[str, Any], *, is_upstream: bool) -> SectionItem:
+def _section_item_from_grouped(item: dict[str, Any]) -> SectionItem:
     """Translate one ``group_loop_iterations`` intermediate dict into a node."""
     kind = item["type"]
     if kind == "single":
-        return _statement_row_from_metric(item["metric"], is_upstream=is_upstream)
+        return _statement_row_from_metric(item["metric"])
 
     if kind == "for_loop_group":
         stmt_groups = item.get("stmt_groups", [])
@@ -749,7 +748,7 @@ def _section_item_from_grouped(item: dict[str, Any], *, is_upstream: bool) -> Se
                 stmts_list.append(ls)
                 body_list.append(ls)
             else:
-                child_item = _section_item_from_grouped(sub, is_upstream=is_upstream)
+                child_item = _section_item_from_grouped(sub)
                 nested_list.append(child_item)
                 body_list.append(child_item)
         return ForLoopGroup(
@@ -769,12 +768,12 @@ def _section_item_from_grouped(item: dict[str, Any], *, is_upstream: bool) -> Se
             # this control body therefore render as ForLoopGroups, not as
             # a flat list of N per-iteration StatementRows.
             rows: tuple[Any, ...] = tuple(
-                _section_item_from_grouped(g, is_upstream=is_upstream)
+                _section_item_from_grouped(g)
                 for g in sub_items
             )
         else:
             rows = tuple(
-                _statement_row_from_metric(m, is_upstream=is_upstream)
+                _statement_row_from_metric(m)
                 for m in item.get("metrics", [])
             )
         return ControlGroup(
@@ -785,7 +784,7 @@ def _section_item_from_grouped(item: dict[str, Any], *, is_upstream: bool) -> Se
 
     if kind == "control_group_single":
         return ControlGroupSingle(
-            row=_statement_row_from_metric(item["metric"], is_upstream=is_upstream),
+            row=_statement_row_from_metric(item["metric"]),
         )
 
     raise ValueError(f"Unknown grouped-item type: {kind!r}")
@@ -798,7 +797,7 @@ def _skipped_bucket(skipped_metrics: list[dict[str, Any]]) -> SkippedBucket | No
     grouped = _group_loop_iterations(skipped_metrics)
     items: list[StatementRow | ForLoopGroup] = []
     for g in grouped:
-        node = _section_item_from_grouped(g, is_upstream=True)
+        node = _section_item_from_grouped(g)
         # SkippedBucket only carries StatementRow | ForLoopGroup per the IR.
         # Control-group skipped items are rendered as their single row for the bucket.
         if isinstance(node, StatementRow | ForLoopGroup):
@@ -1037,9 +1036,9 @@ def build_interactive_badge(
     if upstream_all or upstream_skipped:
         items: list[SectionItem] = []
         for g in _group_loop_iterations(upstream_restored_like):
-            items.append(_section_item_from_grouped(g, is_upstream=True))
+            items.append(_section_item_from_grouped(g))
         for g in _group_loop_iterations(upstream_executed):
-            items.append(_section_item_from_grouped(g, is_upstream=True))
+            items.append(_section_item_from_grouped(g))
         bucket = _skipped_bucket(upstream_skipped)
         if bucket is not None:
             items.append(bucket)
@@ -1051,7 +1050,7 @@ def build_interactive_badge(
 
     current_items: list[SectionItem] = []
     for g in _group_loop_iterations(current):
-        current_items.append(_section_item_from_grouped(g, is_upstream=False))
+        current_items.append(_section_item_from_grouped(g))
     sections.append(Section(
         kind=SectionKind.CURRENT,
         header="CURRENT CELL" if (upstream_all or upstream_skipped) else "",

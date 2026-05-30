@@ -82,7 +82,6 @@ def test_single_restored_metric_no_upstream() -> None:
     assert row.storage_tiers == ("RAM", "DISK")
     # Restored rows separate restored_vars from output_vars (both fields exist).
     assert row.restored_vars == ("x",)
-    assert row.is_upstream is False
     # time_s is now actual elapsed restore time; saved_time_s carries the saving.
     assert row.time_s == pytest.approx(0.005)
     assert row.saved_time_s == pytest.approx(0.3)
@@ -194,7 +193,6 @@ def test_upstream_metrics_go_to_upstream_section() -> None:
     upstream = next(s for s in badge.sections if s.kind is SectionKind.UPSTREAM)
     upstream_row = upstream.items[0]
     assert isinstance(upstream_row, StatementRow)
-    assert upstream_row.is_upstream is True
     assert upstream_row.status is BadgeStatus.RESTORED
 
 

@@ -130,6 +130,26 @@ def test_skipped_bucket_renders_as_collapsible_with_count_and_saved() -> None:
     assert "cache already covered" in html
 
 
+def test_upstream_rails_softened_by_section_cascade() -> None:
+    """Upstream rows are de-emphasised by softening their status rail.
+
+    This is a *structural* CSS cascade off the section-body wrapper, not a
+    per-row class baked in by the view layer: the rows already live inside
+    ``.c3-upstream-body`` (a section fact), so the softening belongs in the
+    stylesheet, not on each ``StatementRow``.
+    """
+    metrics = [
+        {"code": "setup()", "status": str(CacheStatus.RESTORED),
+         "is_upstream": True, "saved_time": 0.3, "total_time": 0.0},
+        {"code": "current()", "status": str(CacheStatus.COMPUTED), "total_time": 0.2},
+    ]
+    html = render_html(build_interactive_badge(metrics))
+    # The upstream rows sit inside the section body wrapper...
+    assert "c3-upstream-body" in html
+    # ...and the rail softening is a cascade scoped to that wrapper.
+    assert ".c3-upstream-body .c3-rail" in html
+
+
 def test_decorator_section_renders_with_cache_tag() -> None:
     metrics = [{
         "code": "f()", "status": str(CacheStatus.COMPUTED), "total_time": 0.1,

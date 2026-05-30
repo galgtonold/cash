@@ -53,7 +53,6 @@ def test_statement_row_constructs_with_only_required_props() -> None:
     assert row.status is BadgeStatus.RESTORED
     assert row.storage_tiers == ()
     assert row.uncacheable_reasons == ()
-    assert row.is_upstream is False
 
 
 def test_frozen_nodes_reject_mutation() -> None:
