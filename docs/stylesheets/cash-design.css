@@ -703,6 +703,55 @@
   transform: translate(-50%, 1px) rotate(45deg);
 }
 
+/* ─── How Cash Works: cache-key segment breakdown (Decorator path) ───── *
+ * Replaces an ASCII-labelled code block. Each colon-separated segment of the
+ * decorator cache key gets its own cell so the label sits exactly under the
+ * value it names; the row stacks to a vertical list on narrow screens. */
+.cash-keybreak {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 6px;
+  margin: 1.5em 0;
+}
+.cash-keybreak-seg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 12px;
+  background: var(--cash-bg-section);
+  border: 1px solid var(--cash-rule-strong);
+  border-bottom: 3px solid var(--cash-ochre);
+  border-radius: var(--cash-radius-sm);
+  text-align: center;
+}
+.cash-keybreak-val {
+  font-family: var(--cash-font-mono);
+  font-size: 14px;
+  color: var(--cash-ink);
+  white-space: nowrap;
+}
+.cash-keybreak-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--cash-ochre);
+}
+.cash-keybreak-colon {
+  align-self: center;
+  font-family: var(--cash-font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--cash-ink-4);
+}
+@media (max-width: 600px) {
+  .cash-keybreak { flex-direction: column; }
+  .cash-keybreak-seg { text-align: left; }
+  .cash-keybreak-colon { display: none; }
+}
+
 /* ─── How Cash Works: invalidation playground (page 3) ───────────────── */
 .cash-ip-controls {
   display: flex;

@@ -6,10 +6,27 @@ notebook path uses — only the *trigger* differs. Where a notebook statement is
 keyed on its source and its inputs' lineage, a decorated **call** is keyed on
 four segments:
 
-```
-cache_key = f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
-#             └ func ┘    └ state ┘    └ dynamic ┘    └ args ┘
-```
+<div class="cash-keybreak" role="img" aria-label="The decorator cache key is four colon-separated segments: func_name (func), state_hash (state), dynamic_hash (dynamic), and args_hash (args).">
+  <div class="cash-keybreak-seg">
+    <span class="cash-keybreak-val">func_name</span>
+    <span class="cash-keybreak-label">func</span>
+  </div>
+  <span class="cash-keybreak-colon" aria-hidden="true">:</span>
+  <div class="cash-keybreak-seg">
+    <span class="cash-keybreak-val">state_hash</span>
+    <span class="cash-keybreak-label">state</span>
+  </div>
+  <span class="cash-keybreak-colon" aria-hidden="true">:</span>
+  <div class="cash-keybreak-seg">
+    <span class="cash-keybreak-val">dynamic_hash</span>
+    <span class="cash-keybreak-label">dynamic</span>
+  </div>
+  <span class="cash-keybreak-colon" aria-hidden="true">:</span>
+  <div class="cash-keybreak-seg">
+    <span class="cash-keybreak-val">args_hash</span>
+    <span class="cash-keybreak-label">args</span>
+  </div>
+</div>
 
 Each segment answers a different "did anything change?" question:
 
