@@ -20,8 +20,8 @@ data.append(4)        # data is now [1, 2, 3, 4] — but the cache still holds [
 ```
 
 Without mutation detection, re-running Cell 2 would *skip* (same code, same
-lineage) and leave `data` wrong. Cash's `MutationDetector` scans each
-statement's AST for the patterns that mutate in place:
+lineage) and leave `data` wrong. Cash's pure-AST analysis (`analyze_statement`)
+scans each statement for the patterns that mutate in place:
 
 | Pattern | Example | How it's detected |
 |---------|---------|-------------------|
@@ -60,16 +60,22 @@ flowchart TD
 
 Some statements don't just compute a value — they *do something to the world*.
 Replaying them from cache would skip the action (a file never gets written, a
-request never gets sent). Cash's `SideEffectDetector` flags these statements as
+request never gets sent). Cash's side-effect analysis flags these statements as
 **uncacheable** so they always run:
 
 | Pattern | Examples | Why it's unsafe to replay |
 |---------|----------|---------------------------|
-| File writes | `open('f', 'w')`, `to_csv()`, `to_parquet()` | The file wouldn't be written on a cache hit |
-| Network calls | `requests.get()`, `urllib` | The request wouldn't be sent |
-| Database ops | `cursor.execute()`, `session.commit()` | The write wouldn't reach the DB |
+| File writes | `open('f', 'w')`, `df.to_csv()`, `df.to_parquet()` | The file wouldn't be written on a cache hit |
+| Filesystem changes | `os.remove()`, `shutil.move()`, `os.mkdir()` | The change to disk wouldn't happen |
 | System calls | `os.system()`, `subprocess.run()` | The process wouldn't run |
-| Print to file | `print(..., file=f)` | The output wouldn't be emitted |
+| Network writes | `requests.post()`, `requests.put()` | The request wouldn't be sent |
+| Database writes | `df.to_sql()` | The rows wouldn't reach the database |
+
+Read-style calls are deliberately **not** treated as side effects: `requests.get()`,
+`urllib` fetches, and `open(...)` in read mode are safe to cache, exactly like
+reading a CSV. Only the verbs that *change* the world — file writes, system
+calls, and the mutating HTTP methods (`POST`/`PUT`/`DELETE`/`PATCH`) — are
+flagged.
 
 ## Unseeded randomness
 
@@ -90,17 +96,17 @@ deliberately, annotate the statement with `@cash:allow-random` (see
 
 ## From watching to deciding
 
-The three detectors run as *pre-checks* on every statement, before Cash
-touches the cache. Their combined verdict gates the cache lookup itself:
+Mutation and side-effect analysis run as a pure-AST *pre-check* on every
+statement, before Cash touches the cache, and their verdict gates the cache
+lookup itself. The randomness check runs alongside but only *warns* — it never
+blocks caching:
 
 ```python
-# pre-checks (per statement)
-mutations    = MutationDetector.detect(code)
-side_effects = SideEffectDetector.detect(code)
-randomness   = RandomnessDetector.detect(code)
+# pure-AST pre-check (per statement) — no runtime state
+analysis = analyze_statement(code, tree)
 
 # the cache is only consulted when it's safe to do so
-if not mutations and not side_effects:
+if not analysis.top_level_mutated_vars and not analysis.side_effects:
     metadata, cached_data = backend.get(cache_key)   # HIT short-circuits here
 ```
 
@@ -118,7 +124,7 @@ it on real snippets below.
       <tr><td><code>total += 1</code></td><td>Not cached — augmented assignment is a mutation</td></tr>
       <tr><td><code>x = np.random.randn(100)</code></td><td>Cached + warning — unseeded randomness</td></tr>
       <tr><td><code>df.to_parquet('out.pq')</code></td><td>Not cached — file-write side effect</td></tr>
-      <tr><td><code>r = requests.get(url)</code></td><td>Not cached — network side effect</td></tr>
+      <tr><td><code>r = requests.post(url, json=payload)</code></td><td>Not cached — network side effect</td></tr>
     </tbody>
   </table>
 </div>

@@ -43,10 +43,10 @@
       why: "A file write is a side effect. Replaying it from cache would skip writing the file, so Cash flags the statement uncacheable and always runs it."
     },
     {
-      code: "r = requests.get(url)",
+      code: "r = requests.post(url, json=payload)",
       verdict: "no",
       title: "Not cached",
-      why: "A network call is a side effect: a cache hit would never send the request. Cash always executes it."
+      why: "A mutating network call (POST/PUT/DELETE/PATCH) is a side effect: a cache hit would never send the request, so Cash always executes it. Read-style requests.get() calls are cacheable, like reading a file."
     }
   ];
 
