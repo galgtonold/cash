@@ -26,7 +26,7 @@ Writing every result to disk would be wasteful — a value that recomputes in
 *recomputing* against the cost of *reading back from disk*:
 
 ```python
-def _default_promotion_policy(execution_time, size_bytes):
+def _default_promotion_policy(self, execution_time, size_bytes):
     # Threshold 1 — too cheap to bother persisting
     if execution_time < 1.0:
         return False

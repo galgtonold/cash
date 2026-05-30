@@ -46,7 +46,7 @@ A few of these steps deserve a closer look:
   it's "how a cell knows it's stale."
 - **Step 6 — the per-statement decision.** Each statement first passes the
   three detector pre-checks from [Safety](safety.md). If it's safe, Cash
-  computes the [cache key](cache-keys-and-lineage.md), checks the skip optimisation, then
+  computes the [cache key](cache-keys-and-lineage.md), checks the skip optimization, then
   the cache. A hit short-circuits; a miss executes and stores.
 - **Step 8 — the badge.** Every run paints an execution badge so you can see,
   at a glance, what was reused and what recomputed (see
