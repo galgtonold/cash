@@ -198,6 +198,23 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Benchmark config (one-shot, set by %cash_benchmark)
         self._benchmark_config = None
 
+        # When CashMagics is re-instantiated in a still-running kernel
+        # (cash.reset_session(), a second Cash(), or %load_ext after a reset),
+        # un-patch the previous instance's hooks FIRST. Otherwise we'd capture an
+        # already-wrapped run_cell as our "original" (nesting wrappers on every
+        # reset) and stack duplicate pre_run_cell handlers. The true-original
+        # run_cell and the prior handler are stashed on the shell for this.
+        prior = getattr(shell, '_cash_hooks', None)
+        if isinstance(prior, dict):
+            try:
+                shell.events.unregister('pre_run_cell', prior['capture_cell_id'])
+            except (ValueError, KeyError, AttributeError, TypeError):
+                pass
+            try:
+                shell.run_cell = prior['original_run_cell']
+            except (KeyError, AttributeError):
+                pass
+
         # Register event handler to capture cell_id before execution
         try:
             shell.events.register('pre_run_cell', self._capture_cell_id)
@@ -212,6 +229,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Monkey-patch run_cell to intercept execution
         self._original_run_cell = shell.run_cell
         shell.run_cell = self._execute_cell
+        try:
+            shell._cash_hooks = {
+                'original_run_cell': self._original_run_cell,
+                'capture_cell_id': self._capture_cell_id,
+            }
+        except (AttributeError, TypeError):
+            pass
 
     @line_magic
     def cash_on(self, line: str) -> None:
