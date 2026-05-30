@@ -742,3 +742,39 @@
 .cash-cc-panel.warn .cash-cc-pill { background: var(--cash-ochre); }
 .cash-cc-panel.no .cash-cc-pill { background: var(--cash-danger); }
 .cash-cc-why { margin: 0.6em 0 0; font-size: 14px; line-height: 1.5; color: var(--cash-ink-2); }
+
+/* ─── How Cash Works: statement-pipeline strip (page 5, Tier-1) ──────── */
+.cash-stmt-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 1.25em 0;
+  padding: 12px 14px;
+  border: 1px solid var(--cash-rule);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg-section);
+}
+.cash-stmt-step {
+  font-family: var(--cash-font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-green);
+  background: var(--cash-green-bg);
+  color: var(--cash-green);
+}
+.cash-stmt-arrow { color: var(--cash-ink-4); font-size: 14px; }
+@media (prefers-reduced-motion: no-preference) {
+  .cash-stmt-step { animation: cash-stmt-pulse 5s ease-in-out infinite; }
+  .cash-stmt-step[data-step="1"] { animation-delay: 0s; }
+  .cash-stmt-step[data-step="2"] { animation-delay: 0.4s; }
+  .cash-stmt-step[data-step="3"] { animation-delay: 0.8s; }
+  .cash-stmt-step[data-step="4"] { animation-delay: 1.2s; }
+  .cash-stmt-step[data-step="5"] { animation-delay: 1.6s; }
+  @keyframes cash-stmt-pulse {
+    0%, 40%, 100% { background: var(--cash-green-bg); color: var(--cash-green); transform: translateY(0); }
+    8% { background: var(--cash-green); color: #fff; transform: translateY(-2px); }
+  }
+}
