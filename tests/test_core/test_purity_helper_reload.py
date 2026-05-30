@@ -6,8 +6,9 @@ cell D calls ``main`` again — expects fresh recompute, not a stale
 cache hit.
 
 Achieved by re-resolving each captured helper from ``sys.modules``
-inside ``_get_dependency_state_hash`` so the cache key reflects the
-current source, not the analysis-time snapshot.
+inside ``DependencyStateHasher.compute`` (via the ``HelperResolver``
+seam) so the cache key reflects the current source, not the
+analysis-time snapshot.
 """
 from __future__ import annotations
 
@@ -52,7 +53,7 @@ def test_in_process_helper_redefinition_invalidates_cache(tmp_path):
     assert main(5) == 15, (
         "in-process helper redefinition did not invalidate the cache; "
         "the parent cached the old helper's result. Per-call "
-        "_current_helper_hashes() should pick up the new helper."
+        "HelperResolver.current_hashes() should pick up the new helper."
     )
 
 

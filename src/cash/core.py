@@ -28,6 +28,7 @@ from .backends.serialization import get_serializer
 from .backends.tiered_backend import TieredBackend
 from .config import CashConfig, get_config
 from .data_source import DataSource
+from .dependency_state import DependencyStateHasher, SysModulesHelperResolver
 from .exceptions import (
     CacheExpiredError,
     CashCacheIneffectiveWarning,
@@ -413,6 +414,18 @@ class Cash:
         # key state hash so cross-process helper edits invalidate.
         self._purity_reports: dict[str, PurityReport] = {}
 
+        # Deep seam over the registries above: folds source/dependency/
+        # helper state into the cache key's ``state_hash`` segment. Borrows
+        # the registry dicts by reference so later registrations are seen.
+        self._state_hasher = DependencyStateHasher(
+            functions=self.functions,
+            data_sources=self.data_sources,
+            source_hashes=self.source_hashes,
+            purity_reports=self._purity_reports,
+            graph=self.graph,
+            helper_resolver=SysModulesHelperResolver(self._hash_callable_source),
+        )
+
         atexit.register(self.shutdown)
 
         # register_magic=None (default) auto-detects: only register when an
@@ -696,7 +709,7 @@ class Cash:
           - (_CACHE_MISS, result, 'error')                  — key generation error
         """
         try:
-            current_state_hash = self._get_dependency_state_hash(func_name, set())
+            current_state_hash = self._state_hasher.compute(func_name)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
@@ -769,7 +782,7 @@ class Cash:
         """
         # Build cache key (silently — explain() does not warn).
         try:
-            current_state_hash = self._get_dependency_state_hash(func_name, set())
+            current_state_hash = self._state_hasher.compute(func_name)
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
@@ -2279,8 +2292,8 @@ class Cash:
 
         The purity report's ``helper_source_hashes`` are stored on
         ``self._purity_reports[func_name]`` and folded into the cache
-        key state hash by `_get_dependency_state_hash` so a
-        helper edit invalidates the parent's cache.
+        key state hash by `DependencyStateHasher` (``self._state_hasher``)
+        so a helper edit invalidates the parent's cache.
 
         Issues from the report are surfaced to the user per the
         function's purity mode (warn / silent / strict).
@@ -2433,102 +2446,6 @@ class Cash:
         from .notebook.file_tracker import FileDependencyRegistry
         registry = FileDependencyRegistry()
         registry.register(module_name, func_name, handler_factory)
-
-    def _get_dependency_state_hash(self, node: str, visited: set[str]) -> str:
-        """Compute a dependency state hash recursively for the given graph node.
-
-        Folds in three sources of state:
-
-        1. The node's own source hash (for functions) or data-source
-           mtime/change marker.
-        2. Recursively, each graph dependency's state hash.
-        3. **Transitive helper source hashes** captured by the purity
-           analyzer for this function. This is what makes editing a
-           plain (non-``@cash.cache``-decorated) helper invalidate
-           the parent's cache key — a previously latent bug.
-           Hashes are sorted for determinism; the helper's own
-           qualname is excluded (its hash equals the node's own
-           source_hash already, included above).
-        """
-        if node in visited:
-            return ""
-        visited.add(node)
-
-        hashes = []
-
-        # 1. Node's own state
-        if node in self.functions:
-            hashes.append(self.source_hashes.get(node, ""))
-        elif node in self.data_sources:
-            ds = self.data_sources[node]
-            if hasattr(ds, '_get_mtime'):
-                hashes.append(str(ds._get_mtime()))
-            else:
-                hashes.append(str(ds.has_changed()))
-
-        # 2. Dependencies' state
-        dependencies = self.graph.get_dependencies(node)
-        for dep in sorted(dependencies):
-            dep_hash = self._get_dependency_state_hash(dep, visited)
-            hashes.append(dep_hash)
-
-        # 3. Transitive helper source hashes from the purity analyzer.
-        # Sort to keep determinism; skip the node's own qualname so
-        # we don't double-count source state already in step 1.
-        #
-        # For each helper, re-resolve via sys.modules per call so an
-        # in-process redefinition (notebook cell rerun, REPL) picks
-        # up the new source. The recorded snapshot is the fallback
-        # when the helper can't be re-resolved (deleted/renamed
-        # since analysis).
-        report = self._purity_reports.get(node)
-        if report is not None and report.helper_source_hashes:
-            current = self._current_helper_hashes(report)
-            for qual in sorted(report.helper_source_hashes):
-                if qual == node:
-                    continue
-                hashes.append(f"helper:{qual}:{current.get(qual, report.helper_source_hashes[qual])}")
-
-        return hashlib.sha256(":".join(hashes).encode('utf-8')).hexdigest()
-
-    def _current_helper_hashes(self, report: PurityReport) -> dict[str, str]:
-        """Return current source hashes for every helper in *report*.
-
-        Re-resolves each helper from ``sys.modules`` via the recorded
-        ``(module_name, attr_chain)`` path, then hashes its source via
-        `_hash_callable_source`. Resolution failures (helper
-        was deleted, renamed, or never recorded a path) are skipped —
-        the caller falls back to the analysis-time snapshot.
-
-        Costs ~5-30μs per helper for typical counts. Called once per
-        cached function per call, inside ``_get_dependency_state_hash``.
-
-        The point of this method (vs. using the recorded snapshot)
-        is to catch in-process helper redefinitions. In a notebook,
-        a cell that rebinds ``helper`` to a new function object
-        will change the resolved callable here, change its source
-        hash, change the cache key, and force a recompute.
-        """
-        import sys
-        current: dict[str, str] = {}
-        for qual, (mod_name, attr_chain) in report.helper_resolution_paths.items():
-            mod = sys.modules.get(mod_name)
-            if mod is None:
-                continue
-            obj: Any = mod
-            for attr in attr_chain:
-                obj = getattr(obj, attr, None)
-                if obj is None:
-                    break
-            if obj is None or not callable(obj):
-                continue
-            try:
-                current[qual] = self._hash_callable_source(obj)
-            except (OSError, TypeError, AttributeError):
-                # Hashing failed (e.g. C extension swap) — fall back
-                # to recorded snapshot on the caller side.
-                continue
-        return current
 
     def shutdown(self) -> None:
         """Cleanup resources (e.g. wait for async writes)."""

@@ -79,7 +79,7 @@ The list-of-resolvers form is handled at `src/cash/core.py:1512`: each resolver 
 
 - **With `file_depends_on=`** — the static file list is folded into the dependency state hash via `_register_func` (`src/cash/core.py:669-673`); the dynamic resolver is folded into the separate dynamic state hash. Both must hold for a hit; either drifting forces a miss.
 - **With `ttl=`** — TTL is checked *after* the key matches (`src/cash/core.py:862-876`). A dynamic dep change misses immediately; a TTL expiry misses on the next call after the timestamp passes. Whichever triggers first wins on any given lookup.
-- **With `depends_on=`** — the static `DataSource` and upstream-function entries contribute to `current_state_hash` (computed by `_get_dependency_state_hash`, called at `src/cash/core.py:696`), which is independent of the dynamic state hash.
+- **With `depends_on=`** — the static `DataSource` and upstream-function entries contribute to `current_state_hash` (computed by `DependencyStateHasher.compute` in `src/cash/dependency_state.py`, invoked as `self._state_hasher.compute(func_name)` in `_resolve_cache_key`), which is independent of the dynamic state hash.
 
 ## What you can return from the resolver
 
