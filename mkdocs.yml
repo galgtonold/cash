@@ -34,6 +34,7 @@ extra_javascript:
   - javascripts/badge-iframe-resize.js
   - javascripts/why-cash-calculator.js
   - javascripts/why-cash-matrix.js
+  - javascripts/invalidation-playground.js
 
 plugins:
   - search
