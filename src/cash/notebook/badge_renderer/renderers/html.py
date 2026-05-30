@@ -55,6 +55,7 @@ from ..view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
+    iter_iterations,
 )
 from ._pytoken import highlight_python
 
@@ -937,7 +938,7 @@ def _item_total_time(item: SectionItem) -> float:
     if isinstance(item, StatementRow):
         return item.time_s
     if isinstance(item, ForLoopGroup):
-        return sum(it.time_s for ls in item.stmts for it in ls.iterations)
+        return sum(it.time_s for it in iter_iterations(item))
     if isinstance(item, ControlGroup):
         # Body rows can themselves be nested ControlGroups / ForLoopGroups
         # after the recursive view-builder grouping; sum recursively.
@@ -1299,7 +1300,7 @@ def _item_saved_time(item) -> float:
     if isinstance(item, StatementRow):
         return item.saved_time_s
     if isinstance(item, ForLoopGroup):
-        return sum(it.saved_time_s for ls in item.stmts for it in ls.iterations)
+        return sum(it.saved_time_s for it in iter_iterations(item))
     if isinstance(item, ControlGroup):
         return sum(_item_saved_time(r) for r in item.rows)
     if isinstance(item, ControlGroupSingle):
@@ -1316,9 +1317,7 @@ def _walk_statuses(items) -> "list[BadgeStatus]":
         if isinstance(item, StatementRow):
             out.append(item.status)
         elif isinstance(item, ForLoopGroup):
-            for ls in item.stmts:
-                for it in ls.iterations:
-                    out.append(it.status)
+            out.extend(it.status for it in iter_iterations(item))
         elif isinstance(item, ControlGroup):
             out.extend(_walk_statuses(item.rows))
         elif isinstance(item, ControlGroupSingle):
@@ -1329,18 +1328,11 @@ def _walk_statuses(items) -> "list[BadgeStatus]":
 
 
 def _collect_iterations(items) -> "list[IterationRow]":
-    """Flatten all IterationRows reachable from a nested ForLoopGroup tree.
-    Used by the synthetic-outer for_loop_group head row to compute its
-    iter count from the nested data when it has no direct stmts."""
-    out: list[IterationRow] = []
-    for item in items:
-        if isinstance(item, ForLoopGroup):
-            for ls in item.stmts:
-                out.extend(ls.iterations)
-            out.extend(_collect_iterations(item.nested))
-        elif isinstance(item, ControlGroup):
-            out.extend(_collect_iterations(item.rows))
-    return out
+    """All IterationRows under a forest of SectionItems — list-input
+    convenience over :func:`view.iter_iterations`. Used by the synthetic
+    -outer for_loop_group head row to count iterations from nested data
+    when it has no direct stmts."""
+    return [it for item in items for it in iter_iterations(item)]
 
 
 def _aggregate_kind(statuses: tuple[BadgeStatus, ...]) -> str:

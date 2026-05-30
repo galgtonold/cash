@@ -23,6 +23,7 @@ of consumers.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Union
@@ -253,6 +254,28 @@ SectionItem = Union[
 ]
 
 
+def iter_iterations(item: SectionItem) -> Iterator[IterationRow]:
+    """Every :class:`IterationRow` reachable under ``item``.
+
+    Defines the loop tree's iteration child-edges **once**: a
+    :class:`ForLoopGroup` contributes its direct-statement iterations
+    (``stmts``) *and* the iterations of any loops/controls nested in its
+    body (``nested``); a :class:`ControlGroup` contributes whatever its
+    branch ``rows`` hold. Aggregation passes — total time, saved time,
+    status roll-up, iteration count — all walk this one traversal so they
+    cannot disagree about which iterations a loop contains. Nodes that
+    hold no iterations yield nothing.
+    """
+    if isinstance(item, ForLoopGroup):
+        for stmt in item.stmts:
+            yield from stmt.iterations
+        for child in item.nested:
+            yield from iter_iterations(child)
+    elif isinstance(item, ControlGroup):
+        for child in item.rows:
+            yield from iter_iterations(child)
+
+
 @dataclass(frozen=True)
 class Section:
     """A labelled group of items inside an :class:`InteractiveBadge`."""
@@ -321,6 +344,7 @@ __all__ = [
     "OverheadEntry",
     "OverheadBreakdown",
     "SectionItem",
+    "iter_iterations",
     "Section",
     "BadgeHeader",
     "BugReportLink",
