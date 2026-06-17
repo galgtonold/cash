@@ -19,15 +19,29 @@ from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["FileBackend"]
+__all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
+
+# Version of the on-disk cache format (the ``*.meta`` / ``*.data`` pickle
+# layout). Bump this **whenever a change makes caches written by an older
+# build undecodable or liable to be misread** by a newer one. On init,
+# FileBackend compares this against the stamp it finds in the cache dir and
+# auto-invalidates a mismatched cache rather than silently decoding a stale
+# layout — automating the "run %cash_repair --full after upgrading" step.
+CACHE_FORMAT_VERSION = 1
+
+# Filename of the per-directory format stamp. Has no ``.meta``/``.data``
+# extension so it is invisible to entry globs (listing, sizing, clearing).
+_VERSION_FILENAME = "CACHE_VERSION"
 
 
 class FileBackend(CacheBackend):
     """File-based cache backend.
 
     .. warning:: Uses `pickle` for serialization.  Cache files are
-       assumed to originate from the local machine.  Do not load cache
-       directories from untrusted sources — see :file:`SECURITY.md`.
+       assumed to originate from the local machine.  Loading a cache
+       deserializes pickled objects, which runs arbitrary code, so never
+       point this at a cache directory from an untrusted source.  See the
+       Security section of the Backends documentation.
     """
     source_label: str = "DISK"
 
@@ -74,6 +88,7 @@ class FileBackend(CacheBackend):
             if self._initialized:
                 return
             os.makedirs(self.cache_dir, exist_ok=True)
+            self._check_format_version()
             self._init_stats()
             if self._flush_interval > 0:
                 self._flusher_thread = threading.Thread(
@@ -81,6 +96,64 @@ class FileBackend(CacheBackend):
                 )
                 self._flusher_thread.start()
             self._initialized = True
+
+    def _check_format_version(self) -> None:
+        """Enforce on-disk cache-format compatibility.
+
+        Compares the format stamp in the cache directory against
+        :data:`CACHE_FORMAT_VERSION`. If they differ — including a cache
+        written by a pre-stamp build (no marker) that still holds entries —
+        the existing ``*.meta`` / ``*.data`` entries are removed so a stale
+        layout can never be decoded as if it were current. The marker is then
+        (re)written with the current version.
+
+        A fresh or empty directory is simply stamped: no entries means there
+        is nothing incompatible to clear. Runs under ``_init_lock`` (held by
+        the caller) and never calls back into ``clear()`` to avoid recursing
+        through ``_ensure_initialized``.
+        """
+        version_path = os.path.join(self.cache_dir, _VERSION_FILENAME)
+
+        stored: int | None = None
+        if os.path.exists(version_path):
+            try:
+                with open(version_path, encoding="utf-8") as fh:
+                    stored = int(fh.read().strip())
+            except (OSError, ValueError):
+                stored = None  # unreadable/corrupt marker → treat as mismatch
+
+        if stored != CACHE_FORMAT_VERSION:
+            entry_files = [
+                f
+                for ext in ("*.meta", "*.data")
+                for f in glob.glob(os.path.join(self.cache_dir, ext))
+            ]
+            if entry_files:
+                logger.warning(
+                    "Cash cache at %s was written in format v%s but this build "
+                    "expects v%s; clearing %d stale file(s). Cache formats are not "
+                    "compatible across this change.",
+                    self.cache_dir,
+                    "<unstamped>" if stored is None else stored,
+                    CACHE_FORMAT_VERSION,
+                    len(entry_files),
+                )
+                for f in entry_files:
+                    try:
+                        os.remove(f)
+                    except OSError:
+                        logger.debug(
+                            "Could not remove stale cache file %s during format "
+                            "migration", f, exc_info=True,
+                        )
+            try:
+                with open(version_path, "w", encoding="utf-8") as fh:
+                    fh.write(str(CACHE_FORMAT_VERSION))
+            except OSError:
+                logger.debug(
+                    "Could not write cache format marker at %s", version_path,
+                    exc_info=True,
+                )
 
     def _init_stats(self) -> None:
         """Scan directory to calculate total size and load metadata for LRU."""
