@@ -290,13 +290,14 @@ def _coerce(field_type: Any, raw: str) -> Any:
     Raises ``ValueError`` on failure so the caller can skip the value
     and log a warning rather than poison the whole config load.
     """
-    # Handle Optional[X] — unwrap to X
-    origin = getattr(field_type, "__origin__", None)
-    if origin is not None:
-        # Optional[X] / Union[X, None]
-        args = [a for a in getattr(field_type, "__args__", ()) if a is not type(None)]
-        if len(args) == 1:
-            field_type = args[0]
+    # Handle Optional[X] / X | None — unwrap to the single non-None member.
+    # typing.get_args normalises both typing.Union and PEP 604 (``int | None``)
+    # unions across Python versions. The previous ``__origin__`` check missed
+    # PEP 604 unions on 3.10–3.13 (types.UnionType has no ``__origin__`` there),
+    # so int/float/bool fields stayed uncoerced strings.
+    union_args = [a for a in typing.get_args(field_type) if a is not type(None)]
+    if len(union_args) == 1:
+        field_type = union_args[0]
     if field_type is bool:
         v = raw.lower()
         if v in _TRUTHY:
