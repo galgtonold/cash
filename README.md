@@ -23,10 +23,6 @@ That's the install. The next time you re-run the notebook, every statement that 
 
 https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c
 
-<!-- TODO: Add hero screenshot here. 1200×600px PNG showing a notebook with a mix of green CACHED (⚡ RESTORED) and ochre EXECUTED (⚙️ COMPUTED) badges, plus the "Cash saved 16.5s this run" summary. Brand colors: green #006644 on #e6fffa, ochre #996300 on #fffbe6 — see the Cash design system. -->
-
-![Cash badge demo placeholder](docs/assets/badge-demo.png)
-
 > See [Reading the Cash badge](docs/badges.md) for a walkthrough of every part of the badge and the most common questions it answers.
 
 ---
