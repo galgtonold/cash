@@ -334,6 +334,63 @@ class TestTieredBackendMetadataOnly:
         assert retrieved['execution_time'] == 10.0
         assert not retrieved.get('metadata_only', False)
 
+    def test_set_metadata_only_waits_for_inflight_full_write(self, tmp_path):
+        """set_metadata_only must synchronise with an in-flight async set()
+        for the same key before deciding whether a full entry exists.
+
+        FileBackend.set() flushes to disk on a background executor. Without
+        waiting, set_metadata_only's existence check races a not-yet-flushed
+        full write, sees no files, and can clobber the full entry — the cause
+        of the intermittent CI flake (`assert 0.1 == 10.0`). This pins the
+        write in flight with an event so the race is deterministic.
+        """
+        import threading
+
+        from cash.backends.file_backend import FileBackend
+
+        writing = threading.Event()
+        release = threading.Event()
+
+        class BlockingWriteBackend(FileBackend):
+            def _write_cache_files(self, *args, **kwargs):
+                writing.set()
+                release.wait(5)  # hold the full write in flight
+                return super()._write_cache_files(*args, **kwargs)
+
+        backend = BlockingWriteBackend(cache_dir=str(tmp_path))
+        try:
+            backend.set('key1', {'variables': {'df': 42}},
+                        {'execution_time': 10.0, 'outputs': ['df']})
+            assert writing.wait(2), "full write should have started"
+
+            done = threading.Event()
+
+            def call_set_metadata_only():
+                backend.set_metadata_only(
+                    'key1', {'execution_time': 0.1, 'metadata_only': True})
+                done.set()
+
+            worker = threading.Thread(target=call_set_metadata_only)
+            worker.start()
+
+            # The full write is still in flight, so set_metadata_only must
+            # block (it waits) rather than return and clobber. Without the
+            # fix it returns immediately and `done` is set.
+            assert not done.wait(0.5), \
+                "set_metadata_only must wait for the in-flight full write"
+
+            release.set()
+            worker.join(5)
+            assert done.is_set()
+
+            retrieved = backend.get_metadata('key1')
+            assert retrieved is not None
+            assert retrieved['execution_time'] == 10.0
+            assert not retrieved.get('metadata_only', False)
+        finally:
+            release.set()
+            backend.shutdown()
+
     def test_set_stores_metadata_even_without_promotion(self, tmp_path):
         """When TieredBackend.set() doesn't promote to disk (cheap stmt),
         _persist_metadata_only should still persist the metadata."""

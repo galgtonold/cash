@@ -423,6 +423,12 @@ class FileBackend(CacheBackend):
         since that entry is more valuable.
         """
         self._ensure_initialized()
+        # Wait for any in-flight async set() for this key to land first —
+        # otherwise the existence check below races a not-yet-flushed full
+        # write, sees no files, and clobbers the (more valuable) full entry
+        # with a metadata-only one. get()/get_metadata()/delete() synchronise
+        # the same way.
+        self._writes.wait(key)
         meta_path, data_path = self._get_paths(key)
 
         # Don't overwrite a full cache entry (has both .meta and .data)
