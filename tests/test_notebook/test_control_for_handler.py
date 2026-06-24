@@ -206,8 +206,28 @@ def test_fast_loop_skipped_for_small_loop(handler, mock_dispatcher, mock_stateme
 
 
 def test_fast_loop_skipped_when_body_has_file_io(handler, mock_dispatcher, mock_statement_processor):
-    """File-I/O calls in the body disable the fast-loop optimisation."""
-    body = "\n    ".join([f"x{i} = {i}" for i in range(200)] + ["pd.read_csv('f.csv')"])
-    node = _parse_for(f"for i in range(1000):\n    {body}")
-    handler.process(node, None, True, None)
+    """File-I/O calls in the body disable the fast-loop optimisation.
+
+    The loop is intentionally small but still clears the single-unit
+    thresholds: 100 iterations (> _MIN_ITERATIONS_FOR_SINGLE_UNIT = 50) and
+    100 × 6 × 8ms = 4.8s estimated overhead (> _MIN_OVERHEAD_SEC = 1s). The
+    control assertion below proves file I/O — not loop size — is what flips
+    the decision. Kept small on purpose: when single-unit is (correctly)
+    declined, ``process`` runs the full per-iteration fallback, which was a
+    CI timeout flake at the old 1000×200 size.
+    """
+    n_iter, n_stmts = 100, 6
+
+    # Control: the same loop WITHOUT file I/O fires single-unit at this size,
+    # so the thresholds are genuinely met.
+    clean_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)])
+    handler.process(_parse_for(f"for i in range({n_iter}):\n    {clean_body}"), None, True, None)
+    assert mock_dispatcher._execute_as_single_unit.call_count == 1, \
+        "control: identical loop without file I/O should fire single-unit"
+
+    mock_dispatcher._execute_as_single_unit.reset_mock()
+
+    # With file I/O in the body, single-unit is disabled (per-iteration only).
+    io_body = "\n    ".join([f"x{i} = {i}" for i in range(n_stmts)] + ["pd.read_csv('f.csv')"])
+    handler.process(_parse_for(f"for i in range({n_iter}):\n    {io_body}"), None, True, None)
     assert mock_dispatcher._execute_as_single_unit.call_count == 0
