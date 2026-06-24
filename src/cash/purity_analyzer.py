@@ -529,7 +529,6 @@ class PurityAnalyzer:
 
     def _analyze_uncached(self, root_func: Callable[..., Any]) -> PurityReport:
         root_module = getattr(root_func, "__module__", None)
-        root_qualname = _qualname_of(root_func)
 
         all_issues: list[PurityIssue] = []
         helper_hashes: dict[str, str] = {}

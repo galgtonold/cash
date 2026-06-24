@@ -44,7 +44,6 @@ if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState
     from ._metadata import StatementCacheMetadata
     from .file_deps import StatementFileDeps
-    from .processor import ProcessResult
 
 logger = logging.getLogger(__name__)
 

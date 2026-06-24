@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from ...utils import resolve_file_dep_path
 from ..file_dep_snapshot import split_file_dep_value

@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import contextlib
 import logging
-import os
 import pickle
 import sys
 import time
@@ -22,7 +21,6 @@ from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
-from cash.notebook.server_discovery import get_notebook_path
 from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
@@ -268,7 +266,6 @@ from ..purity import analyze_function_purity
 from ..randomness import (
     RandomnessDetector,
     capture_rng_state,
-    restore_rng_state,
 )
 
 

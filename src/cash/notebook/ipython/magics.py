@@ -7,9 +7,6 @@ import contextlib
 import logging
 import sys
 import time
-import uuid
-from collections.abc import Callable
-from datetime import datetime
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
 # namespace (user_ns, execution info objects).  These cannot be typed more precisely
@@ -28,7 +25,6 @@ from ..cache_status import CacheStatus
 from .cell_executor import (
     CellExecutor,
     _EarlyReturn,
-    _PipelineCompleted,
     _PipelineSyntaxError,
 )
 from ..control_structures import ControlStructureProcessor
@@ -41,7 +37,7 @@ from ..provenance import ProvenanceTracker
 from ..statement import ProcessResult, StatementProcessor
 from ..upstream import UpstreamChecker
 
-from ._types import CellMetrics, StatementSummary, TimingBreakdown
+from ._types import CellMetrics, TimingBreakdown
 
 __all__ = ["CashMagics"]
 
@@ -888,7 +884,6 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
     def _get_bug_report_context(self) -> dict:
         """Collect runtime environment info for the pre-filled bug report URL."""
-        import sys
         try:
             from cash import __version__ as _v
         except Exception:

@@ -19,13 +19,12 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
-from .backends import CacheBackend, CacheMetadata, CascadingBackend, FileBackend, InMemoryBackend
+from .backends import CacheBackend, CacheMetadata, CascadingBackend
 from .backends.factory import build_backend_from_config
 
 if TYPE_CHECKING:
     from .ui.explorer import CacheExplorer
 from .backends.serialization import get_serializer
-from .backends.tiered_backend import TieredBackend
 from .config import CashConfig, get_config
 from .data_source import DataSource
 from .dependency_state import DependencyStateHasher, SysModulesHelperResolver
