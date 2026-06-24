@@ -14,9 +14,14 @@ import cash
 
 That's the install. The next time you re-run the notebook, every statement that hasn't changed is restored from cache.
 
-<!-- TODO: Replace with real demo video. Suggested host: YouTube unlisted; embed via standard <video> tag for GitHub README. -->
+<!-- Demo video is hosted as a GitHub issue attachment (user-attachments CDN), so the
+     binary stays out of the repo. GitHub auto-renders a bare attachment URL on its own
+     line as an inline <video> player. Source upload: issue "Demo video — README asset".
+     Note: this renders on GitHub only — PyPI/npm strip <video>; add a poster fallback there. -->
 
-📺 **Watch the 90-second demo:** _[demo video coming soon — see [VIDEO_SCRIPT.md](.github/planning/VIDEO_SCRIPT.md)]_
+📺 **Watch the 90-second demo** — Cash caching a real notebook, end to end:
+
+https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c
 
 <!-- TODO: Add hero screenshot here. 1200×600px PNG showing a notebook with a mix of green CACHED (⚡ RESTORED) and ochre EXECUTED (⚙️ COMPUTED) badges, plus the "Cash saved 16.5s this run" summary. Brand colors: green #006644 on #e6fffa, ochre #996300 on #fffbe6 — see the Cash design system. -->
 
