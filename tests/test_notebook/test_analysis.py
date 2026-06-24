@@ -16,6 +16,23 @@ from math import sqrt as my_sqrt
 def func_with_alias():
     return my_sqrt(4)
 
+
+class _AmbiguousBool:
+    """Stand-in for pandas DataFrame / numpy ndarray: ``__bool__`` raises
+    instead of returning True/False."""
+    def __bool__(self):
+        raise ValueError("The truth value is ambiguous")
+
+    def method(self):
+        return None
+
+# A module global bound to an object with a raising __bool__, referenced by the
+# function below — mirrors a decorated function that calls df.sum() while `df`
+# (a DataFrame) lives in its globals.
+_ambiguous_global = _AmbiguousBool()
+def func_references_ambiguous():
+    return _ambiguous_global.method()
+
 # Module-qualified key for func_a (matches the format returned by find_called_functions)
 _func_a_key = Cash._get_func_key(func_a)
 
@@ -33,7 +50,7 @@ def test_known_functions_filter():
     known = {_func_a_key: func_a}
     deps = CodeAnalyzer.find_called_functions(func_b, known)
     assert _func_a_key in deps, f'Should include func_a when it is in known functions, got {deps}'
-    
+
     # When func_a is not known, it should not be in dependencies
     known = {}
     deps = CodeAnalyzer.find_called_functions(func_b, known)
@@ -57,3 +74,11 @@ def test_alias_call():
     # This test is intentionally left as a placeholder for future analysis logic
     # Currently just verifying it doesn't crash
     assert isinstance(deps, set), 'Should return a set of dependencies'
+
+
+def test_find_called_functions_handles_ambiguous_bool_globals():
+    '''Analyzing a function whose globals hold an object with a raising
+    __bool__ (DataFrame/ndarray) must not crash. Regression for the
+    @cash.cache + DataFrame "truth value is ambiguous" failure.'''
+    result = CodeAnalyzer.find_called_functions(func_references_ambiguous)
+    assert isinstance(result, set)

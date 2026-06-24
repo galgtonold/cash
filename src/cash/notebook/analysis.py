@@ -403,7 +403,11 @@ class CodeAnalyzer:
             if obj is None and hasattr(builtins, parts[0]):
                 obj = getattr(builtins, parts[0])
 
-            if obj:
+            # Existence check, not truthiness: a resolved name may be bound to
+            # an object whose __bool__ is ambiguous/raises (DataFrame, ndarray),
+            # and `if obj:` would crash analysis of any function that references
+            # such a value in its globals.
+            if obj is not None:
                 try:
                     for part in parts[1:]:
                         obj = getattr(obj, part)
