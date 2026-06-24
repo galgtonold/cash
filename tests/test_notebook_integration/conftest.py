@@ -826,20 +826,49 @@ class NotebookTestRunner:
         return self
     
     def _start_new_kernel(self) -> None:
-        """Start a new kernel (not from pool)."""
-        # Same throttle as warm-kernel boot: without reuse this path runs once
-        # per test, so the cap also smooths the create/destroy churn that kills
-        # workers mid-run at -n auto.
-        with _boot_throttle():
-            self.client.km = self.client.create_kernel_manager()
-            self.client.start_new_kernel(cwd=str(self.work_dir))
-            self.client.kc = self.client.km.client()
-            self.client.kc.start_channels()
+        """Start a new kernel (not from pool), retrying a flaky boot.
 
-            async def _wait_ready():
-                await self.client.kc._async_wait_for_ready(timeout=30)
+        Kernel startup binds several ZMQ ports; under parallel boots two
+        kernels can race for the same ephemeral port, leaving one unable to
+        bind so wait-for-ready times out (``ZMQError: Address already in
+        use`` → ``Kernel didn't respond in 30 seconds``). A fresh
+        KernelManager re-allocates ports, so retry a couple of times. The
+        first attempt is unchanged, so healthy boots behave exactly as
+        before; only an already-failing boot pays the retry.
+        """
+        last_exc: Optional[BaseException] = None
+        for _attempt in range(3):
+            # Same throttle as warm-kernel boot: without reuse this path runs
+            # once per test, so the cap also smooths the create/destroy churn
+            # that kills workers mid-run at -n auto.
+            with _boot_throttle():
+                km = self.client.create_kernel_manager()
+                self.client.km = km
+                try:
+                    self.client.start_new_kernel(cwd=str(self.work_dir))
+                    self.client.kc = km.client()
+                    self.client.kc.start_channels()
 
-            self._run_async(_wait_ready())
+                    async def _wait_ready():
+                        await self.client.kc._async_wait_for_ready(timeout=30)
+
+                    self._run_async(_wait_ready())
+                    return  # booted cleanly
+                except Exception as exc:  # noqa: BLE001 — retry ANY boot failure
+                    last_exc = exc
+                    # Free the half-booted kernel's ports/PID before retrying.
+                    # _force_kill_kernel needs no event loop and can't deadlock.
+                    try:
+                        if self.client.kc is not None:
+                            self.client.kc.stop_channels()
+                    except Exception:
+                        pass
+                    _force_kill_kernel(km)
+                    self.client.kc = None
+                    self.client.km = None
+        raise RuntimeError(
+            f"kernel failed to boot after 3 attempts: {last_exc!r}"
+        ) from last_exc
     
     def _inject_notebook_path(self) -> None:
         """Inject the notebook path into the kernel namespace.
