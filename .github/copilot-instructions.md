@@ -294,8 +294,8 @@ Rewrite each line so it reads as a user-facing change, not a commit subject. Str
 
 Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`. Keep the prior `[0.5.0b1]`, `[0.3.0]`, ... sections intact.
 
-### 3. Bump version in `pyproject.toml`
-Edit the single `version = "..."` line. No other files need to change (we don't store the version in source).
+### 3. Bump the version
+Edit the single `__version__ = "..."` line in `src/cash/__init__.py`. That is the **single source of truth** — `pyproject.toml` declares `dynamic = ["version"]` and hatchling reads it from there at build time (`[tool.hatch.version]`), so the wheel metadata, `cash.__version__`, and `cash version` can never disagree. Do **not** add a `version =` line back to `pyproject.toml`.
 
 ### 4. Verify
 - `pytest tests/test_notebook -x --timeout=30` (unit suite green)

@@ -7,6 +7,27 @@ direct instantiation is useful for tests and advanced setups.
 To write your own backend or contribute fixes, see
 [Backend internals](backend_internals.md).
 
+## Security
+
+!!! danger "Cached values are pickled — loading a cache runs code"
+    Every persistent backend (`FileBackend`, `SQLiteBackend`,
+    `RedisBackend`, `S3Backend`) serializes values with **`pickle`**
+    (or `cloudpickle`). Deserialization executes arbitrary code embedded
+    in the payload, so **reading from a cache is only as safe as the party
+    that wrote it.**
+
+    | Scenario | Safe? |
+    |---|---|
+    | Your own local `.cash/` directory | ✅ As safe as your own code |
+    | A cache exported by a trusted teammate on infra you control | ✅ Treat like running their `.py` |
+    | A Redis/S3 store other tenants can write to | ⚠️ Only if every writer is trusted |
+    | A `.cash/` directory downloaded from the internet / a stranger | ❌ Do not load — this is remote code execution |
+
+    Cash does **not** sandbox deserialization. If you need to move results
+    across a trust boundary, re-export the underlying data (Parquet, CSV,
+    `np.save`, …) rather than shipping the pickle cache. There is no flag
+    that makes loading an untrusted cache safe.
+
 ## Imports
 
 ```python

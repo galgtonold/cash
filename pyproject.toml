@@ -5,9 +5,15 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cash"]
 
+# Single source of truth for the version: src/cash/__init__.py's __version__.
+# Keep the literal there in sync on release; pyproject reads it, so the wheel
+# metadata and cash.__version__ can never disagree.
+[tool.hatch.version]
+path = "src/cash/__init__.py"
+
 [project]
 name = "cash-lib"
-version = "0.5.0b1"
+dynamic = ["version"]
 description = "Smart caching for Python — automatic dependency tracking, persistent backends, and statement-level Jupyter notebook caching."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -56,7 +62,7 @@ s3 = ["boto3>=1.26,<2"]
 sqlite = []  # uses stdlib sqlite3
 cloudpickle = ["cloudpickle>=2.0,<4"]
 polars = ["polars>=1.0,<3"]
-notebook = ["ipython>=8.0,<9"]
+notebook = ["ipython>=8.0,<10"]
 viz = [
     "matplotlib>=3.5,<4",
     "ipywidgets>=7.0,<9",

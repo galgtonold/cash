@@ -30,7 +30,7 @@ jobs:
       
       - name: Run unit tests
         run: |
-          pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_bench_eval.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config.py tests/test_backend_enhancements.py --tb=short -q
+          pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_bench_eval.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config_unified.py tests/test_backend_enhancements.py --tb=short -q
 
       # Curated subset of the notebook integration suite — the headline-feature
       # tests (basic flow, restore-after-restart, file invalidation, decorator

@@ -49,6 +49,21 @@ Cash shows a badge above each cell summarizing what it did. The example below â€
 
 See [Reading the Cash badge](badges.md) for the full anatomy.
 
+!!! danger "The cache is executable â€” only load caches you trust"
+    Cash persists results by **pickling** Python objects (the file, SQLite,
+    Redis, and S3 backends all use `pickle`). Unpickling runs arbitrary code,
+    so **loading a cache is equivalent to running a Python script from
+    whoever produced it.**
+
+    - **Don't** open someone's exported `.cash/` directory, or point Cash at a
+      Redis/S3 store that untrusted parties can write to, unless you trust the
+      source as much as you'd trust running their code.
+    - **Do** treat a shared cache like a shared `.py` file: fine from a
+      teammate on your own infrastructure, dangerous from a stranger.
+
+    Your own local `.cash/` directory is as safe as the code that wrote it.
+    See [Backends](api/backends.md#security) for the full trust model.
+
 ## Installation
 
 ```bash
