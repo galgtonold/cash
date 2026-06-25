@@ -50,8 +50,8 @@ class TestTieredPerTierSkip:
 
     @pytest.fixture
     def redis_backend(self):
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
             yield RedisBackend(prefix="cash:cap:")
@@ -111,8 +111,8 @@ class TestBareBackendIgnoresMaxSize:
     bare backend can write anything they like — it's their explicit call."""
 
     def test_bare_redis_accepts_oversized_object(self):
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
             b = RedisBackend(prefix="cash:bare:")

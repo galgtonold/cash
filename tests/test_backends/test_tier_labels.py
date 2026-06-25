@@ -27,6 +27,7 @@ class TestBareBackendTierLabels:
 
     def test_redis_reports_redis(self):
         from cash.backends.redis_backend import RedisBackend
+        pytest.importorskip("redis")
         with patch("redis.Redis"):
             b = RedisBackend()
         assert b.tier_labels() == ["REDIS"]
@@ -64,6 +65,7 @@ class TestTieredBackendTierLabels:
 
     def test_three_tier_ram_redis_disk(self, tmp_path):
         from cash.backends.redis_backend import RedisBackend
+        pytest.importorskip("redis")
         with patch("redis.Redis"):
             redis = RedisBackend()
         b = TieredBackend([InMemoryBackend(), redis, FileBackend(str(tmp_path))])
@@ -72,6 +74,7 @@ class TestTieredBackendTierLabels:
     def test_order_matches_tier_order(self, tmp_path):
         """The tier list must reflect the backend list's order, not alpha or set."""
         from cash.backends.redis_backend import RedisBackend
+        pytest.importorskip("redis")
         with patch("redis.Redis"):
             redis = RedisBackend()
         # Reversed order — should still come out as-configured.

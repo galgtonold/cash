@@ -2,11 +2,15 @@ import unittest
 from unittest.mock import MagicMock, patch
 import pickle
 
+import pytest
+
 from cash.backends.redis_backend import RedisBackend
 from cash.backends.s3_backend import S3Backend
 
 class TestRedisBackend(unittest.TestCase):
     def setUp(self):
+        # patch('redis.Redis') imports redis; skip cleanly if it's not installed.
+        pytest.importorskip("redis")
         with patch('redis.Redis'):
             self.backend = RedisBackend()
         self.backend.client = MagicMock()
@@ -58,6 +62,8 @@ class TestRedisBackend(unittest.TestCase):
 
 class TestS3Backend(unittest.TestCase):
     def setUp(self):
+        # patch('boto3.client') imports boto3; skip cleanly if it's not installed.
+        pytest.importorskip("boto3")
         with patch('boto3.client'):
             self.backend = S3Backend(bucket="test-bucket")
         self.backend.s3 = MagicMock()

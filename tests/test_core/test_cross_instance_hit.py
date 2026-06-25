@@ -83,8 +83,8 @@ class TestSameSourceHitsAcrossInstances:
         assert calls["n"] == 1
 
     def test_redis_backend_via_fakeredis(self):
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         calls = {"n": 0}
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend

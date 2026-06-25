@@ -85,8 +85,8 @@ class TestSimpleModeSingleBackend:
         assert isinstance(backend, SQLiteBackend)
 
     def test_backend_redis_builds_just_redis(self):
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
             cfg = CashConfig(
@@ -116,8 +116,8 @@ class TestSimpleModeSingleBackend:
 
 class TestAdvancedModeTierList:
     def test_tier_list_builds_tiered_in_order(self, tmp_path):
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.memory_backend import InMemoryBackend
             from cash.backends.redis_backend import RedisBackend

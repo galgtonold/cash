@@ -42,8 +42,8 @@ def slow_backend(request, tmp_path):
     elif kind == "sqlite":
         b = SQLiteBackend(str(tmp_path / "c.db"))
     elif kind == "redis":
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
             b = RedisBackend(prefix=f"cash:async:{kind}:")

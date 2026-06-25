@@ -68,8 +68,8 @@ class TestNoneReturnValueCaches:
             b.shutdown()
 
     def test_redis_via_fakeredis(self):
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             from cash.backends.redis_backend import RedisBackend
             b = RedisBackend(prefix="cash:nrt:")

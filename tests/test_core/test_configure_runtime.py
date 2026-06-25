@@ -112,8 +112,8 @@ class TestStaleFields:
         """Pre-setting a connection field before switching backend
         type means the switch picks it up."""
         import cash
-        import fakeredis
-        import redis as _redis
+        fakeredis = pytest.importorskip("fakeredis")
+        _redis = pytest.importorskip("redis")
         from cash.backends.redis_backend import RedisBackend
         with patch.object(_redis, "Redis", fakeredis.FakeStrictRedis):
             cash.configure(redis_host="staging.example.com", redis_prefix="staging:")

@@ -9,6 +9,8 @@ from cash.backends.s3_backend import S3Backend
 
 @pytest.fixture
 def redis_backend():
+    # patch('redis.Redis') imports redis; skip cleanly if it's not installed.
+    pytest.importorskip("redis")
     with patch('redis.Redis'):
         backend = RedisBackend()
     backend.client = MagicMock()
@@ -18,6 +20,8 @@ def redis_backend():
 
 @pytest.fixture
 def s3_backend():
+    # patch('boto3.client') imports boto3; skip cleanly if it's not installed.
+    pytest.importorskip("boto3")
     with patch('boto3.client'):
         backend = S3Backend(bucket='test-bucket')
     backend.s3 = MagicMock()
