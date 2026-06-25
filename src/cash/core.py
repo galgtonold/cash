@@ -1357,7 +1357,6 @@ class Cash:
                     return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
                 # Non-iterator return: existing single-blob path.
-                self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
                 execution_time = time.perf_counter() - call_start
 
                 should_cache = True
@@ -1369,6 +1368,11 @@ class Cash:
                         should_cache = False
 
                 if should_cache:
+                    # Attach lineage only when the value is actually stored: a
+                    # lineage hash points downstream at THIS cache entry, so a
+                    # cache_if-rejected (uncached) value must not carry one - it
+                    # would reference an entry that was never written.
+                    self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
                     self._store_in_cache(
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
@@ -1537,7 +1541,6 @@ class Cash:
                     return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
                 # Non-iterator return: single-blob path (unchanged).
-                self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
                 execution_time = time.perf_counter() - call_start
 
                 should_cache = True
@@ -1549,6 +1552,10 @@ class Cash:
                         should_cache = False
 
                 if should_cache:
+                    # Attach lineage only when actually stored (see sync path):
+                    # a cache_if-rejected value must not reference an entry that
+                    # was never written.
+                    self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
                     self._store_in_cache(
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
