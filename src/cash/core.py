@@ -1652,15 +1652,23 @@ class Cash:
 
     @staticmethod
     def _try_hash_numpy(value: Any) -> str | None:
-        """Hash a numpy ndarray."""
+        """Hash a numpy ndarray over its FULL contents.
+
+        Correctness requires hashing every byte, not a sample: two large
+        arrays that differ only outside a sampled window would otherwise
+        collide and return a wrong cached result (a silent data-corruption
+        bug, especially for the large ML/data arrays caching targets). Shape
+        and dtype are folded in so a reshape or retype of the same bytes does
+        not collide. Uses a zero-copy ``memoryview`` for contiguous arrays and
+        falls back to ``tobytes()`` (C-order copy) otherwise.
+        """
         try:
-            if value.nbytes < 10 * 1024 * 1024:  # < 10 MB: full hash
-                return hashlib.sha256(value.tobytes()).hexdigest()
-            # Large array: hash shape + dtype + first/last 1 KB
-            header = f"{value.shape}:{value.dtype}".encode()
-            flat = value.ravel()
-            sample = flat[:128].tobytes() + flat[-128:].tobytes()
-            return hashlib.sha256(header + sample).hexdigest()
+            h = hashlib.sha256(f"{value.shape}:{value.dtype}:".encode())
+            try:
+                h.update(memoryview(value).cast("B"))   # no copy if C-contiguous
+            except (TypeError, ValueError):
+                h.update(value.tobytes())                # non-contiguous / odd layout
+            return h.hexdigest()
         except (TypeError, ValueError, AttributeError, MemoryError):
             logger.debug("Failed to hash numpy ndarray")
             return None
@@ -1690,13 +1698,18 @@ class Cash:
         try:
             import pyarrow as pa
             if isinstance(value, (pa.Table, pa.RecordBatch)):
-                schema_str = str(value.schema)
-                header = f"{schema_str}:{value.num_rows}".encode()
-                if value.nbytes < 10 * 1024 * 1024:
-                    return hashlib.sha256(
-                        header + value.to_pandas().values.tobytes()
-                    ).hexdigest()
-                return hashlib.sha256(header).hexdigest()
+                # Hash the schema + every underlying buffer of every column.
+                # The previous size-gated path hashed ONLY schema+row-count for
+                # tables >=10 MB, so any two same-shape tables collided into a
+                # wrong cache hit. Buffer hashing is zero-copy and total.
+                h = hashlib.sha256(f"{value.schema}:{value.num_rows}:".encode())
+                for col in value.columns:
+                    chunks = col.chunks if hasattr(col, "chunks") else [col]
+                    for chunk in chunks:
+                        for buf in chunk.buffers():
+                            if buf is not None:
+                                h.update(memoryview(buf))
+                return h.hexdigest()
         except (ImportError, TypeError, ValueError, AttributeError, MemoryError):
             logger.debug("Failed to hash PyArrow %s", type_name)
         return None
