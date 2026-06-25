@@ -482,11 +482,21 @@ it flags:
 - **Discarded calls** — `f(x)` as a statement (return thrown away)
   when `f` isn't known-pure
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript
-  assignment, augmented-assign
+  assignment, augmented-assign, and write-methods (`.append`, `.update`,
+  …) on a name that could reach caller-visible state
+
+In-place mutation of a **fresh local** is *not* flagged. A name bound only
+to a freshly-allocated mutable object — a list/dict/set literal or
+comprehension, or a known constructor like `[]`, `dict()`, `np.zeros(...)`,
+`pd.DataFrame(...)`, `.copy()` — cannot alias the caller's state, so
+`pos = np.zeros(n); pos[i] = ...` and `lines = []; lines.append(...)` are
+pure. Mutating a parameter, an alias of one (`x = data; x.append(...)`), or
+module/enclosing state still flags.
 
 Stops at library boundaries (anything under `site-packages` /
 stdlib) — those are trusted unless you `mark_stateful` them
-explicitly.
+explicitly. A call to another `@cash.cache`-decorated function is treated
+as a dependency-graph edge, not walked into.
 
 A nice side-effect of the same walk: helper source hashes flow into
 the cache key. Edit a helper (in another file, or even live in a

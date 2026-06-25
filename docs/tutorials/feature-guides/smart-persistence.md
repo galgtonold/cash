@@ -62,6 +62,14 @@ Three thresholds gate the promotion in order:
 
 The `100 ms` floor and `64 KiB` cutoff are hardcoded in `factory.py` — they are not config-driven. The only configurable knob on the decorator path is `smart_persistence_threshold`.
 
+> **Restart implication.** The corollary of the 100 ms floor is that a *fast but
+> important* computation on the default `TieredBackend` stays RAM-only and does
+> **not** survive a process restart — by design, since re-running it is cheaper
+> than the disk round-trip. If you need a sub-100 ms result to persist across
+> restarts (e.g. a thin reader process that should always restore), use a
+> single-tier persistent backend (`Cash(backend=FileBackend(...))` or
+> `SQLiteBackend`), which writes every entry regardless of compute time.
+
 ### Worked examples
 
 Walking the policy with concrete values clarifies which gate fires for which workload:
