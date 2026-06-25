@@ -81,3 +81,41 @@ def test_downstream_not_stale_after_ttl_refresh():
     time.sleep(1.1)                       # expire fetch's TTL
     assert int(fetch()["x"].sum()) == 100  # upstream refreshed
     assert double(fetch()) == 200, "downstream returned a stale lineage-keyed result"
+
+
+def test_depends_on_inherits_dependency_ttl():
+    """A function that depends on a TTL'd function must refresh at least as often
+    (effective TTL = min over the dependency closure), or it returns stale data
+    after the dependency's TTL refresh."""
+    c = Cash(backend=InMemoryBackend())
+    state = {"rate": 0.1}
+
+    @c.cache(ttl=1, assume_safe=True)
+    def live_rate():
+        return state["rate"]
+
+    @c.cache(depends_on=[live_rate], assume_safe=True)
+    def price(amount):
+        return amount * live_rate()
+
+    assert price(100) == 10
+    state["rate"] = 0.5
+    time.sleep(1.1)                       # live_rate's TTL (and price's inherited TTL) expire
+    assert price(100) == 50, "downstream stale after dependency TTL refresh"
+
+
+def test_ttl_not_propagated_without_ttld_dependency():
+    """A normal function with no TTL'd dependency must NOT inherit a TTL."""
+    c = Cash(backend=InMemoryBackend())
+
+    @c.cache
+    def plain(x):
+        return x * 2
+
+    @c.cache(depends_on=[plain])
+    def derived(x):
+        return plain(x) + 1
+
+    derived(5)                            # trigger analysis -> graph populated
+    key = c._get_func_key(derived.__wrapped__)
+    assert c._effective_ttl(key, None) is None   # never expires

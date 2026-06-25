@@ -375,6 +375,8 @@ class Cash:
         # complete a parent's state hash long before it is called directly and
         # surfaced). Keeps the cache key stable from the first call (finding #7).
         self._populated: set[str] = set()
+        self._func_ttls: dict[str, int | None] = {}  # func_name -> declared ttl
+        self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
         self.debug = debug  # Debug mode flag
@@ -643,6 +645,10 @@ class Cash:
 
         func_name = self._register_func(func, depends_on, file_depends_on)
         self._purity_modes[func_name] = ("strict" if strict else "silent" if assume_safe else "warn")
+        # Record the declared TTL so a downstream that depends on this function
+        # can inherit it (effective TTL = min over the dependency closure).
+        self._func_ttls[func_name] = ttl
+        self._effective_ttl_cache.clear()
 
         # Async generators are not cached; warn once and return unwrapped.
         if inspect.isasyncgenfunction(func):
@@ -1150,7 +1156,7 @@ class Cash:
         func: Callable,
         func_name: str,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        ttl: int | None,
+        ttl_decl: int | None,
         cache_if: Callable[[Any], bool] | None = None,
         chunk_max_items: int = 1_000_000,
         chunk_max_bytes: int = 1_000_000_000,
@@ -1164,6 +1170,10 @@ class Cash:
             if func_name not in self._analyzed:
                 self._analyze_dependencies(func)
                 self._analyzed.add(func_name)
+            # Inherit the shortest TTL of any TTL'd dependency (computed after
+            # analysis populates the graph). `ttl` shadows the declared one for
+            # the rest of the wrapper.
+            ttl = self._effective_ttl(func_name, ttl_decl)
 
             key_result = self._resolve_cache_key(func, func_name, dynamic_depends_on, args, kwargs, call_start)
             if key_result[0] is _CACHE_MISS:
@@ -1289,7 +1299,7 @@ class Cash:
         func: Callable,
         func_name: str,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
-        ttl: int | None,
+        ttl_decl: int | None,
         cache_if: Callable[[Any], bool] | None = None,
         chunk_max_items: int = 1_000_000,
         chunk_max_bytes: int = 1_000_000_000,
@@ -1310,6 +1320,8 @@ class Cash:
             if func_name not in self._analyzed:
                 self._analyze_dependencies(func)
                 self._analyzed.add(func_name)
+            # Inherit the shortest TTL of any TTL'd dependency (see sync wrapper).
+            ttl = self._effective_ttl(func_name, ttl_decl)
 
             key_result = self._resolve_cache_key(
                 func, func_name, dynamic_depends_on, args, kwargs, call_start
@@ -1572,6 +1584,38 @@ class Cash:
         stats_wrapper._cash_cached = True
         self._wrapped_funcs[func_name] = stats_wrapper
         return stats_wrapper
+
+    def _effective_ttl(self, func_name: str, own_ttl: int | None) -> int | None:
+        """The TTL actually used for *func_name*: the minimum of its own TTL and
+        the TTLs of cached functions it (transitively) depends on.
+
+        A function whose result derives from a TTL'd dependency must refresh at
+        least as often as that dependency - otherwise, because ``depends_on``
+        tracks source (not runtime freshness), the downstream keeps returning a
+        stale value after the dependency's TTL refresh. Functions with no TTL'd
+        dependency are unaffected (effective TTL == own TTL)."""
+        cached = self._effective_ttl_cache.get(func_name)
+        if cached is not None or func_name in self._effective_ttl_cache:
+            return cached
+        ttls = [t for t in self._collect_dep_ttls(func_name, set()) if t is not None]
+        if own_ttl is not None:
+            ttls.append(own_ttl)
+        eff = min(ttls) if ttls else None
+        self._effective_ttl_cache[func_name] = eff
+        return eff
+
+    def _collect_dep_ttls(self, func_name: str, visited: set[str]) -> list[int | None]:
+        """TTLs of every cached function reachable from *func_name* via the
+        dependency graph (cycle-guarded)."""
+        if func_name in visited:
+            return []
+        visited.add(func_name)
+        out: list[int | None] = []
+        for dep in self.graph.get_dependencies(func_name):
+            if dep in self._func_ttls:
+                out.append(self._func_ttls[dep])
+                out.extend(self._collect_dep_ttls(dep, visited))
+        return out
 
     def _register_static_dependencies(
         self, func_name: str, depends_on: list[Callable[..., Any] | DataSource] | None
