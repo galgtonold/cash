@@ -375,6 +375,7 @@ class Cash:
         # complete a parent's state hash long before it is called directly and
         # surfaced). Keeps the cache key stable from the first call (finding #7).
         self._populated: set[str] = set()
+        self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
@@ -715,6 +716,7 @@ class Cash:
         """
         try:
             current_state_hash = self._state_hasher.compute(func_name)
+            current_state_hash = self._fold_closure(func, func_name, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
@@ -795,6 +797,7 @@ class Cash:
         # Build cache key (silently - explain() does not warn).
         try:
             current_state_hash = self._state_hasher.compute(func_name)
+            current_state_hash = self._fold_closure(func, func_name, current_state_hash)
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
@@ -1607,6 +1610,76 @@ class Cash:
             # Sort to ensure deterministic order if multiple sources
             return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode('utf-8')).hexdigest()
         return ""
+
+    def _closure_written_freevars(self, code: Any) -> frozenset:
+        """Free-variable names the function reassigns (``STORE_DEREF`` /
+        ``DELETE_DEREF``) - i.e. ``nonlocal`` counters that drift between calls.
+        Cached per code object (closures share a code object per factory)."""
+        cache = self._deref_writes
+        hit = cache.get(code)
+        if hit is not None:
+            return hit
+        import dis
+        written = frozenset(
+            instr.argval for instr in dis.get_instructions(code)
+            if instr.opname in ("STORE_DEREF", "DELETE_DEREF")
+        )
+        if len(cache) < 4096:
+            cache[code] = written
+        return written
+
+    @staticmethod
+    def _is_immutable_capture(v: Any, _depth: int = 0) -> bool:
+        """True for values that are immutable and so define a closure's
+        behaviour without drifting between calls. Mutable captures (dict/list/
+        set/objects) are excluded: they are typically side-effect accumulators
+        (e.g. a hit counter) whose value changes every call - folding those into
+        the key would make every call miss."""
+        if _depth > 8:
+            return False
+        if isinstance(v, (bool, int, float, complex, str, bytes, type(None))):
+            return True
+        if isinstance(v, (tuple, frozenset)):
+            return all(Cash._is_immutable_capture(x, _depth + 1) for x in v)
+        return False
+
+    def _fold_closure(self, func: Callable, func_name: str, state_hash: str) -> str:
+        """Mix a fingerprint of *func*'s IMMUTABLE captured free variables into
+        the state hash.
+
+        Two closures produced by the same factory share a source AND a qualname
+        (``factory.<locals>.f``) but capture different values - so without this
+        they collide on the same cache key and return each other's results (a
+        silent wrong answer, e.g. ``make(2)`` vs ``make(5)``). Only immutable
+        captures are folded in: they pin the closure's behaviour and can't drift
+        across calls. Mutable captures (a counter dict, an accumulator list) are
+        skipped so a function that mutates a captured object doesn't get a new
+        key every call. Functions with no immutable captures are unaffected.
+        """
+        closure = getattr(func, "__closure__", None)
+        code = getattr(func, "__code__", None)
+        if not closure or code is None:
+            return state_hash
+        freevars = getattr(code, "co_freevars", ()) or ()
+        # Free vars the function REASSIGNS (nonlocal counters) drift across calls
+        # even when their value type is immutable - exclude them.
+        written = self._closure_written_freevars(code)
+        captures = []
+        for name, cell in zip(freevars, closure):
+            if name in written:
+                continue
+            try:
+                v = cell.cell_contents
+            except ValueError:
+                continue
+            if self._is_immutable_capture(v):
+                captures.append((name, v))
+        if not captures:
+            return state_hash
+        clo = self._serialize_args(func_name, tuple(captures), {})
+        if not clo:
+            return state_hash
+        return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
 
     def _serialize_args(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
         try:
