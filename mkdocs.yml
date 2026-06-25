@@ -27,6 +27,11 @@ theme:
 exclude_docs: |
   superpowers/
 
+# Build-time fixes. badge_paths rewrites root-absolute /_badges/ iframe srcs to
+# page-relative URLs so they resolve under Read the Docs' /en/<version>/ prefix.
+hooks:
+  - mkdocs_hooks.py
+
 extra_css:
   - stylesheets/cash-design.css
 
