@@ -2226,6 +2226,17 @@ class Cash:
                 result._cash_lineage_hash = lineage
                 return
 
+            # Generic custom objects: any instance that accepts attribute
+            # assignment can carry the lineage hash, so a custom result short-
+            # circuits downstream content-hashing the same way a DataFrame does.
+            # Builtins (list/dict/tuple/str/numbers) and __slots__ objects with
+            # no matching slot reject the assignment - caught below, harmless
+            # skip - so those keep content-hashing (a hard Python limitation).
+            try:
+                result._cash_lineage_hash = lineage
+            except (AttributeError, TypeError):
+                logger.debug("Cannot attach _cash_lineage_hash to %s", type_name)
+
         except (AttributeError, TypeError):
             logger.debug("Failed to attach lineage hash to %s result", type(result).__name__)
 
