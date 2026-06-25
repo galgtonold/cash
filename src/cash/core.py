@@ -369,7 +369,12 @@ class Cash:
         self.functions: dict[str, Callable[..., Any]] = {} # Registry of cached functions
         self.data_sources: dict[str, DataSource] = {} # Registry of data sources
         self.source_hashes: dict[str, str] = {} # Current source hashes
-        self._analyzed = set() # Track which functions we've analyzed for dependencies
+        self._analyzed = set() # Track which functions we've *surfaced* purity for
+        # Track which functions have had their graph edges + purity report
+        # populated (separate from _analyzed: a dependency can be populated to
+        # complete a parent's state hash long before it is called directly and
+        # surfaced). Keeps the cache key stable from the first call (finding #7).
+        self._populated: set[str] = set()
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
@@ -678,6 +683,7 @@ class Cash:
         old_hash = self.source_hashes.get(func_name)
         if old_hash and old_hash != new_hash:
             self._analyzed.discard(func_name)
+            self._populated.discard(func_name)
         self.source_hashes[func_name] = new_hash
         self.graph.add_node(func_name)
         self._register_static_dependencies(func_name, depends_on)
@@ -779,6 +785,13 @@ class Cash:
 
         See `CacheExplanation` for the return shape.
         """
+        # Populate the dependency closure first so the state hash matches what
+        # a real call computes (otherwise explain() reports a stale pre-analysis
+        # key and a false `no_entry` - finding #7). This only fills internal
+        # analysis caches; it does not warn, run the function, or touch the
+        # backend.
+        self._ensure_closure_analyzed(func)
+
         # Build cache key (silently - explain() does not warn).
         try:
             current_state_hash = self._state_hasher.compute(func_name)
@@ -1464,6 +1477,11 @@ class Cash:
         stats_wrapper.cache_clear = cache_clear
         stats_wrapper.explain = explain
         stats_wrapper.__wrapped__ = func
+        # Marker so the purity analyzer treats a call to this wrapper as a
+        # dependency-graph edge rather than recursing into cash's own wrapper
+        # machinery (finding #9). functools.wraps copies __module__, which would
+        # otherwise make the wrapper look like same-package user code.
+        stats_wrapper._cash_cached = True
         self._wrapped_funcs[func_name] = stats_wrapper
         return stats_wrapper
 
@@ -2306,38 +2324,69 @@ class Cash:
             wrapped.cache_clear()
 
     def _analyze_dependencies(self, func: Callable[..., Any]) -> None:
-        """Static analysis: find calls to other cached functions AND
-        run the purity analyzer on this function + its module-bounded
-        helpers.
+        """Populate analysis for *func* + its transitive cached-dependency
+        closure, then surface *func*'s own purity issues.
 
-        The purity report's ``helper_source_hashes`` are stored on
-        ``self._purity_reports[func_name]`` and folded into the cache
-        key state hash by `DependencyStateHasher` (``self._state_hasher``)
-        so a helper edit invalidates the parent's cache.
+        Populating the WHOLE closure (not just *func*) before the first cache
+        key is computed is what keeps the key stable from the very first call.
+        The state hash folds in each dependency's purity-report
+        ``helper_source_hashes``; those used to be filled lazily on each
+        dependency's own first call, so the key deepened only after the chain
+        warmed - and a fresh process therefore missed the first call to every
+        cached function even though a valid entry was on disk (finding #7).
 
-        Issues from the report are surfaced to the user per the
-        function's purity mode (warn / silent / strict).
+        Surfacing stays per-function: each dependency warns/raises on its OWN
+        first direct call, not here, so eager population doesn't change which
+        warnings fire or when.
         """
+        self._ensure_closure_analyzed(func)
         func_name = self._get_func_key(func)
+        report = self._purity_reports.get(func_name) or PurityReport()
+        mode = self._purity_modes.get(func_name, "warn")
+        self._surface_purity(func_name, report, mode)
+
+    def _ensure_closure_analyzed(self, func: Callable[..., Any]) -> None:
+        """Populate graph edges + purity reports for *func* and every cached
+        function transitively reachable from it, WITHOUT surfacing warnings.
+
+        Idempotent per source version (guarded by ``self._populated``). Always
+        traverses the dependency edges - even when the root is already
+        populated - so a dependency invalidated by a source edit gets
+        re-populated. The local ``seen`` set bounds cyclic graphs.
+        """
+        stack = [func]
+        seen: set[str] = set()
+        while stack:
+            f = stack.pop()
+            fname = self._get_func_key(f)
+            if fname in seen:
+                continue
+            seen.add(fname)
+            if fname not in self._populated:
+                self._populate_analysis(f, fname)
+            for dep in self.graph.get_dependencies(fname):
+                dep_func = self.functions.get(dep)
+                if dep_func is not None:
+                    stack.append(dep_func)
+
+    def _populate_analysis(self, func: Callable[..., Any], func_name: str) -> None:
+        """Record *func*'s cached-call graph edges and purity report (no
+        surfacing). The analyzer caches by source hash globally, so this is
+        cheap on repeated registrations.
+        """
+        self._populated.add(func_name)
         called_names = CodeAnalyzer.find_called_functions(func, self.functions)
         for called in called_names:
             if called != func_name:
                 self.graph.add_dependency(func_name, called)
-
-        # Run the purity analyzer once per (function, source_hash).
-        # The analyzer caches by source hash globally so this is
-        # cheap on repeated registrations.
         try:
             report = get_analyzer().analyze(func)
         except (OSError, TypeError, SyntaxError, RecursionError) as e:
-            # Analyzer must never break caching. On error, treat as
-            # clean - the user's compute still runs.
+            # Analyzer must never break caching. On error, treat as clean -
+            # the user's compute still runs.
             logger.debug("Purity analyzer failed for %s: %s", func_name, e)
             report = PurityReport()
         self._purity_reports[func_name] = report
-
-        mode = self._purity_modes.get(func_name, "warn")
-        self._surface_purity(func_name, report, mode)
 
     def _surface_purity(
         self, func_name: str, report: PurityReport, mode: str,

@@ -696,6 +696,13 @@ class PurityAnalyzer:
                 opaque.append(qualname)
                 continue
 
+            # Drop the decorator expressions: ``inspect.getsource`` includes the
+            # ``@c.cache(...)`` / ``@get_cash().cache`` lines, and analyzing them
+            # as if they were body statements walks into the decorator factory's
+            # source (cash's own internals), flagging its mutations as the
+            # user's (finding #9). We only want to analyze the function body.
+            func_def.decorator_list = []
+
             param_names = frozenset(
                 arg.arg for arg in (
                     func_def.args.args
@@ -726,6 +733,14 @@ class PurityAnalyzer:
             for call_node in visitor.called_callable_nodes:
                 callee = _resolve_callee(call_node.func, namespace)
                 if callee is None or not callable(callee):
+                    continue
+                # A call to another @cash.cache-decorated function is a
+                # dependency-graph edge, not a helper to walk: its own source
+                # hash and purity are tracked as a separate node. Recursing
+                # would read cash's wrapper machinery (which ``functools.wraps``
+                # makes look like same-package user code) and flag cash's own
+                # internal mutations as the user's (finding #9).
+                if getattr(callee, "_cash_cached", False):
                     continue
                 if is_pure(callee):
                     continue
