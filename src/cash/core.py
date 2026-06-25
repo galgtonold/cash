@@ -1064,7 +1064,7 @@ class Cash:
                 # key than when the upstream was freshly computed, recomputing
                 # needlessly. The hash is deterministic from (cache_key,
                 # auto_file_deps), both available here.
-                self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps)
+                self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl)
                 self._log_decorator_call(
                     func_name, cache_hit=True,
                     execution_time=time.perf_counter() - call_start,
@@ -1186,16 +1186,23 @@ class Cash:
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 with tracker:
                     res = func(*args, **kwargs)
+                    is_iter = _is_one_shot_iterator(res)
+                    if is_iter:
+                        # A generator is lazy: its file reads happen while it is
+                        # consumed, so materialize the chunks INSIDE the tracker.
+                        # Otherwise the body's reads (e.g. open()/read_csv inside
+                        # the generator) land outside the tracked scope, the
+                        # manifest records no file deps, and the cached iterator
+                        # never invalidates when the file changes.
+                        manifest, single_chunk_buffer = self._write_chunks(
+                            res, cache_key, chunk_max_items, chunk_max_bytes,
+                            func_name, cache_if, ttl=ttl,
+                        )
                 accessed = tracker.get_accessed_files()
                 auto_file_deps = snapshot_file_deps(accessed) if accessed else None
 
-                # Detect one-shot iterators and route them through the
-                # chunked-storage path.
-                if _is_one_shot_iterator(res):
-                    manifest, single_chunk_buffer = self._write_chunks(
-                        res, cache_key, chunk_max_items, chunk_max_bytes,
-                        func_name, cache_if, ttl=ttl,
-                    )
+                # Route one-shot iterators through the chunked-storage path.
+                if is_iter:
                     execution_time = time.perf_counter() - call_start
 
                     if single_chunk_buffer is not None:
@@ -1247,7 +1254,7 @@ class Cash:
                     return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
                 # Non-iterator return: existing single-blob path.
-                self._attach_lineage(res, cache_key, auto_file_deps)
+                self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
                 execution_time = time.perf_counter() - call_start
 
                 should_cache = True
@@ -1342,18 +1349,21 @@ class Cash:
             tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
             with tracker:
                 res = await func(*args, **kwargs)
+                is_iter = _is_one_shot_iterator(res)
+                if is_iter:
+                    # A returned sync generator is lazy - materialize its chunks
+                    # inside the tracker so file reads in the generator body are
+                    # recorded as deps (see the sync path for the full rationale).
+                    # warn_stacklevel=5 for async: one fewer frame than sync.
+                    manifest, single_chunk_buffer = self._write_chunks(
+                        res, cache_key, chunk_max_items, chunk_max_bytes,
+                        func_name, cache_if, ttl=ttl, warn_stacklevel=5,
+                    )
             accessed = tracker.get_accessed_files()
             auto_file_deps = snapshot_file_deps(accessed) if accessed else None
 
             # Iterator returns: chunked storage path.
-            if _is_one_shot_iterator(res):
-                # warn_stacklevel=5 for async: one fewer frame than sync
-                # because there's no _compute_and_store closure layer
-                # (user -> stats_wrapper -> wrapper -> _write_chunks -> _warn_once).
-                manifest, single_chunk_buffer = self._write_chunks(
-                    res, cache_key, chunk_max_items, chunk_max_bytes,
-                    func_name, cache_if, ttl=ttl, warn_stacklevel=5,
-                )
+            if is_iter:
                 execution_time = time.perf_counter() - call_start
 
                 if single_chunk_buffer is not None:
@@ -1400,7 +1410,7 @@ class Cash:
                 return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
             # Non-iterator return: single-blob path (unchanged).
-            self._attach_lineage(res, cache_key, auto_file_deps)
+            self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
             execution_time = time.perf_counter() - call_start
 
             should_cache = True
@@ -1934,6 +1944,7 @@ class Cash:
                         self._validate_ttl(locked_metadata, ttl)
                         self._attach_lineage(
                             locked_data, cache_key, locked_metadata.auto_file_deps,
+                            ttl=ttl,
                         )
                         self._log_decorator_call(
                             func_name, cache_hit=True,
@@ -1983,12 +1994,22 @@ class Cash:
         return f"{cache_key}:fdeps:{fp}"
 
     def _attach_lineage(self, result: Any, cache_key: str,
-                        auto_file_deps: dict | None = None) -> None:
+                        auto_file_deps: dict | None = None,
+                        ttl: int | None = None) -> None:
         """Attach lineage hash to result if it supports attribute setting.
 
         Works with pandas DataFrame/Series, polars DataFrame/Series, PyArrow
         Table, modin DataFrame, and any object that allows setting attributes.
+
+        Skipped when the producer has a ``ttl``: a TTL'd value's identity is not
+        captured by its cache key (the value changes over time while the key
+        stays the same), so a downstream cached function keyed on the lineage
+        hash would return a stale result after the upstream's TTL refresh. With
+        no lineage hash, the downstream content-hashes the actual current value
+        instead - correct, just without the large-value short-circuit.
         """
+        if ttl is not None:
+            return
         lineage = self._lineage_hash(cache_key, auto_file_deps)
         try:
             type_name = type(result).__name__
