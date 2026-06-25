@@ -862,17 +862,31 @@ class Cash:
 
         raw_metadata, _data = self.backend.get(cache_key)
         if raw_metadata is None:
+            details = {
+                'hint': (
+                    'No matching cache entry. First call with these arguments, '
+                    'or the cache was cleared.'
+                ),
+            }
+            # A tracked dynamic dependency that changed produces a NEW cache key,
+            # so the miss surfaces as no_entry rather than file_changed. Make the
+            # explanation say so and list what's tracked (finding #8).
+            dyn_ids = self._describe_dynamic_dependencies(dynamic_depends_on, args, kwargs)
+            if dyn_ids:
+                details['dynamic_dependencies'] = dyn_ids
+                details['hint'] = (
+                    'No matching cache entry. Either the first call with these '
+                    'arguments, or a tracked dynamic dependency changed - a '
+                    'dynamic_depends_on change yields a new cache key, so it '
+                    'shows up here as no_entry, not file_changed. Tracked '
+                    'dynamic dependencies: ' + ', '.join(dyn_ids) + '.'
+                )
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_NO_ENTRY,
                 func_name=func_name,
                 cache_key=cache_key,
-                details={
-                    'hint': (
-                        'No matching cache entry. First call with these arguments, '
-                        'or the cache was cleared.'
-                    ),
-                },
+                details=details,
             )
 
         metadata = CacheMetadata.from_dict(raw_metadata)
@@ -957,6 +971,34 @@ class Cash:
         if dynamic_state_parts:
             return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode('utf-8')).hexdigest()
         return ""
+
+    def _describe_dynamic_dependencies(
+        self,
+        dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None,
+        args: tuple,
+        kwargs: dict,
+    ) -> list[str]:
+        """Best-effort list of the ``DataSource`` ids a function's
+        ``dynamic_depends_on`` resolves to for these args - so ``explain()`` can
+        report *what* is being tracked. Returns ``[]`` when there are none or
+        resolution fails (introspection must never raise)."""
+        if not dynamic_depends_on:
+            return []
+        resolvers = dynamic_depends_on if isinstance(dynamic_depends_on, list) else [dynamic_depends_on]
+        ids: list[str] = []
+        for resolver in resolvers:
+            try:
+                ds_result = resolver(*args, **kwargs)
+            except Exception:  # noqa: BLE001 - explain() is best-effort
+                continue
+            dss = ds_result if isinstance(ds_result, list) else [ds_result]
+            for ds in dss:
+                if isinstance(ds, DataSource):
+                    try:
+                        ids.append(ds.get_id())
+                    except Exception:  # noqa: BLE001
+                        ids.append(repr(ds))
+        return ids
 
     @staticmethod
     def _first_unhashable_arg_type(args: tuple, kwargs: dict) -> str:
