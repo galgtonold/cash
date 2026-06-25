@@ -51,6 +51,9 @@ except ImportError:  # IPython not installed
 # Sentinel object used by wrapper helpers to signal a cache miss without
 # conflicting with any legitimate cached value (including None).
 _CACHE_MISS = object()
+# Sentinel distinguishing "signature not yet computed" from a cached None
+# (which means introspection failed and normalization is disabled for the func).
+_SIG_UNSET = object()
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -434,6 +437,11 @@ class Cash:
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
+        # func_name -> inspect.Signature (or None if introspection failed). Used
+        # to bind call arguments to a canonical form so that logically-identical
+        # calls written differently (positional vs keyword, omitted vs explicit
+        # default, kwargs in different orders) share one cache key.
+        self._signatures: dict[str, inspect.Signature | None] = {}
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
         self.verbose = verbose
@@ -1794,39 +1802,105 @@ class Cash:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
 
-    def _serialize_args(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
+    def _normalize_call_args(
+        self, func_name: str, args: tuple, kwargs: dict,
+    ) -> tuple[tuple, dict]:
+        """Bind ``(args, kwargs)`` to the function signature and apply defaults.
+
+        Collapses logically-identical calls written in different forms - ``f(1)``
+        vs ``f(1, y=10)`` (the default) vs ``f(x=1, y=10)``, and kwargs in any
+        order - to one canonical argument shape so they share a cache key
+        instead of producing wasteful misses.
+
+        Best-effort: any introspection or bind failure (builtins with no
+        signature, ``*args`` calls that don't match, deliberately mismatched
+        calls) returns the inputs unchanged, so behavior never regresses.
+        """
+        sig = self._signatures.get(func_name, _SIG_UNSET)
+        if sig is _SIG_UNSET:
+            func = self.functions.get(func_name)
+            try:
+                sig = inspect.signature(func) if func is not None else None
+            except (ValueError, TypeError):
+                sig = None
+            self._signatures[func_name] = sig
+        if sig is None:
+            return args, kwargs
         try:
-            def get_arg_hash(arg):
-                if hasattr(arg, '_cash_lineage_hash'):
-                    return arg._cash_lineage_hash
-                for type_, (hasher_fn, src_hash) in self._type_hashers.items():
-                    if isinstance(arg, type_):
-                        # Embed the hasher source hash so that changing the
-                        # hasher's body invalidates dependent cache entries
-                        # even when the hasher's output coincidentally matches.
-                        return f"{src_hash}:{hasher_fn(arg)}"
-                # 3. Try built-in type hashers for common non-picklable types
-                builtin_hash = self._try_builtin_type_hash(arg)
-                if builtin_hash is not None:
-                    return builtin_hash
-                return arg
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+        except TypeError:
+            # The call doesn't match the signature (the function itself would
+            # raise when invoked). Leave the raw form untouched.
+            return args, kwargs
+        # ``bound.arguments`` is ordered by parameter definition, so the result
+        # is canonical regardless of how the caller wrote the call. Re-express
+        # named params as kwargs; keep *args positional; sort **kwargs so its
+        # order doesn't leak into the key. (We only build a payload to hash, so
+        # routing named params through kwargs is purely for determinism.)
+        canon_args: list[Any] = []
+        canon_kwargs: dict[str, Any] = {}
+        for name, param in sig.parameters.items():
+            if name not in bound.arguments:
+                continue
+            val = bound.arguments[name]
+            if param.kind is inspect.Parameter.VAR_POSITIONAL:
+                canon_args.extend(val)
+            elif param.kind is inspect.Parameter.VAR_KEYWORD:
+                for k in sorted(val):
+                    canon_kwargs[k] = val[k]
+            else:
+                canon_kwargs[name] = val
+        return tuple(canon_args), canon_kwargs
 
-            hashed_args = tuple(get_arg_hash(a) for a in args)
-            hashed_kwargs = {k: get_arg_hash(v) for k, v in kwargs.items()}
+    def _hash_arg_payload(self, args: tuple, kwargs: dict) -> str:
+        """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
+        values; the caller decides whether to retry with a different form."""
+        def get_arg_hash(arg):
+            if hasattr(arg, '_cash_lineage_hash'):
+                return arg._cash_lineage_hash
+            for type_, (hasher_fn, src_hash) in self._type_hashers.items():
+                if isinstance(arg, type_):
+                    # Embed the hasher source hash so that changing the
+                    # hasher's body invalidates dependent cache entries
+                    # even when the hasher's output coincidentally matches.
+                    return f"{src_hash}:{hasher_fn(arg)}"
+            # 3. Try built-in type hashers for common non-picklable types
+            builtin_hash = self._try_builtin_type_hash(arg)
+            if builtin_hash is not None:
+                return builtin_hash
+            return arg
 
-            payload: Any = (hashed_args, hashed_kwargs)
-            # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
-            # order, so the same set argument hashes differently in every
-            # process, silently breaking cross-process cache hits. Canonicalise
-            # to a deterministic, order-independent form (recursing into objects
-            # so a set inside a dataclass is covered too) - but only when a set
-            # is actually present, so all other argument shapes keep
-            # byte-identical keys.
-            if _contains_set(payload):
-                payload = _stable_key_repr(payload)
-            args_bytes = pickle.dumps(payload)
-            return hashlib.sha256(args_bytes).hexdigest()
+        hashed_args = tuple(get_arg_hash(a) for a in args)
+        hashed_kwargs = {k: get_arg_hash(v) for k, v in kwargs.items()}
+
+        payload: Any = (hashed_args, hashed_kwargs)
+        # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
+        # order, so the same set argument hashes differently in every
+        # process, silently breaking cross-process cache hits. Canonicalise
+        # to a deterministic, order-independent form (recursing into objects
+        # so a set inside a dataclass is covered too) - but only when a set
+        # is actually present, so all other argument shapes keep
+        # byte-identical keys.
+        if _contains_set(payload):
+            payload = _stable_key_repr(payload)
+        args_bytes = pickle.dumps(payload)
+        return hashlib.sha256(args_bytes).hexdigest()
+
+    def _serialize_args(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
+        normalized = self._normalize_call_args(func_name, args, kwargs)
+        try:
+            return self._hash_arg_payload(*normalized)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+            # Normalization can fold a default value into the payload (so
+            # f(1) keys identically to f(1, y=<default>)). If that default is
+            # unpicklable it must not make a call that hashed fine before stop
+            # caching - retry with the raw, un-normalized form first.
+            if normalized[0] is not args or normalized[1] is not kwargs:
+                try:
+                    return self._hash_arg_payload(args, kwargs)
+                except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+                    pass
             # Pickle failure here is surfaced via CashCacheIneffectiveWarning in
             # _resolve_cache_key (which sees the None return). Keep this log at
             # debug level so it's available when explicitly enabled but doesn't
