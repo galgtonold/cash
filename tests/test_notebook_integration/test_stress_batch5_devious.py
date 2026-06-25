@@ -381,18 +381,17 @@ class TestReexecutionPatterns:
         assert "20" in out
 
 
-    def test_149_delete_variable_upstream_then_use(self, nb_runner):
+    def test_149_delete_variable_then_use_raises(self, nb_runner):
         """
         Cell 1: x = 10
         Cell 2: del x
         Cell 3: print(x)
 
-        Cash sees x is needed by cell 3 and that it was defined in cell 1.
-        The upstream checker restores x from cell 1 before running cell 3.
-        So this should NOT error — cash restores x.
-        
-        This verifies that cash correctly handles `del` in upstream cells
-        by restoring the variable from the defining cell's cache.
+        `del x` is an explicit deletion. Cash does NOT resurrect an
+        explicitly-deleted variable from cache - doing so would make `del`
+        meaningless in a cached notebook and surprise users. The downstream
+        reference therefore raises NameError, exactly as it would in a plain
+        Python session. (Intended semantics, not a restore bug.)
         """
         nb_runner.create_notebook([
             "x = 10",
@@ -402,10 +401,17 @@ class TestReexecutionPatterns:
         nb_runner.start_kernel()
         nb_runner.run_cell(1)
         nb_runner.run_cell(2)
-        # Cash should restore x from cell 1's cached value
-        nb_runner.run_cell(3)
-        out = nb_runner.get_output(3)
-        assert "x=10" in out, f"Cash should restore x from cache, got: {out}"
+        with pytest.raises(Exception) as exc:
+            nb_runner.run_cell(3)
+        # nbclient's CellExecutionError keeps the error name/value in .ename /
+        # .evalue (its str() only shows the cell source), so inspect those.
+        err = exc.value
+        detail = (
+            f"{getattr(err, 'ename', '')} {getattr(err, 'evalue', '')} {err}"
+        )
+        assert "NameError" in detail or "not defined" in detail, (
+            f"Expected NameError for a use-after-del, got: {detail[:300]}"
+        )
 
     def test_150_overwrite_import_with_variable(self, nb_runner):
         """Import, then overwrite with variable, then use."""
