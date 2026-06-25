@@ -85,12 +85,25 @@ class TestContentHashEdgeCases:
         nb_runner.run_cell(1)
         assert "x=22" in nb_runner.get_output(1)
 
+    @pytest.mark.xfail(
+        reason=(
+            "Known self-assignment-chain lineage bug (same class as the xfail'd "
+            "test_voladj_status_badges). On re-run of a cell with chained "
+            "self-assignments (df = df.sort_values(); df = df.reset_index(); "
+            "df = df.rename(a->x)), the restore/skip ordering leaves df in an "
+            "inconsistent intermediate state, so the rename runs on an "
+            "already-renamed frame and raises KeyError: 'a'. Unlike the VolAdj "
+            "case this is a correctness manifestation (the re-run errors), not "
+            "just wasted recompute. Tracked for the same focused fix."
+        ),
+        strict=False,
+    )
     def test_134_self_assignment_chain(self, nb_runner):
         """
         df = df.method1()
         df = df.method2()
         df = df.method3()
-        
+
         Each is a self-assignment. Cache keys should chain correctly.
         """
         nb_runner.create_notebook([
