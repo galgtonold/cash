@@ -307,7 +307,7 @@ class TestMultiModuleDependencies:
 
         nb_runner.create_notebook([
             "import processor",
-            "result = processor.process_statement(5)\nprint(f'result = {result}')",
+            "result = processor.process(5)\nprint(f'result = {result}')",
         ])
         nb_runner.start_kernel()
         nb_runner.run_all()

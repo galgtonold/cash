@@ -159,9 +159,16 @@ class TestForwardSimulationConsistency:
         assert "c = 94" in nb_runner.get_output(4)
 
         raw = nb_runner.get_raw_output(4)
-        assert "Auto-executing upstream" not in raw
-        assert "reusing cache" in raw, (
-            f"Expected incremental simulation cache to be used. Output: {raw[:500]}"
+        # Canonical signal that the cached simulation was reused: no upstream
+        # statement was re-executed (the "Auto-executing upstream: ..." stdout
+        # marker, restored under %cash_debug). The previous positive assertion
+        # checked the "[UPSTREAM_DEBUG] ... reusing cache" string, but that is a
+        # logger.debug line (it goes to the logging system, not cell stdout) and
+        # the db8c3bd "silence stdout, badge is the canonical signal" refactor
+        # left it unavailable here. No re-execution on a no-change re-run *is*
+        # the reuse-the-cache observable.
+        assert "Auto-executing upstream" not in raw, (
+            f"No upstream re-execution expected on a no-change re-run. Output: {raw[:500]}"
         )
 
     def test_forward_propagation_with_file_io(self, nb_runner, tmp_path):
