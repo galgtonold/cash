@@ -38,7 +38,7 @@ def test_core_exports_stable():
     expected_stable = {
         # Core API
         'Cash', 'CacheExplanation', 'cache', 'show_stats',
-        'register_hasher', 'reset_session', 'configure',
+        'register_hasher', 'reset_session', 'configure', 'cleanup',
         # Purity declarations
         'pure', 'stateful', 'is_pure', 'is_stateful',
         'analyze_function_purity', 'mark_pure', 'mark_stateful',
