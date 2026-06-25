@@ -6,6 +6,7 @@ caching and the `Cash.notebook` bridge for Jupyter integration.
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import functools
 import hashlib
@@ -442,6 +443,11 @@ class Cash:
         # calls written differently (positional vs keyword, omitted vs explicit
         # default, kwargs in different orders) share one cache key.
         self._signatures: dict[str, inspect.Signature | None] = {}
+        # In-process async single-flight registry: cache_key -> (event_loop,
+        # asyncio.Event). When use_locking is set, concurrent awaits of the
+        # same key coalesce - one coroutine computes, the rest wait on the
+        # event and then read the stored result.
+        self._async_inflight: dict[str, tuple[Any, Any]] = {}
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
         self.verbose = verbose
@@ -1407,106 +1413,137 @@ class Cash:
             if hit is not _CACHE_MISS:
                 return self._wrap_iterator_hit(cache_key, metadata, hit)
 
+            # Async single-flight: with use_locking, coalesce concurrent awaits
+            # of the same key in-process so an expensive idempotent coroutine
+            # (e.g. a paid API call) under asyncio.gather computes once instead
+            # of N times. The leader computes and stores; followers wait on an
+            # event and then read the stored result.
+            single_flight_event = None
             if self.use_locking:
-                self._warn_once(
-                    CashCacheIneffectiveWarning,
-                    func_name,
-                    "",
-                    f"@cash.cache on {func_name}: use_locking=True is not "
-                    f"yet supported for async functions. Proceeding without lock - "
-                    f"two concurrent awaits of the same key will compute redundantly.",
-                    stacklevel=5,
-                )
+                try:
+                    running_loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    running_loop = None
+                if running_loop is not None:
+                    existing = self._async_inflight.get(cache_key)
+                    if existing is not None and existing[0] is running_loop:
+                        # Follower: wait for the leader, then read the stored value.
+                        await existing[1].wait()
+                        raw_metadata, cached_data = self.backend.get(cache_key)
+                        if raw_metadata is not None:
+                            metadata = CacheMetadata.from_dict(raw_metadata)
+                            hit = self._try_get_cached(
+                                cache_key, metadata, cached_data, call_start,
+                                args_hash, func_name, ttl,
+                            )
+                            if hit is not _CACHE_MISS:
+                                return self._wrap_iterator_hit(cache_key, metadata, hit)
+                        # Leader stored nothing (cache_if rejected / errored):
+                        # fall through and compute ourselves.
+                    else:
+                        # Leader: register an event the followers wait on.
+                        single_flight_event = asyncio.Event()
+                        self._async_inflight[cache_key] = (running_loop, single_flight_event)
 
-            from cash.notebook.file_tracker import FileAccessTracker
-            from cash.notebook.file_dep_snapshot import snapshot_file_deps
-            tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
-            with tracker:
-                res = await func(*args, **kwargs)
-                is_iter = _is_one_shot_iterator(res)
+            async def _compute_and_store() -> Any:
+                from cash.notebook.file_tracker import FileAccessTracker
+                from cash.notebook.file_dep_snapshot import snapshot_file_deps
+                tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                with tracker:
+                    res = await func(*args, **kwargs)
+                    is_iter = _is_one_shot_iterator(res)
+                    if is_iter:
+                        # A returned sync generator is lazy - materialize its chunks
+                        # inside the tracker so file reads in the generator body are
+                        # recorded as deps (see the sync path for the full rationale).
+                        # warn_stacklevel=5 for async: one fewer frame than sync.
+                        manifest, single_chunk_buffer = self._write_chunks(
+                            res, cache_key, chunk_max_items, chunk_max_bytes,
+                            func_name, cache_if, ttl=ttl, warn_stacklevel=5,
+                        )
+                accessed = tracker.get_accessed_files()
+                auto_file_deps = snapshot_file_deps(accessed) if accessed else None
+
+                # Iterator returns: chunked storage path.
                 if is_iter:
-                    # A returned sync generator is lazy - materialize its chunks
-                    # inside the tracker so file reads in the generator body are
-                    # recorded as deps (see the sync path for the full rationale).
-                    # warn_stacklevel=5 for async: one fewer frame than sync.
-                    manifest, single_chunk_buffer = self._write_chunks(
-                        res, cache_key, chunk_max_items, chunk_max_bytes,
-                        func_name, cache_if, ttl=ttl, warn_stacklevel=5,
+                    execution_time = time.perf_counter() - call_start
+
+                    if single_chunk_buffer is not None:
+                        should_cache = True
+                        if cache_if is not None:
+                            try:
+                                should_cache = bool(cache_if(single_chunk_buffer))
+                            except Exception as e:
+                                self._warn_cache_if_raised(func_name, e, stacklevel=6)
+                                should_cache = False
+
+                        if should_cache and single_chunk_buffer:
+                            self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
+                            self._store_chunked_manifest(
+                                cache_key, func_name, manifest, metadata,
+                                ttl, current_state_hash, args_hash,
+                                execution_time, auto_file_deps,
+                            )
+                        elif should_cache and not single_chunk_buffer:
+                            self._store_chunked_manifest(
+                                cache_key, func_name, manifest, metadata,
+                                ttl, current_state_hash, args_hash,
+                                execution_time, auto_file_deps,
+                            )
+
+                        self._log_decorator_call(
+                            func_name, cache_hit=False,
+                            execution_time=execution_time,
+                            args_hash=args_hash, cache_key=cache_key,
+                        )
+                        return _ListCachedIterator(single_chunk_buffer)
+
+                    # Multi-chunk path.
+                    self._store_chunked_manifest(
+                        cache_key, func_name, manifest, metadata,
+                        ttl, current_state_hash, args_hash,
+                        execution_time, auto_file_deps,
                     )
-            accessed = tracker.get_accessed_files()
-            auto_file_deps = snapshot_file_deps(accessed) if accessed else None
-
-            # Iterator returns: chunked storage path.
-            if is_iter:
-                execution_time = time.perf_counter() - call_start
-
-                if single_chunk_buffer is not None:
-                    should_cache = True
-                    if cache_if is not None:
-                        try:
-                            should_cache = bool(cache_if(single_chunk_buffer))
-                        except Exception as e:
-                            self._warn_cache_if_raised(func_name, e, stacklevel=6)
-                            should_cache = False
-
-                    if should_cache and single_chunk_buffer:
-                        self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
-                        self._store_chunked_manifest(
-                            cache_key, func_name, manifest, metadata,
-                            ttl, current_state_hash, args_hash,
-                            execution_time, auto_file_deps,
-                        )
-                    elif should_cache and not single_chunk_buffer:
-                        self._store_chunked_manifest(
-                            cache_key, func_name, manifest, metadata,
-                            ttl, current_state_hash, args_hash,
-                            execution_time, auto_file_deps,
-                        )
-
                     self._log_decorator_call(
                         func_name, cache_hit=False,
                         execution_time=execution_time,
                         args_hash=args_hash, cache_key=cache_key,
                     )
-                    return _ListCachedIterator(single_chunk_buffer)
+                    return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
-                # Multi-chunk path.
-                self._store_chunked_manifest(
-                    cache_key, func_name, manifest, metadata,
-                    ttl, current_state_hash, args_hash,
-                    execution_time, auto_file_deps,
-                )
+                # Non-iterator return: single-blob path (unchanged).
+                self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
+                execution_time = time.perf_counter() - call_start
+
+                should_cache = True
+                if cache_if is not None:
+                    try:
+                        should_cache = bool(cache_if(res))
+                    except Exception as e:
+                        self._warn_cache_if_raised(func_name, e, stacklevel=6)
+                        should_cache = False
+
+                if should_cache:
+                    self._store_in_cache(
+                        cache_key, func_name, res, metadata, ttl,
+                        current_state_hash, args_hash, execution_time,
+                        auto_file_deps=auto_file_deps,
+                    )
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
                 )
-                return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
+                return res
 
-            # Non-iterator return: single-blob path (unchanged).
-            self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
-            execution_time = time.perf_counter() - call_start
-
-            should_cache = True
-            if cache_if is not None:
+            if single_flight_event is not None:
                 try:
-                    should_cache = bool(cache_if(res))
-                except Exception as e:
-                    self._warn_cache_if_raised(func_name, e, stacklevel=6)
-                    should_cache = False
-
-            if should_cache:
-                self._store_in_cache(
-                    cache_key, func_name, res, metadata, ttl,
-                    current_state_hash, args_hash, execution_time,
-                    auto_file_deps=auto_file_deps,
-                )
-            self._log_decorator_call(
-                func_name, cache_hit=False,
-                execution_time=execution_time,
-                args_hash=args_hash, cache_key=cache_key,
-            )
-            return res
+                    return await _compute_and_store()
+                finally:
+                    # Signal followers (success or failure) and free the slot.
+                    self._async_inflight.pop(cache_key, None)
+                    single_flight_event.set()
+            return await _compute_and_store()
 
         return wrapper
 
