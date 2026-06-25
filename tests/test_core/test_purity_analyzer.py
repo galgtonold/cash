@@ -275,3 +275,124 @@ def test_mark_stateful_propagates(analyzer):
 
     r = analyzer.analyze(main)
     assert any("stateful" in i.description for i in r.issues)
+
+
+# ---------------------------------------------------------------------------
+# Escape analysis: in-place mutation of a *fresh local* is pure (findings #3/#6).
+# A local bound only to a freshly-allocated mutable object (literal /
+# comprehension / known constructor) cannot reach caller-visible state, so
+# ``x[i] = ...`` / ``x.append(...)`` on it must NOT be flagged. Mutating a
+# parameter, an alias of one, or module/enclosing state still must flag.
+# ---------------------------------------------------------------------------
+
+def test_local_array_subscript_mutation_is_pure(analyzer):
+    def signals(n):
+        import numpy as np
+        pos = np.zeros(n, dtype="int8")
+        for i in range(n):
+            pos[i] = 1
+        return pos
+
+    assert analyzer.analyze(signals).is_clean
+
+
+def test_local_list_append_is_pure(analyzer):
+    def render(rows):
+        lines = ["header"]
+        body = [str(r) for r in rows]
+        lines.append("footer")
+        return "\n".join(lines + body)
+
+    assert analyzer.analyze(render).is_clean
+
+
+def test_local_dict_subscript_and_update_is_pure(analyzer):
+    def build(keys):
+        d = {}
+        for k in keys:
+            d[k] = 1
+        d.update({"x": 2})
+        return d
+
+    assert analyzer.analyze(build).is_clean
+
+
+def test_local_dict_literal_is_pure(analyzer):
+    def f(x):
+        d = {"a": 1}
+        d["b"] = x
+        return d
+
+    assert analyzer.analyze(f).is_clean
+
+
+def test_mutating_parameter_still_flags(analyzer):
+    def f(data):
+        data.append(1)          # mutates caller's list
+        return data
+
+    r = analyzer.analyze(f)
+    assert not r.is_clean
+    assert any(i.kind == ISSUE_IMPURE_CALL for i in r.issues)
+
+
+def test_mutating_parameter_subscript_still_flags(analyzer):
+    def f(data):
+        data[0] = 1             # mutates caller's container
+        return data
+
+    r = analyzer.analyze(f)
+    assert any(i.kind == ISSUE_SCOPE_MUTATION for i in r.issues)
+
+
+def test_aliased_parameter_mutation_still_flags(analyzer):
+    def f(data):
+        x = data                # x is an alias, NOT a fresh allocation
+        x.append(1)
+        return x
+
+    assert not analyzer.analyze(f).is_clean
+
+
+def test_global_container_mutation_still_flags(analyzer):
+    def f():
+        global _ESC_G
+        _ESC_G = {}
+        _ESC_G["k"] = 1         # global escapes the function
+        return _ESC_G
+
+    r = analyzer.analyze(f)
+    assert any(i.kind == ISSUE_SCOPE_MUTATION for i in r.issues)
+
+
+def test_rebinding_to_nonfresh_disqualifies_local(analyzer):
+    def f(other):
+        d = {}                  # fresh...
+        d = other               # ...but later aliased to a parameter
+        d["k"] = 1
+        return d
+
+    # Because one binding of ``d`` is non-fresh, mutation stays flagged.
+    assert not analyzer.analyze(f).is_clean
+
+
+def test_local_purity_does_not_mask_real_impurity(analyzer):
+    def f(rows, path):
+        lines = []
+        lines.append("x")       # pure local mutation
+        with open(path, "w") as fh:
+            fh.write("\n".join(lines))   # real I/O - must still flag
+        return path
+
+    r = analyzer.analyze(f)
+    assert any(i.kind == ISSUE_IMPURE_CALL for i in r.issues)
+
+
+def test_inplace_on_fresh_dataframe_is_pure(analyzer):
+    def f(data):
+        import pandas as pd
+        df = pd.DataFrame(data)
+        df.sort_values("a", inplace=True)   # inplace on a FRESH local frame
+        return df
+
+    assert analyzer.analyze(f).is_clean

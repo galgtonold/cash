@@ -3,16 +3,16 @@
 Walks the body of a ``@cash.cache``-decorated function plus any
 *module-bounded* helpers it calls, and reports:
 
-* **Known-impure calls** — ``requests.post``, ``os.system``,
-  ``logging.info``, file-write methods (``to_csv``, ``write``, …).
-* **Explicit dynamism** — ``eval``/``exec``/``compile``,
+* **Known-impure calls** - ``requests.post``, ``os.system``,
+  ``logging.info``, file-write methods (``to_csv``, ``write``, ...).
+* **Explicit dynamism** - ``eval``/``exec``/``compile``,
   ``getattr(obj, name)(...)`` where *name* is not a constant,
   calling a *parameter* directly (``def f(cb): cb(x)``).
-* **Discarded-return calls** — ``f(x)`` as a statement (return
+* **Discarded-return calls** - ``f(x)`` as a statement (return
   value thrown away). Strong syntactic signal of "I'm calling this
   for the side effect". Skipped for callees in
   :data:`KNOWN_PURE_BUILTINS` (where discarding is just dead code).
-* **Scope mutations** — ``global``/``nonlocal``, assignment to
+* **Scope mutations** - ``global``/``nonlocal``, assignment to
   ``Attribute`` or ``Subscript`` targets, augmented-assign to same.
 
 As a side benefit, the same walk captures source hashes of every
@@ -20,7 +20,7 @@ analyzed user-code helper. Those hashes become part of the cache
 key, so editing a helper invalidates the parent cache automatically
 on the next run.
 
-**Boundary rule** — recursion follows callees that are *user code*:
+**Boundary rule** - recursion follows callees that are *user code*:
 the callable's source file is outside stdlib / site-packages
 (``is_local_module``) **or** the callable shares the cached
 function's top-level package. Everything else is treated as opaque
@@ -150,20 +150,105 @@ class PurityReport:
         return "\n".join(lines)
 
 
+# Names of constructors/methods that return a *freshly-allocated* mutable
+# object. A local bound only to one of these (or to a mutable literal /
+# comprehension) cannot alias caller-visible state, so mutating it in place
+# is pure - see ``_compute_local_owned``.
+_FRESH_CONSTRUCTOR_NAMES: frozenset[str] = frozenset({
+    "list", "dict", "set", "bytearray",
+    "defaultdict", "OrderedDict", "Counter", "deque",
+})
+_FRESH_CONSTRUCTOR_ATTRS: frozenset[str] = frozenset({
+    # numpy fresh-array factories
+    "zeros", "empty", "ones", "full", "array", "asarray",
+    "zeros_like", "empty_like", "ones_like", "full_like",
+    "arange", "linspace",
+    # pandas
+    "DataFrame", "Series",
+    # generic "make me a fresh copy"
+    "copy", "deepcopy", "fromkeys",
+})
+
+# Mutable-literal AST nodes (a fresh container by construction).
+_FRESH_LITERAL_NODES = (ast.List, ast.Dict, ast.Set, ast.ListComp, ast.DictComp, ast.SetComp)
+
+
+def _is_fresh_alloc(node: ast.AST | None) -> bool:
+    """True when *node* evaluates to a brand-new mutable object.
+
+    Conservative: a bare name, attribute, subscript, or any expression we
+    don't recognise as a fresh allocation returns False (so the binding is
+    treated as a possible alias and mutations to it stay flagged).
+    """
+    if node is None:
+        return False
+    if isinstance(node, _FRESH_LITERAL_NODES):
+        return True
+    if isinstance(node, ast.Call):
+        f = node.func
+        if isinstance(f, ast.Name) and f.id in _FRESH_CONSTRUCTOR_NAMES:
+            return True
+        if isinstance(f, ast.Attribute) and f.attr in _FRESH_CONSTRUCTOR_ATTRS:
+            return True
+    return False
+
+
+def _iter_scope_statements(func_def: ast.AST):
+    """Yield nodes in *func_def*'s own scope, NOT descending into nested
+    function/lambda bodies (separate scopes with their own locals)."""
+    for child in ast.iter_child_nodes(func_def):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue
+        yield child
+        yield from _iter_scope_statements(child)
+
+
+def _compute_local_owned(func_def: ast.AST, param_names: frozenset[str]) -> frozenset[str]:
+    """Return names that are *fresh locals* of *func_def*: assigned only to
+    freshly-allocated objects, never declared ``global``/``nonlocal``, and not
+    parameters. Mutating such a name in place (``x[i] = ...``, ``x.append(...)``)
+    is pure - it can't reach caller-visible state, and returning it just hands
+    the caller a new object. This is the escape analysis that distinguishes a
+    local accumulator from a mutation of shared state.
+    """
+    escaped: set[str] = set()          # names declared global/nonlocal
+    bound: dict[str, bool] = {}        # name -> every binding so far is fresh
+
+    for node in _iter_scope_statements(func_def):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            escaped.update(node.names)
+        elif isinstance(node, ast.Assign):
+            fresh = _is_fresh_alloc(node.value)
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Name):
+                    bound[tgt.id] = bound.get(tgt.id, True) and fresh
+        elif isinstance(node, ast.AnnAssign):
+            if isinstance(node.target, ast.Name):
+                fresh = _is_fresh_alloc(node.value)
+                bound[node.target.id] = bound.get(node.target.id, True) and fresh
+
+    return frozenset(
+        name for name, all_fresh in bound.items()
+        if all_fresh and name not in param_names and name not in escaped
+    )
+
+
 class _PurityVisitor(ast.NodeVisitor):
     """Single-function-body visitor that collects :class:`PurityIssue`s.
 
-    Does NOT recurse into callees — the analyzer handles that. Just
+    Does NOT recurse into callees - the analyzer handles that. Just
     flags everything visible in this one body and records called
     names so the analyzer can resolve and recurse.
     """
 
     __slots__ = (
         "issues", "called_callable_nodes", "_param_names",
-        "_qualname", "_line_offset",
+        "_qualname", "_line_offset", "_local_owned",
     )
 
-    def __init__(self, qualname: str, param_names: frozenset[str], line_offset: int = 0) -> None:
+    def __init__(self, qualname: str, param_names: frozenset[str],
+                 line_offset: int = 0,
+                 local_owned: frozenset[str] = frozenset()) -> None:
         self.issues: list[PurityIssue] = []
         self.called_callable_nodes: list[ast.AST] = []
         self._param_names = param_names
@@ -171,8 +256,10 @@ class _PurityVisitor(ast.NodeVisitor):
         # When source comes from inspect.getsource on a method, line
         # numbers in the parsed AST are 1-based relative to the
         # dedented source, not the original file. We just report them
-        # as-is — the qualname tells the user where to look.
+        # as-is - the qualname tells the user where to look.
         self._line_offset = line_offset
+        # Fresh locals: in-place mutation of these is pure (escape analysis).
+        self._local_owned = local_owned
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
@@ -188,7 +275,7 @@ class _PurityVisitor(ast.NodeVisitor):
         if isinstance(func_node, ast.Name) and func_node.id in {"eval", "exec", "compile"}:
             self.issues.append(PurityIssue(
                 kind=ISSUE_DYNAMIC_PATTERN,
-                description=f"{func_node.id}(...) — explicit dynamic execution",
+                description=f"{func_node.id}(...) - explicit dynamic execution",
                 where=self._qualname,
                 line=line,
             ))
@@ -204,7 +291,7 @@ class _PurityVisitor(ast.NodeVisitor):
         ):
             self.issues.append(PurityIssue(
                 kind=ISSUE_DYNAMIC_PATTERN,
-                description="getattr(obj, name)(...) with non-constant name — dynamic dispatch",
+                description="getattr(obj, name)(...) with non-constant name - dynamic dispatch",
                 where=self._qualname,
                 line=line,
             ))
@@ -220,7 +307,7 @@ class _PurityVisitor(ast.NodeVisitor):
             ))
             return
 
-        # Known-impure module-qualified calls (requests.post, os.system, …).
+        # Known-impure module-qualified calls (requests.post, os.system, ...).
         func_name = _get_call_name(func_node)
         module_name = _get_call_module(func_node)
         if func_name:
@@ -228,30 +315,40 @@ class _PurityVisitor(ast.NodeVisitor):
             if dotted in _IMPURE_MODULE_CALLS or func_name in _IMPURE_FUNCTION_CALLS:
                 # Special case: open() in read mode is not impure.
                 if func_name == "open" and not module_name and not _is_open_write_mode(node):
-                    pass  # open(path) for read — track via file-deps, not as impurity
+                    pass  # open(path) for read - track via file-deps, not as impurity
                 else:
                     self.issues.append(PurityIssue(
                         kind=ISSUE_IMPURE_CALL,
-                        description=f"{dotted}() — known I/O / side-effecting",
+                        description=f"{dotted}() - known I/O / side-effecting",
                         where=self._qualname,
                         line=line,
                     ))
                     return
 
-            # Method calls in _WRITE_METHODS (to_csv, write, savefig, …).
-            if isinstance(func_node, ast.Attribute) and func_node.attr in _WRITE_METHODS:
+            # Method calls in _WRITE_METHODS (to_csv, write, savefig, ...).
+            # Skipped when the receiver is a fresh local (e.g. ``lines.append``
+            # where ``lines = []``): mutating a local accumulator is pure.
+            if (
+                isinstance(func_node, ast.Attribute)
+                and func_node.attr in _WRITE_METHODS
+                and not self._receiver_is_local_owned(func_node.value)
+            ):
                 base = _get_base_name(func_node.value)
                 base_str = f"{base}." if base else ""
                 self.issues.append(PurityIssue(
                     kind=ISSUE_IMPURE_CALL,
-                    description=f"{base_str}{func_node.attr}() — write method",
+                    description=f"{base_str}{func_node.attr}() - write method",
                     where=self._qualname,
                     line=line,
                 ))
                 return
 
-            # Pandas inplace=True kwarg — mutates the receiver.
-            if isinstance(func_node, ast.Attribute) and func_node.attr in PANDAS_INPLACE_METHODS:
+            # Pandas inplace=True kwarg - mutates the receiver.
+            if (
+                isinstance(func_node, ast.Attribute)
+                and func_node.attr in PANDAS_INPLACE_METHODS
+                and not self._receiver_is_local_owned(func_node.value)
+            ):
                 for kw in node.keywords:
                     if (
                         kw.arg == "inplace"
@@ -262,13 +359,13 @@ class _PurityVisitor(ast.NodeVisitor):
                         base_str = f"{base}." if base else ""
                         self.issues.append(PurityIssue(
                             kind=ISSUE_IMPURE_CALL,
-                            description=f"{base_str}{func_node.attr}(inplace=True) — in-place mutation",
+                            description=f"{base_str}{func_node.attr}(inplace=True) - in-place mutation",
                             where=self._qualname,
                             line=line,
                         ))
                         return
 
-        # Not flagged as anything — record for recursion attempt.
+        # Not flagged as anything - record for recursion attempt.
         self.called_callable_nodes.append(node)
 
     # --- discarded-call detection on Expr statements ---
@@ -291,7 +388,7 @@ class _PurityVisitor(ast.NodeVisitor):
                 method = func_node.attr
                 # If the method is already flagged elsewhere (write-methods,
                 # impure module calls), it's recorded by _record_call. The
-                # discarded-return flag here adds nothing useful — skip to
+                # discarded-return flag here adds nothing useful - skip to
                 # avoid double-counting. Skip known-pure idioms too.
                 if (
                     method not in _WRITE_METHODS
@@ -313,7 +410,7 @@ class _PurityVisitor(ast.NodeVisitor):
         for name in node.names:
             self.issues.append(PurityIssue(
                 kind=ISSUE_SCOPE_MUTATION,
-                description=f"global {name} — reads/writes module-level state",
+                description=f"global {name} - reads/writes module-level state",
                 where=self._qualname,
                 line=getattr(node, "lineno", 0),
             ))
@@ -323,7 +420,7 @@ class _PurityVisitor(ast.NodeVisitor):
         for name in node.names:
             self.issues.append(PurityIssue(
                 kind=ISSUE_SCOPE_MUTATION,
-                description=f"nonlocal {name} — writes enclosing-scope state",
+                description=f"nonlocal {name} - writes enclosing-scope state",
                 where=self._qualname,
                 line=getattr(node, "lineno", 0),
             ))
@@ -343,13 +440,24 @@ class _PurityVisitor(ast.NodeVisitor):
             self._maybe_flag_mutation_target(target, node.lineno)
         self.generic_visit(node)
 
+    def _receiver_is_local_owned(self, value: ast.AST) -> bool:
+        """True when *value* is a bare name that is a fresh local of this
+        function (escape analysis) - mutating it in place is pure."""
+        return isinstance(value, ast.Name) and value.id in self._local_owned
+
     def _maybe_flag_mutation_target(self, target: ast.AST, line: int) -> None:
+        # Mutating a fresh local (``pos[i] = ...`` where ``pos = np.zeros(n)``)
+        # is pure: the object can't reach caller-visible state and returning it
+        # just hands the caller a new object. Skip those.
+        if isinstance(target, (ast.Attribute, ast.Subscript)) and \
+                self._receiver_is_local_owned(target.value):
+            return
         if isinstance(target, ast.Attribute):
             base = _get_base_name(target.value)
             base_str = f"{base}." if base else ""
             self.issues.append(PurityIssue(
                 kind=ISSUE_SCOPE_MUTATION,
-                description=f"{base_str}{target.attr} = ... — attribute mutation",
+                description=f"{base_str}{target.attr} = ... - attribute mutation",
                 where=self._qualname,
                 line=line,
             ))
@@ -358,7 +466,7 @@ class _PurityVisitor(ast.NodeVisitor):
             base_str = f"{base}[...]" if base else "[...]"
             self.issues.append(PurityIssue(
                 kind=ISSUE_SCOPE_MUTATION,
-                description=f"{base_str} = ... — subscript mutation",
+                description=f"{base_str} = ... - subscript mutation",
                 where=self._qualname,
                 line=line,
             ))
@@ -385,7 +493,7 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
     if module is None:
         return False
 
-    # Top-level package shortcut — handles common case fast and
+    # Top-level package shortcut - handles common case fast and
     # works for editable installs (both pieces share the same
     # top-level package by construction).
     callee_mod = getattr(module, "__name__", "") or ""
@@ -409,7 +517,7 @@ def _resolve_callee(node: ast.AST, namespace: dict[str, Any]) -> Any | None:
     """Resolve a ``Call`` node's function expression to a callable.
 
     Handles bare names (``foo``) and dotted attribute chains
-    (``mod.sub.func``) by walking *namespace* — a merged view of
+    (``mod.sub.func``) by walking *namespace* - a merged view of
     the caller's ``__globals__`` and any closure cells produced by
     :func:`_build_namespace`. Returns ``None`` for any expression
     we can't reduce statically (subscript, higher-order calls,
@@ -440,17 +548,17 @@ def _build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
     """Return a merged ``__globals__`` + closure-cell namespace for *func*.
 
     Lets :func:`_resolve_callee` see helpers defined as closures
-    (nested function definitions) — not just module-level names.
+    (nested function definitions) - not just module-level names.
     Without this, a ``@cash.cache``d function inside another
     function couldn't recurse into its sibling helpers, and any
     impurity those helpers contained would be missed.
 
     Closure cells are pulled from ``func.__code__.co_freevars`` paired
-    with ``func.__closure__``. An empty cell (rare — happens when a
+    with ``func.__closure__``. An empty cell (rare - happens when a
     closure variable is never assigned) is silently skipped.
 
     The returned dict is a shallow copy of ``__globals__`` with
-    closure entries layered on top — same-name closure variables
+    closure entries layered on top - same-name closure variables
     shadow globals, matching Python's normal scoping.
     """
     ns = dict(getattr(func, "__globals__", None) or {})
@@ -544,7 +652,7 @@ class PurityAnalyzer:
                 continue
             visited.add(qualname)
 
-            # Read source. Failure → opaque leaf.
+            # Read source. Failure -> opaque leaf.
             try:
                 src = inspect.getsource(func)
             except (OSError, TypeError):
@@ -554,7 +662,7 @@ class PurityAnalyzer:
 
             # Hash the (dedented) source for cache-key invalidation
             # of helpers. Root function's hash is captured separately
-            # by the decorator via _hash_callable_source — we record
+            # by the decorator via _hash_callable_source - we record
             # all walked callables here so the decorator can fold
             # them into the state hash uniformly.
             helper_hashes[qualname] = hashlib.sha256(src.encode("utf-8")).hexdigest()
@@ -564,7 +672,7 @@ class PurityAnalyzer:
             # in-process redefinitions (notebook cells, REPL). The
             # attr_chain is the helper's __qualname__ split on '.' so
             # methods like ``Klass.method`` resolve correctly. Skip the
-            # root function itself (it's not a "helper" — the decorator
+            # root function itself (it's not a "helper" - the decorator
             # has its own reference).
             helper_module = getattr(func, "__module__", None)
             helper_inner_qualname = getattr(func, "__qualname__", None)
@@ -600,7 +708,10 @@ class PurityAnalyzer:
             if func_def.args.kwarg:
                 param_names = param_names | {func_def.args.kwarg.arg}
 
-            visitor = _PurityVisitor(qualname=qualname, param_names=param_names)
+            local_owned = _compute_local_owned(func_def, param_names)
+            visitor = _PurityVisitor(
+                qualname=qualname, param_names=param_names, local_owned=local_owned,
+            )
             visitor.visit(func_def)
             all_issues.extend(visitor.issues)
 
