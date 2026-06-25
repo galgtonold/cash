@@ -106,7 +106,7 @@ dev = [
 
 [project.urls]
 "Homepage" = "https://github.com/galgtonold/cash"
-"Documentation" = "https://cash.readthedocs.io/"
+"Documentation" = "https://cash-lib.readthedocs.io/"
 "Bug Tracker" = "https://github.com/galgtonold/cash/issues"
 "Changelog" = "https://github.com/galgtonold/cash/blob/main/CHANGELOG.md"
 
