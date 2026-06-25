@@ -1236,7 +1236,7 @@ class Cash:
                     return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
                 # Non-iterator return: existing single-blob path.
-                self._attach_lineage(res, cache_key)
+                self._attach_lineage(res, cache_key, auto_file_deps)
                 execution_time = time.perf_counter() - call_start
 
                 should_cache = True
@@ -1389,7 +1389,7 @@ class Cash:
                 return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
             # Non-iterator return: single-blob path (unchanged).
-            self._attach_lineage(res, cache_key)
+            self._attach_lineage(res, cache_key, auto_file_deps)
             execution_time = time.perf_counter() - call_start
 
             should_cache = True
@@ -1876,25 +1876,49 @@ class Cash:
             if time.time() - timestamp > ttl:
                 raise CacheExpiredError("Cache expired")
 
-    def _attach_lineage(self, result: Any, cache_key: str) -> None:
+    @staticmethod
+    def _lineage_hash(cache_key: str, auto_file_deps: dict | None) -> str:
+        """The lineage hash a result carries downstream.
+
+        It is the producer's ``cache_key`` PLUS a fingerprint of the files the
+        producer read. The cache key alone omits file state (files invalidate
+        via a freshness re-stat, not via the key), so without this a downstream
+        function keyed on the lineage hash would return a STALE result after an
+        upstream file changed - the producer recomputes, but its new output
+        carries the same lineage hash as the old one. Folding the file deps in
+        gives a changed file a distinct lineage. No deps -> unchanged key.
+        """
+        if not auto_file_deps:
+            return cache_key
+        fp = hashlib.sha256(
+            repr(sorted(
+                (p, d.get('mtime'), d.get('size'))
+                for p, d in auto_file_deps.items()
+            )).encode('utf-8')
+        ).hexdigest()
+        return f"{cache_key}:fdeps:{fp}"
+
+    def _attach_lineage(self, result: Any, cache_key: str,
+                        auto_file_deps: dict | None = None) -> None:
         """Attach lineage hash to result if it supports attribute setting.
 
         Works with pandas DataFrame/Series, polars DataFrame/Series, PyArrow
         Table, modin DataFrame, and any object that allows setting attributes.
         """
+        lineage = self._lineage_hash(cache_key, auto_file_deps)
         try:
             type_name = type(result).__name__
             module = type(result).__module__ or ''
 
             # pandas DataFrame / Series (has attrs dict)
             if module.startswith('pandas') and type_name in ('DataFrame', 'Series'):
-                result._cash_lineage_hash = cache_key
+                result._cash_lineage_hash = lineage
                 return
 
             # polars DataFrame / Series
             if module.startswith('polars') and type_name in ('DataFrame', 'Series'):
                 try:
-                    result._cash_lineage_hash = cache_key
+                    result._cash_lineage_hash = lineage
                 except (AttributeError, TypeError):
                     logger.debug("Cannot attach _cash_lineage_hash to polars %s", type_name)
                 return
@@ -1902,7 +1926,7 @@ class Cash:
             # modin DataFrame / Series
             if module.startswith('modin') and type_name in ('DataFrame', 'Series'):
                 try:
-                    result._cash_lineage_hash = cache_key
+                    result._cash_lineage_hash = lineage
                 except (AttributeError, TypeError):
                     logger.debug("Cannot attach _cash_lineage_hash to modin %s", type_name)
                 return
@@ -1910,14 +1934,14 @@ class Cash:
             # PyArrow Table
             if module.startswith('pyarrow') and type_name in ('Table', 'RecordBatch'):
                 try:
-                    result._cash_lineage_hash = cache_key
+                    result._cash_lineage_hash = lineage
                 except (AttributeError, TypeError):
                     logger.debug("Cannot attach _cash_lineage_hash to PyArrow %s", type_name)
                 return
 
             # Generic: try setting on DataFrame-like objects with attrs
             if type_name == 'DataFrame' and hasattr(result, 'attrs'):
-                result._cash_lineage_hash = cache_key
+                result._cash_lineage_hash = lineage
                 return
 
         except (AttributeError, TypeError):
