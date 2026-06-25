@@ -128,10 +128,13 @@ class DependencyStateHasher:
             hashes.append(self._source_hashes.get(node, ""))
         elif node in self._data_sources:
             ds = self._data_sources[node]
-            if hasattr(ds, "_get_mtime"):
-                hashes.append(str(ds._get_mtime()))
-            else:
-                hashes.append(str(ds.has_changed()))
+            # state_token() is the source's change token (mtime / version /
+            # digest). It warns if a source mistakenly returns a bool, which
+            # can't track changes.
+            token = ds.state_token() if hasattr(ds, "state_token") else (
+                ds._get_mtime() if hasattr(ds, "_get_mtime") else ds.has_changed()
+            )
+            hashes.append(str(token))
 
         # 2. Dependencies' state, sorted for determinism.
         for dep in sorted(self._graph.get_dependencies(node)):

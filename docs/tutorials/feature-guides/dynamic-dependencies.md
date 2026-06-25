@@ -89,30 +89,40 @@ The resolver must return one of:
 - A list of `DataSource` instances.
 - An empty list, `None`, or any non-`DataSource` value — but these are silently dropped from the key. The call still caches; the dynamic dep just doesn't contribute.
 
-To track something other than an mtime, write a `DataSource` subclass. The interface is three methods (`src/cash/data_source.py:10-23`):
+To track something other than an mtime, write a `DataSource` subclass. The key
+method is `has_changed()` (or `state_token()`), which must return a **value that
+changes when the data changes** — a version, a config digest, a tenant id. Cash
+folds that value into the cache key, so the entry invalidates when it moves.
+
+> **Return a value, not a `bool`.** Despite the name, `has_changed()` is the
+> *state token* that goes into the key — not a yes/no flag. A `bool` only has two
+> states and cannot track changes, so the cache would never invalidate. Cash
+> warns with a `CashCacheIneffectiveWarning` if it sees a `bool`.
 
 ```python
-import hashlib
+import os
 from cash import DataSource
 
 class EnvVarSource(DataSource):
     def __init__(self, var: str):
         self.var = var
-        self._last = None
 
     def get_id(self) -> str:
         return f"env:{self.var}"
 
-    def has_changed(self) -> bool:
-        import os
-        return os.environ.get(self.var) != self._last
+    def has_changed(self) -> str:
+        # Return the CURRENT value (the token), not a bool. The key changes
+        # whenever the env var changes.
+        return os.environ.get(self.var, "")
 
     def update_state(self) -> None:
-        import os
-        self._last = os.environ.get(self.var)
+        pass
 ```
 
-`has_changed()` is what gets hashed into the key when the source has no `_get_mtime` method (`src/cash/core.py:1527`). Return a stable string representation of whatever you want to track — a version, a config digest, a tenant id — and the call invalidates when the string moves.
+`has_changed()` is what gets hashed into the key when the source has no
+`_get_mtime` method. (`FileDataSource` exposes `_get_mtime`, so its `has_changed`
+— a real bool — is never used as a token.) To track a derived value, you can
+instead override `state_token()` directly.
 
 ## What NOT to do
 

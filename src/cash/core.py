@@ -973,10 +973,9 @@ class Cash:
             dss = ds_result if isinstance(ds_result, list) else [ds_result]
             for ds in dss:
                 if isinstance(ds, DataSource):
-                    if hasattr(ds, '_get_mtime'):
-                        dynamic_state_parts.append(str(ds._get_mtime()))
-                    else:
-                        dynamic_state_parts.append(str(ds.has_changed()))
+                    # state_token() is the source's change token (mtime /
+                    # version / digest); it warns on a bool that can't track.
+                    dynamic_state_parts.append(str(ds.state_token()))
         if dynamic_state_parts:
             return hashlib.sha256(":".join(sorted(dynamic_state_parts)).encode('utf-8')).hexdigest()
         return ""
@@ -1653,10 +1652,7 @@ class Cash:
 
                 for ds in dss:
                     if isinstance(ds, DataSource):
-                        if hasattr(ds, '_get_mtime'):
-                            dynamic_state_parts.append(str(ds._get_mtime()))
-                        else:
-                            dynamic_state_parts.append(str(ds.has_changed()))
+                        dynamic_state_parts.append(str(ds.state_token()))
             except (OSError, TypeError, ValueError, AttributeError, RuntimeError) as e:
                 self._warn_once(
                     CashCacheIneffectiveWarning,
