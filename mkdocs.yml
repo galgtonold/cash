@@ -1,5 +1,5 @@
 site_name: Cash Documentation
-site_url: https://cash-lib.readthedocs.io/
+site_url: https://cash.readthedocs.io/
 site_description: Smart caching library for Python with Jupyter notebook integration
 site_author: Cash Contributors
 repo_url: https://github.com/galgtonold/cash

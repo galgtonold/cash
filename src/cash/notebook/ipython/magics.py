@@ -432,7 +432,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 "\n"
                 "Topics: %cash_help badge | debug | collab | inspect\n"
                 "\n"
-                "Docs: https://cash-lib.readthedocs.io/"
+                "Docs: https://cash.readthedocs.io/"
             )
 
     @line_magic
