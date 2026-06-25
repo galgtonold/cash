@@ -1005,6 +1005,13 @@ class Cash:
                 self._validate_ttl(metadata, ttl)
                 if not self._auto_file_deps_fresh(metadata):
                     return _CACHE_MISS
+                # If this hit happens *inside* another cached function's
+                # computation, replay the files this entry depends on into the
+                # enclosing tracker, so the outer function records them too.
+                # Without this, a dependency that was already cached before the
+                # consumer's first run hides its file deps behind a cache hit
+                # and the consumer never invalidates when that file changes.
+                self._propagate_file_deps_to_active_tracker(metadata)
                 self._log_decorator_call(
                     func_name, cache_hit=True,
                     execution_time=time.perf_counter() - call_start,
@@ -1017,6 +1024,24 @@ class Cash:
             except (TypeError, KeyError) as e:
                 self._warn_metadata_invalid(func_name, e)
         return _CACHE_MISS
+
+    @staticmethod
+    def _propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
+        """Register this entry's recorded file deps with the enclosing
+        ``FileAccessTracker`` (if any), so a cached function that calls this
+        one on a *hit* still inherits its file dependencies. Best-effort: any
+        failure (no tracker active, import issue) is silently ignored."""
+        snap = getattr(metadata, "auto_file_deps", None)
+        if not snap:
+            return
+        try:
+            from cash.notebook.file_tracker import _active_tracker
+            tracker = _active_tracker.get()
+        except Exception:  # noqa: BLE001 - tracking is best-effort
+            return
+        if tracker is not None:
+            for path in snap:
+                tracker._add_tracked(path)
 
     @staticmethod
     def _auto_file_deps_fresh(metadata: CacheMetadata) -> bool:
@@ -1105,7 +1130,7 @@ class Cash:
                 # mtime/size change forces a recompute.
                 from cash.notebook.file_tracker import FileAccessTracker
                 from cash.notebook.file_dep_snapshot import snapshot_file_deps
-                tracker = FileAccessTracker(getattr(func, '__globals__', None))
+                tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 with tracker:
                     res = func(*args, **kwargs)
                 accessed = tracker.get_accessed_files()
@@ -1261,7 +1286,7 @@ class Cash:
 
             from cash.notebook.file_tracker import FileAccessTracker
             from cash.notebook.file_dep_snapshot import snapshot_file_deps
-            tracker = FileAccessTracker(getattr(func, '__globals__', None))
+            tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
             with tracker:
                 res = await func(*args, **kwargs)
             accessed = tracker.get_accessed_files()

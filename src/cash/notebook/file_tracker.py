@@ -336,7 +336,7 @@ class FileAccessTracker:
     because the *output* of a statement is hashed directly, not the files it
     writes.
     """
-    def __init__(self, user_ns=None):
+    def __init__(self, user_ns=None, propagate_to_parent: bool = False):
         self.accessed_files = set()
         self.user_ns = user_ns or {}
         self.registry = FileDependencyRegistry()
@@ -344,6 +344,14 @@ class FileAccessTracker:
         # re-entry of the same instance (an async function that reuses
         # a tracker across awaits, or a sync caller using `with` twice).
         self._token_stack: list[contextvars.Token] = []
+        # When True, a file read in this block also registers with the
+        # enclosing tracker(s) - so an OUTER cached function records the files
+        # its (cold) inner cached calls read, otherwise the outer entry would
+        # never invalidate when that file changes (file deps don't propagate
+        # through depends_on). The decorator sets this; manual `with
+        # FileAccessTracker()` nesting stays isolated by default.
+        self._propagate_to_parent = propagate_to_parent
+        self._parent_stack: list[Optional["FileAccessTracker"]] = []
 
     def __enter__(self):
         # Install permanent dispatcher patches. Each (module/dict, name)
@@ -356,12 +364,17 @@ class FileAccessTracker:
         with _install_lock:
             self._apply_patches()
         _ensure_import_hook_installed()
+        # Capture the enclosing tracker (if any) BEFORE we become active, so a
+        # read inside this block also registers with the outer tracker(s).
+        self._parent_stack.append(_active_tracker.get())
         self._token_stack.append(_active_tracker.set(self))
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         if self._token_stack:
             _active_tracker.reset(self._token_stack.pop())
+        if self._parent_stack:
+            self._parent_stack.pop()
 
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
@@ -372,10 +385,21 @@ class FileAccessTracker:
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls
             abs_path = normalize_path(os.path.realpath(str(path)))
-            self.accessed_files.add(abs_path)
-            # logger.debug(f"[TRACKER] Tracked: {abs_path}")
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
+            return
+        self._add_tracked(abs_path)
+
+    def _add_tracked(self, abs_path: str) -> None:
+        """Record *abs_path* on this tracker and, when propagation is enabled,
+        on the enclosing tracker(s) too - so nested cached reads count as the
+        outer cached function's deps. Manual tracker nesting stays isolated."""
+        self.accessed_files.add(abs_path)
+        if not self._propagate_to_parent:
+            return
+        parent = self._parent_stack[-1] if self._parent_stack else None
+        if parent is not None and parent is not self:
+            parent._add_tracked(abs_path)
 
     def _apply_patches(self):
         # 1. Patch Builtins
