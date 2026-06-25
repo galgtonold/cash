@@ -255,6 +255,24 @@ def configure(**overrides: Any) -> None:
         c._backend = build_backend_from_config(c.config)
 
 
+def cleanup(max_age: int | None = None) -> int:
+    """Remove expired entries from the default ``Cash`` singleton's backend.
+
+    Module-level convenience so the documented ``cash.cleanup()`` call works
+    without constructing a ``Cash`` instance yourself — it proxies to
+    :meth:`Cash.cleanup` on the global singleton.
+
+    Args:
+        max_age: If given, also remove entries older than *max_age* seconds,
+            regardless of their stored TTL. ``None`` (default) removes only
+            entries past their own TTL.
+
+    Returns:
+        Number of entries removed.
+    """
+    return _get_global_cash().cleanup(max_age)
+
+
 def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
     """Decide whether *changed* config fields would change the active stack.
 
@@ -317,6 +335,7 @@ __all__ = [
     "register_hasher",
     "reset_session",
     "configure",
+    "cleanup",
     # Purity declarations (stable)
     "pure",
     "stateful",
