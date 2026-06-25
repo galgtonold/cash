@@ -12,6 +12,10 @@ TABLE = {"a": 1, "b": 2}         # never written -> constant
 LIMIT = 100                      # constant int
 COUNTER = 0                      # reassigned via `global` -> footgun
 
+REGISTRY = {}                    # populated at import time (top-level) only...
+for _name in ("alpha", "beta"):
+    REGISTRY[_name] = len(_name)  # ...so it is constant during runtime -> no flag
+
 
 def set_rate(r):
     CONFIG["rate"] = r           # in-place mutation of a global
@@ -36,6 +40,11 @@ def price(amount):
 @c.cache
 def lookup(k):
     return TABLE[k] * LIMIT                   # reads constants -> no flag
+
+
+@c.cache
+def from_registry(k):
+    return REGISTRY[k]                        # reads import-time-only REGISTRY -> no flag
 
 
 @c.cache

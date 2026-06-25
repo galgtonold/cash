@@ -29,10 +29,17 @@ def _global_flags(func):
 
 def test_scanner_finds_only_modified_globals():
     modified = _module_modified_globals(gf)
-    assert "CONFIG" in modified           # in-place mutated
+    assert "CONFIG" in modified           # in-place mutated (inside a function)
     assert "COUNTER" in modified          # reassigned via `global`
     assert "TABLE" not in modified        # constant (local shadow doesn't count)
     assert "LIMIT" not in modified        # constant int
+    assert "REGISTRY" not in modified     # mutated only at import time (top level)
+
+
+def test_import_time_only_global_not_flagged():
+    """A global populated at module top level (import-time init) but never
+    mutated inside a function is constant at runtime - reading it is safe."""
+    assert _global_flags(gf.from_registry) == set()
 
 
 def test_reads_mutated_global_is_flagged():

@@ -916,17 +916,31 @@ def _function_locals(func_node: ast.AST) -> frozenset[str]:
 
 
 class _GlobalMutationScanner(ast.NodeVisitor):
-    """Collects module-global names that are reassigned or mutated anywhere in a
-    module, scope-aware so a function's local that merely shares a name with a
-    global is not mistaken for a mutation of that global."""
+    """Collects module-global names that are reassigned or mutated *inside a
+    function body* (i.e. reachable at runtime), scope-aware so a function's
+    local that merely shares a name with a global is not mistaken for a
+    mutation of that global.
+
+    Mutations at module top level are ignored on purpose: they run once at
+    import, before any cached function is called, so the global is effectively
+    constant during runtime and reading it is safe. This avoids flagging
+    registries/config dicts that are populated at import and then never change.
+    (A mutation inside a function that only ever runs at import - e.g. a
+    decorator body - is still flagged conservatively, since we cannot prove
+    statically that the function never runs at call time. A false flag is a
+    harmless warning; a missed one would be a silent stale cache.)"""
 
     def __init__(self) -> None:
         self.modified: set[str] = set()
         self._locals_stack: list[frozenset[str]] = []  # enclosing function locals
 
+    @property
+    def _in_function(self) -> bool:
+        return bool(self._locals_stack)
+
     def _is_global(self, name: str) -> bool:
-        # Module scope (empty stack): bare names are globals. Inside a function,
-        # a name is the global only if it isn't shadowed by a local there.
+        # Inside a function, a name is the global only if it isn't shadowed by
+        # a local there. (Only consulted when _in_function is True.)
         return all(name not in loc for loc in self._locals_stack)
 
     def visit_FunctionDef(self, node):  # noqa: N802
@@ -942,13 +956,15 @@ class _GlobalMutationScanner(ast.NodeVisitor):
         self._locals_stack.pop()
 
     def visit_Global(self, node):  # noqa: N802
-        # An explicit `global G` is intent to rebind the module global.
-        self.modified.update(node.names)
+        # An explicit `global G` inside a function is intent to rebind the
+        # module global at runtime. (`global` at module scope is a no-op.)
+        if self._in_function:
+            self.modified.update(node.names)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node):  # noqa: N802
         base = _target_root_name(node.target)
-        if base and self._is_global(base):
+        if self._in_function and base and self._is_global(base):
             self.modified.add(base)
         self.generic_visit(node)
 
@@ -956,20 +972,21 @@ class _GlobalMutationScanner(ast.NodeVisitor):
         for t in node.targets:
             if isinstance(t, (ast.Subscript, ast.Attribute)):
                 base = _target_root_name(t)
-                if base and self._is_global(base):
+                if self._in_function and base and self._is_global(base):
                     self.modified.add(base)
         self.generic_visit(node)
 
     def visit_Delete(self, node):  # noqa: N802
         for t in node.targets:
             base = t.id if isinstance(t, ast.Name) else _target_root_name(t)
-            if base and self._is_global(base):
+            if self._in_function and base and self._is_global(base):
                 self.modified.add(base)
         self.generic_visit(node)
 
     def visit_Call(self, node):  # noqa: N802
         f = node.func
-        if (isinstance(f, ast.Attribute) and f.attr in _WRITE_METHODS
+        if (self._in_function and isinstance(f, ast.Attribute)
+                and f.attr in _WRITE_METHODS
                 and isinstance(f.value, ast.Name) and self._is_global(f.value.id)):
             self.modified.add(f.value.id)
         self.generic_visit(node)
