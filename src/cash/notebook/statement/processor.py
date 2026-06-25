@@ -484,7 +484,7 @@ class StatementProcessor:
         if self.debug:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
-        if cached_data:
+        if cached_data and not self._import_needs_reexecution(_parsed_tree):
             hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
             if hit_result is not None:
                 return hit_result
@@ -1352,6 +1352,24 @@ class StatementProcessor:
         logger.debug("[CACHE DEBUG] Inputs: %s", inputs)
         logger.debug("[CACHE DEBUG] Cache hit: %s", cached_data is not None)
         logger.debug("[TIMING] Analysis: %.1fms | Hash: %.1fms | Lookup: %.1fms", analysis_time*1000, hash_time*1000, cache_check_time*1000)
+
+    def _import_needs_reexecution(self, tree: ast.Module | None) -> bool:
+        """True for a pure-import statement whose bound name(s) are absent from
+        ``user_ns``.
+
+        A cache hit for an import would take the restore path, but restoring
+        cannot rebind a *module* object (modules aren't cacheable values). On a
+        fresh kernel (e.g. after a restart) the bound name is therefore missing,
+        and a later statement in the same cell that uses it raises ``NameError``.
+        Forcing re-execution re-imports and rebinds the name (cheap, idempotent)
+        and re-stores the entry, so lineage tracking is preserved.
+        """
+        if tree is None:
+            return False
+        names = self._get_redundant_import_names(tree)
+        if not names:
+            return False
+        return not all(name in self.shell.user_ns for name in names)
 
     def _get_redundant_import_names(self, tree: ast.AST) -> set[str] | None:
         """
