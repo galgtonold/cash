@@ -126,6 +126,53 @@ def test_set_in_object_order_independent_in_process():
     assert k1 != k3          # different set -> different key
 
 
+def test_set_inside_slots_object_is_canonical_across_hash_seeds():
+    """A set inside a __slots__ object (no __dict__) must also hash
+    deterministically across processes - slot state is canonicalised too."""
+    code = (
+        "import os, tempfile\n"
+        "from cash import Cash, FileBackend\n"
+        "class Cfg:\n"
+        "    __slots__ = ('name', 'tags')\n"
+        "    def __init__(self, name, tags):\n"
+        "        self.name = name\n"
+        "        self.tags = tags\n"
+        "c = Cash(backend=FileBackend(cache_dir=tempfile.mkdtemp()))\n"
+        "@c.cache\n"
+        "def f(cfg):\n    return 1\n"
+        "cfg = Cfg('a', frozenset({'x','y','z','p','q','r','s','t'}))\n"
+        "print(f.explain(cfg).cache_key)\n"
+    )
+
+    def run(seed):
+        env = dict(os.environ, PYTHONHASHSEED=seed)
+        out = subprocess.run([sys.executable, "-c", code], capture_output=True,
+                             text=True, env=env)
+        return out.stdout.strip().splitlines()[-1]
+
+    assert run("0") == run("1") == run("271")
+
+
+def test_set_in_slots_object_order_independent_in_process():
+    c = Cash(backend=FileBackend(cache_dir=tempfile.mkdtemp()))
+
+    class Holder:
+        __slots__ = ("tags",)
+
+        def __init__(self, tags):
+            self.tags = tags
+
+    @c.cache
+    def f(h):
+        return 1
+
+    k1 = f.explain(Holder({"a", "b", "c"})).cache_key
+    k2 = f.explain(Holder({"c", "b", "a"})).cache_key
+    k3 = f.explain(Holder({"a", "b", "d"})).cache_key
+    assert k1 == k2          # equal set, different order -> same key
+    assert k1 != k3          # different set -> different key
+
+
 def test_frozenset_arg_stable_and_distinct_from_set():
     c = Cash(backend=FileBackend(cache_dir=tempfile.mkdtemp()))
 

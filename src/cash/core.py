@@ -60,6 +60,31 @@ P = ParamSpec("P")
 T = TypeVar("T")
 
 
+def _object_state(value: Any) -> dict:
+    """Return an object's instance state as a name -> value dict, covering both
+    ``__dict__`` and ``__slots__`` (collected across the MRO so slots declared
+    on base classes are included). Builtins and leaf values yield ``{}``. Used
+    so set-canonicalisation reaches a set buried inside a ``__slots__`` object,
+    not just a ``__dict__``-backed one.
+    """
+    state: dict = {}
+    obj_dict = getattr(value, "__dict__", None)
+    if isinstance(obj_dict, dict):
+        state.update(obj_dict)
+    for klass in type(value).__mro__:
+        slots = getattr(klass, "__slots__", ())
+        if isinstance(slots, str):
+            slots = (slots,)
+        for name in slots:
+            if name in ("__dict__", "__weakref__") or name in state:
+                continue
+            try:
+                state[name] = getattr(value, name)
+            except AttributeError:
+                pass  # slot declared but never assigned
+    return state
+
+
 def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
     """Rewrite *value* into a form whose pickled bytes are independent of
     set/dict iteration order (which depends on PYTHONHASHSEED for str/bytes
@@ -86,12 +111,12 @@ def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
         return ("__cash_list__", tuple(_stable_key_repr(v, _depth + 1) for v in value))
     if isinstance(value, tuple):
         return tuple(_stable_key_repr(v, _depth + 1) for v in value)
-    obj_dict = getattr(value, "__dict__", None)
-    if isinstance(obj_dict, dict) and obj_dict:
-        # Arbitrary object (e.g. a dataclass) - canonicalise its instance state,
-        # tagged with the type so two different types don't collide.
+    obj_state = _object_state(value)
+    if obj_state:
+        # Arbitrary object (dataclass, __slots__ class, ...) - canonicalise its
+        # instance state, tagged with the type so two types don't collide.
         return ("__cash_obj__", type(value).__qualname__,
-                _stable_key_repr(dict(obj_dict), _depth + 1))
+                _stable_key_repr(obj_state, _depth + 1))
     return value
 
 
@@ -109,9 +134,9 @@ def _contains_set(value: Any, _depth: int = 0) -> bool:
         )
     if isinstance(value, (list, tuple)):
         return any(_contains_set(v, _depth + 1) for v in value)
-    obj_dict = getattr(value, "__dict__", None)
-    if isinstance(obj_dict, dict):
-        return any(_contains_set(v, _depth + 1) for v in obj_dict.values())
+    obj_state = _object_state(value)
+    if obj_state:
+        return any(_contains_set(v, _depth + 1) for v in obj_state.values())
     return False
 
 __all__ = ["Cash", "CacheExplanation"]
