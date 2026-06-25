@@ -62,20 +62,36 @@ def test_every_fixture_renders():
         assert "c3-wrap" in html, f"fixture {name!r} missing badge wrapper class"
 
 
-def test_render_emits_unique_checkbox_ids():
+def test_render_emits_unique_checkbox_ids(monkeypatch):
     """Multi-row badges must have unique rx-* IDs.
 
     The renderer's per-row <details> toggling depends on every <input id="rx-X">
     being unique within the badge. A deterministic-UUID stub that collides on
     the 10-char slice the renderer uses would produce invalid HTML.
+
+    We patch ``uuid.uuid4`` with a low-entropy sequential stub (so the
+    assertion is reproducible) but do it via ``monkeypatch`` so it is restored
+    after the test. Importing ``scripts.build_badge_examples`` for its patch
+    side-effect (as this test used to) leaked the stub process-wide and left
+    every later badge render on the same xdist worker using deterministic IDs -
+    a cross-test contamination flake.
     """
+    import itertools
+    import uuid
+
+    class _DetUUID:
+        __slots__ = ("hex",)
+
+        def __init__(self, n: int) -> None:
+            self.hex = f"{n:010x}" + "0" * 22
+
+    _counter = itertools.count(1)
+    monkeypatch.setattr(uuid, "uuid4", lambda: _DetUUID(next(_counter)))
+
     sys.path.insert(0, str(REPO_ROOT))
     try:
         from cash.notebook.badge_renderer.renderers.html import render_html
         from cash.notebook.badge_renderer.view_builder import build_interactive_badge
-        # Patch uuid in the same way the build script does, then build a
-        # 3-row fixture that exercises multiple _uid() call sites.
-        import scripts.build_badge_examples  # noqa: F401  — applies the patch
     finally:
         sys.path.pop(0)
 
