@@ -1969,38 +1969,52 @@ class Cash:
         call_start: float,
         compute_and_store: Callable[[], Any],
     ) -> Any:
-        """Compute with double-checked locking; falls back to unlocked on error."""
+        """Compute with double-checked locking; falls back to unlocked on error.
+
+        Acquiring the lock is best-effort: if *any* backend raises while taking
+        it (a Redis ``LockError`` on contention/timeout, a dropped connection,
+        an OSError on a file lock), we degrade to an unlocked compute rather than
+        crash the user's call. Acquisition, compute, and release are separated so
+        a release failure can't re-run the compute, and a compute exception
+        propagates normally (it is not mistaken for a lock failure)."""
+        lock_cm = self.backend.lock(cache_key)
         try:
-            with self.backend.lock(cache_key):
-                raw_locked_metadata, locked_data = self.backend.get(cache_key)
-                locked_metadata = (
-                    CacheMetadata.from_dict(raw_locked_metadata)
-                    if raw_locked_metadata is not None else None
-                )
-                # Use metadata presence (not data presence) as the
-                # existence test - see _try_get_cached for rationale.
-                if locked_metadata is not None:
-                    try:
-                        self._validate_ttl(locked_metadata, ttl)
-                        self._attach_lineage(
-                            locked_data, cache_key, locked_metadata.auto_file_deps,
-                            ttl=ttl,
-                        )
-                        self._log_decorator_call(
-                            func_name, cache_hit=True,
-                            execution_time=time.perf_counter() - call_start,
-                            args_hash=args_hash, cache_key=cache_key,
-                            time_saved=locked_metadata.execution_time or 0.0,
-                        )
-                        return self._wrap_iterator_hit(cache_key, locked_metadata, locked_data)
-                    except CacheExpiredError:
-                        pass
-                    except (TypeError, KeyError) as e:
-                        self._warn_metadata_invalid(func_name, e, stacklevel=6)
-                return compute_and_store()
-        except (OSError, RuntimeError, TimeoutError) as e:
+            lock_cm.__enter__()
+        except Exception as e:  # noqa: BLE001 - any acquisition failure -> unlocked
             self._warn_lock_failed(func_name, e, stacklevel=4)
-        return compute_and_store()
+            return compute_and_store()
+        try:
+            raw_locked_metadata, locked_data = self.backend.get(cache_key)
+            locked_metadata = (
+                CacheMetadata.from_dict(raw_locked_metadata)
+                if raw_locked_metadata is not None else None
+            )
+            # Use metadata presence (not data presence) as the existence test -
+            # see _try_get_cached for rationale.
+            if locked_metadata is not None:
+                try:
+                    self._validate_ttl(locked_metadata, ttl)
+                    self._attach_lineage(
+                        locked_data, cache_key, locked_metadata.auto_file_deps,
+                        ttl=ttl,
+                    )
+                    self._log_decorator_call(
+                        func_name, cache_hit=True,
+                        execution_time=time.perf_counter() - call_start,
+                        args_hash=args_hash, cache_key=cache_key,
+                        time_saved=locked_metadata.execution_time or 0.0,
+                    )
+                    return self._wrap_iterator_hit(cache_key, locked_metadata, locked_data)
+                except CacheExpiredError:
+                    pass
+                except (TypeError, KeyError) as e:
+                    self._warn_metadata_invalid(func_name, e, stacklevel=6)
+            return compute_and_store()
+        finally:
+            try:
+                lock_cm.__exit__(None, None, None)
+            except Exception:  # noqa: BLE001 - releasing failed; compute already done
+                logger.debug("lock release failed for %s", func_name)
 
     def _compute_cache_key(self, func_name: str, state_hash: str, dynamic_hash: str, args_hash: str) -> str:
         return f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"
