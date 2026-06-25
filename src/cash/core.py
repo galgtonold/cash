@@ -55,6 +55,61 @@ _CACHE_MISS = object()
 P = ParamSpec("P")
 T = TypeVar("T")
 
+
+def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
+    """Rewrite *value* into a form whose pickled bytes are independent of
+    set/dict iteration order (which depends on PYTHONHASHSEED for str/bytes
+    elements). Sets/frozensets and dict items are sorted by their pickled
+    element bytes; lists/tuples keep order. Recurses into arbitrary objects via
+    their ``__dict__`` so a set buried inside a dataclass is canonicalised too.
+    Leaf values pass through unchanged.
+    """
+    if _depth > 50:
+        return value
+    if isinstance(value, (set, frozenset)):
+        items = [_stable_key_repr(v, _depth + 1) for v in value]
+        items.sort(key=lambda x: pickle.dumps(x, protocol=4))
+        tag = "__cash_frozenset__" if isinstance(value, frozenset) else "__cash_set__"
+        return (tag, tuple(items))
+    if isinstance(value, dict):
+        items = [
+            (_stable_key_repr(k, _depth + 1), _stable_key_repr(v, _depth + 1))
+            for k, v in value.items()
+        ]
+        items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
+        return ("__cash_dict__", tuple(items))
+    if isinstance(value, list):
+        return ("__cash_list__", tuple(_stable_key_repr(v, _depth + 1) for v in value))
+    if isinstance(value, tuple):
+        return tuple(_stable_key_repr(v, _depth + 1) for v in value)
+    obj_dict = getattr(value, "__dict__", None)
+    if isinstance(obj_dict, dict) and obj_dict:
+        # Arbitrary object (e.g. a dataclass) - canonicalise its instance state,
+        # tagged with the type so two different types don't collide.
+        return ("__cash_obj__", type(value).__qualname__,
+                _stable_key_repr(dict(obj_dict), _depth + 1))
+    return value
+
+
+def _contains_set(value: Any, _depth: int = 0) -> bool:
+    """True if *value* contains a set/frozenset anywhere (recursively, including
+    inside objects). Gates the canonicalisation so ordinary args are untouched."""
+    if _depth > 50:
+        return False
+    if isinstance(value, (set, frozenset)):
+        return True
+    if isinstance(value, dict):
+        return any(
+            _contains_set(k, _depth + 1) or _contains_set(v, _depth + 1)
+            for k, v in value.items()
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_contains_set(v, _depth + 1) for v in value)
+    obj_dict = getattr(value, "__dict__", None)
+    if isinstance(obj_dict, dict):
+        return any(_contains_set(v, _depth + 1) for v in obj_dict.values())
+    return False
+
 __all__ = ["Cash", "CacheExplanation"]
 
 
@@ -1760,15 +1815,15 @@ class Cash:
             hashed_kwargs = {k: get_arg_hash(v) for k, v in kwargs.items()}
 
             payload: Any = (hashed_args, hashed_kwargs)
-            # A set/frozenset pickles in iteration order, which depends on
-            # PYTHONHASHSEED for str/bytes elements - so the same set argument
-            # produces a DIFFERENT key in every process, silently breaking
-            # cross-process cache hits (and even in-process matching of equal
-            # sets built in different orders). Canonicalise to a deterministic,
-            # order-independent form, but only when a set is actually present so
-            # all other argument shapes keep byte-identical keys.
-            if self._contains_set(payload):
-                payload = self._stable_key_repr(payload)
+            # A set/frozenset pickles in PYTHONHASHSEED-dependent iteration
+            # order, so the same set argument hashes differently in every
+            # process, silently breaking cross-process cache hits. Canonicalise
+            # to a deterministic, order-independent form (recursing into objects
+            # so a set inside a dataclass is covered too) - but only when a set
+            # is actually present, so all other argument shapes keep
+            # byte-identical keys.
+            if _contains_set(payload):
+                payload = _stable_key_repr(payload)
             args_bytes = pickle.dumps(payload)
             return hashlib.sha256(args_bytes).hexdigest()
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
@@ -1778,49 +1833,6 @@ class Cash:
             # double-warn.
             logger.debug("Could not serialize arguments for %s: %s", func_name, e)
             return None
-
-    @staticmethod
-    def _contains_set(value: Any, _depth: int = 0) -> bool:
-        """True if *value* contains a set/frozenset anywhere (recursively).
-        Used to gate the set-canonicalisation so ordinary args are untouched."""
-        if _depth > 50:
-            return False
-        if isinstance(value, (set, frozenset)):
-            return True
-        if isinstance(value, dict):
-            return any(
-                Cash._contains_set(k, _depth + 1) or Cash._contains_set(v, _depth + 1)
-                for k, v in value.items()
-            )
-        if isinstance(value, (list, tuple)):
-            return any(Cash._contains_set(v, _depth + 1) for v in value)
-        return False
-
-    @staticmethod
-    def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
-        """Rewrite *value* into a form whose pickled bytes are independent of
-        set/dict iteration order. Sets/frozensets and dict items are sorted by
-        their pickled element bytes (deterministic for any element type);
-        lists/tuples keep order. Leaf values pass through unchanged."""
-        if _depth > 50:
-            return value
-        if isinstance(value, (set, frozenset)):
-            items = [Cash._stable_key_repr(v, _depth + 1) for v in value]
-            items.sort(key=lambda x: pickle.dumps(x, protocol=4))
-            tag = "__cash_frozenset__" if isinstance(value, frozenset) else "__cash_set__"
-            return (tag, tuple(items))
-        if isinstance(value, dict):
-            items = [
-                (Cash._stable_key_repr(k, _depth + 1), Cash._stable_key_repr(v, _depth + 1))
-                for k, v in value.items()
-            ]
-            items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
-            return ("__cash_dict__", tuple(items))
-        if isinstance(value, list):
-            return ("__cash_list__", tuple(Cash._stable_key_repr(v, _depth + 1) for v in value))
-        if isinstance(value, tuple):
-            return tuple(Cash._stable_key_repr(v, _depth + 1) for v in value)
-        return value
 
     @staticmethod
     def _try_hash_pandas(value: Any, type_name: str) -> str | None:
