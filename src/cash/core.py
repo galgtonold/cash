@@ -992,7 +992,12 @@ class Cash:
                 self._validate_ttl(metadata, ttl)
                 if not self._auto_file_deps_fresh(metadata):
                     return _CACHE_MISS
-                self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
+                self._log_decorator_call(
+                    func_name, cache_hit=True,
+                    execution_time=time.perf_counter() - call_start,
+                    args_hash=args_hash, cache_key=cache_key,
+                    time_saved=metadata.execution_time or 0.0,
+                )
                 return cached_data
             except CacheExpiredError:
                 pass
@@ -1373,7 +1378,7 @@ class Cash:
                     if call['func_name'] == func_name:
                         if call['cache_hit']:
                             _stats['hits'] += 1
-                            _stats['total_time_saved'] += call['execution_time']
+                            _stats['total_time_saved'] += call.get('time_saved', 0.0)
                         else:
                             _stats['misses'] += 1
                         break
@@ -1695,7 +1700,12 @@ class Cash:
                 if locked_metadata is not None:
                     try:
                         self._validate_ttl(locked_metadata, ttl)
-                        self._log_decorator_call(func_name, cache_hit=True, execution_time=time.perf_counter() - call_start, args_hash=args_hash, cache_key=cache_key)
+                        self._log_decorator_call(
+                            func_name, cache_hit=True,
+                            execution_time=time.perf_counter() - call_start,
+                            args_hash=args_hash, cache_key=cache_key,
+                            time_saved=locked_metadata.execution_time or 0.0,
+                        )
                         return self._wrap_iterator_hit(cache_key, locked_metadata, locked_data)
                     except CacheExpiredError:
                         pass
@@ -1769,17 +1779,28 @@ class Cash:
         execution_time: float,
         args_hash: str,
         cache_key: str,
+        time_saved: float = 0.0,
     ) -> None:
         """Record a decorator call event for notebook integration.
 
         Thread-safe: uses a lock to protect concurrent appends.
         The notebook ``StatementProcessor`` drains this log after each
         statement execution to include decorator call metrics in the badge.
+
+        ``execution_time`` is the wall-time of *this* operation - a lookup on a
+        hit, the compute on a miss. ``time_saved`` is the compute a hit
+        *avoided* (the originally-measured execution time stored with the
+        cached entry), and 0.0 on a miss. They are distinct: a hit's
+        ``execution_time`` is microseconds, but its ``time_saved`` is the full
+        compute it stood in for. ``cache_info()['total_time_saved']`` sums the
+        latter - summing ``execution_time`` (the old behaviour) under-reported
+        savings by orders of magnitude.
         """
         entry = {
             'func_name': func_name,
             'cache_hit': cache_hit,
             'execution_time': execution_time,
+            'time_saved': time_saved,
             'args_hash': args_hash,
             'cache_key': cache_key,
             'timestamp': time.time(),
