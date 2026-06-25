@@ -484,6 +484,13 @@ it flags:
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript
   assignment, augmented-assign, and write-methods (`.append`, `.update`,
   …) on a name that could reach caller-visible state
+- **Reads of a *mutated* module global** — if the function reads a
+  module-level variable that is reassigned or mutated somewhere in its
+  module, the cached result won't reflect changes to it. Only globals that
+  are actually written are flagged — a constant (a lookup/dispatch table you
+  never modify) is fine. Fix by passing the value as an argument or declaring
+  it via `depends_on=`/`dynamic_depends_on=`. The detection is scope-aware: a
+  local that merely shares a name with a global doesn't trip it.
 
 In-place mutation of a **fresh local** is *not* flagged. A name bound only
 to a freshly-allocated mutable object — a list/dict/set literal or

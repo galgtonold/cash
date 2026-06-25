@@ -70,12 +70,14 @@ __all__ = [
     "ISSUE_DYNAMIC_PATTERN",
     "ISSUE_DISCARDED_CALL",
     "ISSUE_SCOPE_MUTATION",
+    "ISSUE_MUTABLE_GLOBAL",
 ]
 
 ISSUE_IMPURE_CALL = "impure_call"
 ISSUE_DYNAMIC_PATTERN = "dynamic_pattern"
 ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
+ISSUE_MUTABLE_GLOBAL = "mutable_global"
 
 
 @dataclass(frozen=True)
@@ -243,7 +245,7 @@ class _PurityVisitor(ast.NodeVisitor):
 
     __slots__ = (
         "issues", "called_callable_nodes", "_param_names",
-        "_qualname", "_line_offset", "_local_owned",
+        "_qualname", "_line_offset", "_local_owned", "read_names",
     )
 
     def __init__(self, qualname: str, param_names: frozenset[str],
@@ -251,6 +253,9 @@ class _PurityVisitor(ast.NodeVisitor):
                  local_owned: frozenset[str] = frozenset()) -> None:
         self.issues: list[PurityIssue] = []
         self.called_callable_nodes: list[ast.AST] = []
+        # Bare names read (Load context) in this body - used to detect reads of
+        # mutable module globals.
+        self.read_names: set[str] = set()
         self._param_names = param_names
         self._qualname = qualname
         # When source comes from inspect.getsource on a method, line
@@ -262,6 +267,11 @@ class _PurityVisitor(ast.NodeVisitor):
         self._local_owned = local_owned
 
     # --- impure / dynamic / called-name detection on Call nodes ---
+
+    def visit_Name(self, node: ast.Name) -> None:  # noqa: N802
+        if isinstance(node.ctx, ast.Load):
+            self.read_names.add(node.id)
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         self._record_call(node)
@@ -722,6 +732,14 @@ class PurityAnalyzer:
             visitor.visit(func_def)
             all_issues.extend(visitor.issues)
 
+            # Flag reads of module globals that are reassigned/mutated somewhere
+            # in the module - a silent staleness footgun (the cached result won't
+            # change when the global does). Constants (never written) are not
+            # flagged, so this stays quiet on dispatch tables / lookup maps.
+            self._flag_mutable_global_reads(
+                func, func_def, qualname, visitor.read_names, all_issues,
+            )
+
             if depth >= self._MAX_DEPTH:
                 continue
 
@@ -769,6 +787,47 @@ class PurityAnalyzer:
             opaque_callees=tuple(sorted(set(opaque))),
         )
 
+    def _flag_mutable_global_reads(
+        self,
+        func: Callable[..., Any],
+        func_def: ast.AST,
+        qualname: str,
+        read_names: set[str],
+        all_issues: list[PurityIssue],
+    ) -> None:
+        """Append an issue for each module global *func* reads that is
+        reassigned/mutated elsewhere in its module - the result would go stale
+        when that global changes. Reads of never-written globals (constants,
+        dispatch tables) are not flagged."""
+        if not read_names:
+            return
+        module = inspect.getmodule(func)
+        if module is None:
+            return
+        modified = _module_modified_globals(module)
+        if not modified:
+            return
+        module_ns = getattr(func, "__globals__", None) or {}
+        locals_ = _function_locals(func_def)
+        freevars = set(getattr(getattr(func, "__code__", None), "co_freevars", ()) or ())
+        own_name = getattr(func, "__name__", None)
+        candidates = (
+            read_names & modified
+        ) - locals_ - freevars - _PY_BUILTIN_NAMES
+        for name in sorted(candidates):
+            if name == own_name or name not in module_ns:
+                continue
+            all_issues.append(PurityIssue(
+                kind=ISSUE_MUTABLE_GLOBAL,
+                description=(
+                    f"reads module global {name!r} that is reassigned or mutated "
+                    f"elsewhere - cached results won't reflect changes to it; pass "
+                    f"it as an argument or declare it via depends_on"
+                ),
+                where=qualname,
+                line=0,
+            ))
+
 
 _global_analyzer: PurityAnalyzer | None = None
 _global_analyzer_lock = threading.Lock()
@@ -787,6 +846,160 @@ def get_analyzer() -> PurityAnalyzer:
         if _global_analyzer is None:
             _global_analyzer = PurityAnalyzer()
         return _global_analyzer
+
+
+import builtins as _builtins  # noqa: E402
+
+_PY_BUILTIN_NAMES = frozenset(dir(_builtins))
+_MODULE_MOD_GLOBALS_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _target_root_name(node: ast.AST) -> str | None:
+    """Root ``Name`` id of an Attribute/Subscript chain (``a.b[c]`` -> ``a``)."""
+    cur = node
+    while isinstance(cur, (ast.Attribute, ast.Subscript)):
+        cur = cur.value
+    return cur.id if isinstance(cur, ast.Name) else None
+
+
+def _collect_bound_names(target: ast.AST, out: set[str]) -> None:
+    """Names bound by an assignment target (``Name`` / nested tuple/list)."""
+    if isinstance(target, ast.Name):
+        out.add(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List, ast.Starred)):
+        for el in ast.iter_child_nodes(target):
+            _collect_bound_names(el, out)
+
+
+def _function_locals(func_node: ast.AST) -> frozenset[str]:
+    """Names local to a function scope: parameters plus names it binds, minus
+    any declared ``global``/``nonlocal``. Does not descend into nested scopes."""
+    args = getattr(func_node, "args", None)
+    locs: set[str] = set()
+    decl: set[str] = set()
+    if args is not None:
+        for a in (args.posonlyargs + args.args + args.kwonlyargs):
+            locs.add(a.arg)
+        if args.vararg:
+            locs.add(args.vararg.arg)
+        if args.kwarg:
+            locs.add(args.kwarg.arg)
+    body = getattr(func_node, "body", [])
+    # A lambda's body is a single expression, not a statement list.
+    stack = list(body) if isinstance(body, list) else [body]
+    while stack:
+        n = stack.pop()
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            continue  # separate scope
+        if isinstance(n, (ast.Global, ast.Nonlocal)):
+            decl.update(n.names)
+        elif isinstance(n, ast.Assign):
+            for t in n.targets:
+                _collect_bound_names(t, locs)
+        elif isinstance(n, (ast.AnnAssign, ast.AugAssign, ast.NamedExpr)):
+            if isinstance(n.target, ast.Name):
+                locs.add(n.target.id)
+        elif isinstance(n, (ast.For, ast.AsyncFor)):
+            _collect_bound_names(n.target, locs)
+        elif isinstance(n, (ast.With, ast.AsyncWith)):
+            for item in n.items:
+                if item.optional_vars:
+                    _collect_bound_names(item.optional_vars, locs)
+        elif isinstance(n, (ast.Import, ast.ImportFrom)):
+            for al in n.names:
+                locs.add(al.asname or al.name.split(".")[0])
+        elif isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for child in ast.iter_child_nodes(n):
+            stack.append(child)
+    return frozenset(locs - decl)
+
+
+class _GlobalMutationScanner(ast.NodeVisitor):
+    """Collects module-global names that are reassigned or mutated anywhere in a
+    module, scope-aware so a function's local that merely shares a name with a
+    global is not mistaken for a mutation of that global."""
+
+    def __init__(self) -> None:
+        self.modified: set[str] = set()
+        self._locals_stack: list[frozenset[str]] = []  # enclosing function locals
+
+    def _is_global(self, name: str) -> bool:
+        # Module scope (empty stack): bare names are globals. Inside a function,
+        # a name is the global only if it isn't shadowed by a local there.
+        return all(name not in loc for loc in self._locals_stack)
+
+    def visit_FunctionDef(self, node):  # noqa: N802
+        self._locals_stack.append(_function_locals(node))
+        self.generic_visit(node)
+        self._locals_stack.pop()
+
+    visit_AsyncFunctionDef = visit_FunctionDef
+
+    def visit_Lambda(self, node):  # noqa: N802
+        self._locals_stack.append(_function_locals(node))
+        self.generic_visit(node)
+        self._locals_stack.pop()
+
+    def visit_Global(self, node):  # noqa: N802
+        # An explicit `global G` is intent to rebind the module global.
+        self.modified.update(node.names)
+        self.generic_visit(node)
+
+    def visit_AugAssign(self, node):  # noqa: N802
+        base = _target_root_name(node.target)
+        if base and self._is_global(base):
+            self.modified.add(base)
+        self.generic_visit(node)
+
+    def visit_Assign(self, node):  # noqa: N802
+        for t in node.targets:
+            if isinstance(t, (ast.Subscript, ast.Attribute)):
+                base = _target_root_name(t)
+                if base and self._is_global(base):
+                    self.modified.add(base)
+        self.generic_visit(node)
+
+    def visit_Delete(self, node):  # noqa: N802
+        for t in node.targets:
+            base = t.id if isinstance(t, ast.Name) else _target_root_name(t)
+            if base and self._is_global(base):
+                self.modified.add(base)
+        self.generic_visit(node)
+
+    def visit_Call(self, node):  # noqa: N802
+        f = node.func
+        if (isinstance(f, ast.Attribute) and f.attr in _WRITE_METHODS
+                and isinstance(f.value, ast.Name) and self._is_global(f.value.id)):
+            self.modified.add(f.value.id)
+        self.generic_visit(node)
+
+
+def _module_modified_globals(module: Any) -> frozenset[str]:
+    """Module-global names that are reassigned/mutated somewhere in *module*.
+
+    Cached per module name. Returns an empty set when the source can't be read
+    (so we never flag on incomplete information)."""
+    name = getattr(module, "__name__", None)
+    if not name:
+        return frozenset()
+    cached = _MODULE_MOD_GLOBALS_CACHE.get(name)
+    if cached is not None:
+        return cached
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(module)))
+    except (OSError, TypeError, SyntaxError, ValueError):
+        _MODULE_MOD_GLOBALS_CACHE[name] = frozenset()
+        return frozenset()
+    try:
+        scanner = _GlobalMutationScanner()
+        scanner.visit(tree)
+        result = frozenset(scanner.modified)
+    except Exception:  # noqa: BLE001 - analysis must never break caching
+        logger.debug("global-mutation scan failed for module %s", name)
+        result = frozenset()
+    _MODULE_MOD_GLOBALS_CACHE[name] = result
+    return result
 
 
 def _qualname_of(func: Callable[..., Any]) -> str:
