@@ -1057,6 +1057,14 @@ class Cash:
                 # consumer's first run hides its file deps behind a cache hit
                 # and the consumer never invalidates when that file changes.
                 self._propagate_file_deps_to_active_tracker(metadata)
+                # Re-attach the lineage hash to the restored value. It's a plain
+                # attribute that doesn't survive pickling, so a value restored
+                # from disk would otherwise lose it - and a downstream cached
+                # function would fall back to content-hashing under a DIFFERENT
+                # key than when the upstream was freshly computed, recomputing
+                # needlessly. The hash is deterministic from (cache_key,
+                # auto_file_deps), both available here.
+                self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps)
                 self._log_decorator_call(
                     func_name, cache_hit=True,
                     execution_time=time.perf_counter() - call_start,
@@ -1924,6 +1932,9 @@ class Cash:
                 if locked_metadata is not None:
                     try:
                         self._validate_ttl(locked_metadata, ttl)
+                        self._attach_lineage(
+                            locked_data, cache_key, locked_metadata.auto_file_deps,
+                        )
                         self._log_decorator_call(
                             func_name, cache_hit=True,
                             execution_time=time.perf_counter() - call_start,
