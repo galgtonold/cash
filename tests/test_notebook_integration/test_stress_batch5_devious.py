@@ -85,33 +85,60 @@ class TestContentHashEdgeCases:
         nb_runner.run_cell(1)
         assert "x=22" in nb_runner.get_output(1)
 
-    def test_134_self_assignment_chain(self, nb_runner):
-        """
-        df = df.method1()
-        df = df.method2()
-        df = df.method3()
+    # The self-assignment chain (df = df.sort(); df = df.reset(); df = df.rename())
+    # is NOT idempotent in plain Python: a second run re-sorts an already-renamed
+    # frame and raises KeyError. Cash's run-from-the-start guarantee must make it
+    # idempotent regardless of whether the individual statements were cached:
+    #   * everything-persisted: each statement restores from cache.
+    #   * default persistence: the sub-ms transforms fall below the cost floor and
+    #     are NOT cached, so the re-run must restore the variable to its safe base
+    #     and re-execute the cheap tail.
+    # Both must yield the same result on re-run.
+    _CHAIN_SETUP = "import pandas as pd\ndf = pd.DataFrame({'a': [3,1,2], 'b': [6,4,5]})"
+    _CHAIN = (
+        "df = df.sort_values('a')\n"
+        "df = df.reset_index(drop=True)\n"
+        "df = df.rename(columns={'a': 'x'})\n"
+        "print(df.columns.tolist())"
+    )
 
-        Each is a self-assignment. Re-running the cell must reproduce the same
-        result rather than re-transforming the already-transformed frame.
-
-        Note this cell is **not idempotent in plain Python**: a second run of
-        ``df = df.sort_values('a')`` after ``df`` was renamed to have column
-        ``x`` raises ``KeyError: 'a'``. Cash makes it idempotent by *restoring*
-        each statement's cached output instead of recomputing - but only when
-        the statements are actually cached. These transforms are sub-millisecond
-        on a 3-row frame, so the cost-aware floor would normally decline to
-        cache them (and the re-run would fall back to plain-Python recompute and
-        raise). ``%cash_persist on`` forces caching, which is exactly the
-        idempotence-via-caching property this test exercises.
-        """
+    def test_134_self_assignment_chain_persist_all(self, nb_runner):
+        """Everything persisted: each chain statement is cached, so the re-run
+        restores them and stays correct."""
         nb_runner.create_notebook([
-            "import pandas as pd\n%cash_persist on\ndf = pd.DataFrame({'a': [3,1,2], 'b': [6,4,5]})",
-            "df = df.sort_values('a')\ndf = df.reset_index(drop=True)\ndf = df.rename(columns={'a': 'x'})\nprint(df.columns.tolist())",
+            "%cash_persist on\n" + self._CHAIN_SETUP,
+            self._CHAIN,
         ])
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "['x', 'b']" in nb_runner.get_output(2)
-        # Re-run — cached statements restore, so this stays correct (no KeyError).
+        nb_runner.run_cell(2)
+        assert "['x', 'b']" in nb_runner.get_output(2)
+
+    @pytest.mark.xfail(
+        reason=(
+            "Target for the SSA-lineage fix. Self-referential statements collapse "
+            "onto one name in the tracking dicts (variable_sources / "
+            "executed_input_lineages keyed by name), so a re-run can't re-derive "
+            "the first statement's INPUT version (the safe base) and recomputes on "
+            "the already-transformed frame. The fix is to version reused names so "
+            "self-referential statements are tracked/restored like ordinary "
+            "variable chains - not to force-cache them (that wastes memory on cheap "
+            "large-df ops) nor to special-case the cell boundary."
+        ),
+        strict=False,
+    )
+    def test_134_self_assignment_chain_default_persistence(self, nb_runner):
+        """Default persistence: the sub-ms transforms are NOT cached (below the
+        cost floor), so the re-run must restore the safe base and re-execute the
+        cheap tail rather than recompute on the already-transformed frame."""
+        nb_runner.create_notebook([
+            self._CHAIN_SETUP,   # no %cash_persist
+            self._CHAIN,
+        ])
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+        assert "['x', 'b']" in nb_runner.get_output(2)
         nb_runner.run_cell(2)
         assert "['x', 'b']" in nb_runner.get_output(2)
 
