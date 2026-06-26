@@ -56,15 +56,30 @@ class Restorer:
         self._backend = backend
         self._tracking_state = tracking_state
         self._debug = debug
+        # Variables currently being restored, to break dependency cycles. A
+        # self-referential statement (``u = u * 0.99``) or mutually-referential
+        # multi-output one (``u, v = f(u, v)``) makes a variable depend on
+        # itself (directly or via a co-output), so naive recursive
+        # input-restoration would loop forever. The cached output already
+        # incorporates those inputs, so once a variable is mid-restore we skip
+        # re-entering it.
+        self._restoring: set[str] = set()
 
     def restore_variable(self, var_name: str) -> list[ProcessResult]:
         """Restore a single variable from cache, recursively ensuring dependencies first."""
+        if var_name in self._restoring:
+            # Cycle: this variable is already mid-restore further up the stack
+            # (a self- or mutually-referential statement). Its cached output
+            # already folds in the inputs, so don't re-enter - the outer call
+            # will restore the value once its inputs are current.
+            return []
         result = self._fetch_cached_payload(var_name)
         if result is None:
             return []
         metadata, cached_data = result
         restored_metrics: list[ProcessResult] = []
 
+        self._restoring.add(var_name)
         try:
             if not isinstance(cached_data, dict) or 'variables' not in cached_data:
                 if self._debug:
@@ -87,6 +102,8 @@ class Restorer:
             logger.debug("[STATE] Error restoring '%s': %s", var_name, e)
             if self._debug:
                 print(f"[STATE] Error restoring '{var_name}': {e}")
+        finally:
+            self._restoring.discard(var_name)
 
         return restored_metrics
 
