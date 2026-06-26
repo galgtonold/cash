@@ -97,15 +97,15 @@ class TestContentHashEdgeCases:
         Note this cell is **not idempotent in plain Python**: a second run of
         ``df = df.sort_values('a')`` after ``df`` was renamed to have column
         ``x`` raises ``KeyError: 'a'``. Cash makes it idempotent by *restoring*
-        each statement's cached output instead of recomputing. These statements
-        are self-referential (read and reassign ``df``), so cash caches them
-        unconditionally - bypassing the cost-aware floor that would otherwise
-        skip these sub-millisecond transforms - because recomputing them on a
-        re-run would read the already-transformed frame, breaking the
-        run-from-the-start equivalence guarantee.
+        each statement's cached output instead of recomputing - but only when
+        the statements are actually cached. These transforms are sub-millisecond
+        on a 3-row frame, so the cost-aware floor would normally decline to
+        cache them (and the re-run would fall back to plain-Python recompute and
+        raise). ``%cash_persist on`` forces caching, which is exactly the
+        idempotence-via-caching property this test exercises.
         """
         nb_runner.create_notebook([
-            "import pandas as pd\ndf = pd.DataFrame({'a': [3,1,2], 'b': [6,4,5]})",
+            "import pandas as pd\n%cash_persist on\ndf = pd.DataFrame({'a': [3,1,2], 'b': [6,4,5]})",
             "df = df.sort_values('a')\ndf = df.reset_index(drop=True)\ndf = df.rename(columns={'a': 'x'})\nprint(df.columns.tolist())",
         ])
         nb_runner.start_kernel()

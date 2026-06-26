@@ -657,25 +657,10 @@ class StatementProcessor:
 
         saved_metadata = None
         if not skip_cache:
-            # Self-referential statements - those that read AND write the same
-            # variable, whether by reassignment (``df = df.sort()``) or in-place
-            # mutation (``df['x'] = ...``, ``acc += 1``, ``lst.append(...)``) -
-            # must always be cached, bypassing the cost-aware floors. For them,
-            # RECOMPUTING on a re-run reads the variable's already-transformed
-            # value (the cell's own prior output), not its from-start value, so
-            # it does NOT reproduce "run everything from the start to here" -
-            # cash's core equivalence guarantee. Only RESTORING the cached
-            # output preserves that guarantee, so the floor's premise ("too
-            # cheap to bother - just recompute") is simply wrong here:
-            # recomputing yields a different (or erroneous) result.
-            self_referential = bool(
-                (set(outputs) | statement_analysis.all_mutated_vars) & set(inputs)
-            )
             saved_metadata = self._save_to_cache(
                 cache_key, code, result, inputs, outputs, accessed_files,
                 execution_time, effective_ttl, captured, process_start,
-                source_hash, captured_vars,
-                force_persist=force_persist or self_referential,
+                source_hash, captured_vars, force_persist=force_persist,
             )
         elif self.debug:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
