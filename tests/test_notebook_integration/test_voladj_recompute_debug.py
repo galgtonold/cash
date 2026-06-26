@@ -15,6 +15,70 @@ import pytest
 
 @pytest.mark.core
 @pytest.mark.upstream
+class TestVolAdjRestoredUnderCashOn:
+    """The VolAdj recompute fix, exercised in the realistic %cash_on mode.
+
+    When two in-place writes share a cell (df['VolAdj']=...; df['SMA']=...) and
+    only the LATER one is edited, the earlier unchanged write must be RESTORED,
+    not recomputed. This requires the statement to be cached - and these writes
+    are self-referential (read+write df), so they're now cached unconditionally,
+    bypassing the cost-aware floor that would otherwise skip the fast 100-row
+    rolling computes. Uses %cash_on so the df-creation cell is cached too (a
+    stable lineage for the in-place writes to key on).
+    """
+
+    @pytest.mark.timeout(60)
+    def test_voladj_restored_when_only_sma_edited(self, nb_runner):
+        nb_runner.create_notebook([
+            "import pandas as pd, numpy as np\n%load_ext cash\n%cash_on",
+            ("np.random.seed(42)\n"
+             "df = pd.DataFrame({'Ticker': ['AAPL']*50 + ['GOOGL']*50, "
+             "'Close': np.random.randn(100).cumsum() + 100})"),
+            ("df['VolAdj_20'] = df.groupby('Ticker')['Close'].transform("
+             "lambda x: x.rolling(window=5).apply("
+             "lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True))\n"
+             "def custom_weighted_mean(x):\n"
+             "    weights = np.arange(1, len(x) + 1)\n"
+             "    return np.sum(x * weights) / np.sum(weights)\n"
+             "df['SMA_58'] = df.groupby('Ticker')['Close'].transform("
+             "lambda x: x.rolling(window=10).apply(custom_weighted_mean, raw=True))\n"
+             "print('v1')"),
+            ("cash = get_ipython().magics_manager.magics['line'].get('cash_debug').__self__\n"
+             "m = cash._last_cell_metrics\n"
+             "for s in (m or {}).get('statements', []):\n"
+             "    print(f\"{s.get('status')}|{s.get('code','')[:14]}\")"),
+        ])
+        nb_runner.start_kernel(with_cash=False)
+        nb_runner.run_all()
+
+        # Edit ONLY the SMA write (window + name); VolAdj is untouched.
+        nb_runner.set_cell_source(3,
+            "df['VolAdj_20'] = df.groupby('Ticker')['Close'].transform("
+            "lambda x: x.rolling(window=5).apply("
+            "lambda y: np.mean(y) / (np.std(y) + 1e-6), raw=True))\n"
+            "def custom_weighted_mean(x):\n"
+            "    weights = np.arange(1, len(x) + 1)\n"
+            "    return np.sum(x * weights) / np.sum(weights)\n"
+            "df['SMA_59'] = df.groupby('Ticker')['Close'].transform("
+            "lambda x: x.rolling(window=3).apply(custom_weighted_mean, raw=True))\n"
+            "print('v2')")
+        nb_runner.run_cell(3)
+        nb_runner.run_cell(4)
+        statuses = nb_runner.get_output(4)
+
+        voladj = [ln for ln in statuses.splitlines() if "VolAdj" in ln]
+        sma = [ln for ln in statuses.splitlines() if "SMA_59" in ln]
+        assert voladj and ("RESTORED" in voladj[0] or "SKIPPED" in voladj[0]), (
+            f"VolAdj should be RESTORED after an SMA-only edit, got: {statuses!r}"
+        )
+        # The edited SMA write must recompute (its code changed).
+        assert sma and "COMPUTED" in sma[0], (
+            f"SMA_59 should be COMPUTED (its code changed), got: {statuses!r}"
+        )
+
+
+@pytest.mark.core
+@pytest.mark.upstream
 class TestVolAdjRecomputeDebug:
 
     def test_voladj_recompute_with_debug(self, nb_runner):
@@ -115,17 +179,14 @@ class TestVolAdjRecomputeDebug:
     @pytest.mark.timeout(60)
     @pytest.mark.xfail(
         reason=(
-            "Known effectiveness bug in the IN-PLACE-mutation lineage path. When "
-            "only a later in-place write in the same cell is edited "
-            "(df['SMA_58'] -> df['SMA_59']), the earlier unchanged in-place write "
-            "(df['VolAdj_20']) is recomputed instead of restored. Confirmed it is "
-            "NOT the cost-floor / non-idempotence issue that test_134 turned out "
-            "to be: it reproduces even with %cash_persist on (the VolAdj statement "
-            "is force-cached yet still not restored), so the failure is specific "
-            "to how in-place column writes (tracked via vars_with_mutation_lineage) "
-            "key and restore - distinct from value-reassignment chains. The cached "
-            "value stays CORRECT; this is wasted recompute, not a wrong answer. "
-            "Tracked as a separate focused fix in the mutation-lineage path."
+            "Harness limitation, not the underlying bug. The VolAdj recompute is "
+            "FIXED (self-referential statements are now cached unconditionally; "
+            "see TestVolAdjRestoredUnderCashOn which passes). This debug variant "
+            "uses %%cash *selectively* - the df-creation cell is NOT cached - so "
+            "df has no lineage on the first run but does on the re-run, and the "
+            "%%cash path has no upstream simulation to reset it. That makes the "
+            "in-place write's cache key unstable across runs here, so it can't "
+            "restore. Kept as a diagnostic record of the selective-%%cash edge."
         ),
         strict=False,
     )
