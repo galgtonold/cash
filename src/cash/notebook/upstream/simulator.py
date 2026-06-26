@@ -205,13 +205,43 @@ class NotebookSimulator:
                 continue
             live_value = self.shell.user_ns.get(var_name)
             live_lineage = getattr(live_value, '_cash_lineage_hash', None)
-            if live_lineage is not None and live_lineage != recorded:
+            if live_lineage is None:
+                continue
+            # (a) ``variable_lineage[var]`` was reset to a pre-cell base (the
+            # downstream-advancement reset, e.g. test_134's multi-statement
+            # chain) but the live value still carries the advanced lineage: the
+            # recorded/live disagreement betrays the stale value directly.
+            if live_lineage != recorded:
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM_DEBUG] '%s' has a stale in-memory value "
                         "(recorded lineage %s but value lineage %s); marking broken "
                         "so its input version is restored before the cell re-runs.",
                         var_name, recorded[:8], live_lineage[:8],
+                    )
+                broken_vars.add(var_name)
+                continue
+            # (b) Self-modifying single statement (``df = df.iloc[1:]``): the
+            # forward simulation reproduces the advanced lineage exactly, so
+            # recorded == live == virtual and the reset in (a) never fires.
+            # ``executed_input_lineages[var][var]`` is the version this cell
+            # *consumed* the last time it ran (its cell-entry base). When the
+            # live value's lineage differs from that base, the namespace holds
+            # the cell's own prior OUTPUT rather than the base it must
+            # re-consume on an isolated re-run -- mark it broken so the same
+            # restore machinery re-derives the base. Self-disables on the first
+            # run (no recorded input version yet) and on legitimate forward runs
+            # (live == base). Primitives carry no ``_cash_lineage_hash`` and were
+            # already skipped above; in-place mutation is excluded via
+            # ``current_cell_reassigned``.
+            base_input = self.executed_input_lineages.get(var_name, {}).get(var_name)
+            if base_input is not None and live_lineage != base_input:
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] '%s' holds its own prior output on re-run "
+                        "(value lineage %s but cell-entry base %s); marking broken "
+                        "so its base is restored before the cell re-runs.",
+                        var_name, live_lineage[:8], base_input[:8],
                     )
                 broken_vars.add(var_name)
 

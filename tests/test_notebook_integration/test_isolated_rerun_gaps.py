@@ -6,24 +6,33 @@ where sub-ms statements fall below the cost floor and stay uncached, so
 correctness depends entirely on the upstream machinery upholding the
 "executing a cell == running everything from the start" guarantee.
 
-ROOT CAUSE (shared by every xfail below): a self-modifying cell only has its
-input variable restored to the cell-entry (base) value when the upstream
-simulation flags that variable as stale -- i.e. when its recorded
-``variable_lineage`` is reset to the pre-cell base, creating a mismatch with the
-live value's ``_cash_lineage_hash`` (which the 4fb5249 stale-value guard then
-detects). For many shapes that reset never fires: the simulation treats the
-variable as "current" (recorded == live == the advanced value), so nothing
-restores the base and the cell re-executes on its own previous output
-(accumulators double, slices re-drop, swaps swap back, renames KeyError).
+ROOT CAUSE: a self-modifying cell only has its input variable restored to the
+cell-entry (base) value when the upstream simulation flags that variable as
+stale. The 4fb5249 stale-value guard detected this only when the recorded
+``variable_lineage`` had been reset to the pre-cell base (creating a mismatch
+with the live value's ``_cash_lineage_hash``) -- which the downstream-advancement
+reset only does for *multi-statement* chains (test_134). A single-statement
+``df = df.iloc[1:]`` produces no forward-sim mismatch at all
+(recorded == live == virtual == the advanced value), so the reset never fires
+and the cell re-executes on its own previous output.
 
-Confirmed via the guard probe: test_134's 3-statement reassign chain gets
-recorded=base != live=advanced (restores), whereas a single-statement
-``df = df.iloc[1:]`` gets recorded == live == advanced (no restore) -- and that
-one fails even under ``%cash_persist on``, so it is a deeper gap than the
-cost-floor case test_134 covers.
+FIXED for lineage-carrying pure-reassignment (the first section below): the
+stale-value guard now also consults ``executed_input_lineages[var][var]`` -- the
+version the cell *consumed* the last time it ran. When the live value's lineage
+differs from that recorded base, the namespace holds the cell's own prior output
+rather than the base, so the var is marked broken and the same restore machinery
+re-derives the base. Confirmed via the guard probe: the single-statement
+``df = df.iloc[1:]`` gets recorded == live == advanced but base_input == base
+!= live, which is the new signal.
 
-These are marked xfail(strict=False) as documented known limitations, not
-regressions: they fail identically on the pre-4fb5249 baseline.
+STILL xfail (the remaining sections, documented known limitations -- they fail
+identically on the pre-fix baseline, not regressions):
+  * primitives / builtin containers (int swap, list/dict reassign) carry no
+    ``_cash_lineage_hash``, so neither guard branch can see them;
+  * in-place mutation accumulators (``lst.append``, ``arr += 1``) replay through
+    a separate mutation-lineage path and are excluded from the reassign gate;
+  * mutate+reassign in one cell (``df['c']=...; df=df.rename(...)``) is excluded
+    because the var lands in ``modified_objects``.
 """
 
 import pytest
@@ -38,17 +47,15 @@ def _two_cell(nb_runner, setup, cell, expect):
     assert expect in nb_runner.get_output(2), f"re-run: {nb_runner.get_output(2)!r}"
 
 
-_GAP = "Isolated re-run gap: the self-modified input is not restored to its base "
-_GAP2 = "(recorded lineage == live, so no staleness is detected), so the cell "
 _GAP3 = "re-executes on its own previous output. See module docstring."
 
 
 class TestIsolatedRerunGaps:
 
     # ---- object pure-reassignment that is NOT accidentally idempotent ----
+    # FIXED: the stale-value guard's executed_input_lineages branch restores the
+    # cell-entry base before these self-modifying single statements re-run.
 
-    @pytest.mark.xfail(reason=_GAP + _GAP2 + _GAP3 + " df=df.iloc[1:] re-drops a row.",
-                       strict=False)
     def test_object_pure_reassign_slice(self, nb_runner):
         _two_cell(
             nb_runner,
@@ -57,8 +64,6 @@ class TestIsolatedRerunGaps:
             "3",
         )
 
-    @pytest.mark.xfail(reason=_GAP + _GAP2 + _GAP3 + " df=pd.concat([df,df]) doubles rows.",
-                       strict=False)
     def test_object_pure_reassign_concat_doubles(self, nb_runner):
         _two_cell(
             nb_runner,
@@ -129,8 +134,7 @@ class TestIsolatedRerunGaps:
             "6",
         )
 
-    @pytest.mark.xfail(reason="Conditional non-idempotent reassign 'if flag: df=df.iloc[1:]' "
-                              "re-drops on re-run. " + _GAP3, strict=False)
+    # FIXED (same mechanism): df is purely reassigned inside the if-branch.
     def test_conditional_self_reassign(self, nb_runner):
         _two_cell(
             nb_runner,
