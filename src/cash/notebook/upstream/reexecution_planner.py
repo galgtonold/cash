@@ -68,6 +68,10 @@ class ReexecutionPlanner:
             simulation_trace_codes, stmt_lookup_times,
         )
 
+        stmts_to_run_indices = self._complete_shadowed_var_producers(
+            stmts_to_run_indices, simulation_trace, virtual_lineage,
+        )
+
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
             virtual_modules, stmt_lookup_times,
@@ -101,6 +105,72 @@ class ReexecutionPlanner:
         )
 
         return statements_to_reexecute, restored_statements_info, total_restore_time
+
+    def _complete_shadowed_var_producers(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        virtual_lineage: dict[str, str],
+    ) -> list[int]:
+        """Re-schedule all producers of a shadowed variable consumed at a stale version.
+
+        A variable produced by more than one upstream statement (shadowed —
+        e.g. ``x`` reassigned across several cells) lives in a single namespace
+        slot, which holds only its FINAL version. The backward scan resolves an
+        input by name against that final version, so when a scheduled statement
+        actually consumed an EARLIER version (``y = x + 100`` reading the cell-1
+        ``x`` while a later cell rebinds ``x``), only the consumer is scheduled
+        and it re-executes against the wrong value.
+
+        Detect that precisely: a scheduled statement whose recorded input lineage
+        for a shadowed variable differs from that variable's final lineage
+        consumed a non-final version. To re-materialise the namespace faithfully
+        in trace order, schedule (a) the producer whose output lineage equals the
+        CONSUMED version (so the consumer sees the right value) and (b) the
+        producer whose output lineage equals the FINAL version (so the namespace
+        ends in the correct state). Matching on lineage — not "all producers" —
+        is what keeps a fully-overwritten earlier definition (e.g. a dead
+        ``x = 123`` superseded by a later ``x = {...}``) out of the schedule.
+        Gated on the version mismatch, so the common "consume the final version"
+        case (and every non-shadowed variable) is untouched.
+        """
+        producers: dict[str, list[int]] = {}
+        for i, entry in enumerate(simulation_trace):
+            for v in entry[1]:  # outputs
+                producers.setdefault(v, []).append(i)
+        shadowed = {v for v, idxs in producers.items() if len(idxs) > 1}
+        if not shadowed:
+            return stmts_to_run_indices
+
+        scheduled = set(stmts_to_run_indices)
+        changed = True
+        while changed:
+            changed = False
+            for i in list(scheduled):
+                entry = simulation_trace[i]
+                inputs, input_hashes = entry[2], (entry[3] or {})
+                for v in inputs:
+                    if v not in shadowed:
+                        continue
+                    consumed = input_hashes.get(v)
+                    final = virtual_lineage.get(v)
+                    if consumed is None or final is None or consumed == final:
+                        continue  # consumed the final version (or unknown) — no shadow hazard
+                    wanted = {consumed, final}
+                    for p in producers[v]:
+                        if p in scheduled:
+                            continue
+                        produced = (simulation_trace[p][4] or {}).get(v)
+                        if produced in wanted:
+                            scheduled.add(p)
+                            changed = True
+                            if self.debug:
+                                logger.debug(
+                                    "[UPSTREAM] Shadow-completion: scheduling producer [%s] of "
+                                    "shadowed '%s' (produced %s; consumed %s, final %s)",
+                                    p, v, str(produced)[:8], str(consumed)[:8], str(final)[:8],
+                                )
+        return sorted(scheduled)
 
     def _dedup_sorted_indices(self, stmts_to_run_indices: list[int]) -> list[int]:
         """Return *stmts_to_run_indices* sorted and deduplicated while preserving order."""

@@ -38,16 +38,12 @@ class TestUpstreamEditPropagation:
         nb_runner.run_cell(3)
         assert "y=30" in nb_runner.get_output(3), f"got {nb_runner.get_output(3)!r}"
 
-    @pytest.mark.xfail(reason="Shadowing + intermediate dependency: x is defined in c1 and "
-                              "c3; y (c2) depends on c1's x. After editing c1 and re-running "
-                              "the leaf c5, the upstream re-execution recomputes y against "
-                              "c3's x (=2) instead of c1's x (=9) -> y=102 not 109. run_all "
-                              "gives the correct 2,109,202; selective run_cell gives the "
-                              "wrong 2,102,202. Per-name lineage collapse in the upstream "
-                              "re-execution ordering (variable_lineage keyed by name only).",
-                       strict=False)
     def test_shadowed_variable_edit_earlier_def(self, nb_runner):
-        """x defined in c1 and c3; c5 uses x (=c3's). Editing c1 must NOT change result."""
+        """Shadowing + intermediate dependency: x defined in c1 and c3; y (c2)
+        depends on c1's x. Editing c1 and re-running the leaf c5 must give
+        2,109,202 (matching run_all), not 2,102,202. Fixed by the planner's
+        shadow-completion pass: re-materialise every version of a shadowed
+        variable consumed at a stale version."""
         nb_runner.create_notebook([
             "x = 1",
             "y = x + 100",
