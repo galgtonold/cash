@@ -175,6 +175,16 @@ class CashConfig:
     0 to flush after every write (slowest, safest)."""
 
     # --- Cost-aware caching policy ---
+    persist_all: bool = False
+    """When True, cache **every** notebook statement, bypassing the
+    cost-aware floors (``min_execution_time_to_cache_seconds`` and the
+    size-aware skip) - equivalent to putting ``# @cash:persist`` on every
+    statement. Useful for deterministic benchmarks, reproducibility, and
+    debugging cache behavior where you want every statement to leave a
+    restorable entry. Wasteful for cheap-to-compute values in normal use.
+    Hot field - flippable at runtime via ``cash.configure(persist_all=True)``
+    or the ``%cash_persist on`` magic."""
+
     smart_persistence: bool = True
     """When True (default), the tiered backend decides per-entry
     whether to persist past RAM based on compute time vs storage
@@ -631,6 +641,11 @@ compress = false
 
 # Max disk cache size (bytes). LRU eviction kicks in above this.
 max_cache_size = 1073741824
+
+# Persist every notebook statement, bypassing the cost-aware floors
+# (same as putting # @cash:persist on each statement). Off by default;
+# also flippable at runtime via the %cash_persist magic.
+persist_all = false
 
 # Smart persistence — only promote past RAM when the compute was slow
 # enough to be worth disk/network I/O for.

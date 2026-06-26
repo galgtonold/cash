@@ -95,6 +95,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Auto-caching mode state
         self._auto_cache_enabled = False
         self._global_ttl = None
+        # 'Persist everything' mode (config / %cash_persist). Seeded from config;
+        # the statement processor reads the same flag from config in its own
+        # __init__, so the two start consistent.
+        try:
+            self._persist_all = bool(getattr(cash_instance.config, 'persist_all', False))
+        except (AttributeError, TypeError):
+            self._persist_all = False
 
         # Badge display mode: 'html' (interactive display_id badges), 'print' (text summary), 'off' (no badge)
         self._badge_mode = 'html'
@@ -343,6 +350,34 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._statement_processor.debug = self._debug
         self._upstream_checker.debug = self._debug
         self._cash_instance.debug = self._debug
+
+    @line_magic
+    def cash_persist(self, line: str) -> None:
+        """Toggle 'persist everything' mode on/off.
+
+        When on, every statement is cached regardless of how cheap it was to
+        compute - equivalent to putting ``# @cash:persist`` on every statement.
+        Bypasses the cost-aware floors (the 10 ms 'too cheap to cache' floor and
+        the size-aware skip). Useful for reproducibility, benchmarks, and
+        debugging cache behavior; wasteful for trivial statements in normal use.
+
+        Usage:
+            %cash_persist on       - cache every statement
+            %cash_persist off      - restore the default cost-aware policy
+            %cash_persist          - toggle
+        """
+        mode = line.strip().lower()
+        if mode in ('on', 'true', '1', 'enable'):
+            self._persist_all = True
+        elif mode in ('off', 'false', '0', 'disable'):
+            self._persist_all = False
+        else:
+            self._persist_all = not getattr(self, '_persist_all', False)
+        self._statement_processor.persist_all = self._persist_all
+        print(
+            f"Cash persist-everything mode: "
+            f"{'enabled' if self._persist_all else 'disabled'}."
+        )
 
     @line_magic
     def cash_help(self, line: str) -> None:

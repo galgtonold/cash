@@ -299,6 +299,14 @@ class StatementProcessor:
         self.shell: ShellProtocol = shell
         self.cash_instance: CashInstanceProtocol = cash_instance
         self.debug = debug
+        # When True, force-persist every statement (bypass the cost-aware
+        # floors), as if every statement carried ``# @cash:persist``. Seeded
+        # from config; flippable at runtime (``%cash_persist`` magic). Read
+        # defensively because tests pass a MagicMock cash_instance.
+        try:
+            self.persist_all = bool(getattr(cash_instance.config, 'persist_all', False))
+        except (AttributeError, TypeError):
+            self.persist_all = False
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
 
         self.analytics_manager = AnalyticsManager()
@@ -524,14 +532,17 @@ class StatementProcessor:
         annotation: CacheAnnotation | None,
         ttl: int | None,
     ) -> tuple[int | None, bool, bool]:
-        """Return ``(effective_ttl, force_persist, skip_cache)`` from annotation."""
+        """Return ``(effective_ttl, force_persist, skip_cache)`` from annotation.
+
+        ``persist_all`` (config / ``%cash_persist`` magic) forces persistence
+        for every statement, as if each carried ``# @cash:persist``."""
         effective_ttl = ttl
-        force_persist = False
+        force_persist = self.persist_all
         skip_cache = False
         if annotation:
             if annotation.ttl is not None:
                 effective_ttl = annotation.ttl
-            force_persist = annotation.persist
+            force_persist = force_persist or annotation.persist
             skip_cache = annotation.no_cache
         return effective_ttl, force_persist, skip_cache
 
