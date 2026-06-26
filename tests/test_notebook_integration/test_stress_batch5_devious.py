@@ -85,35 +85,33 @@ class TestContentHashEdgeCases:
         nb_runner.run_cell(1)
         assert "x=22" in nb_runner.get_output(1)
 
-    @pytest.mark.xfail(
-        reason=(
-            "Known self-assignment-chain lineage bug (same class as the xfail'd "
-            "test_voladj_status_badges). On re-run of a cell with chained "
-            "self-assignments (df = df.sort_values(); df = df.reset_index(); "
-            "df = df.rename(a->x)), the restore/skip ordering leaves df in an "
-            "inconsistent intermediate state, so the rename runs on an "
-            "already-renamed frame and raises KeyError: 'a'. Unlike the VolAdj "
-            "case this is a correctness manifestation (the re-run errors), not "
-            "just wasted recompute. Tracked for the same focused fix."
-        ),
-        strict=False,
-    )
     def test_134_self_assignment_chain(self, nb_runner):
         """
         df = df.method1()
         df = df.method2()
         df = df.method3()
 
-        Each is a self-assignment. Cache keys should chain correctly.
+        Each is a self-assignment. Re-running the cell must reproduce the same
+        result rather than re-transforming the already-transformed frame.
+
+        Note this cell is **not idempotent in plain Python**: a second run of
+        ``df = df.sort_values('a')`` after ``df`` was renamed to have column
+        ``x`` raises ``KeyError: 'a'``. Cash makes it idempotent by *restoring*
+        each statement's cached output instead of recomputing - but only when
+        the statements are actually cached. These transforms are sub-millisecond
+        on a 3-row frame, so the cost-aware floor would normally decline to
+        cache them (and the re-run would fall back to plain-Python recompute and
+        raise). ``%cash_persist on`` forces caching, which is exactly the
+        idempotence-via-caching property this test exercises.
         """
         nb_runner.create_notebook([
-            "import pandas as pd\ndf = pd.DataFrame({'a': [3,1,2], 'b': [6,4,5]})",
+            "import pandas as pd\n%cash_persist on\ndf = pd.DataFrame({'a': [3,1,2], 'b': [6,4,5]})",
             "df = df.sort_values('a')\ndf = df.reset_index(drop=True)\ndf = df.rename(columns={'a': 'x'})\nprint(df.columns.tolist())",
         ])
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "['x', 'b']" in nb_runner.get_output(2)
-        # Re-run — should skip
+        # Re-run — cached statements restore, so this stays correct (no KeyError).
         nb_runner.run_cell(2)
         assert "['x', 'b']" in nb_runner.get_output(2)
 

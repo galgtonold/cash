@@ -115,14 +115,17 @@ class TestVolAdjRecomputeDebug:
     @pytest.mark.timeout(60)
     @pytest.mark.xfail(
         reason=(
-            "Known effectiveness bug: when only a LATER sibling self-assignment "
-            "in the same cell changes (df['SMA_58'] -> df['SMA_59']), the earlier "
-            "unchanged self-assignment (df['VolAdj_20']) is recomputed instead of "
-            "restored. The multi-self-assignment in-place-mutation case isn't "
-            "covered by the self-assignment lineage handling: df's tracked lineage "
-            "reflects the LAST mutation, so the earlier statement's output-lineage "
-            "skip-check misses. The cached value is still CORRECT - this is wasted "
-            "recompute, not a wrong answer. Tracked for a focused fix."
+            "Known effectiveness bug in the IN-PLACE-mutation lineage path. When "
+            "only a later in-place write in the same cell is edited "
+            "(df['SMA_58'] -> df['SMA_59']), the earlier unchanged in-place write "
+            "(df['VolAdj_20']) is recomputed instead of restored. Confirmed it is "
+            "NOT the cost-floor / non-idempotence issue that test_134 turned out "
+            "to be: it reproduces even with %cash_persist on (the VolAdj statement "
+            "is force-cached yet still not restored), so the failure is specific "
+            "to how in-place column writes (tracked via vars_with_mutation_lineage) "
+            "key and restore - distinct from value-reassignment chains. The cached "
+            "value stays CORRECT; this is wasted recompute, not a wrong answer. "
+            "Tracked as a separate focused fix in the mutation-lineage path."
         ),
         strict=False,
     )
