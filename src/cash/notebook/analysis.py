@@ -453,6 +453,34 @@ class CodeAnalyzer:
         return visitor.real_inputs, visitor.outputs
 
     @staticmethod
+    def reassigned_names(code: str, tree: ast.Module | None = None) -> set[str]:
+        """Return cell-level names that are PURELY reassigned with a fresh value.
+
+        A name qualifies when it is bound via a plain ``name = ...`` (``Name``
+        store) target — rebinding it to a new object — AND it is never mutated
+        in place anywhere in the same cell. In-place mutation of an existing
+        object (``name[k] = ...``, ``name.attr = ...``, ``name.method(inplace=
+        True)``) binds the *same* object and is tracked as ``modified_objects``;
+        a name that is both reassigned and mutated in the cell is therefore
+        excluded.
+
+        This isolates the self-referential *reassignment* chain
+        (``df = df.sort(); ...; df = df.rename()``) — where a non-idempotent
+        re-run on a stale value is unsafe and the input version must be restored
+        — from in-place *mutation* cells (``df['c'] = ...``), which own a
+        separate mutation-lineage restoration path and re-run safely.
+        """
+        if tree is None:
+            clean_code = CodeAnalyzer.strip_magics(code)
+            try:
+                tree = ast.parse(clean_code)
+            except SyntaxError:
+                return set()
+        visitor = _FlowVisitor()
+        visitor.visit(tree)
+        return set(visitor.defined_in_block) - set(visitor.modified_objects)
+
+    @staticmethod
     def scan_for_forbidden_functions(code: str, user_ns: dict[str, Any], tree: ast.Module | None = None) -> list[str]:
         """
         Scan code for calls to functions that should never be cached (e.g., time.time()).

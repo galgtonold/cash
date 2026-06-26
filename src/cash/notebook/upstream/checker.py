@@ -209,11 +209,15 @@ class UpstreamChecker:
 
         # Compute current cell outputs so Phase 2 can distinguish read-only inputs
         # from variables the current cell also writes (downstream-advancement case).
+        # Also compute the names the cell REASSIGNS (`name = ...`), distinct from
+        # in-place mutation, so Phase 2 can restore a stale self-reassigned input.
         try:
             _, current_cell_outputs = CodeAnalyzer.analyze_code_block(cell_code)
+            current_cell_reassigned = CodeAnalyzer.reassigned_names(cell_code)
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
             current_cell_outputs = set()
+            current_cell_reassigned = set()
 
         # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
         # Simulates the notebook statement-by-statement and compares the resulting
@@ -221,6 +225,7 @@ class UpstreamChecker:
         all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
             cell_code, required_inputs, process_statement_callback, global_ttl,
             current_cell_outputs=current_cell_outputs,
+            current_cell_reassigned=current_cell_reassigned,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
         )
@@ -527,6 +532,7 @@ class UpstreamChecker:
         process_statement_callback: Callable[..., ProcessResult],
         global_ttl: int | None,
         current_cell_outputs: set[str] | None = None,
+        current_cell_reassigned: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None
     ) -> UpstreamResult:
@@ -552,7 +558,8 @@ class UpstreamChecker:
                 current_cell_idx,
                 notebook_cells,
                 required_inputs,
-                current_cell_outputs=current_cell_outputs
+                current_cell_outputs=current_cell_outputs,
+                current_cell_reassigned=current_cell_reassigned
             )
 
             if self.debug:

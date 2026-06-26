@@ -115,19 +115,6 @@ class TestContentHashEdgeCases:
         nb_runner.run_cell(2)
         assert "['x', 'b']" in nb_runner.get_output(2)
 
-    @pytest.mark.xfail(
-        reason=(
-            "Target for the SSA-lineage fix. Self-referential statements collapse "
-            "onto one name in the tracking dicts (variable_sources / "
-            "executed_input_lineages keyed by name), so a re-run can't re-derive "
-            "the first statement's INPUT version (the safe base) and recomputes on "
-            "the already-transformed frame. The fix is to version reused names so "
-            "self-referential statements are tracked/restored like ordinary "
-            "variable chains - not to force-cache them (that wastes memory on cheap "
-            "large-df ops) nor to special-case the cell boundary."
-        ),
-        strict=False,
-    )
     def test_134_self_assignment_chain_default_persistence(self, nb_runner):
         """Default persistence: the sub-ms transforms are NOT cached (below the
         cost floor), so the re-run must restore the safe base and re-execute the

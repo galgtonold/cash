@@ -163,12 +163,65 @@ class NotebookSimulator:
     def simulate_upstream(self, *args, **kwargs):
         return self._simulate_and_find_changes(*args, **kwargs)
 
+    def _mark_stale_value_inputs_broken(
+        self,
+        required_inputs: set[str] | None,
+        current_cell_reassigned: set[str] | None,
+        broken_vars: set[str],
+    ) -> None:
+        """Flag self-reassigned required inputs whose live value is stale.
+
+        ``variable_lineage[var]`` can be reset to a pre-cell base (downstream
+        advancement / forward simulation) WITHOUT touching the in-memory value,
+        whose own ``_cash_lineage_hash`` still reflects the later (advanced)
+        version. The recorded lineage then *looks* consistent with the virtual
+        state, so Pass 2 does not flag the variable — yet the cell would
+        re-execute on a stale value. This is the self-referential re-run case:
+        ``df = df.sort(); ...; df = df.rename()`` re-run reads the
+        already-renamed frame and raises ``KeyError``. Modelling ``df`` as
+        distinct versions (df_in -> df_out), the cell consumes the input
+        version; when the live value's lineage disagrees with the recorded one
+        the input version is not actually present, so mark it broken and let the
+        normal restore / upstream-re-execution machinery re-derive its base.
+
+        Restricted to variables the current cell **reassigns** with a fresh
+        value (a ``Name`` store, ``df = ...``). In-place mutation of a var
+        (``df['c'] = ...`` / ``df.attr = ...``) is deliberately excluded: it
+        replays through the mutation-lineage restoration path, and its live
+        value legitimately runs ahead of the reset base — flagging it here
+        would force needless recompute of the whole cell (and wrongly defeat
+        per-statement cache hits, e.g. an unchanged ``df['VolAdj']`` when only a
+        later ``df['SMA']`` window changed). Builtins are skipped.
+        """
+        if not required_inputs or not current_cell_reassigned:
+            return
+        for var_name in required_inputs:
+            if var_name in _BUILTIN_NAMES:
+                continue
+            if var_name not in current_cell_reassigned:
+                continue
+            recorded = self.variable_lineage.get(var_name)
+            if recorded is None:
+                continue
+            live_value = self.shell.user_ns.get(var_name)
+            live_lineage = getattr(live_value, '_cash_lineage_hash', None)
+            if live_lineage is not None and live_lineage != recorded:
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] '%s' has a stale in-memory value "
+                        "(recorded lineage %s but value lineage %s); marking broken "
+                        "so its input version is restored before the cell re-runs.",
+                        var_name, recorded[:8], live_lineage[:8],
+                    )
+                broken_vars.add(var_name)
+
     def _simulate_and_find_changes(
         self,
         current_cell_idx: int,
         notebook_cells: list[str],
         required_inputs: set[str] | None = None,
-        current_cell_outputs: set[str] | None = None
+        current_cell_outputs: set[str] | None = None,
+        current_cell_reassigned: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
 
@@ -218,6 +271,10 @@ class NotebookSimulator:
             vars_with_stale_files, vars_derived_from_loops, loop_target_vars,
             upstream_has_modifications, required_inputs, current_cell_outputs,
             notebook_cells, current_cell_idx,
+        )
+
+        self._mark_stale_value_inputs_broken(
+            required_inputs, current_cell_reassigned, broken_vars,
         )
 
         if not broken_vars:
