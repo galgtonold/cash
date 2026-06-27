@@ -9,9 +9,9 @@ Cash is a smart caching library for Python with two primary use cases:
 1. **Decorator-based caching** (`@cash.cache`) for functions with automatic dependency tracking
 2. **Jupyter notebook caching** via IPython magics (`%cash_on`) with statement-level granularity
 
-**Current Status:** Public Beta (v0.5.0b1). See [`.github/planning/INITIAL_RELEASE_ROADMAP.md`](planning/INITIAL_RELEASE_ROADMAP.md) for the active release plan and [`.github/planning/BETA_ROADMAP.md`](planning/BETA_ROADMAP.md) for the broader beta roadmap.
+**Current Status:** Public Beta (v0.5.0b1). The single source of truth for all planning is the **Linear** workspace (team `Cash`, issue prefix `CAS`) — see the *Project Management* section below.
 
-**Development Priority:** Focus on the active phase in `INITIAL_RELEASE_ROADMAP.md`. New features go into `BETA_ROADMAP.md` Phase 2+ unless they unblock the release.
+**Development Priority:** Work the `v0.5.0 Release` project in Linear (milestones: *Beta hardening*, *Launch readiness*). New features default to the `Post-Beta (0.6+)` project unless they unblock the release.
 
 ## Commit messages
 - **Never include `Co-Authored-By: Claude ...`** or any other AI-attribution trailer in commit messages. Author the commit normally.
@@ -252,11 +252,21 @@ When returning from `process()` in `statement_processor.py`, include:
 - **Zombie processes**: After killing Python processes, may need to reconfigure environment
 
 ## Project Management
-- **Roadmaps**: All planning docs live in `.github/planning/` (gitignored).
-  - `INITIAL_RELEASE_ROADMAP.md` — active release plan
-  - `BETA_ROADMAP.md` — broader beta roadmap, Phase 2+ features
-  - `COMMUNITY_OUTREACH.md`, `VIDEO_SCRIPT.md` — launch materials
-- **Before adding features**: Check the active roadmap. If it's not there and not a release blocker, propose it before building.
+
+**Linear is the single source of truth.** All tasks, bugs, follow-ups, and roadmap live in the Linear workspace (team `Cash`, issue prefix `CAS`), accessed via the Linear MCP. Do **not** create or resurrect roadmap markdown — the old `planning/ROADMAP.md` is archived under `planning/archive/` for history only and must not be edited as a live plan.
+
+**Behavioral rules for AI assistants (do these without being asked):**
+1. **Look in Linear by default.** At the start of planning work, query Linear for the active `v0.5.0 Release` project plus In Progress / Todo issues before proposing what to do. Don't ask the user to paste issue state — fetch it.
+2. **Auto-create on flag.** The moment you notice deferred work, an out-of-scope fix, a real bug, or a "do this later" — create a Linear issue immediately (don't let it die in chat). Default: status Backlog, the right workstream label, a best-guess priority. Better an imperfectly-triaged issue than a lost one.
+3. **Cross-check on reference.** When the user mentions an issue — by id (`CAS-123`) or by description — look it up in Linear and work from its current state/comments, not from memory.
+4. **Reflect progress.** Move an issue to In Progress when you start it and Done when it's verified. Reference the `CAS-id` in the commit subject/body where applicable so commits ↔ issues cross-link.
+
+**Structure:**
+- **Projects** = finite, goal-bearing efforts: `v0.5.0 Release`, `Post-Beta (0.6+)`.
+- **Labels** = the five perennial workstreams + helpers: `correctness`, `cache-perf`, `release`, `Bug`, `Improvement` (the five), plus `tech-debt`, `xfail`, `docs`, `Feature`.
+- **`xfail` label** is load-bearing: an issue with it maps to a `pytest.mark.xfail` in the suite; closing the issue means flipping that marker to a passing test. Some `xfail` issues are *documented limitations* (e.g. CAS-9) — read the body before "fixing".
+
+**Other:**
 - **Breaking changes**: Document in `CHANGELOG.md` under the upcoming version and call them out in the PR description.
 - **Version control**: Commit in logical chunks with clear messages (see *Commit messages* section above).
 
