@@ -72,6 +72,10 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, virtual_lineage,
         )
 
+        stmts_to_run_indices = self._schedule_conditional_producer_inits(
+            stmts_to_run_indices, simulation_trace, broken_vars,
+        )
+
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
             virtual_modules, stmt_lookup_times,
@@ -171,6 +175,88 @@ class ReexecutionPlanner:
                                     p, v, str(produced)[:8], str(consumed)[:8], str(final)[:8],
                                 )
         return sorted(scheduled)
+
+    def _schedule_conditional_producer_inits(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        broken_vars: set[str],
+    ) -> list[int]:
+        """Schedule the unconditional initializer behind a conditional rebind.
+
+        Pattern: ``x = 'default'`` followed by ``if flag: x = 'overridden'``.
+        When ``flag`` flips and the conditional rebind is scheduled (it lists
+        ``x`` among its outputs), the backward scan resolves ``x`` against that
+        rebind and stops — it never schedules the earlier ``x = 'default'``
+        initializer. Re-running only the conditional, whose branch no longer
+        fires, leaves ``x`` at its stale prior value.
+
+        Detect precisely: a SCHEDULED statement that outputs a broken var
+        *conditionally only* — the var is in its ``outputs`` but NOT in its
+        ``top_level_assigned_names`` (so it never assigns it unconditionally).
+        For each such var, schedule the NEAREST EARLIER trace statement that
+        DOES assign it unconditionally (in both ``outputs`` and
+        ``top_level_assigned_names``) — the guaranteed init — so the namespace
+        is correctly re-seeded before the (possibly skipped) conditional runs.
+
+        Narrowing that keeps this off the cost-model floor-skip path: the
+        trigger fires ONLY when a single scheduled statement *both* rebinds the
+        var conditionally *and* lacks an unconditional assignment of it. A plain
+        upstream ``scale = 17`` assigns its var unconditionally, so it is never a
+        conditional rebind and never pulls in a spurious earlier init. We only
+        reach back for an init when the scheduled statement genuinely cannot
+        guarantee the var's value on its own.
+        """
+        if not broken_vars:
+            return stmts_to_run_indices
+
+        # Precompute per-statement unconditional-assignment names lazily.
+        top_level_cache: dict[int, set[str]] = {}
+
+        def _top_level(idx: int) -> set[str]:
+            if idx not in top_level_cache:
+                try:
+                    top_level_cache[idx] = CodeAnalyzer.top_level_assigned_names(
+                        simulation_trace[idx][0]
+                    )
+                except (SyntaxError, ValueError):
+                    top_level_cache[idx] = set()
+            return top_level_cache[idx]
+
+        scheduled = set(stmts_to_run_indices)
+        additions: set[int] = set()
+
+        for i in list(scheduled):
+            entry = simulation_trace[i]
+            outputs = entry[1]
+            cond_only_vars = {
+                v for v in outputs
+                if v in broken_vars and v not in _top_level(i)
+            }
+            if not cond_only_vars:
+                continue
+            for v in cond_only_vars:
+                # Already covered by an earlier unconditional producer in the plan?
+                if any(
+                    p < i and v in simulation_trace[p][1] and v in _top_level(p)
+                    for p in scheduled
+                ):
+                    continue
+                # Find the NEAREST earlier guaranteed init of v.
+                for p in range(i - 1, -1, -1):
+                    if v in simulation_trace[p][1] and v in _top_level(p):
+                        additions.add(p)
+                        if self.debug:
+                            logger.debug(
+                                "[UPSTREAM] Conditional-init: scheduling unconditional "
+                                "initializer [%s] of '%s' behind conditional rebind [%s]",
+                                p, v, i,
+                            )
+                        break
+
+        if not additions:
+            return stmts_to_run_indices
+        return sorted(scheduled | additions)
 
     def _dedup_sorted_indices(self, stmts_to_run_indices: list[int]) -> list[int]:
         """Return *stmts_to_run_indices* sorted and deduplicated while preserving order."""

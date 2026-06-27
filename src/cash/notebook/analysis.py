@@ -481,6 +481,40 @@ class CodeAnalyzer:
         return set(visitor.defined_in_block) - set(visitor.modified_objects)
 
     @staticmethod
+    def top_level_assigned_names(code: str, tree: ast.Module | None = None) -> set[str]:
+        """Return names bound by an UNCONDITIONAL top-level assignment.
+
+        Only ``Name`` targets of ``Assign``/``AnnAssign``/``AugAssign`` nodes
+        that appear directly in ``tree.body`` qualify — i.e. assignments that
+        run every time the statement executes. Assignments nested inside
+        ``if``/``for``/``while``/``try``/``with`` are *conditional* (they may or
+        may not run depending on a branch/loop/exception) and are excluded.
+
+        This distinguishes a guaranteed initializer (``x = 'default'`` at the
+        top level) from a conditional rebind (``if flag: x = 'overridden'``),
+        which is what the conditional-producer-init scheduling needs.
+        """
+        if tree is None:
+            clean_code = CodeAnalyzer.strip_magics(code)
+            try:
+                tree = ast.parse(clean_code)
+            except SyntaxError:
+                return set()
+        names = set()
+        for node in tree.body:
+            if isinstance(node, ast.Assign):
+                targets = node.targets
+            elif isinstance(node, (ast.AnnAssign, ast.AugAssign)):
+                targets = [node.target]
+            else:
+                continue
+            for tgt in targets:
+                for sub in ast.walk(tgt):
+                    if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Store):
+                        names.add(sub.id)
+        return names
+
+    @staticmethod
     def scan_for_forbidden_functions(code: str, user_ns: dict[str, Any], tree: ast.Module | None = None) -> list[str]:
         """
         Scan code for calls to functions that should never be cached (e.g., time.time()).
