@@ -24,12 +24,14 @@ __all__ = [
     "StatementAnalysis",
     "analyze_statement",
     "standalone_method_mutation_receivers",
+    "standalone_method_call_receivers",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
     # Constants re-exported for external consumers
     "MUTATING_METHODS",
     "PANDAS_INPLACE_METHODS",
+    "KNOWN_PURE_METHODS",
 ]
 
 # ---------------------------------------------------------------------------
@@ -52,6 +54,21 @@ PANDAS_INPLACE_METHODS = {
     'sort_values', 'sort_index', 'replace', 'clip', 'where', 'mask',
     'drop_duplicates', 'eval', 'query', 'astype',
 }
+
+# Read-only inspection / display methods that never mutate their receiver.
+# Deliberately conservative: this set only lets the runtime *skip* the
+# before/after content observation (a perf optimisation that matters for large
+# objects like DataFrames, where hashing twice per standalone call is costly).
+# A name here must be unambiguously non-mutating — being wrong means a real
+# mutation goes undetected. Anything not listed falls through to observation.
+KNOWN_PURE_METHODS = frozenset({
+    # pandas / numpy inspection & summary (return a new object, never mutate)
+    'head', 'tail', 'describe', 'info', 'sample', 'value_counts', 'nunique',
+    'unique', 'corr', 'cov', 'memory_usage', 'count', 'isna', 'isnull',
+    'notna', 'notnull', 'nlargest', 'nsmallest', 'idxmax', 'idxmin',
+    # display / plotting
+    'plot', 'hist', 'boxplot', 'show',
+})
 
 
 @dataclass
@@ -437,6 +454,33 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
         ):
             receivers.add(base)
     return frozenset(receivers)
+
+
+def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:
+    """``(receiver_base, method_name)`` for every top-level bare-``Expr`` method call.
+
+    The *broad* candidate set for the precise method-mutation extension: unlike
+    :func:`standalone_method_mutation_receivers` it does not filter by method
+    name — it returns ``df.head()`` and ``bus.on(fn)`` alike. The runtime then
+    classifies each candidate (known-mutating / known-pure / observe-by-content)
+    to decide whether the receiver actually mutated; the simulation reads that
+    recorded verdict. Scope matches the narrow helper: only ``tree.body``
+    (top-level) bare ``Expr`` statements, so loop/function bodies and captured
+    results (``r = df.head()``) are excluded.
+    """
+    if tree is None:
+        return frozenset()
+    calls: set[tuple[str, str]] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        call = node.value
+        if not isinstance(call.func, ast.Attribute):
+            continue
+        base = _extract_base_name(call.func.value)
+        if base:
+            calls.add((base, call.func.attr))
+    return frozenset(calls)
 
 
 def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:

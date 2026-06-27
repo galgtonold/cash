@@ -171,6 +171,14 @@ class TrackingState:
     # Maps var_name -> source_module_name for ``from X import Y`` bindings.
     from_import_sources: dict[str, str] = field(default_factory=dict)
 
+    # Written by StatementProcessor after observing a standalone method call;
+    # read by VirtualLineage (upstream simulation). Maps a statement's
+    # source_hash -> the set of receiver names that method call mutates (the
+    # broad-precise mutation verdict). Lets the simulation, which never executes
+    # user code, reproduce the runtime's mutation decision for a bare
+    # ``obj.method()`` whose method is not statically known to mutate.
+    mutation_verdicts: dict[str, set[str]] = field(default_factory=dict)
+
     # The single seam for reading/writing variable lineage. Wraps
     # ``variable_lineage`` as its backing dict so callers that still mutate
     # the dict directly during migration stay in sync. See ``CONTEXT.md``

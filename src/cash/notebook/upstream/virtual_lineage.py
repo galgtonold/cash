@@ -22,7 +22,11 @@ from typing import Any
 from ...utils import resolve_file_dep_path
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
-from ..cacheability import standalone_method_mutation_receivers
+from ..cacheability import (
+    KNOWN_PURE_METHODS,
+    standalone_method_call_receivers,
+    standalone_method_mutation_receivers,
+)
 from ..file_dep_snapshot import split_file_dep_value
 from ..cache_key import CacheKeyContext, compute_cache_key
 from ..cache_status import CacheStatus
@@ -111,6 +115,41 @@ class VirtualLineage:
         self.executed_file_deps = state.executed_file_deps
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
+        self.mutation_verdicts = state.mutation_verdicts
+
+    def _mutation_receivers(self, stmt_code: str, tree: ast.Module) -> set[str]:
+        """Receivers of standalone method calls in *tree* that mutate, per the
+        runtime's broad-precise classification.
+
+        Statically-known mutators (``MUTATING_METHODS`` / ``inplace=True``) and
+        known-pure methods are decided the same way as the runtime, without a
+        verdict. For everything else this reads ``mutation_verdicts`` (keyed by
+        the statement's ``source_hash`` — the same SHA-256 of the code the
+        runtime uses) so the simulation reproduces the runtime's observed
+        decision; an unknown verdict (statement not yet executed) is treated as
+        mutating (conservative).
+        """
+        candidates = standalone_method_call_receivers(tree)
+        if not candidates:
+            return set()
+        tier1 = standalone_method_mutation_receivers(tree)
+        receivers: set[str] = set()
+        source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
+        verdict = self.mutation_verdicts.get(source_hash)
+        for base, method in candidates:
+            if isinstance(self.shell.user_ns.get(base), types.ModuleType):
+                continue  # module function call, not a method mutation
+            if base in tier1:
+                receivers.add(base)
+                continue
+            if method in KNOWN_PURE_METHODS:
+                continue
+            if verdict is not None:
+                if base in verdict:
+                    receivers.add(base)
+            else:
+                receivers.add(base)  # unknown -> conservative
+        return receivers
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""
@@ -1448,15 +1487,16 @@ class VirtualLineage:
             # Analyze statement
             inputs, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
 
-            # Mirror the runtime: a top-level bare-Expr method mutation
-            # (lst.append(x), box.add(1)) carries no Store target, so
+            # Mirror the runtime: a top-level bare-Expr method call
+            # (lst.append(x), bus.on(fn)) carries no Store target, so
             # analyze_code_block never surfaces the receiver as an output. Union
-            # it in so the simulated lineage is bumped with the SAME
-            # source-based formula the runtime uses -- keeping the two engines
+            # in the receivers the runtime treats as mutated (statically known,
+            # or per the recorded broad-precise verdict) so the simulated lineage
+            # is bumped with the SAME source-based formula -- keeping the engines
             # in sync (a runtime-only bump desyncs cross-cell restore).
             mutation_tree = self._get_cached_ast(stmt_code)
             if mutation_tree is not None:
-                outputs = outputs | standalone_method_mutation_receivers(mutation_tree)
+                outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree)
 
             stripped = stmt_code.strip()
             is_import = stripped.startswith(('import ', 'from '))

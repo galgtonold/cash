@@ -43,11 +43,6 @@ _BOX = (
 
 class TestCustomMutationLineage:
 
-    @pytest.mark.xfail(reason="method-call mutation does not bump the receiver's lineage; "
-                              "cached consumer serves stale value. Both attempted fixes "
-                              "(cache receiver / runtime content-hash bump) hit the "
-                              "runtime-vs-simulation lineage desync -- see module docstring.",
-                       strict=False)
     def test_custom_method_mutation_invalidates_cached_consumer(self, nb_runner):
         nb_runner.create_notebook([
             _BOX,
@@ -66,10 +61,6 @@ class TestCustomMutationLineage:
         assert "result=30" in nb_runner.get_output(2), \
             f"stale cached consumer: {nb_runner.get_output(2)!r}"
 
-    @pytest.mark.xfail(reason="builtin method-call mutation (list.append on an attribute) "
-                              "does not bump the receiver's lineage; cached consumer stale "
-                              "(same runtime-vs-simulation desync -- see module docstring)",
-                       strict=False)
     def test_builtin_method_mutation_invalidates_cached_consumer(self, nb_runner):
         nb_runner.create_notebook([
             _BOX,
@@ -87,3 +78,65 @@ class TestCustomMutationLineage:
         nb_runner.run_all()
         assert "result=30" in nb_runner.get_output(2), \
             f"stale cached consumer: {nb_runner.get_output(2)!r}"
+
+
+_STACK = (
+    "class Stack:\n"
+    "    def __init__(self):\n        self._items = []\n"
+    "    def push(self, x):\n        self._items.append(x)\n"
+    "    def total(self):\n        return sum(self._items)"
+)
+
+_BUS_CLS = (
+    "class Bus:\n"
+    "    def __init__(self):\n        self.handlers = []\n"
+    "    def on(self, fn):\n        self.handlers.append(fn)\n"
+    "    def emit(self, x):\n        return [h(x) for h in self.handlers]"
+)
+
+
+class TestBroadCustomMutators:
+    """The broad-precise extension: a custom-named mutator (``stack.push``,
+    ``bus.on``) -- not in MUTATING_METHODS -- should bump the receiver's lineage,
+    detected by runtime content-observation. Picklable receivers are observed
+    precisely; unpicklable ones (lambda / builtin handlers) fall to the
+    conservative assume-mutate path.
+    """
+
+    def test_picklable_custom_mutator_invalidates_consumer(self, nb_runner):
+        """stack.push -- custom name, picklable receiver -> observed precisely."""
+        nb_runner.create_notebook([
+            _STACK,
+            "s = Stack()\ns.push(1)\nresult = s.total()\nprint(f'result={result}')",
+        ])
+        nb_runner.start_kernel()
+        nb_runner.enable_persist()
+        nb_runner.run_all()
+        assert "result=1" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(
+            2,
+            "s = Stack()\ns.push(1)\ns.push(2)\nresult = s.total()\nprint(f'result={result}')",
+        )
+        nb_runner.run_all()
+        assert "result=3" in nb_runner.get_output(2), \
+            f"stale cached consumer: {nb_runner.get_output(2)!r}"
+
+    def test_unpicklable_custom_mutator_invalidates_consumer(self, nb_runner):
+        """bus.on(callable) -- custom name, unpicklable receiver -> assume-mutate."""
+        nb_runner.create_notebook([
+            _BUS_CLS,
+            "bus = Bus()\nbus.on(str.upper)\nresult = bus.emit('hi')\nprint(f'result={result}')",
+        ])
+        nb_runner.start_kernel()
+        nb_runner.enable_persist()
+        nb_runner.run_all()
+        assert "['HI']" in nb_runner.get_output(2)
+
+        nb_runner.set_cell_source(
+            2,
+            "bus = Bus()\nbus.on(str.upper)\nbus.on(lambda s: s[::-1])\nresult = bus.emit('hi')\nprint(f'result={result}')",
+        )
+        nb_runner.run_all()
+        out = nb_runner.get_output(2)
+        assert "HI" in out and "ih" in out, f"stale cached consumer: {out!r}"

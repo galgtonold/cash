@@ -11,10 +11,12 @@ import ast
 import pytest
 
 from cash.notebook.cacheability import (
+    KNOWN_PURE_METHODS,
     MutationInfo,
     SideEffectInfo,
     StatementAnalysis,
     analyze_statement,
+    standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
 
@@ -203,6 +205,63 @@ class TestStandaloneMethodMutationReceivers:
 
     def test_none_tree(self):
         assert standalone_method_mutation_receivers(None) == frozenset()
+
+
+class TestStandaloneMethodCallReceivers:
+    """``standalone_method_call_receivers`` returns ``(base, method)`` for EVERY
+    top-level bare-``Expr`` method call — the broad candidate set the runtime
+    classifies (mutating / pure / observe) for the precise broad extension.
+    Unlike the narrow helper it does not filter by method name.
+    """
+
+    @staticmethod
+    def _calls(code: str) -> frozenset:
+        return standalone_method_call_receivers(ast.parse(code))
+
+    def test_pure_method_included_as_candidate(self):
+        # narrow helper drops df.head(); the broad candidate set keeps it
+        assert self._calls("df.head()") == {('df', 'head')}
+
+    def test_mutating_method_included(self):
+        assert self._calls("box.add(10)") == {('box', 'add')}
+
+    def test_attribute_receiver(self):
+        assert self._calls("box.items.append(10)") == {('box', 'append')}
+
+    def test_custom_method(self):
+        assert self._calls("bus.on(handler)") == {('bus', 'on')}
+
+    def test_chained_call_uses_outer_method_and_root_base(self):
+        assert self._calls("df.groupby('a').sum()") == {('df', 'sum')}
+
+    def test_assignment_excluded(self):
+        assert self._calls("r = df.head()") == frozenset()
+
+    def test_bare_name_call_excluded(self):
+        assert self._calls("print(x)") == frozenset()
+
+    def test_loop_and_function_bodies_excluded(self):
+        assert self._calls("for i in xs:\n    a.append(i)") == frozenset()
+        assert self._calls("def f():\n    a.append(1)") == frozenset()
+
+    def test_multiple(self):
+        assert self._calls("a.foo()\nb.bar(1)") == {('a', 'foo'), ('b', 'bar')}
+
+    def test_none_tree(self):
+        assert standalone_method_call_receivers(None) == frozenset()
+
+
+class TestKnownPureMethods:
+    """The conservative known-pure inspection set lets the runtime skip
+    content-observation for read-only methods on big objects."""
+
+    def test_common_pandas_inspection_pure(self):
+        for m in ('head', 'tail', 'describe', 'info', 'sample', 'value_counts'):
+            assert m in KNOWN_PURE_METHODS
+
+    def test_mutating_methods_not_in_pure_set(self):
+        for m in ('append', 'add', 'update', 'pop', 'sort'):
+            assert m not in KNOWN_PURE_METHODS
 
 
 # ---------------------------------------------------------------------------

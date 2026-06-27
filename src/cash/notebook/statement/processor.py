@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import logging
 import pickle
 import sys
@@ -260,7 +261,13 @@ from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
 from ..function_tracker import FunctionTracker
-from ..cacheability import StatementAnalysis, analyze_statement, standalone_method_mutation_receivers
+from ..cacheability import (
+    KNOWN_PURE_METHODS,
+    StatementAnalysis,
+    analyze_statement,
+    standalone_method_call_receivers,
+    standalone_method_mutation_receivers,
+)
 from ..cacheability_decision import decide_cacheability
 from ..purity import analyze_function_purity
 from ..randomness import (
@@ -405,6 +412,7 @@ class StatementProcessor:
         self.executed_file_deps = state.executed_file_deps
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
+        self.mutation_verdicts = state.mutation_verdicts
 
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
         """
@@ -471,23 +479,34 @@ class StatementProcessor:
         # _post_execute for in-place-mutation tracking.
         statement_analysis = analyze_statement(code, _parsed_tree)
 
-        # A standalone bare-Expr method mutation (``lst.append(x)``,
-        # ``box.add(1)``) has no Store target, so AST analysis never surfaces
-        # the receiver as an output and its lineage stays frozen -> a cached
-        # downstream consumer serves a stale value once the mutation is edited.
-        # Route the receiver into the output set so capture_and_track bumps its
-        # lineage (source-based, matching the upstream simulation), and
-        # skip-cache the statement so the mutated receiver is never
-        # round-tripped -- caching arbitrary mutated objects corrupts
-        # stateful/loop/multi-mutation receivers. The receiver re-executes each
-        # run (cheap) and re-applies the mutation.
-        mutation_receivers = standalone_method_mutation_receivers(_parsed_tree)
-        new_mutation_receivers = mutation_receivers - outputs
-        if new_mutation_receivers:
-            outputs = outputs | new_mutation_receivers
+        # A standalone bare-Expr method call (``lst.append(x)``, ``bus.on(fn)``)
+        # has no Store target, so AST analysis never surfaces the receiver as an
+        # output and its lineage stays frozen -> a cached downstream consumer
+        # serves a stale value once the mutation is edited. The broad-precise
+        # classifier decides which receivers actually mutate (statically known,
+        # a prior runtime verdict, or assume-mutate); the rest are observed by
+        # content after execution (see _post_execute). Routed receivers go into
+        # the output set so capture_and_track bumps their lineage (source-based,
+        # matching the upstream simulation) and the statement is skip-cached so
+        # the mutated receiver is never round-tripped.
+        # Control-structure BODY statements are dispatched here individually with
+        # an injected marker comment, but the upstream simulation treats the whole
+        # loop/branch as one unit (its mutations flow through the loop-mutation
+        # lineage path, not per-body classification). Classifying a body statement
+        # here would bump the receiver with a per-statement source the simulation
+        # never reproduces -> cross-cell desync. Skip them; the control structure
+        # owns its body's mutation lineage.
+        if '# __iteration_context__:' in code or '# control_context:' in code:
+            mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
+        else:
+            mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
+                _parsed_tree, source_hash, outputs,
+            )
+        if mut_pre_route:
+            outputs = outputs | mut_pre_route
             skip_cache = True
             metrics['uncacheable_reasons'].append(
-                f"In-place mutation on: {', '.join(sorted(new_mutation_receivers))} "
+                f"In-place mutation on: {', '.join(sorted(mut_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
 
@@ -543,6 +562,7 @@ class StatementProcessor:
             execution_time, effective_ttl, cache_key, source_hash,
             captured, skip_cache, force_persist, metrics, process_start,
             _parsed_tree, statement_analysis,
+            mut_observe, mut_assumed, mut_record,
         )
 
         return metrics
@@ -652,8 +672,28 @@ class StatementProcessor:
         process_start: float,
         tree: ast.Module | None,
         statement_analysis: StatementAnalysis,
+        mut_observe: set[str] = frozenset(),
+        mut_assumed: set[str] = frozenset(),
+        mut_record: bool = False,
     ) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics."""
+        # Broad-precise mutation observation: for a standalone method call whose
+        # method is not statically known, compare each candidate receiver's
+        # content after execution against its pre-statement hash. Must run BEFORE
+        # capture_and_track so a newly-detected mutation is in ``outputs`` (its
+        # lineage gets bumped) and skip-caches the statement. The verdict is
+        # recorded for the upstream simulation, which cannot observe execution.
+        if mut_record:
+            newly_mutated = {b for b in mut_observe if self._receiver_mutated(b)}
+            if newly_mutated:
+                outputs = outputs | newly_mutated
+                skip_cache = True
+                metrics.setdefault('uncacheable_reasons', []).append(
+                    f"In-place mutation on: {', '.join(sorted(newly_mutated))} "
+                    "(observed; receiver lineage bumped; statement re-executes)"
+                )
+            self.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
+
         # Auto-track newly imported local modules so _capture_variables includes
         # the module source hash in the lineage on first execution.
         try:
@@ -702,6 +742,96 @@ class StatementProcessor:
             saved_time=0.0,
             code_hash=cache_key,
         )
+
+    def _classify_method_mutations(
+        self,
+        tree: ast.Module | None,
+        source_hash: str,
+        outputs: set[str],
+    ) -> tuple[set[str], set[str], set[str], bool]:
+        """Classify a statement's standalone method-call receivers.
+
+        Returns ``(pre_route, observe, assumed, record_verdict)``:
+
+        * ``pre_route`` — receivers to route into outputs + skip-cache now
+          (statically known-mutating; a prior runtime verdict says it mutates;
+          or assume-mutate because the receiver can't be reliably content-hashed
+          — minus anything already in ``outputs``).
+        * ``observe`` — tier-3 receivers to content-observe post-execution
+          (verdict unknown, receiver reliably hashable).
+        * ``assumed`` — tier-3 receivers assumed-mutating without observation
+          (recorded into the verdict so the simulation reproduces them).
+        * ``record_verdict`` — True when this statement's verdict is being learned.
+        """
+        candidates = standalone_method_call_receivers(tree)
+        if not candidates:
+            return set(), set(), set(), False
+        tier1 = standalone_method_mutation_receivers(tree)
+        verdict = self.mutation_verdicts.get(source_hash)
+        pre_route: set[str] = set()
+        observe: set[str] = set()
+        assumed: set[str] = set()
+        for base, method in candidates:
+            if isinstance(self.shell.user_ns.get(base), types.ModuleType):
+                continue  # ``time.sleep()`` / ``np.foo()`` is a module function
+                          # call, not a method mutation of the receiver.
+            if base in tier1:
+                pre_route.add(base)
+                continue
+            if method in KNOWN_PURE_METHODS:
+                continue
+            if verdict is not None:
+                if base in verdict:
+                    pre_route.add(base)
+                continue
+            # tier-3, verdict unknown: observe if cheaply+reliably hashable,
+            # otherwise assume-mutate (conservative, correctness-first).
+            if self._receiver_observable(base):
+                observe.add(base)
+            else:
+                assumed.add(base)
+                pre_route.add(base)
+        record_verdict = verdict is None and bool(observe or assumed)
+        return pre_route - outputs, observe, assumed, record_verdict
+
+    def _receiver_observable(self, base: str) -> bool:
+        """Return True if *base*'s value can be reliably content-hashed.
+
+        ``compute_hash`` *samples* large objects (DataFrame/Series/ndarray, and
+        collections over 200 elements), so an unchanged sample can't prove the
+        object wasn't mutated outside the sample. Such receivers are excluded
+        here and assume-mutated instead.
+        """
+        val = self.shell.user_ns.get(base)
+        if val is None:
+            return False
+        if type(val).__name__ in ('DataFrame', 'Series', 'ndarray'):
+            return False
+        if isinstance(val, (list, tuple, dict, set, frozenset)) and len(val) > 200:
+            return False
+        return True
+
+    def _receiver_mutated(self, base: str) -> bool:
+        """Observe whether *base*'s content changed during this statement.
+
+        Compares the post-execution content hash against the pre-statement hash
+        in ``current_session_hashes``. Conservative (returns True) when the value
+        is absent, has no prior recorded hash, or is unpicklable — in which case
+        ``compute_hash`` returns an identity hash that can't reflect an in-place
+        mutation.
+        """
+        val = self.shell.user_ns.get(base)
+        if val is None:
+            return True
+        try:
+            after = self.compute_hash(val)
+        except (TypeError, ValueError, AttributeError, pickle.PicklingError):
+            return True
+        identity_hash = hashlib.sha256(str(id(val)).encode('utf-8')).hexdigest()
+        if after == identity_hash:
+            return True  # unpicklable -> identity hash -> mutation undetectable
+        before = self.current_session_hashes.get(base)
+        return before is None or after != before
 
     def _check_callable_stateful(self, name: str) -> bool:
         """Return True if *name* resolves to a @stateful callable; continue-safe for known-pure."""
