@@ -23,10 +23,16 @@ import pytest
 @pytest.mark.loops
 def test_loop_append_not_cached(nb_runner):
     """
-    Test that a.append(...) inside a loop is NOT cached.
-    
-    The mutation to 'a' should cause the statement to be marked as
-    uncacheable and re-executed every time, even if it calls pure functions.
+    Re-running a loop that appends to a no-lineage list reproduces the
+    run-from-start result, not a doubled or an empty one.
+
+    The loop mutates ``a`` (a builtin list, which can't carry a lineage hash).
+    On an isolated re-run of the loop cell, cash must reproduce
+    ``a = [0, 2, 4]`` -- the idempotent run-from-start result, per the
+    no-lineage idempotent-rerun design (commit eaf801b). It must NOT produce the
+    old doubled ``[0, 2, 4, 0, 2, 4]`` (accumulation on isolated re-run was the
+    bug that design removed), and it must NOT produce an empty ``[]`` (the
+    cache-restore-loses-the-loop-mutation bug this test originally guarded).
     """
     nb_runner.create_notebook([
         "a = []",
@@ -34,26 +40,22 @@ def test_loop_append_not_cached(nb_runner):
     a.append(i * 2)""",
         "a"
     ])
-    
+
     nb_runner.start_kernel()
     nb_runner.run_all()
-    
+
     # Check output shows correct list
     output = nb_runner.get_output(3)
-    assert "[0, 2, 4]" in output or "0, 2, 4" in output
-    
-    # Re-run the loop cell
+    assert "[0, 2, 4]" in output
+
+    # Re-run the loop cell in isolation, then redisplay `a`.
     nb_runner.run_cell(2)
-    
-    # The list should now have 6 elements (appended twice)
-    # This proves a.append() is NOT being cached
-    nb_runner.get_output(3)
     nb_runner.run_cell(3)
     output3 = nb_runner.get_output(3)
-    
-    # After running twice, if append was NOT cached, we'd have [0,2,4,0,2,4]
-    # If append WAS cached (bug), we'd still have [0,2,4]
-    assert "0, 2, 4, 0, 2, 4" in output3 or "[0, 2, 4, 0, 2, 4]" in output3
+
+    # Idempotent: a is reproduced as [0, 2, 4], not doubled and not emptied.
+    assert "[0, 2, 4]" in output3 and "0, 2, 4, 0, 2, 4" not in output3, \
+        f"isolated loop re-run should reproduce [0, 2, 4], got: {output3!r}"
 
 
 @pytest.mark.loops  
