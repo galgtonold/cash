@@ -90,6 +90,7 @@ dev = [
     "pytest-subtests",
     "pytest-timeout",
     "pytest-xdist",
+    "pytest-rerunfailures",
     "pytest-asyncio>=0.23",
     "nbclient",
     "jupyter_client",
@@ -142,7 +143,15 @@ asyncio_mode = "auto"
 # fastest (121s vs 135s at n=32) and most stable. Past ~2x the boot throttle,
 # extra workers only queue kernel boots -- slowing AND destabilizing the run.
 # Rule of thumb: workers ~= 2 x boot throttle. Lower on a much smaller box.
-addopts = "-n 16 --dist worksteal --max-worker-restart=24"
+#
+# Reruns absorb the residual transient kernel-boot infra casualties (a worker
+# crashes / a kernel can't get a socket under boot-storm pressure -- WinError
+# 10055, ZMQ "connection refused", "node down"). `--only-rerun` scopes retries to
+# those infra signatures ONLY, so a real assertion failure still fails fast and
+# clearly (no wasted retries, no masking of genuine test bugs). Reruns are
+# reported, so any test that needed one stays visible. `.` stands in for spaces
+# in the patterns to avoid TOML/shlex quoting.
+addopts = "-n 16 --dist worksteal --max-worker-restart=24 --reruns 2 --reruns-delay 2 --only-rerun crashed --only-rerun ConnectionError --only-rerun WinError --only-rerun ZMQError --only-rerun node.down --only-rerun Not.properly.terminated --only-rerun Kernel.died --only-rerun failed.to.boot"
 filterwarnings = [
     "ignore:Passing individual keyword arguments to compute_cache_key:DeprecationWarning",
     "ignore:set_tracking_dicts\\(\\) is deprecated:DeprecationWarning",
