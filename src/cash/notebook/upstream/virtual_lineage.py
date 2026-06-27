@@ -512,6 +512,7 @@ class VirtualLineage:
         scheduled_iteration_outputs: dict[str, list],
         vars_mutated_by_loops: set[str],
         iteration_context_pattern: re.Pattern[str],
+        fully_rerun_mutated: set[str],
     ) -> bool:
         """Return True if the statement at *idx* is an accumulator init that should be skipped.
 
@@ -524,6 +525,11 @@ class VirtualLineage:
         if len(outputs) != 1:
             return False
         out_var = list(outputs)[0]
+        if out_var in fully_rerun_mutated:
+            # When the loop that mutates out_var is itself fully re-executed, the
+            # init must run alongside it, else the accumulation doubles; skipping
+            # is only safe for pure incremental extension of a cached loop.
+            return False
         is_loop_updated = (out_var in scheduled_iteration_outputs or out_var in vars_mutated_by_loops)
         if not is_loop_updated:
             return False
@@ -549,6 +555,30 @@ class VirtualLineage:
             return True
         return False
 
+    def _loop_vars_fully_rescheduled(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        vars_mutated_by_loops: set[str],
+        iteration_context_pattern: re.Pattern[str],
+    ) -> set[str]:
+        """Loop-mutated vars whose mutation is scheduled OUTSIDE a cached iteration-context body (=> full re-run)."""
+        if not vars_mutated_by_loops:
+            return set()
+        patterns = {
+            mv: re.compile(rf'\b{re.escape(mv)}\s*(?:\.\s*\w+\s*\(|\[[^\]]*\]\s*=(?!=))')
+            for mv in vars_mutated_by_loops
+        }
+        fully_rerun_mutated: set[str] = set()
+        for idx in stmts_to_run_indices:
+            stmt_code = simulation_trace[idx][0]
+            if iteration_context_pattern.search(stmt_code):
+                continue
+            for mv, pat in patterns.items():
+                if mv not in fully_rerun_mutated and pat.search(stmt_code):
+                    fully_rerun_mutated.add(mv)
+        return fully_rerun_mutated
+
     def _filter_accumulator_reinits(
         self,
         stmts_to_run_indices: list[int],
@@ -571,16 +601,72 @@ class VirtualLineage:
                 for out in outputs:
                     scheduled_iteration_outputs.setdefault(out, []).append(idx)
 
+        fully_rerun_mutated = self._loop_vars_fully_rescheduled(
+            stmts_to_run_indices, simulation_trace, vars_mutated_by_loops,
+            iteration_context_pattern,
+        )
+
+        # A fully re-run loop replays its in-place mutations (.append / [k]=)
+        # onto whatever the accumulator currently holds.  If the empty-container
+        # init was never scheduled (the backward scan often schedules only the
+        # loop body, treating the accumulator output as already satisfied), the
+        # replay doubles the accumulated value.  Schedule the missing init so it
+        # runs alongside the loop.  (Pure incremental extension keeps the init
+        # unscheduled and is handled by the removal pass below.)
+        stmts_to_run_indices = self._schedule_missing_accumulator_inits(
+            stmts_to_run_indices, simulation_trace, fully_rerun_mutated,
+        )
+
         indices_to_remove: set[int] = set()
         for idx in stmts_to_run_indices:
             if self._is_reinit_to_skip(
                 idx, simulation_trace, scheduled_iteration_outputs,
                 vars_mutated_by_loops, iteration_context_pattern,
+                fully_rerun_mutated,
             ):
                 indices_to_remove.add(idx)
 
         if indices_to_remove:
             return [idx for idx in stmts_to_run_indices if idx not in indices_to_remove]
+        return stmts_to_run_indices
+
+    def _schedule_missing_accumulator_inits(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        fully_rerun_mutated: set[str],
+    ) -> list[int]:
+        """Schedule empty-container inits for fully-re-run loop accumulators.
+
+        For each var in *fully_rerun_mutated*, if its ``x = []`` / ``x = {}`` /
+        ``x = set()`` init appears in the trace but is not already scheduled,
+        add it. This prevents the loop's in-place mutations from replaying onto
+        a stale value (doubling). Only single-output empty-container inits are
+        added, so non-init assignments are never pulled in.
+        """
+        if not fully_rerun_mutated:
+            return stmts_to_run_indices
+        scheduled = set(stmts_to_run_indices)
+        empty_init_patterns = {
+            mv: re.compile(
+                rf'^{re.escape(mv)}\s*=\s*(\{{\}}|\[\]|set\(\)|dict\(\)|list\(\)|frozenset\(\))$'
+            )
+            for mv in fully_rerun_mutated
+        }
+        additional: list[int] = []
+        for idx, entry in enumerate(simulation_trace):
+            if idx in scheduled:
+                continue
+            stmt_code, outputs = entry[0], entry[1]
+            if len(outputs) != 1:
+                continue
+            out_var = next(iter(outputs))
+            pat = empty_init_patterns.get(out_var)
+            if pat is not None and pat.match(stmt_code.strip()):
+                additional.append(idx)
+                scheduled.add(idx)
+        if additional:
+            return stmts_to_run_indices + additional
         return stmts_to_run_indices
 
     def _check_loop_derived_trust_override(
