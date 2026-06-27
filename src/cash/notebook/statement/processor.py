@@ -260,7 +260,7 @@ from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
 from ..function_tracker import FunctionTracker
-from ..cacheability import StatementAnalysis, analyze_statement
+from ..cacheability import StatementAnalysis, analyze_statement, standalone_method_mutation_receivers
 from ..cacheability_decision import decide_cacheability
 from ..purity import analyze_function_purity
 from ..randomness import (
@@ -470,6 +470,26 @@ class StatementProcessor:
         # cacheability decision and (on the cache-miss path) by
         # _post_execute for in-place-mutation tracking.
         statement_analysis = analyze_statement(code, _parsed_tree)
+
+        # A standalone bare-Expr method mutation (``lst.append(x)``,
+        # ``box.add(1)``) has no Store target, so AST analysis never surfaces
+        # the receiver as an output and its lineage stays frozen -> a cached
+        # downstream consumer serves a stale value once the mutation is edited.
+        # Route the receiver into the output set so capture_and_track bumps its
+        # lineage (source-based, matching the upstream simulation), and
+        # skip-cache the statement so the mutated receiver is never
+        # round-tripped -- caching arbitrary mutated objects corrupts
+        # stateful/loop/multi-mutation receivers. The receiver re-executes each
+        # run (cheap) and re-applies the mutation.
+        mutation_receivers = standalone_method_mutation_receivers(_parsed_tree)
+        new_mutation_receivers = mutation_receivers - outputs
+        if new_mutation_receivers:
+            outputs = outputs | new_mutation_receivers
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"In-place mutation on: {', '.join(sorted(new_mutation_receivers))} "
+                "(receiver lineage bumped; statement re-executes)"
+            )
 
         if not skip_cache:
             cacheable, reasons = decide_cacheability(

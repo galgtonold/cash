@@ -23,6 +23,7 @@ __all__ = [
     # Primary API
     "StatementAnalysis",
     "analyze_statement",
+    "standalone_method_mutation_receivers",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -378,6 +379,64 @@ class StatementAnalysis:
         for e in self.side_effects:
             reasons.append(f"Side effect: {e.description} ({e.kind})")
         return reasons
+
+
+def _expr_call_inplace_true(call: ast.Call) -> bool:
+    """Return True if *call* passes ``inplace=True`` as a keyword."""
+    for kw in call.keywords:
+        if (
+            kw.arg == 'inplace'
+            and isinstance(kw.value, ast.Constant)
+            and kw.value.value is True
+        ):
+            return True
+    return False
+
+
+def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[str]:
+    """Base variables mutated by a *top-level bare-``Expr``* method call.
+
+    Returns the receiver variable for statements like ``lst.append(x)``,
+    ``box.add(1)``, ``box.items.append(1)`` or ``df.dropna(inplace=True)`` —
+    a method known to mutate its receiver (``MUTATING_METHODS``) or a pandas
+    method invoked with ``inplace=True``.
+
+    These receivers carry no Store target, so ``CodeAnalyzer._FlowVisitor``
+    never surfaces them as *outputs* and their lineage is left frozen — a
+    cached downstream consumer then serves a stale value after the mutation is
+    edited.  Both the runtime (``StatementProcessor.process_statement``) and the
+    upstream simulation (``VirtualLineage._update_virtual_lineage``) union this
+    set into the statement's outputs so the receiver gets a fresh, source-based
+    lineage identically on both sides.
+
+    Scope is deliberately narrow — only ``tree.body`` (top-level) bare ``Expr``
+    statements:
+
+    * Mutations inside loops/functions are handled elsewhere (the
+      loop-mutation lineage path), so they are excluded to avoid double-bump.
+    * A captured result (``r = lst.append(x)``) is an ``Assign``, not a bare
+      ``Expr``, and is excluded.
+    * Pure standalone calls (``df.head()``) use a method outside the known
+      mutating sets and are excluded — so they are never over-invalidated.
+    """
+    if tree is None:
+        return frozenset()
+    receivers: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        call = node.value
+        if not isinstance(call.func, ast.Attribute):
+            continue
+        method_name = call.func.attr
+        base = _extract_base_name(call.func.value)
+        if not base:
+            continue
+        if method_name in MUTATING_METHODS or (
+            method_name in PANDAS_INPLACE_METHODS and _expr_call_inplace_true(call)
+        ):
+            receivers.add(base)
+    return frozenset(receivers)
 
 
 def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:

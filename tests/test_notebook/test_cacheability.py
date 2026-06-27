@@ -15,6 +15,7 @@ from cash.notebook.cacheability import (
     SideEffectInfo,
     StatementAnalysis,
     analyze_statement,
+    standalone_method_mutation_receivers,
 )
 
 
@@ -143,6 +144,65 @@ class TestAllMutatedVars:
         code = "lst.append(42)"
         a = _analyze_with_tree(code)
         assert 'lst' in a.all_mutated_vars
+
+
+# ---------------------------------------------------------------------------
+# Standalone method-mutation receivers (lineage-bump + skip-cache trigger)
+# ---------------------------------------------------------------------------
+
+class TestStandaloneMethodMutationReceivers:
+    """``standalone_method_mutation_receivers`` returns the base variable of a
+    top-level bare-``Expr`` method call that mutates its receiver in place
+    (``lst.append(x)``, ``df.dropna(inplace=True)``).  These receivers are
+    routed into the statement's *output* set so their lineage is bumped — the
+    runtime and the upstream simulation both consume this helper so the bump
+    stays in sync.  Pure standalone calls (``df.head()``) and assignments
+    (``r = lst.append(x)``) are excluded.
+    """
+
+    @staticmethod
+    def _receivers(code: str) -> frozenset[str]:
+        return standalone_method_mutation_receivers(ast.parse(code))
+
+    def test_list_append(self):
+        assert self._receivers("lst.append(42)") == {'lst'}
+
+    def test_set_add(self):
+        assert self._receivers("box.add(10)") == {'box'}
+
+    def test_attribute_receiver_append(self):
+        assert self._receivers("box.items.append(10)") == {'box'}
+
+    def test_dict_update(self):
+        assert self._receivers("config.update({'k': 'v'})") == {'config'}
+
+    def test_pandas_inplace_true(self):
+        assert self._receivers("df.dropna(inplace=True)") == {'df'}
+
+    def test_pure_method_excluded(self):
+        """A non-mutating standalone call must NOT bump its receiver."""
+        assert self._receivers("df.head()") == frozenset()
+
+    def test_pandas_inplace_false_excluded(self):
+        assert self._receivers("df.fillna(0, inplace=False)") == frozenset()
+
+    def test_assignment_excluded(self):
+        """Captured result — not a bare standalone mutation statement."""
+        assert self._receivers("r = lst.append(42)") == frozenset()
+
+    def test_loop_body_mutation_excluded(self):
+        """Mutations inside a loop are handled by the loop-mutation path, not here."""
+        assert self._receivers("for x in xs:\n    lst.append(x)") == frozenset()
+
+    def test_function_body_mutation_excluded(self):
+        code = "def f():\n    lst.append(1)"
+        assert self._receivers(code) == frozenset()
+
+    def test_multiple_receivers(self):
+        assert self._receivers("a.append(1)\nb.add(2)") == {'a', 'b'}
+
+    def test_none_tree(self):
+        assert standalone_method_mutation_receivers(None) == frozenset()
 
 
 # ---------------------------------------------------------------------------

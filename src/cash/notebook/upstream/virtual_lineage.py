@@ -22,6 +22,7 @@ from typing import Any
 from ...utils import resolve_file_dep_path
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
+from ..cacheability import standalone_method_mutation_receivers
 from ..file_dep_snapshot import split_file_dep_value
 from ..cache_key import CacheKeyContext, compute_cache_key
 from ..cache_status import CacheStatus
@@ -1446,6 +1447,16 @@ class VirtualLineage:
 
             # Analyze statement
             inputs, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
+
+            # Mirror the runtime: a top-level bare-Expr method mutation
+            # (lst.append(x), box.add(1)) carries no Store target, so
+            # analyze_code_block never surfaces the receiver as an output. Union
+            # it in so the simulated lineage is bumped with the SAME
+            # source-based formula the runtime uses -- keeping the two engines
+            # in sync (a runtime-only bump desyncs cross-cell restore).
+            mutation_tree = self._get_cached_ast(stmt_code)
+            if mutation_tree is not None:
+                outputs = outputs | standalone_method_mutation_receivers(mutation_tree)
 
             stripped = stmt_code.strip()
             is_import = stripped.startswith(('import ', 'from '))
