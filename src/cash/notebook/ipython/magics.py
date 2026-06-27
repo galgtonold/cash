@@ -679,15 +679,18 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # 3. Seed notebook-path cache from VS Code cell_id URI
             self._maybe_seed_notebook_path(self._current_cell_id)
 
-            if self._debug:
-                if self._current_cell_id:
-                    print(f"[CELL_ID] Captured cell_id: {self._current_cell_id}")
-                else:
-                    print("[CELL_ID] No cell_id found in info or metadata")
+            # Debug-level logging (not a raw print): when %cash_debug is on the
+            # ``cash`` logger is at DEBUG with a console handler attached, so
+            # these surface; otherwise they stay silent instead of printing on
+            # every cell (the "No cell_id found" case fires constantly in
+            # environments that don't supply a cell_id).
+            if self._current_cell_id:
+                logger.debug("[CELL_ID] Captured cell_id: %s", self._current_cell_id)
+            else:
+                logger.debug("[CELL_ID] No cell_id found in info or metadata")
 
         except (AttributeError, TypeError, KeyError, RuntimeError) as e:
-            if self._debug:
-                print(f"[CELL_ID] Could not capture cell_id: {e}")
+            logger.debug("[CELL_ID] Could not capture cell_id: %s", e)
             self._current_cell_id = None
 
     def _should_render_progress_badge(self) -> bool:

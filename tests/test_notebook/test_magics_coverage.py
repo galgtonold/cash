@@ -186,15 +186,25 @@ class TestCaptureCellId:
         magics._capture_cell_id(info)
         assert magics._current_cell_id is None
 
-    def test_capture_debug_output(self, magics_fixture, capsys):
+    def test_capture_debug_output(self, magics_fixture, caplog):
+        """cell_id capture emits a DEBUG log record, not a raw stdout print."""
+        import logging
         magics, _, _ = magics_fixture
         magics._debug = True
         info = MagicMock()
         info.cell_id = "debug-cell"
+        with caplog.at_level(logging.DEBUG, logger="cash.notebook.ipython.magics"):
+            magics._capture_cell_id(info)
+        messages = [r.getMessage() for r in caplog.records]
+        assert any("[CELL_ID]" in m and "debug-cell" in m for m in messages), messages
+
+    def test_capture_no_cell_id_does_not_print(self, magics_fixture, capsys):
+        """The no-cell_id path must not write to stdout (was noisy every cell)."""
+        magics, _, _ = magics_fixture
+        magics._debug = True
+        info = MagicMock(spec=[])  # no cell_id attribute
         magics._capture_cell_id(info)
-        captured = capsys.readouterr()
-        assert "[CELL_ID]" in captured.out
-        assert "debug-cell" in captured.out
+        assert "[CELL_ID]" not in capsys.readouterr().out
 
 
 # ============================================================================

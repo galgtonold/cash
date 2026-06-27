@@ -237,14 +237,15 @@ class CellExecutor:
             self._magics._current_cell_id = cell_id
             self._magics._maybe_seed_notebook_path(cell_id)
 
-            if self._debug:
-                if cell_id:
-                    print(f"[PROXY_CELL_ID] Captured cell_id early: {cell_id}")
-                else:
-                    print("[PROXY_CELL_ID] No cell_id in parent metadata")
+            # Debug-level logging (not a raw print): silent unless %cash_debug
+            # is on. The "No cell_id" branch otherwise fires on every cell in
+            # the default proxy path for environments that don't supply one.
+            if cell_id:
+                logger.debug("[PROXY_CELL_ID] Captured cell_id early: %s", cell_id)
+            else:
+                logger.debug("[PROXY_CELL_ID] No cell_id in parent metadata")
         except (AttributeError, TypeError, KeyError, RuntimeError) as e:
-            if self._debug:
-                print(f"[PROXY_CELL_ID] Could not capture cell_id early: {e}")
+            logger.debug("[PROXY_CELL_ID] Could not capture cell_id early: %s", e)
 
     # ------------------------------------------------------------------
     # Phase 2: badge & timing init
