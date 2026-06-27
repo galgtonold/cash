@@ -58,6 +58,8 @@ def invalidate_notebook_path_cache() -> None:
     global _cached_notebook_path, _cached_notebook_path_time
     _cached_notebook_path = None
     _cached_notebook_path_time = 0.0
+    # A notebook switch invalidates any cached cell parse for the old path too.
+    invalidate_notebook_cells_cache()
 
 
 def set_notebook_path(path: str) -> None:
@@ -205,19 +207,50 @@ def get_notebook_path() -> str | None:
     return None
 
 
-def _wait_for_notebook_save(notebook_path: str) -> None:
-    """Wait briefly if the notebook file was just saved (< 1 s ago).
+# Tunables for the save-settle wait (see _wait_for_notebook_save).
+_SAVE_FRESH_WINDOW_S: float = 1.0      # only wait when the file changed this recently
+_SAVE_POLL_INTERVAL_S: float = 0.05    # re-stat cadence while a write is in flight
+_SAVE_MAX_WAIT_S: float = 1.0          # hard cap so we never block a run for long
 
-    VS Code saves the notebook before executing a cell.  On cloud-synced
-    drives or slow I/O the write may still be in progress, so we sleep
-    a short time to let it complete.
+
+def _wait_for_notebook_save(notebook_path: str) -> None:
+    """Block briefly while an in-flight notebook save settles, then return.
+
+    The editor executes from its in-memory model and may write the ``.ipynb`` to
+    disk slightly *after* the run begins; on a cloud-synced drive or slow I/O the
+    write can still be in progress when we read.  Reading mid-write yields stale
+    (pre-edit) cell sources, which silently breaks upstream change detection — the
+    bug this guards against.
+
+    There is no guaranteed save-before-execute to wait on (VS Code's Jupyter
+    extension has no "autosave on run"; classic Jupyter autosaves on a long
+    timer), so a fixed blind sleep is the wrong tool: when nothing is being
+    written it only adds latency, and when the write is slow a fixed sleep may be
+    too short and still read stale.  Instead, *only* when the file looks freshly
+    touched, poll until its ``(mtime, size)`` stops changing — i.e. the writer is
+    done — bounded by ``_SAVE_MAX_WAIT_S``.  A long-settled file returns at once.
     """
     try:
-        age = _time.time() - os.path.getmtime(notebook_path)
-        if age < 1.0:
-            _time.sleep(0.3)
+        st = os.stat(notebook_path)
     except OSError:
         logger.debug("Cannot stat notebook file for freshness check: %s", notebook_path)
+        return
+
+    if _time.time() - st.st_mtime >= _SAVE_FRESH_WINDOW_S:
+        return  # settled long ago — nothing in flight to wait for
+
+    deadline = _time.monotonic() + _SAVE_MAX_WAIT_S
+    last = (st.st_mtime_ns, st.st_size)
+    while _time.monotonic() < deadline:
+        _time.sleep(_SAVE_POLL_INTERVAL_S)
+        try:
+            st = os.stat(notebook_path)
+        except OSError:
+            return
+        current = (st.st_mtime_ns, st.st_size)
+        if current == last:
+            return  # writer is done — file is stable
+        last = current
 
 
 def _extract_cell_entry(cell: dict, include_ids: bool) -> str | tuple[str | None, str]:
@@ -231,9 +264,29 @@ def _extract_cell_entry(cell: dict, include_ids: bool) -> str | tuple[str | None
     return source
 
 
+# Session-level cache of parsed notebook cells, keyed by (path, include_ids).
+# Value is (mtime_ns, size, cells).  The (mtime_ns, size) signature is the file's
+# own identity, so the cache can never serve content for a different file state —
+# any save bumps the signature, forcing a fresh read.  This collapses the many
+# reads per cell run (the magic reads once; the upstream checker reads twice) into
+# a single parse per file state, and means the save-settle wait runs at most once
+# per change instead of once per read.  Cleared on notebook switch.
+_notebook_cells_cache: dict[tuple[str, bool], tuple[int, int, list]] = {}
+
+
+def invalidate_notebook_cells_cache() -> None:
+    """Drop the parsed-notebook-cells cache (e.g. on notebook switch / %cash_on)."""
+    _notebook_cells_cache.clear()
+
+
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
     """
     Read code cells from the notebook file.
+
+    Memoized by the file's ``(mtime_ns, size)`` signature: repeated reads of an
+    unchanged file return the cached parse without re-opening it, while any edit
+    (which bumps mtime/size) forces a fresh read — so a quick edit-then-run never
+    serves stale cell sources.
 
     Args:
         notebook_path: Path to notebook file. Auto-detected if None.
@@ -252,13 +305,27 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
     if not os.path.exists(notebook_path):
         return []
 
+    cache_key = (notebook_path, include_ids)
     try:
+        st = os.stat(notebook_path)
+        signature = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        signature = None
+
+    if signature is not None:
+        cached = _notebook_cells_cache.get(cache_key)
+        if cached is not None and (cached[0], cached[1]) == signature:
+            return cached[2]
+
+    try:
+        # Reached only on a new/changed file state: let an in-flight save settle
+        # before reading so we never parse a half-written (stale) notebook.
         _wait_for_notebook_save(notebook_path)
 
         with open(notebook_path, encoding='utf-8') as f:
             nb = json.load(f)
 
-        return [
+        cells = [
             _extract_cell_entry(cell, include_ids)
             for cell in nb.get('cells', [])
             if cell.get('cell_type') == 'code'
@@ -266,6 +333,16 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
     except Exception as e:
         logger.error("Error reading notebook file: %s", e)
         return []
+
+    # Key by the POST-wait file state — the wait may have let a newer save land —
+    # so subsequent reads of the now-settled file hit the cache.
+    try:
+        st2 = os.stat(notebook_path)
+        _notebook_cells_cache[cache_key] = (st2.st_mtime_ns, st2.st_size, cells)
+    except OSError:
+        logger.debug("Cannot stat notebook file to cache cells: %s", notebook_path)
+
+    return cells
 
 
 def get_notebook_cells(notebook_path: str | None = None) -> list[str]:
