@@ -77,6 +77,13 @@ def _boot_lock_acquire():
             except OSError:
                 pass
             time.sleep(0.02)
+        except PermissionError:
+            # Windows throws WinError 5 (Access is denied) on mkdir when another
+            # worker is mid-rmdir of the lock dir, or an AV/indexer briefly holds
+            # a handle on it. Transient, not a real failure -- just retry. (Only
+            # FileExistsError was caught before; the denser worksteal scheduling
+            # surfaced this race as spurious PermissionError test failures.)
+            time.sleep(0.02)
 
 
 def _boot_lock_release():

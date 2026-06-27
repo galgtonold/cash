@@ -122,18 +122,27 @@ timeout = 30
 asyncio_mode = "auto"
 # Parallel by default: integration tests each spawn a fresh Jupyter kernel and
 # spend ~90% of wall-clock blocked on kernel boot/IPC, so a serial run pins one
-# core and leaves the rest idle. `loadscope` keeps each module/class on a single
-# worker, preserving the ordered, per-file isolation the unit suite relies on.
-# For interactive debugging (pdb, -s) disable parallelism with `-n0`.
+# core and leaves the rest idle. For interactive debugging (pdb, -s) disable
+# parallelism with `-n0`.
+#
+# Scheduler is `worksteal`, NOT `loadscope`. Worker deaths are inevitable across
+# thousands of Jupyter-kernel spawns on Windows (boot-storm "node down"), and
+# under loadscope a SINGLE death is catastrophic: its rescheduler can't reassign
+# the dead worker's scope, so the master either aborts the whole session
+# (INTERNALERROR KeyError) or hangs indefinitely (observed 15h; a 90s
+# self-killing-worker repro hung the full 90s). worksteal isolates a death to the
+# one in-flight test and redistributes the rest, so the run always completes;
+# `--max-worker-restart` lets dead workers respawn. Neither suite needs
+# loadscope's module-grouping (nb_runner is function-scoped; no module/session/
+# class-scoped fixtures exist). `timeout=30` per test is the in-worker backstop.
 #
 # Worker count is pinned to 16, NOT `-n auto`. The suite is boot-throttle-bound
 # (CASH_TEST_BOOT_THROTTLE, default 8), not CPU-bound: CPU never saturates even
 # at 64 workers. A sweep on this box (32 logical / 24 physical) found n=16 both
-# fastest (121s vs 135s at n=32) and most stable (1 failure vs 8). Past ~2x the
-# boot throttle, extra workers only queue kernel boots -- slowing AND
-# destabilizing the run (failures climbed 1->8->20->35 at n=16->32->48->64).
+# fastest (121s vs 135s at n=32) and most stable. Past ~2x the boot throttle,
+# extra workers only queue kernel boots -- slowing AND destabilizing the run.
 # Rule of thumb: workers ~= 2 x boot throttle. Lower on a much smaller box.
-addopts = "-n 16 --dist loadscope"
+addopts = "-n 16 --dist worksteal --max-worker-restart=24"
 filterwarnings = [
     "ignore:Passing individual keyword arguments to compute_cache_key:DeprecationWarning",
     "ignore:set_tracking_dicts\\(\\) is deprecated:DeprecationWarning",
