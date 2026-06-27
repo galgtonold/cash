@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from ..cacheability import analyze_statement
 from ..control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
@@ -168,8 +169,11 @@ class NotebookSimulator:
         required_inputs: set[str] | None,
         current_cell_reassigned: set[str] | None,
         broken_vars: set[str],
+        current_cell_mutated: set[str] | None = None,
+        notebook_cells: list[str] | None = None,
+        current_cell_idx: int | None = None,
     ) -> None:
-        """Flag self-reassigned required inputs whose live value is stale.
+        """Flag self-modifying required inputs whose live value is stale.
 
         ``variable_lineage[var]`` can be reset to a pre-cell base (downstream
         advancement / forward simulation) WITHOUT touching the in-memory value,
@@ -184,28 +188,70 @@ class NotebookSimulator:
         the input version is not actually present, so mark it broken and let the
         normal restore / upstream-re-execution machinery re-derive its base.
 
-        Restricted to variables the current cell **reassigns** with a fresh
-        value (a ``Name`` store, ``df = ...``). In-place mutation of a var
-        (``df['c'] = ...`` / ``df.attr = ...``) is deliberately excluded: it
-        replays through the mutation-lineage restoration path, and its live
-        value legitimately runs ahead of the reset base — flagging it here
-        would force needless recompute of the whole cell (and wrongly defeat
-        per-statement cache hits, e.g. an unchanged ``df['VolAdj']`` when only a
-        later ``df['SMA']`` window changed). Builtins are skipped.
+        Two regimes, split on whether the live value carries a
+        ``_cash_lineage_hash``:
+
+        * **Lineage-carrying objects** (DataFrame/Series — branches (a)/(b)
+          below). Restricted to variables the current cell **reassigns** with a
+          fresh value (a ``Name`` store, ``df = ...``). In-place mutation of a
+          such a var (``df['c'] = ...`` / ``df.attr = ...``) is deliberately
+          excluded: it replays through the mutation-lineage restoration path,
+          and its live value legitimately runs ahead of the reset base —
+          flagging it here would force needless recompute of the whole cell (and
+          wrongly defeat per-statement cache hits, e.g. an unchanged
+          ``df['VolAdj']`` when only a later ``df['SMA']`` window changed).
+        * **No-lineage values** (primitives / builtin containers / ndarray —
+          ``_mark_nolineage_self_write_broken``). These cannot hold the attribute
+          and their self-modifying statements skip the per-statement cache for
+          missing input lineage, so an isolated re-run computes on the cell's own
+          prior output (``lst.append`` doubles, ``total = total + k`` doubles).
+          Both pure reassignment *and* in-place mutation are eligible here —
+          there is no per-statement cache to defeat.
+
+        Builtins are skipped.
         """
-        if not required_inputs or not current_cell_reassigned:
+        if not required_inputs:
             return
+        reassigned = current_cell_reassigned or set()
+        # A no-lineage var the current cell mutates in place (``lst.append`` /
+        # ``arr += 1`` / ``d.update``) is *self-written* even though it is not a
+        # ``Name``-store reassignment.  Treat both as self-modifying inputs.
+        inplace_self = (current_cell_mutated or set()) & required_inputs
+        self_written = reassigned | inplace_self
+        if not self_written:
+            return
+        # Vars that an *upstream* cell also mutates in place. A no-lineage var
+        # mutated across several cells (``results.append(..)`` once per cell) has
+        # no recorded per-cell base — current_session_hashes never advances past
+        # the first assignment — so the content-base check below would wrongly
+        # reset it to that assignment and drop the intermediate cells' mutations.
+        # Computed lazily (only when an in-place no-lineage candidate exists).
+        upstream_inplace_mutated: set[str] | None = None
         for var_name in required_inputs:
             if var_name in _BUILTIN_NAMES:
                 continue
-            if var_name not in current_cell_reassigned:
-                continue
-            recorded = self.variable_lineage.get(var_name)
-            if recorded is None:
+            if var_name not in self_written:
                 continue
             live_value = self.shell.user_ns.get(var_name)
             live_lineage = getattr(live_value, '_cash_lineage_hash', None)
             if live_lineage is None:
+                # Primitives / builtin containers / ndarray carry no
+                # ``_cash_lineage_hash`` and their self-modifying statements skip
+                # the per-statement cache (missing input lineage), so an isolated
+                # re-run would compute on the cell's own prior output. Restore the
+                # cell-entry base by marking the input broken (producer re-runs).
+                if upstream_inplace_mutated is None:
+                    upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
+                        notebook_cells, current_cell_idx,
+                    )
+                self._mark_nolineage_self_write_broken(
+                    var_name, live_value, broken_vars, upstream_inplace_mutated,
+                )
+                continue
+            if var_name not in reassigned:
+                continue
+            recorded = self.variable_lineage.get(var_name)
+            if recorded is None:
                 continue
             # (a) ``variable_lineage[var]`` was reset to a pre-cell base (the
             # downstream-advancement reset, e.g. test_134's multi-statement
@@ -245,6 +291,98 @@ class NotebookSimulator:
                     )
                 broken_vars.add(var_name)
 
+    def _mark_nolineage_self_write_broken(
+        self,
+        var_name: str,
+        live_value: Any,
+        broken_vars: set[str],
+        upstream_inplace_mutated: set[str] | None = None,
+    ) -> None:
+        """Mark a no-lineage self-modifying input broken if its live value is stale.
+
+        Values with no ``_cash_lineage_hash`` (int/str, builtin list/dict/set,
+        ndarray) cannot be tracked by the lineage branches (a)/(b). Two staleness
+        signals, each of which self-disables on a fresh forward run (where the
+        producer has already restored the cell-entry base) and only fires on an
+        isolated re-run (where it has not):
+
+        * **Lineage-base** — the var is a self-modifying *output*
+          (``total = total + k``, ``arr += 1``). ``executed_input_lineages[var]
+          [var]`` is the lineage of the version this cell *consumed* last run (the
+          cell-entry base). After the cell ran, ``variable_lineage[var]`` advanced
+          to the output lineage; on an isolated re-run the producer has not reset
+          it, so base != current betrays the stale value. (On ``run_all`` the
+          producer runs first and resets ``variable_lineage[var]`` to the base, so
+          base == current and nothing is flagged.)
+        * **Content-base** — pure in-place mutation (``lst.append``) produces no
+          output, so ``executed_input_lineages[var]`` is absent and
+          ``current_session_hashes[var]`` still holds the upstream producer's
+          *content* hash (the base, never advanced by the mutation). A live
+          content hash that differs means the namespace holds this cell's own
+          prior mutation.
+
+        The content-base check is suppressed when an *upstream* cell also mutates
+        the var in place: such a var is accumulated across cells
+        (``results.append(..)`` once per cell), its ``current_session_hashes``
+        entry never advances past the first assignment, and restoring it to that
+        assignment would drop the intermediate cells' contributions.
+        """
+        base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
+        if base_lineage is not None:
+            current_lineage = self.variable_lineage.get(var_name)
+            if current_lineage is not None and current_lineage != base_lineage:
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] no-lineage self-write '%s' holds its own prior "
+                        "output on re-run (cell-entry base lineage %s but current %s); "
+                        "marking broken so its base is restored before the cell re-runs.",
+                        var_name, base_lineage[:8], current_lineage[:8],
+                    )
+                broken_vars.add(var_name)
+            return
+
+        if upstream_inplace_mutated and var_name in upstream_inplace_mutated:
+            return
+        if self.compute_hash_fn is None:
+            return
+        session_hashes = getattr(self._tracking_state, 'current_session_hashes', {})
+        base_content = session_hashes.get(var_name)
+        if base_content is None:
+            return
+        try:
+            live_content = self.compute_hash_fn(live_value)
+        except (TypeError, ValueError, AttributeError, RecursionError):
+            return
+        if live_content != base_content:
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM_DEBUG] no-lineage in-place mutation '%s' holds its own prior "
+                    "output on re-run (cell-entry base content %s but live %s); marking "
+                    "broken so its base is restored before the cell re-runs.",
+                    var_name, base_content[:8], live_content[:8],
+                )
+            broken_vars.add(var_name)
+
+    def _scan_upstream_inplace_mutations(
+        self,
+        notebook_cells: list[str] | None,
+        current_cell_idx: int | None,
+    ) -> set[str]:
+        """Return the set of names mutated in place by any cell *before* the current one.
+
+        Used to suppress the content-base staleness check for variables
+        accumulated across several cells (see ``_mark_nolineage_self_write_broken``).
+        """
+        if not notebook_cells or not current_cell_idx:
+            return set()
+        muts: set[str] = set()
+        for code in notebook_cells[:current_cell_idx]:
+            try:
+                muts |= set(analyze_statement(code, None).all_mutated_vars)
+            except (SyntaxError, ValueError, TypeError):
+                continue
+        return muts
+
     def _simulate_and_find_changes(
         self,
         current_cell_idx: int,
@@ -252,6 +390,7 @@ class NotebookSimulator:
         required_inputs: set[str] | None = None,
         current_cell_outputs: set[str] | None = None,
         current_cell_reassigned: set[str] | None = None,
+        current_cell_mutated: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
 
@@ -305,6 +444,8 @@ class NotebookSimulator:
 
         self._mark_stale_value_inputs_broken(
             required_inputs, current_cell_reassigned, broken_vars,
+            current_cell_mutated=current_cell_mutated,
+            notebook_cells=notebook_cells, current_cell_idx=current_cell_idx,
         )
 
         if not broken_vars:

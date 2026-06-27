@@ -25,12 +25,23 @@ re-derives the base. Confirmed via the guard probe: the single-statement
 ``df = df.iloc[1:]`` gets recorded == live == advanced but base_input == base
 != live, which is the new signal.
 
-STILL xfail (the remaining sections, documented known limitations -- they fail
-identically on the pre-fix baseline, not regressions):
-  * primitives / builtin containers (int swap, list/dict reassign) carry no
-    ``_cash_lineage_hash``, so neither guard branch can see them;
-  * in-place mutation accumulators (``lst.append``, ``arr += 1``) replay through
-    a separate mutation-lineage path and are excluded from the reassign gate;
+FIXED for no-lineage self-modifying inputs (the second section below): primitives
+/ builtin containers / ndarray carry no ``_cash_lineage_hash``, and their
+self-modifying statements skip the per-statement cache (missing input lineage), so
+an isolated re-run computes on the cell's own prior output. The stale-value
+guard's no-lineage branch detects this two ways -- a self-modifying *output*
+whose consumed cell-entry base lineage (``executed_input_lineages[var][var]``) now
+differs from its advanced recorded lineage (``total = total + k``, ``arr += 1``,
+``lst = lst + [..]``), and a pure in-place *mutation* whose
+``current_session_hashes[var]`` (never advanced by a no-output mutation, so still
+the producer's content hash) differs from the live content hash (``lst.append``).
+Both self-disable on ``run_all`` (the producer restores the base first).
+
+STILL xfail (documented known limitations -- they fail identically on the pre-fix
+baseline, not regressions):
+  * interdependent multi-target swap (``a, b = b, a``): both outputs share one
+    statement lineage, so the per-variable base cannot distinguish ``a`` from
+    ``b``;
   * mutate+reassign in one cell (``df['c']=...; df=df.rename(...)``) is excluded
     because the var lands in ``modified_objects``.
 """
@@ -89,31 +100,32 @@ class TestIsolatedRerunGaps:
 
     # ---- primitives / builtin containers (no _cash_lineage_hash attribute) ----
 
-    @pytest.mark.xfail(reason="Bug B: int swap; primitives carry no _cash_lineage_hash so "
-                              "the guard skips them. " + _GAP3, strict=False)
+    @pytest.mark.xfail(reason="Interdependent multi-target swap (a, b = b, a): both outputs "
+                              "of one statement share a single lineage, so the per-variable "
+                              "cell-entry base no longer distinguishes a from b and the "
+                              "no-lineage guard cannot restore the pair. " + _GAP3,
+                       strict=False)
     def test_primitive_tuple_swap(self, nb_runner):
         _two_cell(nb_runner, "a = 1\nb = 2", "a, b = b, a\nprint(f'{a},{b}')", "2,1")
 
-    @pytest.mark.xfail(reason="Bug B family: list reassigned from itself; builtin list has "
-                              "no lineage attr. " + _GAP3, strict=False)
+    # FIXED: no-lineage self-reassignment. The stale-value guard's no-lineage
+    # branch compares the consumed cell-entry base (executed_input_lineages /
+    # current_session_hashes) against the live value and restores the base.
+
     def test_builtin_list_reassign_grow(self, nb_runner):
         _two_cell(nb_runner, "lst = [0]", "lst = lst + [len(lst)]\nprint(lst)", "[0, 1]")
 
-    @pytest.mark.xfail(reason="Bug B family: dict reassigned from itself. " + _GAP3,
-                       strict=False)
     def test_builtin_dict_reassign_grow(self, nb_runner):
         _two_cell(nb_runner, "d = {'a': 1}", "d = {**d, str(len(d)): len(d)}\nprint(sorted(d))", "['1', 'a']")
 
-    # ---- in-place mutation accumulators (separate mutation-lineage path) ----
+    # ---- in-place mutation accumulators ----
+    # FIXED: a no-lineage var mutated in place produces no output, so
+    # current_session_hashes still holds the upstream producer's content hash
+    # (the base); a live content hash that differs flags the stale value.
 
-    @pytest.mark.xfail(reason="In-place accumulator: lst.append re-run doubles "
-                              "([1,2,99]->[1,2,99,99]). Mutation-lineage path does not "
-                              "restore the base on isolated re-run. " + _GAP3, strict=False)
     def test_list_append_inplace_rerun(self, nb_runner):
         _two_cell(nb_runner, "lst = [1, 2]", "lst.append(99)\nprint(lst)", "[1, 2, 99]")
 
-    @pytest.mark.xfail(reason="In-place accumulator: arr += 1 (numpy in-place) adds twice "
-                              "on re-run. " + _GAP3, strict=False)
     def test_numpy_inplace_augmented(self, nb_runner):
         _two_cell(
             nb_runner,
@@ -123,9 +135,9 @@ class TestIsolatedRerunGaps:
         )
 
     # ---- control structure self-reference ----
+    # FIXED (same no-lineage branch): 'total' is a self-modifying output whose
+    # consumed base lineage differs from the advanced recorded lineage on re-run.
 
-    @pytest.mark.xfail(reason="Loop accumulator: 'for k in ...: total = total + k' doubles "
-                              "(6->12) on isolated re-run. " + _GAP3, strict=False)
     def test_for_loop_accumulate_rerun(self, nb_runner):
         _two_cell(
             nb_runner,

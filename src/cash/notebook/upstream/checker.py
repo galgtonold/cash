@@ -11,6 +11,7 @@ from ...exceptions import AmbiguousCellError, UpstreamStateError
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
+from ..cacheability import analyze_statement
 from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
     NotebookSimulator,
     _BUILTIN_NAMES,
@@ -211,13 +212,17 @@ class UpstreamChecker:
         # from variables the current cell also writes (downstream-advancement case).
         # Also compute the names the cell REASSIGNS (`name = ...`), distinct from
         # in-place mutation, so Phase 2 can restore a stale self-reassigned input.
+        # And the names the cell MUTATES in place (`lst.append`, `arr += 1`,
+        # `d.update`) so Phase 2 can restore a no-lineage in-place accumulator.
         try:
             _, current_cell_outputs = CodeAnalyzer.analyze_code_block(cell_code)
             current_cell_reassigned = CodeAnalyzer.reassigned_names(cell_code)
+            current_cell_mutated = set(analyze_statement(cell_code, None).all_mutated_vars)
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
             current_cell_outputs = set()
             current_cell_reassigned = set()
+            current_cell_mutated = set()
 
         # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
         # Simulates the notebook statement-by-statement and compares the resulting
@@ -226,6 +231,7 @@ class UpstreamChecker:
             cell_code, required_inputs, process_statement_callback, global_ttl,
             current_cell_outputs=current_cell_outputs,
             current_cell_reassigned=current_cell_reassigned,
+            current_cell_mutated=current_cell_mutated,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
         )
@@ -533,6 +539,7 @@ class UpstreamChecker:
         global_ttl: int | None,
         current_cell_outputs: set[str] | None = None,
         current_cell_reassigned: set[str] | None = None,
+        current_cell_mutated: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None
     ) -> UpstreamResult:
@@ -559,7 +566,8 @@ class UpstreamChecker:
                 notebook_cells,
                 required_inputs,
                 current_cell_outputs=current_cell_outputs,
-                current_cell_reassigned=current_cell_reassigned
+                current_cell_reassigned=current_cell_reassigned,
+                current_cell_mutated=current_cell_mutated
             )
 
             if self.debug:

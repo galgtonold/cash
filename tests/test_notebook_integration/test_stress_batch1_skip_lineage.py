@@ -100,7 +100,15 @@ class TestSkipLogic:
         assert "3" in nb_runner.get_output(1)
 
     def test_06_augmented_assignment_different_results(self, nb_runner):
-        """Scenario 10: x += 1 repeated — each execution produces different result."""
+        """Scenario 10: x += 1 on an isolated re-run is idempotent (run-from-start).
+
+        ``x`` is a no-lineage primitive the cell self-modifies. Re-running cell 2
+        alone == running the notebook from the start (``x = 0`` then ``x += 1``),
+        so ``x`` is restored to its cell-entry base before re-execution and the
+        result stays ``1`` — it does NOT accumulate to ``2``. (An earlier snapshot
+        of the doubling bug asserted ``x=2``; idempotent re-run is the intended
+        semantic — see test_isolated_rerun_gaps.)
+        """
         nb_runner.create_notebook([
             "x = 0",
             "x += 1\nprint(f'x={x}')",
@@ -108,10 +116,9 @@ class TestSkipLogic:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=1" in nb_runner.get_output(2)
-        # Re-run cell 2 — x is now 1, augmented assignment should produce 2
-        # This is tricky because code is same but input (x) has changed lineage
+        # Re-run cell 2 — base x=0 is restored first, so x += 1 stays 1.
         nb_runner.run_cell(2)
-        assert "x=2" in nb_runner.get_output(2)
+        assert "x=1" in nb_runner.get_output(2)
 
 
     def test_08_empty_cell(self, nb_runner):
@@ -295,7 +302,13 @@ class TestLineageIntegrity:
         assert "d=500" in nb_runner.get_output(4)
 
     def test_20_self_referential_increment(self, nb_runner):
-        """Scenario 21: x = x + 1 repeated — should handle without recursion."""
+        """Scenario 21: x = x + 1 on an isolated re-run is idempotent (run-from-start).
+
+        Same family as test_06 with a pure self-reassignment rather than an
+        augmented assignment. Re-running cell 2 restores the cell-entry base
+        ``x = 0`` first, so ``x = x + 1`` stays ``1`` rather than accumulating to
+        ``2`` — see test_isolated_rerun_gaps for the catalogue.
+        """
         nb_runner.create_notebook([
             "x = 0",
             "x = x + 1\nprint(f'x={x}')",
@@ -303,9 +316,9 @@ class TestLineageIntegrity:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "x=1" in nb_runner.get_output(2)
-        # Run cell 2 again — x is 1, x = x + 1 = 2
+        # Run cell 2 again — base x=0 is restored first, so x = x + 1 stays 1.
         nb_runner.run_cell(2)
-        assert "x=2" in nb_runner.get_output(2)
+        assert "x=1" in nb_runner.get_output(2)
 
     def test_21_variable_shadowing_uses_latest(self, nb_runner):
         """Scenario 22: Two cells define x — downstream uses latest."""

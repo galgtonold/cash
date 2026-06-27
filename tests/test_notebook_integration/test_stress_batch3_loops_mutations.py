@@ -336,7 +336,13 @@ class TestMutationDetection:
         assert "'a': 10" in out
 
     def test_94_mutation_no_output_variable(self, nb_runner):
-        """Mutation with no new output variable — just modifying existing."""
+        """Subscript mutation with no new output variable — isolated re-run is idempotent.
+
+        ``data`` is a no-lineage dict mutated in place (``data['count'] += 1``).
+        Re-running cell 2 alone == running from the start, so ``data`` is restored
+        to its cell-entry base ``{'count': 0}`` before re-execution and ``count``
+        stays ``1`` rather than accumulating to ``2`` — see test_isolated_rerun_gaps.
+        """
         nb_runner.create_notebook([
             "data = {'count': 0}",
             "data['count'] += 1\nprint(f\"count={data['count']}\")",
@@ -344,9 +350,9 @@ class TestMutationDetection:
         nb_runner.start_kernel()
         nb_runner.run_all()
         assert "count=1" in nb_runner.get_output(2)
-        # Re-run — data['count'] is now 1, += 1 = 2
+        # Re-run — base data={'count': 0} is restored first, so count stays 1.
         nb_runner.run_cell(2)
-        assert "count=2" in nb_runner.get_output(2)
+        assert "count=1" in nb_runner.get_output(2)
 
     def test_95_set_operations_mutation(self, nb_runner):
         """Set.add(), set.update() — mutations detected."""
