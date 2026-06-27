@@ -83,6 +83,12 @@ class TestModuleCachingConsistency:
         ])
         nb_runner.start_kernel()
         nb_runner.enable_debug()
+        # Persist-everything so the module-dependent statement is actually
+        # cached on the 2nd run.  Without it the trivial print/assignment is
+        # sub-millisecond and legitimately skipped by the 10 ms cost floor, so
+        # 'Executing (cache miss)' would correctly appear and the cache-hit
+        # assertion would be vacuous.
+        nb_runner.enable_persist()
 
         # --- Call 1: fresh session, everything should execute ---
         nb_runner.run_all()
@@ -135,6 +141,12 @@ class TestModuleCachingConsistency:
         ])
         nb_runner.start_kernel()
         nb_runner.enable_debug()
+        # Persist-everything so the module-dependent statement is actually
+        # cached on the 2nd run.  Without it the trivial print/assignment is
+        # sub-millisecond and legitimately skipped by the 10 ms cost floor, so
+        # 'Executing (cache miss)' would correctly appear and the cache-hit
+        # assertion would be vacuous.
+        nb_runner.enable_persist()
 
         # --- Call 1: everything executes ---
         nb_runner.run_all()
@@ -181,6 +193,12 @@ class TestModuleCachingConsistency:
         ])
         nb_runner.start_kernel()
         nb_runner.enable_debug()
+        # Persist-everything so the module-dependent statement is actually
+        # cached on the 2nd run.  Without it the trivial print/assignment is
+        # sub-millisecond and legitimately skipped by the 10 ms cost floor, so
+        # 'Executing (cache miss)' would correctly appear and the cache-hit
+        # assertion would be vacuous.
+        nb_runner.enable_persist()
 
         # Call 1: all execute
         nb_runner.run_all()

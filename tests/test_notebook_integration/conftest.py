@@ -442,9 +442,21 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
     raw_text = "\n".join(text_outputs)
     
     if filter_debug:
-        debug_markers = ['[TIMING', '[UPSTREAM', '[LINEAGE', '[ALREADY', '[CACHE', '[CONTROL', 
+        # '[cash.' catches every line emitted by the %cash_debug console
+        # handler — it formats records as "[<logger name>] <message>" and all
+        # cash loggers are named "cash.*", so a single prefix match strips the
+        # whole debug stream (e.g. "[cash.notebook.statement.processor] [DEBUG]
+        # Processing statement: print(f"...")" which would otherwise leak the
+        # statement source into the parsed output).
+        # Do NOT add a bare '[DEBUG]'/'[SIZE_AWARE]' marker: cash's own debug
+        # lines are formatted "[cash.<logger>] [DEBUG]/[SIZE_AWARE] ..." and the
+        # '[cash.' prefix already strips them. User output legitimately contains
+        # things like "[DEBUG] Hello" (e.g. a logging decorator), which a bare
+        # match would wrongly drop.
+        debug_markers = ['[cash.', '[TIMING', '[UPSTREAM', '[LINEAGE', '[ALREADY', '[CACHE',
+                         '[CONTROL',
                          '_DEBUG]', '[PROXY_CELL_ID]', '[CELL_CHANGED]', '[CELL_UNCHANGED]',
-                         '[CELL_ID]', '[STATE]', '[ENSURE_STATE', '[SKIP_', 
+                         '[CELL_ID]', '[STATE]', '[ENSURE_STATE', '[SKIP_',
                          'Cash:', 'cache_key: stmt:', '| source_hash:']
         filtered_lines = [
             line for line in raw_text.split('\n')
@@ -1074,7 +1086,22 @@ except Exception:
             self.client.kc._async_execute_interactive("%cash_debug on", store_history=False)
         )
         return self
-    
+
+    def enable_persist(self) -> 'NotebookTestRunner':
+        """Enable cash 'persist everything' mode.
+
+        Bypasses the cost-aware floors (the 10 ms 'too cheap to cache' floor
+        and the size-aware skip) so that even sub-millisecond statements are
+        written to the cache and can produce a cache HIT on a subsequent
+        identical run.  Use this when a test needs to assert a cache hit on a
+        statement that is otherwise too cheap to cache by default.
+        """
+        # Run directly via kernel client to avoid overwriting notebook cells
+        self._run_async(
+            self.client.kc._async_execute_interactive("%cash_persist on", store_history=False)
+        )
+        return self
+
     def shutdown(self) -> None:
         """Shutdown the kernel."""
         if self._warm is not None:

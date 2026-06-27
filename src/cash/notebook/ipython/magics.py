@@ -44,6 +44,31 @@ __all__ = ["CashMagics"]
 logger = logging.getLogger(__name__)
 
 
+class _CurrentStdoutHandler(logging.StreamHandler):
+    """A ``StreamHandler`` that always writes to the *current* ``sys.stdout``.
+
+    Under ipykernel, ``sys.stdout`` is swapped to a per-cell output proxy on
+    each execution.  A vanilla ``StreamHandler(sys.stdout)`` captures the
+    stream at construction time, so debug records emitted during later cells
+    would be routed to whatever stdout was active when ``%cash_debug on`` ran.
+    Resolving ``sys.stdout`` at emit time keeps debug output landing in the
+    cell that produced it.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(stream=sys.stdout)
+
+    @property
+    def stream(self):  # type: ignore[override]
+        return sys.stdout
+
+    @stream.setter
+    def stream(self, value: Any) -> None:
+        # logging.StreamHandler.__init__ assigns self.stream; ignore the stored
+        # value and always defer to the live sys.stdout via the getter.
+        pass
+
+
 class CashSession:
     """Groups session-level concerns owned by a single CashMagics instance.
 
@@ -317,10 +342,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if mode in ('on', 'true', '1', 'enable'):
             self._debug = True
             logger.setLevel(logging.DEBUG)
+            self._install_debug_console_handler()
             print("Cache debug output enabled.")
         elif mode in ('off', 'false', '0', 'disable'):
             self._debug = False
             logger.setLevel(logging.INFO)
+            self._quiet_debug_console_handler()
             print("Cache debug output disabled.")
         elif mode == 'json':
             self._debug = True
@@ -350,6 +377,50 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._statement_processor.debug = self._debug
         self._upstream_checker.debug = self._debug
         self._cash_instance.debug = self._debug
+
+    @staticmethod
+    def _install_debug_console_handler() -> None:
+        """Attach (idempotently) a DEBUG console handler to the ``cash`` logger.
+
+        ``%cash_debug on`` only raised the logger level, relying on ambient
+        root-logger propagation to surface DEBUG records in the captured cell
+        output.  On recent Python / ipykernel that propagation no longer routes
+        the records to the cell, so debug markers (``[UPSTREAM_DEBUG] ...``,
+        ``[CACHE_HIT_DEBUG] ...``, ...) never appeared.  Install our own
+        console handler so the records reach the cell regardless.
+
+        The handler resolves ``sys.stdout`` lazily at emit time (rather than
+        binding it once at construction): under ipykernel each cell execution
+        installs a fresh stdout proxy bound to that cell's output area, so a
+        handler that captured ``sys.stdout`` when ``%cash_debug on`` ran would
+        write debug records to the wrong (or a stale) cell.
+
+        The handler is tagged with ``_cash_debug_console`` so it is only added
+        once and so ``%cash_debug off`` can find and quiet it.
+        """
+        cash_logger = logging.getLogger("cash")
+        for h in cash_logger.handlers:
+            if getattr(h, '_cash_debug_console', False):
+                h.setLevel(logging.DEBUG)
+                return
+        handler = _CurrentStdoutHandler()
+        handler.setLevel(logging.DEBUG)
+        handler.setFormatter(logging.Formatter("[%(name)s] %(message)s"))
+        handler._cash_debug_console = True  # type: ignore[attr-defined]
+        cash_logger.addHandler(handler)
+
+    @staticmethod
+    def _quiet_debug_console_handler() -> None:
+        """Silence the debug console handler installed by ``%cash_debug on``.
+
+        Raises the handler's level above DEBUG so no further debug records are
+        emitted, while leaving it attached (cheap to re-enable on the next
+        ``%cash_debug on``).
+        """
+        cash_logger = logging.getLogger("cash")
+        for h in cash_logger.handlers:
+            if getattr(h, '_cash_debug_console', False):
+                h.setLevel(logging.WARNING)
 
     @line_magic
     def cash_persist(self, line: str) -> None:

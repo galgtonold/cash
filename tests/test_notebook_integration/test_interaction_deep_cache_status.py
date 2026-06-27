@@ -11,7 +11,13 @@ class TestDeepCacheStatusVerification:
     """Verify caching status is correct in complex scenarios."""
 
     def test_second_run_uses_cache(self, nb_runner):
-        """Second identical run should use ALREADY_EXECUTED or cache hit."""
+        """Second identical run should hit the cache for ``y = x * 2``.
+
+        ``y = x * 2`` is sub-millisecond, so by default the 10 ms cost floor
+        means it is never written to the cache and a "cache hit" can never be
+        observed.  Enable persist-everything so the statement is genuinely
+        cached on the first run and produces a real cache hit on the second.
+        """
         nb_runner.create_notebook([
             "x = 42",
             "y = x * 2",
@@ -19,6 +25,7 @@ class TestDeepCacheStatusVerification:
         ])
         nb_runner.start_kernel()
         nb_runner.enable_debug()
+        nb_runner.enable_persist()
         nb_runner.run_all()
         out = nb_runner.get_output(3)
         assert "y=84" in out
@@ -26,7 +33,7 @@ class TestDeepCacheStatusVerification:
         # Second identical run
         nb_runner.run_all()
         raw = nb_runner.get_raw_output(2)
-        has_cache = "ALREADY_EXECUTED" in raw or "CACHE_HIT" in raw
+        has_cache = "CACHE_HIT" in raw or "Cache hit: True" in raw
         assert has_cache, f"Expected caching on second run, got: {raw[:300]}"
         out2 = nb_runner.get_output(3)
         assert "y=84" in out2

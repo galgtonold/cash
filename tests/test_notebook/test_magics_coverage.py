@@ -195,3 +195,86 @@ class TestCaptureCellId:
         captured = capsys.readouterr()
         assert "[CELL_ID]" in captured.out
         assert "debug-cell" in captured.out
+
+
+# ============================================================================
+# cash_debug console handler
+#
+# `%cash_debug on` must install a console handler on the `cash` logger so
+# logger.debug() markers ([UPSTREAM_DEBUG], [CACHE_HIT_DEBUG], ...) actually
+# reach the captured cell output. Raising the logger level alone is not enough
+# on recent Python/ipykernel where ambient root propagation no longer routes
+# DEBUG records to the cell.
+# ============================================================================
+
+import logging
+
+
+def _cash_debug_handlers():
+    return [h for h in logging.getLogger("cash").handlers
+            if getattr(h, '_cash_debug_console', False)]
+
+
+class TestCashDebugConsoleHandler:
+    """`%cash_debug on/off` installs and quiets a DEBUG console handler."""
+
+    def teardown_method(self):
+        # Don't leak the process-global handler into other tests.
+        cash_logger = logging.getLogger("cash")
+        for h in _cash_debug_handlers():
+            cash_logger.removeHandler(h)
+
+    def test_on_installs_handler_routing_debug_to_stdout(self, magics_fixture, capsys):
+        magics, _, _ = magics_fixture
+        magics.cash_debug("on")
+
+        handlers = _cash_debug_handlers()
+        assert len(handlers) == 1
+        assert handlers[0].level == logging.DEBUG
+
+        # A logger.debug() on a cash.* child logger must reach stdout.
+        logging.getLogger("cash.notebook.unittest").debug("[UPSTREAM_DEBUG] hello")
+        out = capsys.readouterr().out
+        assert "[UPSTREAM_DEBUG] hello" in out
+        assert "[cash.notebook.unittest]" in out
+
+    def test_on_is_idempotent(self, magics_fixture):
+        magics, _, _ = magics_fixture
+        magics.cash_debug("on")
+        magics.cash_debug("on")
+        # Never add the console handler twice.
+        assert len(_cash_debug_handlers()) == 1
+
+    def test_off_quiets_handler(self, magics_fixture, capsys):
+        magics, _, _ = magics_fixture
+        magics.cash_debug("on")
+        capsys.readouterr()  # drop the "enabled" message
+
+        magics.cash_debug("off")
+        # Handler is left attached but raised above DEBUG so nothing emits.
+        handlers = _cash_debug_handlers()
+        assert len(handlers) == 1
+        assert handlers[0].level > logging.DEBUG
+
+        logging.getLogger("cash.notebook.unittest").debug("[UPSTREAM_DEBUG] silent")
+        out = capsys.readouterr().out
+        assert "[UPSTREAM_DEBUG] silent" not in out
+
+    def test_handler_follows_current_stdout(self, magics_fixture):
+        """The handler resolves sys.stdout lazily (per cell), not at install."""
+        import io
+        import sys
+        magics, _, _ = magics_fixture
+        magics.cash_debug("on")
+        handler = _cash_debug_handlers()[0]
+
+        new_stream = io.StringIO()
+        old_stdout = sys.stdout
+        sys.stdout = new_stream
+        try:
+            logging.getLogger("cash.notebook.unittest").debug("[UPSTREAM_DEBUG] routed")
+        finally:
+            sys.stdout = old_stdout
+        # Record landed in the stdout active at emit time, not install time.
+        assert "[UPSTREAM_DEBUG] routed" in new_stream.getvalue()
+        assert handler.stream is old_stdout
