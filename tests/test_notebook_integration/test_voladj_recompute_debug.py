@@ -115,17 +115,19 @@ class TestVolAdjRecomputeDebug:
     @pytest.mark.timeout(60)
     @pytest.mark.xfail(
         reason=(
-            "Known effectiveness bug in the IN-PLACE-mutation lineage path. When "
-            "only a later in-place write in the same cell is edited "
-            "(df['SMA_58'] -> df['SMA_59']), the earlier unchanged in-place write "
-            "(df['VolAdj_20']) is recomputed instead of restored. Confirmed it is "
-            "NOT the cost-floor / non-idempotence issue that test_134 turned out "
-            "to be: it reproduces even with %cash_persist on (the VolAdj statement "
-            "is force-cached yet still not restored), so the failure is specific "
-            "to how in-place column writes (tracked via vars_with_mutation_lineage) "
-            "key and restore - distinct from value-reassignment chains. The cached "
-            "value stays CORRECT; this is wasted recompute, not a wrong answer. "
-            "Tracked as a separate focused fix in the mutation-lineage path."
+            "Confined to the %%cash CELL-MAGIC path. Editing only the later "
+            "in-place write (df['SMA_58'] -> df['SMA_59']) and re-running the cell "
+            "leaves the earlier unchanged df['VolAdj_20'] COMPUTED instead of "
+            "RESTORED, because under %%cash the cell-entry lineage of df is not "
+            "reset to its base on re-run -- so VolAdj's input 'df' resolves to the "
+            "advanced (post-cell) lineage and its cache key no longer matches the "
+            "first run. The DEFAULT %cash_on proxy path DOES reset df and restores "
+            "VolAdj correctly (verified with a dataset above the cost floor), so "
+            "this is a %%cash-path gap, NOT a general in-place-mutation-lineage "
+            "bug. The original 100-row dataset additionally masked everything "
+            "under the 10 ms cost floor (rolling-apply ~3 ms, never cached); the "
+            "20k-row dataset below clears the floor so the residual %%cash gap is "
+            "what remains. Effectiveness only -- cached values stay correct."
         ),
         strict=False,
     )
@@ -146,12 +148,16 @@ class TestVolAdjRecomputeDebug:
                 "%load_ext cash\n"
                 "%cash_debug on"
             ),
-            # Cell 3: Create data (not cached, just runs normally)
+            # Cell 3: Create data (not cached, just runs normally).
+            # NOTE: the dataset must be large enough that the rolling-apply
+            # computations clear the 10 ms cost floor; otherwise the VolAdj
+            # statement is (correctly) never cached and "RESTORED" can never be
+            # observed -- see the test docstring.
             (
                 "np.random.seed(42)\n"
                 "df = pd.DataFrame({\n"
-                "    'Ticker': ['AAPL'] * 50 + ['GOOGL'] * 50,\n"
-                "    'Close': np.random.randn(100).cumsum() + 100\n"
+                "    'Ticker': ['AAPL'] * 10000 + ['GOOGL'] * 10000,\n"
+                "    'Close': np.random.randn(20000).cumsum() + 100\n"
                 "})"
             ),
             # Cell 4: Sort (using %%cash)
