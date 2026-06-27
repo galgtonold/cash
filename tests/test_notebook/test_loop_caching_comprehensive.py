@@ -413,9 +413,13 @@ for x in ["A", "B"]:
         self._run_with_notebook(magics, downstream_code, notebook_path)
         assert set(shell.user_ns['output']) == {'A', 'B'}
 
-    @pytest.mark.xfail(reason="Known failure: upstream loop variable re-execution")
     def test_upstream_reexecutes_loop_vars_when_changed(self, cash_magics, mock_shell, tmp_path):
-        """When upstream loop code changes, loop-mutated vars must be re-executed."""
+        """When upstream loop code changes, loop-mutated vars must be re-executed.
+
+        Fixed by the lineage/idempotent-rerun work: changing the loop cell
+        (ABCD -> ABCDE) and running only the downstream cell re-executes the
+        loop so ``results`` ends with all five items.
+        """
         magics = cash_magics
         shell = mock_shell
 

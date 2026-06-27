@@ -12,7 +12,6 @@ pytestmark = [pytest.mark.stress, pytest.mark.upstream, pytest.mark.timeout(90)]
 class TestObserverPatternEdits:
     """Editing observer/event patterns."""
 
-    @pytest.mark.xfail(reason="Custom mutation methods (bus.on()) not in MUTATING_METHODS; cache hits stale after cell edit. Needs mutation detector enhancement.")
     def test_edit_event_handler(self, nb_runner):
         """Edit cell 2 to add a second handler — cash should re-execute."""
         nb_runner.create_notebook([

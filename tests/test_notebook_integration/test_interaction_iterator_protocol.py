@@ -27,7 +27,6 @@ class TestIteratorProtocolEdits:
         nb_runner.run_all()
         assert "items = [0, 2, 4]" in nb_runner.get_output(2)
 
-    @pytest.mark.xfail(reason="Custom mutation methods (s.push()) not in MUTATING_METHODS; cache hits stale after cell edit. Needs mutation detector enhancement.")
     def test_edit_container_with_len(self, nb_runner):
         """Edit a custom container with __len__ and __getitem__."""
         nb_runner.create_notebook([

@@ -580,7 +580,6 @@ class TestAccumulatorInitSkip:
        we should NOT re-run the init statement (it would reset the dict)
     """
 
-    @pytest.mark.xfail(reason="Known failure: accumulator init skip logic")
     def test_skip_empty_dict_init_when_has_data(self, cash_magics, mock_shell):
         """
         If results = {} is scheduled but results already has data,

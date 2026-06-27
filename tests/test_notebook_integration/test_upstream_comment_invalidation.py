@@ -120,7 +120,6 @@ class TestUpstreamCommentInvalidation:
             f"Expected y=50 after uncommenting upstream line, got: {out}"
         )
 
-    @pytest.mark.xfail(reason="Upstream invalidation for unexecuted modified cells not yet implemented")
     def test_multi_cell_chain_comment_invalidation(self, nb_runner):
         """
         Cell 1: data = [1, 2, 3]
