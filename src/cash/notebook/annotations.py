@@ -30,7 +30,11 @@ class CacheAnnotation:
         return self.persist or self.no_cache or self.ttl is not None or self.allow_random
 
 # Regex patterns for annotation parsing ([\w-]+ allows hyphens in directive names)
-ANNOTATION_PATTERN = re.compile(r'#\s*@cash:([\w-]+)(?:=(\d+))?')
+# Whitespace is tolerated after the colon and around ``=`` so both the
+# documented ``# @cash:no-cache`` and the natural ``# @cash: no-cache`` parse
+# (see test_annotation_with_spaces). Without the ``\s*`` after the colon the
+# spaced form was silently ignored -- the statement was cached as normal.
+ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')
 
 def parse_annotation_line(line: str) -> CacheAnnotation | None:
     """

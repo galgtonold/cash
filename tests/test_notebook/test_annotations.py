@@ -37,6 +37,21 @@ class TestAnnotationParsing(unittest.TestCase):
         self.assertIsNotNone(ann)
         self.assertTrue(ann.no_cache)
 
+    def test_parse_nocache_space_after_colon(self):
+        """A space after the colon (`@cash: no-cache`) must still parse -- the
+        natural form users write. Previously it was silently ignored and the
+        statement was cached as normal."""
+        for line in ("# @cash: no-cache", "#  @cash:  no-cache"):
+            ann = parse_annotation_line(line)
+            self.assertIsNotNone(ann, line)
+            self.assertTrue(ann.no_cache, line)
+
+    def test_parse_ttl_with_spaces(self):
+        """Whitespace after the colon and around `=` is tolerated for ttl."""
+        ann = parse_annotation_line("# @cash: ttl = 300")
+        self.assertIsNotNone(ann)
+        self.assertEqual(ann.ttl, 300)
+
     def test_parse_ttl_annotation(self):
         """@cash:ttl=N should set ttl=N."""
         ann = parse_annotation_line("# @cash:ttl=300")

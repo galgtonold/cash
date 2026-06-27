@@ -11,6 +11,7 @@ from ...exceptions import AmbiguousCellError, UpstreamStateError
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
+from ..annotations import extract_annotations_for_statements
 from ..cacheability import analyze_statement
 from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
     NotebookSimulator,
@@ -36,6 +37,39 @@ class UpstreamResult(NamedTuple):
     execution_time: float
 
 logger = logging.getLogger(__name__)
+
+
+def _nocache_written_vars(cell_code: str) -> set[str]:
+    """Variables written by a ``# @cash: no-cache`` statement in *cell_code*.
+
+    These must be excluded from the idempotent-rerun self-write restoration:
+    ``no-cache`` means "always run fresh", so a self-modifying var under it
+    (``counter = counter + 1``) is meant to ACCUMULATE on re-run, not be
+    restored to its input. Returns an empty set when the cell has no
+    annotations or can't be parsed.
+    """
+    try:
+        annotations = extract_annotations_for_statements(cell_code)
+        if not annotations:
+            return set()
+        tree = ast.parse(cell_code)
+    except (SyntaxError, ValueError):
+        return set()
+
+    written: set[str] = set()
+    for node in tree.body:
+        ann = annotations.get(getattr(node, 'lineno', -1))
+        if ann is None or not ann.no_cache:
+            continue
+        try:
+            stmt_code = ast.unparse(node)
+            _, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
+            written |= outputs
+            written |= set(analyze_statement(stmt_code, None).all_mutated_vars)
+        except (SyntaxError, ValueError):
+            continue
+    return written
+
 
 class UpstreamChecker:
     """
@@ -218,6 +252,13 @@ class UpstreamChecker:
             _, current_cell_outputs = CodeAnalyzer.analyze_code_block(cell_code)
             current_cell_reassigned = CodeAnalyzer.reassigned_names(cell_code)
             current_cell_mutated = set(analyze_statement(cell_code, None).all_mutated_vars)
+            # A `# @cash: no-cache` statement opts out of caching AND of the
+            # idempotent-rerun input restoration: its self-modifying vars must
+            # accumulate on re-run (the documented "always recompute" contract),
+            # not be reset to their input. Drop them from the self-write sets.
+            nocache_vars = _nocache_written_vars(cell_code)
+            current_cell_reassigned = current_cell_reassigned - nocache_vars
+            current_cell_mutated = current_cell_mutated - nocache_vars
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
             current_cell_outputs = set()
