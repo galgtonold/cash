@@ -613,7 +613,7 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     assignment (``+=``) is always self-referential. Only ``tree.body`` (top-level);
     mutations nested in if/for/while/with bodies are NOT reset on isolated re-run
     because the runtime does not advance their lineage through a control structure
-    (CAS-58, a known limitation); loop/function bodies are handled elsewhere.
+    (CAS-57, a known limitation); loop/function bodies are handled elsewhere.
     """
     if tree is None:
         return frozenset()

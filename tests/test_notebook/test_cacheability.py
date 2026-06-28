@@ -642,10 +642,10 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("del x") == frozenset()
 
     def test_control_body_not_scanned(self):
-        # CAS-58 (known limitation): selfref scans only tree.body, so a mutation
+        # CAS-57 (known limitation): selfref scans only tree.body, so a mutation
         # nested in an if/for/with body is NOT flagged here. (The runtime also does
         # not advance df's lineage through a control structure, so even flagging it
-        # would not reset it -- see CAS-58.)
+        # would not reset it -- see CAS-57.)
         assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == frozenset()
 
     def test_function_body_not_scanned(self):
