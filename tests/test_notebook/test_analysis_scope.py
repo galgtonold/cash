@@ -139,3 +139,38 @@ def foo():
     assert 'foo' in outputs
     assert 'os' not in inputs # It is defined here
     assert 'sqrt' not in inputs
+
+
+# --- Walrus operator (PEP 572 := / ast.NamedExpr) ---
+
+def test_walrus_self_reference_is_input_and_output():
+    """``n := n + 1`` reads the old n, so n is both an input and an output
+    (mirrors ``n = n + 1``)."""
+    inputs, outputs = CodeAnalyzer.analyze_code_block("if (n := n + 1):\n    pass")
+    assert 'n' in inputs, "self-referential walrus must register n as an input"
+    assert 'n' in outputs, "walrus target n must be an output"
+
+
+def test_walrus_plain_binding_target_is_output():
+    """``m = (d := base * 2)`` binds both m and d; base is the only input."""
+    inputs, outputs = CodeAnalyzer.analyze_code_block("m = (d := base * 2)")
+    assert inputs == {'base'}
+    assert {'m', 'd'} <= outputs
+
+
+def test_walrus_in_comprehension_binds_enclosing_scope():
+    """PEP 572: a walrus inside a comprehension binds in the ENCLOSING scope,
+    not the comprehension scope. ``[(t := t + i) for i in range(4)]`` must
+    therefore expose t as both a cell-level input and output."""
+    inputs, outputs = CodeAnalyzer.analyze_code_block(
+        "vals = [(t := t + i) for i in range(4)]"
+    )
+    assert 't' in inputs, "walrus self-read t must be a cell input"
+    assert 't' in outputs, "walrus target t must be a cell output (enclosing scope)"
+    assert 'vals' in outputs
+    assert 'i' not in outputs, "comprehension loop var i stays local"
+
+
+def test_walrus_reassigned_names_includes_target():
+    """A walrus target is a fresh rebinding, so reassigned_names includes it."""
+    assert 'n' in CodeAnalyzer.reassigned_names("while (n := n - 1) > 0:\n    pass")

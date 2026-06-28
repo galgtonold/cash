@@ -58,6 +58,10 @@ class _FlowVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         # Stack of sets of defined variables. scopes[0] is the cell level.
         self.scopes: list[set[str]] = [set()]
+        # Parallel stack: True where the scope at the same index is a
+        # comprehension scope. Used for PEP 572 walrus scoping -- a ``:=``
+        # target binds in the nearest enclosing NON-comprehension scope.
+        self.comp_scopes: list[bool] = [False]
         self.outputs: set[str] = set()
         self.real_inputs: set[str] = set()
         self.defined_in_block: set[str] = set()
@@ -127,10 +131,12 @@ class _FlowVisitor(ast.NodeVisitor):
 
         # 4. Enter new scope, add arguments, visit body, exit scope
         self.scopes.append(set())
+        self.comp_scopes.append(False)
         self._add_args_to_scope(self.scopes[-1], node.args)
         for stmt in node.body:
             self.visit(stmt)
         self.scopes.pop()
+        self.comp_scopes.pop()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
         for decorator in node.decorator_list:
@@ -141,9 +147,11 @@ class _FlowVisitor(ast.NodeVisitor):
             self.visit(keyword.value)
         self.define_variable(node.name)
         self.scopes.append(set())
+        self.comp_scopes.append(False)
         for stmt in node.body:
             self.visit(stmt)
         self.scopes.pop()
+        self.comp_scopes.pop()
 
     def visit_Lambda(self, node: ast.Lambda) -> None:  # noqa: N802
         if node.args.defaults:
@@ -154,15 +162,18 @@ class _FlowVisitor(ast.NodeVisitor):
                 if default:
                     self.visit(default)
         self.scopes.append(set())
+        self.comp_scopes.append(False)
         self._add_args_to_scope(self.scopes[-1], node.args)
         self.visit(node.body)
         self.scopes.pop()
+        self.comp_scopes.pop()
 
     # --- Comprehension scoping (Python 3: iteration vars are local) ---
 
     def _visit_comprehension(self, node: ast.expr, value_nodes: list[ast.expr]) -> None:
         """Handle ListComp / SetComp / GeneratorExp / DictComp."""
         self.scopes.append(set())
+        self.comp_scopes.append(True)
         for generator in node.generators:  # type: ignore[attr-defined]
             self.visit(generator.iter)
             self._define_comp_target(generator.target)
@@ -171,6 +182,7 @@ class _FlowVisitor(ast.NodeVisitor):
         for vnode in value_nodes:
             self.visit(vnode)
         self.scopes.pop()
+        self.comp_scopes.pop()
 
     def _define_comp_target(self, target: ast.expr) -> None:
         """Define comprehension target variable(s) in current scope only."""
@@ -225,6 +237,28 @@ class _FlowVisitor(ast.NodeVisitor):
         self.visit(node.value)
         for target in node.targets:
             self.visit(target)
+
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:  # noqa: N802
+        # Walrus ``target := value``. Visit the value FIRST so a self-referential
+        # read (``n := n + 1``) registers ``n`` as an input before the binding
+        # hides it (mirrors visit_Assign). PEP 572 also binds the target in the
+        # nearest enclosing NON-comprehension scope, so a walrus inside a
+        # comprehension still defines a cell-level output.
+        self.visit(node.value)
+        target = node.target
+        if isinstance(target, ast.Name):
+            self._define_walrus_target(target.id)
+        else:  # defensive: PEP 572 only permits a bare Name target
+            self.visit(target)
+
+    def _define_walrus_target(self, name: str) -> None:
+        idx = len(self.scopes) - 1
+        while idx > 0 and self.comp_scopes[idx]:
+            idx -= 1
+        self.scopes[idx].add(name)
+        if idx == 0:
+            self.outputs.add(name)
+            self.defined_in_block.add(name)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
         if isinstance(node.target, ast.Name):
