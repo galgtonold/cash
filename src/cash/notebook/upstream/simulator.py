@@ -18,6 +18,7 @@ from collections.abc import Callable
 from typing import Any
 
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
+from .._trace import trace_event
 from ..cacheability import analyze_statement
 from ..control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
 from .mismatch_classifier import MismatchClassifier
@@ -409,6 +410,7 @@ class NotebookSimulator:
         current_cell_reassigned: set[str] | None = None,
         current_cell_mutated: set[str] | None = None,
         current_cell_method_receivers: set[str] | None = None,
+        current_cell_nocache_vars: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
 
@@ -418,6 +420,10 @@ class NotebookSimulator:
             with info about restored statements, and total disk-cache lookup
             time (seconds) accumulated during simulation.
         """
+        trace_event("simulate_enter", cell_idx=current_cell_idx,
+                    reassigned=current_cell_reassigned or set(),
+                    mutated=current_cell_mutated or set(),
+                    method_receivers=current_cell_method_receivers or set())
         # Pass 1: Simulate ALL statements to build final virtual state
         stmt_lookup_times = {}  # stmt_code -> cache_lookup_time (disk I/O during simulation)
         loop_target_vars = set()  # Track loop iteration variables (e.g., 'item' in 'for item in data')
@@ -459,6 +465,7 @@ class NotebookSimulator:
             upstream_has_modifications, required_inputs, current_cell_outputs,
             notebook_cells, current_cell_idx,
         )
+        trace_event("broken_after_pass2", broken=broken_vars, tainted=vars_tainted)
 
         self._mark_stale_value_inputs_broken(
             required_inputs, current_cell_reassigned, broken_vars,
@@ -466,6 +473,20 @@ class NotebookSimulator:
             notebook_cells=notebook_cells, current_cell_idx=current_cell_idx,
             current_cell_method_receivers=current_cell_method_receivers,
         )
+        trace_event("broken_after_guard", broken=broken_vars)
+
+        # A ``# @cash: no-cache`` statement opts the whole statement out of cash,
+        # so its self-modified vars must behave like an uncached Jupyter cell:
+        # re-running ACCUMULATES (advances), never resets. Pass 2 still flags such
+        # a var stale (its runtime lineage advanced past the simulation's), which
+        # would re-execute its producer and reset it -- so drop no-cache-written
+        # vars from broken_vars here (the CAS-47 self-write-set exclusion only
+        # covered the stale-value guard, not the pass-2 lineage mismatch).
+        if current_cell_nocache_vars:
+            removed = broken_vars & set(current_cell_nocache_vars)
+            if removed:
+                broken_vars -= removed
+                trace_event("broken_drop_nocache", dropped=removed, broken=broken_vars)
 
         if not broken_vars:
             self._apply_phase_mutations()

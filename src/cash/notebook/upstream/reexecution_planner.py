@@ -5,6 +5,7 @@ import re
 from typing import TYPE_CHECKING
 
 from ..analysis import CodeAnalyzer
+from .._trace import trace_event
 
 if TYPE_CHECKING:
     from .mismatch_classifier import MismatchClassifier
@@ -90,6 +91,7 @@ class ReexecutionPlanner:
         for idx in stmts_to_run_indices:
             stmt_code = simulation_trace[idx][0]
             statements_to_reexecute.append(stmt_code)
+            trace_event("schedule_reexec", stmt=stmt_code[:80])
             if self.debug:
                 logger.debug("[UPSTREAM] Scheduled for execution: %s", stmt_code[:40])
 
