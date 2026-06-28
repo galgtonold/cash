@@ -75,6 +75,18 @@ def test_while_new_var_preserved(nb_runner):
            "[2, 4, 6]")
 
 
+def test_walrus_while_condition_multivar(nb_runner):
+    """The control var is assigned by a walrus in the while CONDITION (not the
+    body), so `all_mutated_vars` misses it; the static output set catches it."""
+    _rerun(nb_runner, "n = 0\ntotal = 0",
+           "while (n := n + 1) <= 5:\n    total += n\nprint(total)", "15")
+
+
+def test_walrus_while_condition_listaccum(nb_runner):
+    _rerun(nb_runner, "n = 0\nacc = []",
+           "while (n := n + 1) <= 3:\n    acc.append(n)\nprint(acc)", "[1, 2, 3]")
+
+
 def test_while_nocache_accumulates(nb_runner):
     """A `# @cash: no-cache` while loop is meant to run fresh and accumulate
     across re-runs (the opt-out), not be reset."""
