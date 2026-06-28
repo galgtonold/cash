@@ -269,14 +269,29 @@ class NotebookSimulator:
                     or (current_cell_selfref_vars and var_name in current_cell_selfref_vars)
                 )
                 if force_reset:
-                    if upstream_inplace_mutated is None:
-                        upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
-                            notebook_cells, current_cell_idx,
-                        )
                     before = var_name in broken_vars
-                    self._mark_nolineage_self_write_broken(
-                        var_name, live_value, broken_vars, upstream_inplace_mutated,
-                    )
+                    # The live VALUE's own lineage (``_cash_lineage_hash``) reflects
+                    # the object actually in memory. When the mutation is nested in a
+                    # control structure (``if c: df['a']=df['a']*2``) the runtime
+                    # advances it past the cell-entry base, but the downstream-
+                    # advancement fallback collapses the recorded ``variable_lineage``
+                    # back to the base via ``reset_to`` (which leaves the value's
+                    # attribute intact). So compare the VALUE's lineage against the
+                    # cell-entry base — it survives the collapse and still betrays the
+                    # stale (own-prior-mutation) value on an isolated re-run, while a
+                    # fresh forward run (producer restored the base) leaves them equal.
+                    # [CAS-57]
+                    base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
+                    if base_lineage is not None and live_lineage != base_lineage:
+                        broken_vars.add(var_name)
+                    else:
+                        if upstream_inplace_mutated is None:
+                            upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
+                                notebook_cells, current_cell_idx,
+                            )
+                        self._mark_nolineage_self_write_broken(
+                            var_name, live_value, broken_vars, upstream_inplace_mutated,
+                        )
                     trace_event("force_reset", var=var_name,
                                 broke=(var_name in broken_vars and not before))
                 continue

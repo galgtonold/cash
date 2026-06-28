@@ -641,15 +641,36 @@ class TestSelfrefInplaceWriteVars:
         # deleting a plain name is a namespace op, handled elsewhere -> not here.
         assert self._vars("del x") == frozenset()
 
-    def test_control_body_not_scanned(self):
-        # CAS-57 (known limitation): selfref scans only tree.body, so a mutation
-        # nested in an if/for/with body is NOT flagged here. (The runtime also does
-        # not advance df's lineage through a control structure, so even flagging it
-        # would not reset it -- see CAS-57.)
-        assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == frozenset()
+    def test_conditional_self_mutation(self):
+        # CAS-57: a self-mutation nested in an if-body executes at module level.
+        assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == {'df'}
+
+    def test_for_loop_self_mutation(self):
+        assert self._vars("for c in cols:\n    df[c] = df[c] * 2") == {'df'}
+
+    def test_for_loop_augmented_self_mutation(self):
+        assert self._vars("for c in cols:\n    df[c] += 1") == {'df'}
+
+    def test_with_block_self_mutation(self):
+        assert self._vars("with ctx:\n    df['a'] = df['a'] * 2") == {'df'}
+
+    def test_try_body_del(self):
+        assert self._vars("try:\n    del df['b']\nexcept KeyError:\n    pass") == {'df'}
+
+    def test_nested_control_self_mutation(self):
+        assert self._vars("for c in cols:\n    if c:\n        df[c] = df[c] * 2") == {'df'}
 
     def test_function_body_not_scanned(self):
+        # a mutation inside a def runs only when called -> not a module-level write.
         assert self._vars("def f():\n    df['a'] = df['a'] * 2") == frozenset()
+
+    def test_loop_building_from_source_excluded(self):
+        # CAS-42: loop builds df columns from a DIFFERENT object -> idempotent.
+        assert self._vars("for c in cols:\n    df[c] = source[c] * 2") == frozenset()
+
+    def test_conditional_new_column_excluded(self):
+        # CAS-42: new column derived in a conditional -> idempotent.
+        assert self._vars("if cond:\n    df['b'] = df['a'] + 1") == frozenset()
 
     def test_none_tree(self):
         assert selfref_inplace_write_vars(None) == frozenset()

@@ -572,6 +572,28 @@ def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
     return False
 
 
+# Statement scopes whose bodies run only later (when called/instantiated), so a
+# mutation inside them is NOT a module-level write of the current cell.
+_DEFERRED_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _module_level_stmts(body: list[ast.stmt]):
+    """Yield every statement that executes when *body* runs at module level,
+    descending into control-flow bodies (if/for/while/with/try) but NOT into
+    deferred scopes (def/async def/class). A column transform guarded by an
+    ``if`` or run in a ``for`` loop still mutates the frame when the cell runs."""
+    for node in body:
+        if isinstance(node, _DEFERRED_SCOPES):
+            continue
+        yield node
+        for field in ('body', 'orelse', 'finalbody'):
+            nested = getattr(node, field, None)
+            if nested:
+                yield from _module_level_stmts(nested)
+        for handler in getattr(node, 'handlers', []):  # try/except handler bodies
+            yield from _module_level_stmts(handler.body)
+
+
 def _selfref_write_base(target: ast.expr, rhs: ast.expr) -> str | None:
     """Base var if ``target = rhs`` is a self-referential in-place subscript/attr
     write — the target is also read in *rhs*, by exact text or column-key overlap."""
@@ -598,7 +620,11 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     * tuple/list unpacking that reads & writes overlapping columns
       (``df['a'], df['b'] = df['b'], df['a']`` — a column swap) (CAS-56);
     * ``del`` of a subscript/attribute (``del df['b']``, ``del obj.cache``) — a
-      second ``del`` raises, so the receiver must reset (CAS-56).
+      second ``del`` raises, so the receiver must reset (CAS-56);
+    * any of the above nested in an if/for/while/with body
+      (``if cond: df['a'] = df['a']*2``) — scanned via :func:`_module_level_stmts`
+      (CAS-57; the reset itself uses the live value's lineage, which survives the
+      simulator's control-structure collapse).
 
     Such writes are NON-IDEMPOTENT, so on an isolated cell re-run the lineage-
     carrying receiver (DataFrame/Series/custom object) must be restored first —
@@ -610,15 +636,14 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     (``df['b'] = df['a'] + 1``, ``df['VolAdj'] = df.groupby('Ticker')['Close']…``,
     ``df['c'], df['d'] = df['a'], df['b']``): those are idempotent on re-run and
     keep their per-statement cache, preserving the CAS-42 design. Augmented
-    assignment (``+=``) is always self-referential. Only ``tree.body`` (top-level);
-    mutations nested in if/for/while/with bodies are NOT reset on isolated re-run
-    because the runtime does not advance their lineage through a control structure
-    (CAS-57, a known limitation); loop/function bodies are handled elsewhere.
+    assignment (``+=``) is always self-referential. Scans module-level statements
+    including those nested in if/for/while/with bodies (CAS-57) but NOT inside
+    def/class scopes (their bodies run only when called).
     """
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for node in tree.body:
+    for node in _module_level_stmts(tree.body):
         if isinstance(node, ast.AugAssign):
             base = _selfref_target_base(node.target)
             if base:
