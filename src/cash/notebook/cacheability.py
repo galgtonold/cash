@@ -481,13 +481,87 @@ def _rhs_reads_target(rhs: ast.expr, target: ast.expr) -> bool:
     return False
 
 
+# Accessor attributes that index by POSITION (no recoverable column name).
+_POSITIONAL_ACCESSORS = frozenset({'iloc', 'iat'})
+# Accessor attributes that index by LABEL; the column is the last slice element.
+_LABEL_ACCESSORS = frozenset({'loc', 'at'})
+
+
+def _key_literals(col: ast.expr) -> frozenset[str] | None:
+    """String column literal(s) in a selector, or ``None`` if not all string
+    literals (a slice, a variable, an int, a boolean mask, etc.)."""
+    if isinstance(col, ast.Constant) and isinstance(col.value, str):
+        return frozenset({col.value})
+    if isinstance(col, (ast.List, ast.Tuple)):
+        keys: set[str] = set()
+        for elt in col.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                keys.add(elt.value)
+            else:
+                return None
+        return frozenset(keys)
+    return None
+
+
+def _subscript_column_keys(node: ast.expr) -> frozenset[str] | None:
+    """String column key(s) a DataFrame subscript touches, or ``None`` if unknown.
+
+    ``df['a']`` -> ``{'a'}``; ``df[['a','b']]`` -> ``{'a','b'}``;
+    ``df.loc[mask, 'a']`` -> ``{'a'}``; ``df.loc[mask, ['a','b']]`` -> ``{'a','b'}``.
+    ``None`` (unknown) for positional access (``df.iloc[i, 0]``), a variable/slice
+    column, or whole-row selection (``df.loc[mask]``) — callers must then make no
+    assumption about which column is touched.
+    """
+    if not isinstance(node, ast.Subscript):
+        return None
+    value = node.value
+    if isinstance(value, ast.Attribute):
+        if value.attr in _POSITIONAL_ACCESSORS:
+            return None
+        if value.attr in _LABEL_ACCESSORS:
+            # df.loc[row, col]: the column is the last tuple element.
+            # df.loc[row] (no column axis) -> whole-row -> unknown.
+            if isinstance(node.slice, ast.Tuple) and len(node.slice.elts) >= 2:
+                return _key_literals(node.slice.elts[-1])
+            return None
+        # df.<other-accessor>[...] — not a recognised column selector.
+        return None
+    # Plain df[...] subscript: the slice itself is the column selector.
+    return _key_literals(node.slice)
+
+
+def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
+    """True if *rhs* reads a same-``base`` subscript whose column key(s) overlap
+    the *target*'s written column key(s).
+
+    Catches a masked self-write spelled differently from its target —
+    ``df.loc[mask, 'a'] = df['a'] * 2`` writes and reads column ``'a'`` though the
+    two subscripts are not textually identical (so :func:`_rhs_reads_target`
+    misses it). A write to a DIFFERENT column read from another
+    (``df.loc[mask, 'b'] = df['a']*2``) has disjoint keys and is NOT flagged,
+    preserving the CAS-42 derived-column cache.
+    """
+    written = _subscript_column_keys(target)
+    if not written:  # unknown/positional target -> defer to the exact-match path
+        return False
+    for sub in ast.walk(rhs):
+        if not isinstance(sub, ast.Subscript) or _extract_base_name(sub) != base:
+            continue
+        read = _subscript_column_keys(sub)
+        if read and (read & written):
+            return True
+    return False
+
+
 def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     """Base vars mutated by a SELF-REFERENTIAL in-place subscript/attribute write
     at the top level — the written target is also *read* in the same statement.
 
     Covers ``df['a'] = df['a'] * 2``, ``df['a'] += 1``, ``df.iloc[i, j] += x``,
     ``df.iloc[i, j] = df.iloc[i, j] + 1``, ``df['a'] = df['a'].fillna(0)``,
-    ``obj.attr = obj.attr + 1``.
+    ``obj.attr = obj.attr + 1``, and MASKED writes whose RHS reads the same
+    column spelled differently (``df.loc[mask, 'a'] = df['a'] * 2``) — matched by
+    column-key overlap, not exact text (see :func:`_rhs_reads_same_column`).
 
     Such writes are NON-IDEMPOTENT: re-running them applies the operation again,
     so on an isolated cell re-run the lineage-carrying receiver (DataFrame/Series/
@@ -512,7 +586,10 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
         elif isinstance(node, ast.Assign):
             for target in node.targets:
                 base = _selfref_target_base(target)
-                if base and _rhs_reads_target(node.value, target):
+                if base and (
+                    _rhs_reads_target(node.value, target)
+                    or _rhs_reads_same_column(node.value, target, base)
+                ):
                     out.add(base)
     return frozenset(out)
 

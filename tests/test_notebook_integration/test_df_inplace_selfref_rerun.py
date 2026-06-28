@@ -62,6 +62,27 @@ def test_loc_scalar_self_ref_same_cell(nb_runner):
                     "df.loc[10, 'a'] = df.loc[10, 'a'] * 3\nprint(df.loc[10, 'a'])", "30")
 
 
+def test_loc_masked_self_ref_same_cell(nb_runner):
+    """CAS-57: masked .loc write reads the SAME column spelled differently than the
+    target (df.loc[mask,'a'] = df['a']*2). Self-referential -> must not double."""
+    _rerun_one_cell(nb_runner, DF100,
+                    "df.loc[df['a'] >= 50, 'a'] = df['a'] * 2\nprint(df['a'].iloc[50])", "100")
+
+
+def test_loc_masked_augmented_same_cell(nb_runner):
+    """CAS-57 control: masked .loc AugAssign df.loc[mask,'a'] += 1000."""
+    _rerun_one_cell(nb_runner, DF100,
+                    "df.loc[df['a'] >= 50, 'a'] += 1000\nprint(df['a'].iloc[50])", "1050")
+
+
+def test_loc_masked_new_column_preserved(nb_runner):
+    """CAS-42 guard: a masked write to a DIFFERENT column read from another is
+    idempotent and must keep working (not over-reset)."""
+    _rerun_one_cell(
+        nb_runner, "import pandas as pd\ndf = pd.DataFrame({'a': list(range(100))})",
+        "df.loc[df['a'] >= 50, 'b'] = df['a'] * 2\nprint(df['b'].iloc[50])", "100")
+
+
 def test_new_column_from_other_columns_preserved(nb_runner):
     """CAS-42 guard: a NEW column read from OTHER columns is idempotent and must
     keep working (not over-reset, not broken)."""

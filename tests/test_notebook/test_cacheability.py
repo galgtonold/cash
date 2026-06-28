@@ -574,5 +574,28 @@ class TestSelfrefInplaceWriteVars:
     def test_cross_object_excluded(self):
         assert self._vars("df['a'] = other['a'] * 2") == frozenset()
 
+    def test_loc_masked_self_ref_same_column(self):
+        # CAS-57: masked .loc write reads the SAME column spelled differently
+        # (df['a']) than the target (df.loc[mask, 'a']) -> still self-referential.
+        assert self._vars("df.loc[df['a'] >= 50, 'a'] = df['a'] * 2") == {'df'}
+
+    def test_loc_masked_self_ref_via_loc_read(self):
+        assert self._vars("df.loc[mask, 'a'] = df.loc[mask, 'a'] + 1") == {'df'}
+
+    def test_loc_masked_list_columns_self_ref(self):
+        assert self._vars("df.loc[mask, ['a', 'b']] = df[['a', 'b']] * 2") == {'df'}
+
+    def test_loc_masked_new_column_excluded(self):
+        # CAS-42: masked write to a DIFFERENT column read from another -> idempotent.
+        assert self._vars("df.loc[df['a'] >= 50, 'b'] = df['a'] * 2") == frozenset()
+
+    def test_subset_assign_other_column_excluded(self):
+        assert self._vars("df.loc[mask, 'b'] = df['a'] + df['c']") == frozenset()
+
+    def test_iloc_positional_other_excluded(self):
+        # positional target is unknown-column; RHS reads a named column -> no
+        # provable overlap, and not an exact-target match -> excluded.
+        assert self._vars("df.iloc[0, 1] = df['a'].sum()") == frozenset()
+
     def test_none_tree(self):
         assert selfref_inplace_write_vars(None) == frozenset()
