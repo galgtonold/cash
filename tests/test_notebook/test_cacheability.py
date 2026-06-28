@@ -795,6 +795,38 @@ class TestFunctionArgMutations:
         assert self._muts("r = append_one(data)") == frozenset()
 
 
+class TestInterproceduralArgMutations:
+    """``function_arg_mutations`` follows nested calls (CAS-61): a param mutated
+    only through a further resolvable call is detected too."""
+
+    SRCS = {
+        'inner': "def inner(z):\n    z.append(9)",
+        'outer': "def outer(y):\n    inner(y)",
+        'mid': "def mid(b):\n    inner(b)",
+        'deep': "def deep(a):\n    mid(a)",
+        'inner_pure': "def inner_pure(z):\n    return z * 2",
+        'pure_outer': "def pure_outer(y):\n    return inner_pure(y)",
+        'recurse': "def recurse(x):\n    recurse(x)",
+    }
+
+    def _muts(self, code):
+        return function_arg_mutations(ast.parse(code), self.SRCS.get)
+
+    def test_depth2(self):
+        assert self._muts("outer(data)") == {'data'}
+
+    def test_depth3(self):
+        assert self._muts("deep(data)") == {'data'}
+
+    def test_pure_chain_excluded(self):
+        assert self._muts("pure_outer(data)") == frozenset()
+
+    def test_self_recursion_terminates(self):
+        # recurse(x) calls itself; the seen-guard prevents infinite recursion and
+        # there is no actual mutation, so nothing is flagged.
+        assert self._muts("recurse(data)") == frozenset()
+
+
 class TestAliasMutationSources:
     """``alias_mutation_sources`` maps an in-place mutation through a bare
     ``y = x`` alias back to the upstream source ``x`` (CAS-60)."""

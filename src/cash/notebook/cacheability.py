@@ -684,23 +684,8 @@ def _positional_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> lis
     return [a.arg for a in (*func.args.posonlyargs, *func.args.args)]
 
 
-def params_mutated_in_function(
-    func: ast.FunctionDef | ast.AsyncFunctionDef,
-) -> frozenset[str]:
-    """Parameter names a function body mutates IN PLACE.
-
-    A parameter counts as mutated when the body performs an in-place mutation on
-    it — subscript/attribute assignment, augmented assignment, a mutating method
-    call, ``out=`` kwarg, or ``del`` — i.e. the same signals as
-    :attr:`StatementAnalysis.all_mutated_vars`. Plain reassignment (``x = ...``)
-    rebinds a local and does NOT mutate the caller's object, so it does not count.
-
-    Used (with :func:`function_arg_mutations`) to attribute an argument mutation
-    back to the caller's variable: ``def f(x): x.append(1)`` plus ``f(data)``
-    means ``data`` is mutated in place, so it must reset on isolated re-run
-    (CAS-58). Analysis is one level deep — a parameter mutated only via a further
-    call (``def f(x): g(x)``) is not detected.
-    """
+def _all_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Every parameter name (posonly + normal + kwonly + *args + **kwargs)."""
     params = {
         a.arg
         for a in (
@@ -713,13 +698,103 @@ def params_mutated_in_function(
         params.add(func.args.vararg.arg)
     if func.args.kwarg:
         params.add(func.args.kwarg.arg)
+    return params
+
+
+def _params_mutated_via_nested_calls(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+    params: set[str],
+    resolve_source,
+    seen: frozenset[str],
+) -> set[str]:
+    """Params of *func* mutated only by being passed to another resolvable call.
+
+    For each ``Name`` call in the body, resolve the callee, recursively find which
+    of ITS params it mutates, and map those back to any of *func*'s params passed
+    at the matching position / keyword.
+    """
+    out: set[str] = set()
+    for node in ast.walk(func):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)):
+            continue
+        callee_name = node.func.id
+        if callee_name in seen:
+            continue  # recursion guard (mutual / self recursion)
+        callee = _resolve_function_def(callee_name, resolve_source)
+        if callee is None:
+            continue
+        callee_muts = params_mutated_in_function(
+            callee, resolve_source, seen | {callee_name}
+        )
+        if not callee_muts:
+            continue
+        pos_params = _positional_param_names(callee)
+        for i, arg in enumerate(node.args):
+            if (isinstance(arg, ast.Name) and arg.id in params
+                    and i < len(pos_params) and pos_params[i] in callee_muts):
+                out.add(arg.id)
+        for kw in node.keywords:
+            if (kw.arg and isinstance(kw.value, ast.Name)
+                    and kw.value.id in params and kw.arg in callee_muts):
+                out.add(kw.value.id)
+    return out
+
+
+def _resolve_function_def(name, resolve_source):
+    """Parse *name*'s source via *resolve_source* into a FunctionDef, or None."""
+    if resolve_source is None:
+        return None
+    source = resolve_source(name)
+    if not source:
+        return None
+    try:
+        parsed = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError):
+        return None
+    if parsed.body and isinstance(
+        parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+    ):
+        return parsed.body[0]
+    return None
+
+
+def params_mutated_in_function(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+    resolve_source=None,
+    seen: frozenset[str] = frozenset(),
+) -> frozenset[str]:
+    """Parameter names a function body mutates IN PLACE.
+
+    A parameter counts as mutated when the body performs an in-place mutation on
+    it — subscript/attribute assignment, augmented assignment, a mutating method
+    call, ``out=`` kwarg, or ``del`` — i.e. the same signals as
+    :attr:`StatementAnalysis.all_mutated_vars`. Plain reassignment (``x = ...``)
+    rebinds a local and does NOT mutate the caller's object, so it does not count.
+
+    Used (with :func:`function_arg_mutations`) to attribute an argument mutation
+    back to the caller's variable: ``def f(x): x.append(1)`` plus ``f(data)``
+    means ``data`` is mutated in place, so it must reset on isolated re-run
+    (CAS-58).
+
+    When *resolve_source* is given (a ``name -> source`` lookup), the analysis is
+    interprocedural: a parameter mutated only via a further resolvable call
+    (``def outer(y): inner(y)`` where ``inner`` mutates its arg) is also detected
+    (CAS-61). *seen* guards against mutual / self recursion. Without
+    *resolve_source* the analysis is one level deep (the original CAS-58
+    behaviour).
+    """
+    params = _all_param_names(func)
     if not params:
         return frozenset()
     visitor = _MutationVisitor()
     for stmt in func.body:
         visitor.visit(stmt)
-    mutated = {m.variable for m in visitor.mutations}
-    return frozenset(mutated & params)
+    mutated = {m.variable for m in visitor.mutations} & params
+    if resolve_source is not None:
+        mutated |= _params_mutated_via_nested_calls(
+            func, params, resolve_source, seen
+        )
+    return frozenset(mutated)
 
 
 def standalone_call_arg_targets(
@@ -768,26 +843,21 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
     *resolve_source* maps a function name to its source string (or ``None`` if it
     is not a resolvable user-defined function — a builtin, C function, lambda, or
     unknown name). For each top-level bare-``Expr`` call the function body is
-    parsed, its mutated parameters are found via :func:`params_mutated_in_function`,
-    and each is mapped back to the call's positional/keyword argument variable.
+    parsed, its mutated parameters are found via :func:`params_mutated_in_function`
+    (interprocedurally — a param mutated only through a further resolvable call is
+    detected too, CAS-61), and each is mapped back to the call's positional /
+    keyword argument variable.
     """
     if tree is None:
         return frozenset()
     out: set[str] = set()
     for func_name, positional, keywords in standalone_call_arg_targets(tree):
-        source = resolve_source(func_name)
-        if not source:
+        fdef = _resolve_function_def(func_name, resolve_source)
+        if fdef is None:
             continue
-        try:
-            parsed = ast.parse(textwrap.dedent(source))
-        except (SyntaxError, ValueError):
-            continue
-        if not parsed.body or not isinstance(
-            parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
-        ):
-            continue
-        fdef = parsed.body[0]
-        mutated_params = params_mutated_in_function(fdef)
+        mutated_params = params_mutated_in_function(
+            fdef, resolve_source, frozenset({func_name})
+        )
         if not mutated_params:
             continue
         pos_params = _positional_param_names(fdef)
@@ -800,8 +870,8 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
     return frozenset(out)
 
 
-def _top_level_alias_map(tree: ast.Module) -> dict[str, str]:
-    """Map each top-level alias name to its direct source name (shared object).
+def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
+    """Map each alias name in the cell to its direct source name (shared object).
 
     Recognises every binding form that makes the target share the RHS object,
     not just ``y = x``:
@@ -810,10 +880,13 @@ def _top_level_alias_map(tree: ast.Module) -> dict[str, str]:
       target aliases x);
     * 1:1 tuple / list unpack of a literal — ``(y,) = (x,)``, ``a, b = c, d``
       (element-wise, only ``Name``-to-``Name`` pairs);
-    * walrus anywhere in the statement — ``(y := x).append(..)``.
+    * walrus binding — ``(y := x).append(..)``.
 
-    Only a bare ``Name`` RHS counts as aliasing; ``y = x.copy()`` / ``y = x[:]``
-    are copies and excluded. Self-binds (``x = x``) are skipped. A ternary
+    Bindings inside control-flow bodies (if / for / while / with / try) are
+    scanned too — an alias formed in a loop body still shares the object
+    (CAS-61). Deferred scopes (def / class) are not descended into. Only a bare
+    ``Name`` RHS counts as aliasing; ``y = x.copy()`` / ``y = x[:]`` are copies
+    and excluded. Self-binds (``x = x``) are skipped. A ternary
     (``y = x if c else z``) is intentionally not handled here (flow-sensitive,
     two possible sources) — tracked separately.
     """
@@ -824,8 +897,10 @@ def _top_level_alias_map(tree: ast.Module) -> dict[str, str]:
                 and target.id != value.id):
             alias_map[target.id] = value.id
 
-    for node in tree.body:
-        # Walrus binding anywhere in the statement (``(y := x).method()``).
+    for node in _module_level_stmts(tree.body):
+        # Walrus binding in this statement's own expressions. (Nested control
+        # bodies are visited as their own yielded statements, so restrict the
+        # walk to NamedExprs that are not themselves inside a deferred scope.)
         for sub in ast.walk(node):
             if isinstance(sub, ast.NamedExpr):
                 _bind(sub.target, sub.value)
@@ -865,7 +940,7 @@ def aliased_sources(tree: ast.Module | None, names) -> frozenset[str]:
     """
     if tree is None or not names:
         return frozenset()
-    alias_map = _top_level_alias_map(tree)
+    alias_map = _cell_alias_map(tree)
     if not alias_map:
         return frozenset()
     out: set[str] = set()
@@ -897,7 +972,7 @@ def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
     """
     if tree is None:
         return frozenset()
-    alias_map = _top_level_alias_map(tree)
+    alias_map = _cell_alias_map(tree)
     if not alias_map:
         return frozenset()
     try:

@@ -71,3 +71,24 @@ def test_reassigning_helper_not_a_mutation(nb_runner):
     caller -> not flagged, keeps cache (no over-invalidation)."""
     _rerun(nb_runner, "data = [1, 2, 3]\ndef grow(x):\n    x = x + [0]\n    return x",
            "grow(data)\nprint(len(data))", "3")
+
+
+def test_depth2_mutation_via_nested_helper(nb_runner):
+    """outer(y) mutates y only by calling inner(y); the interprocedural analysis
+    propagates the mutation back through the nested call (CAS-61)."""
+    _rerun(nb_runner,
+           "data = [1]\ndef inner(z):\n    z.append(9)\ndef outer(y):\n    inner(y)",
+           "outer(data)\nprint(data)", "[1, 9]")
+
+
+def test_depth3_mutation_via_nested_helpers(nb_runner):
+    _rerun(nb_runner,
+           "data = [1]\ndef inner(z):\n    z.append(9)\ndef mid(b):\n    inner(b)\ndef outer(y):\n    mid(y)",
+           "outer(data)\nprint(data)", "[1, 9]")
+
+
+def test_depth2_pure_chain_not_over_invalidated(nb_runner):
+    """A nested chain that never mutates (only returns) must keep its cache."""
+    _rerun(nb_runner,
+           "data = [1, 2, 3]\ndef inner_pure(z):\n    return len(z)\ndef outer_pure(y):\n    return inner_pure(y)",
+           "outer_pure(data)\nprint(len(data))", "3")

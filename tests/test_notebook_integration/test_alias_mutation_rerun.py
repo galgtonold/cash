@@ -49,6 +49,18 @@ def test_tuple_unpack_alias(nb_runner):
     _rerun(nb_runner, "x = [1, 2]", "(y,) = (x,)\ny.append(3)\nprint(x)", "[1, 2, 3]")
 
 
+def test_alias_bound_in_for_body(nb_runner):
+    # Alias formed AND mutated inside a loop body (CAS-61) — scanned via the
+    # cell-wide alias map that descends into control bodies.
+    _rerun(nb_runner, "x = [1, 2, 3]",
+           "for _ in range(1):\n    y = x\n    y.append(99)\nprint(x)", "[1, 2, 3, 99]")
+
+
+def test_alias_bound_in_if_body(nb_runner):
+    _rerun(nb_runner, "x = [1, 2]",
+           "if True:\n    y = x\n    y.append(9)\nprint(x)", "[1, 2, 9]")
+
+
 def test_alias_set_mutation(nb_runner):
     _rerun(nb_runner, "s = {1, 2}", "t = s\nt.add(3)\nprint(sorted(s))", "[1, 2, 3]")
 

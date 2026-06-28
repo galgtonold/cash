@@ -33,19 +33,6 @@ def test_tuple_holds_mutable(nb_runner):
            "t = (lst,)\nt[0].append(3)\nprint(lst)", "[1, 2, 3]")
 
 
-@pytest.mark.xfail(reason="CAS-61: alias bound inside loop body not scanned", strict=False)
-def test_alias_in_for_loop(nb_runner):
-    _rerun(nb_runner, "x = [1, 2, 3]",
-           "for _ in range(1):\n    y = x\n    y.append(99)\nprint(x)", "[1, 2, 3, 99]")
-
-
-@pytest.mark.xfail(reason="CAS-61: depth-2 function-arg mutation not propagated", strict=False)
-def test_nested_function_depth2_arg(nb_runner):
-    _rerun(nb_runner,
-           "def inner(z):\n    z.append(9)\ndef outer(y):\n    inner(y)\ndata = [1]",
-           "outer(data)\nprint(data)", "[1, 9]")
-
-
 @pytest.mark.xfail(reason="CAS-61: walrus-as-method-receiver not attributed", strict=False)
 def test_walrus_alias_mutate(nb_runner):
     # (y := x).append(..) — the NamedExpr receiver is not surfaced as a mutated
