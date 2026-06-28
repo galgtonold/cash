@@ -8,12 +8,14 @@ Extracted from ``NotebookSimulator``. Holds references to a
 dicts. Pure-phase invariants land in a later refactor.
 """
 
+import ast
 import logging
 import re
 import types
 
 from .._protocols import TrackingState
 from ..analysis import CodeAnalyzer
+from ..cacheability import analyze_statement
 from ..cache_status import CacheStatus
 from ._types import RestoreCollector, apply_collected_mutations
 from .virtual_lineage import VirtualLineage, _BUILTIN_NAMES, _normalize_stmt
@@ -347,6 +349,31 @@ class MismatchClassifier:
             broken_vars.add(var_name)
             return True
 
+        # Self-modifying no-lineage output of a single-unit (while / with) loop
+        # in the current cell. Its recorded lineage is legitimately "ahead" — it
+        # is the cell's OWN loop output, not downstream advancement — but unlike
+        # a regular self-assign the runtime's value-based loop lineage does not
+        # match the simulator's projection, so the collapse branch below would
+        # reset the recorded lineage to the cell-entry base. For a no-lineage var
+        # (int / list / set: no ``_cash_lineage_hash`` escape hatch) that makes
+        # ``executed_input_lineages[var][var] == variable_lineage[var]`` and the
+        # downstream stale-value guard then declines, so the loop re-accumulates
+        # (or, with a control var pinned, never re-runs) on an isolated re-run.
+        # Mark it broken directly so its producer restores the cell-entry base
+        # and the loop recomputes from scratch — mirroring the for-loop path,
+        # whose per-iteration capture keeps the guard's base distinct. Scoped to
+        # input∩output, so it fires only when re-running the loop cell itself,
+        # never when a downstream cell merely reads the var. [CAS-59]
+        if (required_inputs and var_name in required_inputs
+                and current_cell_outputs and var_name in current_cell_outputs
+                and self._is_singleunit_loop_nolineage_selfmod(var_name)):
+            if self.debug:
+                logger.debug("[UPSTREAM_DEBUG]   -> '%s' is a no-lineage self-modifying "
+                      "output of a single-unit (while/with) loop. Marking broken so the "
+                      "loop recomputes from its cell-entry base on isolated re-run.", var_name)
+            broken_vars.add(var_name)
+            return True
+
         # Downstream advancement: if var is also a current-cell output reset lineage.
         if required_inputs and var_name in required_inputs and current_cell_outputs and var_name in current_cell_outputs:
             if self.debug:
@@ -360,6 +387,34 @@ class MismatchClassifier:
             return True
 
         return False
+
+    def _is_singleunit_loop_nolineage_selfmod(self, var_name: str) -> bool:
+        """True if *var_name* is a no-lineage var self-modified by a single-unit loop.
+
+        Detects the CAS-59 shape: the variable's producing statement is a
+        ``while`` or ``with`` block (executed as one opaque unit, unlike a ``for``
+        loop's per-iteration replay) whose body mutates the variable in place
+        (``n += 1``, ``total += n``, ``acc.append(..)``), AND the live value
+        carries no ``_cash_lineage_hash``. Lineage-carrying receivers
+        (DataFrame / Series) are excluded — they reset correctly through the
+        value-lineage path (CAS-57) and must keep it.
+        """
+        live = self.shell.user_ns.get(var_name)
+        if getattr(live, '_cash_lineage_hash', None) is not None:
+            return False
+        code = self.executed_cell_codes.get(var_name)
+        if not code:
+            return False
+        try:
+            tree = ast.parse(code.strip())
+        except (SyntaxError, ValueError):
+            return False
+        if len(tree.body) != 1 or not isinstance(tree.body[0], (ast.While, ast.With)):
+            return False
+        try:
+            return var_name in analyze_statement(code, None).all_mutated_vars
+        except (SyntaxError, ValueError, TypeError):
+            return False
 
     def _handle_lineage_mismatch(
         self,
