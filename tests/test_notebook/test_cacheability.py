@@ -104,6 +104,31 @@ class TestAllMutatedVars:
         a = _analyze("df.fillna(0, inplace=False)")
         assert 'df' not in a.all_mutated_vars
 
+    def test_numpy_out_kwarg(self):
+        """numpy ufunc out= writes its target in place: out=a mutates a."""
+        a = _analyze("np.add(a, 10, out=a)")
+        assert 'a' in a.all_mutated_vars
+
+    def test_numpy_out_kwarg_distinct_target(self):
+        """out= names the mutated array even when it is not also an input."""
+        a = _analyze("np.multiply(x, y, out=result)")
+        assert 'result' in a.all_mutated_vars
+
+    def test_numpy_out_kwarg_tuple(self):
+        """Multi-output ufuncs take a tuple: out=(a, b) mutates both."""
+        a = _analyze("np.divmod(x, y, out=(q, r))")
+        assert {'q', 'r'} <= a.all_mutated_vars
+
+    def test_numpy_out_kwarg_subscript(self):
+        """out=arr[1:] mutates the base array arr."""
+        a = _analyze("np.add(arr, 1, out=arr[1:])")
+        assert 'arr' in a.all_mutated_vars
+
+    def test_out_kwarg_captured_result(self):
+        """out= mutation is detected even when the call's result is assigned."""
+        a = _analyze("b = np.add(a, 10, out=a)")
+        assert 'a' in a.all_mutated_vars
+
     def test_subscript_assign(self):
         a = _analyze("arr[0] = 100")
         assert 'arr' in a.all_mutated_vars
@@ -203,6 +228,19 @@ class TestStandaloneMethodMutationReceivers:
     def test_multiple_receivers(self):
         assert self._receivers("a.append(1)\nb.add(2)") == {'a', 'b'}
 
+    def test_numpy_out_kwarg(self):
+        """numpy out= writes its target in place -> bump the out target ``a``.
+        (``np`` also appears here because ``add`` is in MUTATING_METHODS via
+        ``set.add``; that pre-existing artifact is harmless — the runtime/sim
+        loops skip module receivers.)"""
+        assert 'a' in self._receivers("np.add(a, 10, out=a)")
+
+    def test_numpy_out_kwarg_tuple(self):
+        assert self._receivers("np.divmod(x, y, out=(q, r))") == {'q', 'r'}
+
+    def test_numpy_out_kwarg_distinct_target(self):
+        assert self._receivers("np.multiply(x, y, out=result)") == {'result'}
+
     def test_none_tree(self):
         assert standalone_method_mutation_receivers(None) == frozenset()
 
@@ -246,6 +284,10 @@ class TestStandaloneMethodCallReceivers:
 
     def test_multiple(self):
         assert self._calls("a.foo()\nb.bar(1)") == {('a', 'foo'), ('b', 'bar')}
+
+    def test_numpy_out_kwarg_candidate(self):
+        """out= target is a candidate (method label 'out='); np.add receiver too."""
+        assert self._calls("np.add(a, 10, out=a)") == {('np', 'add'), ('a', 'out=')}
 
     def test_none_tree(self):
         assert standalone_method_call_receivers(None) == frozenset()

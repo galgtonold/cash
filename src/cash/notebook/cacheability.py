@@ -135,6 +135,28 @@ class _MutationVisitor(ast.NodeVisitor):
                             break
         self.generic_visit(node)
 
+    def visit_Call(self, node: ast.Call) -> None:
+        """Detect the numpy ufunc ``out=`` kwarg, which writes its target array
+        in place: ``np.add(a, 10, out=a)`` mutates ``a`` (the out target), not
+        the ``np`` receiver. Fires on any Call (result captured or not). For
+        multi-output ufuncs ``out`` is a tuple: ``out=(q, r)``."""
+        for kw in node.keywords:
+            if kw.arg != 'out':
+                continue
+            targets = (
+                kw.value.elts
+                if isinstance(kw.value, (ast.Tuple, ast.List))
+                else [kw.value]
+            )
+            for tgt in targets:
+                base = _extract_base_name(tgt)
+                if base:
+                    self.mutations.append(MutationInfo(
+                        variable=base, method='out=',
+                        kind='out_kwarg', line=node.lineno,
+                    ))
+        self.generic_visit(node)
+
     def visit_AugAssign(self, node: ast.AugAssign) -> None:
         """Detect augmented assignments like x += 1, arr *= 2."""
         base = _extract_base_name(node.target)
@@ -410,6 +432,29 @@ def _expr_call_inplace_true(call: ast.Call) -> bool:
     return False
 
 
+def _out_kwarg_target_bases(call: ast.Call) -> list[str]:
+    """Base names written in place by a numpy-style ``out=`` kwarg.
+
+    ``np.add(a, 1, out=a)`` mutates ``a``; multi-output ufuncs take a tuple
+    (``out=(q, r)``); the target may be a slice (``out=arr[1:]`` -> ``arr``).
+    The mutated object is the out target, NOT the call's own receiver (``np``).
+    """
+    bases: list[str] = []
+    for kw in call.keywords:
+        if kw.arg != 'out':
+            continue
+        targets = (
+            kw.value.elts
+            if isinstance(kw.value, (ast.Tuple, ast.List))
+            else [kw.value]
+        )
+        for tgt in targets:
+            base = _extract_base_name(tgt)
+            if base:
+                bases.append(base)
+    return bases
+
+
 def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[str]:
     """Base variables mutated by a *top-level bare-``Expr``* method call.
 
@@ -443,6 +488,9 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
         if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
             continue
         call = node.value
+        # numpy ``out=`` writes its target in place (works regardless of how the
+        # call's own receiver is spelled), so bump the out target's lineage.
+        receivers.update(_out_kwarg_target_bases(call))
         if not isinstance(call.func, ast.Attribute):
             continue
         method_name = call.func.attr
@@ -475,6 +523,10 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
         if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
             continue
         call = node.value
+        # numpy ``out=`` target is a candidate receiver (method label ``out=``);
+        # it is tier-1 (known-mutating) so the runtime/sim route it directly.
+        for out_base in _out_kwarg_target_bases(call):
+            calls.add((out_base, 'out='))
         if not isinstance(call.func, ast.Attribute):
             continue
         base = _extract_base_name(call.func.value)
