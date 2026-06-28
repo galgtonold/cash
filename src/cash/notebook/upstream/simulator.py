@@ -273,9 +273,12 @@ class NotebookSimulator:
                         upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
                             notebook_cells, current_cell_idx,
                         )
+                    before = var_name in broken_vars
                     self._mark_nolineage_self_write_broken(
                         var_name, live_value, broken_vars, upstream_inplace_mutated,
                     )
+                    trace_event("force_reset", var=var_name,
+                                broke=(var_name in broken_vars and not before))
                 continue
             recorded = self.variable_lineage.get(var_name)
             if recorded is None:
@@ -433,6 +436,8 @@ class NotebookSimulator:
         trace_event("simulate_enter", cell_idx=current_cell_idx,
                     reassigned=current_cell_reassigned or set(),
                     mutated=current_cell_mutated or set(),
+                    required_inputs=required_inputs or set(),
+                    selfref=current_cell_selfref_vars or set(),
                     method_receivers=current_cell_method_receivers or set())
         # Pass 1: Simulate ALL statements to build final virtual state
         stmt_lookup_times = {}  # stmt_code -> cache_lookup_time (disk I/O during simulation)

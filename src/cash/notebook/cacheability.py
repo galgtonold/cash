@@ -611,7 +611,9 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
     ``df['c'], df['d'] = df['a'], df['b']``): those are idempotent on re-run and
     keep their per-statement cache, preserving the CAS-42 design. Augmented
     assignment (``+=``) is always self-referential. Only ``tree.body`` (top-level);
-    loop/function bodies are handled elsewhere.
+    mutations nested in if/for/while/with bodies are NOT reset on isolated re-run
+    because the runtime does not advance their lineage through a control structure
+    (CAS-58, a known limitation); loop/function bodies are handled elsewhere.
     """
     if tree is None:
         return frozenset()

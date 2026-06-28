@@ -641,5 +641,15 @@ class TestSelfrefInplaceWriteVars:
         # deleting a plain name is a namespace op, handled elsewhere -> not here.
         assert self._vars("del x") == frozenset()
 
+    def test_control_body_not_scanned(self):
+        # CAS-58 (known limitation): selfref scans only tree.body, so a mutation
+        # nested in an if/for/with body is NOT flagged here. (The runtime also does
+        # not advance df's lineage through a control structure, so even flagging it
+        # would not reset it -- see CAS-58.)
+        assert self._vars("if cond:\n    df['a'] = df['a'] * 2") == frozenset()
+
+    def test_function_body_not_scanned(self):
+        assert self._vars("def f():\n    df['a'] = df['a'] * 2") == frozenset()
+
     def test_none_tree(self):
         assert selfref_inplace_write_vars(None) == frozenset()
