@@ -90,6 +90,42 @@ def test_new_column_from_other_columns_preserved(nb_runner):
                     "df['c'] = df['a'] + df['b']\nprint(df['c'].tolist())", "[11, 22, 33]")
 
 
+def test_tuple_unpack_column_swap_same_cell(nb_runner):
+    """CAS-56: df['a'], df['b'] = df['b'], df['a'] (column swap). A Tuple target
+    with subscript writes reads & writes overlapping columns -> non-idempotent
+    (re-run swaps back). Must reset so an isolated re-run swaps exactly once."""
+    _rerun_one_cell(
+        nb_runner, "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [10, 20, 30]})",
+        "df['a'], df['b'] = df['b'], df['a']\nprint(df['a'].tolist())", "[10, 20, 30]")
+
+
+def test_tuple_unpack_self_scale_same_cell(nb_runner):
+    """CAS-56: df['a'], df['b'] = df['a']*2, df['b']*2 -- both self-referential."""
+    _rerun_one_cell(
+        nb_runner, "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [10, 20, 30]})",
+        "df['a'], df['b'] = df['a'] * 2, df['b'] * 2\nprint(df['a'].tolist())", "[2, 4, 6]")
+
+
+def test_tuple_unpack_new_columns_preserved(nb_runner):
+    """CAS-42 guard: new columns c,d derived from existing a,b are idempotent."""
+    _rerun_one_cell(
+        nb_runner, "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [10, 20, 30]})",
+        "df['c'], df['d'] = df['a'], df['b']\nprint(df['c'].tolist())", "[1, 2, 3]")
+
+
+def test_del_column_same_cell(nb_runner):
+    """CAS-56: del df['b'] + display in one cell. A second del KeyErrors, so df
+    must reset on isolated re-run (the column is present again at cell entry)."""
+    nb_runner.create_notebook([
+        "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3], 'b': [4, 5, 6]})",
+        "del df['b']\nprint(list(df.columns))"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "['a']" in nb_runner.get_output(2), nb_runner.get_output(2)
+    nb_runner.run_cell(2)
+    assert "['a']" in nb_runner.get_output(2), f"re-run: {nb_runner.get_output(2)!r}"
+
+
 def test_split_cell_still_works(nb_runner):
     """Regression: mutation and display in SEPARATE cells still resets correctly."""
     nb_runner.create_notebook([DF8, "df['a'] = df['a'] * 2", "print(df['a'].tolist())"])

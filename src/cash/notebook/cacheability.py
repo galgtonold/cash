@@ -102,6 +102,23 @@ def _extract_base_name(node: ast.AST) -> str | None:
     return None
 
 
+def _iter_store_targets(target: ast.expr):
+    """Yield the leaf store targets of an assignment target, flattening tuple/list
+    unpacking and starred elements.
+
+    ``df['a']`` -> the subscript itself; ``df['a'], df['b']`` -> both subscripts;
+    ``a, *rest = ...`` -> the ``Name`` and the starred ``Name`` (callers ignore
+    plain ``Name`` targets). Nested tuples (``(a, (b, c))``) are recursed into.
+    """
+    if isinstance(target, ast.Starred):
+        yield from _iter_store_targets(target.value)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            yield from _iter_store_targets(elt)
+    else:
+        yield target
+
+
 class _MutationVisitor(ast.NodeVisitor):
     """AST visitor that collects :class:`MutationInfo` entries."""
 
@@ -170,22 +187,24 @@ class _MutationVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Assign(self, node: ast.Assign) -> None:
-        """Detect subscript/attribute assignments like d[key] = val, obj.attr = val."""
+        """Detect subscript/attribute assignments like d[key] = val, obj.attr = val,
+        including those nested in a tuple/list target (df['a'], df['b'] = ...)."""
         for target in node.targets:
-            if isinstance(target, ast.Subscript):
-                base = _extract_base_name(target.value)
-                if base:
-                    self.mutations.append(MutationInfo(
-                        variable=base, method='__setitem__',
-                        kind='subscript_assign', line=node.lineno,
-                    ))
-            elif isinstance(target, ast.Attribute):
-                base = _extract_base_name(target.value)
-                if base:
-                    self.mutations.append(MutationInfo(
-                        variable=base, method=f'__setattr__({target.attr})',
-                        kind='attribute_assign', line=node.lineno,
-                    ))
+            for store in _iter_store_targets(target):
+                if isinstance(store, ast.Subscript):
+                    base = _extract_base_name(store.value)
+                    if base:
+                        self.mutations.append(MutationInfo(
+                            variable=base, method='__setitem__',
+                            kind='subscript_assign', line=node.lineno,
+                        ))
+                elif isinstance(store, ast.Attribute):
+                    base = _extract_base_name(store.value)
+                    if base:
+                        self.mutations.append(MutationInfo(
+                            variable=base, method=f'__setattr__({store.attr})',
+                            kind='attribute_assign', line=node.lineno,
+                        ))
         self.generic_visit(node)
 
     def visit_Delete(self, node: ast.Delete) -> None:
@@ -553,27 +572,46 @@ def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
     return False
 
 
+def _selfref_write_base(target: ast.expr, rhs: ast.expr) -> str | None:
+    """Base var if ``target = rhs`` is a self-referential in-place subscript/attr
+    write — the target is also read in *rhs*, by exact text or column-key overlap."""
+    base = _selfref_target_base(target)
+    if base and (
+        _rhs_reads_target(rhs, target) or _rhs_reads_same_column(rhs, target, base)
+    ):
+        return base
+    return None
+
+
 def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
-    """Base vars mutated by a SELF-REFERENTIAL in-place subscript/attribute write
-    at the top level — the written target is also *read* in the same statement.
+    """Base vars mutated by a NON-IDEMPOTENT in-place subscript/attribute write at
+    the top level — re-running the statement re-applies the mutation.
 
-    Covers ``df['a'] = df['a'] * 2``, ``df['a'] += 1``, ``df.iloc[i, j] += x``,
-    ``df.iloc[i, j] = df.iloc[i, j] + 1``, ``df['a'] = df['a'].fillna(0)``,
-    ``obj.attr = obj.attr + 1``, and MASKED writes whose RHS reads the same
-    column spelled differently (``df.loc[mask, 'a'] = df['a'] * 2``) — matched by
-    column-key overlap, not exact text (see :func:`_rhs_reads_same_column`).
+    Covers, with the receiver restored to its cell-entry base on re-run:
 
-    Such writes are NON-IDEMPOTENT: re-running them applies the operation again,
-    so on an isolated cell re-run the lineage-carrying receiver (DataFrame/Series/
-    custom object) must be restored to its cell-entry base first — otherwise the
-    value accumulates (``df['a']*2`` doubles again). The caller routes these vars
-    through the same stale-value reset used for method receivers (see CAS-54).
+    * self-referential writes whose RHS reads the target — ``df['a'] = df['a']*2``,
+      ``df['a'] += 1``, ``df.iloc[i, j] += x``, ``df['a'] = df['a'].fillna(0)``,
+      ``obj.attr = obj.attr + 1`` (CAS-54);
+    * MASKED writes whose RHS reads the same column spelled differently
+      (``df.loc[mask, 'a'] = df['a']*2``) — matched by column-key overlap, not
+      exact text (CAS-55, see :func:`_rhs_reads_same_column`);
+    * tuple/list unpacking that reads & writes overlapping columns
+      (``df['a'], df['b'] = df['b'], df['a']`` — a column swap) (CAS-56);
+    * ``del`` of a subscript/attribute (``del df['b']``, ``del obj.cache``) — a
+      second ``del`` raises, so the receiver must reset (CAS-56).
+
+    Such writes are NON-IDEMPOTENT, so on an isolated cell re-run the lineage-
+    carrying receiver (DataFrame/Series/custom object) must be restored first —
+    otherwise the value accumulates (``df['a']*2`` doubles again) or the re-run
+    errors. The caller routes these vars through the same stale-value reset used
+    for method receivers (see CAS-54).
 
     Deliberately EXCLUDES writes to a NEW target read from OTHER keys
-    (``df['b'] = df['a'] + 1``, ``df['VolAdj'] = df.groupby('Ticker')['Close']…``):
-    those are idempotent on re-run and keep their per-statement cache, preserving
-    the CAS-42 design. Augmented assignment (``+=``) is always self-referential.
-    Only ``tree.body`` (top-level); loop/function bodies are handled elsewhere.
+    (``df['b'] = df['a'] + 1``, ``df['VolAdj'] = df.groupby('Ticker')['Close']…``,
+    ``df['c'], df['d'] = df['a'], df['b']``): those are idempotent on re-run and
+    keep their per-statement cache, preserving the CAS-42 design. Augmented
+    assignment (``+=``) is always self-referential. Only ``tree.body`` (top-level);
+    loop/function bodies are handled elsewhere.
     """
     if tree is None:
         return frozenset()
@@ -585,11 +623,25 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
                 out.add(base)
         elif isinstance(node, ast.Assign):
             for target in node.targets:
+                # Tuple/list unpacking: test each element against the whole RHS, so
+                # a swap (df['a'], df['b'] = df['b'], df['a']) flags df while new
+                # columns (df['c'], df['d'] = df['a'], df['b']) stay excluded.
+                elts = (
+                    target.elts
+                    if isinstance(target, (ast.Tuple, ast.List))
+                    else [target]
+                )
+                for elt in elts:
+                    if isinstance(elt, ast.Starred):
+                        elt = elt.value
+                    base = _selfref_write_base(elt, node.value)
+                    if base:
+                        out.add(base)
+        elif isinstance(node, ast.Delete):
+            # del df['b'] / del obj.cache removes in place and is non-idempotent.
+            for target in node.targets:
                 base = _selfref_target_base(target)
-                if base and (
-                    _rhs_reads_target(node.value, target)
-                    or _rhs_reads_same_column(node.value, target, base)
-                ):
+                if base:
                     out.add(base)
     return frozenset(out)
 

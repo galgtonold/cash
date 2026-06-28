@@ -146,6 +146,23 @@ class TestAllMutatedVars:
         a = _analyze("del d['key']")
         assert 'd' in a.all_mutated_vars
 
+    def test_tuple_unpack_subscript_target(self):
+        # CAS-56: subscript writes nested in a tuple target mutate their bases.
+        a = _analyze("df['a'], df['b'] = df['b'], df['a']")
+        assert 'df' in a.all_mutated_vars
+
+    def test_tuple_unpack_mixed_bases(self):
+        a = _analyze("d['x'], lst[0] = 1, 2")
+        assert {'d', 'lst'} <= a.all_mutated_vars
+
+    def test_list_target_attribute(self):
+        a = _analyze("[obj.x, obj.y] = (1, 2)")
+        assert 'obj' in a.all_mutated_vars
+
+    def test_tuple_unpack_plain_names_no_mutation(self):
+        a = _analyze("x, y = 1, 2")
+        assert len(a.all_mutated_vars) == 0
+
     def test_multiple_mutations(self):
         code = "lst.append(1)\nlst.append(2)\nd['key'] = 'val'\ncounter += 1"
         a = _analyze(code)
@@ -596,6 +613,33 @@ class TestSelfrefInplaceWriteVars:
         # positional target is unknown-column; RHS reads a named column -> no
         # provable overlap, and not an exact-target match -> excluded.
         assert self._vars("df.iloc[0, 1] = df['a'].sum()") == frozenset()
+
+    def test_tuple_unpack_column_swap(self):
+        # CAS-56: df['a'], df['b'] = df['b'], df['a'] -- statement reads & writes
+        # overlapping columns of df -> non-idempotent -> flag df.
+        assert self._vars("df['a'], df['b'] = df['b'], df['a']") == {'df'}
+
+    def test_tuple_unpack_self_scale(self):
+        assert self._vars("df['a'], df['b'] = df['a'] * 2, df['b'] * 2") == {'df'}
+
+    def test_tuple_unpack_new_columns_excluded(self):
+        # CAS-42: new columns c,d derived from existing a,b -> idempotent.
+        assert self._vars("df['c'], df['d'] = df['a'], df['b']") == frozenset()
+
+    def test_tuple_unpack_cross_object_excluded(self):
+        assert self._vars("df['a'], df['b'] = other['x'], other['y']") == frozenset()
+
+    def test_del_subscript(self):
+        # CAS-56: del df['b'] removes a column in place -> non-idempotent
+        # (second del KeyErrors) -> df must reset on isolated re-run.
+        assert self._vars("del df['b']") == {'df'}
+
+    def test_del_attribute(self):
+        assert self._vars("del obj.cache") == {'obj'}
+
+    def test_del_plain_name_excluded(self):
+        # deleting a plain name is a namespace op, handled elsewhere -> not here.
+        assert self._vars("del x") == frozenset()
 
     def test_none_tree(self):
         assert selfref_inplace_write_vars(None) == frozenset()
