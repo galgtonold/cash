@@ -4,6 +4,7 @@ import ast
 import hashlib
 import logging
 import re
+import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
@@ -133,6 +134,7 @@ class UpstreamChecker:
         Kept as a separate method so ``set_tracking_state`` can also forward
         to the simulator.
         """
+        self._tracking_state = state
         self.executed_cell_codes = state.executed_cell_codes
         self.executed_cell_hashes = state.executed_cell_hashes
         self.variable_lineage = state.variable_lineage
@@ -664,6 +666,71 @@ class UpstreamChecker:
             )
         return current_cell_idx
 
+    def _evict_orphaned_definitions(self, notebook_cells: list[str], cell_code: str) -> None:
+        """Evict variables whose producing definition no longer exists (CAS-62).
+
+        A variable cash previously produced but that NO current cell statically
+        produces is orphaned — its definition was removed, commented out, or
+        renamed. It survives in ``user_ns`` with a still-matching lineage, so a
+        cached consumer keeps serving a stale value instead of the ``NameError``
+        a from-start run would raise. Evict the orphan and its transitive
+        consumers from the namespace and all tracking dicts so the consumers
+        re-execute their producers (and fail or recompute) on this run.
+
+        Conservative by construction: a candidate must be a real, plainly-named
+        user variable currently bound in ``user_ns`` — modules (a ``from X
+        import Y`` keeps the tracked source module X in lineage though no cell
+        outputs it), cash-internal / dunder names (``_cash_magics``, ``_v``), and
+        tracking-only entries with no live binding (an exception ``as e`` that
+        Python already unbound) are excluded so they are never wrongly evicted.
+        The produced-set spans ALL cells PLUS the current cell (a var produced or
+        mutated anywhere is safe — guards an unsaved current cell the on-disk
+        notebook view may omit), and if any cell fails to parse the pass is
+        skipped rather than risk a wrong eviction.
+        """
+        produced: set[str] = set()
+        for cell in (*notebook_cells, cell_code):
+            try:
+                _, outs = CodeAnalyzer.analyze_code_block(cell)
+            except (SyntaxError, ValueError):
+                return  # can't be sure what is produced — do nothing
+            produced |= outs
+
+        user_ns = self.shell.user_ns
+        orphaned = {
+            v for v in set(self.variable_lineage) - produced
+            if v in user_ns
+            and not v.startswith('_')
+            and not isinstance(user_ns[v], types.ModuleType)
+        }
+        if not orphaned:
+            return
+
+        # Cascade to transitive consumers via the recorded input lineages.
+        to_evict = set(orphaned)
+        changed = True
+        while changed:
+            changed = False
+            for var, inputs in self.executed_input_lineages.items():
+                if var not in to_evict and not inputs.keys().isdisjoint(to_evict):
+                    to_evict.add(var)
+                    changed = True
+
+        state = self._tracking_state
+        dict_attrs = (
+            'variable_lineage', 'executed_input_lineages', 'current_session_hashes',
+            'variable_hashes', 'variable_sources', 'executed_cell_codes',
+            'executed_cell_hashes', 'executed_file_deps', 'executed_file_mtimes',
+            'granular_preserved_vars', 'module_attribute_deps', 'from_import_sources',
+        )
+        for var in to_evict:
+            self.shell.user_ns.pop(var, None)
+            for attr in dict_attrs:
+                getattr(state, attr, {}).pop(var, None)
+            state.vars_with_mutation_lineage.discard(var)
+            if self.debug:
+                logger.debug("[UPSTREAM] CAS-62 evicted orphaned variable '%s'", var)
+
     def _sum_execution_times(self, executed_metrics: list) -> float:
         """Sum ``total_time`` from a list of metric dicts."""
         total = 0.0
@@ -700,6 +767,12 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
+
+            # CAS-62: a variable whose definition was removed/renamed across an
+            # edit is orphaned — no cell produces it anymore. Evict it (and its
+            # transitive consumers) so they re-run from the start and raise
+            # NameError like a fresh kernel, instead of serving a stale value.
+            self._evict_orphaned_definitions(notebook_cells, cell_code)
 
             if self.debug:
                 logger.debug("[UPSTREAM_DEBUG] Current cell found at index %s", current_cell_idx)
