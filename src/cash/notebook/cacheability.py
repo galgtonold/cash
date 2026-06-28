@@ -17,6 +17,7 @@ them directly.
 """
 
 import ast
+import textwrap
 from dataclasses import dataclass
 
 __all__ = [
@@ -26,6 +27,9 @@ __all__ = [
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
     "selfref_inplace_write_vars",
+    "params_mutated_in_function",
+    "standalone_call_arg_targets",
+    "function_arg_mutations",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -670,6 +674,127 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
                 base = _selfref_target_base(target)
                 if base:
                     out.add(base)
+    return frozenset(out)
+
+
+def _positional_param_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """Ordered positional parameter names (posonly + normal), excluding *args."""
+    return [a.arg for a in (*func.args.posonlyargs, *func.args.args)]
+
+
+def params_mutated_in_function(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """Parameter names a function body mutates IN PLACE.
+
+    A parameter counts as mutated when the body performs an in-place mutation on
+    it — subscript/attribute assignment, augmented assignment, a mutating method
+    call, ``out=`` kwarg, or ``del`` — i.e. the same signals as
+    :attr:`StatementAnalysis.all_mutated_vars`. Plain reassignment (``x = ...``)
+    rebinds a local and does NOT mutate the caller's object, so it does not count.
+
+    Used (with :func:`function_arg_mutations`) to attribute an argument mutation
+    back to the caller's variable: ``def f(x): x.append(1)`` plus ``f(data)``
+    means ``data`` is mutated in place, so it must reset on isolated re-run
+    (CAS-58). Analysis is one level deep — a parameter mutated only via a further
+    call (``def f(x): g(x)``) is not detected.
+    """
+    params = {
+        a.arg
+        for a in (
+            *func.args.posonlyargs,
+            *func.args.args,
+            *func.args.kwonlyargs,
+        )
+    }
+    if func.args.vararg:
+        params.add(func.args.vararg.arg)
+    if func.args.kwarg:
+        params.add(func.args.kwarg.arg)
+    if not params:
+        return frozenset()
+    visitor = _MutationVisitor()
+    for stmt in func.body:
+        visitor.visit(stmt)
+    mutated = {m.variable for m in visitor.mutations}
+    return frozenset(mutated & params)
+
+
+def standalone_call_arg_targets(
+    tree: ast.Module | None,
+) -> frozenset[tuple[str, tuple[str | None, ...], tuple[tuple[str, str], ...]]]:
+    """Top-level bare-``Expr`` calls to a NAME, with their variable arguments.
+
+    Returns ``(func_name, positional, keywords)`` per call:
+
+    * ``positional`` — a tuple with the variable name for each positional argument
+      that is a bare ``Name``, or ``None`` for anything else (literal, expression,
+      ``*args``) since only a tracked variable can be a reset target.
+    * ``keywords`` — ``(param_name, arg_var)`` pairs for keyword arguments whose
+      value is a bare ``Name``.
+
+    Only bare-``Expr`` calls (result discarded) are returned: a call made purely
+    for effect is the mutation pattern, whereas a pure call captures its result
+    (``r = f(x)``). Method calls (``obj.m(x)``) are handled by the method-receiver
+    path and excluded here.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[tuple[str, tuple[str | None, ...], tuple[tuple[str, str], ...]]] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
+            continue
+        call = node.value
+        if not isinstance(call.func, ast.Name):
+            continue
+        positional = tuple(
+            a.id if isinstance(a, ast.Name) else None for a in call.args
+        )
+        keywords = tuple(
+            (kw.arg, kw.value.id)
+            for kw in call.keywords
+            if kw.arg is not None and isinstance(kw.value, ast.Name)
+        )
+        out.add((call.func.id, positional, keywords))
+    return frozenset(out)
+
+
+def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset[str]:
+    """Caller variables mutated in place by being passed to a user-defined
+    function that mutates the corresponding parameter (CAS-58).
+
+    *resolve_source* maps a function name to its source string (or ``None`` if it
+    is not a resolvable user-defined function — a builtin, C function, lambda, or
+    unknown name). For each top-level bare-``Expr`` call the function body is
+    parsed, its mutated parameters are found via :func:`params_mutated_in_function`,
+    and each is mapped back to the call's positional/keyword argument variable.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for func_name, positional, keywords in standalone_call_arg_targets(tree):
+        source = resolve_source(func_name)
+        if not source:
+            continue
+        try:
+            parsed = ast.parse(textwrap.dedent(source))
+        except (SyntaxError, ValueError):
+            continue
+        if not parsed.body or not isinstance(
+            parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        fdef = parsed.body[0]
+        mutated_params = params_mutated_in_function(fdef)
+        if not mutated_params:
+            continue
+        pos_params = _positional_param_names(fdef)
+        for i, arg_var in enumerate(positional):
+            if arg_var and i < len(pos_params) and pos_params[i] in mutated_params:
+                out.add(arg_var)
+        for param, arg_var in keywords:
+            if param in mutated_params:
+                out.add(arg_var)
     return frozenset(out)
 
 

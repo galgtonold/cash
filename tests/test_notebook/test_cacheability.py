@@ -16,6 +16,9 @@ from cash.notebook.cacheability import (
     SideEffectInfo,
     StatementAnalysis,
     analyze_statement,
+    function_arg_mutations,
+    params_mutated_in_function,
+    standalone_call_arg_targets,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
     selfref_inplace_write_vars,
@@ -674,3 +677,117 @@ class TestSelfrefInplaceWriteVars:
 
     def test_none_tree(self):
         assert selfref_inplace_write_vars(None) == frozenset()
+
+
+class TestParamsMutatedInFunction:
+    """``params_mutated_in_function`` reports which PARAMETERS a function body
+    mutates in place (CAS-58, interprocedural arg-mutation detection)."""
+
+    @staticmethod
+    def _params(code):
+        fdef = ast.parse(code).body[0]
+        return params_mutated_in_function(fdef)
+
+    def test_list_append_param(self):
+        assert self._params("def f(x):\n    x.append(1)") == {'x'}
+
+    def test_subscript_assign_param(self):
+        assert self._params("def f(d):\n    d['k'] = 1") == {'d'}
+
+    def test_augmented_subscript_param(self):
+        assert self._params("def f(d):\n    d['n'] += 1") == {'d'}
+
+    def test_attribute_assign_param(self):
+        assert self._params("def f(o):\n    o.count = 5") == {'o'}
+
+    def test_del_subscript_param(self):
+        assert self._params("def f(d):\n    del d['k']") == {'d'}
+
+    def test_only_mutated_param_reported(self):
+        assert self._params("def f(a, b):\n    a.append(1)\n    return b") == {'a'}
+
+    def test_reassignment_is_not_mutation(self):
+        # rebinding the param to a new local object is not a caller mutation.
+        assert self._params("def f(x):\n    x = x + [1]\n    return x") == frozenset()
+
+    def test_pure_function_no_params(self):
+        assert self._params("def f(x):\n    return x * 2") == frozenset()
+
+    def test_mutation_of_local_not_param(self):
+        assert self._params("def f(x):\n    tmp = []\n    tmp.append(x)") == frozenset()
+
+    def test_conditional_mutation_param(self):
+        assert self._params("def f(d, c):\n    if c:\n        d['k'] = 1") == {'d'}
+
+    def test_keyword_only_param(self):
+        assert self._params("def f(*, d):\n    d.append(1)") == {'d'}
+
+
+class TestStandaloneCallArgTargets:
+    """``standalone_call_arg_targets`` extracts top-level bare-Expr Name-calls and
+    their positional/keyword variable arguments."""
+
+    @staticmethod
+    def _targets(code):
+        return standalone_call_arg_targets(ast.parse(code))
+
+    def test_single_positional(self):
+        assert self._targets("f(data)") == frozenset({('f', ('data',), ())})
+
+    def test_multiple_positional(self):
+        assert self._targets("f(a, b)") == frozenset({('f', ('a', 'b'), ())})
+
+    def test_keyword_arg(self):
+        assert self._targets("f(x=data)") == frozenset({('f', (), (('x', 'data'),))})
+
+    def test_non_name_arg_is_none(self):
+        assert self._targets("f(a, [1, 2])") == frozenset({('f', ('a', None), ())})
+
+    def test_starred_arg_is_none(self):
+        assert self._targets("f(*args)") == frozenset({('f', (None,), ())})
+
+    def test_method_call_excluded(self):
+        # obj.method(x) is handled by the method-receiver path, not here.
+        assert self._targets("obj.method(data)") == frozenset()
+
+    def test_captured_result_excluded(self):
+        # r = f(data) is not a bare Expr -> excluded (pure calls capture results).
+        assert self._targets("r = f(data)") == frozenset()
+
+
+class TestFunctionArgMutations:
+    """``function_arg_mutations`` maps a body's mutated params back to the call's
+    argument variables, via a source resolver."""
+
+    SRCS = {
+        'append_one': "def append_one(x):\n    x.append(99)",
+        'bump': "def bump(d):\n    d['n'] += 1",
+        'pure': "def pure(x):\n    return x * 2",
+        'two': "def two(a, b):\n    a.append(1)\n    return b",
+        'kw': "def kw(*, target):\n    target.append(1)",
+    }
+
+    def _muts(self, code):
+        return function_arg_mutations(ast.parse(code), self.SRCS.get)
+
+    def test_positional_mutation(self):
+        assert self._muts("append_one(data)") == {'data'}
+
+    def test_dict_mutation(self):
+        assert self._muts("bump(cfg)") == {'cfg'}
+
+    def test_pure_call_excluded(self):
+        assert self._muts("pure(x)") == frozenset()
+
+    def test_only_mutated_position(self):
+        # two(a, b) mutates only the first param -> only the first arg.
+        assert self._muts("two(rows, keep)") == {'rows'}
+
+    def test_keyword_mapping(self):
+        assert self._muts("kw(target=mylist)") == {'mylist'}
+
+    def test_unknown_function_excluded(self):
+        assert self._muts("mystery(data)") == frozenset()
+
+    def test_captured_result_excluded(self):
+        assert self._muts("r = append_one(data)") == frozenset()

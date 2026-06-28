@@ -14,6 +14,8 @@ from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements
 from ..cacheability import (
     analyze_statement,
+    function_arg_mutations,
+    standalone_call_arg_targets,
     standalone_method_mutation_receivers,
     selfref_inplace_write_vars,
 )
@@ -282,6 +284,22 @@ class UpstreamChecker:
             current_cell_selfref_vars = set(
                 selfref_inplace_write_vars(ast.parse(cell_code))
             ) - nocache_vars
+            # A variable passed to a user-defined helper that mutates the
+            # corresponding parameter in place (``def add(d): d.append(x)`` +
+            # ``add(data)``) is mutated even though the cell never names the
+            # mutation — static one-level body analysis attributes it back to the
+            # argument so it resets on isolated re-run instead of accumulating
+            # (CAS-58). Treated like a method receiver (force-reset + self-write).
+            # Only resolve the (notebook-wide) function sources when the current
+            # cell actually has a bare-Expr call candidate, so the common case
+            # pays nothing.
+            if standalone_call_arg_targets(ast.parse(cell_code)):
+                func_sources = self._notebook_function_sources(cell_code)
+                func_arg_muts = function_arg_mutations(
+                    ast.parse(cell_code), func_sources.get
+                ) - nocache_vars
+                current_cell_mutated |= func_arg_muts
+                current_cell_method_receivers |= func_arg_muts
             nocache_vars = set(nocache_vars)
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
@@ -359,6 +377,38 @@ class UpstreamChecker:
             f"{func_lineage_component}"
         )
         return hashlib.sha256(expected_lineage_str.encode('utf-8')).hexdigest()
+
+    def _notebook_function_sources(self, cell_code: str) -> dict[str, str]:
+        """Map ``{function_name: source}`` for every top-level ``def`` across the
+        notebook cells plus the current cell.
+
+        Resolves from cell SOURCE (the source of truth) rather than
+        ``inspect.getsource`` — the latter fails for cell-defined functions under
+        nbclient (no linecache entry). Used by :func:`function_arg_mutations`
+        (CAS-58). The current cell is included so a helper defined and used in the
+        same cell still resolves; later same-name defs win (last definition).
+        """
+        sources: dict[str, str] = {}
+        cells: list[str] = []
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                cells = get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            cells = []
+        for code in (*cells, cell_code):
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    try:
+                        sources[node.name] = ast.unparse(node)
+                    except (ValueError, AttributeError):
+                        continue
+        return sources
 
     def _check_lineage_based(self, required_inputs: set[str]) -> None:
         """Phase 1 — diagnostic-only lineage staleness check.
