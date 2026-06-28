@@ -172,6 +172,7 @@ class NotebookSimulator:
         current_cell_mutated: set[str] | None = None,
         notebook_cells: list[str] | None = None,
         current_cell_idx: int | None = None,
+        current_cell_method_receivers: set[str] | None = None,
     ) -> None:
         """Flag self-modifying required inputs whose live value is stale.
 
@@ -249,6 +250,22 @@ class NotebookSimulator:
                 )
                 continue
             if var_name not in reassigned:
+                # A lineage-carrying var mutated in place by a bare method call
+                # (``b.items.append(..)``) -- not a Name reassignment. Such
+                # no-output method statements skip the per-statement cache, so on
+                # an isolated re-run the receiver accumulates (``results.append(x)``
+                # + ``obj.total += x`` is a common pattern). Restore via the same
+                # content/lineage-base machinery used for no-lineage self-writes.
+                # Scoped to METHOD receivers so subscript/attr in-place writes
+                # (``df['VolAdj']=..``) keep their per-statement cache (CAS-42).
+                if current_cell_method_receivers and var_name in current_cell_method_receivers:
+                    if upstream_inplace_mutated is None:
+                        upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
+                            notebook_cells, current_cell_idx,
+                        )
+                    self._mark_nolineage_self_write_broken(
+                        var_name, live_value, broken_vars, upstream_inplace_mutated,
+                    )
                 continue
             recorded = self.variable_lineage.get(var_name)
             if recorded is None:
@@ -391,6 +408,7 @@ class NotebookSimulator:
         current_cell_outputs: set[str] | None = None,
         current_cell_reassigned: set[str] | None = None,
         current_cell_mutated: set[str] | None = None,
+        current_cell_method_receivers: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
 
@@ -446,6 +464,7 @@ class NotebookSimulator:
             required_inputs, current_cell_reassigned, broken_vars,
             current_cell_mutated=current_cell_mutated,
             notebook_cells=notebook_cells, current_cell_idx=current_cell_idx,
+            current_cell_method_receivers=current_cell_method_receivers,
         )
 
         if not broken_vars:

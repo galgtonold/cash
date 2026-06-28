@@ -12,7 +12,7 @@ from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements
-from ..cacheability import analyze_statement
+from ..cacheability import analyze_statement, standalone_method_mutation_receivers
 from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
     NotebookSimulator,
     _BUILTIN_NAMES,
@@ -259,11 +259,21 @@ class UpstreamChecker:
             nocache_vars = _nocache_written_vars(cell_code)
             current_cell_reassigned = current_cell_reassigned - nocache_vars
             current_cell_mutated = current_cell_mutated - nocache_vars
+            # Receivers mutated in place by a bare method call (``b.items.append``).
+            # Such no-output method statements skip the per-statement cache, so a
+            # lineage-carrying receiver accumulates on an isolated re-run unless it
+            # is restored to its cell-entry base. Scoped to METHOD receivers (NOT
+            # subscript/attr writes) so ``df['col']=..`` keeps its per-statement
+            # cache (CAS-42). Same no-cache opt-out as the other self-write sets.
+            current_cell_method_receivers = set(
+                standalone_method_mutation_receivers(ast.parse(cell_code))
+            ) - nocache_vars
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
             current_cell_outputs = set()
             current_cell_reassigned = set()
             current_cell_mutated = set()
+            current_cell_method_receivers = set()
 
         # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
         # Simulates the notebook statement-by-statement and compares the resulting
@@ -273,6 +283,7 @@ class UpstreamChecker:
             current_cell_outputs=current_cell_outputs,
             current_cell_reassigned=current_cell_reassigned,
             current_cell_mutated=current_cell_mutated,
+            current_cell_method_receivers=current_cell_method_receivers,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
         )
@@ -581,6 +592,7 @@ class UpstreamChecker:
         current_cell_outputs: set[str] | None = None,
         current_cell_reassigned: set[str] | None = None,
         current_cell_mutated: set[str] | None = None,
+        current_cell_method_receivers: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None
     ) -> UpstreamResult:
@@ -608,7 +620,8 @@ class UpstreamChecker:
                 required_inputs,
                 current_cell_outputs=current_cell_outputs,
                 current_cell_reassigned=current_cell_reassigned,
-                current_cell_mutated=current_cell_mutated
+                current_cell_mutated=current_cell_mutated,
+                current_cell_method_receivers=current_cell_method_receivers
             )
 
             if self.debug:
