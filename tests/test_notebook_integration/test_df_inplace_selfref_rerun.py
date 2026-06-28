@@ -63,14 +63,14 @@ def test_loc_scalar_self_ref_same_cell(nb_runner):
 
 
 def test_loc_masked_self_ref_same_cell(nb_runner):
-    """CAS-57: masked .loc write reads the SAME column spelled differently than the
+    """CAS-55: masked .loc write reads the SAME column spelled differently than the
     target (df.loc[mask,'a'] = df['a']*2). Self-referential -> must not double."""
     _rerun_one_cell(nb_runner, DF100,
                     "df.loc[df['a'] >= 50, 'a'] = df['a'] * 2\nprint(df['a'].iloc[50])", "100")
 
 
 def test_loc_masked_augmented_same_cell(nb_runner):
-    """CAS-57 control: masked .loc AugAssign df.loc[mask,'a'] += 1000."""
+    """CAS-55 control: masked .loc AugAssign df.loc[mask,'a'] += 1000."""
     _rerun_one_cell(nb_runner, DF100,
                     "df.loc[df['a'] >= 50, 'a'] += 1000\nprint(df['a'].iloc[50])", "1050")
 

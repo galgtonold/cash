@@ -575,7 +575,7 @@ class TestSelfrefInplaceWriteVars:
         assert self._vars("df['a'] = other['a'] * 2") == frozenset()
 
     def test_loc_masked_self_ref_same_column(self):
-        # CAS-57: masked .loc write reads the SAME column spelled differently
+        # CAS-55: masked .loc write reads the SAME column spelled differently
         # (df['a']) than the target (df.loc[mask, 'a']) -> still self-referential.
         assert self._vars("df.loc[df['a'] >= 50, 'a'] = df['a'] * 2") == {'df'}
 
