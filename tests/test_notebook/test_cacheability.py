@@ -829,6 +829,20 @@ class TestAliasMutationSources:
     def test_self_assign_ignored(self):
         assert self._src("x = x\nx.append(1)") == frozenset()
 
+    def test_chained_assignment(self):
+        assert self._src("a = b = x\na.append(1)") == {'x'}
+
+    def test_tuple_unpack_pair(self):
+        assert self._src("(y,) = (x,)\ny.append(1)") == {'x'}
+
+    def test_unpack_only_name_elements(self):
+        # literal list element is not a Name -> not an alias
+        assert self._src("a, b = [1], src\nb.append(1)") == {'src'}
+
+    def test_non_literal_unpack_excluded(self):
+        # RHS is a call, not a literal tuple -> no element aliasing
+        assert self._src("a, b = compute()\na.append(1)") == frozenset()
+
 
 class TestAliasedSources:
     """``aliased_sources`` resolves a set of names through the alias map back to

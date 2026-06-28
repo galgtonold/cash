@@ -801,20 +801,47 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
 
 
 def _top_level_alias_map(tree: ast.Module) -> dict[str, str]:
-    """Map each top-level ``Name = Name`` alias to its direct source name.
+    """Map each top-level alias name to its direct source name (shared object).
 
-    Only bare ``Name`` RHS counts as aliasing (shared object); ``y = x.copy()``
-    / ``y = x[:]`` are copies and are excluded. Self-binds (``x = x``) are
-    skipped.
+    Recognises every binding form that makes the target share the RHS object,
+    not just ``y = x``:
+
+    * simple / chained ``Name`` assignment — ``y = x``, ``a = b = x`` (each
+      target aliases x);
+    * 1:1 tuple / list unpack of a literal — ``(y,) = (x,)``, ``a, b = c, d``
+      (element-wise, only ``Name``-to-``Name`` pairs);
+    * walrus anywhere in the statement — ``(y := x).append(..)``.
+
+    Only a bare ``Name`` RHS counts as aliasing; ``y = x.copy()`` / ``y = x[:]``
+    are copies and excluded. Self-binds (``x = x``) are skipped. A ternary
+    (``y = x if c else z``) is intentionally not handled here (flow-sensitive,
+    two possible sources) — tracked separately.
     """
     alias_map: dict[str, str] = {}
+
+    def _bind(target: ast.AST, value: ast.AST) -> None:
+        if (isinstance(target, ast.Name) and isinstance(value, ast.Name)
+                and target.id != value.id):
+            alias_map[target.id] = value.id
+
     for node in tree.body:
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Name)):
-            alias, source = node.targets[0].id, node.value.id
-            if alias != source:
-                alias_map[alias] = source
+        # Walrus binding anywhere in the statement (``(y := x).method()``).
+        for sub in ast.walk(node):
+            if isinstance(sub, ast.NamedExpr):
+                _bind(sub.target, sub.value)
+        if not isinstance(node, ast.Assign):
+            continue
+        # Simple or chained ``Name`` assignment: ``y = x`` / ``a = b = x``.
+        if isinstance(node.value, ast.Name):
+            for tgt in node.targets:
+                _bind(tgt, node.value)
+        # 1:1 literal unpack: ``(y,) = (x,)`` / ``a, b = c, d`` (Name pairs only).
+        for tgt in node.targets:
+            if (isinstance(tgt, (ast.Tuple, ast.List))
+                    and isinstance(node.value, (ast.Tuple, ast.List))
+                    and len(tgt.elts) == len(node.value.elts)):
+                for te, ve in zip(tgt.elts, node.value.elts):
+                    _bind(te, ve)
     return alias_map
 
 

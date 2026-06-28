@@ -44,3 +44,16 @@ def test_nested_function_depth2_arg(nb_runner):
     _rerun(nb_runner,
            "def inner(z):\n    z.append(9)\ndef outer(y):\n    inner(y)\ndata = [1]",
            "outer(data)\nprint(data)", "[1, 9]")
+
+
+@pytest.mark.xfail(reason="CAS-61: walrus-as-method-receiver not attributed", strict=False)
+def test_walrus_alias_mutate(nb_runner):
+    # (y := x).append(..) — the NamedExpr receiver is not surfaced as a mutated
+    # name, so the alias y->x is never resolved.
+    _rerun(nb_runner, "x = [1, 2]", "(y := x).append(3)\nprint(x)", "[1, 2, 3]")
+
+
+@pytest.mark.xfail(reason="CAS-61: ternary alias is flow-sensitive (two sources)", strict=False)
+def test_conditional_alias(nb_runner):
+    _rerun(nb_runner, "x = [1, 2]\nz = [9]",
+           "y = x if True else z\ny.append(3)\nprint(x)", "[1, 2, 3]")

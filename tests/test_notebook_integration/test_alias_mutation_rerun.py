@@ -39,6 +39,16 @@ def test_alias_chain(nb_runner):
     _rerun(nb_runner, "x = [1, 2]", "y = x\nz = y\nz.append(3)\nprint(x)", "[1, 2, 3]")
 
 
+def test_chained_assignment_alias(nb_runner):
+    # a = b = x : both a and b alias x.
+    _rerun(nb_runner, "x = [1, 2, 3]", "a = b = x\na.append(99)\nprint(x)", "[1, 2, 3, 99]")
+
+
+def test_tuple_unpack_alias(nb_runner):
+    # (y,) = (x,) : y aliases x via 1:1 literal unpack.
+    _rerun(nb_runner, "x = [1, 2]", "(y,) = (x,)\ny.append(3)\nprint(x)", "[1, 2, 3]")
+
+
 def test_alias_set_mutation(nb_runner):
     _rerun(nb_runner, "s = {1, 2}", "t = s\nt.add(3)\nprint(sorted(s))", "[1, 2, 3]")
 
