@@ -16,6 +16,7 @@ from cash.notebook.cacheability import (
     SideEffectInfo,
     StatementAnalysis,
     alias_mutation_sources,
+    aliased_sources,
     analyze_statement,
     function_arg_mutations,
     params_mutated_in_function,
@@ -827,3 +828,24 @@ class TestAliasMutationSources:
 
     def test_self_assign_ignored(self):
         assert self._src("x = x\nx.append(1)") == frozenset()
+
+
+class TestAliasedSources:
+    """``aliased_sources`` resolves a set of names through the alias map back to
+    their upstream roots (used to extend selfref / method-receiver sets)."""
+
+    def _f(self, code, names):
+        return aliased_sources(ast.parse(code), names)
+
+    def test_selfref_df_alias(self):
+        # df2 is the selfref receiver; resolves to df
+        assert self._f("df2 = df\ndf2['a'] = df2['a'] * 2", {'df2'}) == {'df'}
+
+    def test_method_df_alias(self):
+        assert self._f("df2 = df\ndf2.fillna(0, inplace=True)", {'df2'}) == {'df'}
+
+    def test_non_alias_name_contributes_nothing(self):
+        assert self._f("df['a'] = df['a'] * 2", {'df'}) == frozenset()
+
+    def test_empty_names(self):
+        assert self._f("y = x", set()) == frozenset()

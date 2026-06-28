@@ -31,6 +31,7 @@ __all__ = [
     "standalone_call_arg_targets",
     "function_arg_mutations",
     "alias_mutation_sources",
+    "aliased_sources",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -799,6 +800,55 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
     return frozenset(out)
 
 
+def _top_level_alias_map(tree: ast.Module) -> dict[str, str]:
+    """Map each top-level ``Name = Name`` alias to its direct source name.
+
+    Only bare ``Name`` RHS counts as aliasing (shared object); ``y = x.copy()``
+    / ``y = x[:]`` are copies and are excluded. Self-binds (``x = x``) are
+    skipped.
+    """
+    alias_map: dict[str, str] = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Name)):
+            alias, source = node.targets[0].id, node.value.id
+            if alias != source:
+                alias_map[alias] = source
+    return alias_map
+
+
+def _resolve_alias_root(name: str, alias_map: dict[str, str]) -> str:
+    """Follow the (transitive) alias chain from *name* to its root source."""
+    cur, seen = name, {name}
+    while cur in alias_map and alias_map[cur] not in seen:
+        cur = alias_map[cur]
+        seen.add(cur)
+    return cur
+
+
+def aliased_sources(tree: ast.Module | None, names) -> frozenset[str]:
+    """Root source names that *names* alias via a top-level ``Name = Name`` bind.
+
+    For each name that resolves through the alias map to a different root, return
+    that root. Used to extend an existing mutation set (selfref writes, method
+    receivers) from an in-cell alias back to the upstream holder it shares an
+    object with, so the holder resets on an isolated re-run (CAS-60). Names that
+    are not aliases contribute nothing.
+    """
+    if tree is None or not names:
+        return frozenset()
+    alias_map = _top_level_alias_map(tree)
+    if not alias_map:
+        return frozenset()
+    out: set[str] = set()
+    for name in names:
+        root = _resolve_alias_root(name, alias_map)
+        if root != name:
+            out.add(root)
+    return frozenset(out)
+
+
 def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
     """Upstream variables whose object is mutated in place through an alias (CAS-60).
 
@@ -820,29 +870,14 @@ def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
     """
     if tree is None:
         return frozenset()
-    alias_map: dict[str, str] = {}
-    for node in tree.body:
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Name)):
-            alias, source = node.targets[0].id, node.value.id
-            if alias != source:
-                alias_map[alias] = source
+    alias_map = _top_level_alias_map(tree)
     if not alias_map:
         return frozenset()
     try:
         mutated = set(analyze_statement(ast.unparse(tree), None).all_mutated_vars)
     except (SyntaxError, ValueError, TypeError):
         return frozenset()
-    sources: set[str] = set()
-    for name in mutated:
-        cur, seen = name, {name}
-        while cur in alias_map and alias_map[cur] not in seen:
-            cur = alias_map[cur]
-            seen.add(cur)
-        if cur != name:
-            sources.add(cur)
-    return frozenset(sources)
+    return aliased_sources(tree, mutated)
 
 
 def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[str]:

@@ -14,6 +14,7 @@ from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements
 from ..cacheability import (
     alias_mutation_sources,
+    aliased_sources,
     analyze_statement,
     function_arg_mutations,
     standalone_call_arg_targets,
@@ -304,11 +305,21 @@ class UpstreamChecker:
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run
-            # instead of accumulating (CAS-60). No-lineage sources route through
-            # the content-base guard; added to ``current_cell_mutated`` only (not
-            # the method-receiver force-reset set) so a lineage-carrying aliased
-            # DataFrame is not over-invalidated (CAS-42 preserved).
-            current_cell_mutated |= alias_mutation_sources(ast.parse(cell_code)) - nocache_vars
+            # instead of accumulating (CAS-60). For a no-lineage source the
+            # content-base guard restores it via ``current_cell_mutated``; for a
+            # lineage-carrying aliased DataFrame the source must also join the
+            # selfref / method-receiver sets so the CAS-54/57 force-reset fires
+            # (``df2 = df; df2['a'] = df2['a']*2`` doubled). The selfref set is
+            # column-key-scoped, so an aliased NEW-column write (``df2['b'] =
+            # df2['a']*2``) is still excluded and keeps its cache (CAS-42).
+            alias_tree = ast.parse(cell_code)
+            current_cell_mutated |= alias_mutation_sources(alias_tree) - nocache_vars
+            current_cell_selfref_vars |= aliased_sources(
+                alias_tree, current_cell_selfref_vars
+            ) - nocache_vars
+            current_cell_method_receivers |= aliased_sources(
+                alias_tree, current_cell_method_receivers
+            ) - nocache_vars
             nocache_vars = set(nocache_vars)
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")

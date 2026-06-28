@@ -53,3 +53,28 @@ def test_copy_is_not_alias_preserved(nb_runner):
     # copy itself is idempotent across re-runs.
     _rerun(nb_runner, "x = [1, 2, 3]", "y = x.copy()\ny.append(99)\nprint(y, x)",
            "[1, 2, 3, 99] [1, 2, 3]")
+
+
+# --- lineage-carrying (DataFrame) aliases: the source must join the selfref /
+# method-receiver sets so the CAS-54/57 force-reset fires through the alias ----
+
+_DF = "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2, 3]})"
+
+
+def test_df_alias_column_selfmul(nb_runner):
+    _rerun(nb_runner, _DF, "df2 = df\ndf2['a'] = df2['a'] * 2\nprint(df['a'].tolist())", "[2, 4, 6]")
+
+
+def test_df_alias_aug_assign(nb_runner):
+    _rerun(nb_runner, _DF, "df2 = df\ndf2['a'] += 100\nprint(df['a'].tolist())", "[101, 102, 103]")
+
+
+def test_df_alias_inplace_method_nonidempotent(nb_runner):
+    _rerun(nb_runner, "import pandas as pd\ndf = pd.DataFrame({'a': [1, 2]})",
+           "df2 = df\ndf2.insert(0, 'z', [9, 9])\nprint(list(df.columns))", "['z', 'a']")
+
+
+def test_df_alias_newcol_preserved(nb_runner):
+    """CAS-42 via alias: a new column derived from OTHER columns through an alias
+    is not self-referential and stays correct on re-run."""
+    _rerun(nb_runner, _DF, "df2 = df\ndf2['b'] = df2['a'] + 1\nprint(df['b'].tolist())", "[2, 3, 4]")

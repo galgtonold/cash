@@ -38,3 +38,13 @@ def test_class_instance_self_mutation(nb_runner):
     _rerun(nb_runner,
            "class Acc:\n    def __init__(self):\n        self.items = []\n    def add(self, v):\n        self.items.append(v)\nacc = Acc()",
            "acc.add(1)\nacc.add(2)\nprint(acc.items)", "[1, 2]")
+
+
+def test_slice_assignment(nb_runner):
+    # Idempotent in-place slice write — must stay correct on re-run.
+    _rerun(nb_runner, "x = [0, 0, 0, 0]", "x[1:3] = [7, 8]\nprint(x)", "[0, 7, 8, 0]")
+
+
+def test_rebind_concat_not_double(nb_runner):
+    # `lst = lst + [3]` is a rebind to a NEW object (not in-place), idempotent.
+    _rerun(nb_runner, "lst = [1, 2]", "lst = lst + [3]\nprint(lst)", "[1, 2, 3]")
