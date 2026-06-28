@@ -15,6 +15,7 @@ from cash.notebook.cacheability import (
     MutationInfo,
     SideEffectInfo,
     StatementAnalysis,
+    alias_mutation_sources,
     analyze_statement,
     function_arg_mutations,
     params_mutated_in_function,
@@ -791,3 +792,38 @@ class TestFunctionArgMutations:
 
     def test_captured_result_excluded(self):
         assert self._muts("r = append_one(data)") == frozenset()
+
+
+class TestAliasMutationSources:
+    """``alias_mutation_sources`` maps an in-place mutation through a bare
+    ``y = x`` alias back to the upstream source ``x`` (CAS-60)."""
+
+    def _src(self, code):
+        return alias_mutation_sources(ast.parse(code))
+
+    def test_method_mutation(self):
+        assert self._src("y = x\ny.append(99)") == {'x'}
+
+    def test_subscript_aug_assign(self):
+        assert self._src("y = x\ny[0] += 5") == {'x'}
+
+    def test_alias_chain_resolves_to_root(self):
+        assert self._src("y = x\nz = y\nz.append(1)") == {'x'}
+
+    def test_two_aliases_same_source(self):
+        assert self._src("a = src\nb = src\nb.add(1)") == {'src'}
+
+    def test_copy_is_not_alias(self):
+        assert self._src("y = x.copy()\ny.append(1)") == frozenset()
+
+    def test_slice_is_not_alias(self):
+        assert self._src("y = x[:]\ny.append(1)") == frozenset()
+
+    def test_no_mutation_excluded(self):
+        assert self._src("y = x\nprint(y)") == frozenset()
+
+    def test_direct_mutation_no_alias(self):
+        assert self._src("x.append(1)") == frozenset()
+
+    def test_self_assign_ignored(self):
+        assert self._src("x = x\nx.append(1)") == frozenset()

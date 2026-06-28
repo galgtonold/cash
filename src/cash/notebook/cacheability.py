@@ -30,6 +30,7 @@ __all__ = [
     "params_mutated_in_function",
     "standalone_call_arg_targets",
     "function_arg_mutations",
+    "alias_mutation_sources",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -796,6 +797,52 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
             if param in mutated_params:
                 out.add(arg_var)
     return frozenset(out)
+
+
+def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
+    """Upstream variables whose object is mutated in place through an alias (CAS-60).
+
+    A bare ``Name = Name`` binding (``y = x``) makes ``y`` share ``x``'s object,
+    so a later in-place mutation through ``y`` (``y.append(..)``, ``y[0] += 1``)
+    also mutates ``x``. The mutation analysis attributes the change to the alias
+    ``y`` — which is created in the cell and has no producer to restore from —
+    so the upstream holder ``x`` is never marked for reset and the mutation
+    accumulates on an isolated re-run. This resolves each mutated name back
+    through the (transitive) alias map and returns the root source names, which
+    the checker unions into ``current_cell_mutated`` so the source resets.
+
+    Scope: top-level (``tree.body``) ``Name = Name`` aliases only; the RHS must be
+    a bare ``Name`` (``y = x.copy()`` / ``y = x[:]`` are copies, not aliases, and
+    are correctly excluded). Flow-insensitive — an alias re-bound before the
+    mutation still maps back, but resetting an un-mutated source to its identical
+    base is a correctness-safe no-op. A mutated name that is not an alias maps to
+    nothing and is left to the existing in-place-mutation reset.
+    """
+    if tree is None:
+        return frozenset()
+    alias_map: dict[str, str] = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Name)):
+            alias, source = node.targets[0].id, node.value.id
+            if alias != source:
+                alias_map[alias] = source
+    if not alias_map:
+        return frozenset()
+    try:
+        mutated = set(analyze_statement(ast.unparse(tree), None).all_mutated_vars)
+    except (SyntaxError, ValueError, TypeError):
+        return frozenset()
+    sources: set[str] = set()
+    for name in mutated:
+        cur, seen = name, {name}
+        while cur in alias_map and alias_map[cur] not in seen:
+            cur = alias_map[cur]
+            seen.add(cur)
+        if cur != name:
+            sources.add(cur)
+    return frozenset(sources)
 
 
 def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[str]:
