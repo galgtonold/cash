@@ -174,6 +174,7 @@ class NotebookSimulator:
         notebook_cells: list[str] | None = None,
         current_cell_idx: int | None = None,
         current_cell_method_receivers: set[str] | None = None,
+        current_cell_selfref_vars: set[str] | None = None,
     ) -> None:
         """Flag self-modifying required inputs whose live value is stale.
 
@@ -251,15 +252,23 @@ class NotebookSimulator:
                 )
                 continue
             if var_name not in reassigned:
-                # A lineage-carrying var mutated in place by a bare method call
-                # (``b.items.append(..)``) -- not a Name reassignment. Such
-                # no-output method statements skip the per-statement cache, so on
-                # an isolated re-run the receiver accumulates (``results.append(x)``
-                # + ``obj.total += x`` is a common pattern). Restore via the same
-                # content/lineage-base machinery used for no-lineage self-writes.
-                # Scoped to METHOD receivers so subscript/attr in-place writes
-                # (``df['VolAdj']=..``) keep their per-statement cache (CAS-42).
-                if current_cell_method_receivers and var_name in current_cell_method_receivers:
+                # A lineage-carrying var mutated in place -- not a Name
+                # reassignment -- whose isolated re-run is non-idempotent and would
+                # accumulate unless restored to its cell-entry base. Two cases:
+                #   * METHOD receivers (``b.items.append(..)``): no-output method
+                #     statements skip the per-statement cache (``results.append(x)``
+                #     + ``obj.total += x``). [CAS-53]
+                #   * SELF-REFERENTIAL subscript/attr writes (``df['a']=df['a']*2``,
+                #     ``df['a']+=1``, ``df.iloc[i,j]+=x``). [CAS-54]
+                # Restore via the same content/lineage-base machinery used for
+                # no-lineage self-writes. Scoped so that a write to a NEW column read
+                # from OTHER columns (``df['VolAdj']=df.groupby('Close')..``) is NOT
+                # included and keeps its per-statement cache (CAS-42 preserved).
+                force_reset = (
+                    (current_cell_method_receivers and var_name in current_cell_method_receivers)
+                    or (current_cell_selfref_vars and var_name in current_cell_selfref_vars)
+                )
+                if force_reset:
                     if upstream_inplace_mutated is None:
                         upstream_inplace_mutated = self._scan_upstream_inplace_mutations(
                             notebook_cells, current_cell_idx,
@@ -410,6 +419,7 @@ class NotebookSimulator:
         current_cell_reassigned: set[str] | None = None,
         current_cell_mutated: set[str] | None = None,
         current_cell_method_receivers: set[str] | None = None,
+        current_cell_selfref_vars: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
@@ -472,6 +482,7 @@ class NotebookSimulator:
             current_cell_mutated=current_cell_mutated,
             notebook_cells=notebook_cells, current_cell_idx=current_cell_idx,
             current_cell_method_receivers=current_cell_method_receivers,
+            current_cell_selfref_vars=current_cell_selfref_vars,
         )
         trace_event("broken_after_guard", broken=broken_vars)
 

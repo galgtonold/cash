@@ -25,6 +25,7 @@ __all__ = [
     "analyze_statement",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
+    "selfref_inplace_write_vars",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -453,6 +454,67 @@ def _out_kwarg_target_bases(call: ast.Call) -> list[str]:
             if base:
                 bases.append(base)
     return bases
+
+
+def _selfref_target_base(target: ast.expr) -> str | None:
+    """Base name of a subscript/attribute store target (``df['a']``/``df.iloc[i,j]``
+    /``obj.attr`` -> ``df``/``df``/``obj``); ``None`` for a plain ``Name`` store."""
+    if isinstance(target, (ast.Subscript, ast.Attribute)):
+        return _extract_base_name(target)
+    return None
+
+
+def _rhs_reads_target(rhs: ast.expr, target: ast.expr) -> bool:
+    """True if *rhs* reads the exact same subscript/attribute expression as *target*
+    (e.g. ``df['a']`` appears in the RHS of ``df['a'] = df['a'] * 2``)."""
+    try:
+        tgt = ast.unparse(target)
+    except Exception:  # noqa: BLE001 — unparse can fail on exotic nodes
+        return False
+    for sub in ast.walk(rhs):
+        if isinstance(sub, (ast.Subscript, ast.Attribute)):
+            try:
+                if ast.unparse(sub) == tgt:
+                    return True
+            except Exception:  # noqa: BLE001
+                continue
+    return False
+
+
+def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
+    """Base vars mutated by a SELF-REFERENTIAL in-place subscript/attribute write
+    at the top level — the written target is also *read* in the same statement.
+
+    Covers ``df['a'] = df['a'] * 2``, ``df['a'] += 1``, ``df.iloc[i, j] += x``,
+    ``df.iloc[i, j] = df.iloc[i, j] + 1``, ``df['a'] = df['a'].fillna(0)``,
+    ``obj.attr = obj.attr + 1``.
+
+    Such writes are NON-IDEMPOTENT: re-running them applies the operation again,
+    so on an isolated cell re-run the lineage-carrying receiver (DataFrame/Series/
+    custom object) must be restored to its cell-entry base first — otherwise the
+    value accumulates (``df['a']*2`` doubles again). The caller routes these vars
+    through the same stale-value reset used for method receivers (see CAS-54).
+
+    Deliberately EXCLUDES writes to a NEW target read from OTHER keys
+    (``df['b'] = df['a'] + 1``, ``df['VolAdj'] = df.groupby('Ticker')['Close']…``):
+    those are idempotent on re-run and keep their per-statement cache, preserving
+    the CAS-42 design. Augmented assignment (``+=``) is always self-referential.
+    Only ``tree.body`` (top-level); loop/function bodies are handled elsewhere.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.AugAssign):
+            base = _selfref_target_base(node.target)
+            if base:
+                out.add(base)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                base = _selfref_target_base(target)
+                if base and _rhs_reads_target(node.value, target):
+                    out.add(base)
+    return frozenset(out)
 
 
 def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[str]:

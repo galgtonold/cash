@@ -12,7 +12,11 @@ from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements
-from ..cacheability import analyze_statement, standalone_method_mutation_receivers
+from ..cacheability import (
+    analyze_statement,
+    standalone_method_mutation_receivers,
+    selfref_inplace_write_vars,
+)
 from .simulator import (  # noqa: F401  re-exports for tests + downstream modules
     NotebookSimulator,
     _BUILTIN_NAMES,
@@ -268,6 +272,16 @@ class UpstreamChecker:
             current_cell_method_receivers = set(
                 standalone_method_mutation_receivers(ast.parse(cell_code))
             ) - nocache_vars
+            # Self-referential in-place subscript/attr writes (``df['a']=df['a']*2``,
+            # ``df['a']+=1``, ``df.iloc[i,j]+=x``) are non-idempotent: re-running
+            # applies the op again, so a lineage-carrying receiver (DataFrame) must
+            # be reset to its cell-entry base or the value accumulates (CAS-54).
+            # New-column writes read from OTHER columns (``df['VolAdj']=...``) are
+            # NOT self-referential and keep their per-statement cache (CAS-42). Same
+            # no-cache opt-out (a no-cache self-write must advance, not reset -- CAS-51).
+            current_cell_selfref_vars = set(
+                selfref_inplace_write_vars(ast.parse(cell_code))
+            ) - nocache_vars
             nocache_vars = set(nocache_vars)
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
@@ -275,6 +289,7 @@ class UpstreamChecker:
             current_cell_reassigned = set()
             current_cell_mutated = set()
             current_cell_method_receivers = set()
+            current_cell_selfref_vars = set()
             nocache_vars = set()
 
         # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
@@ -286,6 +301,7 @@ class UpstreamChecker:
             current_cell_reassigned=current_cell_reassigned,
             current_cell_mutated=current_cell_mutated,
             current_cell_method_receivers=current_cell_method_receivers,
+            current_cell_selfref_vars=current_cell_selfref_vars,
             current_cell_nocache_vars=nocache_vars,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
@@ -596,6 +612,7 @@ class UpstreamChecker:
         current_cell_reassigned: set[str] | None = None,
         current_cell_mutated: set[str] | None = None,
         current_cell_method_receivers: set[str] | None = None,
+        current_cell_selfref_vars: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None
@@ -626,6 +643,7 @@ class UpstreamChecker:
                 current_cell_reassigned=current_cell_reassigned,
                 current_cell_mutated=current_cell_mutated,
                 current_cell_method_receivers=current_cell_method_receivers,
+                current_cell_selfref_vars=current_cell_selfref_vars,
                 current_cell_nocache_vars=current_cell_nocache_vars
             )
 

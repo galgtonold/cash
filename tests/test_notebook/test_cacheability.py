@@ -18,6 +18,7 @@ from cash.notebook.cacheability import (
     analyze_statement,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
+    selfref_inplace_write_vars,
 )
 
 
@@ -524,3 +525,54 @@ class TestImmutability:
         assert isinstance(a.all_mutated_vars, frozenset)
         assert isinstance(a.side_effects, tuple)
         assert isinstance(a.called_names, frozenset)
+
+
+class TestSelfrefInplaceWriteVars:
+    """``selfref_inplace_write_vars`` detects NON-IDEMPOTENT self-referential
+    in-place subscript/attribute writes (the written target is also read) so the
+    receiver is reset on isolated re-run (CAS-54). New-target writes read from
+    OTHER keys are excluded so they keep their per-statement cache (CAS-42)."""
+
+    @staticmethod
+    def _vars(code):
+        return selfref_inplace_write_vars(ast.parse(code))
+
+    def test_column_scale_self_ref(self):
+        assert self._vars("df['a'] = df['a'] * 2") == {'df'}
+
+    def test_column_augmented(self):
+        assert self._vars("df['a'] += 100") == {'df'}
+
+    def test_iloc_scalar_self_ref(self):
+        assert self._vars("df.iloc[2, 0] = df.iloc[2, 0] + 1000") == {'df'}
+
+    def test_iloc_augmented(self):
+        assert self._vars("df.iloc[2, 0] += 5") == {'df'}
+
+    def test_column_method_self_ref(self):
+        assert self._vars("df['a'] = df['a'].fillna(0)") == {'df'}
+
+    def test_attribute_self_ref(self):
+        assert self._vars("obj.total = obj.total + 1") == {'obj'}
+
+    def test_new_column_from_other_excluded(self):
+        # CAS-42: writes a NEW column read from a DIFFERENT column -> idempotent.
+        assert self._vars("df['b'] = df['a'] + 1") == frozenset()
+
+    def test_groupby_transform_excluded(self):
+        assert self._vars(
+            "df['VolAdj'] = df.groupby('Ticker')['Close'].transform(lambda x: x.mean())"
+        ) == frozenset()
+
+    def test_constant_assign_excluded(self):
+        assert self._vars("df['c'] = 5") == frozenset()
+
+    def test_name_reassign_excluded(self):
+        # plain Name reassignment is handled by the reassigned-names path, not here
+        assert self._vars("x = x + 1") == frozenset()
+
+    def test_cross_object_excluded(self):
+        assert self._vars("df['a'] = other['a'] * 2") == frozenset()
+
+    def test_none_tree(self):
+        assert selfref_inplace_write_vars(None) == frozenset()
