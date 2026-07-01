@@ -19,6 +19,9 @@ from ..cacheability import (
     analyze_statement,
     crossref_reassigned_vars,
     function_arg_mutations,
+    function_global_mutations,
+    stateful_self_functions,
+    _called_function_names,
     standalone_call_arg_targets,
     standalone_method_mutation_receivers,
     selfref_inplace_write_vars,
@@ -298,6 +301,7 @@ class UpstreamChecker:
             # Only resolve the (notebook-wide) function sources when the current
             # cell actually has a bare-Expr call candidate, so the common case
             # pays nothing.
+            current_cell_stateful_funcs: set[str] = set()
             if standalone_call_arg_targets(ast.parse(cell_code)):
                 func_sources = self._notebook_function_sources(cell_code)
                 func_arg_muts = function_arg_mutations(
@@ -305,6 +309,27 @@ class UpstreamChecker:
                 ) - nocache_vars
                 current_cell_mutated |= func_arg_muts
                 current_cell_method_receivers |= func_arg_muts
+                # A called function that mutates a module GLOBAL / free variable
+                # in place (``def bump(): global g; g += 1`` + ``bump()``) leaves
+                # the global accumulating on an isolated re-run because nothing in
+                # the cell text names it. Attribute the mutation back to the
+                # global and add it to the cell's inputs so the reset loop (which
+                # iterates required_inputs) restores its producer's base (CAS-68 A).
+                func_global_muts = function_global_mutations(
+                    ast.parse(cell_code), func_sources.get
+                ) - nocache_vars
+                current_cell_mutated |= func_global_muts
+                required_inputs = required_inputs | func_global_muts
+            # A called function (captured OR bare) that carries mutable state on
+            # its own object -- a mutated mutable-default arg (``def collect(x,
+            # acc=[]): acc.append(x)``) or a function-attribute counter -- keeps
+            # accumulating across calls. Force-reset the function so its ``def``
+            # re-runs and recreates fresh state on an isolated re-run (CAS-68 B).
+            if _called_function_names(ast.parse(cell_code)):
+                func_sources_all = self._notebook_function_sources(cell_code)
+                current_cell_stateful_funcs = set(
+                    stateful_self_functions(ast.parse(cell_code), func_sources_all.get)
+                ) - nocache_vars
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run
@@ -338,6 +363,7 @@ class UpstreamChecker:
             current_cell_method_receivers = set()
             current_cell_selfref_vars = set()
             current_cell_crossref_reassigned = set()
+            current_cell_stateful_funcs = set()
             nocache_vars = set()
 
         # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
@@ -351,6 +377,7 @@ class UpstreamChecker:
             current_cell_method_receivers=current_cell_method_receivers,
             current_cell_selfref_vars=current_cell_selfref_vars,
             current_cell_crossref_reassigned=current_cell_crossref_reassigned,
+            current_cell_stateful_funcs=current_cell_stateful_funcs,
             current_cell_nocache_vars=nocache_vars,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
@@ -760,6 +787,7 @@ class UpstreamChecker:
         current_cell_method_receivers: set[str] | None = None,
         current_cell_selfref_vars: set[str] | None = None,
         current_cell_crossref_reassigned: set[str] | None = None,
+        current_cell_stateful_funcs: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None
@@ -798,6 +826,7 @@ class UpstreamChecker:
                 current_cell_method_receivers=current_cell_method_receivers,
                 current_cell_selfref_vars=current_cell_selfref_vars,
                 current_cell_crossref_reassigned=current_cell_crossref_reassigned,
+                current_cell_stateful_funcs=current_cell_stateful_funcs,
                 current_cell_nocache_vars=current_cell_nocache_vars
             )
 

@@ -30,6 +30,8 @@ __all__ = [
     "params_mutated_in_function",
     "standalone_call_arg_targets",
     "function_arg_mutations",
+    "function_global_mutations",
+    "stateful_self_functions",
     "alias_mutation_sources",
     "aliased_sources",
     "crossref_reassigned_vars",
@@ -875,6 +877,133 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
         for param, arg_var in keywords:
             if param in mutated_params:
                 out.add(arg_var)
+    return frozenset(out)
+
+
+def _free_vars_mutated_in_function(
+    func: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """Module-global / free variables a function body mutates in place (CAS-68).
+
+    A name mutated in place (``items.append``, ``store[k]=``, ``g += 1`` under a
+    ``global`` declaration) that is neither a parameter nor a plain local
+    assignment is a free variable resolved from the enclosing / module scope —
+    calling the function mutates that global. Parameter mutations are CAS-58's
+    job and are excluded; a name rebound locally (``acc = []`` then
+    ``acc.append``) refers to the local and is excluded, UNLESS declared
+    ``global`` / ``nonlocal``.
+    """
+    params = _all_param_names(func)
+    global_decls: set[str] = set()
+    local_assigned: set[str] = set()
+    for node in ast.walk(func):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            global_decls.update(node.names)
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Name):
+                        local_assigned.add(leaf.id)
+    visitor = _MutationVisitor()
+    for stmt in func.body:
+        visitor.visit(stmt)
+    mutated = {m.variable for m in visitor.mutations}
+    local_assigned -= global_decls
+    return frozenset(mutated - params - local_assigned)
+
+
+def function_global_mutations(tree: ast.Module | None, resolve_source) -> frozenset[str]:
+    """Module globals mutated in place by a called function (CAS-68 part A).
+
+    For each top-level bare-``Expr`` call ``f()`` whose source resolves, find the
+    free / global variables ``f`` mutates in place and return them. The checker
+    marks these for reset (adds them to the current cell's inputs and mutation
+    set) so their producers restore the cell-entry base on an isolated re-run,
+    instead of the hidden global accumulating (``g = 0; def bump(): global g;
+    g += 1`` + ``bump()`` doubling).
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for func_name, _positional, _keywords in standalone_call_arg_targets(tree):
+        fdef = _resolve_function_def(func_name, resolve_source)
+        if fdef is None:
+            continue
+        out |= _free_vars_mutated_in_function(fdef)
+    return frozenset(out)
+
+
+_MUTABLE_LITERAL_CALLS = frozenset({'list', 'dict', 'set'})
+
+
+def _is_mutable_default(node: ast.expr) -> bool:
+    """True if *node* is a mutable literal default (``[]``, ``{}``, ``set()``)."""
+    if isinstance(node, (ast.List, ast.Dict, ast.Set)):
+        return True
+    return (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id in _MUTABLE_LITERAL_CALLS and not node.args)
+
+
+def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if calling *func* mutates state carried on the function OBJECT itself
+    (CAS-68 part B), which persists across calls and must be reset by re-running
+    the ``def``:
+
+    * a **mutable default argument** the body mutates in place
+      (``def collect(x, acc=[]): acc.append(x)``);
+    * an assignment to a **function attribute**
+      (``def tick(): tick.count = getattr(tick, 'count', 0) + 1``).
+    """
+    fname = func.name
+    for node in ast.walk(func):
+        target = node.target if isinstance(node, ast.AugAssign) else None
+        if isinstance(node, ast.Assign):
+            for t in node.targets:
+                if (isinstance(t, ast.Attribute) and isinstance(t.value, ast.Name)
+                        and t.value.id == fname):
+                    return True
+        elif (isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+                and target.value.id == fname):
+            return True
+
+    mutated = params_mutated_in_function(func)
+    if mutated:
+        pos = list(func.args.posonlyargs) + list(func.args.args)
+        defs = func.args.defaults
+        if defs:
+            for param, default in zip(pos[-len(defs):], defs):
+                if param.arg in mutated and _is_mutable_default(default):
+                    return True
+        for kw, default in zip(func.args.kwonlyargs, func.args.kw_defaults):
+            if default is not None and kw.arg in mutated and _is_mutable_default(default):
+                return True
+    return False
+
+
+def _called_function_names(tree: ast.Module) -> frozenset[str]:
+    """Names called as ``name(...)`` anywhere in the cell (bare OR captured)."""
+    return frozenset(
+        n.func.id for n in ast.walk(tree)
+        if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+    )
+
+
+def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozenset[str]:
+    """Called functions that carry mutable state on their own object (CAS-68 B).
+
+    For each function called in the cell (captured or bare) whose source
+    resolves, return its name if calling it mutates state on the function object
+    (a mutated mutable default arg, or a function-attribute assignment). The
+    checker force-resets these so their ``def`` re-runs and recreates fresh state
+    on an isolated re-run, instead of the default / attribute accumulating.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for name in _called_function_names(tree):
+        fdef = _resolve_function_def(name, resolve_source)
+        if fdef is not None and _function_mutates_own_object(fdef):
+            out.add(name)
     return frozenset(out)
 
 

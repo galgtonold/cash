@@ -20,6 +20,8 @@ from cash.notebook.cacheability import (
     analyze_statement,
     crossref_reassigned_vars,
     function_arg_mutations,
+    function_global_mutations,
+    stateful_self_functions,
     params_mutated_in_function,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -902,6 +904,78 @@ class TestAliasMutationSources:
     def test_non_literal_unpack_excluded(self):
         # RHS is a call, not a literal tuple -> no element aliasing
         assert self._src("a, b = compute()\na.append(1)") == frozenset()
+
+
+class TestFunctionGlobalMutations:
+    """``function_global_mutations`` attributes a called function's free/global
+    mutations back to the global (CAS-68 A)."""
+
+    SRCS = {
+        'bump': "def bump():\n    global g\n    g += 1",
+        'add': "def add():\n    items.append(1)",
+        'put': "def put():\n    store['k'] = store.get('k', 0) + 1",
+        'pure': "def pure():\n    return 42",
+        'local': "def local():\n    acc = []\n    acc.append(1)\n    return acc",
+        'arg': "def arg(x):\n    x.append(1)",
+    }
+
+    def _f(self, code):
+        return function_global_mutations(ast.parse(code), self.SRCS.get)
+
+    def test_global_augassign(self):
+        assert self._f("bump()") == {'g'}
+
+    def test_free_var_append(self):
+        assert self._f("add()") == {'items'}
+
+    def test_free_var_subscript(self):
+        assert self._f("put()") == {'store'}
+
+    def test_pure_excluded(self):
+        assert self._f("pure()") == frozenset()
+
+    def test_local_excluded(self):
+        assert self._f("local()") == frozenset()
+
+    def test_param_mutation_excluded(self):
+        # a param mutation is CAS-58's job, not a global
+        assert self._f("arg(d)") == frozenset()
+
+
+class TestStatefulSelfFunctions:
+    """``stateful_self_functions`` flags a called function that mutates state on
+    its own object — mutable default arg or function attribute (CAS-68 B)."""
+
+    SRCS = {
+        'collect': "def collect(x, acc=[]):\n    acc.append(x)\n    return acc",
+        'tally': "def tally(k, acc={}):\n    acc[k] = acc.get(k, 0) + 1\n    return acc",
+        'tick': "def tick():\n    tick.count = getattr(tick, 'count', 0) + 1\n    return tick.count",
+        'pure': "def pure(x):\n    return x + 1",
+        'none_default': "def g(x, cache=None):\n    return x",
+        'fresh_default': "def h(x, acc=[]):\n    return acc + [x]",
+    }
+
+    def _f(self, code):
+        return stateful_self_functions(ast.parse(code), self.SRCS.get)
+
+    def test_mutable_default_list_captured(self):
+        assert self._f("r = collect(1)") == {'collect'}
+
+    def test_mutable_default_dict_captured(self):
+        assert self._f("r = tally('a')") == {'tally'}
+
+    def test_function_attribute(self):
+        assert self._f("print(tick())") == {'tick'}
+
+    def test_pure_excluded(self):
+        assert self._f("r = pure(1)") == frozenset()
+
+    def test_none_default_excluded(self):
+        assert self._f("r = g(1)") == frozenset()
+
+    def test_default_read_not_mutated_excluded(self):
+        # acc is a mutable default but only READ (acc + [x]), not mutated in place
+        assert self._f("r = h(1)") == frozenset()
 
 
 class TestCrossrefReassignedVars:

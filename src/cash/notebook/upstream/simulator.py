@@ -176,6 +176,7 @@ class NotebookSimulator:
         current_cell_method_receivers: set[str] | None = None,
         current_cell_selfref_vars: set[str] | None = None,
         current_cell_crossref_reassigned: set[str] | None = None,
+        current_cell_stateful_funcs: set[str] | None = None,
     ) -> None:
         """Flag self-modifying required inputs whose live value is stale.
 
@@ -214,6 +215,15 @@ class NotebookSimulator:
 
         Builtins are skipped.
         """
+        # A called function that carries mutable state on its own object (a
+        # mutated mutable-default arg, a function-attribute counter) must have its
+        # ``def`` re-run to recreate fresh state — force its producer to re-run by
+        # marking it broken. On ``run_all`` the def re-runs to the same fresh
+        # object first, so this only adds a cheap redundant redefine (CAS-68 B).
+        if current_cell_stateful_funcs:
+            for fn in current_cell_stateful_funcs:
+                if fn in self.shell.user_ns:
+                    broken_vars.add(fn)
         if not required_inputs:
             return
         reassigned = current_cell_reassigned or set()
@@ -437,7 +447,11 @@ class NotebookSimulator:
         muts: set[str] = set()
         for code in notebook_cells[:current_cell_idx]:
             try:
-                muts |= set(analyze_statement(code, None).all_mutated_vars)
+                # top-level only: a cell that merely DEFINES a function whose body
+                # mutates ``g`` (``def bump(): global g; g += 1``) does not itself
+                # accumulate ``g`` across cells, so it must not suppress the
+                # content-base reset for a later cell that CALLS it (CAS-68).
+                muts |= set(analyze_statement(code, None).top_level_mutated_vars)
             except (SyntaxError, ValueError, TypeError):
                 continue
         return muts
@@ -453,6 +467,7 @@ class NotebookSimulator:
         current_cell_method_receivers: set[str] | None = None,
         current_cell_selfref_vars: set[str] | None = None,
         current_cell_crossref_reassigned: set[str] | None = None,
+        current_cell_stateful_funcs: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
@@ -519,6 +534,7 @@ class NotebookSimulator:
             current_cell_method_receivers=current_cell_method_receivers,
             current_cell_selfref_vars=current_cell_selfref_vars,
             current_cell_crossref_reassigned=current_cell_crossref_reassigned,
+            current_cell_stateful_funcs=current_cell_stateful_funcs,
         )
         trace_event("broken_after_guard", broken=broken_vars)
 
