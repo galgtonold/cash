@@ -231,7 +231,9 @@ class NotebookSimulator:
         # Computed lazily (only when an in-place no-lineage candidate exists).
         upstream_inplace_mutated: set[str] | None = None
         for var_name in required_inputs:
-            if var_name in _BUILTIN_NAMES:
+            # A user variable shadowing a builtin name is tracked in
+            # variable_lineage; only skip genuine (untracked) builtins (CAS-63).
+            if var_name in _BUILTIN_NAMES and var_name not in self.variable_lineage:
                 continue
             if var_name not in self_written:
                 continue

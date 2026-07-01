@@ -624,7 +624,10 @@ class MismatchClassifier:
                 if inp in self.shell.user_ns:
                     continue
                 return False
-            if inp in _BUILTIN_NAMES:
+            # Skip genuine builtins, but NOT a user variable that shadows a
+            # builtin name (``sum = 10``) — such a name IS tracked in
+            # variable_lineage and must have its freshness checked (CAS-63).
+            if inp in _BUILTIN_NAMES and inp not in self.variable_lineage:
                 continue
             if inp not in self.shell.user_ns:
                 return False
@@ -723,7 +726,11 @@ class MismatchClassifier:
                 if self.debug:
                     logger.debug("[UPSTREAM] Module '%s' is in virtual_modules but NOT in memory. Scheduling re-import.", inp)
             return False  # handled (either added or skipped)
-        if inp in _BUILTIN_NAMES:
+        # A user variable shadowing a builtin name (``sum = 10``) is tracked in
+        # variable_lineage — fall through to the real freshness checks so its
+        # producer is scheduled when stale, instead of assuming it is a builtin
+        # that is always available (CAS-63).
+        if inp in _BUILTIN_NAMES and inp not in self.variable_lineage:
             return False
         if self._check_inp_lineage_skip(inp, virtual_lineage, upstream_has_modifications, simulation_trace_codes):
             return False
