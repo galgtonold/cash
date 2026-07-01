@@ -17,6 +17,7 @@ from ..cacheability import (
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
+    crossref_reassigned_vars,
     function_arg_mutations,
     standalone_call_arg_targets,
     standalone_method_mutation_receivers,
@@ -322,6 +323,12 @@ class UpstreamChecker:
             current_cell_method_receivers |= aliased_sources(
                 alias_tree, current_cell_method_receivers
             ) - nocache_vars
+            # Names reassigned from a permutation of their own prior values
+            # (``a, b = b, a`` swap / rotate / temp-swap) read their pre-cell base
+            # but on isolated re-run hold the swapped OUTPUT, whose content equals
+            # the recorded output hash -- lineage-invisible, so no reset signal
+            # fires. Force these to reset to their producers' base (CAS-65).
+            current_cell_crossref_reassigned = crossref_reassigned_vars(alias_tree) - nocache_vars
             nocache_vars = set(nocache_vars)
         except (SyntaxError, ValueError):
             logger.debug("[UPSTREAM] Failed to analyze current cell outputs")
@@ -330,6 +337,7 @@ class UpstreamChecker:
             current_cell_mutated = set()
             current_cell_method_receivers = set()
             current_cell_selfref_vars = set()
+            current_cell_crossref_reassigned = set()
             nocache_vars = set()
 
         # Phase 2 â€” Notebook-simulation-based staleness check (disk vs. memory).
@@ -342,6 +350,7 @@ class UpstreamChecker:
             current_cell_mutated=current_cell_mutated,
             current_cell_method_receivers=current_cell_method_receivers,
             current_cell_selfref_vars=current_cell_selfref_vars,
+            current_cell_crossref_reassigned=current_cell_crossref_reassigned,
             current_cell_nocache_vars=nocache_vars,
             progress_callback=progress_callback,
             control_structure_callback=control_structure_callback,
@@ -750,6 +759,7 @@ class UpstreamChecker:
         current_cell_mutated: set[str] | None = None,
         current_cell_method_receivers: set[str] | None = None,
         current_cell_selfref_vars: set[str] | None = None,
+        current_cell_crossref_reassigned: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
         progress_callback: Callable[..., None] | None = None,
         control_structure_callback: Callable[..., Any] | None = None
@@ -787,6 +797,7 @@ class UpstreamChecker:
                 current_cell_mutated=current_cell_mutated,
                 current_cell_method_receivers=current_cell_method_receivers,
                 current_cell_selfref_vars=current_cell_selfref_vars,
+                current_cell_crossref_reassigned=current_cell_crossref_reassigned,
                 current_cell_nocache_vars=current_cell_nocache_vars
             )
 

@@ -175,6 +175,7 @@ class NotebookSimulator:
         current_cell_idx: int | None = None,
         current_cell_method_receivers: set[str] | None = None,
         current_cell_selfref_vars: set[str] | None = None,
+        current_cell_crossref_reassigned: set[str] | None = None,
     ) -> None:
         """Flag self-modifying required inputs whose live value is stale.
 
@@ -236,6 +237,17 @@ class NotebookSimulator:
             if var_name in _BUILTIN_NAMES and var_name not in self.variable_lineage:
                 continue
             if var_name not in self_written:
+                continue
+            # A swap / rotate / temp-swap target (``a, b = b, a``) reads its own
+            # pre-cell value but on an isolated re-run holds the swapped OUTPUT,
+            # whose content and lineage both equal the recorded output — so the
+            # lineage-base and content-base signals below are BOTH fooled. The
+            # staleness is lineage-invisible, so force the reset from the static
+            # detector: mark broken and let the producers restore the cell-entry
+            # base. On ``run_all`` the producers re-run to the same base first, so
+            # this only adds a cheap redundant restore there. [CAS-65]
+            if current_cell_crossref_reassigned and var_name in current_cell_crossref_reassigned:
+                broken_vars.add(var_name)
                 continue
             live_value = self.shell.user_ns.get(var_name)
             live_lineage = getattr(live_value, '_cash_lineage_hash', None)
@@ -440,6 +452,7 @@ class NotebookSimulator:
         current_cell_mutated: set[str] | None = None,
         current_cell_method_receivers: set[str] | None = None,
         current_cell_selfref_vars: set[str] | None = None,
+        current_cell_crossref_reassigned: set[str] | None = None,
         current_cell_nocache_vars: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Simulate notebook execution statement-by-statement.
@@ -505,6 +518,7 @@ class NotebookSimulator:
             notebook_cells=notebook_cells, current_cell_idx=current_cell_idx,
             current_cell_method_receivers=current_cell_method_receivers,
             current_cell_selfref_vars=current_cell_selfref_vars,
+            current_cell_crossref_reassigned=current_cell_crossref_reassigned,
         )
         trace_event("broken_after_guard", broken=broken_vars)
 

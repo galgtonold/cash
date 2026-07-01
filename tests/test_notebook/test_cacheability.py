@@ -18,6 +18,7 @@ from cash.notebook.cacheability import (
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
+    crossref_reassigned_vars,
     function_arg_mutations,
     params_mutated_in_function,
     standalone_call_arg_targets,
@@ -874,6 +875,53 @@ class TestAliasMutationSources:
     def test_non_literal_unpack_excluded(self):
         # RHS is a call, not a literal tuple -> no element aliasing
         assert self._src("a, b = compute()\na.append(1)") == frozenset()
+
+
+class TestCrossrefReassignedVars:
+    """``crossref_reassigned_vars`` flags swap/rotate/temp-swap names but not
+    single-statement self-accumulation (CAS-65)."""
+
+    def _f(self, code):
+        return crossref_reassigned_vars(ast.parse(code))
+
+    def test_tuple_swap(self):
+        assert self._f("a, b = b, a") == {'a', 'b'}
+
+    def test_three_way_rotate(self):
+        assert self._f("a, b, c = c, a, b") == {'a', 'b', 'c'}
+
+    def test_temp_swap(self):
+        assert self._f("tmp = a\na = b\nb = tmp") == {'a', 'b'}
+
+    def test_partial_swap(self):
+        assert self._f("a, b = b, c") == {'b'}
+
+    def test_read_before_write_from_other(self):
+        # b read then reassigned from a DIFFERENT value -> swap-like.
+        assert self._f("y = b\nb = k") == {'b'}
+
+    def test_read_before_write_selfref_excluded(self):
+        # total is read then reassigned FROM ITSELF -> accumulator, not a swap.
+        assert self._f("y = total\ntotal = total + k") == frozenset()
+
+    def test_self_accumulate_excluded(self):
+        assert self._f("x = x + 1") == frozenset()
+
+    def test_accumulator_excluded(self):
+        assert self._f("total = total + k") == frozenset()
+
+    def test_df_mutate_then_selfref_transform_excluded(self):
+        # df mutated then reassigned from itself -> handled by reassign-reset, not a swap.
+        assert self._f("df['rm'] = df['p'].rolling(3).mean()\ndf = df.sort_values('d')") == frozenset()
+
+    def test_fresh_unpack_excluded(self):
+        assert self._f("a, b = 1, 2") == frozenset()
+
+    def test_list_unpack_excluded(self):
+        assert self._f("x, y = data") == frozenset()
+
+    def test_swap_in_if_body(self):
+        assert self._f("if cond:\n    a, b = b, a") == {'a', 'b'}
 
 
 class TestAliasedSources:

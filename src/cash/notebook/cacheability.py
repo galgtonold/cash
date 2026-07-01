@@ -32,6 +32,7 @@ __all__ = [
     "function_arg_mutations",
     "alias_mutation_sources",
     "aliased_sources",
+    "crossref_reassigned_vars",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -868,6 +869,70 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
             if param in mutated_params:
                 out.add(arg_var)
     return frozenset(out)
+
+
+def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
+    """Names reassigned from a permutation of their own prior values (CAS-65).
+
+    The swap / rotate / temp-swap family: a variable that is **read** (its
+    pre-cell value) and then **reassigned** in the same cell, but not via a plain
+    single-target self-accumulation (``x = x + 1``, which the lineage-base reset
+    already handles and whose input capture preserves the base). Two shapes, both
+    lineage-invisible on isolated re-run — the swapped output's content equals its
+    recorded output hash, so no lineage / content signal detects the staleness:
+
+    * **Tuple / list unpack** whose LHS name also appears in the RHS —
+      ``a, b = b, a``, ``a, b, c = c, a, b``.
+    * **Read-before-write across statements** — a name read in an earlier
+      statement and reassigned (``Name`` store) in a later one: the temp-swap
+      ``tmp = a; a = b; b = tmp`` (flags ``a`` and ``b``, not ``tmp``).
+
+    A single-statement self-reference (``x = x + 1``, ``total = total + k``) is NOT
+    flagged: its read and write are in the same statement, and its cell-entry base
+    lineage is preserved, so the existing no-lineage lineage-base reset covers it.
+    """
+    if tree is None:
+        return frozenset()
+    flagged: set[str] = set()
+    stmts = list(_module_level_stmts(tree.body))
+
+    # (A) element-wise tuple/list swap: ``(t_i) = (v_i)`` where a target name is
+    # reused elsewhere in the RHS and is NOT assigned from itself at its own
+    # position. Excludes ``df, meta = process(df)`` (RHS is not a literal tuple —
+    # ``df``'s new value derives from itself, handled by the reassign-reset path).
+    for node in stmts:
+        if not isinstance(node, ast.Assign):
+            continue
+        for tgt in node.targets:
+            if not (isinstance(tgt, (ast.Tuple, ast.List))
+                    and isinstance(node.value, (ast.Tuple, ast.List))
+                    and len(tgt.elts) == len(node.value.elts)):
+                continue
+            rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+            for te, ve in zip(tgt.elts, node.value.elts):
+                if (isinstance(te, ast.Name) and te.id in rhs_names
+                        and not (isinstance(ve, ast.Name) and ve.id == te.id)):
+                    flagged.add(te.id)
+
+    # (B) a name READ in an earlier statement and later REASSIGNED from a value
+    # that does NOT read the name itself (temp-swap ``tmp = a; a = b; b = tmp``).
+    # The self-referential-reassignment exclusion (``df['x']=..; df=df.sort()``)
+    # keeps a sequential mutate-then-transform out of the set — its reassignment
+    # reads the var and is handled by the existing reassign-reset machinery.
+    read_before: set[str] = set()
+    for node in stmts:
+        if isinstance(node, ast.Assign):
+            rhs_names = {n.id for n in ast.walk(node.value) if isinstance(n, ast.Name)}
+            for tgt in node.targets:
+                for t in _iter_store_targets(tgt):
+                    if (isinstance(t, ast.Name) and t.id in read_before
+                            and t.id not in rhs_names):
+                        flagged.add(t.id)
+        for n in ast.walk(node):
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Load):
+                read_before.add(n.id)
+
+    return frozenset(flagged)
 
 
 def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
