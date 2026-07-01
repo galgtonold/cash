@@ -19,6 +19,7 @@ from cash.notebook.cacheability import (
     aliased_sources,
     analyze_statement,
     crossref_reassigned_vars,
+    subscript_view_bindings,
     function_arg_mutations,
     function_global_mutations,
     stateful_self_functions,
@@ -645,6 +646,17 @@ class TestSelfrefInplaceWriteVars:
     def test_subset_assign_other_column_excluded(self):
         assert self._vars("df.loc[mask, 'b'] = df['a'] + df['c']") == frozenset()
 
+    def test_loc_row_grow_len(self):
+        # CAS-74: df.loc[len(df)] = .. appends a row (size-dependent index).
+        assert self._vars("df.loc[len(df)] = 99") == {'df'}
+
+    def test_loc_row_grow_shape(self):
+        assert self._vars("df.loc[df.shape[0]] = 99") == {'df'}
+
+    def test_loc_masked_reading_frame_excluded(self):
+        # a masked write whose key reads the frame (not len/shape) is idempotent.
+        assert self._vars("df.loc[df['a'] > 0, 'b'] = 5") == frozenset()
+
     def test_iloc_positional_other_excluded(self):
         # positional target is unknown-column; RHS reads a named column -> no
         # provable overlap, and not an exact-target match -> excluded.
@@ -1007,6 +1019,31 @@ class TestStatefulClosureVars:
 
     def test_unknown_var_excluded(self):
         assert self._f("unknown()") == frozenset()
+
+
+class TestSubscriptViewBindings:
+    """``subscript_view_bindings`` maps ``alias = base[...]`` bindings (CAS-74)."""
+
+    def _f(self, code):
+        return subscript_view_bindings(ast.parse(code))
+
+    def test_slice_binding(self):
+        assert self._f("v = arr[1:]") == {'v': 'arr'}
+
+    def test_full_slice_binding(self):
+        assert self._f("v = arr[:]") == {'v': 'arr'}
+
+    def test_step_slice_binding(self):
+        assert self._f("v = arr[::2]") == {'v': 'arr'}
+
+    def test_plain_name_not_a_view(self):
+        assert self._f("v = arr") == {}
+
+    def test_copy_call_not_a_view(self):
+        assert self._f("v = arr.copy()") == {}
+
+    def test_binding_in_if_body(self):
+        assert self._f("if c:\n    v = arr[1:]") == {'v': 'arr'}
 
 
 class TestCrossrefReassignedVars:

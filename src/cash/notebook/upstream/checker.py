@@ -18,6 +18,7 @@ from ..cacheability import (
     aliased_sources,
     analyze_statement,
     crossref_reassigned_vars,
+    subscript_view_bindings,
     function_arg_mutations,
     function_global_mutations,
     stateful_self_functions,
@@ -42,6 +43,13 @@ if TYPE_CHECKING:
     from ..statement import ProcessResult
 
 __all__ = ["UpstreamChecker", "UpstreamResult"]
+
+
+def _is_live_ndarray(val: Any) -> bool:
+    """True if *val* is a numpy ndarray (so ``v = val[slice]`` is a view, not a
+    copy). Duck-typed by type module/name to avoid importing numpy here (CAS-74)."""
+    t = type(val)
+    return t.__name__ == 'ndarray' and t.__module__.split('.')[0] == 'numpy'
 
 
 class UpstreamResult(NamedTuple):
@@ -372,6 +380,19 @@ class UpstreamChecker:
             current_cell_method_receivers |= aliased_sources(
                 alias_tree, current_cell_method_receivers
             ) - nocache_vars
+            # A numpy ``v = arr[slice]`` binding is a VIEW sharing arr's memory, so
+            # mutating v (``v += 1``, ``v[i] = x``) mutates arr in place. A list
+            # slice is a COPY, so this is gated on arr being a live ndarray at
+            # runtime. When the view is mutated, attribute it back to arr so arr
+            # resets on isolated re-run instead of accumulating (CAS-74).
+            view_bindings = subscript_view_bindings(alias_tree)
+            if view_bindings:
+                user_ns = self.shell.user_ns
+                mutated_here = analyze_statement(cell_code, None).all_mutated_vars
+                current_cell_mutated |= {
+                    base for alias, base in view_bindings.items()
+                    if alias in mutated_here and _is_live_ndarray(user_ns.get(base))
+                } - nocache_vars
             # Names reassigned from a permutation of their own prior values
             # (``a, b = b, a`` swap / rotate / temp-swap) read their pre-cell base
             # but on isolated re-run hold the swapped OUTPUT, whose content equals

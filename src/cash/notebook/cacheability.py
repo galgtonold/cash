@@ -36,6 +36,7 @@ __all__ = [
     "alias_mutation_sources",
     "aliased_sources",
     "crossref_reassigned_vars",
+    "subscript_view_bindings",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
     "SideEffectInfo",
@@ -611,12 +612,37 @@ def _module_level_stmts(body: list[ast.stmt]):
             yield from _module_level_stmts(handler.body)
 
 
+def _target_key_grows_receiver(target: ast.expr, base: str) -> bool:
+    """True if a subscript target's KEY is a size-dependent index of *base* — the
+    row-append idiom ``df.loc[len(df)] = ..`` / ``df.loc[df.shape[0]] = ..``.
+
+    Such a write ADDS a row at a position derived from the receiver's own size, so
+    it is non-idempotent (re-running grows the frame again) and the receiver must
+    reset. Scoped to ``len(base)`` / ``base.shape`` / ``base.size`` in the key, so
+    a masked write whose key merely reads the frame (``df.loc[df['a'] > 0, 'b'] =
+    5``, idempotent) is NOT flagged (CAS-74)."""
+    if not isinstance(target, ast.Subscript):
+        return False
+    for sub in ast.walk(target.slice):
+        if (isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name)
+                and sub.func.id == 'len'
+                and any(_extract_base_name(a) == base for a in sub.args)):
+            return True
+        if (isinstance(sub, ast.Attribute) and sub.attr in ('shape', 'size')
+                and _extract_base_name(sub.value) == base):
+            return True
+    return False
+
+
 def _selfref_write_base(target: ast.expr, rhs: ast.expr) -> str | None:
     """Base var if ``target = rhs`` is a self-referential in-place subscript/attr
-    write — the target is also read in *rhs*, by exact text or column-key overlap."""
+    write — the target is also read in *rhs*, by exact text or column-key overlap,
+    or the target's key grows the receiver (``df.loc[len(df)] = ..``)."""
     base = _selfref_target_base(target)
     if base and (
-        _rhs_reads_target(rhs, target) or _rhs_reads_same_column(rhs, target, base)
+        _rhs_reads_target(rhs, target)
+        or _rhs_reads_same_column(rhs, target, base)
+        or _target_key_grows_receiver(target, base)
     ):
         return base
     return None
@@ -1006,6 +1032,28 @@ def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozense
         if fdef is not None and _function_mutates_own_object(fdef):
             out.add(name)
     return frozenset(out)
+
+
+def subscript_view_bindings(tree: ast.Module | None) -> dict[str, str]:
+    """Map ``{alias: base}`` for ``alias = base[...]`` subscript bindings (CAS-74).
+
+    A numpy ``base[slice]`` is a VIEW that shares memory with ``base``, so mutating
+    the alias (``v += 1``, ``v[i] = x``) mutates ``base`` in place. This is
+    pure-AST (base must be a ``Name``); the caller gates on ``base`` actually being
+    an ndarray at runtime (a list slice is a COPY, not a view). Scans module-level
+    statements incl. control bodies, excludes def/class scopes.
+    """
+    if tree is None:
+        return {}
+    out: dict[str, str] = {}
+    for node in _module_level_stmts(tree.body):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Subscript)):
+            base = _extract_base_name(node.value.value)
+            if base:
+                out[node.targets[0].id] = base
+    return out
 
 
 def _factory_body_scope(factory: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
