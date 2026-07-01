@@ -21,6 +21,7 @@ from ..cacheability import (
     function_arg_mutations,
     function_global_mutations,
     stateful_self_functions,
+    stateful_closure_vars,
     _called_function_names,
     standalone_call_arg_targets,
     standalone_method_mutation_receivers,
@@ -330,6 +331,29 @@ class UpstreamChecker:
                 current_cell_stateful_funcs = set(
                     stateful_self_functions(ast.parse(cell_code), func_sources_all.get)
                 ) - nocache_vars
+                # A closure variable (``c = make_counter()``) whose factory returns
+                # an inner function that mutates factory-local state accumulates
+                # across calls; force-reset it so ``c = make_counter()`` re-runs
+                # and rebuilds the closure fresh (CAS-68 B closure case).
+                var_factories = self._notebook_var_factories(cell_code)
+
+                def _resolve_var_factory(name, _fs=func_sources_all, _vf=var_factories):
+                    src = _fs.get(_vf.get(name))
+                    if not src:
+                        return None
+                    try:
+                        parsed = ast.parse(src)
+                    except (SyntaxError, ValueError):
+                        return None
+                    if parsed.body and isinstance(
+                        parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        return parsed.body[0]
+                    return None
+
+                current_cell_stateful_funcs |= set(
+                    stateful_closure_vars(ast.parse(cell_code), _resolve_var_factory)
+                ) - nocache_vars
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run
@@ -467,6 +491,36 @@ class UpstreamChecker:
                     except (ValueError, AttributeError):
                         continue
         return sources
+
+    def _notebook_var_factories(self, cell_code: str) -> dict[str, str]:
+        """Map ``{var: factory_name}`` for every top-level ``var = factory(...)``
+        assignment across the notebook (``c = make_counter()`` → ``make_counter``).
+
+        Used to resolve a closure variable back to the factory that produced it,
+        so a stateful closure can be reset by re-running the factory call
+        (CAS-68 B closure case). Last assignment wins.
+        """
+        factories: dict[str, str] = {}
+        cells: list[str] = []
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                cells = get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            cells = []
+        for code in (*cells, cell_code):
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and isinstance(node.value, ast.Call)
+                        and isinstance(node.value.func, ast.Name)):
+                    factories[node.targets[0].id] = node.value.func.id
+        return factories
 
     def _check_lineage_based(self, required_inputs: set[str]) -> None:
         """Phase 1 — diagnostic-only lineage staleness check.

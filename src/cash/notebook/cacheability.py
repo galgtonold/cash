@@ -32,6 +32,7 @@ __all__ = [
     "function_arg_mutations",
     "function_global_mutations",
     "stateful_self_functions",
+    "stateful_closure_vars",
     "alias_mutation_sources",
     "aliased_sources",
     "crossref_reassigned_vars",
@@ -1003,6 +1004,56 @@ def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozense
     for name in _called_function_names(tree):
         fdef = _resolve_function_def(name, resolve_source)
         if fdef is not None and _function_mutates_own_object(fdef):
+            out.add(name)
+    return frozenset(out)
+
+
+def _factory_body_scope(factory: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
+    """Names bound in the factory's OWN scope: its params + names assigned at its
+    direct body level (the locals a returned closure captures)."""
+    scope = _all_param_names(factory)
+    for stmt in factory.body:
+        if isinstance(stmt, ast.Assign):
+            for tgt in stmt.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Name):
+                        scope.add(leaf.id)
+        elif isinstance(stmt, (ast.AugAssign, ast.AnnAssign)) and isinstance(stmt.target, ast.Name):
+            scope.add(stmt.target.id)
+        elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            scope.add(stmt.name)
+    return scope
+
+
+def _factory_returns_stateful_closure(factory: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if *factory* defines an inner function that mutates a variable
+    captured from the factory's own scope (a ``nonlocal`` cell or a factory-local
+    container). Such a closure carries state that persists across calls of the
+    returned function and is only reset by re-running the factory (CAS-68 B).
+    """
+    factory_scope = _factory_body_scope(factory)
+    for node in ast.walk(factory):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node is not factory):
+            if _free_vars_mutated_in_function(node) & factory_scope:
+                return True
+    return False
+
+
+def stateful_closure_vars(tree: ast.Module | None, resolve_var_factory) -> frozenset[str]:
+    """Closure variables called in the cell that carry mutable captured state
+    (CAS-68 B). *resolve_var_factory* maps a name to the ``FunctionDef`` of the
+    factory it was assigned from (``c = make_counter()`` → ``make_counter``'s
+    def), or ``None``. A name is flagged when its factory returns a closure that
+    mutates factory-local state, so the checker force-resets it and its producer
+    (``c = make_counter()``) re-runs to recreate the fresh closure.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for name in _called_function_names(tree):
+        factory = resolve_var_factory(name)
+        if factory is not None and _factory_returns_stateful_closure(factory):
             out.add(name)
     return frozenset(out)
 

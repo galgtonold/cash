@@ -50,12 +50,16 @@ def test_mutable_default_dict(nb_runner):
            "r = tally('a')\nprint('v', r['a'])", "v 1")
 
 
-@pytest.mark.xfail(reason="CAS-68 part B: closure-cell state needs resolving the "
-                          "factory producer of `c = make_counter()`", strict=False)
 def test_closure_counter(nb_runner):
     _rerun(nb_runner,
            "def make_counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc\nc = make_counter()",
            "print('c', c())", "c 1")
+
+
+def test_closure_mutable_list(nb_runner):
+    _rerun(nb_runner,
+           "def make_list():\n    data = []\n    def add(x):\n        data.append(x)\n        return data\n    return add\nadder = make_list()",
+           "r = adder(1)\nprint('len', len(r))", "len 1")
 
 
 def test_class_variable_mutation(nb_runner):

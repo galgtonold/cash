@@ -22,6 +22,7 @@ from cash.notebook.cacheability import (
     function_arg_mutations,
     function_global_mutations,
     stateful_self_functions,
+    stateful_closure_vars,
     params_mutated_in_function,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -976,6 +977,36 @@ class TestStatefulSelfFunctions:
     def test_default_read_not_mutated_excluded(self):
         # acc is a mutable default but only READ (acc + [x]), not mutated in place
         assert self._f("r = h(1)") == frozenset()
+
+
+class TestStatefulClosureVars:
+    """``stateful_closure_vars`` flags a called closure variable whose factory
+    returns an inner function mutating factory-local state (CAS-68 B closure)."""
+
+    FACTORIES = {
+        'c': "def make_counter():\n    n = 0\n    def inc():\n        nonlocal n\n        n += 1\n        return n\n    return inc",
+        'adder': "def make_list():\n    data = []\n    def add(x):\n        data.append(x)\n    return add",
+        'p': "def make_pure():\n    def f(x):\n        return x + 1\n    return f",
+    }
+
+    def _resolve(self, name):
+        src = self.FACTORIES.get(name)
+        return ast.parse(src).body[0] if src else None
+
+    def _f(self, code):
+        return stateful_closure_vars(ast.parse(code), self._resolve)
+
+    def test_nonlocal_counter(self):
+        assert self._f("print(c())") == {'c'}
+
+    def test_captured_list(self):
+        assert self._f("adder(1)") == {'adder'}
+
+    def test_pure_closure_excluded(self):
+        assert self._f("r = p(1)") == frozenset()
+
+    def test_unknown_var_excluded(self):
+        assert self._f("unknown()") == frozenset()
 
 
 class TestCrossrefReassignedVars:
