@@ -23,6 +23,9 @@ from ..cacheability import (
     function_global_mutations,
     stateful_self_functions,
     stateful_closure_vars,
+    partial_arg_mutations,
+    mutating_partials,
+    reduce_free_mutations,
     _called_function_names,
     standalone_call_arg_targets,
     standalone_method_mutation_receivers,
@@ -362,6 +365,28 @@ class UpstreamChecker:
                 current_cell_stateful_funcs |= set(
                     stateful_closure_vars(ast.parse(cell_code), _resolve_var_factory)
                 ) - nocache_vars
+                # Hidden mutation through functools.partial (a bound mutable arg,
+                # or the target's free var) or a function passed to functools.reduce
+                # — the higher-order caller invokes it, so the mutation happens but
+                # the cell text doesn't name it. Attribute it back and add to the
+                # cell's inputs so its producer's base is restored (CAS-72).
+                partial_bindings = self._notebook_partial_bindings(cell_code)
+                hidden_muts = (
+                    partial_arg_mutations(
+                        ast.parse(cell_code), partial_bindings.get, func_sources_all.get
+                    )
+                    | reduce_free_mutations(ast.parse(cell_code), func_sources_all.get)
+                ) - nocache_vars
+                current_cell_mutated |= hidden_muts
+                required_inputs = required_inputs | hidden_muts
+                # A partial that binds a MUTATED arg captured the arg's OBJECT, so
+                # resetting the arg name is not enough — force-reset the partial
+                # too so its producer re-binds it to the fresh arg (CAS-72).
+                current_cell_stateful_funcs |= set(
+                    mutating_partials(
+                        ast.parse(cell_code), partial_bindings.get, func_sources_all.get
+                    )
+                ) - nocache_vars
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run
@@ -542,6 +567,41 @@ class UpstreamChecker:
                         and isinstance(node.value.func, ast.Name)):
                     factories[node.targets[0].id] = node.value.func.id
         return factories
+
+    def _notebook_partial_bindings(self, cell_code: str) -> dict[str, tuple[str, list]]:
+        """Map ``{var: (target_func, [bound_arg_vars])}`` for every top-level
+        ``var = partial(f, x, ...)`` / ``functools.partial(...)`` across the
+        notebook (CAS-72). Bound args are Name ids (or ``None`` for non-Name),
+        aligned to ``f``'s positional params. Last assignment wins.
+        """
+        bindings: dict[str, tuple[str, list]] = {}
+        cells: list[str] = []
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                cells = get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            cells = []
+        for code in (*cells, cell_code):
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if not (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and isinstance(node.value, ast.Call)):
+                    continue
+                call = node.value
+                func = call.func
+                is_partial = ((isinstance(func, ast.Name) and func.id == 'partial')
+                              or (isinstance(func, ast.Attribute) and func.attr == 'partial'))
+                if is_partial and call.args and isinstance(call.args[0], ast.Name):
+                    f_name = call.args[0].id
+                    bound = [a.id if isinstance(a, ast.Name) else None for a in call.args[1:]]
+                    bindings[node.targets[0].id] = (f_name, bound)
+        return bindings
 
     def _check_lineage_based(self, required_inputs: set[str]) -> None:
         """Phase 1 — diagnostic-only lineage staleness check.

@@ -24,6 +24,9 @@ from cash.notebook.cacheability import (
     function_global_mutations,
     stateful_self_functions,
     stateful_closure_vars,
+    partial_arg_mutations,
+    mutating_partials,
+    reduce_free_mutations,
     params_mutated_in_function,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -1019,6 +1022,54 @@ class TestStatefulClosureVars:
 
     def test_unknown_var_excluded(self):
         assert self._f("unknown()") == frozenset()
+
+
+class TestFunctoolsHiddenMutations:
+    """partial / reduce hidden-mutation detectors (CAS-72)."""
+
+    SRCS = {
+        'push': "def push(lst, v):\n    lst.append(v)",
+        'tick': "def tick(step):\n    counter[0] += step",
+        'combine': "def combine(a, b):\n    log.append(b)\n    return a + b",
+        'mul': "def mul(a, b):\n    return a * b",
+    }
+    PARTIALS = {
+        'p': ('push', ['shared']),
+        't': ('tick', [None]),          # partial(tick, 1) -> literal, no bound Name
+        'double': ('mul', [None]),      # partial(mul, 2) -> pure
+    }
+
+    def _pam(self, code):
+        return partial_arg_mutations(ast.parse(code), self.PARTIALS.get, self.SRCS.get)
+
+    def _mp(self, code):
+        return mutating_partials(ast.parse(code), self.PARTIALS.get, self.SRCS.get)
+
+    def _rfm(self, code):
+        return reduce_free_mutations(ast.parse(code), self.SRCS.get)
+
+    def test_partial_bound_arg_mutated(self):
+        assert self._pam("p('a')") == {'shared'}
+
+    def test_partial_free_var_mutated(self):
+        assert self._pam("t()") == {'counter'}
+
+    def test_partial_pure_not_flagged(self):
+        assert self._pam("r = double(5)") == frozenset()
+
+    def test_mutating_partial_bound_arg(self):
+        # p binds a mutated arg -> must re-bind
+        assert self._mp("p('a')") == {'p'}
+
+    def test_mutating_partial_free_var_excluded(self):
+        # t mutates only a free var (global) -> no re-bind needed
+        assert self._mp("t()") == frozenset()
+
+    def test_reduce_side_effect(self):
+        assert self._rfm("total = reduce(combine, [1, 2, 3], 0)") == {'log'}
+
+    def test_reduce_pure_not_flagged(self):
+        assert self._rfm("total = reduce(mul, [1, 2, 3], 1)") == frozenset()
 
 
 class TestSubscriptViewBindings:

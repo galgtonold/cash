@@ -33,6 +33,9 @@ __all__ = [
     "function_global_mutations",
     "stateful_self_functions",
     "stateful_closure_vars",
+    "partial_arg_mutations",
+    "mutating_partials",
+    "reduce_free_mutations",
     "alias_mutation_sources",
     "aliased_sources",
     "crossref_reassigned_vars",
@@ -1054,6 +1057,88 @@ def subscript_view_bindings(tree: ast.Module | None) -> dict[str, str]:
             if base:
                 out[node.targets[0].id] = base
     return out
+
+
+def partial_arg_mutations(tree: ast.Module | None, resolve_partial, resolve_source) -> frozenset[str]:
+    """Vars mutated through a called ``functools.partial`` binding (CAS-72).
+
+    *resolve_partial* maps a name to ``(target_func_name, [bound_arg_vars])`` for a
+    ``p = partial(f, x, y)`` binding, or ``None``. For each partial called in the
+    cell, the target ``f``'s in-place param mutations are mapped to the bound
+    positional args (``partial(push, shared)`` + ``p('a')`` mutates ``shared``
+    because ``push`` mutates its first param), and ``f``'s free/global mutations
+    are attributed too (``partial(tick, 1)`` where ``tick`` mutates ``counter``).
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for name in _called_function_names(tree):
+        binding = resolve_partial(name)
+        if binding is None:
+            continue
+        f_name, bound_args = binding
+        fdef = _resolve_function_def(f_name, resolve_source)
+        if fdef is None:
+            continue
+        mutated_params = params_mutated_in_function(fdef)
+        pos_params = _positional_param_names(fdef)
+        for i, arg in enumerate(bound_args):
+            if arg and i < len(pos_params) and pos_params[i] in mutated_params:
+                out.add(arg)
+        out |= _free_vars_mutated_in_function(fdef)
+    return frozenset(out)
+
+
+def mutating_partials(tree: ast.Module | None, resolve_partial, resolve_source) -> frozenset[str]:
+    """Partial vars called in the cell that bind a MUTATED positional arg (CAS-72).
+
+    ``p = partial(push, shared)`` captures the ``shared`` LIST OBJECT, so resetting
+    the ``shared`` name to a fresh list does not help — ``p`` still appends to the
+    old object. These partials must be re-created (their ``def`` re-run) so they
+    re-bind to the reset arg. A partial whose target mutates only a FREE/global var
+    is NOT included: a global is resolved dynamically, so resetting it suffices.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for name in _called_function_names(tree):
+        binding = resolve_partial(name)
+        if binding is None:
+            continue
+        f_name, bound_args = binding
+        fdef = _resolve_function_def(f_name, resolve_source)
+        if fdef is None:
+            continue
+        mutated_params = params_mutated_in_function(fdef)
+        pos_params = _positional_param_names(fdef)
+        for i, arg in enumerate(bound_args):
+            if arg and i < len(pos_params) and pos_params[i] in mutated_params:
+                out.add(name)
+                break
+    return frozenset(out)
+
+
+def reduce_free_mutations(tree: ast.Module | None, resolve_source) -> frozenset[str]:
+    """Free/global vars mutated by a function passed to ``functools.reduce`` (CAS-72).
+
+    ``reduce(combine, [1, 2, 3], 0)`` invokes ``combine`` once per element; if
+    ``combine`` mutates a free variable (``log.append(b)``) that mutation happens,
+    so the free var must reset on isolated re-run.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        is_reduce = ((isinstance(fn, ast.Name) and fn.id == 'reduce')
+                     or (isinstance(fn, ast.Attribute) and fn.attr == 'reduce'))
+        if is_reduce and node.args and isinstance(node.args[0], ast.Name):
+            fdef = _resolve_function_def(node.args[0].id, resolve_source)
+            if fdef is not None:
+                out |= _free_vars_mutated_in_function(fdef)
+    return frozenset(out)
 
 
 def _factory_body_scope(factory: ast.FunctionDef | ast.AsyncFunctionDef) -> set[str]:
