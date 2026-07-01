@@ -36,6 +36,8 @@ __all__ = [
     "partial_arg_mutations",
     "mutating_partials",
     "reduce_free_mutations",
+    "object_protocol_mutations",
+    "ObjectProtocolResets",
     "alias_mutation_sources",
     "aliased_sources",
     "crossref_reassigned_vars",
@@ -1189,6 +1191,438 @@ def stateful_closure_vars(tree: ast.Module | None, resolve_var_factory) -> froze
         if factory is not None and _factory_returns_stateful_closure(factory):
             out.add(name)
     return frozenset(out)
+
+
+# ---------------------------------------------------------------------------
+# Object-protocol hidden state (CAS-69/70/71/73)
+#
+# A ``with`` statement, a custom-dunder operation (``s[k]=v`` / ``del s[k]`` /
+# ``v=s[k]`` / ``a(x)``), a constructor, a decorated call, or an instance /
+# class method invokes a user-defined method whose body mutates hidden state.
+# The mutation is invisible to the cell text, so on an isolated re-run it
+# accumulates. This generalises CAS-68 (hidden state via a called function) to
+# the object protocol: resolve the receiver's class (or the wrapper / context
+# manager), analyse the invoked method body, and attribute the mutation to one
+# of three reset channels:
+#
+#   * **free_vars**   — a module/free variable the method mutates (``log``);
+#     reset like CAS-68 A (add to the cell's mutated set + inputs so the
+#     producer's cell-entry base is restored).
+#   * **receivers**   — the receiver INSTANCE whose ``self`` attribute the
+#     method mutates in place (``cm.n += 1``); reset like a method receiver.
+#   * **class_defs**  — the CLASS whose class variable the method mutates
+#     (``Reg.registry.append`` / ``cls.log.append``); reset by re-running the
+#     class ``def`` so the class-level container is recreated fresh.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ObjectProtocolResets:
+    """Reset targets attributed to hidden object-protocol mutations, one set per
+    reset channel (see the module-section comment above)."""
+
+    free_vars: frozenset[str]
+    receivers: frozenset[str]
+    class_defs: frozenset[str]
+
+
+def _first_param_name(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
+    """The name of *func*'s first positional parameter (``self`` / ``cls``), or
+    ``None`` for a zero-arg function."""
+    positional = list(func.args.posonlyargs) + list(func.args.args)
+    return positional[0].arg if positional else None
+
+
+def _has_named_decorator(func: ast.FunctionDef | ast.AsyncFunctionDef, name: str) -> bool:
+    """True if *func* carries a ``@name`` decorator (bare or called)."""
+    for dec in func.decorator_list:
+        if isinstance(dec, ast.Name) and dec.id == name:
+            return True
+        if isinstance(dec, ast.Attribute) and dec.attr == name:
+            return True
+    return False
+
+
+def _resolve_class_def(name, resolve_class_source) -> ast.ClassDef | None:
+    """Parse *name*'s source via *resolve_class_source* into a ClassDef, or None."""
+    if not name or resolve_class_source is None:
+        return None
+    source = resolve_class_source(name)
+    if not source:
+        return None
+    try:
+        parsed = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError):
+        return None
+    if parsed.body and isinstance(parsed.body[0], ast.ClassDef):
+        return parsed.body[0]
+    return None
+
+
+def _class_method(
+    classdef: ast.ClassDef, method_name: str
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The method named *method_name* directly on *classdef*, or None. Base
+    classes are not followed (inheritance is out of scope here)."""
+    for node in classdef.body:
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node.name == method_name):
+            return node
+    return None
+
+
+def _class_level_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
+    """Names bound at the class body's top level — the class variables
+    (``registry = []``, ``count = 0``). These live on the class object and are
+    shared by every instance, so mutating one accumulates until the class ``def``
+    re-runs."""
+    out: set[str] = set()
+    for node in classdef.body:
+        if isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Name):
+                        out.add(leaf.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            out.add(node.target.id)
+    return frozenset(out)
+
+
+def _instance_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
+    """Attribute names assigned as ``self.<attr> = ...`` in any method — the
+    per-instance attributes. A method mutating one of these mutates the receiver
+    instance (reset the receiver), not the shared class."""
+    out: set[str] = set()
+    for meth in classdef.body:
+        if not isinstance(meth, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        recv = _first_param_name(meth)
+        if recv is None:
+            continue
+        for node in ast.walk(meth):
+            if not isinstance(node, ast.Assign):
+                continue
+            for tgt in node.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if (isinstance(leaf, ast.Attribute)
+                            and isinstance(leaf.value, ast.Name)
+                            and leaf.value.id == recv):
+                        out.add(leaf.attr)
+    return frozenset(out)
+
+
+def _walk_executable(node: ast.AST):
+    """Yield *node* and every descendant that executes when it runs, WITHOUT
+    descending into deferred scopes (def/async def/class). Used to scan a cell or
+    a method body for the operations that actually run, skipping nested
+    definitions."""
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _DEFERRED_SCOPES):
+            continue
+        yield from _walk_executable(child)
+
+
+def _iter_method_body_nodes(method: ast.FunctionDef | ast.AsyncFunctionDef):
+    """Yield every executable node in *method*'s body (skipping nested scopes)."""
+    for stmt in method.body:
+        yield from _walk_executable(stmt)
+
+
+def _first_attr_after_root(chain: ast.expr) -> str | None:
+    """For a receiver chain like ``self.data`` / ``cls.log`` / ``self.cache[k]``
+    return the attribute name attached directly to the root ``Name``
+    (``data`` / ``log`` / ``cache``), or ``None`` if the root is bare."""
+    node: ast.AST = chain
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        if isinstance(node.value, ast.Name):
+            return node.attr if isinstance(node, ast.Attribute) else None
+        node = node.value
+    return None
+
+
+def _iter_inplace_mutation_chains(method: ast.FunctionDef | ast.AsyncFunctionDef):
+    """Yield the receiver-chain expr of every IN-PLACE mutation in *method*'s
+    body: a known-mutating method call, an augmented assignment, a subscript
+    assignment / delete, or a pandas ``inplace=True`` call. Plain attribute
+    rebinds (``self.x = value`` — construction / idempotent re-set) are excluded
+    so a constructor is not flagged."""
+    for node in _iter_method_body_nodes(method):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            attr = node.func.attr
+            if attr in MUTATING_METHODS:
+                yield node.func.value
+            elif attr in PANDAS_INPLACE_METHODS:
+                for kw in node.keywords:
+                    if (kw.arg == 'inplace' and isinstance(kw.value, ast.Constant)
+                            and kw.value.value is True):
+                        yield node.func.value
+                        break
+        elif isinstance(node, ast.AugAssign):
+            yield node.target
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Subscript):
+                        yield leaf.value
+        elif isinstance(node, ast.Delete):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Subscript):
+                    yield tgt.value
+
+
+def _classify_method_mutations(
+    method: ast.FunctionDef | ast.AsyncFunctionDef,
+    class_name: str,
+    class_attrs: frozenset[str],
+    instance_attrs: frozenset[str],
+) -> tuple[bool, bool, frozenset[str]]:
+    """Classify the hidden mutations *method* performs into the three reset
+    channels: ``(mutates_self_instance, mutates_class_var, free_vars)``.
+
+    * ``self.<attr>`` where ``<attr>`` is a per-instance attribute → instance
+      mutation (reset the receiver);
+    * ``cls.<attr>`` (classmethod), ``ClassName.<attr>``, or ``self.<attr>``
+      where ``<attr>`` is a class-level variable → class-variable mutation
+      (re-run the class def);
+    * a module/free variable (neither a parameter nor a local) → free-var
+      mutation (reset via the CAS-68 A path).
+
+    A ``@staticmethod`` has no receiver binding, so its first parameter is not
+    treated as ``self`` / ``cls``.
+    """
+    recv = _first_param_name(method)
+    is_classmethod = _has_named_decorator(method, 'classmethod')
+    is_staticmethod = _has_named_decorator(method, 'staticmethod')
+    params = _all_param_names(method)
+    global_decls: set[str] = set()
+    local_assigned: set[str] = set()
+    for node in _iter_method_body_nodes(method):
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            global_decls.update(node.names)
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Name):
+                        local_assigned.add(leaf.id)
+    local_assigned -= global_decls
+
+    mutates_self = False
+    mutates_class = False
+    free: set[str] = set()
+    for chain in _iter_inplace_mutation_chains(method):
+        root = _extract_base_name(chain)
+        if root is None:
+            continue
+        if not is_staticmethod and recv is not None and root == recv:
+            if is_classmethod:
+                mutates_class = True
+                continue
+            first_attr = _first_attr_after_root(chain)
+            if first_attr is not None and first_attr in instance_attrs:
+                mutates_self = True
+            elif first_attr is not None and first_attr in class_attrs:
+                mutates_class = True
+            else:
+                # A bare ``self`` mutation or an attribute assigned nowhere we can
+                # see — attribute it to the instance (the conservative reset).
+                mutates_self = True
+        elif root == class_name:
+            mutates_class = True
+        elif root in params or root in local_assigned:
+            # A non-receiver parameter (CAS-58's arg-mutation path) or a local.
+            continue
+        else:
+            free.add(root)
+    return mutates_self, mutates_class, frozenset(free)
+
+
+def _decorator_free_var_mutations(
+    decorator_def: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> frozenset[str]:
+    """Module/free variables mutated by the wrapper a decorator returns
+    (CAS-71). ``def logged(f): def wrap(*a): calls.append('x'); ...; return
+    wrap`` — calling a ``@logged``-decorated function runs ``wrap``, which
+    appends to the module list ``calls``. Collect the free vars each inner
+    function mutates that are NOT local to the decorator (those are CAS-68's
+    closure case)."""
+    scope = _factory_body_scope(decorator_def)
+    out: set[str] = set()
+    for node in ast.walk(decorator_def):
+        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and node is not decorator_def):
+            out |= _free_vars_mutated_in_function(node) - scope
+    return frozenset(out)
+
+
+def _decorator_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """The decorator NAMES applied to *func* (``@logged`` → ``logged``,
+    ``@app.route(...)`` → ``route``-less, skipped). Bare-name and simple
+    ``name(...)`` decorators are resolved by name."""
+    names: list[str] = []
+    for dec in func.decorator_list:
+        if isinstance(dec, ast.Name):
+            names.append(dec.id)
+        elif isinstance(dec, ast.Call) and isinstance(dec.func, ast.Name):
+            names.append(dec.func.id)
+    return names
+
+
+def object_protocol_mutations(
+    tree: ast.Module | None,
+    resolve_class_source,
+    instance_class,
+    resolve_source,
+    resolve_var_factory,
+) -> ObjectProtocolResets:
+    """Hidden mutations reached through the object protocol (CAS-69/70/71/73).
+
+    Walks the cell's executable nodes and, for each object-protocol invocation —
+    a ``with`` statement, a subscript op (``s[k]=v`` / ``del s[k]`` / ``v=s[k]``),
+    a call (constructor / instance ``__call__`` / decorated function), or a
+    method call — resolves the receiver's class (via *resolve_class_source* +
+    *instance_class*), a ``@contextmanager`` generator or decorator (via
+    *resolve_source*), or a reassignment-decorator factory (via
+    *resolve_var_factory*), analyses the invoked method body, and returns the
+    reset targets grouped by channel (see :class:`ObjectProtocolResets`).
+
+    * *resolve_class_source* — ``class_name -> source`` (or ``None``).
+    * *instance_class* — ``var -> class_name`` for a ``var = ClassName(...)``
+      instance whose class is resolvable (or ``None``).
+    * *resolve_source* — ``func_name -> source`` (or ``None``), for
+      ``@contextmanager`` generators and decorator functions.
+    * *resolve_var_factory* — ``var -> factory FunctionDef`` (or ``None``), for a
+      reassignment decorator ``g = counting(g)``.
+    """
+    free_vars: set[str] = set()
+    receivers: set[str] = set()
+    class_defs: set[str] = set()
+
+    _class_cache: dict[str, ast.ClassDef | None] = {}
+
+    def _classdef(name):
+        if name not in _class_cache:
+            _class_cache[name] = _resolve_class_def(name, resolve_class_source)
+        return _class_cache[name]
+
+    def _apply_method(cdef, class_name, method, recv_var, *, allow_self):
+        si, cv, fv = _classify_method_mutations(
+            method, class_name,
+            _class_level_attr_names(cdef), _instance_attr_names(cdef),
+        )
+        if fv:
+            free_vars.update(fv)
+        if cv:
+            class_defs.add(class_name)
+        if si and allow_self and recv_var is not None:
+            receivers.add(recv_var)
+
+    def _dispatch_dunder(recv_var, dunder):
+        cls = instance_class(recv_var)
+        cdef = _classdef(cls) if cls else None
+        if cdef is None:
+            return
+        method = _class_method(cdef, dunder)
+        if method is not None:
+            _apply_method(cdef, cls, method, recv_var, allow_self=True)
+
+    if tree is None:
+        return ObjectProtocolResets(frozenset(), frozenset(), frozenset())
+
+    nodes = list(_walk_executable(tree))
+
+    for node in nodes:
+        # --- with statements: __enter__ / __exit__ or a @contextmanager gen ----
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            for item in node.items:
+                ctx = item.context_expr
+                if isinstance(ctx, ast.Name):
+                    cls = instance_class(ctx.id)
+                    cdef = _classdef(cls) if cls else None
+                    if cdef is not None:
+                        for dunder in ('__enter__', '__exit__'):
+                            method = _class_method(cdef, dunder)
+                            if method is not None:
+                                _apply_method(cdef, cls, method, ctx.id, allow_self=True)
+                elif isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Name):
+                    nm = ctx.func.id
+                    cdef = _classdef(nm)
+                    if cdef is not None:
+                        # ``with SomeCM():`` — anonymous instance, no receiver to
+                        # reset; only class-var / free-var mutations persist.
+                        for dunder in ('__enter__', '__exit__'):
+                            method = _class_method(cdef, dunder)
+                            if method is not None:
+                                _apply_method(cdef, nm, method, None, allow_self=False)
+                    else:
+                        fdef = _resolve_function_def(nm, resolve_source)
+                        if fdef is not None:
+                            free_vars.update(_free_vars_mutated_in_function(fdef))
+        # --- subscript operations dispatching to custom dunders ----------------
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                for leaf in _iter_store_targets(tgt):
+                    if isinstance(leaf, ast.Subscript) and isinstance(leaf.value, ast.Name):
+                        _dispatch_dunder(leaf.value.id, '__setitem__')
+        elif isinstance(node, ast.Delete):
+            for tgt in node.targets:
+                if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
+                    _dispatch_dunder(tgt.value.id, '__delitem__')
+        elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
+              and isinstance(node.value, ast.Name)):
+            _dispatch_dunder(node.value.id, '__getitem__')
+        # --- calls: constructor / instance __call__ / decorated fn / method ----
+        elif isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name):
+                nm = func.id
+                cdef = _classdef(nm)
+                if cdef is not None:
+                    # Construction ``X()`` — the fresh instance's self-init is
+                    # discarded, so only class-var / free-var mutations in
+                    # __init__ persist.
+                    init = _class_method(cdef, '__init__')
+                    if init is not None:
+                        _apply_method(cdef, nm, init, None, allow_self=False)
+                    continue
+                # An instance called via __call__ (``a('z')``).
+                cls = instance_class(nm)
+                icdef = _classdef(cls) if cls else None
+                if icdef is not None:
+                    call_m = _class_method(icdef, '__call__')
+                    if call_m is not None:
+                        _apply_method(icdef, cls, call_m, nm, allow_self=True)
+                # A decorated function whose wrapper mutates a free var, or a
+                # reassignment decorator ``g = counting(g)``.
+                fdef = _resolve_function_def(nm, resolve_source)
+                if fdef is not None:
+                    for dname in _decorator_names(fdef):
+                        ddef = _resolve_function_def(dname, resolve_source)
+                        if ddef is not None:
+                            free_vars.update(_decorator_free_var_mutations(ddef))
+                factory = resolve_var_factory(nm) if resolve_var_factory else None
+                if factory is not None:
+                    free_vars.update(_decorator_free_var_mutations(factory))
+            elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
+                recv = func.value.id
+                method_name = func.attr
+                own_class = _classdef(recv)
+                if own_class is not None:
+                    # A class-level call ``Registry.record()`` — no instance.
+                    method = _class_method(own_class, method_name)
+                    if method is not None:
+                        _apply_method(own_class, recv, method, None, allow_self=False)
+                else:
+                    cls = instance_class(recv)
+                    cdef = _classdef(cls) if cls else None
+                    if cdef is not None:
+                        method = _class_method(cdef, method_name)
+                        if method is not None:
+                            _apply_method(cdef, cls, method, recv, allow_self=True)
+
+    return ObjectProtocolResets(
+        frozenset(free_vars), frozenset(receivers), frozenset(class_defs),
+    )
 
 
 def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:

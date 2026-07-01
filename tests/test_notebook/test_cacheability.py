@@ -27,6 +27,7 @@ from cash.notebook.cacheability import (
     partial_arg_mutations,
     mutating_partials,
     reduce_free_mutations,
+    object_protocol_mutations,
     params_mutated_in_function,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -1070,6 +1071,116 @@ class TestFunctoolsHiddenMutations:
 
     def test_reduce_pure_not_flagged(self):
         assert self._rfm("total = reduce(mul, [1, 2, 3], 1)") == frozenset()
+
+
+class TestObjectProtocolMutations:
+    """``object_protocol_mutations`` attributes a hidden mutation reached through
+    the object protocol — a ``with`` statement, a custom dunder, a decorated
+    call, a constructor, or an instance / class method — to the correct reset
+    channel (free var / receiver / class def), CAS-69/70/71/73."""
+
+    CLASSES = {
+        'Counter': ("class Counter:\n    def __init__(self):\n        self.n = 0\n"
+                    "    def __enter__(self):\n        self.n += 1\n        return self\n"
+                    "    def __exit__(self, *a):\n        return False"),
+        'Store': ("class Store:\n    def __setitem__(self, k, v):\n        log.append((k, v))\n"
+                  "    def __delitem__(self, k):\n        log.append(k)"),
+        'Accum': ("class Accum:\n    def __init__(self):\n        self.calls = []\n"
+                  "    def __call__(self, x):\n        self.calls.append(x)\n        return x"),
+        'Registry': ("class Registry:\n    log = []\n    @classmethod\n"
+                     "    def record(cls):\n        cls.log.append('r')"),
+        'Reg': ("class Reg:\n    registry = []\n    def __init__(self):\n"
+                "        Reg.registry.append(id(self))"),
+        'Shared': ("class Shared:\n    data = []\n    def add(self, x):\n"
+                   "        self.data.append(x)"),
+        'Stack': ("class Stack:\n    def __init__(self):\n        self.data = []\n"
+                  "    def push(self, x):\n        self.data.append(x)\n        return self.data"),
+        'Point': ("class Point:\n    def __init__(self, x, y):\n        self.x = x\n"
+                  "        self.y = y\n    def norm(self):\n        return self.x + self.y"),
+        'Doubler': "class Doubler:\n    def __call__(self, x):\n        return x * 2",
+    }
+    FUNCS = {
+        'track': ("@contextlib.contextmanager\ndef track():\n    log.append('e')\n"
+                  "    yield\n    log.append('x')"),
+        'logged': ("def logged(f):\n    def wrap(*a, **k):\n        calls.append('x')\n"
+                   "        return f(*a, **k)\n    return wrap"),
+        'work': "@logged\ndef work():\n    return 42",
+        'trace': ("def trace(f):\n    def wrap(*a, **k):\n        return f(*a, **k)\n    return wrap"),
+        'square': "@trace\ndef square(x):\n    return x * x",
+    }
+    # var -> constructing name (for instance_class + reassignment-decorator factory)
+    FACTORIES = {'cm': 'Counter', 's': 'Store', 'a': 'Accum', 'r': 'Reg',
+                 'x': 'Shared', 'y': 'Shared', 'st': 'Stack', 'p': 'Point',
+                 'd': 'Doubler'}
+
+    def _instance_class(self, var):
+        cls = self.FACTORIES.get(var)
+        return cls if cls in self.CLASSES else None
+
+    def _var_factory(self, name):
+        src = self.FUNCS.get(self.FACTORIES.get(name))
+        if not src:
+            return None
+        node = ast.parse(src).body[0]
+        return node if isinstance(node, ast.FunctionDef) else None
+
+    def _f(self, code):
+        return object_protocol_mutations(
+            ast.parse(code), self.CLASSES.get, self._instance_class,
+            self.FUNCS.get, self._var_factory,
+        )
+
+    # --- free-var channel ----------------------------------------------------
+    def test_contextmanager_generator_free_var(self):
+        assert self._f("with track():\n    pass").free_vars == {'log'}
+
+    def test_setitem_free_var(self):
+        assert self._f("s['k'] = 1").free_vars == {'log'}
+
+    def test_delitem_free_var(self):
+        assert self._f("del s['a']").free_vars == {'log'}
+
+    def test_decorator_wrapper_free_var(self):
+        assert self._f("work()").free_vars == {'calls'}
+
+    # --- receiver channel ----------------------------------------------------
+    def test_with_enter_mutates_self(self):
+        assert self._f("with cm:\n    pass").receivers == {'cm'}
+
+    def test_call_mutates_self(self):
+        assert self._f("r2 = a('z')").receivers == {'a'}
+
+    def test_instance_method_mutates_self(self):
+        assert self._f("out = st.push('x')").receivers == {'st'}
+
+    # --- class-def channel ---------------------------------------------------
+    def test_classmethod_class_var(self):
+        assert self._f("Registry.record()").class_defs == {'Registry'}
+
+    def test_constructor_class_var(self):
+        assert self._f("obj = Reg()").class_defs == {'Reg'}
+
+    def test_instance_method_class_var(self):
+        # Shared.data is class-level (no __init__), so add() mutates the class var
+        assert self._f("x.add('v')").class_defs == {'Shared'}
+        assert self._f("x.add('v')").receivers == frozenset()
+
+    # --- pure guards (nothing flagged) ---------------------------------------
+    def test_pure_construction_not_flagged(self):
+        r = self._f("p = Point(3, 4)")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_pure_call_not_flagged(self):
+        r = self._f("out = d(5)")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_pure_decorator_not_flagged(self):
+        assert self._f("square(6)").free_vars == frozenset()
+
+    def test_builtin_subscript_not_flagged(self):
+        # a plain name that resolves to no notebook class is never flagged
+        r = self._f("unknown['k'] = 1")
+        assert not (r.free_vars or r.receivers or r.class_defs)
 
 
 class TestSubscriptViewBindings:

@@ -26,6 +26,7 @@ from ..cacheability import (
     partial_arg_mutations,
     mutating_partials,
     reduce_free_mutations,
+    object_protocol_mutations,
     _called_function_names,
     standalone_call_arg_targets,
     standalone_method_mutation_receivers,
@@ -387,6 +388,93 @@ class UpstreamChecker:
                         ast.parse(cell_code), partial_bindings.get, func_sources_all.get
                     )
                 ) - nocache_vars
+            # Object-protocol hidden state (CAS-69/70/71/73): a with-statement, a
+            # custom-dunder op (``s[k]=v`` / ``del s[k]`` / ``v=s[k]`` / ``a(x)``),
+            # a constructor, a decorated call, or an instance / class method whose
+            # body mutates hidden state. Resolve the class / wrapper / context
+            # manager, analyse the invoked method, and route the mutation to the
+            # matching reset channel: a free var (mutated + inputs, CAS-68 A), the
+            # receiver instance (method-receiver), or the class def (stateful
+            # re-run).
+            op_tree = ast.parse(cell_code)
+            # Cheap current-cell trigger: any call / subscript / del / with can
+            # dispatch to a custom method whose body hides a mutation. The
+            # analysis is a no-op when nothing resolves to a notebook class /
+            # decorated function, so this only gates the (memoised) source scans.
+            has_op_trigger = any(
+                isinstance(n, (ast.Call, ast.Subscript, ast.Delete,
+                               ast.With, ast.AsyncWith))
+                for n in ast.walk(op_tree)
+            )
+            if has_op_trigger:
+                class_sources = self._notebook_class_sources(cell_code)
+                op_func_sources = self._notebook_function_sources(cell_code)
+                op_var_factories = self._notebook_var_factories(cell_code)
+
+                def _instance_class(var, _vf=op_var_factories, _cs=class_sources):
+                    cls = _vf.get(var)
+                    return cls if cls in _cs else None
+
+                def _op_var_factory(name, _fs=op_func_sources, _vf=op_var_factories):
+                    src = _fs.get(_vf.get(name))
+                    if not src:
+                        return None
+                    try:
+                        parsed = ast.parse(src)
+                    except (SyntaxError, ValueError):
+                        return None
+                    if parsed.body and isinstance(
+                        parsed.body[0], (ast.FunctionDef, ast.AsyncFunctionDef)
+                    ):
+                        return parsed.body[0]
+                    return None
+
+                op_resets = object_protocol_mutations(
+                    op_tree, class_sources.get, _instance_class,
+                    op_func_sources.get, _op_var_factory,
+                )
+                # The free-var channel resets via the CAS-68 A content-base path,
+                # which already suppresses cross-cell accumulators — apply it
+                # directly.
+                op_free = op_resets.free_vars - nocache_vars
+                current_cell_mutated |= op_free
+                required_inputs = required_inputs | op_free
+                # The receiver and class-def channels re-derive the object
+                # (restore the receiver to its cell-entry base / re-run the class
+                # def). That is safe ONLY when the current cell is the SOLE
+                # in-place mutator: if ANOTHER cell also mutates the same receiver
+                # (``dag.add_edge(..)`` in a setup cell builds ``dag`` up across a
+                # loop, then ``dag.topo_sort()`` here) or class var (``w0 =
+                # Widget()`` then ``w = Widget()`` — both bump ``Widget.count``),
+                # the re-derivation loses the other cell's contribution and would
+                # corrupt EVEN THE FIRST run. Suppress those — a cross-cell
+                # accumulator needs a per-cell-base snapshot this reset cannot
+                # provide. The FILED CAS-69/70/71/73 forms construct the receiver
+                # once (no cross-cell in-place build) and are unaffected. [CAS-75]
+                op_receivers = op_resets.receivers - nocache_vars
+                op_class_defs = op_resets.class_defs - nocache_vars
+                if op_receivers or op_class_defs:
+                    other_receivers: set[str] = set()
+                    other_class_defs: set[str] = set()
+                    seen_current = False
+                    for _code in self._other_notebook_cells(cell_code):
+                        if not seen_current and _code == cell_code:
+                            seen_current = True
+                            continue
+                        try:
+                            other = object_protocol_mutations(
+                                ast.parse(_code), class_sources.get,
+                                _instance_class, op_func_sources.get, _op_var_factory,
+                            )
+                        except (SyntaxError, ValueError):
+                            continue
+                        other_receivers |= other.receivers
+                        other_class_defs |= other.class_defs
+                    op_receivers = op_receivers - other_receivers
+                    op_class_defs = op_class_defs - other_class_defs
+                current_cell_mutated |= op_receivers
+                current_cell_method_receivers |= op_receivers
+                current_cell_stateful_funcs |= op_class_defs
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run
@@ -532,6 +620,52 @@ class UpstreamChecker:
                 continue
             for node in tree.body:
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    try:
+                        sources[node.name] = ast.unparse(node)
+                    except (ValueError, AttributeError):
+                        continue
+        return sources
+
+    def _other_notebook_cells(self, cell_code: str) -> list[str]:
+        """The notebook's cell sources (which already include the current cell;
+        the caller skips its first occurrence of *cell_code*). Used to detect a
+        class variable mutated by more than one cell — a cross-cell accumulator
+        whose class-def reset must be suppressed (CAS-73 / CAS-75)."""
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                return get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            pass
+        return []
+
+    def _notebook_class_sources(self, cell_code: str) -> dict[str, str]:
+        """Map ``{class_name: source}`` for every top-level ``class`` across the
+        notebook cells plus the current cell.
+
+        Resolves from cell SOURCE (like :meth:`_notebook_function_sources`) so a
+        class defined in a cell resolves under nbclient, where
+        ``inspect.getsource`` has no linecache entry. Used by
+        :func:`object_protocol_mutations` to analyse a receiver's method /
+        dunder bodies (CAS-69/70/71/73). Later same-name defs win.
+        """
+        sources: dict[str, str] = {}
+        cells: list[str] = []
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                cells = get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            cells = []
+        for code in (*cells, cell_code):
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if isinstance(node, ast.ClassDef):
                     try:
                         sources[node.name] = ast.unparse(node)
                     except (ValueError, AttributeError):
