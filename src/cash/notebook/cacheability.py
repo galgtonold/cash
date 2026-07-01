@@ -1259,23 +1259,53 @@ def _resolve_class_def(name, resolve_class_source) -> ast.ClassDef | None:
     return None
 
 
+def _class_bases(classdef: ast.ClassDef) -> list[str]:
+    """The bare-``Name`` base-class names of *classdef* (in declaration order).
+    Non-``Name`` bases (``Generic[T]``, ``a.B``) are skipped — only notebook
+    classes resolvable by name are followed."""
+    return [b.id for b in classdef.bases if isinstance(b, ast.Name)]
+
+
+def _iter_class_hierarchy(
+    classdef: ast.ClassDef | None, resolve_class_source, _seen: set[str] | None = None
+):
+    """Yield *classdef* and its resolvable base classes, depth-first (CAS-76).
+
+    Follows each ``Name`` base via *resolve_class_source*, so an inherited method
+    / class variable is seen. Cycle-guarded by class name. When
+    *resolve_class_source* is ``None`` (unit-test callers), only *classdef* is
+    yielded — the original own-class-only behaviour."""
+    if classdef is None:
+        return
+    if _seen is None:
+        _seen = set()
+    if classdef.name in _seen:
+        return
+    _seen.add(classdef.name)
+    yield classdef
+    if resolve_class_source is None:
+        return
+    for base_name in _class_bases(classdef):
+        base = _resolve_class_def(base_name, resolve_class_source)
+        if base is not None:
+            yield from _iter_class_hierarchy(base, resolve_class_source, _seen)
+
+
 def _class_method(
-    classdef: ast.ClassDef, method_name: str
+    classdef: ast.ClassDef, method_name: str, resolve_class_source=None
 ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
-    """The method named *method_name* directly on *classdef*, or None. Base
-    classes are not followed (inheritance is out of scope here)."""
-    for node in classdef.body:
-        if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-                and node.name == method_name):
-            return node
+    """The method named *method_name* on *classdef* or an inherited base (the
+    first match walking the hierarchy, CAS-76)."""
+    for cls in _iter_class_hierarchy(classdef, resolve_class_source):
+        for node in cls.body:
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == method_name):
+                return node
     return None
 
 
-def _class_level_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
-    """Names bound at the class body's top level — the class variables
-    (``registry = []``, ``count = 0``). These live on the class object and are
-    shared by every instance, so mutating one accumulates until the class ``def``
-    re-runs."""
+def _own_class_level_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
+    """Class variables assigned directly in *classdef*'s body (not inherited)."""
     out: set[str] = set()
     for node in classdef.body:
         if isinstance(node, ast.Assign):
@@ -1288,27 +1318,51 @@ def _class_level_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
     return frozenset(out)
 
 
-def _instance_attr_names(classdef: ast.ClassDef) -> frozenset[str]:
-    """Attribute names assigned as ``self.<attr> = ...`` in any method — the
-    per-instance attributes. A method mutating one of these mutates the receiver
-    instance (reset the receiver), not the shared class."""
+def _class_level_attr_names(classdef: ast.ClassDef, resolve_class_source=None) -> frozenset[str]:
+    """Class variables of *classdef* including those inherited from base classes
+    (``registry = []``, ``count = 0``, ``ClassVar[...] = []``). These live on the
+    owning class object and are shared by every instance, so mutating one
+    accumulates until that class ``def`` re-runs."""
     out: set[str] = set()
-    for meth in classdef.body:
-        if not isinstance(meth, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        recv = _first_param_name(meth)
-        if recv is None:
-            continue
-        for node in ast.walk(meth):
-            if not isinstance(node, ast.Assign):
-                continue
-            for tgt in node.targets:
-                for leaf in _iter_store_targets(tgt):
-                    if (isinstance(leaf, ast.Attribute)
-                            and isinstance(leaf.value, ast.Name)
-                            and leaf.value.id == recv):
-                        out.add(leaf.attr)
+    for cls in _iter_class_hierarchy(classdef, resolve_class_source):
+        out |= _own_class_level_attr_names(cls)
     return frozenset(out)
+
+
+def _instance_attr_names(classdef: ast.ClassDef, resolve_class_source=None) -> frozenset[str]:
+    """Attribute names assigned as ``self.<attr> = ...`` in any method of
+    *classdef* or an inherited base — the per-instance attributes. A method
+    mutating one of these mutates the receiver instance (reset the receiver), not
+    the shared class."""
+    out: set[str] = set()
+    for cls in _iter_class_hierarchy(classdef, resolve_class_source):
+        for meth in cls.body:
+            if not isinstance(meth, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            recv = _first_param_name(meth)
+            if recv is None:
+                continue
+            for node in ast.walk(meth):
+                if not isinstance(node, ast.Assign):
+                    continue
+                for tgt in node.targets:
+                    for leaf in _iter_store_targets(tgt):
+                        if (isinstance(leaf, ast.Attribute)
+                                and isinstance(leaf.value, ast.Name)
+                                and leaf.value.id == recv):
+                            out.add(leaf.attr)
+    return frozenset(out)
+
+
+def _class_var_owner(attr: str, classdef: ast.ClassDef, resolve_class_source) -> str | None:
+    """The name of the class in *classdef*'s hierarchy that DEFINES class variable
+    *attr* at its own body level — the class whose ``def`` must re-run to reset it
+    (``Base.registry`` is owned by ``Base`` even when mutated via ``Sub``, CAS-76).
+    The nearest defining class wins; ``None`` if no class defines it."""
+    for cls in _iter_class_hierarchy(classdef, resolve_class_source):
+        if attr in _own_class_level_attr_names(cls):
+            return cls.name
+    return None
 
 
 def _walk_executable(node: ast.AST):
@@ -1371,26 +1425,60 @@ def _iter_inplace_mutation_chains(method: ast.FunctionDef | ast.AsyncFunctionDef
                     yield tgt.value
 
 
+def _super_called_methods(method: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
+    """Method names invoked via ``super().<name>(...)`` in *method*'s body — the
+    inherited implementations whose hidden mutations must also be attributed
+    (``super().__init__()`` running ``Base.__init__``, CAS-76)."""
+    out: set[str] = set()
+    for node in _iter_method_body_nodes(method):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Name)
+                and node.func.value.func.id == 'super'):
+            out.add(node.func.attr)
+    return frozenset(out)
+
+
 def _classify_method_mutations(
     method: ast.FunctionDef | ast.AsyncFunctionDef,
-    class_name: str,
-    class_attrs: frozenset[str],
-    instance_attrs: frozenset[str],
-) -> tuple[bool, bool, frozenset[str]]:
+    recv_class_name: str,
+    cdef: ast.ClassDef,
+    resolve_class_source=None,
+    _seen: set[tuple[str, str]] | None = None,
+    _current: ast.ClassDef | None = None,
+) -> tuple[bool, frozenset[str], frozenset[str]]:
     """Classify the hidden mutations *method* performs into the three reset
-    channels: ``(mutates_self_instance, mutates_class_var, free_vars)``.
+    channels: ``(mutates_self_instance, class_reset_targets, free_vars)``.
 
     * ``self.<attr>`` where ``<attr>`` is a per-instance attribute → instance
       mutation (reset the receiver);
-    * ``cls.<attr>`` (classmethod), ``ClassName.<attr>``, or ``self.<attr>``
-      where ``<attr>`` is a class-level variable → class-variable mutation
-      (re-run the class def);
+    * ``cls.<attr>`` (classmethod), ``BaseOrOwnClass.<attr>``, or ``self.<attr>``
+      where ``<attr>`` is a class-level variable → class-variable mutation. The
+      reset target is the class that OWNS the variable (a base class when the var
+      is inherited, CAS-76), so ``class_reset_targets`` is a SET of class names;
     * a module/free variable (neither a parameter nor a local) → free-var
       mutation (reset via the CAS-68 A path).
 
-    A ``@staticmethod`` has no receiver binding, so its first parameter is not
-    treated as ``self`` / ``cls``.
+    Inheritance is followed: *cdef* + *resolve_class_source* give hierarchy-aware
+    attribute sets and owner lookup, and ``super().<m>()`` calls recurse into the
+    base implementation. *cdef* is fixed across the recursion (attr/owner context
+    is the receiver's full hierarchy); *_current* is the class whose method is
+    being classified, used to resolve ``super()`` against ITS bases. The recursion
+    is guarded by ``(current_class, method)`` — a stable key, since
+    :func:`_resolve_class_def` re-parses source and yields fresh node ids each
+    call. A ``@staticmethod`` has no receiver binding.
     """
+    if _current is None:
+        _current = cdef
+    if _seen is None:
+        _seen = set()
+    key = (_current.name, method.name)
+    if key in _seen:
+        return False, frozenset(), frozenset()
+    _seen.add(key)
+
+    class_attrs = _class_level_attr_names(cdef, resolve_class_source)
+    instance_attrs = _instance_attr_names(cdef, resolve_class_source)
     recv = _first_param_name(method)
     is_classmethod = _has_named_decorator(method, 'classmethod')
     is_staticmethod = _has_named_decorator(method, 'staticmethod')
@@ -1408,33 +1496,57 @@ def _classify_method_mutations(
     local_assigned -= global_decls
 
     mutates_self = False
-    mutates_class = False
+    class_targets: set[str] = set()
     free: set[str] = set()
+
+    def _add_class_var(attr):
+        owner = _class_var_owner(attr, cdef, resolve_class_source) if attr else None
+        class_targets.add(owner or recv_class_name)
+
     for chain in _iter_inplace_mutation_chains(method):
         root = _extract_base_name(chain)
         if root is None:
             continue
         if not is_staticmethod and recv is not None and root == recv:
-            if is_classmethod:
-                mutates_class = True
-                continue
             first_attr = _first_attr_after_root(chain)
-            if first_attr is not None and first_attr in instance_attrs:
+            if is_classmethod:
+                _add_class_var(first_attr)
+            elif first_attr is not None and first_attr in instance_attrs:
                 mutates_self = True
             elif first_attr is not None and first_attr in class_attrs:
-                mutates_class = True
+                _add_class_var(first_attr)
             else:
                 # A bare ``self`` mutation or an attribute assigned nowhere we can
                 # see — attribute it to the instance (the conservative reset).
                 mutates_self = True
-        elif root == class_name:
-            mutates_class = True
+        elif _resolve_class_def(root, resolve_class_source) is not None:
+            # ``ClassName.<attr>`` — the class (own or a base) owns the var.
+            class_targets.add(root)
         elif root in params or root in local_assigned:
             # A non-receiver parameter (CAS-58's arg-mutation path) or a local.
             continue
         else:
             free.add(root)
-    return mutates_self, mutates_class, frozenset(free)
+
+    # ``super().<m>()`` runs the inherited implementation — attribute its hidden
+    # mutations too (the first resolvable base of the CURRENT class defining <m>
+    # wins, MRO-ish).
+    for m_name in _super_called_methods(method):
+        for base_name in _class_bases(_current):
+            base_cdef = _resolve_class_def(base_name, resolve_class_source)
+            base_m = (_class_method(base_cdef, m_name, resolve_class_source)
+                      if base_cdef is not None else None)
+            if base_m is not None:
+                s2, c2, f2 = _classify_method_mutations(
+                    base_m, recv_class_name, cdef, resolve_class_source, _seen,
+                    base_cdef,
+                )
+                mutates_self = mutates_self or s2
+                class_targets |= c2
+                free |= f2
+                break
+
+    return mutates_self, frozenset(class_targets), frozenset(free)
 
 
 def _decorator_free_var_mutations(
@@ -1506,23 +1618,40 @@ def object_protocol_mutations(
         return _class_cache[name]
 
     def _apply_method(cdef, class_name, method, recv_var, *, allow_self):
-        si, cv, fv = _classify_method_mutations(
-            method, class_name,
-            _class_level_attr_names(cdef), _instance_attr_names(cdef),
+        si, class_targets, fv = _classify_method_mutations(
+            method, class_name, cdef, resolve_class_source,
         )
         if fv:
             free_vars.update(fv)
-        if cv:
+        if class_targets:
+            # The class-var reset target is the OWNING class (a base when the var
+            # is inherited), which must re-run to recreate the class-level
+            # container. When the var is inherited (owner != receiver's class),
+            # also reset the receiver's class so its instances re-derive against
+            # the fresh base — a subclass method mutating an inherited class var
+            # via ``self`` needs both, since the reset cascade is one level deep
+            # (CAS-76). For a non-inherited var the owner IS the receiver's class,
+            # so this adds nothing.
+            class_defs.update(class_targets)
             class_defs.add(class_name)
         if si and allow_self and recv_var is not None:
             receivers.add(recv_var)
+
+    def _apply_ctor(cdef, class_name):
+        """A construction ``X()`` — the fresh instance's self-init is discarded, so
+        only class-var / free-var mutations in ``__init__`` (or a dataclass
+        ``__post_init__``, CAS-79) persist."""
+        for ctor in ('__init__', '__post_init__'):
+            method = _class_method(cdef, ctor, resolve_class_source)
+            if method is not None:
+                _apply_method(cdef, class_name, method, None, allow_self=False)
 
     def _dispatch_dunder(recv_var, dunder):
         cls = instance_class(recv_var)
         cdef = _classdef(cls) if cls else None
         if cdef is None:
             return
-        method = _class_method(cdef, dunder)
+        method = _class_method(cdef, dunder, resolve_class_source)
         if method is not None:
             _apply_method(cdef, cls, method, recv_var, allow_self=True)
 
@@ -1541,7 +1670,7 @@ def object_protocol_mutations(
                     cdef = _classdef(cls) if cls else None
                     if cdef is not None:
                         for dunder in ('__enter__', '__exit__'):
-                            method = _class_method(cdef, dunder)
+                            method = _class_method(cdef, dunder, resolve_class_source)
                             if method is not None:
                                 _apply_method(cdef, cls, method, ctx.id, allow_self=True)
                 elif isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Name):
@@ -1551,7 +1680,7 @@ def object_protocol_mutations(
                         # ``with SomeCM():`` — anonymous instance, no receiver to
                         # reset; only class-var / free-var mutations persist.
                         for dunder in ('__enter__', '__exit__'):
-                            method = _class_method(cdef, dunder)
+                            method = _class_method(cdef, dunder, resolve_class_source)
                             if method is not None:
                                 _apply_method(cdef, nm, method, None, allow_self=False)
                     else:
@@ -1578,18 +1707,13 @@ def object_protocol_mutations(
                 nm = func.id
                 cdef = _classdef(nm)
                 if cdef is not None:
-                    # Construction ``X()`` — the fresh instance's self-init is
-                    # discarded, so only class-var / free-var mutations in
-                    # __init__ persist.
-                    init = _class_method(cdef, '__init__')
-                    if init is not None:
-                        _apply_method(cdef, nm, init, None, allow_self=False)
+                    _apply_ctor(cdef, nm)
                     continue
                 # An instance called via __call__ (``a('z')``).
                 cls = instance_class(nm)
                 icdef = _classdef(cls) if cls else None
                 if icdef is not None:
-                    call_m = _class_method(icdef, '__call__')
+                    call_m = _class_method(icdef, '__call__', resolve_class_source)
                     if call_m is not None:
                         _apply_method(icdef, cls, call_m, nm, allow_self=True)
                 # A decorated function whose wrapper mutates a free var, or a
@@ -1609,14 +1733,14 @@ def object_protocol_mutations(
                 own_class = _classdef(recv)
                 if own_class is not None:
                     # A class-level call ``Registry.record()`` — no instance.
-                    method = _class_method(own_class, method_name)
+                    method = _class_method(own_class, method_name, resolve_class_source)
                     if method is not None:
                         _apply_method(own_class, recv, method, None, allow_self=False)
                 else:
                     cls = instance_class(recv)
                     cdef = _classdef(cls) if cls else None
                     if cdef is not None:
-                        method = _class_method(cdef, method_name)
+                        method = _class_method(cdef, method_name, resolve_class_source)
                         if method is not None:
                             _apply_method(cdef, cls, method, recv, allow_self=True)
 

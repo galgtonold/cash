@@ -1183,6 +1183,63 @@ class TestObjectProtocolMutations:
         assert not (r.free_vars or r.receivers or r.class_defs)
 
 
+class TestObjectProtocolInheritance:
+    """``object_protocol_mutations`` follows base classes (CAS-76) and dataclass
+    ``__post_init__`` (CAS-79): an inherited method / __init__ / __enter__ or a
+    base-owned class variable is attributed to the OWNING class."""
+
+    CLASSES = {
+        'Base': ("class Base:\n    registry = []\n    def __init__(self):\n"
+                 "        Base.registry.append(1)"),
+        'Sub': "class Sub(Base):\n    pass",
+        'SBase': ("class SBase:\n    shared = []\n    def add(self, v):\n"
+                  "        self.shared.append(v)"),
+        'SSub': "class SSub(SBase):\n    pass",
+        'SupBase': ("class SupBase:\n    seen = []\n    def __init__(self):\n"
+                    "        SupBase.seen.append(1)"),
+        'SupSub': ("class SupSub(SupBase):\n    def __init__(self):\n"
+                   "        super().__init__()"),
+        'PBase': ("class PBase:\n    def __init__(self, n):\n        self.n = n\n"
+                  "    def doubled(self):\n        return self.n * 2"),
+        'PSub': "class PSub(PBase):\n    pass",
+        'DReg': ("@dataclass\nclass DReg:\n    name: str\n    def __post_init__(self):\n"
+                 "        log.append(self.name)"),
+        'DNode': ("@dataclass\nclass DNode:\n    val: int\n    registry: ClassVar[list] = []\n"
+                  "    def __post_init__(self):\n        DNode.registry.append(self.val)"),
+    }
+    FACTORIES = {'sub': 'Sub', 'a': 'SSub', 'b': 'SSub', 'sup': 'SupSub', 'ps': 'PSub'}
+
+    def _instance_class(self, var):
+        cls = self.FACTORIES.get(var)
+        return cls if cls in self.CLASSES else None
+
+    def _f(self, code):
+        return object_protocol_mutations(
+            ast.parse(code), self.CLASSES.get, self._instance_class,
+            lambda n: None, lambda n: None,
+        )
+
+    def test_inherited_init_owner_is_base(self):
+        assert self._f("sub = Sub()").class_defs == {'Base', 'Sub'}
+
+    def test_super_init_follows_base(self):
+        assert self._f("sup = SupSub()").class_defs == {'SupBase', 'SupSub'}
+
+    def test_inherited_method_shared_attr(self):
+        # add() (on SBase) mutates self.shared, a base class var — reset both
+        assert self._f("a.add('v')").class_defs == {'SBase', 'SSub'}
+
+    def test_pure_inheritance_not_flagged(self):
+        r = self._f("ps = PSub(4)")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_dataclass_post_init_free_var(self):
+        assert self._f("r = DReg('a')").free_vars == {'log'}
+
+    def test_dataclass_post_init_class_var(self):
+        assert self._f("n = DNode(7)").class_defs == {'DNode'}
+
+
 class TestSubscriptViewBindings:
     """``subscript_view_bindings`` maps ``alias = base[...]`` bindings (CAS-74)."""
 
