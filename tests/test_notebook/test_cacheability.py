@@ -1098,6 +1098,12 @@ class TestObjectProtocolMutations:
         'Point': ("class Point:\n    def __init__(self, x, y):\n        self.x = x\n"
                   "        self.y = y\n    def norm(self):\n        return self.x + self.y"),
         'Doubler': "class Doubler:\n    def __call__(self, x):\n        return x * 2",
+        'Box': ("class Box:\n    def __iadd__(self, x):\n        log.append(x)\n"
+                "        return self"),
+        'Scaler': ("class Scaler:\n    seen = []\n    def __imul__(self, x):\n"
+                   "        Scaler.seen.append(x)\n        return self"),
+        'Money': ("class Money:\n    def __init__(self, c):\n        self.c = c\n"
+                  "    def __iadd__(self, x):\n        return Money(self.c + x)"),
     }
     FUNCS = {
         'track': ("@contextlib.contextmanager\ndef track():\n    log.append('e')\n"
@@ -1111,7 +1117,7 @@ class TestObjectProtocolMutations:
     # var -> constructing name (for instance_class + reassignment-decorator factory)
     FACTORIES = {'cm': 'Counter', 's': 'Store', 'a': 'Accum', 'r': 'Reg',
                  'x': 'Shared', 'y': 'Shared', 'st': 'Stack', 'p': 'Point',
-                 'd': 'Doubler'}
+                 'd': 'Doubler', 'bx': 'Box', 'sc': 'Scaler', 'mo': 'Money'}
 
     def _instance_class(self, var):
         cls = self.FACTORIES.get(var)
@@ -1180,6 +1186,22 @@ class TestObjectProtocolMutations:
     def test_builtin_subscript_not_flagged(self):
         # a plain name that resolves to no notebook class is never flagged
         r = self._f("unknown['k'] = 1")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    # --- in-place operator dunders (CAS-78) ----------------------------------
+    def test_iadd_free_var(self):
+        assert self._f("bx += 1").free_vars == {'log'}
+
+    def test_imul_class_var(self):
+        assert self._f("sc *= 2").class_defs == {'Scaler'}
+
+    def test_pure_iadd_not_flagged(self):
+        r = self._f("mo += 5")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_int_augassign_not_flagged(self):
+        # plain int += on a non-instance name resolves to no class
+        r = self._f("i += 1")
         assert not (r.free_vars or r.receivers or r.class_defs)
 
 

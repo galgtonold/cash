@@ -1580,6 +1580,26 @@ def _decorator_names(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
     return names
 
 
+# ``obj <op>= x`` dispatches to the in-place operator dunder, falling back to the
+# binary form when the in-place one is absent (``obj = obj.__add__(x)``). Maps the
+# AST op node name to ``(inplace_dunder, fallback_dunder)`` (CAS-78).
+_AUGOP_DUNDERS: dict[str, tuple[str, str]] = {
+    'Add': ('__iadd__', '__add__'),
+    'Sub': ('__isub__', '__sub__'),
+    'Mult': ('__imul__', '__mul__'),
+    'Div': ('__itruediv__', '__truediv__'),
+    'FloorDiv': ('__ifloordiv__', '__floordiv__'),
+    'Mod': ('__imod__', '__mod__'),
+    'Pow': ('__ipow__', '__pow__'),
+    'MatMult': ('__imatmul__', '__matmul__'),
+    'BitOr': ('__ior__', '__or__'),
+    'BitAnd': ('__iand__', '__and__'),
+    'BitXor': ('__ixor__', '__xor__'),
+    'LShift': ('__ilshift__', '__lshift__'),
+    'RShift': ('__irshift__', '__rshift__'),
+}
+
+
 def object_protocol_mutations(
     tree: ast.Module | None,
     resolve_class_source,
@@ -1697,6 +1717,24 @@ def object_protocol_mutations(
             for tgt in node.targets:
                 if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
                     _dispatch_dunder(tgt.value.id, '__delitem__')
+        # --- ``obj <op>= x`` dispatching to an in-place operator dunder ---------
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+            cls = instance_class(node.target.id)
+            cdef = _classdef(cls) if cls else None
+            dunders = _AUGOP_DUNDERS.get(type(node.op).__name__)
+            if cdef is not None and dunders is not None:
+                inplace_dunder, fallback_dunder = dunders
+                method = _class_method(cdef, inplace_dunder, resolve_class_source)
+                if method is not None:
+                    # ``__iadd__`` mutates the receiver in place (returns self).
+                    _apply_method(cdef, cls, method, node.target.id, allow_self=True)
+                else:
+                    # No in-place form: ``obj += x`` REASSIGNS obj to a fresh
+                    # ``obj.__add__(x)`` (idempotent), so only its free-var /
+                    # class-var side effects persist.
+                    method = _class_method(cdef, fallback_dunder, resolve_class_source)
+                    if method is not None:
+                        _apply_method(cdef, cls, method, node.target.id, allow_self=False)
         elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
               and isinstance(node.value, ast.Name)):
             _dispatch_dunder(node.value.id, '__getitem__')
