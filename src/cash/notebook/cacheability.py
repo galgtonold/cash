@@ -1365,6 +1365,47 @@ def _class_var_owner(attr: str, classdef: ast.ClassDef, resolve_class_source) ->
     return None
 
 
+def _property_accessor(
+    classdef: ast.ClassDef, attr: str, kind: str, resolve_class_source=None
+) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
+    """The ``@property`` getter (``kind='getter'``) or ``@<attr>.setter`` setter
+    (``kind='setter'``) named *attr* in *classdef*'s hierarchy, or None (CAS-77).
+
+    A property defines two methods both named *attr*: the getter carries
+    ``@property`` and the setter ``@<attr>.setter``. ``_class_method`` would return
+    whichever comes first, so the accessors are matched by their decorator."""
+    for cls in _iter_class_hierarchy(classdef, resolve_class_source):
+        for node in cls.body:
+            if not (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == attr):
+                continue
+            if kind == 'getter' and _has_named_decorator(node, 'property'):
+                return node
+            if kind == 'setter':
+                for dec in node.decorator_list:
+                    if (isinstance(dec, ast.Attribute) and dec.attr == 'setter'
+                            and isinstance(dec.value, ast.Name) and dec.value.id == attr):
+                        return node
+    return None
+
+
+def _descriptor_class(
+    classdef: ast.ClassDef, attr: str, resolve_class_source
+) -> ast.ClassDef | None:
+    """The ClassDef of the data descriptor bound to class attribute *attr*
+    (``field = Tracked()`` → ``Tracked``'s ClassDef), or None (CAS-77). Accessing
+    ``obj.field`` / assigning ``obj.field = v`` dispatches to that class's
+    ``__get__`` / ``__set__``."""
+    for cls in _iter_class_hierarchy(classdef, resolve_class_source):
+        for node in cls.body:
+            if (isinstance(node, ast.Assign)
+                    and any(isinstance(t, ast.Name) and t.id == attr for t in node.targets)
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)):
+                return _resolve_class_def(node.value.func.id, resolve_class_source)
+    return None
+
+
 def _walk_executable(node: ast.AST):
     """Yield *node* and every descendant that executes when it runs, WITHOUT
     descending into deferred scopes (def/async def/class). Used to scan a cell or
@@ -1675,6 +1716,44 @@ def object_protocol_mutations(
         if method is not None:
             _apply_method(cdef, cls, method, recv_var, allow_self=True)
 
+    def _dispatch_descriptor(cdef, attr, dunder):
+        """A data descriptor's ``__set__`` / ``__get__`` receives ``self`` (the
+        descriptor, a shared class attribute) and ``obj`` (the instance) — both
+        parameters — so only its FREE-var side effects are attributed (CAS-77)."""
+        ddef = _descriptor_class(cdef, attr, resolve_class_source)
+        if ddef is None:
+            return
+        method = _class_method(ddef, dunder, resolve_class_source)
+        if method is not None:
+            free_vars.update(_free_vars_mutated_in_function(method))
+
+    def _dispatch_attr_set(recv_var, attr):
+        """``recv.attr = v`` dispatching to a ``@property`` setter or a data
+        descriptor's ``__set__`` (CAS-77). A plain attribute assign resolves to
+        neither and is a no-op."""
+        cls = instance_class(recv_var)
+        cdef = _classdef(cls) if cls else None
+        if cdef is None:
+            return
+        setter = _property_accessor(cdef, attr, 'setter', resolve_class_source)
+        if setter is not None:
+            _apply_method(cdef, cls, setter, recv_var, allow_self=True)
+        else:
+            _dispatch_descriptor(cdef, attr, '__set__')
+
+    def _dispatch_attr_get(recv_var, attr):
+        """``recv.attr`` (load) dispatching to a ``@property`` getter or a data
+        descriptor's ``__get__`` with a side effect (CAS-77)."""
+        cls = instance_class(recv_var)
+        cdef = _classdef(cls) if cls else None
+        if cdef is None:
+            return
+        getter = _property_accessor(cdef, attr, 'getter', resolve_class_source)
+        if getter is not None:
+            _apply_method(cdef, cls, getter, recv_var, allow_self=True)
+        else:
+            _dispatch_descriptor(cdef, attr, '__get__')
+
     if tree is None:
         return ObjectProtocolResets(frozenset(), frozenset(), frozenset())
 
@@ -1713,6 +1792,8 @@ def object_protocol_mutations(
                 for leaf in _iter_store_targets(tgt):
                     if isinstance(leaf, ast.Subscript) and isinstance(leaf.value, ast.Name):
                         _dispatch_dunder(leaf.value.id, '__setitem__')
+                    elif isinstance(leaf, ast.Attribute) and isinstance(leaf.value, ast.Name):
+                        _dispatch_attr_set(leaf.value.id, leaf.attr)
         elif isinstance(node, ast.Delete):
             for tgt in node.targets:
                 if isinstance(tgt, ast.Subscript) and isinstance(tgt.value, ast.Name):
@@ -1738,6 +1819,10 @@ def object_protocol_mutations(
         elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
               and isinstance(node.value, ast.Name)):
             _dispatch_dunder(node.value.id, '__getitem__')
+        # --- ``recv.attr`` load dispatching to a property getter / __get__ -----
+        elif (isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Load)
+              and isinstance(node.value, ast.Name)):
+            _dispatch_attr_get(node.value.id, node.attr)
         # --- calls: constructor / instance __call__ / decorated fn / method ----
         elif isinstance(node, ast.Call):
             func = node.func

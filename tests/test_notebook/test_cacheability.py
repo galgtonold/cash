@@ -1262,6 +1262,72 @@ class TestObjectProtocolInheritance:
         assert self._f("n = DNode(7)").class_defs == {'DNode'}
 
 
+class TestObjectProtocolDescriptor:
+    """``object_protocol_mutations`` follows the descriptor protocol (CAS-77): an
+    attribute assign / load dispatching to a ``@property`` setter/getter or a
+    data-descriptor ``__set__`` / ``__get__``."""
+
+    CLASSES = {
+        'Cfg': ("class Cfg:\n    @property\n    def x(self):\n        return self._x\n"
+                "    @x.setter\n    def x(self, v):\n        log.append(v)\n        self._x = v"),
+        'Rec': ("class Rec:\n    def __init__(self):\n        self.history = []\n"
+                "    @property\n    def val(self):\n        return self._v\n"
+                "    @val.setter\n    def val(self, v):\n        self.history.append(v)\n"
+                "        self._v = v"),
+        'Meter': ("class Meter:\n    def __init__(self):\n        self.reads = []\n"
+                  "    @property\n    def now(self):\n        self.reads.append(1)\n"
+                  "        return len(self.reads)"),
+        'Circle': ("class Circle:\n    def __init__(self, r):\n        self._r = r\n"
+                   "    @property\n    def area(self):\n        return 3 * self._r * self._r"),
+        'Tracked': ("class Tracked:\n    def __set__(self, obj, v):\n        log.append(v)\n"
+                    "    def __get__(self, obj, owner=None):\n        log.append(1)\n"
+                    "        return None"),
+        'Model': "class Model:\n    field = Tracked()",
+        'Bag': "class Bag:\n    def __init__(self):\n        self.n = 0",
+    }
+    FACTORIES = {'c': 'Cfg', 'r': 'Rec', 'm': 'Meter', 'ci': 'Circle',
+                 'mdl': 'Model', 'bag': 'Bag'}
+
+    def _instance_class(self, var):
+        cls = self.FACTORIES.get(var)
+        return cls if cls in self.CLASSES else None
+
+    def _f(self, code):
+        return object_protocol_mutations(
+            ast.parse(code), self.CLASSES.get, self._instance_class,
+            lambda n: None, lambda n: None,
+        )
+
+    def test_property_setter_free_var(self):
+        assert self._f("c.x = 5").free_vars == {'log'}
+
+    def test_property_setter_self_list(self):
+        assert self._f("r.val = 7").receivers == {'r'}
+
+    def test_property_getter_side_effect_self(self):
+        assert self._f("v = m.now").receivers == {'m'}
+
+    def test_descriptor_set_free_var(self):
+        assert self._f("mdl.field = 3").free_vars == {'log'}
+
+    def test_descriptor_get_free_var(self):
+        # __set__ AND __get__ both append to log; a bare load hits __get__
+        r = self._f("v = mdl.field")
+        assert 'log' in r.free_vars
+
+    def test_pure_property_not_flagged(self):
+        r = self._f("a = ci.area")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_plain_attribute_assign_not_flagged(self):
+        r = self._f("bag.n = 5")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_plain_attribute_load_not_flagged(self):
+        r = self._f("y = bag.n")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+
 class TestSubscriptViewBindings:
     """``subscript_view_bindings`` maps ``alias = base[...]`` bindings (CAS-74)."""
 
