@@ -903,6 +903,14 @@ class VirtualLineage:
             cell_stmt_occurrence_counts: dict = {}
 
             for node in tree.body:
+                # A top-level ``raise`` unconditionally aborts the cell — every
+                # statement after it is dead code that never runs in a real
+                # from-start execution. Stop here so the simulation does not
+                # register a post-raise assignment (``z = 1; raise; z = 2``) as
+                # the variable's producer and later reconstruct that dead value
+                # (CAS-64).
+                if isinstance(node, ast.Raise):
+                    break
                 self._simulate_one_node(
                     i, node, cell_stmt_occurrence_counts,
                     virtual_lineage, virtual_modules, simulation_trace,
