@@ -988,9 +988,16 @@ class VirtualLineage:
         loop_target_vars: set[str],
         vars_mutated_by_loops: set[str],
     ) -> set[str]:
-        """Collect loop mutation info and return the set of mutated vars for this node.
+        """Collect control-body mutation info and return the mutated vars for this node.
 
-        Updates *loop_target_vars* (for ``ast.For``) and *vars_mutated_by_loops* in place.
+        Updates *loop_target_vars* (for ``ast.For``) and *vars_mutated_by_loops*
+        in place. Covers ALL control structures, not just loops: a var mutated in
+        place inside an ``if`` / ``with`` / ``try`` body (``if cond:
+        items.append(x)``) is not reported as a static output by
+        ``CodeAnalyzer``, so without this its virtual lineage would stay stale and
+        a downstream cell reading it would serve a pre-mutation value (CAS-66).
+        Treated like a loop mutation so it is trusted in memory and its lineage is
+        bumped, matching the runtime's ``update_lineage_after_execution``.
         """
         mutated_vars: set[str] = set()
         if isinstance(node, ast.For):
@@ -1000,6 +1007,14 @@ class VirtualLineage:
             vars_mutated_by_loops.update(mutated_vars)
         elif isinstance(node, ast.While):
             mutated_vars = self._find_loop_mutated_vars(node.body, set())
+            vars_mutated_by_loops.update(mutated_vars)
+        elif isinstance(node, (ast.If, ast.With, ast.AsyncWith, ast.Try)):
+            direct_body: list = []
+            for attr in ('body', 'orelse', 'finalbody'):
+                direct_body.extend(getattr(node, attr, []) or [])
+            for handler in getattr(node, 'handlers', []) or []:
+                direct_body.extend(handler.body)
+            mutated_vars = self._find_loop_mutated_vars(direct_body, set())
             vars_mutated_by_loops.update(mutated_vars)
         return mutated_vars
 
