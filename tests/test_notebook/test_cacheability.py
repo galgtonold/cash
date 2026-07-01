@@ -136,6 +136,33 @@ class TestAllMutatedVars:
         a = _analyze("b = np.add(a, 10, out=a)")
         assert 'a' in a.all_mutated_vars
 
+    def test_method_mutation_in_list_comprehension(self):
+        # CAS-67: a known-mutating method inside a comprehension element.
+        a = _analyze("r = [base.append(0) for _ in range(2)]")
+        assert 'base' in a.all_mutated_vars
+
+    def test_method_mutation_in_generator_expr(self):
+        a = _analyze("r = list(base.append(0) for _ in range(2))")
+        assert 'base' in a.all_mutated_vars
+
+    def test_method_mutation_in_dict_comprehension(self):
+        a = _analyze("r = {i: base.append(0) for i in range(2)}")
+        assert 'base' in a.all_mutated_vars
+
+    def test_method_mutation_in_fstring(self):
+        a = _analyze("s = f'{base.append(0)}'")
+        assert 'base' in a.all_mutated_vars
+
+    def test_method_mutation_captured_result(self):
+        # r = d.pop(k) still mutates d (append/pop/... always mutate).
+        a = _analyze("r = d.pop('k')")
+        assert 'd' in a.all_mutated_vars
+
+    def test_pure_method_in_comprehension_not_flagged(self):
+        # A non-mutating method (copy/head) inside a comprehension is not a mutation.
+        a = _analyze("r = [base.copy() for _ in range(2)]")
+        assert 'base' not in a.all_mutated_vars
+
     def test_subscript_assign(self):
         a = _analyze("arr[0] = 100")
         assert 'arr' in a.all_mutated_vars

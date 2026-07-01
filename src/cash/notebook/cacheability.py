@@ -132,39 +132,46 @@ class _MutationVisitor(ast.NodeVisitor):
     def __init__(self) -> None:
         self.mutations: list[MutationInfo] = []
 
-    def visit_Expr(self, node: ast.Expr) -> None:
-        """Detect standalone method calls like lst.append(x)."""
-        if isinstance(node.value, ast.Call):
-            call = node.value
-            if isinstance(call.func, ast.Attribute):
-                method_name = call.func.attr
-                base = _extract_base_name(call.func.value)
+    def _record_method_mutation(self, call: ast.Call, lineno: int) -> None:
+        """Record a KNOWN-mutating method call on a named receiver.
 
-                if base and method_name in MUTATING_METHODS:
+        A method in ``MUTATING_METHODS`` (``append``/``pop``/``update``/...) or a
+        pandas ``inplace=True`` call mutates its receiver regardless of where it
+        appears — as a bare statement, a captured result (``r = lst.pop()``), a
+        comprehension element (``[base.append(x) for ..]``), or an f-string
+        placeholder (``f"{lst.append(x)}"``). Called from :meth:`visit_Call` so
+        every call site is covered, not just top-level ``Expr`` statements
+        (CAS-67).
+        """
+        if not isinstance(call.func, ast.Attribute):
+            return
+        method_name = call.func.attr
+        base = _extract_base_name(call.func.value)
+        if not base:
+            return
+        if method_name in MUTATING_METHODS:
+            self.mutations.append(MutationInfo(
+                variable=base, method=method_name,
+                kind='method_call', line=lineno,
+            ))
+        elif method_name in PANDAS_INPLACE_METHODS:
+            for kw in call.keywords:
+                if (kw.arg == 'inplace'
+                        and isinstance(kw.value, ast.Constant)
+                        and kw.value.value is True):
                     self.mutations.append(MutationInfo(
                         variable=base, method=method_name,
-                        kind='method_call', line=node.lineno,
+                        kind='inplace_kwarg', line=lineno,
                     ))
-
-                if base and method_name in PANDAS_INPLACE_METHODS:
-                    for kw in call.keywords:
-                        if (
-                            kw.arg == 'inplace'
-                            and isinstance(kw.value, ast.Constant)
-                            and kw.value.value is True
-                        ):
-                            self.mutations.append(MutationInfo(
-                                variable=base, method=method_name,
-                                kind='inplace_kwarg', line=node.lineno,
-                            ))
-                            break
-        self.generic_visit(node)
+                    break
 
     def visit_Call(self, node: ast.Call) -> None:
-        """Detect the numpy ufunc ``out=`` kwarg, which writes its target array
-        in place: ``np.add(a, 10, out=a)`` mutates ``a`` (the out target), not
-        the ``np`` receiver. Fires on any Call (result captured or not). For
-        multi-output ufuncs ``out`` is a tuple: ``out=(q, r)``."""
+        """Detect KNOWN-mutating method calls (anywhere) and the numpy ufunc
+        ``out=`` kwarg, which writes its target array in place: ``np.add(a, 10,
+        out=a)`` mutates ``a`` (the out target), not the ``np`` receiver. Fires on
+        any Call (result captured or not). For multi-output ufuncs ``out`` is a
+        tuple: ``out=(q, r)``."""
+        self._record_method_mutation(node, node.lineno)
         for kw in node.keywords:
             if kw.arg != 'out':
                 continue
