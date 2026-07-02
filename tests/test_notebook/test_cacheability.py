@@ -970,10 +970,19 @@ class TestStatefulSelfFunctions:
         'pure': "def pure(x):\n    return x + 1",
         'none_default': "def g(x, cache=None):\n    return x",
         'fresh_default': "def h(x, acc=[]):\n    return acc + [x]",
+        'memo': "@functools.lru_cache(maxsize=None)\ndef memo(x):\n    seen.append(x)\n    return x",
+        'pure_memo': "@lru_cache\ndef pure_memo(x):\n    return x * x",
     }
 
     def _f(self, code):
         return stateful_self_functions(ast.parse(code), self.SRCS.get)
+
+    def test_lru_cache_memoizer(self):
+        # a functools memoizer carries a persistent cache -> stateful (CAS-80)
+        assert self._f("memo(1)") == {'memo'}
+
+    def test_bare_lru_cache_memoizer(self):
+        assert self._f("r = pure_memo(2)") == {'pure_memo'}
 
     def test_mutable_default_list_captured(self):
         assert self._f("r = collect(1)") == {'collect'}
@@ -1326,6 +1335,74 @@ class TestObjectProtocolDescriptor:
     def test_plain_attribute_load_not_flagged(self):
         r = self._f("y = bag.n")
         assert not (r.free_vars or r.receivers or r.class_defs)
+
+
+class TestObjectProtocolExotic:
+    """``object_protocol_mutations`` handles the indirect channels (CAS-80):
+    ``next(it)``, ``ExitStack.enter_context``, a context-manager factory, and a
+    class-based decorator."""
+
+    CLASSES = {
+        'CM': ("class CM:\n    def __enter__(self):\n        log.append(1)\n"
+               "        return self\n    def __exit__(self, *a):\n        return False"),
+        'Mgr': ("class Mgr:\n    def __enter__(self):\n        hits.append(1)\n"
+                "        return len(hits)\n    def __exit__(self, *a):\n        return False"),
+        'It': ("class It:\n    def __iter__(self):\n        return self\n"
+               "    def __next__(self):\n        cursor[0] += 1\n        return 1"),
+        'Counter': ("class Counter:\n    def __init__(self, f):\n        self.f = f\n"
+                    "        self.n = 0\n    def __call__(self, *a, **k):\n"
+                    "        self.n += 1\n        return self.f(*a, **k)"),
+        'Quiet': ("class Quiet:\n    def __enter__(self):\n        return 42\n"
+                  "    def __exit__(self, *a):\n        return False"),
+    }
+    FUNCS = {'cm': "def cm():\n    return Mgr()",
+             'make': "def make():\n    return Quiet()"}
+    FACTORIES = {'cmv': 'CM', 'it': 'It'}
+    DECORATED = {'task': 'Counter'}
+
+    def _ic(self, var):
+        cls = self.FACTORIES.get(var)
+        return cls if cls in self.CLASSES else None
+
+    def _dc(self, var):
+        cls = self.DECORATED.get(var)
+        return cls if cls in self.CLASSES else None
+
+    def _f(self, code):
+        return object_protocol_mutations(
+            ast.parse(code), self.CLASSES.get, self._ic, self.FUNCS.get,
+            lambda n: None, decorated_class=self._dc,
+        )
+
+    def test_next_free_var(self):
+        assert self._f("v = next(it)").free_vars == {'cursor'}
+
+    def test_enter_context_free_var(self):
+        assert self._f("stack.enter_context(cmv)").free_vars == {'log'}
+
+    def test_with_factory_free_var(self):
+        assert self._f("with cm() as x:\n    pass").free_vars == {'hits'}
+
+    def test_class_based_decorator_stateful(self):
+        assert self._f("task()").class_defs == {'task'}
+
+    def test_pure_factory_cm_not_flagged(self):
+        r = self._f("with make() as v:\n    pass")
+        assert not (r.free_vars or r.receivers or r.class_defs)
+
+    def test_aliased_decorator_via_factory(self):
+        # resolve_var_factory follows h -> g -> counting (alias handled upstream);
+        # here it directly returns counting's def, exercising the wrapper analysis
+        counting = ("def counting(f):\n    def wrap(*a, **k):\n        log.append(1)\n"
+                    "        return f(*a, **k)\n    return wrap")
+
+        def vf(name):
+            return ast.parse(counting).body[0] if name == 'h' else None
+
+        r = object_protocol_mutations(
+            ast.parse("h()"), lambda n: None, lambda n: None, lambda n: None, vf,
+        )
+        assert r.free_vars == {'log'}
 
 
 class TestSubscriptViewBindings:

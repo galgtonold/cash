@@ -976,6 +976,21 @@ def _is_mutable_default(node: ast.expr) -> bool:
             and node.func.id in _MUTABLE_LITERAL_CALLS and not node.args)
 
 
+_MEMOIZER_DECORATORS = frozenset({'lru_cache', 'cache'})
+
+
+def _is_memoizer_decorator(dec: ast.expr) -> bool:
+    """True for a ``functools`` memoizer decorator — ``@lru_cache`` / ``@cache``,
+    bare or called (``@lru_cache(maxsize=None)``), plain or dotted
+    (``@functools.lru_cache``)."""
+    node = dec.func if isinstance(dec, ast.Call) else dec
+    if isinstance(node, ast.Name):
+        return node.id in _MEMOIZER_DECORATORS
+    if isinstance(node, ast.Attribute):
+        return node.attr in _MEMOIZER_DECORATORS
+    return False
+
+
 def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True if calling *func* mutates state carried on the function OBJECT itself
     (CAS-68 part B), which persists across calls and must be reset by re-running
@@ -984,8 +999,14 @@ def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -
     * a **mutable default argument** the body mutates in place
       (``def collect(x, acc=[]): acc.append(x)``);
     * an assignment to a **function attribute**
-      (``def tick(): tick.count = getattr(tick, 'count', 0) + 1``).
+      (``def tick(): tick.count = getattr(tick, 'count', 0) + 1``);
+    * a **functools memoizer** (``@lru_cache`` / ``@cache``) — the cache persists
+      across calls, so a re-run reuses memoised results and its body's
+      side effects (a free-var append) no longer fire; re-running the ``def``
+      recreates an empty cache (CAS-80).
     """
+    if any(_is_memoizer_decorator(d) for d in func.decorator_list):
+        return True
     fname = func.name
     for node in ast.walk(func):
         target = node.target if isinstance(node, ast.AugAssign) else None
@@ -1647,6 +1668,7 @@ def object_protocol_mutations(
     instance_class,
     resolve_source,
     resolve_var_factory,
+    decorated_class=None,
 ) -> ObjectProtocolResets:
     """Hidden mutations reached through the object protocol (CAS-69/70/71/73).
 
@@ -1666,10 +1688,15 @@ def object_protocol_mutations(
       ``@contextmanager`` generators and decorator functions.
     * *resolve_var_factory* — ``var -> factory FunctionDef`` (or ``None``), for a
       reassignment decorator ``g = counting(g)``.
+    * *decorated_class* — ``var -> class_name`` for a class-based decorator
+      binding ``@Counter def task`` (or ``None``), CAS-80.
     """
     free_vars: set[str] = set()
     receivers: set[str] = set()
     class_defs: set[str] = set()
+    if decorated_class is None:
+        def decorated_class(_var):
+            return None
 
     _class_cache: dict[str, ast.ClassDef | None] = {}
 
@@ -1715,6 +1742,30 @@ def object_protocol_mutations(
         method = _class_method(cdef, dunder, resolve_class_source)
         if method is not None:
             _apply_method(cdef, cls, method, recv_var, allow_self=True)
+
+    def _dispatch_context(recv_var):
+        """A context-managed instance ``recv_var`` (``with cm:`` or
+        ``stack.enter_context(cm)``): analyse its ``__enter__`` / ``__exit__``."""
+        cls = instance_class(recv_var)
+        cdef = _classdef(cls) if cls else None
+        if cdef is None:
+            return
+        for dunder in ('__enter__', '__exit__'):
+            method = _class_method(cdef, dunder, resolve_class_source)
+            if method is not None:
+                _apply_method(cdef, cls, method, recv_var, allow_self=True)
+
+    def _return_class(fdef):
+        """The ``(name, ClassDef)`` of a notebook class a factory function
+        RETURNS (``def cm(): return Mgr()`` → ``Mgr``), or ``(None, None)``
+        (CAS-80). Used for ``with cm() as x:`` where ``cm`` is a plain factory."""
+        for sub in ast.walk(fdef):
+            if (isinstance(sub, ast.Return) and isinstance(sub.value, ast.Call)
+                    and isinstance(sub.value.func, ast.Name)):
+                rcdef = _classdef(sub.value.func.id)
+                if rcdef is not None:
+                    return sub.value.func.id, rcdef
+        return None, None
 
     def _dispatch_descriptor(cdef, attr, dunder):
         """A data descriptor's ``__set__`` / ``__get__`` receives ``self`` (the
@@ -1765,13 +1816,7 @@ def object_protocol_mutations(
             for item in node.items:
                 ctx = item.context_expr
                 if isinstance(ctx, ast.Name):
-                    cls = instance_class(ctx.id)
-                    cdef = _classdef(cls) if cls else None
-                    if cdef is not None:
-                        for dunder in ('__enter__', '__exit__'):
-                            method = _class_method(cdef, dunder, resolve_class_source)
-                            if method is not None:
-                                _apply_method(cdef, cls, method, ctx.id, allow_self=True)
+                    _dispatch_context(ctx.id)
                 elif isinstance(ctx, ast.Call) and isinstance(ctx.func, ast.Name):
                     nm = ctx.func.id
                     cdef = _classdef(nm)
@@ -1785,7 +1830,18 @@ def object_protocol_mutations(
                     else:
                         fdef = _resolve_function_def(nm, resolve_source)
                         if fdef is not None:
+                            # A ``@contextmanager`` generator's free-var mutations,
                             free_vars.update(_free_vars_mutated_in_function(fdef))
+                            # or a plain factory ``def cm(): return Mgr()`` — the
+                            # returned instance's __enter__/__exit__ run anonymously
+                            # (``with cm() as x:``), so only class-var / free-var
+                            # mutations persist (CAS-80).
+                            ret_name, ret_cdef = _return_class(fdef)
+                            if ret_cdef is not None:
+                                for dunder in ('__enter__', '__exit__'):
+                                    method = _class_method(ret_cdef, dunder, resolve_class_source)
+                                    if method is not None:
+                                        _apply_method(ret_cdef, ret_name, method, None, allow_self=False)
         # --- subscript operations dispatching to custom dunders ----------------
         elif isinstance(node, ast.Assign):
             for tgt in node.targets:
@@ -1828,9 +1884,32 @@ def object_protocol_mutations(
             func = node.func
             if isinstance(func, ast.Name):
                 nm = func.id
+                # ``next(it)`` advances the iterator via ``It.__next__`` (CAS-80).
+                if nm == 'next' and node.args and isinstance(node.args[0], ast.Name):
+                    _dispatch_dunder(node.args[0].id, '__next__')
+                    continue
                 cdef = _classdef(nm)
                 if cdef is not None:
                     _apply_ctor(cdef, nm)
+                    continue
+                # A class-based decorator ``@Counter def task`` — ``task`` is a
+                # Counter INSTANCE holding the wrapped function, so it is a
+                # stateful callable: calling it runs ``Counter.__call__`` (which
+                # mutates ``self.n``). Re-run its producer (the decorated def) to
+                # reset — the receiver's content is unhashable (holds a function),
+                # so route a self-mutation to the class-def channel (CAS-80).
+                deco_cls = decorated_class(nm)
+                dcdef = _classdef(deco_cls) if deco_cls else None
+                if dcdef is not None:
+                    call_m = _class_method(dcdef, '__call__', resolve_class_source)
+                    if call_m is not None:
+                        si, ct, fv = _classify_method_mutations(
+                            call_m, deco_cls, dcdef, resolve_class_source,
+                        )
+                        free_vars.update(fv)
+                        class_defs.update(ct)
+                        if si:
+                            class_defs.add(nm)
                     continue
                 # An instance called via __call__ (``a('z')``).
                 cls = instance_class(nm)
@@ -1853,6 +1932,12 @@ def object_protocol_mutations(
             elif isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
                 recv = func.value.id
                 method_name = func.attr
+                # ``stack.enter_context(cm)`` runs ``cm.__enter__`` / ``__exit__``
+                # regardless of what ``stack`` is (an ExitStack), so dispatch to
+                # the ARGUMENT's context manager (CAS-80).
+                if method_name == 'enter_context' and node.args and isinstance(node.args[0], ast.Name):
+                    _dispatch_context(node.args[0].id)
+                    continue
                 own_class = _classdef(recv)
                 if own_class is not None:
                     # A class-level call ``Registry.record()`` — no instance.

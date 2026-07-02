@@ -410,12 +410,31 @@ class UpstreamChecker:
                 class_sources = self._notebook_class_sources(cell_code)
                 op_func_sources = self._notebook_function_sources(cell_code)
                 op_var_factories = self._notebook_var_factories(cell_code)
+                # ``@ClassName def task`` binds ``task`` to a ClassName INSTANCE
+                # (a class-based decorator), and ``h = g`` aliases one name to
+                # another; both feed the object-protocol resolvers (CAS-80).
+                op_decorated_instances = self._notebook_decorated_instances(cell_code)
+                op_name_aliases = self._notebook_name_aliases(cell_code)
+
+                def _resolve_alias(name, _al=op_name_aliases):
+                    # follow ``h = g = ...`` chains (bounded by the alias count)
+                    for _ in range(len(_al) + 1):
+                        nxt = _al.get(name)
+                        if nxt is None:
+                            return name
+                        name = nxt
+                    return name
 
                 def _instance_class(var, _vf=op_var_factories, _cs=class_sources):
                     cls = _vf.get(var)
                     return cls if cls in _cs else None
 
+                def _decorated_class(var, _di=op_decorated_instances, _cs=class_sources):
+                    cls = _di.get(var)
+                    return cls if cls in _cs else None
+
                 def _op_var_factory(name, _fs=op_func_sources, _vf=op_var_factories):
+                    name = _resolve_alias(name)
                     src = _fs.get(_vf.get(name))
                     if not src:
                         return None
@@ -432,6 +451,7 @@ class UpstreamChecker:
                 op_resets = object_protocol_mutations(
                     op_tree, class_sources.get, _instance_class,
                     op_func_sources.get, _op_var_factory,
+                    decorated_class=_decorated_class,
                 )
                 # The free-var channel resets via the CAS-68 A content-base path,
                 # which already suppresses cross-cell accumulators — apply it
@@ -671,6 +691,59 @@ class UpstreamChecker:
                     except (ValueError, AttributeError):
                         continue
         return sources
+
+    def _notebook_decorated_instances(self, cell_code: str) -> dict[str, str]:
+        """Map ``{func_name: decorator_name}`` for every top-level ``@Deco def f``
+        across the notebook (CAS-80). When the decorator is a class, ``f`` is an
+        INSTANCE of it (a class-based decorator: ``@Counter def task`` → ``task``
+        is a ``Counter``). The caller filters to decorators that resolve to a
+        class. Only bare-``Name`` decorators are captured. Last definition wins."""
+        instances: dict[str, str] = {}
+        cells: list[str] = []
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                cells = get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            cells = []
+        for code in (*cells, cell_code):
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    for dec in node.decorator_list:
+                        if isinstance(dec, ast.Name):
+                            instances[node.name] = dec.id
+                            break
+        return instances
+
+    def _notebook_name_aliases(self, cell_code: str) -> dict[str, str]:
+        """Map ``{alias: source}`` for every top-level ``alias = source`` bare-Name
+        binding across the notebook (``h = g``), so a called alias resolves to the
+        decorator/factory of the name it aliases (CAS-80). Last binding wins."""
+        aliases: dict[str, str] = {}
+        cells: list[str] = []
+        try:
+            from ..server_discovery import get_notebook_path
+            path = get_notebook_path()
+            if path:
+                cells = get_notebook_cells(path) or []
+        except (OSError, ValueError, RuntimeError):
+            cells = []
+        for code in (*cells, cell_code):
+            try:
+                tree = ast.parse(code)
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                        and isinstance(node.value, ast.Name)):
+                    aliases[node.targets[0].id] = node.value.id
+        return aliases
 
     def _notebook_var_factories(self, cell_code: str) -> dict[str, str]:
         """Map ``{var: factory_name}`` for every top-level ``var = factory(...)``
