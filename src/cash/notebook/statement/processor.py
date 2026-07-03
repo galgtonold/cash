@@ -707,6 +707,15 @@ class StatementProcessor:
             cache_key=cache_key, accessed_files=accessed_files, tree=tree,
         )
 
+        # Record executed file-WRITING statements by code text (CAS-81/82):
+        # writes have no variable edge, so the upstream simulation needs this
+        # to tell an edited/new writer from one that already ran.
+        try:
+            if any(e.kind == 'file_write' for e in statement_analysis.side_effects):
+                self._tracking_state.executed_write_stmt_codes.add(code)
+        except AttributeError:
+            pass
+
         # Detect in-place mutations (detection-only; do not modify lineage).
         # Reuses the StatementAnalysis from process_statement to avoid a
         # second pass of AST visitors over the same tree.

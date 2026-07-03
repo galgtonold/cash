@@ -431,6 +431,16 @@ class TestSideEffects:
         a = _analyze("s = p.read_text()")
         assert not any(e.kind == 'file_write' for e in a.side_effects)
 
+    def test_statement_writes_files_helper(self):
+        # CAS-81/82: the sim/planner seam for scheduling stale writers.
+        from cash.notebook.cacheability import statement_writes_files
+        assert statement_writes_files("df.to_csv('out.csv', index=False)")
+        assert statement_writes_files("with open('f.txt', 'w') as f:\n    f.write('x')")
+        assert statement_writes_files("pickle.dump(obj, fh)")
+        assert not statement_writes_files("df = pd.read_csv('in.csv')")
+        assert not statement_writes_files("x = 1 + 2")
+        assert not statement_writes_files("with open('f.txt') as f:\n    body = f.read()")
+
     def test_os_remove(self):
         a = _analyze("import os; os.remove('file.txt')")
         assert any(e.kind == 'file_write' for e in a.side_effects)

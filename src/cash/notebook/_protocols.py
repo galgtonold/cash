@@ -131,6 +131,13 @@ class TrackingState:
     # Read by UpstreamChecker to detect stale file dependencies.
     executed_file_deps: dict[str, set[str]] = field(default_factory=dict)
 
+    # Written by StatementProcessor after executing a statement with a
+    # file-WRITE side effect; read by ReexecutionPlanner (CAS-81/82).
+    # File writes have no variable edge, so this code-text record is how the
+    # simulation tells an edited/new writer statement from one that already
+    # ran in this session.
+    executed_write_stmt_codes: set[str] = field(default_factory=set)
+
     # Written by StatementProcessor; read by CashMagics for badge display.
     # Accumulates all content hashes seen for a variable across executions.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

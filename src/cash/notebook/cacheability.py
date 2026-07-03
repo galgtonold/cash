@@ -322,6 +322,29 @@ _WRITE_METHODS: frozenset[str] = frozenset({
 # File open modes that indicate writing
 _WRITE_MODES: frozenset[str] = frozenset({'w', 'wb', 'a', 'ab', 'w+', 'wb+', 'a+', 'ab+', 'x', 'xb'})
 
+# Cheap textual pre-filter for statement_writes_files: superset of the names
+# in the write-detection tables above, checked before any AST work.
+_WRITE_TEXT_MARKERS: tuple[str, ...] = (
+    'open(', 'write', 'to_', 'save', 'dump', 'os.', 'shutil.',
+)
+
+
+def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
+    """True when *code* contains a file-WRITE side effect (CAS-81/82).
+
+    Used by the upstream simulation to give file-writing statements a trace
+    entry and by the re-execution planner to schedule stale writers — file
+    writes have no variable edge, so lineage alone never re-runs them.
+    Cheap: a textual marker pre-filter runs before the AST analysis.
+    """
+    if not any(m in code for m in _WRITE_TEXT_MARKERS):
+        return False
+    try:
+        analysis = analyze_statement(code, tree)
+    except (SyntaxError, ValueError, TypeError):
+        return False
+    return any(e.kind == 'file_write' for e in analysis.side_effects)
+
 
 def _get_call_name(func_node: ast.AST) -> str | None:
     """Extract the function name from a call's func node."""

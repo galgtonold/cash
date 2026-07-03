@@ -858,6 +858,15 @@ class VirtualLineage:
             simulation_trace.append(_TraceEntry(stmt_code, outputs, inputs, input_hashes, produced_lineages, files_stale))
             if lookup_time > 0:
                 stmt_lookup_times[stmt_code] = lookup_time
+        else:
+            # No-output statements normally stay out of the trace, but a bare
+            # file-writing expression (``df.to_csv(p)``) IS upstream state a
+            # reader depends on: without a trace entry the planner can never
+            # schedule an edited/stale writer (CAS-81/82). Empty outputs keep
+            # the backward scan indifferent to the entry.
+            from ..cacheability import statement_writes_files
+            if statement_writes_files(stmt_code):
+                simulation_trace.append(_TraceEntry(stmt_code, outputs, inputs, input_hashes, {}, files_stale))
 
     def _simulate_one_cell(
         self,

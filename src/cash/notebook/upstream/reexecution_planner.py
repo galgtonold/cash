@@ -77,6 +77,11 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, broken_vars,
         )
 
+        stmts_to_run_indices, restored_statements_info = self._schedule_file_write_statements(
+            stmts_to_run_indices, simulation_trace, restored_statements_info,
+            broken_vars, virtual_lineage,
+        )
+
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
             virtual_modules, stmt_lookup_times,
@@ -259,6 +264,183 @@ class ReexecutionPlanner:
         if not additions:
             return stmts_to_run_indices
         return sorted(scheduled | additions)
+
+    # Cheap textual pre-filter before running the full AST side-effect
+    # analysis on a trace statement. Superset of the names in the write
+    # detection tables (open modes, pandas to_*, save/savefig, json/pickle
+    # dump, csv.writer, os/shutil mutations, pathlib write_text/bytes).
+    _WRITE_MARKERS = (
+        'open(', 'write', 'to_', 'save', 'dump', 'os.', 'shutil.',
+    )
+
+    def _schedule_file_write_statements(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        restored_statements_info: list[dict],
+        broken_vars: set[str] | None = None,
+        virtual_lineage: dict | None = None,
+    ) -> tuple[list[int], list[dict]]:
+        """Schedule upstream file-WRITING statements whose effect is stale (CAS-81/82).
+
+        File writes have no variable edge, so the backward scan never
+        schedules them: editing a writer cell and re-running only the reader
+        served the stale pre-edit file (CAS-81); and when a writer cell's
+        sibling statements DID re-run, the side-effect-only write statement
+        was still skipped and the reader's freshness stayed decided against
+        the pre-run file state (CAS-82).
+
+        A writer statement is scheduled when
+
+        * its code was never executed in this session (edited or new — the
+          runtime records every executed file-writing statement's code in
+          ``executed_write_stmt_codes``), or
+        * any of its inputs is produced by an already-scheduled statement
+          (its payload changed).
+
+        Restored statements positioned after the first scheduled writer whose
+        variables carry file dependencies are PROMOTED to re-execution: their
+        plan-time restore was validated against the pre-write file state, and
+        re-executing them in trace order (after the writer) overwrites the
+        stale restore with a fresh read.
+        """
+        scheduled = set(stmts_to_run_indices)
+        scheduled_outputs: set[str] = set()
+        for idx in scheduled:
+            scheduled_outputs.update(simulation_trace[idx][1])
+        # A writer whose input is BROKEN is also stale, even when nothing in
+        # the variable plan demands that input (the write may be the only
+        # consumer — e.g. an edited payload that exists just to be dumped).
+        changed_inputs = scheduled_outputs | set(broken_vars or ())
+
+        tracking = getattr(self._classifier, '_tracking_state', None)
+        runtime_lineage = getattr(tracking, 'variable_lineage', None) or {}
+
+        def _input_changed(name: str) -> bool:
+            if name in changed_inputs:
+                return True
+            if virtual_lineage is None:
+                return False
+            virt = virtual_lineage.get(name)
+            run = runtime_lineage.get(name)
+            return virt is not None and run is not None and virt != run
+
+        writer_indices = self._find_stale_file_writer_indices(
+            simulation_trace, scheduled_outputs=changed_inputs, skip=scheduled,
+            virtual_lineage=virtual_lineage,
+        )
+        if not writer_indices:
+            return stmts_to_run_indices, restored_statements_info
+
+        scheduled.update(writer_indices)
+        first_writer = min(writer_indices)
+
+        # Re-materialise a scheduled writer's changed inputs: their producers
+        # may be missing from the plan when the write is the only consumer.
+        pending = list(writer_indices)
+        while pending:
+            w = pending.pop()
+            for v in set(simulation_trace[w][2]):
+                if not _input_changed(v):
+                    continue
+                for prod in range(w - 1, -1, -1):
+                    if v in simulation_trace[prod][1]:
+                        if prod not in scheduled:
+                            scheduled.add(prod)
+                            pending.append(prod)
+                            if self.debug:
+                                logger.debug(
+                                    "[UPSTREAM] Scheduling producer [%s] of writer "
+                                    "input '%s'", prod, v,
+                                )
+                        break
+
+        # Every statement AFTER a scheduled writer whose variables carry file
+        # dependencies must re-execute: its cached value (whether restored at
+        # plan time or simply sitting untouched in memory) was validated
+        # against the PRE-write file state. Re-execution happens in trace
+        # order, after the writer, so its freshness is decided against the
+        # freshly written file.
+        tracking = getattr(self._classifier, '_tracking_state', None)
+        executed_file_deps = getattr(tracking, 'executed_file_deps', None) or {}
+        promoted: set[int] = set()
+        for i in range(first_writer + 1, len(simulation_trace)):
+            if i in scheduled:
+                continue
+            outputs = simulation_trace[i][1]
+            if any(executed_file_deps.get(v) for v in outputs):
+                scheduled.add(i)
+                promoted.add(i)
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM] Promoting file-reader [%s] to re-exec (writer "
+                        "scheduled at [%s]): %s",
+                        i, first_writer, simulation_trace[i][0][:40],
+                    )
+
+        if promoted:
+            promoted_codes = {simulation_trace[i][0] for i in promoted}
+            restored_statements_info = [
+                info for info in restored_statements_info
+                if info.get('code') not in promoted_codes
+            ]
+
+        return sorted(scheduled), restored_statements_info
+
+    def _find_stale_file_writer_indices(
+        self,
+        simulation_trace: list,
+        scheduled_outputs: frozenset | set = frozenset(),
+        skip: frozenset | set = frozenset(),
+        virtual_lineage: dict | None = None,
+    ) -> list[int]:
+        """Trace indices of file-WRITING statements whose effect is stale.
+
+        A writer is stale when its code was never executed in this session
+        (edited/new — the runtime records executed file-writing statements'
+        code in ``executed_write_stmt_codes``) or when one of its inputs is
+        produced by an already-scheduled statement. Also used by the
+        simulator to gate its no-broken-vars early return, so the common
+        path stays cheap: a textual marker pre-filter runs before any AST
+        analysis.
+        """
+        tracking = getattr(self._classifier, '_tracking_state', None)
+        executed_writes = getattr(tracking, 'executed_write_stmt_codes', None)
+        if executed_writes is None:
+            return []
+        runtime_lineage = getattr(tracking, 'variable_lineage', None) or {}
+
+        from ..cacheability import statement_writes_files
+
+        def _input_lineage_drifted(name: str) -> bool:
+            # The writer's payload changed even though nothing in the variable
+            # plan demands it: the simulated (current-code) lineage differs
+            # from the lineage last seen at runtime.
+            if virtual_lineage is None:
+                return False
+            virt = virtual_lineage.get(name)
+            run = runtime_lineage.get(name)
+            return virt is not None and run is not None and virt != run
+
+        writer_indices: list[int] = []
+        for i, entry in enumerate(simulation_trace):
+            if i in skip:
+                continue
+            stmt_code, _outputs, inputs = entry[0], entry[1], entry[2]
+            if not statement_writes_files(stmt_code):
+                continue
+            changed = stmt_code not in executed_writes
+            inputs_changed = bool(set(inputs) & scheduled_outputs) or any(
+                _input_lineage_drifted(v) for v in inputs
+            )
+            if changed or inputs_changed:
+                writer_indices.append(i)
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM] File-writer scheduling: [%s] %s (changed=%s, "
+                        "inputs_changed=%s)", i, stmt_code[:40], changed, inputs_changed,
+                    )
+        return writer_indices
 
     def _dedup_sorted_indices(self, stmts_to_run_indices: list[int]) -> list[int]:
         """Return *stmts_to_run_indices* sorted and deduplicated while preserving order."""

@@ -551,7 +551,17 @@ class NotebookSimulator:
                 broken_vars -= removed
                 trace_event("broken_drop_nocache", dropped=removed, broken=broken_vars)
 
-        if not broken_vars:
+        # File writes have no variable edge, so an edited/new upstream writer
+        # statement leaves broken_vars empty while the on-disk state a reader
+        # depends on is stale (CAS-81/82). The plan must still be built so
+        # the planner can schedule the writer.
+        has_stale_file_writers = bool(
+            self._planner._find_stale_file_writer_indices(
+                simulation_trace, virtual_lineage=virtual_lineage,
+            )
+        )
+
+        if not broken_vars and not has_stale_file_writers:
             self._apply_phase_mutations()
             return [], [], 0.0
 
@@ -560,12 +570,13 @@ class NotebookSimulator:
         # unnecessary.  For example, if df is broken but the current cell's
         # first df-consuming statement is a disk cache hit that restores df,
         # we don't need to re-execute upstream cells that produce df.
-        self._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
-            broken_vars, notebook_cells, current_cell_idx,
-            virtual_lineage, virtual_modules,
-        )
+        if broken_vars:
+            self._virtual_lineage._eliminate_broken_vars_via_current_cell_probe(
+                broken_vars, notebook_cells, current_cell_idx,
+                virtual_lineage, virtual_modules,
+            )
 
-        if not broken_vars:
+        if not broken_vars and not has_stale_file_writers:
             if self.debug:
                 logger.debug("[UPSTREAM] All broken vars resolved by current cell cache hits â€” skipping upstream")
             self._apply_phase_mutations()
