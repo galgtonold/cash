@@ -18,6 +18,7 @@ import sys
 import textwrap
 import threading
 import time
+import types
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -472,6 +473,8 @@ class Cash:
         self._own_pins: dict[int, str] = {}
         # code object -> frozenset of free vars with capture-unsafe uses (CAS-104)
         self._capture_use_cache: dict = {}
+        # code object -> tuple of global names it reads (CAS-107 global folding)
+        self._global_read_cache: dict = {}
         # func_name -> inspect.Signature (or None if introspection failed). Used
         # to bind call arguments to a canonical form so that logically-identical
         # calls written differently (positional vs keyword, omitted vs explicit
@@ -873,6 +876,7 @@ class Cash:
             )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
+            current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
@@ -957,6 +961,7 @@ class Cash:
             )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
+            current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
@@ -1977,40 +1982,52 @@ class Cash:
         if cached is not None:
             return cached
         freevars = set(code.co_freevars or ())
-        unsafe: set[str] = set()
         try:
             tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
         except (OSError, TypeError, SyntaxError, IndentationError):
-            unsafe = set(freevars)
+            result = frozenset(freevars)
         else:
-            for node in ast.walk(tree):
-                if isinstance(node, ast.Call):
-                    f = node.func
-                    if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
-                            and f.value.id in freevars):
-                        unsafe.add(f.value.id)
-                    for a in list(node.args) + [kw.value for kw in node.keywords]:
-                        if isinstance(a, ast.Starred):
-                            a = a.value
-                        if isinstance(a, ast.Name) and a.id in freevars:
-                            unsafe.add(a.id)
-                elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
-                    if isinstance(node, ast.Assign):
-                        targets = node.targets
-                    elif isinstance(node, ast.AugAssign):
-                        targets = [node.target]
-                    else:
-                        targets = node.targets
-                    for t in targets:
-                        root = t
-                        while isinstance(root, (ast.Subscript, ast.Attribute, ast.Starred)):
-                            root = root.value
-                        if isinstance(root, ast.Name) and root.id in freevars:
-                            unsafe.add(root.id)
-        result = frozenset(unsafe)
+            result = Cash._unsafe_uses_of(tree, freevars)
         if len(self._capture_use_cache) < 4096:
             self._capture_use_cache[code] = result
         return result
+
+    @staticmethod
+    def _unsafe_uses_of(tree: ast.AST, names: set[str]) -> frozenset:
+        """Return the subset of *names* the AST body *may mutate* (CAS-104).
+
+        Disqualifying uses of a name ``n``: method calls on it (``n.append(...)``
+        — any method, since we can't prove purity), passing it as a bare argument
+        (the callee may mutate), subscript/attribute stores or aug-assigns rooted
+        at it, and ``del``. Iteration, subscript reads, and arithmetic stay safe.
+        Shared by the closure-capture (CAS-104) and module-global (CAS-107) folds.
+        """
+        unsafe: set[str] = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                f = node.func
+                if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                        and f.value.id in names):
+                    unsafe.add(f.value.id)
+                for a in list(node.args) + [kw.value for kw in node.keywords]:
+                    if isinstance(a, ast.Starred):
+                        a = a.value
+                    if isinstance(a, ast.Name) and a.id in names:
+                        unsafe.add(a.id)
+            elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
+                if isinstance(node, ast.Assign):
+                    targets = node.targets
+                elif isinstance(node, ast.AugAssign):
+                    targets = [node.target]
+                else:
+                    targets = node.targets
+                for t in targets:
+                    root = t
+                    while isinstance(root, (ast.Subscript, ast.Attribute, ast.Starred)):
+                        root = root.value
+                    if isinstance(root, ast.Name) and root.id in names:
+                        unsafe.add(root.id)
+        return frozenset(unsafe)
 
     def _fold_closure(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Mix a fingerprint of *func*'s captured free variables into the
@@ -2103,6 +2120,115 @@ class Cash:
         return hashlib.sha256(
             f"{state_hash}:boundself:{self_hash}".encode('utf-8')
         ).hexdigest()
+
+    def _read_global_data_names(self, func: Callable) -> tuple[str, ...]:
+        """Global names *func* references that are candidates for data-folding.
+
+        ``code.co_names`` intersected with the function's globals, minus dunders
+        and minus any global the function WRITES (``STORE_GLOBAL`` /
+        ``DELETE_GLOBAL``). A written global is a side-effect accumulator (a
+        ``global counter; counter += 1``) whose value drifts every call - folding
+        it would make every call miss (the CAS-104 lesson, applied to globals).
+        Modules / callables / classes are filtered per-call at fold time (a
+        name's bound value can change). Cached per code object.
+        """
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return ()
+        cached = self._global_read_cache.get(code)
+        if cached is not None:
+            return cached
+        g = getattr(func, "__globals__", {}) or {}
+        import dis
+        written = {
+            instr.argval for instr in dis.get_instructions(code)
+            if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL")
+        }
+        candidates = {
+            n for n in (code.co_names or ())
+            if n in g and not n.startswith("__") and n not in written
+        }
+        # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
+        # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
+        # otherwise drift every call and cause a permanent miss.
+        if candidates:
+            try:
+                tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+                candidates -= Cash._unsafe_uses_of(tree, candidates)
+            except (OSError, TypeError, SyntaxError, IndentationError):
+                candidates = set()
+        names = tuple(sorted(candidates))
+        if len(self._global_read_cache) < 4096:
+            self._global_read_cache[code] = names
+        return names
+
+    @staticmethod
+    def _stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
+        """Rewrite *v* so callables (incl. lambdas held in containers) are
+        replaced by their source hash, making a container of callables hashable
+        and content-sensitive (CAS-107 dict-dispatch channel)."""
+        if _depth > 8:
+            return v
+        if callable(v) and not isinstance(v, type):
+            try:
+                return ("__cash_callable__", hash_callable(v))
+            except (OSError, TypeError, ValueError):
+                return ("__cash_callable__", getattr(v, "__qualname__", repr(v)))
+        if isinstance(v, dict):
+            return {
+                k: Cash._stabilize_for_global_hash(val, hash_callable, _depth + 1)
+                for k, val in v.items()
+            }
+        if isinstance(v, (list, tuple)):
+            return type(v)(
+                Cash._stabilize_for_global_hash(x, hash_callable, _depth + 1) for x in v
+            )
+        return v
+
+    def _fold_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
+        """Fold module-level DATA globals the function reads into the key (CAS-107).
+
+        A cached function reading a mutable module global (a config constant, a
+        dispatch dict of callables) returned stale results when that global
+        changed, with no warning. Fold the content of read *data* globals so a
+        change invalidates. Modules, plain callables (helpers - tracked via the
+        purity analyzer / dependency graph), and classes are excluded; unhashable
+        data globals warn once and are skipped.
+        """
+        names = self._read_global_data_names(func)
+        if not names:
+            return state_hash
+        g = func.__globals__
+        parts: list[tuple[str, str]] = []
+        for name in names:
+            if name not in g:
+                continue
+            v = g[name]
+            # Skip modules, classes, and plain callables (helpers/deps handled
+            # elsewhere). Containers of callables (dispatch dicts) ARE folded.
+            if isinstance(v, types.ModuleType) or isinstance(v, type):
+                continue
+            if callable(v) and not isinstance(v, (dict, list, tuple, set)):
+                continue
+            try:
+                stabilized = self._stabilize_for_global_hash(v, self._hash_callable_source)
+                h = self._hash_arg_payload((stabilized,), {})
+                parts.append((name, h))
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                self._warn_once(
+                    CashImpurityWarning,
+                    func_name,
+                    name,
+                    f"@cash.cache on {func_name}: reads module global '{name}' whose "
+                    f"value could not be hashed; changes to it will NOT invalidate the "
+                    f"cache.",
+                    stacklevel=6,
+                )
+                continue
+        if not parts:
+            return state_hash
+        payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
+        return hashlib.sha256(f"{state_hash}:globals:{payload}".encode('utf-8')).hexdigest()
 
     def _normalize_call_args(
         self, func_name: str, args: tuple, kwargs: dict,
