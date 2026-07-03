@@ -141,10 +141,24 @@ class TestBuildIterationContext:
         assert ctx == {'outer': 5, 'x': 10}
 
     def test_unhashable_value(self):
-        """Unhashable values are stored as repr."""
+        """Unhashable values are stored as a FULL-content hash (CAS-86).
+
+        repr() truncates large numpy/pandas objects, so two iterations
+        differing outside the repr window collided into one context hash.
+        """
         user_ns = {'x': [1, 2, 3]}
         ctx = build_iteration_context(['x'], user_ns, None)
-        assert ctx == {'x': '[1, 2, 3]'}
+        assert set(ctx) == {'x'}
+        assert isinstance(ctx['x'], str) and len(ctx['x']) == 64
+        # Distinct content -> distinct context entry, even where repr agrees.
+        import numpy as np
+        a = np.zeros(2000)
+        b = np.zeros(2000)
+        b[1000] = 5.0
+        assert repr(a) == repr(b), "precondition: repr truncates the difference"
+        ctx_a = build_iteration_context(['x'], {'x': a}, None)
+        ctx_b = build_iteration_context(['x'], {'x': b}, None)
+        assert ctx_a['x'] != ctx_b['x']
 
     def test_missing_var(self):
         """Missing variables are skipped."""

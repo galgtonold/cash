@@ -146,7 +146,11 @@ def build_iteration_context(
                 hash(value)
                 context[name] = value
             except TypeError:
-                context[name] = repr(value)
+                # repr() TRUNCATES large numpy/pandas objects, so two
+                # iterations differing outside the repr window collided
+                # into one context hash (CAS-86). Hash the full content.
+                from cash.notebook.object_hashing import compute_hash_full
+                context[name] = compute_hash_full(value)
 
     return context
 

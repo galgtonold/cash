@@ -90,6 +90,46 @@ def compute_hash(obj: Any) -> str:
     return hashlib.sha256(str(id(obj)).encode('utf-8')).hexdigest()
 
 
+def compute_hash_full(obj: Any) -> str:
+    """Full-content hash for cache-KEY discrimination (CAS-86).
+
+    ``compute_hash`` SAMPLES large objects (ndarray: first 100 elements,
+    DataFrame: first 5 rows, collections >200: head/tail). That is fine for
+    cheap freshness heuristics, but unsound wherever the hash *is* the key
+    discriminator — per-iteration loop caching keyed two iterations over
+    arrays that agreed in the sample onto one entry and produced a wrong
+    result on the very first run. This variant hashes every byte.
+
+    Fallback ladder mirrors ``compute_hash`` (generic pickle, then the
+    sampled/identity ladder as a last resort).
+    """
+    type_name = type(obj).__name__
+    try:
+        if type_name in ('DataFrame', 'Series'):
+            import pandas as pd
+            if type_name == 'DataFrame':
+                schema = f"{list(obj.columns)!r}:{list(obj.index.names)!r}:"
+            else:
+                schema = f"{obj.name!r}:{list(obj.index.names)!r}:"
+            h = hashlib.sha256(schema.encode('utf-8'))
+            h.update(pd.util.hash_pandas_object(obj).values.tobytes())
+            return h.hexdigest()
+        if type_name == 'ndarray':
+            if getattr(obj.dtype, 'hasobject', False):
+                # Object arrays' buffer bytes are raw pointers, not content.
+                return hashlib.sha256(pickle.dumps(obj)).hexdigest()
+            h = hashlib.sha256(f"{obj.shape}:{obj.dtype}:".encode('utf-8'))
+            try:
+                h.update(memoryview(obj).cast('B'))   # no copy if contiguous
+            except (TypeError, ValueError):
+                h.update(obj.tobytes())
+            return h.hexdigest()
+        return hashlib.sha256(pickle.dumps(obj)).hexdigest()
+    except _HASH_ERRORS as exc:
+        logger.debug("Full hash failed for %s: %s", type_name, exc)
+    return compute_hash(obj)
+
+
 # ---------------------------------------------------------------------------
 # Object size estimation
 # ---------------------------------------------------------------------------

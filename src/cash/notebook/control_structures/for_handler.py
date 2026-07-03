@@ -212,7 +212,12 @@ class ForLoopHandler:
         bindings = bind_target_values(node.target, iteration_value, self.shell.user_ns)
         for name, val in bindings.items():
             try:
-                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else self.statement_processor.compute_hash(val)
+                # The loop variable's hash IS the per-iteration cache-key
+                # discriminator: a sampled hash keyed two iterations over
+                # arrays that agreed in the sample onto ONE entry - wrong
+                # result on the first run (CAS-86). Hash full content here.
+                from cash.notebook.object_hashing import compute_hash_full
+                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else compute_hash_full(val)
                 self.statement_processor.variable_lineage[name] = h
             except (TypeError, ValueError, AttributeError) as exc:
                 if self.debug:
