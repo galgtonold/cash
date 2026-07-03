@@ -108,12 +108,27 @@ class DependencyStateHasher:
         self._graph = graph
         self._helper_resolver = helper_resolver
 
-    def compute(self, node: str, visited: set[str] | None = None) -> str:
+    def compute(
+        self,
+        node: str,
+        visited: set[str] | None = None,
+        *,
+        own_source_override: str | None = None,
+    ) -> str:
         """Return the dependency state hash for *node*.
 
         ``visited`` guards against dependency cycles; a node seen twice
         contributes the empty string. Callers pass nothing — the set is
         seeded internally and threaded through the recursion.
+
+        ``own_source_override`` replaces the ROOT node's own-source
+        component (CAS-109): a wrapper must key on the function object it
+        actually executes, not on whatever the live registry currently
+        holds under the shared ``module.qualname`` slot — otherwise a
+        stale wrapper plants its results under a redefined function's
+        identity (and two same-qualname lambdas collide outright).
+        Recursive dependency calls never receive the override, so helper
+        and dependency state stays live.
         """
         if visited is None:
             visited = set()
@@ -125,7 +140,10 @@ class DependencyStateHasher:
 
         # 1. Node's own state.
         if node in self._functions:
-            hashes.append(self._source_hashes.get(node, ""))
+            if own_source_override is not None:
+                hashes.append(own_source_override)
+            else:
+                hashes.append(self._source_hashes.get(node, ""))
         elif node in self._data_sources:
             ds = self._data_sources[node]
             # state_token() is the source's change token (mtime / version /

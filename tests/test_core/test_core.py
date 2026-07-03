@@ -90,11 +90,17 @@ def test_dependency_invalidation():
     
     # Simulate source code change in dep2
     app.source_hashes[Cash._get_func_key(dep2)] = "changed"
-    
-    # Call main_func2 again - should invalidate and re-execute both functions
+
+    # Call main_func2 again - the DEPENDENT must invalidate and re-execute.
+    # dep2's own wrapper keys on the code object it actually executes
+    # (CAS-109), so a registry-level source poke doesn't invalidate its own
+    # still-valid entry: main re-runs, calls dep2, and dep2 serves its cached
+    # value for the unchanged code. A REAL source change arrives as a
+    # re-registration (new function object -> new pinned identity) and does
+    # recompute - covered by test_registry_identity.py.
     main_func2(10)
-    assert dep_runs == 2, "dep2 should be called again after source change"
     assert main_runs == 2, "main_func2 should be re-executed due to dependency invalidation"
+    assert dep_runs == 1, "dep2 still wraps the old code; its own entry stays valid (CAS-109)"
 
 
 def test_imported_dependency():

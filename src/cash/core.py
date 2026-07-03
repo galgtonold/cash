@@ -463,6 +463,10 @@ class Cash:
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
+        # id(func) -> decoration-pinned own-source identity (CAS-109). The
+        # wrapper closure keeps *func* alive, so the id stays valid for the
+        # wrapper's lifetime (same contract as _func_key_cache).
+        self._own_pins: dict[int, str] = {}
         # func_name -> inspect.Signature (or None if introspection failed). Used
         # to bind call arguments to a canonical form so that logically-identical
         # calls written differently (positional vs keyword, omitted vs explicit
@@ -795,6 +799,41 @@ class Cash:
             self._register_static_dependencies(func_name, file_deps)
         return func_name
 
+    def _pin_own_source(self, func: Callable) -> str:
+        """Identity of *func* itself, pinned per function object (CAS-109).
+
+        The state hash's root component must describe the function the
+        wrapper EXECUTES, not the live ``source_hashes[qualname]`` registry
+        slot — a redefinition (notebook cell re-run) or a second lambda
+        sharing the ``<lambda>`` qualname overwrites that slot, letting a
+        stale wrapper store its results under the new function's identity.
+
+        For named functions the pin equals the registration-time source
+        hash (byte-identical keys for the normal single-registration case,
+        so persisted entries keep hitting). Lambdas additionally fold the
+        code fingerprint: two lambdas defined on the SAME source line share
+        their source text, and only ``co_code``/consts tell them apart.
+        """
+        pin = self._own_pins.get(id(func))
+        if pin is not None:
+            return pin
+        pin = CodeAnalyzer.get_source_hash(func)
+        if getattr(func, '__name__', '') == '<lambda>':
+            code = getattr(func, '__code__', None)
+            if code is not None:
+                # Primitive consts only: nested code objects repr with
+                # memory addresses, which would destabilise the key.
+                consts = tuple(
+                    c for c in code.co_consts
+                    if isinstance(c, (bool, int, float, complex, str, bytes, type(None)))
+                )
+                pin = hashlib.sha256(
+                    f"{pin}:{code.co_code.hex()}:{consts!r}".encode('utf-8')
+                ).hexdigest()
+        if len(self._own_pins) < 4096:
+            self._own_pins[id(func)] = pin
+        return pin
+
     def _resolve_cache_key(
         self,
         func: Callable,
@@ -815,7 +854,9 @@ class Cash:
           - (_CACHE_MISS, result, 'error')                  - key generation error
         """
         try:
-            current_state_hash = self._state_hasher.compute(func_name)
+            current_state_hash = self._state_hasher.compute(
+                func_name, own_source_override=self._pin_own_source(func),
+            )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
@@ -896,7 +937,9 @@ class Cash:
 
         # Build cache key (silently - explain() does not warn).
         try:
-            current_state_hash = self._state_hasher.compute(func_name)
+            current_state_hash = self._state_hasher.compute(
+                func_name, own_source_override=self._pin_own_source(func),
+            )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
