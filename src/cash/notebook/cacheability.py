@@ -312,6 +312,11 @@ _WRITE_METHODS: frozenset[str] = frozenset({
     'save',      # numpy, PIL, torch
     'write',     # file objects
     'writelines',
+    # pathlib.Path writes (CAS-83). Only the unambiguous names: generic
+    # Path mutators like `rename`/`replace`/`touch` collide with common
+    # methods on other types (str.replace!) and would over-flag.
+    'write_text',
+    'write_bytes',
 })
 
 # File open modes that indicate writing

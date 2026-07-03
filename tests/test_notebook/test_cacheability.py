@@ -417,6 +417,20 @@ class TestSideEffects:
         a = _analyze("f = open('data.csv', 'r')")
         assert not any(e.kind == 'file_write' for e in a.side_effects)
 
+    def test_pathlib_write_text(self):
+        # CAS-83: Path.write_text is a file write; without this the write-only
+        # cell is cacheable and a cache hit skips creating the file.
+        a = _analyze("from pathlib import Path\nPath('out.json').write_text('x')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_pathlib_write_bytes(self):
+        a = _analyze("p.write_bytes(b'\\x00')")
+        assert any(e.kind == 'file_write' for e in a.side_effects)
+
+    def test_pathlib_read_text_not_detected(self):
+        a = _analyze("s = p.read_text()")
+        assert not any(e.kind == 'file_write' for e in a.side_effects)
+
     def test_os_remove(self):
         a = _analyze("import os; os.remove('file.txt')")
         assert any(e.kind == 'file_write' for e in a.side_effects)
