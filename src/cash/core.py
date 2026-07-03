@@ -858,6 +858,7 @@ class Cash:
                 func_name, own_source_override=self._pin_own_source(func),
             )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
+            current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
@@ -941,6 +942,7 @@ class Cash:
                 func_name, own_source_override=self._pin_own_source(func),
             )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
+            current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
@@ -1913,6 +1915,48 @@ class Cash:
         if not clo:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
+
+    def _fold_bound_self(
+        self, func: Callable, func_name: str, state_hash: str, warn: bool = True,
+    ) -> str:
+        """Mix a bound method's instance state into the key (CAS-105).
+
+        ``c.cache(obj.method)`` wraps an already-bound method: ``self`` never
+        appears in ``args``, so two instances with different state shared one
+        cache key and silently returned each other's results. Fold
+        ``func.__self__`` through the same machinery as an ordinary argument
+        (so ``register_hasher`` applies exactly as it does for in-class
+        decoration, where ``self`` arrives via ``args``). Hashed per call,
+        not at decoration: instance state may change between calls.
+
+        Unhashable instances fall back to ``id(self)`` — correct (distinct
+        instances stay distinct) but process-local; a one-shot warning points
+        at ``register_hasher``.
+        """
+        if not inspect.ismethod(func):
+            return state_hash
+        owner = func.__self__
+        try:
+            self_hash = self._hash_arg_payload((owner,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+            owner_type = type(owner).__name__
+            if warn:
+                self._warn_once(
+                    CashCacheIneffectiveWarning,
+                    func_name,
+                    owner_type,
+                    f"@cash.cache on bound method {func_name}: the instance's state "
+                    f"could not be hashed ({type(e).__name__}). Falling back to the "
+                    f"instance's identity - entries won't be shared across equal "
+                    f"instances or survive the process. Consider "
+                    f"cash.register_hasher({owner_type}, ...).",
+                )
+            else:
+                logger.debug("bound-self hash failed for %s: %s", func_name, e)
+            self_hash = f"selfid:{id(owner)}"
+        return hashlib.sha256(
+            f"{state_hash}:boundself:{self_hash}".encode('utf-8')
+        ).hexdigest()
 
     def _normalize_call_args(
         self, func_name: str, args: tuple, kwargs: dict,
