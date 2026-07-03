@@ -579,6 +579,25 @@ class CellExecutor:
                 display(output)
         return buffered_result_outputs
 
+    @staticmethod
+    def _expr_has_trailing_semicolon(raw_cell: str, node: ast.stmt) -> bool:
+        """True if expression statement *node* is followed by a ``;`` in the raw
+        source (IPython display suppression). ``ast.unparse`` discards it, so we
+        recover it from the original cell text."""
+        if not isinstance(node, ast.Expr):
+            return False
+        end_line = getattr(node, "end_lineno", None)
+        end_col = getattr(node, "end_col_offset", None)
+        if end_line is None or end_col is None:
+            return False
+        lines = raw_cell.splitlines()
+        if end_line > len(lines):
+            return False
+        rest = lines[end_line - 1][end_col:]
+        if end_line < len(lines):
+            rest = rest + "\n" + "\n".join(lines[end_line:])
+        return rest.lstrip().startswith(";")
+
     def _process_regular_stmt(
         self,
         stmt_code: str,
@@ -686,6 +705,14 @@ class CellExecutor:
                 stmt_code = ast.unparse(node)
             except (ValueError, TypeError):
                 continue
+
+            # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
+            # suppression (``df.head();`` shows no repr). Re-attach it so the
+            # suppression rides through the cache key AND the execution path
+            # (``_execute_statement`` skips the display), so a cached re-run
+            # doesn't emit a phantom repr (CAS-96).
+            if self._expr_has_trailing_semicolon(raw_cell, node):
+                stmt_code = stmt_code + ";"
 
             occ = stmt_occurrence_counts.get(stmt_code, 0)
             stmt_occurrence_counts[stmt_code] = occ + 1

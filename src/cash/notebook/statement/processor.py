@@ -1074,7 +1074,11 @@ class StatementProcessor:
                          c_expr = compile(mod_expr, '<cash>', 'eval')
                          result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
 
-                         if result_val is not None:
+                         # A trailing ``;`` suppresses the repr in IPython. The
+                         # cell splitter re-attaches it after ``ast.unparse``
+                         # (CAS-96); honour it so no repr is displayed OR captured
+                         # (an empty capture then also restores cleanly).
+                         if result_val is not None and not code.rstrip().endswith(';'):
                              display(result_val)
                     else:
                         compiled_code = compile(code, '<cash>', 'exec')
