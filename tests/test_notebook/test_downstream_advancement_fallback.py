@@ -163,7 +163,10 @@ class TestDownstreamAdvancementFallback:
             upstream._check_notebook_based(
                 cell_code,
                 {'x'},        # required_inputs
-                MagicMock(),
+                # A bare MagicMock's result carries a truthy .get('error'),
+                # which the CAS-87 loud-failure path (correctly) raises on -
+                # return None so the auto-executed statement reports cleanly.
+                MagicMock(return_value=None),
                 None,
                 current_cell_outputs={'y'},  # x is NOT an output
             )
