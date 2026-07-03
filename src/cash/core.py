@@ -6,6 +6,7 @@ caching and the `Cash.notebook` bridge for Jupyter integration.
 
 from __future__ import annotations
 
+import ast
 import asyncio
 import atexit
 import functools
@@ -13,6 +14,7 @@ import hashlib
 import inspect
 import logging
 import pickle
+import textwrap
 import threading
 import time
 import warnings
@@ -467,6 +469,8 @@ class Cash:
         # wrapper closure keeps *func* alive, so the id stays valid for the
         # wrapper's lifetime (same contract as _func_key_cache).
         self._own_pins: dict[int, str] = {}
+        # code object -> frozenset of free vars with capture-unsafe uses (CAS-104)
+        self._capture_use_cache: dict = {}
         # func_name -> inspect.Signature (or None if introspection failed). Used
         # to bind call arguments to a canonical form so that logically-identical
         # calls written differently (positional vs keyword, omitted vs explicit
@@ -1878,18 +1882,78 @@ class Cash:
             return all(Cash._is_immutable_capture(x, _depth + 1) for x in v)
         return False
 
+    def _capture_unsafe_uses(self, func: Callable) -> frozenset:
+        """Free-variable names whose captured object *may be mutated* by the
+        function body (CAS-104).
+
+        A capture is only content-foldable into the cache key when the body
+        provably just READS it. Disqualifying uses of a free variable ``n``:
+        method calls on it (``n.append(...)`` — any method, since we can't
+        prove purity), passing it as a bare argument (the callee may mutate),
+        subscript/attribute stores or aug-assigns rooted at it, and ``del``.
+        Iteration, subscript reads, and arithmetic stay safe.
+
+        Cached per code object (closures from one factory share it). When the
+        source is unavailable, every free var is reported unsafe.
+        """
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return frozenset()
+        cached = self._capture_use_cache.get(code)
+        if cached is not None:
+            return cached
+        freevars = set(code.co_freevars or ())
+        unsafe: set[str] = set()
+        try:
+            tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+        except (OSError, TypeError, SyntaxError, IndentationError):
+            unsafe = set(freevars)
+        else:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    f = node.func
+                    if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
+                            and f.value.id in freevars):
+                        unsafe.add(f.value.id)
+                    for a in list(node.args) + [kw.value for kw in node.keywords]:
+                        if isinstance(a, ast.Starred):
+                            a = a.value
+                        if isinstance(a, ast.Name) and a.id in freevars:
+                            unsafe.add(a.id)
+                elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
+                    if isinstance(node, ast.Assign):
+                        targets = node.targets
+                    elif isinstance(node, ast.AugAssign):
+                        targets = [node.target]
+                    else:
+                        targets = node.targets
+                    for t in targets:
+                        root = t
+                        while isinstance(root, (ast.Subscript, ast.Attribute, ast.Starred)):
+                            root = root.value
+                        if isinstance(root, ast.Name) and root.id in freevars:
+                            unsafe.add(root.id)
+        result = frozenset(unsafe)
+        if len(self._capture_use_cache) < 4096:
+            self._capture_use_cache[code] = result
+        return result
+
     def _fold_closure(self, func: Callable, func_name: str, state_hash: str) -> str:
-        """Mix a fingerprint of *func*'s IMMUTABLE captured free variables into
-        the state hash.
+        """Mix a fingerprint of *func*'s captured free variables into the
+        state hash.
 
         Two closures produced by the same factory share a source AND a qualname
         (``factory.<locals>.f``) but capture different values - so without this
         they collide on the same cache key and return each other's results (a
-        silent wrong answer, e.g. ``make(2)`` vs ``make(5)``). Only immutable
-        captures are folded in: they pin the closure's behaviour and can't drift
-        across calls. Mutable captures (a counter dict, an accumulator list) are
-        skipped so a function that mutates a captured object doesn't get a new
-        key every call. Functions with no immutable captures are unaffected.
+        silent wrong answer, e.g. ``make(2)`` vs ``make(5)``).
+
+        Immutable captures are folded by value. Mutable captures (lists,
+        dicts, arrays — e.g. a weights vector) are folded by CONTENT HASH,
+        but only when the body provably just reads them (CAS-104): captures
+        the function reassigns (``nonlocal`` counters) or may mutate in place
+        (accumulators) are skipped, so their keys don't drift call-to-call.
+        A side effect of per-call content hashing: externally mutating a
+        folded capture correctly invalidates the closure's entries.
         """
         closure = getattr(func, "__closure__", None)
         code = getattr(func, "__code__", None)
@@ -1899,6 +1963,7 @@ class Cash:
         # Free vars the function REASSIGNS (nonlocal counters) drift across calls
         # even when their value type is immutable - exclude them.
         written = self._closure_written_freevars(code)
+        unsafe = self._capture_unsafe_uses(func)
         captures = []
         for name, cell in zip(freevars, closure):
             if name in written:
@@ -1909,6 +1974,13 @@ class Cash:
                 continue
             if self._is_immutable_capture(v):
                 captures.append((name, v))
+            elif name not in unsafe:
+                # Read-only mutable capture: fold its content hash (CAS-104).
+                # Unhashable content keeps the old skip behavior.
+                try:
+                    captures.append((name, self._hash_arg_payload((v,), {})))
+                except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+                    continue
         if not captures:
             return state_hash
         clo = self._serialize_args(func_name, tuple(captures), {})
