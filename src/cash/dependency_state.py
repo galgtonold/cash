@@ -100,6 +100,8 @@ class DependencyStateHasher:
         purity_reports: Mapping[str, PurityReport],
         graph: DependencyGraph,
         helper_resolver: HelperResolver,
+        declared_dep_snapshots: Mapping[str, str] | None = None,
+        declared_dep_resolver: Callable[[str], str | None] | None = None,
     ):
         self._functions = functions
         self._data_sources = data_sources
@@ -107,6 +109,14 @@ class DependencyStateHasher:
         self._purity_reports = purity_reports
         self._graph = graph
         self._helper_resolver = helper_resolver
+        # Declared plain-callable deps (CAS-110): snapshot map + live resolver.
+        # Keep the passed dict BY REFERENCE (it is empty at construction and
+        # filled by later registrations) - ``or {}`` would swap in a fresh dict
+        # because an empty dict is falsy, severing the shared reference.
+        self._declared_dep_snapshots = (
+            declared_dep_snapshots if declared_dep_snapshots is not None else {}
+        )
+        self._declared_dep_resolver = declared_dep_resolver
 
     def compute(
         self,
@@ -153,6 +163,16 @@ class DependencyStateHasher:
                 ds._get_mtime() if hasattr(ds, "_get_mtime") else ds.has_changed()
             )
             hashes.append(str(token))
+        elif node in self._declared_dep_snapshots:
+            # A declared plain-callable dep (CAS-110): re-resolve its live
+            # source hash so a disk edit + reload is seen; fall back to the
+            # registration-time snapshot when resolution fails.
+            live = (
+                self._declared_dep_resolver(node)
+                if self._declared_dep_resolver is not None
+                else None
+            )
+            hashes.append(live if live is not None else self._declared_dep_snapshots[node])
 
         # 2. Dependencies' state, sorted for determinism.
         for dep in sorted(self._graph.get_dependencies(node)):

@@ -14,6 +14,7 @@ import hashlib
 import inspect
 import logging
 import pickle
+import sys
 import textwrap
 import threading
 import time
@@ -523,6 +524,13 @@ class Cash:
         # key state hash so cross-process helper edits invalidate.
         self._purity_reports: dict[str, PurityReport] = {}
 
+        # Declared plain-callable dependencies (``depends_on=[proxy_fn]`` where
+        # proxy_fn is NOT a decorated cached function). Snapshot source hash at
+        # registration + a ``(module, attr_chain)`` path for live re-resolution,
+        # so editing the dep on disk + reload invalidates the parent key (CAS-110).
+        self._declared_dep_snapshots: dict[str, str] = {}
+        self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+
         # Deep seam over the registries above: folds source/dependency/
         # helper state into the cache key's ``state_hash`` segment. Borrows
         # the registry dicts by reference so later registrations are seen.
@@ -533,6 +541,8 @@ class Cash:
             purity_reports=self._purity_reports,
             graph=self.graph,
             helper_resolver=SysModulesHelperResolver(self._hash_callable_source),
+            declared_dep_snapshots=self._declared_dep_snapshots,
+            declared_dep_resolver=self._resolve_declared_dep_hash,
         )
 
         atexit.register(self.shutdown)
@@ -1808,7 +1818,71 @@ class Cash:
                 self.data_sources[dep_id] = dep
                 self.graph.add_dependency(func_name, dep_id)
             elif callable(dep):
-                self.graph.add_dependency(func_name, self._get_func_key(dep))
+                dep_key = self._get_func_key(dep)
+                self.graph.add_dependency(func_name, dep_key)
+                # A declared callable dep that is NOT a decorated cached function
+                # would contribute nothing to the state hash (the hasher only
+                # folds functions/data-sources), silently breaking the documented
+                # ``depends_on`` promise (CAS-110). Snapshot its source + a live
+                # resolution path so edits/reloads invalidate the parent key.
+                if dep_key not in self.functions:
+                    self._register_declared_callable_dep(dep, dep_key, func_name)
+
+    def _register_declared_callable_dep(
+        self, dep: Callable[..., Any], dep_key: str, func_name: str
+    ) -> None:
+        """Record a plain-callable ``depends_on`` dependency's source identity.
+
+        Stores a source-hash snapshot and a ``(module, attr_chain)`` path for
+        live re-resolution (so an on-disk edit + ``importlib.reload`` is seen).
+        If the dep's source cannot be hashed (builtin / C-extension), warn once
+        that the declared dependency is inert rather than silently ignore it.
+        """
+        try:
+            snapshot = self._hash_callable_source(dep)
+        except (OSError, TypeError, ValueError):
+            snapshot = None
+        if snapshot is None:
+            self._warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                "",
+                f"@cash.cache on {func_name}: depends_on={getattr(dep, '__qualname__', dep)!r} "
+                f"is a callable whose source cannot be read (builtin / C-extension); "
+                f"changes to it will NOT invalidate the cache.",
+                stacklevel=6,
+            )
+            return
+        self._declared_dep_snapshots[dep_key] = snapshot
+        module = getattr(dep, '__module__', None)
+        qualname = getattr(dep, '__qualname__', None) or getattr(dep, '__name__', None)
+        if module and qualname and '<locals>' not in qualname:
+            self._declared_dep_paths[dep_key] = (module, tuple(qualname.split('.')))
+
+    def _resolve_declared_dep_hash(self, dep_key: str) -> str | None:
+        """Re-resolve a declared plain-callable dep's live source hash.
+
+        Walks the stored ``(module, attr_chain)`` path via ``sys.modules`` and
+        hashes the resolved callable's current source. Returns ``None`` on any
+        resolution/hash failure so the hasher falls back to the snapshot.
+        """
+        path = self._declared_dep_paths.get(dep_key)
+        if path is None:
+            return None
+        mod_name, attr_chain = path
+        obj: Any = sys.modules.get(mod_name)
+        if obj is None:
+            return None
+        for attr in attr_chain:
+            obj = getattr(obj, attr, None)
+            if obj is None:
+                return None
+        if not callable(obj):
+            return None
+        try:
+            return self._hash_callable_source(obj)
+        except (OSError, TypeError, ValueError):
+            return None
 
     def _resolve_dynamic_dependencies(
         self,
@@ -2173,12 +2247,23 @@ class Cash:
         """
         try:
             h = hashlib.sha256(f"{value.shape}:{value.dtype}:".encode())
+            if getattr(value.dtype, "hasobject", False):
+                # object-dtype arrays: the buffer holds raw PyObject *pointers*,
+                # not content, so tobytes() hashes memory addresses - identical
+                # content in fresh objects never collides (permanent misses,
+                # cross-process-unstable) and address reuse could alias distinct
+                # content onto one key (CAS-111). Hash the elements' stable
+                # representation instead (canonicalising nested sets/dicts so the
+                # key is order- and PYTHONHASHSEED-independent).
+                payload = _stable_key_repr(value.tolist())
+                h.update(pickle.dumps(payload, protocol=4))
+                return h.hexdigest()
             try:
                 h.update(memoryview(value).cast("B"))   # no copy if C-contiguous
             except (TypeError, ValueError):
                 h.update(value.tobytes())                # non-contiguous / odd layout
             return h.hexdigest()
-        except (TypeError, ValueError, AttributeError, MemoryError):
+        except (TypeError, ValueError, AttributeError, MemoryError, pickle.PicklingError):
             logger.debug("Failed to hash numpy ndarray")
             return None
 
