@@ -1979,12 +1979,23 @@ class Cash:
 
     @staticmethod
     def _try_hash_pandas(value: Any, type_name: str) -> str | None:
-        """Hash a pandas DataFrame or Series."""
+        """Hash a pandas DataFrame or Series over values AND schema.
+
+        ``hash_pandas_object`` covers row values + index values but NOT the
+        schema labels: column names, ``Series.name``, and index name(s) are
+        invisible to it, so ``df.rename(columns=...)`` (or an empty frame of
+        any shape) collided with the original and returned its cached result
+        (CAS-106). Fold the labels in as a digest prefix.
+        """
         try:
             import pandas as pd
-            return hashlib.sha256(
-                pd.util.hash_pandas_object(value).values.tobytes()
-            ).hexdigest()
+            if type_name == 'DataFrame':
+                schema = f"{list(value.columns)!r}:{list(value.index.names)!r}:"
+            else:  # Series
+                schema = f"{value.name!r}:{list(value.index.names)!r}:"
+            h = hashlib.sha256(schema.encode('utf-8'))
+            h.update(pd.util.hash_pandas_object(value).values.tobytes())
+            return h.hexdigest()
         except (ImportError, TypeError, ValueError, AttributeError):
             logger.debug("Failed to hash pandas %s via hash_pandas_object", type_name)
             return None
