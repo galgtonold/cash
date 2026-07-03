@@ -5,6 +5,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Status: Beta](https://img.shields.io/badge/status-beta-orange.svg)](#status)
 
+> ⚠️ **Work in progress — not released yet.** Cash is under active development and has not been published to PyPI. The install instructions below won't work yet, and APIs and the cache format may change without notice. Watch the repo for the first release.
+
 > **Two lines. Zero config. Restart-and-run-all in seconds instead of minutes.**
 
 ```python
@@ -178,7 +180,7 @@ To wipe the cache: delete `.cash/` or run `%cash_repair --full`.
 
 ## Status
 
-Beta. The public API is stable enough to depend on, but cache-format compatibility may break before 1.0 — assume `%cash_repair --full` after upgrading minor versions.
+**Pre-release / work in progress.** Cash has not been published to PyPI yet. The public API is stabilizing, but anything — including the cache format — may break before the first release; assume `%cash_repair --full` after upgrading.
 
 This is the first public release. We want bug reports. The badge has a "Report a bug" button; or run `%cash_feedback`; or open an issue on [GitHub](https://github.com/galgtonold/cash/issues).
 
