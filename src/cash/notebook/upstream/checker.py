@@ -1351,8 +1351,29 @@ class UpstreamChecker:
                     if result:
                         result['is_upstream'] = True  # Mark as upstream so badge categorizes correctly
                         executed_metrics.append(result)
+                        # The processor reports statement failures via the
+                        # 'error' field instead of raising - surface those
+                        # through the same loud path below (CAS-87).
+                        if result.get('error'):
+                            raise UpstreamStateError(
+                                self._format_upstream_failure(
+                                    stmt_code, str(result['error'])
+                                )
+                            )
+            except UpstreamStateError:
+                raise
             except (RuntimeError, NameError, KeyError, TypeError, ValueError) as e:
+                # Swallowing here served the downstream cell a STALE value
+                # while the upstream producer was silently broken (CAS-87) -
+                # the worst failure mode for a caching layer. Fail the user's
+                # cell with the upstream failure instead, like a plain
+                # top-to-bottom run would.
                 logger.error("[ERROR] Failed to auto-execute statement: %s", e)
+                raise UpstreamStateError(
+                    self._format_upstream_failure(
+                        stmt_code, f"{type(e).__name__}: {e}"
+                    )
+                ) from e
 
             # Report progress after each statement
             if progress_callback is not None:
@@ -1363,6 +1384,25 @@ class UpstreamChecker:
                     pass  # Don't let progress reporting break execution
 
         return executed_metrics
+
+    @staticmethod
+    def _format_upstream_failure(stmt_code: str, error_text: str) -> str:
+        """One-line, embeddable message for an upstream statement failure.
+
+        The executor re-raises this inside the user's cell via a generated
+        ``raise ...('''<msg>''')`` statement, so the message must stay a
+        single line and must not contain a triple quote.
+        """
+        stmt_short = stmt_code.split('\n')[0][:60]
+        if len(stmt_code) > 60 or '\n' in stmt_code:
+            stmt_short += '...'
+        msg = (
+            f"Upstream statement {stmt_short!r} failed during auto-"
+            f"re-execution: {error_text}. Cash stopped instead of running "
+            f"this cell against stale upstream state - fix the upstream "
+            f"cell and re-run."
+        )
+        return msg.replace("'''", '"""').replace('\n', ' ')
 
     def _try_parse_control_structure(self, code: str) -> ast.AST | None:
         """Parse code and return the AST node if it's a single control structure."""

@@ -51,7 +51,7 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
 
-from ...exceptions import AmbiguousCellError
+from ...exceptions import AmbiguousCellError, UpstreamStateError
 from .._protocols import ShellProtocol
 from ..analysis import CodeAnalyzer
 from ..annotations import get_statement_annotations
@@ -452,7 +452,7 @@ class CellExecutor:
             if isinstance(e, SyntaxError):
                 self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
                 return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
-            if isinstance(e, (RuntimeError, AmbiguousCellError)):
+            if isinstance(e, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
                 # Re-raise inside the user's cell so IPython renders the traceback
                 # as if the cell itself raised.  Import the exception class
                 # explicitly because the user's namespace may not have it.
