@@ -311,7 +311,12 @@ class FileBackend(CacheBackend):
 
             metadata.setdefault('source', self.source_label)
             return metadata, value
-        except (OSError, pickle.PickleError, ValueError) as exc:
+        except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError) as exc:
+            # AttributeError/ImportError: the pickled value references a
+            # binding that doesn't exist in this process (e.g. a __main__
+            # class from a previous kernel session, CAS-93). The entry is
+            # unrestorable here - report it absent so callers recompute
+            # instead of crashing the user's cell.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 

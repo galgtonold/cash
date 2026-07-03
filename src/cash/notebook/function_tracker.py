@@ -119,6 +119,25 @@ def _evict_source_cache(cache: dict, max_size: int) -> None:
             del cache[k]
 
 
+def _update_code_object_hash(h: Any, code_obj: Any) -> None:
+    """Feed *code_obj* into hash *h*, recursing into nested code objects.
+
+    ``str(co_consts)`` is NOT usable for consts holding nested code objects
+    (a factory's inner ``def``): their repr embeds the compile-time memory
+    address, so two compiles of IDENTICAL source hashed differently and the
+    cache key of every consumer drifted run-to-run (CAS-93 fallout). Recurse
+    into nested code objects structurally instead.
+    """
+    h.update(code_obj.co_code)
+    h.update(str(code_obj.co_names).encode('utf-8'))
+    h.update(str(code_obj.co_varnames).encode('utf-8'))
+    for const in code_obj.co_consts:
+        if isinstance(const, types.CodeType):
+            _update_code_object_hash(h, const)
+        else:
+            h.update(repr(const).encode('utf-8'))
+
+
 def _compute_bytecode_hash(func: Any) -> str | None:
     """Compute a hash from a function's bytecode when source is unavailable."""
     code_obj = getattr(func, '__code__', None)
@@ -127,15 +146,9 @@ def _compute_bytecode_hash(func: Any) -> str | None:
     if code_obj is None:
         return None
     try:
-        parts = [
-            code_obj.co_code,
-            str(code_obj.co_consts).encode('utf-8'),
-            str(code_obj.co_names).encode('utf-8'),
-            str(code_obj.co_varnames).encode('utf-8'),
-        ]
-        return hashlib.sha256(b''.join(
-            p if isinstance(p, bytes) else p for p in parts
-        )).hexdigest()
+        h = hashlib.sha256()
+        _update_code_object_hash(h, code_obj)
+        return h.hexdigest()
     except (AttributeError, TypeError, ValueError) as exc:
         logger.debug("[FUNC_TRACKER] Failed to compute bytecode hash for function: %s", exc)
         return None

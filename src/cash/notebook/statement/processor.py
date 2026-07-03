@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import hashlib
+import inspect
 import logging
 import pickle
 import sys
@@ -1368,6 +1369,29 @@ class StatementProcessor:
             captured_vars, execution_time, force_persist,
             has_file_dependencies=bool(file_dependencies),
         )
+
+        # Statements whose outputs include a __main__-defined function or
+        # class are never VALUE-cached (CAS-93): those values pickle BY
+        # REFERENCE to a binding that won't exist in the next session, so a
+        # value entry would either crash the lookup (dangling find_class ->
+        # AttributeError) or "restore" nothing and wrongly skip the defining
+        # statement. Route them through the metadata-only path (same as the
+        # size-aware skip): output lineages persist for the upstream
+        # simulation, while the value lookup misses cleanly and the cheap
+        # statement (lambda assign, `g = f` alias) re-executes.
+        if not should_skip:
+            _unrestorable = sorted(
+                _name for _name, _v in captured_vars.items()
+                if (inspect.isfunction(_v) or inspect.isclass(_v))
+                and getattr(_v, '__module__', None) == '__main__'
+            )
+            if _unrestorable:
+                should_skip = True
+                skip_reason = (
+                    f"__main__ function/class output(s) "
+                    f"{', '.join(_unrestorable)} are unrestorable by value; "
+                    f"statement re-executes (lineage persists)"
+                )
         # Cost-model prediction fields are shared by both the skip and the
         # full-store branches; build them once.
         cost_fields: dict[str, Any] = {}
