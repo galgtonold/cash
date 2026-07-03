@@ -185,6 +185,17 @@ class FileDependencyRegistry:
         # Json
         self.register('json', 'load', self._create_path_arg_handler)
 
+        # Directory listing (CAS-85): a cell that enumerates a directory and
+        # reads the matches gets file-deps only for the files READ on the first
+        # run, so a NEW matching file is invisible. Track the enumerated
+        # directory itself as a dependency - adding/removing an entry bumps the
+        # directory's own mtime on local filesystems, so the existing mtime
+        # freshness check invalidates the reader.
+        self.register('glob', 'glob', self._create_glob_dir_handler)
+        self.register('glob', 'iglob', self._create_glob_dir_handler)
+        self.register('os', 'listdir', self._create_listdir_handler)
+        self.register('os', 'scandir', self._create_listdir_handler)
+
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
         """
         Register a file tracking handler for a specific function.
@@ -238,6 +249,48 @@ class FileDependencyRegistry:
                     _tracker._track_path(path_or_buf)
             return original_func(path_or_buf, *args, **kwargs)
         return tracked_func
+
+    @staticmethod
+    def _glob_base_dir(pattern: Any) -> str | None:
+        """Return the longest leading, magic-free directory of a glob *pattern*.
+
+        ``gdir/*.num`` → ``gdir``; ``a/b*/c`` → ``a`` (deepest stable ancestor).
+        The directory's mtime is what we track for membership changes.
+        """
+        import glob as _glob
+        try:
+            parts = str(pattern).replace('\\', '/').split('/')
+        except (TypeError, ValueError):
+            return None
+        base: list[str] = []
+        for p in parts[:-1]:  # exclude the filename component
+            if _glob.has_magic(p):
+                break
+            base.append(p)
+        return '/'.join(base) or '.'
+
+    @staticmethod
+    def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """Track the directory a ``glob`` pattern enumerates (CAS-85)."""
+        def tracked_glob(pathname, *args, **kwargs):
+            _tracker = _active_tracker.get()
+            if _tracker is not None:
+                base = FileDependencyRegistry._glob_base_dir(pathname)
+                if base is not None:
+                    _tracker._track_path(base)
+            return original_func(pathname, *args, **kwargs)
+        return tracked_glob
+
+    @staticmethod
+    def _create_listdir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """Track the directory passed to ``os.listdir`` / ``os.scandir`` (CAS-85)."""
+        def tracked_listdir(path='.', *args, **kwargs):
+            if isinstance(path, (str, bytes, os.PathLike)):
+                _tracker = _active_tracker.get()
+                if _tracker is not None:
+                    _tracker._track_path(path)
+            return original_func(path, *args, **kwargs)
+        return tracked_listdir
 
 class PostImportHook(importlib.abc.MetaPathFinder):
     """Intercepts imports of registered modules to patch them after loading.
