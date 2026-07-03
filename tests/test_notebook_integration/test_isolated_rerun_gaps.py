@@ -100,11 +100,9 @@ class TestIsolatedRerunGaps:
 
     # ---- primitives / builtin containers (no _cash_lineage_hash attribute) ----
 
-    @pytest.mark.xfail(reason="Interdependent multi-target swap (a, b = b, a): both outputs "
-                              "of one statement share a single lineage, so the per-variable "
-                              "cell-entry base no longer distinguishes a from b and the "
-                              "no-lineage guard cannot restore the pair. " + _GAP3,
-                       strict=False)
+    # FIXED (CAS-43, first channel) as fallout of the 2026-07-03 fix batch:
+    # the multi-target swap now restores the pair correctly on isolated
+    # re-run (verified deterministic across repeated --runxfail runs).
     def test_primitive_tuple_swap(self, nb_runner):
         _two_cell(nb_runner, "a = 1\nb = 2", "a, b = b, a\nprint(f'{a},{b}')", "2,1")
 

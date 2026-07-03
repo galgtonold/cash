@@ -46,14 +46,9 @@ def test_exhausted_generator_rerun(nb_runner):
     assert "[0, 1, 2]" in nb_runner.get_output(2), nb_runner.get_output(2)
 
 
-@pytest.mark.xfail(reason="Hidden function state: a function that mutates a module "
-                          "global via the `global` keyword (`def inc(): global g; "
-                          "g += 1`) is flagged impure but the mutation is not "
-                          "attributed to `g`, so on an isolated re-run `g` is not "
-                          "reset and the call advances it again. Statically "
-                          "detectable (a future enhancement) but not a localized "
-                          "fix. CAS-49 family.",
-                   strict=False)
+# FIXED (CAS-49 family, via CAS-93): definition statements always re-execute
+# now, so the isolated re-run re-runs `def inc()` and the upstream chain
+# re-seeds `g` — the hidden global mutation no longer accumulates.
 def test_global_keyword_mutation_rerun(nb_runner):
     nb_runner.create_notebook([
         "g = 0\ndef inc():\n    global g\n    g += 1",
@@ -66,12 +61,9 @@ def test_global_keyword_mutation_rerun(nb_runner):
     assert nb_runner.get_output(2).strip().endswith("1"), nb_runner.get_output(2)
 
 
-@pytest.mark.xfail(reason="Mutable default argument (`def acc(x, bucket=[]): "
-                          "bucket.append(x)`) holds state on the function object "
-                          "across calls; cash cannot see or reset it, so an "
-                          "isolated re-run accumulates ([1] -> [1, 1]). Fundamental "
-                          "hidden-state limitation. CAS-49 family.",
-                   strict=False)
+# FIXED (CAS-49 family, via CAS-93): definition statements always re-execute
+# now, so the isolated re-run recreates the function object — and with it a
+# FRESH mutable default — instead of reusing the accumulated one.
 def test_mutable_default_arg_rerun(nb_runner):
     nb_runner.create_notebook([
         "def acc(x, bucket=[]):\n    bucket.append(x)\n    return bucket",
