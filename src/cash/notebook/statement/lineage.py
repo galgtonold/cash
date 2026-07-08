@@ -33,6 +33,11 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from .derivation_edges import (
+    bump_derived_lineages,
+    clear_edges_for,
+    detect_derivation_edges,
+)
 from .file_deps import compute_file_hash_component, read_module_source_hash
 
 if TYPE_CHECKING:
@@ -120,6 +125,16 @@ class StatementLineageBuilder:
             # are written together and cannot drift.
             tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
 
+            # Derivation-alias edges (CAS-115 / CAS-89). A fresh rebind
+            # (``g = ...`` — output not also read as an input) drops the var's
+            # stale edges before we re-detect; an in-place mutation
+            # (``df.iloc[...] = ...`` — output IS an input) keeps them.
+            if var_name not in inputs:
+                clear_edges_for(tracking_state.derivation_edges, var_name)
+            detect_derivation_edges(
+                tracking_state.derivation_edges, var_name, value, user_ns
+            )
+
             self._apply_granular_module_update(tracking_state, var_name, value, output_lineage_hash)
 
             if var_name not in tracking_state.executed_cell_hashes:
@@ -134,6 +149,22 @@ class StatementLineageBuilder:
             tracking_state.variable_sources[var_name] = cache_key
 
             self._file_deps.update_for_var(tracking_state, var_name, accessed_files, inputs, value)
+
+        # After all outputs' lineages are recorded, replay derivation bumps:
+        # a mutation of a base/frame bumps its live-alias derivatives
+        # (CAS-115 / CAS-89). Skip-inputs rule keeps view *creation* from
+        # invalidating its base. Runtime attaches the live value so the bumped
+        # var's ``_cash_lineage_hash`` stays paired with its dict entry.
+        bump_derived_lineages(
+            tracking_state.derivation_edges,
+            tracking_state.variable_lineage,
+            outputs,
+            inputs,
+            record=lambda t, h: tracking_state.lineage.record(
+                t, h, value=user_ns.get(t)
+            ),
+            present=lambda t: t in user_ns,
+        )
 
         return captured_vars
 

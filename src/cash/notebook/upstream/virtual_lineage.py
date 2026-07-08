@@ -31,6 +31,7 @@ from ..file_dep_snapshot import split_file_dep_value
 from ..cache_key import CacheKeyContext, compute_cache_key
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from ..statement.derivation_edges import bump_derived_lineages
 from ._types import (
     IncrementalStartResult as _IncrementalStartResult,
     RestoreCollector,
@@ -104,6 +105,10 @@ class VirtualLineage:
 
         # Buffered TrackingState mutations; orchestrator drains after the phase.
         self._restores = RestoreCollector()
+
+        # Derivation-alias vars bumped during the most recent cache-hit
+        # propagation (CAS-115 / CAS-89); read back by _update_virtual_lineage.
+        self._last_hit_bumped: set[str] = set()
 
     def set_tracking_state(self, state: TrackingState) -> None:
         """Re-wire shared state refs (mirrors NotebookSimulator.set_tracking_state)."""
@@ -1290,6 +1295,7 @@ class VirtualLineage:
         stmt_code: str,
         cache_key: str,
         outputs: set[str],
+        inputs: set[str],
         virtual_lineage: dict[str, str],
         virtual_modules: set[str],
         is_import: bool,
@@ -1307,6 +1313,19 @@ class VirtualLineage:
             print(f"[UPSTREAM] Forward propagating cached lineages for {stmt_code[:30]}...")
         for var, h in output_lineages.items():
             virtual_lineage[var] = h
+        # Even on a cache hit, replay the derivation-alias bump so a mutation of
+        # a base/frame (its own lineage restored from cache here) still bumps its
+        # live-alias derivatives (CAS-115 / CAS-89). Same skip-inputs rule and
+        # deterministic formula as the runtime and the miss path. Bumped vars are
+        # threaded back so the caller can union them into ``outputs``.
+        self._last_hit_bumped = bump_derived_lineages(
+            self._tracking_state.derivation_edges,
+            virtual_lineage,
+            outputs,
+            inputs,
+            record=lambda t, h: virtual_lineage.__setitem__(t, h),
+            present=lambda t: True,
+        )
         if is_import:
             for out in outputs:
                 if out in virtual_modules and out not in self.variable_lineage:
@@ -1352,6 +1371,7 @@ class VirtualLineage:
         stmt_code: str,
         cache_key: str,
         outputs: set[str],
+        inputs: set[str],
         virtual_lineage: dict[str, str],
         virtual_modules: set[str],
         is_import: bool,
@@ -1389,11 +1409,12 @@ class VirtualLineage:
                 files_valid = not hist_files or self._validate_file_freshness(hist_files, self.debug)
 
                 if files_valid and output_lineages:
+                    self._last_hit_bumped = set()
                     _sentinel, _, hit_file_deps = self._apply_cache_hit_propagation(
-                        stmt_code, cache_key, outputs, virtual_lineage, virtual_modules,
+                        stmt_code, cache_key, outputs, inputs, virtual_lineage, virtual_modules,
                         is_import, metadata, hist_files, output_lineages,
                     )
-                    return ('hit', cache_lookup_time, hit_file_deps)
+                    return ('hit', cache_lookup_time, hit_file_deps, self._last_hit_bumped)
 
                 if not files_valid:
                     files_stale = True
@@ -1568,11 +1589,14 @@ class VirtualLineage:
 
             # Try forward-propagation from cache
             cache_result = self._try_virtual_cache_propagation(
-                stmt_code, cache_key, outputs, virtual_lineage, virtual_modules, is_import
+                stmt_code, cache_key, outputs, inputs, virtual_lineage, virtual_modules, is_import
             )
 
             if cache_result[0] == 'hit':
-                _, cache_lookup_time, stmt_file_deps = cache_result
+                _, cache_lookup_time, stmt_file_deps, hit_bumped = cache_result
+                # Union derivation-bumped vars so this cached mutation statement
+                # is still recorded as a producer of the aliased base.
+                outputs = outputs | hit_bumped
                 return outputs, cache_lookup_time, False, stmt_file_deps
 
             _, cache_lookup_time, files_stale, stmt_file_deps, extra_file_deps = cache_result
@@ -1596,6 +1620,26 @@ class VirtualLineage:
             # Update virtual state
             for out in outputs:
                 virtual_lineage[out] = lineage_hash
+
+            # Mirror the runtime derivation-alias bump (CAS-115 / CAS-89): when
+            # a base/frame is mutated in place, bump its live-alias derivatives.
+            # The simulator cannot observe ``.base`` / ``.obj`` identity, so it
+            # only REPLAYS the runtime-recorded edge map with the SAME
+            # skip-inputs rule and the SAME deterministic derived-hash formula,
+            # keeping runtime and simulation byte-identical. No live namespace,
+            # so every edge target counts as present. Union bumped vars into
+            # ``outputs`` so the reexecution planner records THIS statement as a
+            # producer of the aliased base and reschedules it on an isolated
+            # re-run (the base's own cache is the stale pre-mutation value).
+            bumped = bump_derived_lineages(
+                self._tracking_state.derivation_edges,
+                virtual_lineage,
+                outputs,
+                inputs,
+                record=lambda t, h: virtual_lineage.__setitem__(t, h),
+                present=lambda t: True,
+            )
+            outputs = outputs | bumped
 
             # CRITICAL: Propagate module lineages to self.variable_lineage immediately.
             # Without this, compute_cache_key won't find the module in variable_lineage

@@ -186,6 +186,17 @@ class TrackingState:
     # ``obj.method()`` whose method is not statically known to mutate.
     mutation_verdicts: dict[str, set[str]] = field(default_factory=dict)
 
+    # Written by StatementLineageBuilder after detecting a live-alias derivation
+    # (numpy view -> base, pandas groupby/rolling ref-holder -> source frame);
+    # read by VirtualLineage (upstream simulation). Maps
+    # ``bump_source_var -> {vars to bump when that source var's lineage bumps
+    # due to an in-place mutation}``. Models the object graph that lineage alone
+    # cannot see: mutating a numpy view mutates its base; mutating a frame
+    # mutates the groupby that still holds a live reference to it. The runtime
+    # detects the edges (it can observe ``.base`` / ``.obj`` identity); the
+    # simulation only REPLAYS this recorded map. See CAS-115 / CAS-89.
+    derivation_edges: dict[str, set[str]] = field(default_factory=dict)
+
     # The single seam for reading/writing variable lineage. Wraps
     # ``variable_lineage`` as its backing dict so callers that still mutate
     # the dict directly during migration stay in sync. See ``CONTEXT.md``

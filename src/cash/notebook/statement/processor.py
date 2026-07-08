@@ -707,6 +707,24 @@ class StatementProcessor:
             cache_key=cache_key, accessed_files=accessed_files, tree=tree,
         )
 
+        # A statement producing a live-alias object (numpy view, pandas
+        # groupby/rolling ref-holder) must NOT be cached: pickling and restoring
+        # such an object decouples it from its live base, so a later base
+        # mutation would be lost after restore. Force re-derivation from the live
+        # base instead (CAS-115 / CAS-89). ``.copy()`` produces no alias and stays
+        # cacheable (over-invalidation guard).
+        if not skip_cache:
+            from .derivation_edges import is_uncacheable_alias
+            for out in outputs:
+                val = captured_vars.get(out)
+                if val is not None and is_uncacheable_alias(val):
+                    skip_cache = True
+                    metrics.setdefault('uncacheable_reasons', []).append(
+                        f"Live-alias object '{out}' (view/ref-holder); re-derived "
+                        "from live base, not cached (CAS-115/89)."
+                    )
+                    break
+
         # Record executed file-WRITING statements by code text (CAS-81/82):
         # writes have no variable edge, so the upstream simulation needs this
         # to tell an edited/new writer from one that already ran.
