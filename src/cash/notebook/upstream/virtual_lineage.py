@@ -896,6 +896,19 @@ class VirtualLineage:
         trace_start = len(simulation_trace)
         cell_file_deps: dict = {}
 
+        # Model ``%reset`` / ``%reset -f`` as a full namespace wipe BEFORE the
+        # strip_magics empty-cell short-circuit below (a reset cell strips to
+        # empty). Like ``del`` it clears ``user_ns`` but not ``variable_lineage``;
+        # position-scoping (the simulator only replays cells 0..current) means a
+        # reset ABOVE the target wipes the virtual state so an above-the-reset
+        # consumer's inputs are reconstructed, while a reset BELOW is never
+        # simulated. Without this the liveness gate (CAS-94) would resurrect a
+        # reset variable as a phantom restore (test_reset_magic_no_phantom_restore).
+        for line in cell_code.split('\n'):
+            if line.strip().startswith('%reset'):
+                virtual_lineage.clear()
+                virtual_modules.clear()
+
         try:
             clean_cell_code = CodeAnalyzer.strip_magics(cell_code)
             if not clean_cell_code.strip():
@@ -1550,6 +1563,20 @@ class VirtualLineage:
             mutation_tree = self._get_cached_ast(stmt_code)
             if mutation_tree is not None:
                 outputs = outputs | self._mutation_receivers(stmt_code, mutation_tree)
+
+                # Model bare-name ``del x`` as a namespace removal so the
+                # position-scoped liveness check downstream reconstructs an
+                # above-the-del consumer's inputs (CAS-94). Only ``ast.Name``
+                # targets remove a lineage entry; ``del d[k]`` / ``del obj.attr``
+                # are container mutations handled at cacheability.py:233, so they
+                # must NOT pop the base's lineage here.
+                for node in mutation_tree.body:
+                    if not isinstance(node, ast.Delete):
+                        continue
+                    for tgt in node.targets:
+                        if isinstance(tgt, ast.Name):
+                            virtual_lineage.pop(tgt.id, None)
+                            virtual_modules.discard(tgt.id)
 
             stripped = stmt_code.strip()
             is_import = stripped.startswith(('import ', 'from '))

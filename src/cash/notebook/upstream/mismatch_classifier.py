@@ -899,7 +899,15 @@ class MismatchClassifier:
                     logger.debug("[UPSTREAM_DEBUG] Module '%s' is not in memory. Marking as broken for re-import.", var_name)
                 broken_vars.add(var_name)
                 continue
-            if var_name in self.variable_lineage:
+            # Gate on the LIVE namespace, not the tracking dict. A ``del x`` (or
+            # ``%reset``) removes ``x`` from ``user_ns`` but leaves
+            # ``variable_lineage['x']`` behind; the old ``in self.variable_lineage``
+            # short-circuit therefore hid the missing input and never scheduled the
+            # producer to rebuild it (CAS-94). ``virtual_lineage`` is already
+            # position-scoped by the simulator (a del/%reset ABOVE the target pops
+            # the name; one BELOW is never simulated), so an input that survives to
+            # here yet is absent from memory must be reconstructed.
+            if var_name in self.shell.user_ns:
                 continue
 
             if var_name in utility_vars or var_name.startswith('_'):
