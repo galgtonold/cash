@@ -406,6 +406,14 @@ class UpstreamChecker:
                                ast.With, ast.AsyncWith))
                 for n in ast.walk(op_tree)
             )
+            # A top-level ``class Sub(Base):`` defining a subclass triggers the
+            # base's ``__init_subclass__`` hook during CLASS CREATION — a hidden
+            # mutation with no Call/Subscript/etc. node of its own — so gate the
+            # object-protocol scan on a based class def too (CAS-103).
+            has_op_trigger = has_op_trigger or any(
+                isinstance(n, ast.ClassDef) and n.bases
+                for n in op_tree.body
+            )
             if has_op_trigger:
                 class_sources = self._notebook_class_sources(cell_code)
                 op_func_sources = self._notebook_function_sources(cell_code)
@@ -473,9 +481,19 @@ class UpstreamChecker:
                 # once (no cross-cell in-place build) and are unaffected. [CAS-75]
                 op_receivers = op_resets.receivers - nocache_vars
                 op_class_defs = op_resets.class_defs - nocache_vars
-                if op_receivers or op_class_defs:
+                # A base ``__init_subclass__`` free-var registry (CAS-103) hides
+                # its mutation behind class creation, so — unlike an ordinary
+                # CAS-68 free var — the simulator's content-base guard cannot see
+                # that a SIBLING subclass cell also appends to it. Guard it with
+                # the same cross-cell suppression as the receiver / class-def
+                # channels: if another cell also registers into it, this cell is
+                # not the sole mutator and the free-var reset would drop that
+                # cell's contribution on run_all.
+                op_init_free = op_resets.init_subclass_free_vars - nocache_vars
+                if op_receivers or op_class_defs or op_init_free:
                     other_receivers: set[str] = set()
                     other_class_defs: set[str] = set()
+                    other_init_free: set[str] = set()
                     seen_current = False
                     for _code in self._other_notebook_cells(cell_code):
                         if not seen_current and _code == cell_code:
@@ -490,11 +508,16 @@ class UpstreamChecker:
                             continue
                         other_receivers |= other.receivers
                         other_class_defs |= other.class_defs
+                        other_init_free |= other.init_subclass_free_vars
                     op_receivers = op_receivers - other_receivers
                     op_class_defs = op_class_defs - other_class_defs
+                    op_init_free = op_init_free - other_init_free
                 current_cell_mutated |= op_receivers
                 current_cell_method_receivers |= op_receivers
                 current_cell_stateful_funcs |= op_class_defs
+                # Survivors (sole-mutator subclass cells) join the free-var reset.
+                current_cell_mutated |= op_init_free
+                required_inputs = required_inputs | op_init_free
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run

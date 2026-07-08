@@ -1273,6 +1273,14 @@ class ObjectProtocolResets:
     free_vars: frozenset[str]
     receivers: frozenset[str]
     class_defs: frozenset[str]
+    # Free vars mutated by a base ``__init_subclass__`` hook fired during class
+    # creation (CAS-103). Kept apart from ``free_vars`` because — unlike an
+    # ordinary CAS-68 free-var mutation, whose upstream occurrences the simulator
+    # sees as top-level statements — this mutation is hidden behind class creation
+    # in EVERY subclass cell, so the simulator's content-base cross-cell guard is
+    # blind to it. The caller applies the CAS-75 cross-cell suppression before
+    # routing these to the (otherwise self-protecting) free-var reset.
+    init_subclass_free_vars: frozenset[str] = frozenset()
 
 
 def _first_param_name(func: ast.FunctionDef | ast.AsyncFunctionDef) -> str | None:
@@ -1980,8 +1988,39 @@ def object_protocol_mutations(
                         if method is not None:
                             _apply_method(cdef, cls, method, recv, allow_self=True)
 
+    # --- top-level ``class Sub(Base):`` triggering a base __init_subclass__ -----
+    # A subclass def runs the nearest base's ``__init_subclass__(cls, ...)`` hook
+    # during CLASS CREATION (before any node in this cell's body executes), so it
+    # is invisible to the executable-node walk above. The hook receives ``cls``
+    # (the fresh subclass, discarded on re-derivation) — analyse its body exactly
+    # like a constructor (``allow_self=False``) so only its class-var / free-var
+    # mutations persist. A class-var accumulator (``Base.registry``) routes to the
+    # class-def channel (already under the CAS-75 cross-cell guard); a module/free
+    # var (``registry.append``) is collected SEPARATELY so the caller can apply the
+    # same guard — the simulator cannot see this hidden cross-cell mutation.
+    # Only ``__init_subclass__`` is handled here (metaclass hooks / __set_name__
+    # are separate follow-ups). ClassDefs are deferred scopes so the walk above
+    # never yields them — scan ``tree.body`` directly (CAS-103).
+    init_subclass_free: set[str] = set()
+    for node in tree.body:
+        if not (isinstance(node, ast.ClassDef) and node.bases):
+            continue
+        for base_name in _class_bases(node):
+            base_cdef = _classdef(base_name)
+            if base_cdef is None:
+                continue
+            hook = _class_method(base_cdef, '__init_subclass__', resolve_class_source)
+            if hook is not None:
+                _, class_targets, fv = _classify_method_mutations(
+                    hook, base_name, base_cdef, resolve_class_source,
+                )
+                class_defs.update(class_targets)
+                init_subclass_free.update(fv)
+                break
+
     return ObjectProtocolResets(
         frozenset(free_vars), frozenset(receivers), frozenset(class_defs),
+        frozenset(init_subclass_free),
     )
 
 
