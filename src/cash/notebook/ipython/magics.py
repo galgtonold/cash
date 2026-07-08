@@ -115,6 +115,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         super().__init__(shell)
         self._cash_instance = cash_instance
         self._execution_lock = False
+        # Re-entrancy guard for the run_cell_async wrapper. IPython's *sync*
+        # ``run_cell`` delegates to ``run_cell_async`` internally (via the
+        # pseudo-sync runner), so once we patch ``run_cell_async`` it would
+        # otherwise fire a SECOND time for every sync cell — double-running
+        # cash's pre/post work. This flag is raised for the dynamic extent of
+        # the sync ``_execute_cell`` so the nested async call knows to just
+        # delegate without repeating cash's pipeline.
+        self._in_sync_cell = False
         self._debug = cash_instance.debug
 
         # Auto-caching mode state
@@ -242,6 +250,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 shell.run_cell = prior['original_run_cell']
             except (KeyError, AttributeError):
                 pass
+            # Restore the async entry point too, so a reset_session /
+            # second-Cash re-patch captures the true-original run_cell_async
+            # rather than nesting our wrapper on every reset.
+            if 'original_run_cell_async' in prior:
+                try:
+                    shell.run_cell_async = prior['original_run_cell_async']
+                except (KeyError, AttributeError):
+                    pass
 
         # Register event handler to capture cell_id before execution
         try:
@@ -257,11 +273,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Monkey-patch run_cell to intercept execution
         self._original_run_cell = shell.run_cell
         shell.run_cell = self._execute_cell
+
+        # Also intercept run_cell_async: ipykernel dispatches top-level-await
+        # cells (``x = await f()``) through ``shell.run_cell_async``, NOT the
+        # sync ``run_cell`` we patch above, so without this they would bypass
+        # cash's pipeline entirely (no upstream reconstruction, no self-mod
+        # reset). Guarded because older IPython lacks run_cell_async.
+        self._original_run_cell_async = None
+        if hasattr(shell, 'run_cell_async'):
+            self._original_run_cell_async = shell.run_cell_async
+            shell.run_cell_async = self._execute_cell_async
+
         try:
             shell._cash_hooks = {
                 'original_run_cell': self._original_run_cell,
                 'capture_cell_id': self._capture_cell_id,
             }
+            if self._original_run_cell_async is not None:
+                shell._cash_hooks['original_run_cell_async'] = self._original_run_cell_async
         except (AttributeError, TypeError):
             pass
 
@@ -740,6 +769,19 @@ class CashMagics(CashAdminMagicsMixin, Magics):
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell`` to implement caching when
         ``%cash_on`` is active.  Delegates to :meth:`CellExecutor.execute_cell`."""
+        # Raise the re-entrancy guard for the whole sync execution: IPython's
+        # ``run_cell`` delegates to ``run_cell_async`` internally, so our
+        # patched ``run_cell_async`` would otherwise re-run cash's pipeline on
+        # every sync cell (and on the ``"pass"`` delegation the finaliser
+        # issues). The guard makes that nested async call a no-op passthrough.
+        prev_in_sync = self._in_sync_cell
+        self._in_sync_cell = True
+        try:
+            return self._execute_cell_inner(raw_cell, *args, **kwargs)
+        finally:
+            self._in_sync_cell = prev_in_sync
+
+    def _execute_cell_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         if not self._auto_cache_enabled:
             return self._original_run_cell(raw_cell, *args, **kwargs)
 
@@ -778,6 +820,135 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             result.badge_display_id, result.hook_start, result.timing_breakdown,
             result.badge_render_time, args, kwargs,
         )
+
+    async def _execute_cell_async(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
+        """Proxy for ``interactiveshell.run_cell_async``.
+
+        ipykernel routes cells that contain top-level ``await`` (IPython
+        autoawait) through ``run_cell_async``, not the sync ``run_cell`` that
+        :meth:`_execute_cell` intercepts.  Without this wrapper those cells
+        would skip cash's pipeline entirely — no upstream reconstruction, no
+        self-modifying-reassignment reset, no lineage capture.
+
+        **Execute-exactly-once contract.** Cash must NOT execute the cell's
+        statements itself here: a top-level ``await`` cannot run through the
+        statement processor's synchronous ``exec`` (and doing so would
+        double-run side effects).  Instead this wrapper runs only cash's
+        *non-execution* phases around a single delegation to the original
+        coroutine:
+
+          1. PRE  — upstream reconstruction + self-modifying-input reset
+                    (the same work :class:`CellExecutor` does before it
+                    executes statements), so ``x = await bump(x)`` sees ``x``
+                    reset to its cell-entry value and the awaiting cell picks
+                    up an edited ``async def`` upstream.
+          2. RUN  — ``await`` the original ``run_cell_async`` exactly once.
+                    IPython drives the coroutine on its own live loop and
+                    fires ``pre_run_cell`` / ``post_run_cell`` itself, so we
+                    neither re-execute nor re-fire those events.
+          3. POST — record output lineage from the resulting ``user_ns`` so
+                    downstream cells see correct lineages.
+
+        Caching the awaited result (a cache *hit* on the second run) is a
+        separate, higher-risk concern (driving a coroutine inside cash's own
+        ``exec`` while the kernel loop is running) and is intentionally out of
+        scope here — this stage restores *correctness* only.
+        """
+        if self._original_run_cell_async is None:
+            # Defensive: should not happen (we only patch when it exists).
+            raise RuntimeError("run_cell_async wrapper invoked without an original")
+
+        # Passthrough when there is nothing to do, or when this call is the
+        # RE-ENTRANT one that IPython's sync ``run_cell`` makes internally
+        # (guarded by ``_in_sync_cell``). Doing cash work here would
+        # double-run the pipeline / double-fire events for the sync cell.
+        if not self._auto_cache_enabled or self._in_sync_cell:
+            return await self._original_run_cell_async(raw_cell, *args, **kwargs)
+
+        # Record raw cell text for bug-report history (before any processing).
+        self._execution_history.append(raw_cell)
+
+        # PRE: upstream reconstruction + self-mod reset. Best-effort — a
+        # failure here must never prevent the user's cell from running, so we
+        # log and fall through to plain async execution.
+        try:
+            self._cell_executor._extract_cell_id_and_notebook_path()
+            self._cell_executor._detect_module_changes(raw_cell)
+            self._cell_executor._ensure_state_for_inputs(raw_cell)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001 - never block the user's cell over a pre-check failure
+            logger.debug("[ASYNC] Pre-execution cash handling failed: %s", e)
+
+        # RUN: execute the whole cell exactly once on IPython's live loop.
+        result = await self._original_run_cell_async(raw_cell, *args, **kwargs)
+
+        # POST: capture output lineage from user_ns. Best-effort — this is
+        # bookkeeping for downstream cells and must not turn a successful cell
+        # into a failure.
+        try:
+            self._capture_async_lineage(raw_cell)
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001 - post-capture is bookkeeping only
+            logger.debug("[ASYNC] Post-execution lineage capture failed: %s", e)
+
+        return result
+
+    def _capture_async_lineage(self, raw_cell: str) -> None:
+        """Record output lineage for a top-level-await cell after execution.
+
+        Mirrors the statement processor's post-execution capture (the same
+        ``_analyze_and_hash`` → ``capture_and_track_variables`` path, so cache
+        keys stay computed through the unified ``compute_cache_key``) but does
+        no cache save and no re-execution — the cell already ran on IPython's
+        loop.  Per-statement so each output's lineage reflects the statement
+        that produced it, matching the sync pipeline.
+
+        **Self-reassigned outputs are deliberately NOT captured.**  For a
+        self-modifying statement (``x = await bump(x)`` — a name that is both
+        input and output) the sync pipeline earns idempotent isolated re-runs
+        by *caching* the result and restoring it on a lineage-keyed hit.  That
+        cache round-trip is Stage 2 (out of scope: driving the coroutine inside
+        cash's own ``exec`` is the high-risk part).  Advancing such a var's
+        recorded content hash here would overwrite the producer's cell-entry
+        base, defeating the content-base staleness signal the upstream checker
+        uses to reset a no-lineage self-write.  Leaving the base intact lets the
+        existing reset re-run the producer on the next isolated re-run, so
+        ``x`` returns to its from-start value instead of accumulating.  A var
+        the cell freshly binds (``result = await compute(10)``) is not a
+        self-write and is captured normally.
+        """
+        try:
+            tree = ast.parse(raw_cell)
+        except SyntaxError:
+            return
+
+        sp = self._statement_processor
+        stmt_occurrence_counts: dict[str, int] = {}
+        for node in tree.body:
+            try:
+                stmt_code = ast.unparse(node)
+            except (ValueError, TypeError):
+                continue
+            occ = stmt_occurrence_counts.get(stmt_code, 0)
+            stmt_occurrence_counts[stmt_code] = occ + 1
+            try:
+                inputs, outputs, source_hash, cache_key, _, _ = sp._analyze_and_hash(
+                    stmt_code, occurrence_index=occ,
+                )
+            except Exception as e:  # noqa: BLE001 - skip statements we can't hash
+                logger.debug("[ASYNC] Could not analyze statement for lineage: %s", e)
+                continue
+            # Drop self-reassigned names (see docstring) so their producer's
+            # cell-entry base survives for the reset signal.
+            outputs = outputs - inputs
+            if not outputs:
+                continue
+            sp._lineage.capture_and_track_variables(
+                sp._tracking_state, outputs, inputs, stmt_code, source_hash,
+                cache_key=cache_key,
+            )
 
     def _synthesize_run_cell_raise(
         self,
