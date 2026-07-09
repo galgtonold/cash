@@ -717,7 +717,7 @@ class StatementProcessor:
             from .derivation_edges import is_uncacheable_alias
             for out in outputs:
                 val = captured_vars.get(out)
-                if val is not None and is_uncacheable_alias(val):
+                if val is not None and is_uncacheable_alias(val, self.shell.user_ns):
                     skip_cache = True
                     metrics.setdefault('uncacheable_reasons', []).append(
                         f"Live-alias object '{out}' (view/ref-holder); re-derived "

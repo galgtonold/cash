@@ -44,26 +44,42 @@ __all__ = [
 ]
 
 
-def is_uncacheable_alias(value: Any) -> bool:
-    """True if *value* is a live-alias object that must NOT be cache-restored.
+def is_uncacheable_alias(value: Any, user_ns: dict) -> bool:
+    """True if *value* is a live-alias of a NAMED ``user_ns`` object that must
+    NOT be cache-restored.
 
     A numpy **view** and a pandas **ref-holder** (groupby/rolling/...) each hold
     a live reference to another in-memory object. Pickling and restoring them
     breaks that reference identity (the restored object aliases a stale *copy*),
     so a downstream mutation of the base is lost. These statements must always
-    re-derive from the live base instead of restoring from cache. A ``.copy()``
-    (numpy ``base is None`` / independent pandas frame) is NOT an alias and stays
-    cacheable — the over-invalidation guard.
+    re-derive from the live base instead of restoring from cache.
+
+    The alias is only *uncacheable* when its base resolves to a NAMED live
+    variable that could be mutated elsewhere. Many fresh arrays (``np.linspace``,
+    and in some builds ``np.arange``/ufunc results) carry a non-None ``.base``
+    pointing at an anonymous internal buffer that no user variable references;
+    restoring an independent copy of those is correct, so they stay cacheable.
+    A ``.copy()`` (numpy ``base is None`` / independent pandas frame) is likewise
+    not an alias — the over-invalidation guard.
     """
     try:
         import numpy as np
         if isinstance(value, np.ndarray) and value.base is not None:
-            return True
+            # Only a genuine alias of a NAMED live variable is uncacheable.
+            base = value.base
+            seen: set[int] = set()
+            while base is not None and id(base) not in seen:
+                seen.add(id(base))
+                if _find_name_by_identity(user_ns, base) is not None:
+                    return True
+                base = getattr(base, "base", None)
+            return False
     except ImportError:
         pass
     refholder_types = _pandas_refholder_types()
     if refholder_types and isinstance(value, refholder_types):
-        return True
+        src = getattr(value, "obj", None)
+        return src is not None and _find_name_by_identity(user_ns, src) is not None
     return False
 
 
