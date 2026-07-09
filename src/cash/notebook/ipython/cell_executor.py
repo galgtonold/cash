@@ -221,6 +221,82 @@ class CellExecutor:
             badge_render_time=badge_render_time,
         )
 
+    async def execute_cell_async(
+        self,
+        raw_cell: str,
+        args: tuple = (),
+        kwargs: dict | None = None,
+        original_run_cell: Callable[..., Any] | None = None,
+    ) -> _PipelineCompleted | _PipelineSyntaxError | _EarlyReturn:
+        """Async twin of :meth:`execute_cell` for top-level-await cells.
+
+        Runs the identical 7-phase pipeline — cell id, badge/timing init, module
+        change detection, upstream resolution, AST parse, pre-execution
+        notifications — then awaits :meth:`_execute_cell_statements_async` so a
+        top-level ``await`` executes on IPython's live loop.  Because every phase
+        but statement execution is shared verbatim, the async path can never
+        drift from the sync path in upstream reconstruction, cacheability, or
+        badge accounting.
+        """
+        kwargs = kwargs or {}
+
+        # 1. Cell ID & notebook path
+        self._extract_cell_id_and_notebook_path()
+
+        # 2. Badge & timing init
+        badge_display_id = str(uuid.uuid4())
+        timing_breakdown = self._init_cell_timing_and_badge(badge_display_id)
+        hook_start = time.time()
+        if self._debug:
+            print(f"[TIMING_PROXY] Start cached_run_cell (async): {datetime.now().strftime('%H:%M:%S.%f')}")
+
+        # 3. Module change detection (must precede upstream check)
+        pre_upstream_metrics = self._detect_module_changes(raw_cell)
+
+        # 4. Upstream resolution
+        upstream_result = self._resolve_upstream_state(
+            raw_cell, pre_upstream_metrics, badge_display_id,
+            timing_breakdown, args, kwargs, original_run_cell,
+        )
+        if isinstance(upstream_result, _EarlyReturn):
+            return upstream_result
+        upstream_metrics, _restore_time, _execution_time = upstream_result
+
+        # 5. AST parse
+        try:
+            tree = ast.parse(raw_cell)
+        except SyntaxError:
+            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return _PipelineSyntaxError()
+
+        # 6. Pre-execution notifications
+        all_metrics = self._build_pre_execution_notifications(
+            raw_cell, pre_upstream_metrics, upstream_metrics,
+        )
+
+        if self._debug:
+            print("[TIMING_PROXY] Start executing statements (async)...")
+
+        # 7. Statement execution (awaited)
+        result = await self._execute_cell_statements_async(
+            raw_cell, tree, all_metrics, badge_display_id,
+            hook_start, timing_breakdown,
+        )
+        if isinstance(result, _EarlyReturn):
+            return result
+
+        all_metrics, buffered_result_outputs, badge_render_time = result
+        timing_breakdown['badge_progress'] = badge_render_time
+
+        return _PipelineCompleted(
+            all_metrics=all_metrics,
+            buffered_outputs=buffered_result_outputs,
+            badge_display_id=badge_display_id,
+            hook_start=hook_start,
+            timing_breakdown=timing_breakdown,
+            badge_render_time=badge_render_time,
+        )
+
     # ------------------------------------------------------------------
     # Phase 1: cell ID & notebook path
     # ------------------------------------------------------------------
@@ -598,6 +674,34 @@ class CellExecutor:
             rest = rest + "\n" + "\n".join(lines[end_line:])
         return rest.lstrip().startswith(";")
 
+    def _handle_regular_stmt_metrics(
+        self,
+        metrics: ProcessResult | None,
+        is_last_statement: bool,
+        all_metrics: list[ProcessResult],
+        buffered_result_outputs: list,
+    ) -> list:
+        """Consume a single non-control statement's metrics; return updated buffer.
+
+        Shared tail for the sync and async statement paths — the only thing
+        that differs upstream is how ``metrics`` was produced (sync
+        ``process_statement`` vs awaited ``process_statement_async``).
+        """
+        if not metrics:
+            return buffered_result_outputs
+
+        all_metrics.append(metrics)
+        if metrics.get('stdout'):
+            print(metrics['stdout'], end='')
+        if metrics.get('stderr'):
+            print(metrics['stderr'], end='', file=sys.stderr)
+        if metrics.get('status') == CacheStatus.ERROR and metrics.get('error'):
+            raise metrics['error']
+
+        return self._flush_rich_outputs(
+            metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
+        )
+
     def _process_regular_stmt(
         self,
         stmt_code: str,
@@ -613,19 +717,34 @@ class CellExecutor:
             annotation=annotation,
             occurrence_index=occurrence_index,
         )
-        if not metrics:
-            return buffered_result_outputs
+        return self._handle_regular_stmt_metrics(
+            metrics, is_last_statement, all_metrics, buffered_result_outputs,
+        )
 
-        all_metrics.append(metrics)
-        if metrics.get('stdout'):
-            print(metrics['stdout'], end='')
-        if metrics.get('stderr'):
-            print(metrics['stderr'], end='', file=sys.stderr)
-        if metrics.get('status') == CacheStatus.ERROR and metrics.get('error'):
-            raise metrics['error']
+    async def _process_regular_stmt_async(
+        self,
+        stmt_code: str,
+        annotation: Any,
+        occurrence_index: int,
+        is_last_statement: bool,
+        all_metrics: list[ProcessResult],
+        buffered_result_outputs: list,
+    ) -> list:
+        """Async twin of :meth:`_process_regular_stmt`.
 
-        return self._flush_rich_outputs(
-            metrics.get('rich_outputs', []), is_last_statement, buffered_result_outputs,
+        Routes every regular statement through ``process_statement_async`` so a
+        top-level ``await`` is executed on IPython's live loop.  A statement
+        with no top-level await compiles without ``CO_COROUTINE`` and runs
+        through the same synchronous exec/eval inside the async executor, so its
+        behaviour (and cache key) is identical to the sync path.
+        """
+        metrics = await self._statement_processor.process_statement_async(
+            stmt_code, self._magics._global_ttl, silent=True,
+            annotation=annotation,
+            occurrence_index=occurrence_index,
+        )
+        return self._handle_regular_stmt_metrics(
+            metrics, is_last_statement, all_metrics, buffered_result_outputs,
         )
 
     def _collect_ctrl_outputs(
@@ -746,6 +865,97 @@ class CellExecutor:
                         raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                 else:
                     buffered_result_outputs = self._process_regular_stmt(
+                        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
+                    )
+
+                t_badge = time.time()
+                self._magics._maybe_progress_badge(
+                    all_metrics, display_id=badge_display_id,
+                    step=unified_step + 1, total=total_steps_unified, code=None,
+                )
+                badge_render_time += time.time() - t_badge
+
+            except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
+                if isinstance(e, KeyboardInterrupt):
+                    raise
+                self._finalize_error_badge(
+                    e, raw_cell, node, all_metrics, badge_display_id,
+                    hook_start, timing_breakdown,
+                )
+                raise
+
+        return (all_metrics, buffered_result_outputs, badge_render_time)
+
+    async def _execute_cell_statements_async(
+        self,
+        raw_cell: str,
+        tree: ast.Module,
+        all_metrics: list[ProcessResult],
+        badge_display_id: str,
+        hook_start: float,
+        timing_breakdown: 'TimingBreakdown',
+    ) -> _EarlyReturn | tuple[list[ProcessResult], list, float]:
+        """Async twin of :meth:`_execute_cell_statements` for top-level-await cells.
+
+        Identical badge / occurrence / trailing-semicolon / control-structure /
+        error-badge plumbing as the sync loop — the ONLY difference is that a
+        regular (non-control) statement is executed via the awaited
+        :meth:`_process_regular_stmt_async`, so a top-level ``await`` runs on
+        IPython's live loop.  Control structures still go through the sync
+        ``ControlStructureProcessor`` (they own their own body/mutation lineage
+        and never contain top-level await).
+        """
+        buffered_result_outputs: list = []
+        badge_render_time = 0.0
+
+        upstream_step_count = len([
+            m for m in all_metrics
+            if m.get('is_upstream', False) and m.get('status') != 'SKIPPED'
+        ])
+        total_steps_unified = upstream_step_count + len(tree.body)
+        stmt_occurrence_counts: dict[str, int] = {}
+
+        for i, node in enumerate(tree.body):
+            try:
+                stmt_code = ast.unparse(node)
+            except (ValueError, TypeError):
+                continue
+
+            if self._expr_has_trailing_semicolon(raw_cell, node):
+                stmt_code = stmt_code + ";"
+
+            occ = stmt_occurrence_counts.get(stmt_code, 0)
+            stmt_occurrence_counts[stmt_code] = occ + 1
+            annotation = get_statement_annotations(raw_cell, node)
+            is_last = (i == len(tree.body) - 1)
+            unified_step = upstream_step_count + i + 1
+
+            t_badge_pre = time.time()
+            if self._magics._badge_mode == 'html':
+                self._magics._render_interactive_badge(
+                    all_metrics, display_id=badge_display_id,
+                    status="RUNNING", current_step=unified_step,
+                    total_steps=total_steps_unified, current_code=stmt_code,
+                )
+            badge_render_time += time.time() - t_badge_pre
+
+            try:
+                if is_control_structure(node):
+                    if self._debug:
+                        print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                    ctrl_result = self._control_structure_processor.process(
+                        node, ttl=self._magics._global_ttl, silent=True,
+                    )
+                    buffered_result_outputs = self._collect_ctrl_outputs(
+                        ctrl_result, is_last, all_metrics, buffered_result_outputs,
+                    )
+                    if self._debug:
+                        print(f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
+                              f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed")
+                    if not ctrl_result.success:
+                        raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
+                else:
+                    buffered_result_outputs = await self._process_regular_stmt_async(
                         stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
                     )
 

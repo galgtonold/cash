@@ -568,6 +568,119 @@ class StatementProcessor:
 
         return metrics
 
+    async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
+        """Async twin of :meth:`process_statement` for top-level-await cells.
+
+        Line-for-line the same pipeline — analysis, cache lookup, cache-hit
+        restore, cacheability decision, mutation classification, post-execute
+        capture + store — as :meth:`process_statement`.  The ONLY difference is
+        that the cache-*miss* execution goes through
+        :meth:`_execute_and_drain_async` (which awaits the compiled unit) so a
+        statement containing a top-level ``await`` runs on IPython's live loop.
+
+        The cache-*hit* path (``_handle_cache_hit``) returns BEFORE any
+        coroutine is built, so an identical second run skips the await entirely
+        (CAS-116).  CAS-96 trailing-semicolon suppression and CAS-115/89
+        live-alias edge-recording (in ``_post_execute``) apply unchanged because
+        this method routes through the same ``_analyze_and_hash`` /
+        ``_handle_cache_hit`` / ``_post_execute`` helpers.
+        """
+        effective_ttl, force_persist, skip_cache = self._parse_annotation(annotation, ttl)
+        metrics: ProcessResult = {
+            'status': CacheStatus.UNKNOWN,
+            'execution_time': 0.0,
+            'total_time': 0.0,
+            'saved_time': 0.0,
+            'error': None,
+            'restored_vars': [],
+            'code': code.strip(),
+            'uncacheable_reasons': []
+        }
+        if self.debug:
+            logger.debug("%s Processing statement (async): %s...", _LOG_DEBUG, code[:50])
+
+        process_start = time.time()
+
+        try:
+            _parsed_tree = ast.parse(code.strip())
+        except SyntaxError:
+            _parsed_tree = None
+
+        inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
+        metrics['cache_key'] = cache_key
+
+        early_result, skip_cache = self._check_redundant_import(
+            code, _parsed_tree, skip_cache, inputs, outputs, metrics, source_hash, cache_key, process_start,
+        )
+        if early_result is not None:
+            return early_result
+
+        statement_analysis = analyze_statement(code, _parsed_tree)
+
+        if '# __iteration_context__:' in code or '# control_context:' in code:
+            mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
+        else:
+            mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
+                _parsed_tree, source_hash, outputs,
+            )
+        if mut_pre_route:
+            outputs = outputs | mut_pre_route
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"In-place mutation on: {', '.join(sorted(mut_pre_route))} "
+                "(receiver lineage bumped; statement re-executes)"
+            )
+
+        if not skip_cache:
+            cacheable, reasons = decide_cacheability(
+                code=code,
+                tree=_parsed_tree,
+                inputs=inputs,
+                outputs=outputs,
+                annotation=annotation,
+                analysis=statement_analysis,
+                user_ns=self.shell.user_ns,
+                variable_lineage=self.variable_lineage,
+                is_stateful_call=self._check_callable_stateful,
+                scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+            )
+            if not cacheable:
+                metrics['uncacheable_reasons'].extend(reasons)
+                skip_cache = True
+        metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
+
+        if self.debug:
+            self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
+
+        # CACHE HIT — returns before any coroutine is built, so an identical
+        # second run of a top-level-await cell skips the await entirely.
+        if cached_data and not self._import_needs_reexecution(_parsed_tree):
+            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
+            if hit_result is not None:
+                return hit_result
+
+        error_metrics, result, captured, execution_time, accessed_files = await self._execute_and_drain_async(
+            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent,
+        )
+        if error_metrics is not None:
+            return error_metrics
+
+        metrics['status'] = CacheStatus.COMPUTED
+        metrics['evaluated_vars'] = list(outputs) if outputs else []
+        metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
+        if not skip_cache and self._freshness.last_miss_reason:
+            metrics['miss_reason'] = self._freshness.last_miss_reason
+
+        self._post_execute(
+            code, result, inputs, outputs, accessed_files,
+            execution_time, effective_ttl, cache_key, source_hash,
+            captured, skip_cache, force_persist, metrics, process_start,
+            _parsed_tree, statement_analysis,
+            mut_observe, mut_assumed, mut_record,
+        )
+
+        return metrics
+
     def _parse_annotation(
         self,
         annotation: CacheAnnotation | None,
@@ -639,6 +752,58 @@ class StatementProcessor:
         # NAMES from AST analysis). Keeping them under different keys avoids
         # the F-01-style fallback chain that printed ``<RichOutput at 0x..>``
         # into badge fields.
+        metrics['rich_outputs'] = captured.outputs
+        if decorator_calls:
+            metrics['decorator_calls'] = decorator_calls
+
+        self._display_execution_output(captured, execution_time, silent, stream_output, metrics)
+        metrics['execution_time'] = execution_time
+
+        if not result.success:
+            metrics['status'] = CacheStatus.ERROR
+            metrics['error'] = result.error
+            metrics['total_time'] = time.time() - process_start
+            self._handle_execution_error(result, silent)
+            return metrics, result, captured, execution_time, accessed_files
+
+        return None, result, captured, execution_time, accessed_files
+
+    async def _execute_and_drain_async(
+        self,
+        code: str,
+        stream_output: bool,
+        skip_cache: bool,
+        tree: ast.Module | None,
+        metrics: ProcessResult,
+        process_start: float,
+        silent: bool,
+    ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
+        """Async twin of :meth:`_execute_and_drain`.
+
+        Identical to the sync version except it awaits
+        :meth:`_execute_statement_async` so a top-level-await statement runs on
+        IPython's live loop.  All post-execution bookkeeping (decorator drain,
+        stdout/stderr/rich capture, output display, error handling) is byte-for-
+        byte the same.
+        """
+        if self.debug:
+            logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
+
+        result, captured, execution_time, accessed_files = await self._execute_statement_async(
+            code, stream_output=stream_output, tree=tree,
+            skip_capture=(skip_cache and stream_output),
+        )
+
+        decorator_calls: list = []
+        try:
+            cash_instance = self._get_cash_instance()
+            if cash_instance is not None:
+                decorator_calls = cash_instance.drain_decorator_calls()
+        except (AttributeError, TypeError, RuntimeError):
+            logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
+
+        metrics['stdout'] = captured.stdout
+        metrics['stderr'] = captured.stderr
         metrics['rich_outputs'] = captured.outputs
         if decorator_calls:
             metrics['decorator_calls'] = decorator_calls
@@ -1035,6 +1200,24 @@ class StatementProcessor:
                 print(captured.stderr, end='', file=sys.stderr)
             self._publish_rich_outputs(captured.outputs)
 
+    @staticmethod
+    def _make_capture_ctx(stream_output: bool, skip_capture: bool) -> Any:
+        """Return the output-capture context manager for an execution.
+
+        Shared by the sync and async executors so both wrap user code in the
+        exact same stdout/stderr/display capture (only the exec primitive
+        inside differs).
+        """
+        if stream_output and skip_capture:
+            class _EmptyCaptured:
+                stdout = ''
+                stderr = ''
+                outputs = []
+            return contextlib.nullcontext(_EmptyCaptured())
+        if stream_output:
+            return _tee_output()
+        return capture_output(stdout=True, stderr=True, display=True)
+
     def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False) -> tuple[Any, Any, float, set[str]]:
         """Execute statement with output capture and file tracking.
 
@@ -1053,19 +1236,7 @@ class StatementProcessor:
         accessed_files = set()
 
         try:
-            # Fast path: when streaming and we won't cache, execute with the
-            # real stdout/stderr directly — no TeeWriter interception at all.
-            if stream_output and skip_capture:
-                class _EmptyCaptured:
-                    stdout = ''
-                    stderr = ''
-                    outputs = []
-                captured = _EmptyCaptured()
-                ctx_manager = contextlib.nullcontext(captured)
-            elif stream_output:
-                ctx_manager = _tee_output()
-            else:
-                ctx_manager = capture_output(stdout=True, stderr=True, display=True)
+            ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
             with ctx_manager as captured:
                 with FileAccessTracker(self.shell.user_ns) as file_tracker:
                     if tree is None:
@@ -1101,6 +1272,81 @@ class StatementProcessor:
                     else:
                         compiled_code = compile(code, '<cash>', 'exec')
                         exec(compiled_code, self.shell.user_ns, self.shell.user_ns)
+                        result_val = None
+
+                accessed_files = file_tracker.get_accessed_files()
+
+                result = ExecutionResult(success=True)
+
+        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code
+            result = self._create_error_result(e)
+            if 'captured' not in dir():
+                class _EmptyCaptured:
+                    stdout = ''
+                    stderr = ''
+                    outputs = []
+                captured = _EmptyCaptured()
+
+        execution_time = time.time() - start_time
+        return result, captured, execution_time, accessed_files
+
+    async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False) -> tuple[Any, Any, float, set[str]]:
+        """Async twin of :meth:`_execute_statement` for top-level-await cells.
+
+        Byte-for-byte the same output-capture / file-tracking / last-expr
+        display / error handling as the sync path — the ONLY difference is the
+        exec primitive: every unit is compiled under
+        ``ast.PyCF_ALLOW_TOP_LEVEL_AWAIT`` and, when the compiled code object
+        carries ``CO_COROUTINE`` (i.e. it contains a top-level ``await``), the
+        coroutine returned by ``exec``/``eval`` is awaited on IPython's live
+        loop.  A plain statement compiled under the flag does NOT get
+        ``CO_COROUTINE``, so it runs through the identical synchronous
+        ``exec``/``eval`` and behaves exactly like the sync path.
+
+        This mirrors IPython's own ``run_code`` pattern (compile under the flag,
+        ``await`` when ``CO_COROUTINE``), so a top-level-await statement executes
+        exactly once, on the same loop IPython would have used.
+        """
+        start_time = time.time()
+        accessed_files = set()
+        _FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+
+        try:
+            ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
+            with ctx_manager as captured:
+                with FileAccessTracker(self.shell.user_ns) as file_tracker:
+                    if tree is None:
+                        try:
+                            tree = ast.parse(code)
+                        except SyntaxError:
+                            tree = None
+
+                    if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
+                        body_nodes = tree.body[:-1]
+                        last_node = tree.body[-1]
+
+                        if body_nodes:
+                            mod = ast.Module(body=body_nodes, type_ignores=[])
+                            c_body = compile(mod, '<cash>', 'exec', flags=_FLAG)
+                            coro = eval(c_body, self.shell.user_ns, self.shell.user_ns)
+                            if c_body.co_flags & inspect.CO_COROUTINE:
+                                await coro
+
+                        expr_val = last_node.value
+                        mod_expr = ast.Expression(body=expr_val)
+                        ast.fix_missing_locations(mod_expr)
+                        c_expr = compile(mod_expr, '<cash>', 'eval', flags=_FLAG)
+                        result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
+                        if c_expr.co_flags & inspect.CO_COROUTINE:
+                            result_val = await result_val
+
+                        if result_val is not None and not code.rstrip().endswith(';'):
+                            display(result_val)
+                    else:
+                        compiled_code = compile(code, '<cash>', 'exec', flags=_FLAG)
+                        coro = eval(compiled_code, self.shell.user_ns, self.shell.user_ns)
+                        if compiled_code.co_flags & inspect.CO_COROUTINE:
+                            await coro
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()

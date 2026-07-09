@@ -822,37 +822,28 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         )
 
     async def _execute_cell_async(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
-        """Proxy for ``interactiveshell.run_cell_async``.
+        """Proxy for ``interactiveshell.run_cell_async`` (CAS-92 stage 2).
 
         ipykernel routes cells that contain top-level ``await`` (IPython
         autoawait) through ``run_cell_async``, not the sync ``run_cell`` that
         :meth:`_execute_cell` intercepts.  Without this wrapper those cells
         would skip cash's pipeline entirely — no upstream reconstruction, no
-        self-modifying-reassignment reset, no lineage capture.
+        self-modifying-reassignment reset, no lineage capture, **no caching**.
 
-        **Execute-exactly-once contract.** Cash must NOT execute the cell's
-        statements itself here: a top-level ``await`` cannot run through the
-        statement processor's synchronous ``exec`` (and doing so would
-        double-run side effects).  Instead this wrapper runs only cash's
-        *non-execution* phases around a single delegation to the original
-        coroutine:
+        **Execute-exactly-once contract.** Cash now owns per-statement
+        execution for these cells: it runs each statement through
+        :meth:`StatementProcessor.process_statement_async`, which compiles the
+        unit under ``ast.PyCF_ALLOW_TOP_LEVEL_AWAIT`` and awaits the coroutine
+        on IPython's live loop when the statement contains a top-level
+        ``await``.  A cache *hit* returns before any coroutine is built, so an
+        identical second run skips the await entirely (CAS-116).
 
-          1. PRE  — upstream reconstruction + self-modifying-input reset
-                    (the same work :class:`CellExecutor` does before it
-                    executes statements), so ``x = await bump(x)`` sees ``x``
-                    reset to its cell-entry value and the awaiting cell picks
-                    up an edited ``async def`` upstream.
-          2. RUN  — ``await`` the original ``run_cell_async`` exactly once.
-                    IPython drives the coroutine on its own live loop and
-                    fires ``pre_run_cell`` / ``post_run_cell`` itself, so we
-                    neither re-execute nor re-fire those events.
-          3. POST — record output lineage from the resulting ``user_ns`` so
-                    downstream cells see correct lineages.
-
-        Caching the awaited result (a cache *hit* on the second run) is a
-        separate, higher-risk concern (driving a coroutine inside cash's own
-        ``exec`` while the kernel loop is running) and is intentionally out of
-        scope here — this stage restores *correctness* only.
+        Because cash runs the statements itself, it must NOT also delegate the
+        whole cell to ``_original_run_cell_async(raw_cell)`` — that would
+        double-run every side effect.  Instead the finaliser delegates a no-op
+        ``"pass"`` cell through the original ``run_cell_async`` so IPython fires
+        ``pre_run_cell`` / ``post_run_cell`` exactly once, advances the
+        execution count + history, and returns a real ``ExecutionResult``.
         """
         if self._original_run_cell_async is None:
             # Defensive: should not happen (we only patch when it exists).
@@ -865,90 +856,97 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if not self._auto_cache_enabled or self._in_sync_cell:
             return await self._original_run_cell_async(raw_cell, *args, **kwargs)
 
+        # Raise the re-entrancy guard for the whole async execution: the
+        # finaliser's ``"pass"`` delegation and any upstream reconstruction must
+        # not re-enter this wrapper.
+        prev_in_sync = self._in_sync_cell
+        self._in_sync_cell = True
+        try:
+            return await self._execute_cell_async_inner(raw_cell, *args, **kwargs)
+        finally:
+            self._in_sync_cell = prev_in_sync
+
+    async def _execute_cell_async_inner(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         # Record raw cell text for bug-report history (before any processing).
         self._execution_history.append(raw_cell)
 
-        # PRE: upstream reconstruction + self-mod reset. Best-effort — a
-        # failure here must never prevent the user's cell from running, so we
-        # log and fall through to plain async execution.
         try:
-            self._cell_executor._extract_cell_id_and_notebook_path()
-            self._cell_executor._detect_module_changes(raw_cell)
-            self._cell_executor._ensure_state_for_inputs(raw_cell)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:  # noqa: BLE001 - never block the user's cell over a pre-check failure
-            logger.debug("[ASYNC] Pre-execution cash handling failed: %s", e)
-
-        # RUN: execute the whole cell exactly once on IPython's live loop.
-        result = await self._original_run_cell_async(raw_cell, *args, **kwargs)
-
-        # POST: capture output lineage from user_ns. Best-effort — this is
-        # bookkeeping for downstream cells and must not turn a successful cell
-        # into a failure.
-        try:
-            self._capture_async_lineage(raw_cell)
-        except KeyboardInterrupt:
-            raise
-        except Exception as e:  # noqa: BLE001 - post-capture is bookkeeping only
-            logger.debug("[ASYNC] Post-execution lineage capture failed: %s", e)
-
-        return result
-
-    def _capture_async_lineage(self, raw_cell: str) -> None:
-        """Record output lineage for a top-level-await cell after execution.
-
-        Mirrors the statement processor's post-execution capture (the same
-        ``_analyze_and_hash`` → ``capture_and_track_variables`` path, so cache
-        keys stay computed through the unified ``compute_cache_key``) but does
-        no cache save and no re-execution — the cell already ran on IPython's
-        loop.  Per-statement so each output's lineage reflects the statement
-        that produced it, matching the sync pipeline.
-
-        **Self-reassigned outputs are deliberately NOT captured.**  For a
-        self-modifying statement (``x = await bump(x)`` — a name that is both
-        input and output) the sync pipeline earns idempotent isolated re-runs
-        by *caching* the result and restoring it on a lineage-keyed hit.  That
-        cache round-trip is Stage 2 (out of scope: driving the coroutine inside
-        cash's own ``exec`` is the high-risk part).  Advancing such a var's
-        recorded content hash here would overwrite the producer's cell-entry
-        base, defeating the content-base staleness signal the upstream checker
-        uses to reset a no-lineage self-write.  Leaving the base intact lets the
-        existing reset re-run the producer on the next isolated re-run, so
-        ``x`` returns to its from-start value instead of accumulating.  A var
-        the cell freshly binds (``result = await compute(10)``) is not a
-        self-write and is captured normally.
-        """
-        try:
-            tree = ast.parse(raw_cell)
-        except SyntaxError:
-            return
-
-        sp = self._statement_processor
-        stmt_occurrence_counts: dict[str, int] = {}
-        for node in tree.body:
-            try:
-                stmt_code = ast.unparse(node)
-            except (ValueError, TypeError):
-                continue
-            occ = stmt_occurrence_counts.get(stmt_code, 0)
-            stmt_occurrence_counts[stmt_code] = occ + 1
-            try:
-                inputs, outputs, source_hash, cache_key, _, _ = sp._analyze_and_hash(
-                    stmt_code, occurrence_index=occ,
-                )
-            except Exception as e:  # noqa: BLE001 - skip statements we can't hash
-                logger.debug("[ASYNC] Could not analyze statement for lineage: %s", e)
-                continue
-            # Drop self-reassigned names (see docstring) so their producer's
-            # cell-entry base survives for the reset signal.
-            outputs = outputs - inputs
-            if not outputs:
-                continue
-            sp._lineage.capture_and_track_variables(
-                sp._tracking_state, outputs, inputs, stmt_code, source_hash,
-                cache_key=cache_key,
+            result = await self._cell_executor.execute_cell_async(
+                raw_cell, args, kwargs,
+                original_run_cell=None,
             )
+        except KeyboardInterrupt:
+            raise
+        except Exception as e:  # noqa: BLE001 - surfaces user code exceptions to IPython
+            return await self._synthesize_run_cell_raise_async(e, args, kwargs)
+
+        if isinstance(result, _EarlyReturn):
+            return result.value
+        if isinstance(result, _PipelineSyntaxError):
+            # The cell's own AST failed to parse — let IPython handle it (it
+            # will render the SyntaxError) exactly once on its live loop.
+            return await self._original_run_cell_async(raw_cell, *args, **kwargs)
+
+        return await self._finalize_cell_execution_async(
+            raw_cell, result.all_metrics, result.buffered_outputs,
+            result.badge_display_id, result.hook_start, result.timing_breakdown,
+            result.badge_render_time, args, kwargs,
+        )
+
+    @staticmethod
+    def _sanitize_async_delegation_kwargs(kwargs: dict) -> dict:
+        """Strip pre-transform kwargs before delegating a substitute cell.
+
+        ipykernel calls ``run_cell_async(code, transformed_cell=…,
+        preprocessing_exc_tuple=…)``.  When ``transformed_cell`` is present
+        IPython runs IT and ignores ``raw_cell`` entirely — so delegating our
+        bookkeeping cell (``"pass"`` / ``"raise __cash_exception__"``) with the
+        original kwargs would re-run the WHOLE user cell a second time
+        (double side effects).  We drop ``transformed_cell`` (and its paired
+        ``preprocessing_exc_tuple``) so IPython freshly transforms the substitute
+        cell we actually pass.  The sync path never hits this because ipykernel
+        does not pass ``transformed_cell`` to sync ``run_cell``.
+        """
+        return {
+            k: v for k, v in kwargs.items()
+            if k not in ('transformed_cell', 'preprocessing_exc_tuple')
+        }
+
+    async def _synthesize_run_cell_raise_async(
+        self,
+        e: BaseException,
+        args: tuple,
+        kwargs: dict,
+    ) -> Any:
+        """Async twin of :meth:`_synthesize_run_cell_raise`.
+
+        Re-raise *e* through the original ``run_cell_async`` so the kernel
+        reply status is "error" while suppressing IPython's duplicate traceback
+        (the clean error display was already rendered by the executor's
+        ``_finalize_error_badge``).
+        """
+        self.shell.user_ns['__cash_exception__'] = e
+        orig_showtb = getattr(self.shell, 'showtraceback', None)
+        try:
+            self.shell.showtraceback = lambda *a, **kw: None
+        except (AttributeError, TypeError):
+            logger.debug("Could not suppress IPython showtraceback")
+        ipython_error_result = None
+        try:
+            ipython_error_result = await self._original_run_cell_async(
+                "raise __cash_exception__", *args,
+                **self._sanitize_async_delegation_kwargs(kwargs),
+            )
+        finally:
+            try:
+                if orig_showtb is not None:
+                    self.shell.showtraceback = orig_showtb
+                else:
+                    with contextlib.suppress(AttributeError, TypeError):
+                        del self.shell.showtraceback
+            except (AttributeError, TypeError):
+                logger.debug("Could not restore showtraceback")
+        return ipython_error_result
 
     def _synthesize_run_cell_raise(
         self,
@@ -1010,6 +1008,36 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         in sync.  ``%%cash`` passes False — it runs inside an IPython magic
         whose own dispatcher already keeps that bookkeeping consistent.
         """
+        self._finalize_cell_body(
+            raw_cell, all_metrics, buffered_result_outputs, badge_display_id,
+            hook_start, timing_breakdown, badge_render_time,
+        )
+
+        # Delegate to original run_cell with "pass" so IPython keeps its
+        # execution count + history consistent.  Skipped when called from
+        # `%%cash` (its dispatcher already handles that bookkeeping).
+        if delegate_to_run_cell:
+            return self._original_run_cell("pass", *args, **kwargs)
+        return None
+
+    def _finalize_cell_body(
+        self,
+        raw_cell: str,
+        all_metrics: list[ProcessResult],
+        buffered_result_outputs: list,
+        badge_display_id: str,
+        hook_start: float,
+        timing_breakdown: TimingBreakdown,
+        badge_render_time: float,
+    ) -> None:
+        """Finaliser body shared by the sync and async tails.
+
+        Everything the finaliser does *except* the ``"pass"`` delegation to
+        IPython (which differs: sync ``_original_run_cell`` vs
+        ``await _original_run_cell_async``).  Extracting it keeps the async
+        top-level-await path from drifting on analytics, session stats,
+        observability, buffered-output replay, and the final badge render.
+        """
         hook_total = time.time() - hook_start
 
         # Flush buffered analytics events to avoid stale data
@@ -1056,12 +1084,37 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         elif self._badge_mode == 'print':
             self._print_text_badge(all_metrics, cell_total_time=hook_total)
 
-        # Delegate to original run_cell with "pass" so IPython keeps its
-        # execution count + history consistent.  Skipped when called from
-        # `%%cash` (its dispatcher already handles that bookkeeping).
-        if delegate_to_run_cell:
-            return self._original_run_cell("pass", *args, **kwargs)
-        return None
+    async def _finalize_cell_execution_async(
+        self,
+        raw_cell: str,
+        all_metrics: list[ProcessResult],
+        buffered_result_outputs: list,
+        badge_display_id: str,
+        hook_start: float,
+        timing_breakdown: TimingBreakdown,
+        badge_render_time: float,
+        args: tuple,
+        kwargs: dict,
+    ) -> Any:
+        """Async twin of :meth:`_finalize_cell_execution` for top-level-await cells.
+
+        Runs the shared finaliser body, then delegates a no-op ``"pass"`` cell
+        through the ORIGINAL ``run_cell_async`` — not the sync ``run_cell`` —
+        so IPython fires ``pre_run_cell`` / ``post_run_cell`` exactly once,
+        advances the execution count + history, and returns a real
+        ``ExecutionResult`` on its own live loop.  The user's statements were
+        already executed per-statement by the async pipeline, so this ``"pass"``
+        adds no side effects (execute-exactly-once).
+        """
+        self._finalize_cell_body(
+            raw_cell, all_metrics, buffered_result_outputs, badge_display_id,
+            hook_start, timing_breakdown, badge_render_time,
+        )
+        # Strip ``transformed_cell`` so IPython runs our ``"pass"`` and NOT the
+        # original user cell again (see _sanitize_async_delegation_kwargs).
+        return await self._original_run_cell_async(
+            "pass", *args, **self._sanitize_async_delegation_kwargs(kwargs),
+        )
 
     def _update_last_cell_metrics(self, all_metrics: list[ProcessResult], hook_total: float) -> None:
         """Compute and store ``_last_cell_metrics`` for ``%cash_status``."""
