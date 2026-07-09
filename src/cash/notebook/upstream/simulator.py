@@ -14,6 +14,7 @@ orchestrator (``UpstreamChecker``) takes that plan and runs it via the real
 """
 
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 
@@ -177,6 +178,7 @@ class NotebookSimulator:
         current_cell_selfref_vars: set[str] | None = None,
         current_cell_crossref_reassigned: set[str] | None = None,
         current_cell_stateful_funcs: set[str] | None = None,
+        virtual_lineage: dict[str, str] | None = None,
     ) -> None:
         """Flag self-modifying required inputs whose live value is stale.
 
@@ -322,6 +324,40 @@ class NotebookSimulator:
             recorded = self.variable_lineage.get(var_name)
             if recorded is None:
                 continue
+            # A reassigned lineage-carrying input whose live value is a VALID
+            # EXTENSION of the notebook state — executing its recorded producing
+            # code on the simulated inputs reproduces the live lineage — is a
+            # legitimate fresh value produced UPSTREAM, not the current cell's own
+            # stale self-referential output. Pass 2 already kept it via this exact
+            # check; the stale-value guard must not override that, or the forward
+            # probe would restore a stale cache entry keyed on the outdated virtual
+            # lineage (the unsaved cell edit routing through a user function).
+            # Scoped to vars produced by an UPSTREAM cell: a genuine
+            # self-modification whose producer is a statement of the CURRENT cell
+            # (``df = df.iloc[1:]`` re-run) must still hit the guard, or its
+            # isolated re-run would double-apply. [CAS-88 layer 2]
+            if virtual_lineage is not None:
+                prod_code = self.executed_cell_codes.get(var_name)
+                produced_by_current_cell = True
+                if prod_code:
+                    # Strip cash's context markers (``# control_context: ...`` /
+                    # ``# __iteration_context__: ...``) so a control-nested
+                    # self-write still matches its cell's source text.
+                    norm_prod = re.sub(
+                        r'#\s*(?:__iteration_context__|iteration_context|control_context)\b[^\n]*\n',
+                        '', prod_code,
+                    ).strip()
+                    cur_src = (
+                        notebook_cells[current_cell_idx]
+                        if notebook_cells is not None and current_cell_idx is not None
+                        and 0 <= current_cell_idx < len(notebook_cells)
+                        else ''
+                    )
+                    produced_by_current_cell = (not norm_prod) or (norm_prod in cur_src)
+                if (prod_code is not None and not produced_by_current_cell
+                        and self._virtual_lineage._is_valid_extension(
+                            prod_code, recorded, virtual_lineage, required_dependency=var_name)):
+                    continue
             # (a) ``variable_lineage[var]`` was reset to a pre-cell base (the
             # downstream-advancement reset, e.g. test_134's multi-statement
             # chain) but the live value still carries the advanced lineage: the
@@ -535,6 +571,7 @@ class NotebookSimulator:
             current_cell_selfref_vars=current_cell_selfref_vars,
             current_cell_crossref_reassigned=current_cell_crossref_reassigned,
             current_cell_stateful_funcs=current_cell_stateful_funcs,
+            virtual_lineage=virtual_lineage,
         )
         trace_event("broken_after_guard", broken=broken_vars)
 

@@ -2143,7 +2143,7 @@ class VirtualLineage:
         This distinguishes valid extensions (x = x + 1) from conflicting redefinitions (x = 5).
         """
         try:
-             inputs, _ = CodeAnalyzer.analyze_code_block(code)
+             inputs, outputs = CodeAnalyzer.analyze_code_block(code)
 
              if required_dependency and required_dependency not in inputs:
                  return False
@@ -2166,8 +2166,15 @@ class VirtualLineage:
                      return False
 
              source_hash = hashlib.sha256(code.encode('utf-8')).hexdigest()
-             lineage_str = source_hash + ":" + ":".join(input_lineages)
-             projected_hash = hashlib.sha256(lineage_str.encode('utf-8')).hexdigest()
+             # Route through the shared func-inclusive projection (matches the
+             # recorder in statement/lineage.py) so an unsaved edit that calls a
+             # user-defined function is not spuriously rejected for lacking the
+             # function-source component. A hand-rolled sha256(code)+input_lineages
+             # omitted it, so any function-routed edit always projected != recorded
+             # and was wrongly discarded. [CAS-88 layer 1]
+             projected_hash = self._compute_virtual_output_lineage(
+                 source_hash, input_lineages, "", inputs, outputs
+             )
 
              return projected_hash == actual_lineage
 
