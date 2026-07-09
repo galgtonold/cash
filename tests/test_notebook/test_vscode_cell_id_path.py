@@ -199,6 +199,7 @@ class TestEarlyCellIdCapture:
             m._badge_mode = 'off'
             m._debug = False
             m._current_cell_id = None
+            m._in_sync_cell = False
             m._statement_processor = MagicMock()
             m._upstream_checker = MagicMock()
             m._original_run_cell = MagicMock()
