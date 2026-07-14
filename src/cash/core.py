@@ -124,6 +124,43 @@ def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
     return value
 
 
+def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
+    """Rebuild every ``dict`` in *value* in canonical (sorted-key) order so that
+    two dicts that are equal but for insertion order pickle to identical bytes
+    (CAS-108). Recurses through ``dict``/``list``/``tuple``; other types pass
+    through unchanged. ``list``/``tuple`` order is preserved (semantic), and the
+    dict TYPE is kept, so a payload whose dicts are already sorted (e.g. the
+    top-level kwargs canonicalised by ``_normalize_call_args``) is byte-identical
+    to before — only out-of-order dict *values* change.
+
+    Keys are ordered by their pickled bytes (a total order that never raises on
+    mixed key types); on an unpicklable key it falls back to ``repr(key)``, then
+    to insertion order — it never crashes. Sets are intentionally NOT handled
+    here: a payload containing a set is routed through ``_stable_key_repr``
+    instead, which canonicalises sets (including frozenset dict keys, whose
+    pickle bytes are PYTHONHASHSEED-dependent) deterministically.
+    """
+    if _depth > 50:
+        return value
+    if isinstance(value, dict):
+        items = [
+            (k, _canonicalize_dict_order(v, _depth + 1)) for k, v in value.items()
+        ]
+        try:
+            items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
+        except Exception:  # noqa: BLE001 - unpicklable key: degrade, never crash
+            try:
+                items.sort(key=lambda kv: repr(kv[0]))
+            except Exception:  # noqa: BLE001 - unsortable even by repr: keep order
+                pass
+        return dict(items)
+    if isinstance(value, list):
+        return [_canonicalize_dict_order(v, _depth + 1) for v in value]
+    if isinstance(value, tuple):
+        return tuple(_canonicalize_dict_order(v, _depth + 1) for v in value)
+    return value
+
+
 def _contains_set(value: Any, _depth: int = 0) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
     inside objects). Gates the canonicalisation so ordinary args are untouched."""
@@ -2317,9 +2354,16 @@ class Cash:
         # to a deterministic, order-independent form (recursing into objects
         # so a set inside a dataclass is covered too) - but only when a set
         # is actually present, so all other argument shapes keep
-        # byte-identical keys.
+        # byte-identical keys. _stable_key_repr also canonicalises dict order.
+        #
+        # When there's no set, still canonicalise dict *ordering* so two dict
+        # args equal but for insertion order share a key (CAS-108). This is
+        # byte-identical for already-sorted dicts (the normalised top-level
+        # kwargs), so only out-of-order dict values change their key.
         if _contains_set(payload):
             payload = _stable_key_repr(payload)
+        else:
+            payload = _canonicalize_dict_order(payload)
         args_bytes = pickle.dumps(payload)
         return hashlib.sha256(args_bytes).hexdigest()
 
