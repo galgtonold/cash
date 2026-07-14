@@ -548,6 +548,25 @@ class NotebookSimulator:
                   "(had_prior_cache=%s, cache_had_hash_mismatch=%s, first_changed_cell=%s)",
                   upstream_has_modifications, had_prior_cache, cache_had_hash_mismatch, first_changed_cell)
 
+        # A reassignment accumulator that ALSO derives from an external input via
+        # a non-loop producing statement (``result = np.zeros(N)``) must not join
+        # the loop-trust set: editing that input and re-running the edited cell
+        # first makes upstream_has_modifications False and every current-state
+        # input lineage consistent, so the trust would serve a stale value. Drop
+        # such accumulators so they follow the baseline lineage-mismatch path
+        # (which re-executes correctly); a constant-init accumulator keeps the
+        # new trust so one-shot iterables are not re-drained. [CAS-120]
+        externally_tainted = self._virtual_lineage._loop_accumulators_with_external_init(
+            vars_mutated_by_loops, simulation_trace, loop_target_vars
+        )
+        if externally_tainted:
+            vars_mutated_by_loops = vars_mutated_by_loops - externally_tainted
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM_DEBUG] Dropped externally-dependent loop accumulators "
+                    "from loop-trust set: %s", externally_tainted,
+                )
+
         vars_derived_from_loops = self._virtual_lineage._propagate_loop_derived_vars(
             vars_mutated_by_loops, simulation_trace
         )

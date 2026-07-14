@@ -173,7 +173,7 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
     assigns, attribute assignments).
     """
     from .processor import is_control_structure
-    from ..cacheability import analyze_statement
+    from ..cacheability import analyze_statement, selfref_reassignment_targets
 
     mutated_vars: set = set()
     for body_node in body_nodes:
@@ -187,6 +187,14 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
                 mutated_vars.update(detected)
             except (SyntaxError, ValueError, AttributeError, TypeError) as exc:
                 logger.debug("[CONTROL] Failed to detect mutations in: %s: %s", stmt_code[:60], exc)
+            # Self-referential reassignment accumulators (``total = total + b``,
+            # ``total += b``) leave no in-place-mutation trace, so all_mutated_vars
+            # misses them and the loop is wrongly re-executed on every downstream
+            # read, re-draining one-shot iterables. Trust them like append.
+            # Kept byte-identical with the simulation collector
+            # (VirtualLineage._find_loop_mutated_vars) per the unified-key rule.
+            # [CAS-120]
+            mutated_vars.update(selfref_reassignment_targets(body_node))
 
     # Filter out built-ins
     built_ins = {'print', 'len', 'range', 'enumerate', 'zip', 'map', 'filter',

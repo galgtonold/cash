@@ -433,6 +433,60 @@ class VirtualLineage:
                          logger.debug("[UPSTREAM] Re-applying unsaved extension for '%s'", var_name)
                          statements_to_reexecute.append(mem_code)
 
+    # Control-structure wrapper prefixes. Delimited (space or colon) so a plain
+    # identifier that merely begins with a keyword (``elsewhere = ...``,
+    # ``exception = ...``) is NOT mistaken for a wrapper and wrongly skipped.
+    _CTRL_PREFIXES = (
+        'for ', 'while ', 'async for ', 'if ', 'elif ', 'else:',
+        'with ', 'async with ', 'try:', 'except ', 'except:', 'finally:',
+    )
+
+    def _loop_accumulators_with_external_init(
+        self,
+        vars_mutated_by_loops: set[str],
+        simulation_trace: list,
+        loop_target_vars: set[str],
+    ) -> set[str]:
+        """Loop accumulators whose value ALSO derives from an external input.
+
+        A reassignment accumulator (``result = result + 1``) enters the loop-trust
+        set so that a no-change re-run is not re-executed (which would re-drain a
+        one-shot iterable). But when the accumulator ALSO has an external
+        dependency via a *non-loop* producing statement — typically an
+        initializer like ``result = np.zeros(N)`` — editing that external input
+        (``N``) and re-running the edited cell before the reader leaves
+        ``upstream_has_modifications`` False, and every current-state input
+        lineage is consistent, so the trust would serve a stale value. Only the
+        accumulator's transitive lineage betrays the staleness. Such accumulators
+        are excluded from the loop-trust set entirely, so they fall back to the
+        normal lineage-mismatch path (baseline behaviour) that correctly
+        re-executes; a constant-init accumulator (``total = 0``) has no external
+        dependency and keeps the new trust. [CAS-120]
+
+        Detection scans the trace for a *non-self-referential*, *non-control*
+        statement producing the accumulator (its init) that reads a data variable
+        which is not a loop target, not a builtin and not a module.
+        """
+        tainted: set[str] = set()
+        for acc in vars_mutated_by_loops:
+            for entry in simulation_trace:
+                stmt_code, outputs, inputs = entry[0], entry[1], entry[2]
+                if acc not in outputs or acc in inputs:
+                    continue  # not a producer, or self-referential (loop body)
+                if stmt_code.lstrip().startswith(self._CTRL_PREFIXES):
+                    continue  # loop/control wrapper; iterable feeds via the loop
+                for inp in inputs:
+                    if inp in loop_target_vars or inp in _BUILTIN_NAMES:
+                        continue
+                    val = self.shell.user_ns.get(inp)
+                    if val is not None and isinstance(val, types.ModuleType):
+                        continue
+                    tainted.add(acc)
+                    break
+                if acc in tainted:
+                    break
+        return tainted
+
     def _propagate_loop_derived_vars(
         self,
         vars_mutated_by_loops: set[str],
@@ -2232,7 +2286,7 @@ class VirtualLineage:
 
         Excludes loop target variables and built-ins.
         """
-        from ..cacheability import analyze_statement
+        from ..cacheability import analyze_statement, selfref_reassignment_targets
 
         mutated_vars: set[str] = set()
 
@@ -2251,6 +2305,11 @@ class VirtualLineage:
                     mutated_vars.update(detected)
                 except (SyntaxError, ValueError, TypeError):
                     logger.debug("analyze_statement failed for AST node in loop body")
+                # Self-referential reassignment accumulators (``total = total + b``,
+                # ``total += b``) leave no in-place-mutation trace, so
+                # all_mutated_vars misses them and the loop is wrongly re-executed,
+                # re-draining one-shot iterables. Trust them like append. [CAS-120]
+                mutated_vars.update(selfref_reassignment_targets(body_node))
 
         # Filter out built-ins and loop targets
         return mutated_vars - _BUILTIN_NAMES - loop_targets

@@ -26,6 +26,7 @@ __all__ = [
     "analyze_statement",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
+    "selfref_reassignment_targets",
     "selfref_inplace_write_vars",
     "params_mutated_in_function",
     "standalone_call_arg_targets",
@@ -2278,6 +2279,56 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
         if base:
             calls.add((base, call.func.attr))
     return frozenset(calls)
+
+
+def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
+    """Names a single statement *reassigns to itself* — the accumulator shape.
+
+    A self-referential reassignment accumulator rebinds a name from an
+    expression that reads that same name, so its value depends on its own prior
+    value across loop iterations (``total = total + b``, ``total = f(total)``,
+    or the augmented ``total += b``).  Unlike an in-place mutation
+    (``results.append(x)``) this leaves no ``Store``-on-a-container trace, so
+    :attr:`StatementAnalysis.all_mutated_vars` never surfaces it — which is why
+    such accumulators were wrongly excluded from the loop-trust set and
+    re-executed (re-draining one-shot iterables) on every downstream read.
+    [CAS-120]
+
+    Detected shapes (single leaf statement only):
+
+    * ``ast.AugAssign`` whose target is a bare ``Name`` (``total += b``).
+    * ``ast.Assign`` to a *single* bare ``Name`` target where that same name
+      appears as a ``Load`` anywhere in the RHS (``total = total + b``,
+      ``total = f(total)``).
+
+    A plain, non-self-referential rebinding (``x = g(i)``) is deliberately
+    excluded: trusting it would under-invalidate (the loop could legitimately
+    produce a different ``x`` when an upstream input changes, yet a trusted
+    ``x`` would be served stale).  Tuple / multi-target / attribute / subscript
+    targets are excluded for the same reason.
+
+    Both the runtime loop-mutation collector
+    (``control_structures.helpers.find_potentially_mutated_variables``) and the
+    simulation collector (``VirtualLineage._find_loop_mutated_vars``) call this
+    on each leaf body statement, so the two classify identically (unified-key
+    rule).
+    """
+    if isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Name):
+        return frozenset({node.target.id})
+    if (
+        isinstance(node, ast.Assign)
+        and len(node.targets) == 1
+        and isinstance(node.targets[0], ast.Name)
+    ):
+        target_name = node.targets[0].id
+        for sub in ast.walk(node.value):
+            if (
+                isinstance(sub, ast.Name)
+                and sub.id == target_name
+                and isinstance(sub.ctx, ast.Load)
+            ):
+                return frozenset({target_name})
+    return frozenset()
 
 
 def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:

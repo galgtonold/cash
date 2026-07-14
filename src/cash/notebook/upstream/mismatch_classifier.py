@@ -265,7 +265,20 @@ class MismatchClassifier:
             overwritten_downstream = False
             exec_code = self.executed_cell_codes.get(var_name)
             if exec_code and simulation_trace_codes is not None:
-                if exec_code not in simulation_trace_codes:
+                # A reassignment accumulator (``total = total + b``) is produced by
+                # a per-iteration body statement, so its recorded code carries the
+                # CAS-86 ``# __iteration_context__:`` marker while the simulation
+                # trace codes are stored stripped. Strip it here too (mirroring
+                # _check_loop_derived_trust_override) or the marked code never
+                # matches and the accumulator is falsely treated as overwritten
+                # downstream, defeating the loop trust. [CAS-120]
+                normalized_exec_code = re.sub(
+                    r'# __iteration_context__:.*?\n', '', exec_code
+                ).strip()
+                if (
+                    exec_code not in simulation_trace_codes
+                    and normalized_exec_code not in simulation_trace_codes
+                ):
                     overwritten_downstream = True
                     if self.debug:
                         logger.debug(
