@@ -380,12 +380,36 @@ class CodeAnalyzer:
     """Analyzes function code to determine dependencies and compute hashes."""
 
     @staticmethod
+    def opaque_identity(func: Callable) -> str:
+        """Return a stable identity string for an OPAQUE callable (CAS-113).
+
+        Builtins, C-extension functions, ufuncs, ``functools.partial`` objects,
+        and other callables without retrievable source/``__code__`` cannot be
+        source-hashed or AST-analyzed. We key them on a best-effort stable
+        identity — ``module.qualname`` — so caching still works and does not
+        crash. Falls back to ``__name__`` then ``repr()`` when qualname is
+        absent.
+        """
+        module = getattr(func, '__module__', None) or '?'
+        qualname = (
+            getattr(func, '__qualname__', None)
+            or getattr(func, '__name__', None)
+            or repr(func)
+        )
+        return f"{module}.{qualname}"
+
+    @staticmethod
     def get_source_hash(func: Callable) -> str:
         """Compute SHA256 hash of the function's source code.
 
         Falls back to hashing the function's bytecode (``__code__``) when
         ``inspect.getsource()`` fails — for example, functions defined inside
         IPython cells intercepted by ``%cash_on``.
+
+        Last resort: for OPAQUE callables (builtins, C extensions, ufuncs,
+        ``functools.partial``) that have neither retrievable source nor a usable
+        ``__code__``, hash a stable identity string instead of raising, so they
+        can be cached without crashing (CAS-113).
         """
         try:
             source = inspect.getsource(func)
@@ -408,7 +432,10 @@ class CodeAnalyzer:
             except (AttributeError, TypeError, ValueError) as exc:
                 logger.debug("[ANALYSIS] Failed to compute bytecode hash for function: %s", exc)
 
-        raise ValueError(f"Cannot compute source hash for {func!r}: getsource failed and no usable __code__")
+        # Opaque callable (builtin / C-extension / ufunc / partial): key on a
+        # stable identity rather than crashing (CAS-113).
+        identity = CodeAnalyzer.opaque_identity(func)
+        return hashlib.sha256(f"__cash_opaque__:{identity}".encode('utf-8')).hexdigest()
 
     @staticmethod
     def find_called_functions(func: Callable, known_functions: dict[str, Callable] | None = None) -> set[str]:
@@ -427,7 +454,12 @@ class CodeAnalyzer:
         visitor = _CallVisitor()
         visitor.visit(tree)
 
-        globals_dict = func.__globals__
+        # An opaque callable (builtin / C-extension / ufunc / partial) may have
+        # source available via ``__wrapped__`` yet lack ``__globals__``; without
+        # it, names can't be resolved, so skip dependency analysis (CAS-113).
+        globals_dict = getattr(func, '__globals__', None)
+        if globals_dict is None:
+            return set()
         resolved_qualnames: set[str] = set()
 
         for name in visitor.names_to_resolve:

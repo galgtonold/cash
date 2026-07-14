@@ -588,9 +588,17 @@ class Cash:
         Uses ``func.__module__ + '.' + func.__qualname__`` to avoid collisions
         when different modules define functions with the same ``__qualname__``
         (e.g. a notebook's ``dep()`` vs a library module's ``dep()``).
+
+        Opaque callables such as ``functools.partial`` lack both ``__qualname__``
+        and ``__name__``; fall back to ``repr`` so keying them never crashes
+        (CAS-113).
         """
         module = getattr(func, '__module__', None) or '__unknown__'
-        qualname = getattr(func, '__qualname__', None) or func.__name__
+        qualname = (
+            getattr(func, '__qualname__', None)
+            or getattr(func, '__name__', None)
+            or repr(func)
+        )
         return f"{module}.{qualname}"
 
     @staticmethod
