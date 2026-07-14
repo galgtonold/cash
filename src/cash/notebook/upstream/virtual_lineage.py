@@ -27,7 +27,7 @@ from ..cacheability import (
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
-from ..file_dep_snapshot import split_file_dep_value
+from ..file_dep_snapshot import file_dep_is_fresh
 from ..cache_key import CacheKeyContext, compute_cache_key
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
@@ -1153,19 +1153,11 @@ class VirtualLineage:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
-            stored_mtime, stored_size = split_file_dep_value(stored)
-            try:
-                cur_stat = os.stat(resolved)
-            except OSError:
-                return False
-            delta = abs(cur_stat.st_mtime - stored_mtime)
-            if delta > 0.01:
+            # Content-authoritative freshness when the size matches (CAS-98/CAS-10).
+            is_fresh, reason = file_dep_is_fresh(resolved, stored)
+            if not is_fresh:
                 if debug:
-                    logger.debug("[UPSTREAM] Forward prop failed: Stale file %s (delta=%.4fs)", resolved, delta)
-                return False
-            if stored_size is not None and cur_stat.st_size != stored_size:
-                if debug:
-                    logger.debug("[UPSTREAM] Forward prop failed: Resized file %s (%d -> %d)", resolved, stored_size, cur_stat.st_size)
+                    logger.debug("[UPSTREAM] Forward prop failed: Stale file (%s) %s", reason, resolved)
                 return False
         return True
 
@@ -1694,18 +1686,11 @@ class VirtualLineage:
                 if self.debug:
                     print(f"[UPSTREAM] Restore failed: Miss file {fpath}")
                 return set(), time_module.time() - start_time, 0.0
-            stored_mtime, stored_size = split_file_dep_value(stored)
-            try:
-                cur_stat = os.stat(resolved)
-            except OSError:
-                return set(), time_module.time() - start_time, 0.0
-            if abs(cur_stat.st_mtime - stored_mtime) > 0.01:
+            # Content is authoritative when the size matches (CAS-98/CAS-10).
+            is_fresh, reason = file_dep_is_fresh(resolved, stored)
+            if not is_fresh:
                 if self.debug:
-                    print(f"[UPSTREAM] Restore failed: Stale file {resolved} (delta={abs(cur_stat.st_mtime - stored_mtime):.4f}s)")
-                return set(), time_module.time() - start_time, 0.0
-            if stored_size is not None and cur_stat.st_size != stored_size:
-                if self.debug:
-                    print(f"[UPSTREAM] Restore failed: Resized file {resolved} ({stored_size} -> {cur_stat.st_size})")
+                    print(f"[UPSTREAM] Restore failed: Stale file ({reason}) {resolved}")
                 return set(), time_module.time() - start_time, 0.0
         return None  # All deps fresh
 

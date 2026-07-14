@@ -26,12 +26,11 @@ belong inside ``statement/``.
 from __future__ import annotations
 
 import logging
-import os
 import time
 from typing import TYPE_CHECKING, Any
 
 from ...utils import resolve_file_dep_path
-from ..file_dep_snapshot import split_file_dep_value
+from ..file_dep_snapshot import file_dep_is_fresh
 from ._metadata import StatementCacheMetadata
 
 if TYPE_CHECKING:
@@ -125,29 +124,19 @@ class CacheFreshnessChecker:
                 if self.debug:
                     logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
                 return None
-            stored_mtime, stored_size = split_file_dep_value(stored)
-            try:
-                cur_stat = os.stat(resolved)
-            except OSError:
-                self.last_miss_reason = f"file dependency unreadable: {resolved}"
-                return None
-            mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
-            if mtime_delta > 0.01:
-                self.last_miss_reason = f"file changed: {resolved}"
+            # Content is authoritative when the size matches; a bare size/mtime
+            # check both over-invalidates on a touch (CAS-98) and misses a
+            # same-size sub-resolution edit (CAS-10). See file_dep_is_fresh.
+            is_fresh, reason = file_dep_is_fresh(resolved, stored)
+            if not is_fresh:
+                if reason == "unreadable":
+                    self.last_miss_reason = f"file dependency unreadable: {resolved}"
+                elif reason == "size":
+                    self.last_miss_reason = f"file changed (size): {resolved}"
+                else:
+                    self.last_miss_reason = f"file changed: {resolved}"
                 if self.debug:
-                    logger.debug("[CACHE DEBUG] File dependency mtime changed: %s (delta=%.4fs)", resolved, mtime_delta)
-                return None
-            # Filesystems with coarse mtime granularity (HFS+/APFS, some
-            # ext4 configs) can produce identical mtimes for back-to-back
-            # writes.  Falling back to size catches that case for the
-            # common "rewrote the CSV" scenario.
-            if stored_size is not None and cur_stat.st_size != stored_size:
-                self.last_miss_reason = f"file changed (size): {resolved}"
-                if self.debug:
-                    logger.debug(
-                        "[CACHE DEBUG] File dependency size changed: %s (was %d, now %d)",
-                        resolved, stored_size, cur_stat.st_size,
-                    )
+                    logger.debug("[CACHE DEBUG] File dependency stale (%s): %s", reason, resolved)
                 return None
         return cached_data
 
@@ -169,21 +158,16 @@ class CacheFreshnessChecker:
         source_file_deps = source_meta.file_dependencies or {}
         if fpath not in source_file_deps:
             return False
-        stored_mtime, stored_size = split_file_dep_value(source_file_deps[fpath])
-        try:
-            cur_stat = os.stat(resolved)
-        except OSError:
-            return True
-        mtime_delta = abs(cur_stat.st_mtime - stored_mtime)
-        if mtime_delta > 0.01:
-            self.last_miss_reason = f"file changed via input '{input_var}': {resolved}"
+        # Same content-authoritative freshness as the direct-dep check.
+        is_fresh, reason = file_dep_is_fresh(resolved, source_file_deps[fpath])
+        if not is_fresh:
+            size_note = " (size)" if reason == "size" else ""
+            self.last_miss_reason = f"file changed{size_note} via input '{input_var}': {resolved}"
             if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' source file mtime changed: %s (delta=%.4fs)", input_var, resolved, mtime_delta)
-            return True
-        if stored_size is not None and cur_stat.st_size != stored_size:
-            self.last_miss_reason = f"file changed (size) via input '{input_var}': {resolved}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' source file size changed: %s (was %d, now %d)", input_var, resolved, stored_size, cur_stat.st_size)
+                logger.debug(
+                    "[CACHE DEBUG] Input '%s' source file stale (%s): %s",
+                    input_var, reason, resolved,
+                )
             return True
         return False
 

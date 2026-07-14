@@ -18,14 +18,13 @@ logic.  Cell-level orchestration is the ``CellExecutor``'s job.
 from __future__ import annotations
 
 import logging
-import os
 import pickle
 import types
 from typing import TYPE_CHECKING, Any
 
 from ..utils import resolve_file_dep_path
 from ._protocols import ShellProtocol
-from .file_dep_snapshot import split_file_dep_value
+from .file_dep_snapshot import file_dep_is_fresh
 from .cache_status import CacheStatus
 from .object_hashing import compute_hash
 from .statement import ProcessResult
@@ -135,19 +134,14 @@ class Restorer:
                 if self._debug:
                     print(f"[STATE] Cannot restore '{var_name}': file dependency missing: {fpath}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            stored_mtime, stored_size = split_file_dep_value(stored)
-            try:
-                cur_stat = os.stat(resolved)
-            except OSError:
-                raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            delta = abs(cur_stat.st_mtime - stored_mtime)
-            if delta > 0.01:
+            # Content-authoritative freshness (CAS-98/CAS-10): a touch keeps the
+            # restore valid, a same-size sub-resolution edit invalidates it.
+            is_fresh, reason = file_dep_is_fresh(resolved, stored)
+            if not is_fresh:
+                if reason == "unreadable":
+                    raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
                 if self._debug:
-                    print(f"[STATE] Cannot restore '{var_name}': file dependency mtime changed: {resolved} (delta={delta:.4f}s)")
-                raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
-            if stored_size is not None and cur_stat.st_size != stored_size:
-                if self._debug:
-                    print(f"[STATE] Cannot restore '{var_name}': file dependency size changed: {resolved}")
+                    print(f"[STATE] Cannot restore '{var_name}': file dependency stale ({reason}): {resolved}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency changed)")
 
     def _restore_tracking_state(self, var_name: str, metadata: dict, restored_vars: dict) -> None:
