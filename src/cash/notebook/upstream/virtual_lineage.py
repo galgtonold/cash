@@ -243,7 +243,18 @@ class VirtualLineage:
                 break
             cached_file_deps = cached.cell_file_deps
             if cached_file_deps and self._check_cell_file_deps(cached_file_deps, idx):
-                cache_had_hash_mismatch = True
+                # A file-dep change (or a mere mtime touch of identical content)
+                # must re-simulate FROM this cell so the reader re-populates
+                # ``vars_with_stale_files`` (its dedicated invalidation channel,
+                # mismatch_classifier ``_handle_mismatch_prereqs``). But it must
+                # NOT set ``cache_had_hash_mismatch``: that flag becomes the global
+                # ``upstream_has_modifications``, which disables loop-derived TRUST
+                # for EVERY loop var in the notebook — so an unrelated loop chain
+                # (whose runtime folds a value-hash and whose sim folds input-
+                # lineages, structurally divergent) would be spuriously marked
+                # broken and re-executed. Break to re-simulate; leave the flag
+                # alone so file staleness stays decoupled from code modification.
+                # [CAS-99]
                 break
             first_changed_cell = idx + 1
         return first_changed_cell, cache_had_hash_mismatch
