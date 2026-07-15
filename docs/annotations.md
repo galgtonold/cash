@@ -144,11 +144,43 @@ warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 ```
 
 Seeding the RNG is the other way to silence it, and the better one when you want
-reproducibility rather than just quiet: after `np.random.seed(0)` or
+reproducibility rather than just quiet.
+
+Cash recognises two ways of being random, because reproducibility is established
+differently for each:
+
+**Module globals** — `np.random.rand()`, `random.random()`, `torch.rand()`. Here
+seeding is a property of the *module*: after `np.random.seed(0)` or
 `random.seed(0)`, Cash treats subsequent draws from that module as deterministic
-for the rest of the session and stops warning about them. Note that Cash tracks
-seeding per *module* (`random`, `numpy.random`, `torch`, `tensorflow.random`) —
-seeding `numpy.random` does not silence a `random.random()` call.
+for the rest of the session and stops warning about them. Tracking is per module
+(`random`, `numpy.random`, `torch`, `tensorflow.random`), so seeding
+`numpy.random` does not silence a `random.random()` call.
+
+**Generator objects** — `rng = np.random.default_rng()` and the draws you take
+off it. Here reproducibility is a property of the *object*, fixed by the
+constructor, so Cash reads it from there:
+
+```python
+rng = np.random.default_rng()     # unseeded
+x = rng.standard_normal(1000)     # warns
+
+rng = np.random.default_rng(42)   # seeded
+y = rng.standard_normal(1000)     # no warning
+```
+
+The same applies to `np.random.Generator(...)`, `np.random.RandomState(...)` and
+`random.Random(...)`. Because a generator owns its state, **`np.random.seed()`
+does not silence a `default_rng()` draw** — the two channels are independent, and
+seeding the legacy global says nothing about your Generator. Pass the seed to the
+generator instead.
+
+!!! warning "Detection is rooted at the RNG, not at the draw"
+    Cash finds these by following the generator from where it is constructed. A
+    draw off an object it never saw constructed — `df.sample()`, a generator
+    handed in as a function argument, or one reached through an attribute
+    (`self.rng.normal()`) — is **not** detected and will cache silently. Seed
+    explicitly, or use [`# @cash:no-cache`](#cashno-cache-alias-nocache), when a
+    statement must genuinely re-run every time.
 
 ## Lookback and scoping
 

@@ -301,6 +301,21 @@ def _compute_something_small():
     return 1
 
 
+class _FakeGenerator:
+    """Stub for a ``np.random.default_rng()`` Generator (CAS-135)."""
+    @staticmethod
+    def standard_normal(*args):
+        return [0.0] * (args[0] if args else 1)
+
+    @staticmethod
+    def normal(*args, **kwargs):
+        return [0.0] * (args[0] if args else 1)
+
+    @staticmethod
+    def integers(*args, **kwargs):
+        return 0
+
+
 class _FakeRandomState:
     """Stub for np.random.* calls in annotations.md / controlling-cache-behavior.md."""
     @staticmethod
@@ -314,6 +329,10 @@ class _FakeRandomState:
     @staticmethod
     def seed(s):
         return None
+
+    @staticmethod
+    def default_rng(seed=None):
+        return _FakeGenerator()
 
 
 def _make_numpy_stub():

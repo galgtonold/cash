@@ -7,10 +7,11 @@ import logging
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
 
 logger = logging.getLogger(__name__)
 
@@ -29,11 +30,21 @@ class CashRandomnessWarning(CashWarning):
 
 @dataclass
 class RandomnessCallInfo:
-    """Information about a detected randomness call."""
+    """Information about a detected randomness call.
+
+    ``carrier`` names the *variable* a draw was taken from when the call came
+    off an RNG object rather than a module global — ``rng.standard_normal()``
+    sets ``carrier='rng'``, ``np.random.standard_normal()`` leaves it ``None``.
+    The distinction is load-bearing, not cosmetic: a carrier's reproducibility
+    is decided by its own constructor, so a carrier call must never be filtered
+    through the module-level seed ledger (:meth:`RandomnessDetector.is_seeded`).
+    See ``_resolve_carrier_calls``.
+    """
     module: str
     function: str
     lineno: int
     col_offset: int
+    carrier: str | None = None
 
 # Comprehensive mapping of randomness functions by module
 RANDOM_FUNCTIONS = {
@@ -97,6 +108,114 @@ MODULE_ALIASES = {
     'tf': 'tensorflow',
 }
 
+# -----------------------------------------------------------------------------
+# RNG carriers (objects that hold their own bit-generator state)
+# -----------------------------------------------------------------------------
+#
+# The three kinds below are the single taxonomy of "what is an RNG object" for
+# this module.  They are consumed by TWO channels that see different things:
+#
+# * ``_classify_rng_carrier`` (CAS-90, further down) classifies a **live value**
+#   by ``isinstance``.  It runs at store/restore time, when the object exists.
+# * The tables here classify a **constructor call in source**.  Detection has to
+#   run on the AST because the warning fires *before* the statement executes —
+#   and, decisively, because the RNG is often a function local
+#   (``def f(): g = np.random.default_rng(); ...``) that never reaches
+#   ``user_ns`` at all, so no live-value classifier can ever see it.
+#
+# The AST channel is also the only one that can answer the question the warning
+# actually turns on — *was it seeded?*  ``default_rng()`` and ``default_rng(42)``
+# produce indistinguishable ``Generator`` objects; only the source says which
+# one you wrote.  So the live classifier deliberately does not drive the
+# warning: it would have to guess, and guessing "unseeded" would fire on
+# perfectly reproducible generators.  Sharing the kind constants is what keeps
+# the two channels from drifting into two different notions of an RNG.
+
+_KIND_NP_GENERATOR = 'numpy.Generator'
+_KIND_NP_RANDOMSTATE = 'numpy.RandomState'
+_KIND_PY_RANDOM = 'random.Random'
+
+# Constructors that MINT a carrier, keyed by the kind they produce.
+RNG_CARRIER_CONSTRUCTORS = {
+    'numpy.random.default_rng': _KIND_NP_GENERATOR,
+    'numpy.random.Generator': _KIND_NP_GENERATOR,
+    'numpy.random.RandomState': _KIND_NP_RANDOMSTATE,
+    'random.Random': _KIND_PY_RANDOM,
+    'random.SystemRandom': _KIND_PY_RANDOM,
+}
+
+# Bare constructor names, for ``from numpy.random import default_rng`` when the
+# import happened in an *earlier* statement (each statement is scanned on its
+# own, so this visitor never sees that import).  Same pragmatic role as
+# MODULE_ALIASES' 'np' -> 'numpy'.
+#
+# Only ``default_rng`` earns a spot: it is unambiguous in practice.  ``Random``,
+# ``Generator`` and ``RandomState`` are NOT here — bare ``Generator(...)`` is far
+# more likely to be ``typing.Generator`` or a user's own class, and mistaking one
+# for an RNG would warn about code that has no randomness in it at all.
+_BARE_CARRIER_CONSTRUCTORS = {
+    'default_rng': _KIND_NP_GENERATOR,
+}
+
+# numpy bit generators: ``Generator(PCG64(42))`` is seeded, ``Generator(PCG64())``
+# is not, so the seed question recurses one level into the bit generator.
+_NP_BIT_GENERATORS = frozenset({
+    'PCG64', 'PCG64DXSM', 'MT19937', 'Philox', 'SFC64',
+})
+
+# Which draw methods each carrier kind offers.  Reusing RANDOM_FUNCTIONS keeps
+# one list of "what counts as a draw" per module rather than two.
+_CARRIER_DRAW_FUNCTIONS = {
+    _KIND_NP_GENERATOR: RANDOM_FUNCTIONS['numpy.random'],
+    _KIND_NP_RANDOMSTATE: RANDOM_FUNCTIONS['numpy.random'],
+    _KIND_PY_RANDOM: RANDOM_FUNCTIONS['random'],
+}
+
+# The module each carrier kind is attributed to in the warning message.
+_CARRIER_MODULES = {
+    _KIND_NP_GENERATOR: 'numpy.random',
+    _KIND_NP_RANDOMSTATE: 'numpy.random',
+    _KIND_PY_RANDOM: 'random',
+}
+
+# Any name that could be a draw off some carrier.  Used as a cheap pre-filter
+# while visiting; the kind-specific set above makes the real decision once the
+# carrier's kind is known.
+_ANY_CARRIER_DRAW_FUNCTION = frozenset(
+    RANDOM_FUNCTIONS['numpy.random'] | RANDOM_FUNCTIONS['random']
+)
+
+
+def _rng_constructor_is_seeded(node: ast.Call) -> bool:
+    """Whether an RNG constructor call was handed a reproducible seed.
+
+    ``default_rng()`` / ``default_rng(None)`` draw from OS entropy and are not
+    reproducible.  Anything else — a literal, a variable, a bit generator built
+    with a seed — is treated as seeded.
+
+    Deliberately biased toward "seeded" for shapes it cannot read (e.g.
+    ``default_rng(cfg.seed)``).  A false negative costs a missing warning on an
+    unusual spelling; a false positive would fire on reproducible code, which is
+    how a warning gets filtered out wholesale and stops protecting anyone.
+    """
+    args = list(node.args)
+    args.extend(kw.value for kw in node.keywords if kw.arg in ('seed', 'bit_generator'))
+
+    if not args:
+        return False
+
+    first = args[0]
+    if isinstance(first, ast.Constant) and first.value is None:
+        return False
+    if isinstance(first, ast.Call):
+        if isinstance(first.func, ast.Attribute):
+            inner_name = first.func.attr
+        else:
+            inner_name = getattr(first.func, 'id', None)
+        if inner_name in _NP_BIT_GENERATORS:
+            return _rng_constructor_is_seeded(first)
+    return True
+
 class RandomnessVisitor(ast.NodeVisitor):
     """AST visitor that detects randomness and seed calls."""
 
@@ -104,6 +223,19 @@ class RandomnessVisitor(ast.NodeVisitor):
         self.random_calls: list[RandomnessCallInfo] = []
         self.seed_calls: list[tuple[str, int]] = []  # (module, lineno)
         self.imports: dict = {}  # name -> module mapping
+        # RNG carriers bound in THIS source: name -> (kind, seeded).
+        self.carrier_assigns: dict[str, tuple[str, bool]] = {}
+        # Names rebound to a non-carrier here, so a session-level binding for
+        # them is stale and must be dropped.
+        self.carrier_clears: set[str] = set()
+        # ``g = rng`` where ``rng`` is not bound in THIS source: (target, source),
+        # resolved by the detector against session state.
+        self.carrier_aliases: list[tuple[str, str]] = []
+        # Candidate draws off an object: (base, func, lineno, col_offset).
+        # Collected unresolved — whether ``base`` is a carrier at all can depend
+        # on a previous statement, which this visitor cannot see.  The detector
+        # resolves them against session state.
+        self.carrier_calls: list[tuple[str, str, int, int]] = []
 
     def visit_Import(self, node: ast.Import):
         """Track imports like 'import random', 'import numpy as np'."""
@@ -139,6 +271,74 @@ class RandomnessVisitor(ast.NodeVisitor):
             chain.append(node.id)
         return list(reversed(chain))
 
+    def visit_Assign(self, node: ast.Assign):
+        """Track ``rng = np.random.default_rng()`` and friends."""
+        self._track_carrier_binding(
+            [t.id for t in node.targets if isinstance(t, ast.Name)], node.value,
+        )
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign):
+        """Track the annotated spelling — ``rng: Generator = default_rng()``."""
+        if isinstance(node.target, ast.Name) and node.value is not None:
+            self._track_carrier_binding([node.target.id], node.value)
+        self.generic_visit(node)
+
+    def _track_carrier_binding(self, names: list[str], value: ast.expr):
+        """Bind, re-bind, or clear ``names`` as RNG carriers based on *value*."""
+        if not names:
+            return
+
+        kind = self._carrier_kind_of(value)
+        if kind is not None:
+            seeded = _rng_constructor_is_seeded(value)
+            for name in names:
+                self.carrier_assigns[name] = (kind, seeded)
+                self.carrier_clears.discard(name)
+            return
+
+        # Aliasing: ``g = rng`` carries the binding across, seededness included.
+        if isinstance(value, ast.Name):
+            if value.id in self.carrier_assigns:
+                for name in names:
+                    self.carrier_assigns[name] = self.carrier_assigns[value.id]
+                    self.carrier_clears.discard(name)
+            else:
+                # The source may be a carrier bound in an EARLIER statement,
+                # which this visitor cannot see. Emit the alias unresolved and
+                # let the detector settle it against session state.
+                for name in names:
+                    self.carrier_assigns.pop(name, None)
+                    self.carrier_aliases.append((name, value.id))
+            return
+
+        # Rebound to something that isn't a carrier: forget it, and tell the
+        # detector to forget any session-level binding too. Without this a name
+        # reused for an ordinary value ("rng = load_config()") would keep
+        # warning on every method call that shares a name with a draw.
+        for name in names:
+            self.carrier_assigns.pop(name, None)
+            self.carrier_clears.add(name)
+
+    def _carrier_kind_of(self, value: ast.expr) -> str | None:
+        """Return the carrier kind *value* constructs, or None."""
+        if not isinstance(value, ast.Call):
+            return None
+        chain = self._get_call_chain(value.func)
+        if not chain:
+            return None
+
+        if len(chain) == 1:
+            # ``from numpy.random import default_rng; rng = default_rng()``
+            imported = self.imports.get(chain[0])
+            if imported:
+                return RNG_CARRIER_CONSTRUCTORS.get(imported)
+            return _BARE_CARRIER_CONSTRUCTORS.get(chain[0])
+
+        resolved_base = self._resolve_module(chain[0]) or chain[0]
+        full_name = '.'.join([*resolved_base.split('.'), *chain[1:]])
+        return RNG_CARRIER_CONSTRUCTORS.get(full_name)
+
     def visit_Call(self, node: ast.Call):
         """Check for randomness and seed function calls."""
         chain = self._get_call_chain(node.func)
@@ -153,8 +353,29 @@ class RandomnessVisitor(ast.NodeVisitor):
         # Check various patterns
         self._check_random_call(chain, full_name, node)
         self._check_seed_call(chain, full_name, node)
+        self._check_carrier_call(chain, node)
 
         self.generic_visit(node)
+
+    def _check_carrier_call(self, chain: list[str], node: ast.Call):
+        """Collect ``<name>.<draw>()`` as a *candidate* carrier draw.
+
+        Deliberately unresolved and deliberately permissive: ``df.sample()``
+        lands here too, because ``sample`` is a draw name on both RNG modules.
+        That is harmless — the detector only emits a warning once ``base`` is a
+        *known* carrier, so an unknown receiver stays silent. It also keeps the
+        documented ``df.sample()`` gap exactly where it is rather than turning
+        it into a false positive.
+        """
+        if len(chain) != 2:
+            return  # ``np.random.rand()`` (3) is the module path's job;
+                    # ``self.rng.normal()`` (3) is a known gap.
+        base, func_name = chain
+        if func_name not in _ANY_CARRIER_DRAW_FUNCTION:
+            return
+        if base in MODULE_ALIASES or self._resolve_module(base) is not None:
+            return  # an imported module, not an object
+        self.carrier_calls.append((base, func_name, node.lineno, node.col_offset))
 
     def _check_random_call(self, chain: list[str], full_name: str, node: ast.Call):
         """Check if this call is a randomness function."""
@@ -250,24 +471,56 @@ class RandomnessVisitor(ast.NodeVisitor):
                         self.seed_calls.append((module, node.lineno))
                         return
 
+class _ScanResult(NamedTuple):
+    """One statement's purely-source-derived randomness facts.
+
+    Every field is immutable and independent of session state — that is the
+    contract that lets ``RandomnessDetector._scan`` memoize this by source
+    string and reuse it for the life of the session.
+    """
+    random_calls: tuple[RandomnessCallInfo, ...]
+    seed_calls: tuple[tuple[str, int], ...]
+    carrier_assigns: tuple[tuple[str, tuple[str, bool]], ...]
+    carrier_clears: frozenset[str]
+    carrier_calls: tuple[tuple[str, str, int, int], ...]
+    carrier_aliases: tuple[tuple[str, str], ...]
+
+
 class RandomnessDetector:
     """
     Detects randomness function calls without proper seed setting.
 
-    Tracks seeding state across statements within a session to allow
-    seeding in one cell to apply to subsequent cells.
+    Two channels feed it, because there are two ways to be random:
+
+    * **Module globals** — ``np.random.rand()``, ``random.random()``.
+      Reproducibility is a property of the *module*, tracked in
+      ``seeded_modules``.
+    * **Carriers** — ``rng = np.random.default_rng(); rng.standard_normal()``.
+      Reproducibility is a property of the *object*, decided by its
+      constructor and tracked per variable in ``rng_carriers`` (CAS-135).
+
+    Both are session-scoped: seeding (or minting a generator) in one cell
+    applies to the cells after it.
     """
 
     def __init__(self):
         # Modules that have been seeded in the current session
         self.seeded_modules: set[str] = set()
-        # Memo: code string -> (random_calls, seed_calls) from a pure AST scan.
+        # RNG carriers bound in this session: var name -> (kind, seeded).
+        # The object-API analogue of ``seeded_modules``, and session-scoped for
+        # the same reason: ``rng = np.random.default_rng()`` and the draw off it
+        # are separate statements, each scanned on its own.
+        self.rng_carriers: dict[str, tuple[str, bool]] = {}
+        # Memo: code string -> the pure AST scan (see ``_ScanResult``).
         # The scan is the expensive half of analyze_code (parse + full visit) and
         # is a pure function of the source, so it is safe to reuse across runs.
-        # Only the cheap ``is_seeded`` filter below depends on session state.
+        # Only the cheap session-state filters below (``is_seeded``,
+        # ``_resolve_carrier_calls``) depend on session state — carrier draws are
+        # therefore memoized UNRESOLVED, since whether ``rng`` names a carrier is
+        # session state, not a property of the source.
         # Mirrors ``Cash._capture_use_cache`` in core.py: unbounded growth is the
         # real risk in a long notebook session, so the insert is size-gated.
-        self._scan_cache: dict[str, tuple[tuple[RandomnessCallInfo, ...], tuple[tuple[str, int], ...]]] = {}
+        self._scan_cache: dict[str, _ScanResult] = {}
         # Dedupe ledger: (code, warning message) pairs already warned about in
         # this session.  See ``mark_warned``.
         self._warned: set[tuple[str, str]] = set()
@@ -275,6 +528,7 @@ class RandomnessDetector:
     def reset(self):
         """Reset seeding state (e.g., for new session)."""
         self.seeded_modules.clear()
+        self.rng_carriers.clear()
         # A new session re-warns: the user is looking at a fresh set of outputs.
         # ``_scan_cache`` is deliberately kept — it is pure w.r.t. session state.
         self._warned.clear()
@@ -295,11 +549,12 @@ class RandomnessDetector:
             self._warned.add(key)
         return True
 
-    def _scan(self, code: str) -> tuple[tuple[RandomnessCallInfo, ...], tuple[tuple[str, int], ...]]:
+    def _scan(self, code: str) -> '_ScanResult':
         """Parse + visit *code*, memoized per source string.
 
-        Returns ``(random_calls, seed_calls)`` as tuples so callers cannot mutate
-        the shared memo entry.
+        Everything returned is an immutable, purely-source-derived fact, so the
+        memo entry stays valid for the life of the session and callers cannot
+        corrupt it.
         """
         cached = self._scan_cache.get(code)
         if cached is not None:
@@ -308,15 +563,74 @@ class RandomnessDetector:
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            result: tuple[tuple[RandomnessCallInfo, ...], tuple[tuple[str, int], ...]] = ((), ())
+            result = _ScanResult((), (), (), frozenset(), (), ())
         else:
             visitor = RandomnessVisitor()
             visitor.visit(tree)
-            result = (tuple(visitor.random_calls), tuple(visitor.seed_calls))
+            result = _ScanResult(
+                tuple(visitor.random_calls),
+                tuple(visitor.seed_calls),
+                tuple(visitor.carrier_assigns.items()),
+                frozenset(visitor.carrier_clears),
+                tuple(visitor.carrier_calls),
+                tuple(visitor.carrier_aliases),
+            )
 
         if len(self._scan_cache) < 4096:
             self._scan_cache[code] = result
         return result
+
+    def bind_carriers(self, assigns, clears, aliases=()) -> None:
+        """Fold a statement's carrier bindings into session state."""
+        for name in clears:
+            self.rng_carriers.pop(name, None)
+        for name, entry in assigns:
+            self._bind_carrier(name, entry)
+        # Resolved last: an alias' source may have been (re)bound just above by
+        # this same statement.
+        for target, source in aliases:
+            entry = self.rng_carriers.get(source)
+            if entry is None:
+                self.rng_carriers.pop(target, None)
+            else:
+                self._bind_carrier(target, entry)
+
+    def _bind_carrier(self, name: str, entry: tuple[str, bool]) -> None:
+        # Size-gated like the other session ledgers, but a rebind of a name
+        # already tracked must always land or a re-seed would be ignored.
+        if len(self.rng_carriers) < 4096 or name in self.rng_carriers:
+            self.rng_carriers[name] = entry
+
+    def _resolve_carrier_calls(self, carrier_calls) -> list[RandomnessCallInfo]:
+        """Turn candidate object draws into confirmed unseeded-randomness calls.
+
+        Silent unless the receiver is a *known* carrier: an unresolvable
+        ``obj.sample()`` is far more likely to be a DataFrame than an RNG, and a
+        warning that cries wolf gets filtered out wholesale.
+
+        Carrier draws bypass :meth:`is_seeded` on purpose. ``np.random.seed(42)``
+        seeds the legacy global singleton; a ``default_rng()`` Generator is
+        wholly independent of it. Consulting the module ledger here would let an
+        unrelated seed call two cells up silence the one warning that matters.
+        """
+        found: list[RandomnessCallInfo] = []
+        for base, func_name, lineno, col_offset in carrier_calls:
+            entry = self.rng_carriers.get(base)
+            if entry is None:
+                continue
+            kind, seeded = entry
+            if seeded:
+                continue
+            if func_name not in _CARRIER_DRAW_FUNCTIONS.get(kind, frozenset()):
+                continue
+            found.append(RandomnessCallInfo(
+                module=_CARRIER_MODULES.get(kind, kind),
+                function=func_name,
+                lineno=lineno,
+                col_offset=col_offset,
+                carrier=base,
+            ))
+        return found
 
     def mark_seeded(self, module: str):
         self.seeded_modules.add(module)
@@ -353,21 +667,40 @@ class RandomnessDetector:
             - has_seed_calls is True if the code contains seed function calls
               (these statements should not be cached, as the seed must be executed)
         """
-        random_calls, seed_calls = self._scan(code)
+        scan = self._scan(code)
 
-        has_seed_calls = len(seed_calls) > 0
+        has_seed_calls = len(scan.seed_calls) > 0
 
         # Update seeding state from any seed calls in this code
-        for module, _lineno in seed_calls:
+        for module, _lineno in scan.seed_calls:
             self.mark_seeded(module)
+
+        # Bind this statement's carriers BEFORE resolving its own draws, so a
+        # single statement that both mints and draws — ``rng = default_rng();
+        # x = rng.normal()``, or a whole ``def`` body — resolves against itself.
+        self.bind_carriers(scan.carrier_assigns, scan.carrier_clears, scan.carrier_aliases)
 
         # Then check for unseeded random calls
         unseeded_calls = []
         warnings_list = []
 
-        for call in random_calls:
+        for call in scan.random_calls:
             if not self.is_seeded(call.module):
                 unseeded_calls.append(call)
+
+        unseeded_calls.extend(self._resolve_carrier_calls(scan.carrier_calls))
+        # Source order, so a statement with several draws reads top-to-bottom.
+        unseeded_calls.sort(key=lambda c: (c.lineno, c.col_offset))
+
+        for call in unseeded_calls:
+            if call.carrier is not None:
+                warnings_list.append(
+                    f"Unseeded randomness detected: {call.carrier}.{call.function}() "
+                    f"at line {call.lineno}. '{call.carrier}' came from an unseeded "
+                    f"{call.module} generator, so cached results are frozen, not random. "
+                    f"Pass a seed to the generator, or use @cash:allow-random to suppress."
+                )
+            else:
                 warnings_list.append(
                     f"Unseeded randomness detected: {call.module}.{call.function}() "
                     f"at line {call.lineno}. Cached results may not be reproducible. "
@@ -534,9 +867,9 @@ def restore_rng_state(state: dict) -> None:
 # ``isinstance`` allowlist, which bounds the cost to the handful of variables a
 # statement actually reads.
 
-_KIND_NP_GENERATOR = 'numpy.Generator'
-_KIND_NP_RANDOMSTATE = 'numpy.RandomState'
-_KIND_PY_RANDOM = 'random.Random'
+# The carrier kinds (``_KIND_*``) and the source-level constructor tables live
+# at the top of this module — the detector needs them too, and both channels
+# must agree on what an RNG is.  See the "RNG carriers" section there.
 
 
 def _classify_rng_carrier(obj: object) -> str | None:
@@ -694,6 +1027,13 @@ def get_used_rng_modules(code: str) -> set[str]:
         modules.add(call.module)
     for module, _ in visitor.seed_calls:
         modules.add(module)
+    # A draw off a carrier bound in this same source still uses the module's
+    # RNG machinery, so the module belongs in the set.  Carriers bound in an
+    # *earlier* statement are not visible here — this helper is deliberately
+    # stateless, and the per-object channel (``capture_object_rng_states``) is
+    # what replays those.
+    for _name, (kind, _seeded) in visitor.carrier_assigns.items():
+        modules.add(_CARRIER_MODULES.get(kind, kind))
 
     return modules
 

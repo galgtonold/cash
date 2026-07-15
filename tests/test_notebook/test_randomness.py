@@ -503,3 +503,181 @@ class TestRandomnessDetectorAdvanced:
         assert has_seed is True
         _, _, has_seed = detector.analyze_code("import random; random.random()")
         assert has_seed is False
+
+
+class TestRngCarrierDetection:
+    """Draws off an RNG *object* rather than a module global (CAS-135 hole 1).
+
+    CAS-114's detector was rooted at RNG module names, so numpy's modern
+    ``default_rng()`` API — the one numpy's own docs have pushed since 1.17, and
+    the one CAS-90 already replays state for — was entirely invisible. An
+    unseeded Monte Carlo written against it cached and froze in silence.
+
+    The two halves that matter here: draws off an *unseeded* carrier must warn,
+    and draws off a *seeded* one must not. A detector that only satisfied the
+    first could just warn on every unresolved method call.
+    """
+
+    def _carriers(self, *statements):
+        """Feed statements to one detector, as a session would; return draws."""
+        detector = RandomnessDetector()
+        found = []
+        for stmt in statements:
+            calls, _msgs, _seed = detector.analyze_code(stmt)
+            found.extend(calls)
+        return found
+
+    def test_unseeded_default_rng_draw_detected(self):
+        calls = self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "x = rng.standard_normal(10)",
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'rng'
+        assert calls[0].function == 'standard_normal'
+        assert calls[0].module == 'numpy.random'
+
+    def test_seeded_default_rng_draw_not_detected(self):
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng(42)",
+            "x = rng.standard_normal(10)",
+        ) == []
+
+    def test_seed_keyword_counts_as_seeded(self):
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng(seed=42)",
+            "x = rng.normal()",
+        ) == []
+
+    def test_explicit_none_seed_is_unseeded(self):
+        """``default_rng(None)`` is numpy's spelling of 'draw from OS entropy'."""
+        assert len(self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng(None)",
+            "x = rng.normal()",
+        )) == 1
+
+    def test_carrier_local_to_a_function_body_detected(self):
+        """The CAS-135 report's actual shape: the generator is a function local.
+
+        ``g`` never reaches ``user_ns``, so this can only be caught on the AST of
+        the ``def`` itself — no live-value classifier can ever see it.
+        """
+        calls = self._carriers(
+            "import numpy as np\n"
+            "def draw():\n"
+            "    g = np.random.default_rng()\n"
+            "    return float(g.standard_normal(10).mean())"
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'g'
+
+    def test_np_random_seed_does_not_quiet_a_generator(self):
+        """The module seed ledger must not reach across to a Generator.
+
+        ``np.random.seed()`` seeds the legacy global singleton; a ``default_rng()``
+        Generator is independent of it. Letting the ledger suppress this would
+        reintroduce the exact silence CAS-135 is about.
+        """
+        assert len(self._carriers(
+            "import numpy as np\nnp.random.seed(42)",
+            "rng = np.random.default_rng()",
+            "x = rng.normal()",
+        )) == 1
+
+    def test_bit_generator_seed_is_read_through(self):
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.Generator(np.random.PCG64(42))",
+            "x = rng.normal()",
+        ) == []
+        assert len(self._carriers(
+            "import numpy as np",
+            "rng = np.random.Generator(np.random.PCG64())",
+            "x = rng.normal()",
+        )) == 1
+
+    def test_randomstate_and_stdlib_random_carriers(self):
+        assert len(self._carriers(
+            "import numpy as np", "rs = np.random.RandomState()", "x = rs.rand(5)",
+        )) == 1
+        assert self._carriers(
+            "import numpy as np", "rs = np.random.RandomState(0)", "x = rs.rand(5)",
+        ) == []
+        assert len(self._carriers(
+            "import random", "r = random.Random()", "x = r.random()",
+        )) == 1
+        assert self._carriers(
+            "import random", "r = random.Random(7)", "x = r.random()",
+        ) == []
+
+    def test_from_import_default_rng(self):
+        assert len(self._carriers(
+            "from numpy.random import default_rng",
+            "rng = default_rng()",
+            "x = rng.normal()",
+        )) == 1
+
+    def test_alias_carries_the_binding(self):
+        assert len(self._carriers(
+            "import numpy as np", "rng = np.random.default_rng()", "g = rng", "x = g.normal()",
+        )) == 1
+
+    def test_rebinding_to_a_non_carrier_forgets_it(self):
+        """A name reused for an ordinary value must stop being an RNG."""
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "rng = load_config()",
+            "x = rng.normal()",
+        ) == []
+
+    def test_reseeding_quiets_the_carrier(self):
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "rng = np.random.default_rng(1)",
+            "x = rng.normal()",
+        ) == []
+
+    def test_unknown_receiver_stays_silent(self):
+        """``df.sample()`` is a documented gap, and must not become a false positive.
+
+        'sample' is a draw name on both RNG modules, so it reaches the carrier
+        check — the receiver simply isn't a known carrier, which is exactly why
+        nothing is reported.
+        """
+        assert self._carriers("import pandas as pd", "y = df.sample(5)") == []
+        assert self._carriers("y = thing.normal()") == []
+
+    def test_reset_clears_carrier_bindings(self):
+        detector = RandomnessDetector()
+        detector.analyze_code("import numpy as np\nrng = np.random.default_rng()")
+        assert 'rng' in detector.rng_carriers
+        detector.reset()
+        assert detector.rng_carriers == {}
+
+    def test_carrier_warning_names_the_variable_and_the_escape_hatch(self):
+        detector = RandomnessDetector()
+        detector.analyze_code("import numpy as np\nrng = np.random.default_rng()")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            check_and_warn_randomness("x = rng.standard_normal(10)", detector)
+        assert len(w) == 1
+        assert issubclass(w[0].category, CashRandomnessWarning)
+        message = str(w[0].message)
+        assert "rng.standard_normal()" in message
+        assert "@cash:allow-random" in message
+
+    def test_allow_random_suppresses_carrier_warning(self):
+        detector = RandomnessDetector()
+        detector.analyze_code("import numpy as np\nrng = np.random.default_rng()")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            check_and_warn_randomness(
+                "x = rng.standard_normal(10)", detector, suppress_warning=True,
+            )
+        assert len(w) == 0
