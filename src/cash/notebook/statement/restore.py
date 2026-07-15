@@ -20,9 +20,10 @@ small-but-cacheable case where only metadata gets persisted.
 Different unit of work, same backend.  Both can be safely active in
 the same session because their callers ensure they don't collide.
 
-**Anti-god-class rule (semi-load-bearing):** unlike its sibling
-modules, this one DOES use ``IPython.display`` — replaying captured
-rich outputs is intrinsically an IPython operation.  If the codebase
+**Anti-god-class rule (semi-load-bearing):** this module uses
+``IPython.display`` — replaying captured rich outputs is intrinsically
+an IPython operation.  Only ``processor.py`` does the same (its own
+replay + last-expression repr); keep it to those two.  If the codebase
 ever needs a non-IPython restore path, the right move is to factor
 *that* out as a non-replay sibling, not to spread the IPython imports
 further.
@@ -34,6 +35,13 @@ chain (``core`` → ``notebook`` → ``upstream`` → ``statement``), so a
 module-level ``from IPython.display import ...`` made a bare
 ``pip install cash-lib`` unimportable.  Keep the import inside
 :meth:`StatementRestorer._replay_cached_outputs`.
+
+**Do not "fix" this into a module-level try/except with no-op stubs.**
+That shape keeps the module importable but makes a real display call
+silently render nothing.  ``processor.py`` had exactly that and was
+brought in line with this module (CAS-132): import locally, let a
+genuine display attempt without IPython raise.  Both are pinned by
+``tests/test_notebook/test_display_without_ipython.py``.
 """
 
 from __future__ import annotations

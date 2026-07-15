@@ -214,12 +214,24 @@ def _tee_output() -> Generator[Any, None, None]:
         teed.stderr = "".join(stderr_chunks)
         sys.stdout, sys.stderr = old_stdout, old_stderr
 
+# ``capture_output`` is the ONLY IPython name imported at module scope, and it
+# keeps its try/except because the fallback below is a genuine working
+# equivalent (it really does capture stdout/stderr), not a silent drop.  The
+# module MUST stay importable without IPython: base ``cash`` declares
+# ``dependencies = []`` — IPython lives in the ``[notebook]`` extra — and this
+# module sits on the ``import cash`` chain, so a module-level unguarded IPython
+# import makes a bare ``pip install cash-lib`` unimportable (CAS-129).
+#
+# ``display`` / ``publish_display_data`` deliberately do NOT get the same
+# treatment: there is no honest fallback for "render rich output" without
+# IPython, and a no-op stub would make a display call silently vanish — the
+# cell appears to succeed while producing nothing.  They are imported
+# function-locally at each use site instead, so a genuine display attempt
+# fails loudly with a clear ImportError.  Same rule as
+# ``StatementRestorer._replay_cached_outputs`` (CAS-129/CAS-132).
 try:
-    from IPython.display import display, publish_display_data
     from IPython.utils.io import capture_output
-    HAS_IPYTHON = True
 except ImportError:
-    HAS_IPYTHON = False
     @contextmanager
     def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True) -> Generator[Any, None, None]:
         """Fallback capture_output for when IPython is not available."""
@@ -250,13 +262,6 @@ except ImportError:
                 captured.stderr = sys.stderr.getvalue()
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
-
-    def publish_display_data(data, metadata=None):
-        """Fallback publish_display_data."""
-
-    def display(*objs, **kwargs):
-        for obj in objs:
-            print(obj)
 
 from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
@@ -1224,7 +1229,18 @@ class StatementProcessor:
         return None, skip_cache
 
     def _publish_rich_outputs(self, outputs: list) -> None:
-        """Replay a list of rich display outputs."""
+        """Replay a list of rich display outputs.
+
+        Raises ImportError without IPython — see the module-header note: a
+        caller replaying rich output expects it to render, so failing loudly
+        beats silently dropping it.  The ``if not outputs`` guard keeps the
+        common no-rich-output path off the import entirely.
+        """
+        if not outputs:
+            return
+
+        from IPython.display import display, publish_display_data
+
         for output in outputs:
             if isinstance(output, dict) and 'data' in output:
                 publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
@@ -1313,6 +1329,7 @@ class StatementProcessor:
                          # (CAS-96); honour it so no repr is displayed OR captured
                          # (an empty capture then also restores cleanly).
                          if result_val is not None and not code.rstrip().endswith(';'):
+                             from IPython.display import display
                              display(result_val)
                     else:
                         compiled_code = compile(code, '<cash>', 'exec')
@@ -1386,6 +1403,7 @@ class StatementProcessor:
                             result_val = await result_val
 
                         if result_val is not None and not code.rstrip().endswith(';'):
+                            from IPython.display import display
                             display(result_val)
                     else:
                         compiled_code = compile(code, '<cash>', 'exec', flags=_FLAG)

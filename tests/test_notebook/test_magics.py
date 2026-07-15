@@ -248,9 +248,12 @@ final_value = result * multiplier
         mock_output = {'data': {'text/plain': 'mock_data'}, 'metadata': {}}
         
         # We need to patch capture_output used in statement_processor.py where it's actually called
-        # Also patch publish_display_data to avoid IPython initialization issues
+        # Also patch publish_display_data to avoid IPython initialization issues.
+        # processor.py imports publish_display_data function-locally (CAS-132), so
+        # it resolves through IPython.display at call time -- patch it at the
+        # source. magics.py binds the name at import time, so it needs its own.
         with patch('cash.notebook.statement.processor.capture_output') as mock_capture, \
-             patch('cash.notebook.statement.processor.publish_display_data'), \
+             patch('IPython.display.publish_display_data'), \
              patch('cash.notebook.ipython.magics.publish_display_data'):
             # Configure mock context manager
             mock_captured = MagicMock()
@@ -272,7 +275,7 @@ final_value = result * multiplier
             
         # 2. Second run: Cache hit -> Replay
         # We need to patch publish_display_data in both modules where it can be called
-        with patch('cash.notebook.statement.processor.publish_display_data') as mock_publish_sp, \
+        with patch('IPython.display.publish_display_data') as mock_publish_sp, \
              patch('cash.notebook.ipython.magics.publish_display_data') as mock_publish_magics:
             self.magics.cash("", cell)
             
