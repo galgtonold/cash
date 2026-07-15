@@ -38,6 +38,7 @@ from .exceptions import (
     UpstreamStateError,
 )
 from .notebook.purity import analyze_function_purity, is_pure, is_stateful, pure, stateful
+from .notebook.randomness import CashRandomnessWarning
 
 # ---------------------------------------------------------------------------
 # Annotation helpers for third-party callables
@@ -371,6 +372,7 @@ __all__ = [
     "CashCacheIneffectiveWarning",
     "CashCacheStoreFailedWarning",
     "CashImpurityWarning",
+    "CashRandomnessWarning",
 ]
 
 # Experimental features are available via:

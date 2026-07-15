@@ -133,6 +133,16 @@ The warning fires **once per statement per session**, not once per run: re-runni
 an unchanged cell stays quiet, and editing the statement makes it warn again. A
 random draw inside a loop body warns once, not once per iteration.
 
+To silence the warning globally rather than per statement, filter the class —
+it's exported from the package root and belongs to the `CashWarning` family:
+
+```python
+import warnings
+import cash
+
+warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
+```
+
 Seeding the RNG is the other way to silence it, and the better one when you want
 reproducibility rather than just quiet: after `np.random.seed(0)` or
 `random.seed(0)`, Cash treats subsequent draws from that module as deterministic

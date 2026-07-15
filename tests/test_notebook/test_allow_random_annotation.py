@@ -115,6 +115,58 @@ class TestWarningEmitted:
         assert "random.randint" in str(caught[0].message)
 
 
+class TestWarningClassContract:
+    """``CashRandomnessWarning`` must behave like the rest of the warning family.
+
+    It was declared ``UserWarning`` and left out of the top-level exports, which
+    was invisible while nothing raised it. Now that it fires, a user needs to be
+    able to reach it and filter it the way ``CashWarning`` documents.
+    """
+
+    def test_exported_from_the_package_root(self):
+        import cash
+
+        assert cash.CashRandomnessWarning is CashRandomnessWarning
+        assert "CashRandomnessWarning" in cash.__all__
+
+    def test_is_in_the_cash_warning_family(self):
+        import cash
+
+        assert issubclass(CashRandomnessWarning, cash.CashWarning)
+
+    def test_remains_a_user_warning(self):
+        """CashWarning derives from UserWarning, so pre-existing filters that
+        target UserWarning must keep catching this."""
+        assert issubclass(CashRandomnessWarning, UserWarning)
+
+    def test_blanket_cash_warning_filter_suppresses_it(self, magics_fixture):
+        """The recipe in CashWarning's docstring must actually work.
+
+        Regression guard: the helper used to force ``simplefilter('always')``
+        inside a ``catch_warnings()`` block, which overrode user filters and
+        made these warnings unsuppressable by the documented mechanism.
+        """
+        import cash
+
+        magics, _shell, _backend, _cash = magics_fixture
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            warnings.filterwarnings("ignore", category=cash.CashWarning)
+            magics.cash("", "import numpy as np\nx = np.random.rand(1000)")
+        assert [w for w in caught if issubclass(w.category, CashRandomnessWarning)] == []
+
+    def test_attributed_to_the_cash_pseudo_file(self, magics_fixture):
+        """No user frame exists when the warning is raised (the statement hasn't
+        run yet), so it is attributed to ``<cash>`` — the same pseudo-filename
+        the statement is compiled under — rather than leaking an internal path."""
+        magics, _shell, _backend, _cash = magics_fixture
+        caught = _run_capturing_warnings(
+            magics, "import numpy as np\nx = np.random.rand(1000)",
+        )
+        assert len(caught) == 1
+        assert caught[0].filename == "<cash>"
+
+
 class TestSuppression:
     """``# @cash:allow-random`` silences the warning.
 

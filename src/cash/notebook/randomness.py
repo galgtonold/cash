@@ -8,12 +8,24 @@ import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from ..exceptions import CashWarning
+
 __all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
 
 logger = logging.getLogger(__name__)
 
-class CashRandomnessWarning(UserWarning):
-    """Warning issued when unseeded randomness is detected in cached code."""
+class CashRandomnessWarning(CashWarning):
+    """Warning issued when unseeded randomness is detected in cached code.
+
+    Part of the :class:`~cash.exceptions.CashWarning` family, so the documented
+    blanket filter works on it::
+
+        warnings.filterwarnings("ignore", category=cash.CashWarning)
+
+    It sat outside that family while it was unreachable (CAS-114 wired up the
+    only code that raises it). ``CashWarning`` is itself a ``UserWarning``, so
+    filters written against ``UserWarning`` keep working.
+    """
 
 @dataclass
 class RandomnessCallInfo:
@@ -383,23 +395,36 @@ def check_and_warn_randomness(
           (seed statements should not be cached - they must execute to set RNG state)
 
     Warnings are deduped *once per statement per session* via
-    ``detector.mark_warned``.  The detector — not Python's ``__warningregistry__``
-    — owns the policy: the ``warnings.warn`` call below is on a single line of
-    this module, so the interpreter's default "once per location" dedupe would
-    collapse *every* statement's warning into one for the whole session.  The
-    ``simplefilter('always')`` disables that location dedupe; ``mark_warned``
-    then applies the per-statement one we actually want.
+    ``detector.mark_warned``, and raised with :func:`warnings.warn_explicit`
+    under the ``<cash>`` pseudo-filename Cash compiles user statements with.
+
+    Two things make that the right call rather than a plain ``warnings.warn``:
+
+    * ``registry=None`` bypasses ``__warningregistry__``'s "once per location"
+      dedupe.  Every randomness warning is raised from this one source line, so
+      the registry would collapse an entire session's worth into a single
+      warning.  ``mark_warned`` supplies the per-statement dedupe we actually
+      want instead.
+    * It still consults the user's filters.  The previous approach —
+      ``catch_warnings()`` + ``simplefilter('always')`` — bought registry-bypass
+      by *overriding* those filters, which silently defeated the blanket
+      ``filterwarnings(..., category=cash.CashWarning)`` recipe that
+      :class:`~cash.exceptions.CashWarning` documents.
+
+    ``stacklevel`` has no useful target here: the statement has not executed yet,
+    so no user frame is on the stack — every candidate is Cash-internal.
+    ``<cash>`` plus the in-message line number attributes it to the statement.
     """
     unseeded_calls, warnings_list, has_seed_calls = detector.analyze_code(code)
 
     if not suppress_warning and warnings_list:
-        fresh = [msg for msg in warnings_list if detector.mark_warned(code, msg)]
-        if fresh:
-            # Use 'always' filter so warnings show every time, not just once
-            with warnings.catch_warnings():
-                warnings.simplefilter('always', CashRandomnessWarning)
-                for warning_msg in fresh:
-                    warnings.warn(warning_msg, CashRandomnessWarning, stacklevel=4)
+        for call, warning_msg in zip(unseeded_calls, warnings_list):
+            if not detector.mark_warned(code, warning_msg):
+                continue
+            warnings.warn_explicit(
+                warning_msg, CashRandomnessWarning,
+                filename='<cash>', lineno=call.lineno, registry=None,
+            )
 
     return unseeded_calls, has_seed_calls
 
