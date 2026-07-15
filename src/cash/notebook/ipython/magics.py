@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import functools
 import logging
 import sys
 import time
@@ -270,9 +271,26 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 e,
             )
 
-        # Monkey-patch run_cell to intercept execution
+        # Monkey-patch run_cell to intercept execution.
+        #
+        # Both hooks are installed as ``functools.wraps``-ed proxies rather than
+        # as the bound methods directly. That is load-bearing, not cosmetic:
+        # ipykernel introspects these signatures to decide what to pass us
+        # (ipkernel.py: ``_accepts_parameters(run_cell, ["cell_id"])``), and its
+        # helper treats a ``**kwargs`` signature as "accepts every parameter".
+        # Our proxies are ``(*args, **kwargs)``, so bare they would claim to
+        # accept ``cell_id`` even against an IPython too old to have it (<8.3,
+        # which ``[notebook]``'s ``ipython>=8.0`` floor still allows) — ipykernel
+        # would then pass ``cell_id=...``, our forward would raise TypeError
+        # before ``execute_reply`` was sent, and the cell would hang at ``[*]``.
+        # ``functools.wraps`` sets ``__wrapped__``, which ``inspect.signature``
+        # follows, so introspection sees the *original's* signature and every
+        # verdict about us is identical to the verdict about the shell we
+        # replaced (CAS-134).
         self._original_run_cell = shell.run_cell
-        shell.run_cell = self._execute_cell
+        shell.run_cell = self._signature_preserving_proxy(
+            self._original_run_cell, '_execute_cell',
+        )
 
         # Also intercept run_cell_async: ipykernel dispatches top-level-await
         # cells (``x = await f()``) through ``shell.run_cell_async``, NOT the
@@ -282,7 +300,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._original_run_cell_async = None
         if hasattr(shell, 'run_cell_async'):
             self._original_run_cell_async = shell.run_cell_async
-            shell.run_cell_async = self._execute_cell_async
+            shell.run_cell_async = self._signature_preserving_proxy(
+                self._original_run_cell_async, '_execute_cell_async', is_async=True,
+            )
 
         try:
             shell._cash_hooks = {
@@ -293,6 +313,34 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 shell._cash_hooks['original_run_cell_async'] = self._original_run_cell_async
         except (AttributeError, TypeError):
             pass
+
+    def _signature_preserving_proxy(
+        self, original: Any, handler_name: str, is_async: bool = False,
+    ) -> Any:
+        """Wrap *original* with a proxy that dispatches to ``self.<handler_name>``.
+
+        The proxy forwards ``*args, **kwargs`` verbatim but, thanks to
+        ``functools.wraps``, presents *original*'s signature to
+        ``inspect.signature`` (via ``__wrapped__``). Callers that introspect
+        these hooks to decide what to pass — ipykernel does exactly this for
+        ``cell_id`` — therefore get the same answer they would have got from the
+        unpatched shell, so we can never be handed an argument the real callee
+        rejects (CAS-134).
+
+        The handler is resolved by name **at call time** rather than captured, so
+        tests (and ``%cash_benchmark``) can swap ``self._execute_cell`` out and
+        still be routed through.
+        """
+        if is_async:
+            @functools.wraps(original)
+            async def proxy(*args: Any, **kwargs: Any) -> Any:
+                return await getattr(self, handler_name)(*args, **kwargs)
+        else:
+            @functools.wraps(original)
+            def proxy(*args: Any, **kwargs: Any) -> Any:
+                return getattr(self, handler_name)(*args, **kwargs)
+
+        return proxy
 
     @line_magic
     def cash_on(self, line: str) -> None:
