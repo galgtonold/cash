@@ -274,7 +274,7 @@ from ..cacheability import (
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
-from ..cacheability_decision import decide_cacheability
+from ..cacheability_decision import decide_cacheability, identity_coupled_reason
 from ..purity import analyze_function_purity
 from ..randomness import (
     RandomnessDetector,
@@ -938,6 +938,27 @@ class StatementProcessor:
                         f"Live-alias object '{out}' (view/ref-holder); re-derived "
                         "from live base, not cached (CAS-115/89)."
                     )
+                    break
+
+        # A statement producing an object that is identity-coupled to a library
+        # global (a matplotlib Figure/Axes vs pyplot's ``Gcf`` current-figure
+        # registry) must NOT be cached. The RAM tier deep-copies on store, and a
+        # Figure's ``__setstate__`` re-registers the COPY as pyplot's current
+        # figure -- so the user draws on their figure while ``plt.savefig()``
+        # writes the cache's snapshot: a blank PNG on the FIRST run, silently.
+        # This must run here (post-execution) rather than in decide_cacheability:
+        # the object does not exist yet when that runs. Refusing BEFORE
+        # _save_to_cache is what prevents the deep-copy from ever happening
+        # (CAS-144).
+        if not skip_cache:
+            for out in outputs:
+                val = captured_vars.get(out)
+                if val is None:
+                    continue
+                reason = identity_coupled_reason(out, val)
+                if reason is not None:
+                    skip_cache = True
+                    metrics.setdefault('uncacheable_reasons', []).append(reason)
                     break
 
         # Record executed file-WRITING statements by code text (CAS-81/82):

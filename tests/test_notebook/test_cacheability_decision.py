@@ -12,7 +12,7 @@ import pytest
 
 from cash.notebook.annotations import CacheAnnotation
 from cash.notebook.cacheability import analyze_statement
-from cash.notebook.cacheability_decision import decide_cacheability
+from cash.notebook.cacheability_decision import decide_cacheability, identity_coupled_reason
 
 
 def _analysis(code: str):
@@ -244,3 +244,57 @@ class TestReasonOrdering:
         )
         assert any("In-place mutation" in r for r in reasons)
         assert 'Input variable missing lineage' not in reasons
+
+
+
+class TestIdentityCoupledReason:
+    """``identity_coupled_reason`` — the CAS-144 refusal of matplotlib Figure/Axes.
+
+    These objects are only correct while they ARE the object pyplot's ``Gcf``
+    registry points at.  Caching one makes the RAM tier deep-copy it, and
+    ``Figure.__setstate__`` re-registers the COPY as pyplot's current figure --
+    so ``plt.savefig()`` silently writes a blank image on the FIRST run.
+
+    Figures here are built via ``matplotlib.figure.Figure`` directly rather than
+    ``pyplot``: the predicate is a pure type check, so it needs no global state,
+    and touching pyplot would make these tests share the process-wide ``Gcf``
+    registry and backend with whatever xdist scheduled alongside them (observed
+    flaking exactly that way).  The real identity behaviour is pinned by the
+    integration tests against a live kernel, which is the trustworthy oracle.
+    """
+
+    def test_plain_values_are_not_coupled(self):
+        for value in [1, "s", [1, 2, 3], {"a": 1}, None, (1, 2), {1, 2}]:
+            assert identity_coupled_reason("v", value) is None
+
+    def test_figure_is_refused(self):
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        reason = identity_coupled_reason("fig", figure_mod.Figure())
+        assert reason is not None
+        assert "Figure" in reason and "fig" in reason
+
+    def test_axes_is_refused_because_it_drags_its_figure(self):
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        ax = figure_mod.Figure().add_subplot()
+        reason = identity_coupled_reason("ax", ax)
+        assert reason is not None
+        assert "Axes" in reason
+
+    def test_ndarray_of_axes_is_refused(self):
+        """``fig, axes = plt.subplots(2, 2)`` binds an object-array of Axes."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        axes = figure_mod.Figure().subplots(2, 2)
+        assert identity_coupled_reason("axes", axes) is not None
+
+    def test_other_matplotlib_artists_stay_cacheable(self):
+        """Precision guard: do NOT blanket-ban matplotlib. Line2D is an Artist
+        but is not identity-coupled to pyplot's globals, so it stays cacheable."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        line = figure_mod.Figure().add_subplot().plot([1, 2], [3, 4])[0]
+        assert identity_coupled_reason("line", line) is None
+
+    def test_numeric_ndarray_is_not_scanned_elementwise(self):
+        """A numeric array cannot hold an Axes; the dtype gate keeps it off the
+        scan path entirely (and is why a big array costs nothing here)."""
+        np = pytest.importorskip("numpy")
+        assert identity_coupled_reason("arr", np.arange(100_000)) is None

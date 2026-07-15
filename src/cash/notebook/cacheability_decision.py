@@ -44,7 +44,47 @@ from cash.notebook.cacheability import StatementAnalysis
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["decide_cacheability"]
+__all__ = ["decide_cacheability", "identity_coupled_reason"]
+
+# --- Identity-coupled library objects (CAS-144) ---------------------------
+#
+# Some objects are only *correct* while they ARE the object a library global
+# points at.  pyplot keeps a process-wide registry of the "current figure"
+# (``matplotlib._pylab_helpers.Gcf``); ``plt.savefig()`` / ``plt.title()`` /
+# ``plt.show()`` act on whatever that registry says is current — NOT on the
+# user's variable.
+#
+# Caching such an object is actively harmful.  The RAM tier deep-copies every
+# value it stores (``InMemoryBackend._safe_deep_copy``).  ``Figure.__getstate__``
+# records that the figure was registered with pyplot, so ``Figure.__setstate__``
+# on the COPY calls ``Gcf._set_new_active_manager`` and makes *the cache's
+# private snapshot* the current figure.  From then on the user draws on their
+# own figure while ``plt.savefig()`` writes the snapshot — a blank image, on the
+# FIRST run, with no error.  Deep-copying a bare Axes does the same thing: it
+# drags its ``.figure`` along.
+#
+# The trade is entirely one-sided — a Figure costs ~0.04s to build — so there is
+# no scenario in which caching one pays for the risk.  Refuse outright.
+#
+# DETECTION: matplotlib is an OPTIONAL dependency, so this path must never
+# import it (CAS-129 shipped an unimportable package exactly that way).  We walk
+# the MRO and compare ``module.qualname`` STRINGS, which imports nothing.  We
+# match the BASE classes, not the leaf: ``Axes3D`` lives in ``mpl_toolkits`` but
+# inherits ``_AxesBase``, and a user subclass leafs in ``__main__``.  Matching
+# the bases also keeps this precise — ``Line2D`` is an ``Artist`` but is not
+# identity-coupled, so it stays cacheable.
+_IDENTITY_COUPLED_BASES: Mapping[str, str] = {
+    'matplotlib.figure.FigureBase': 'matplotlib Figure',       # Figure, SubFigure
+    'matplotlib.axes._base._AxesBase': 'matplotlib Axes',      # Axes + every projection
+}
+
+# ``fig, axes = plt.subplots(2, 2)`` binds ``axes`` to a numpy object-array of
+# Axes, and ``axs = fig.subplots(2, 2)`` never binds the Figure at all — so a
+# top-level type check alone would miss it and silently cache the Axes (which
+# drags the Figure).  A *bounded* shallow scan catches the common spellings
+# without walking a million-element list on the hot path: these containers are
+# homogeneous, so the first few elements settle it.
+_CONTAINER_SCAN_LIMIT = 8
 
 # Builtin-ish names that never need lineage tracking.  Kept in module scope
 # so the per-input loop does not rebuild ``set(dir(builtins))`` on every call.
@@ -64,6 +104,68 @@ def _is_lineage_exempt(var_name: str, val: Any) -> bool:
     if isinstance(val, types.ModuleType) or var_name == 'get_ipython':
         return True
     return bool(callable(val) and (var_name.startswith('_') or hasattr(val, '__self__')))
+
+
+def _coupled_kind(value: Any) -> str | None:
+    """Return the friendly name if *value* is itself identity-coupled, else None.
+
+    Imports nothing: the match is on ``module.qualname`` strings taken from the
+    MRO.  The ``startswith`` gate keeps the common case (int, str, DataFrame)
+    to a couple of cheap string checks.
+    """
+    try:
+        mro = type(value).__mro__
+    except AttributeError:  # pragma: no cover - exotic metaclass
+        return None
+    for base in mro:
+        module = getattr(base, '__module__', '') or ''
+        if not module.startswith('matplotlib'):
+            continue
+        kind = _IDENTITY_COUPLED_BASES.get(f"{module}.{getattr(base, '__qualname__', '')}")
+        if kind is not None:
+            return kind
+    return None
+
+
+def _coupled_kind_in_container(value: Any) -> str | None:
+    """Return the friendly name if a *shallow* container holds a coupled object.
+
+    Bounded by ``_CONTAINER_SCAN_LIMIT``.  Only object-dtype numpy arrays are
+    scanned — a numeric array cannot hold an Axes, and checking ``dtype`` first
+    keeps big numeric arrays off this path entirely.
+    """
+    if isinstance(value, (list, tuple, set, frozenset)):
+        items: Any = value
+    elif type(value).__module__ == 'numpy' and getattr(getattr(value, 'dtype', None), 'kind', '') == 'O':
+        items = value.flat
+    else:
+        return None
+
+    for index, item in enumerate(items):
+        if index >= _CONTAINER_SCAN_LIMIT:
+            break
+        kind = _coupled_kind(item)
+        if kind is not None:
+            return kind
+    return None
+
+
+def identity_coupled_reason(var_name: str, value: Any) -> str | None:
+    """Return an ``uncacheable_reasons`` string if *value* must never be cached.
+
+    ``None`` means "no objection".  See ``_IDENTITY_COUPLED_BASES`` for why
+    these objects are refused (CAS-144).  This is a *value* check, so it runs
+    after execution — the object does not exist yet when
+    :func:`decide_cacheability` runs on a first run.
+    """
+    kind = _coupled_kind(value) or _coupled_kind_in_container(value)
+    if kind is None:
+        return None
+    return (
+        f"Identity-coupled object '{var_name}' ({kind}); caching it would "
+        "detach pyplot's current figure from yours and make plt.savefig() "
+        "write a blank image (CAS-144)."
+    )
 
 
 def decide_cacheability(
