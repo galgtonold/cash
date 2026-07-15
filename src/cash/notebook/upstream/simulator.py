@@ -20,7 +20,8 @@ from typing import Any
 
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import trace_event
-from ..cacheability import analyze_statement
+from ..cacheability import analyze_statement, consumed_input_names
+from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ..control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
 from .mismatch_classifier import MismatchClassifier
 from .reexecution_planner import ReexecutionPlanner
@@ -396,6 +397,99 @@ class NotebookSimulator:
                     )
                 broken_vars.add(var_name)
 
+    def _mark_consumed_unrestorable_inputs_broken(
+        self,
+        required_inputs: set[str] | None,
+        broken_vars: set[str],
+        notebook_cells: list[str] | None = None,
+        current_cell_idx: int | None = None,
+    ) -> set[str]:
+        """Flag consumed, unrestorable inputs whose live object is already drained.
+
+        Returns the subset of vars flagged here, so the planner can also schedule
+        the upstream statements that FILL them (a consumable's filler statements
+        are usually not its trace ``outputs`` — see
+        ``ReexecutionPlanner._schedule_consumable_producer_touches``).
+
+        The sibling guard above only ever examines variables the current cell
+        **writes** (``self_written``; it returns early otherwise). A drained
+        ``queue.Queue`` or an exhausted generator is a READ-ONLY input, so it is
+        never looked at — the cell re-runs against the leftovers of its own
+        previous run and prints ``got=[]`` / ``total=0`` where ``run_all`` (which
+        re-runs the producer first) prints ``got=[0, 1, 2]`` / ``total=55``.
+        [CAS-118 / CAS-50]
+
+        Neither existing staleness signal can see this. The var carries no
+        ``_cash_lineage_hash`` and its lineage never advances (the producer's
+        record still points at ``q = Queue()``), so the lineage-base check is
+        blind; and because a consumable drains IN PLACE its identity is constant,
+        so ``compute_hash``'s ``sha256(str(id(obj)))`` fallback returns the SAME
+        hash before and after draining and the content-base check is blind too.
+        Hence the dedicated per-type probes in ``consumables.py``.
+
+        Marking the var broken is most of the fix: the planner's backward scan
+        then re-executes the statements that OWN it as a trace output. The
+        remainder — scheduling the statements that FILL it, which typically do
+        not own it — is the returned set's job (see the planner method named
+        above).
+
+        Self-disabling by construction: the probe compares against a baseline
+        recorded at this cell's ENTRY on its previous run, so a ``run_all``
+        (producer re-ran, object fresh) compares equal and this is a no-op, and
+        a first run has no baseline at all.
+
+        The CAS-75 cross-cell-accumulator hazard does not apply: that reset
+        re-derives an object that another cell also mutates in place, whereas
+        here re-executing the producer chain is exactly what ``run_all`` does.
+        """
+        flagged: set[str] = set()
+        if not required_inputs:
+            return flagged
+        cell_src = (
+            notebook_cells[current_cell_idx]
+            if notebook_cells is not None and current_cell_idx is not None
+            and 0 <= current_cell_idx < len(notebook_cells)
+            else None
+        )
+        if not cell_src:
+            return flagged
+        try:
+            consumed = consumed_input_names(self._virtual_lineage._get_cached_ast(cell_src))
+        except (SyntaxError, ValueError, TypeError):
+            return flagged
+        candidates = required_inputs & consumed
+        if not candidates:
+            return flagged
+        bases = getattr(self._tracking_state, 'consumable_bases', {})
+        for var_name in candidates:
+            if var_name in _BUILTIN_NAMES and var_name not in self.variable_lineage:
+                continue
+            live_value = self.shell.user_ns.get(var_name)
+            if live_value is None:
+                continue
+            try:
+                if not is_consumable_unrestorable(live_value):
+                    continue
+                diverged = has_diverged(
+                    live_value, bases.get(var_name), had_baseline=(var_name in bases),
+                )
+            except (TypeError, ValueError, AttributeError, RecursionError):
+                continue
+            if not diverged:
+                continue
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM_DEBUG] consumed unrestorable input '%s' (%s) is already "
+                    "drained on re-run (cell-entry base %r but live %r); marking broken "
+                    "so its producer re-runs.",
+                    var_name, type(live_value).__name__,
+                    bases.get(var_name), consumable_state(live_value),
+                )
+            broken_vars.add(var_name)
+            flagged.add(var_name)
+            trace_event("consumable_broken", var=var_name)
+        return flagged
+
     def _mark_nolineage_self_write_broken(
         self,
         var_name: str,
@@ -594,6 +688,15 @@ class NotebookSimulator:
         )
         trace_event("broken_after_guard", broken=broken_vars)
 
+        # Read-only consumable inputs (drained queue / exhausted generator) are
+        # invisible to the guard above, which only examines self-WRITTEN vars.
+        # Same ``broken_vars`` set, so the planner handles both identically.
+        consumable_broken_vars = self._mark_consumed_unrestorable_inputs_broken(
+            required_inputs, broken_vars,
+            notebook_cells=notebook_cells, current_cell_idx=current_cell_idx,
+        )
+        trace_event("broken_after_consumables", broken=broken_vars)
+
         # A ``# @cash: no-cache`` statement opts the whole statement out of cash,
         # so its self-modified vars must behave like an uncached Jupyter cell:
         # re-running ACCUMULATES (advances), never resets. Pass 2 still flags such
@@ -643,6 +746,7 @@ class NotebookSimulator:
             virtual_lineage, virtual_modules, vars_derived_from_loops,
             vars_mutated_by_loops, upstream_has_modifications,
             stmt_lookup_times, notebook_cells,
+            consumable_broken_vars=consumable_broken_vars,
         )
         self._apply_phase_mutations()
         return result

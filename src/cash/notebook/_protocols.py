@@ -186,6 +186,17 @@ class TrackingState:
     # ``obj.method()`` whose method is not statically known to mutate.
     mutation_verdicts: dict[str, set[str]] = field(default_factory=dict)
 
+    # Written by CellExecutor at each cell's ENTRY (after upstream resolution,
+    # before the cell body runs); read by NotebookSimulator. Maps
+    # var_name -> the ``consumables.consumable_state`` token that a consumable,
+    # unrestorable input (generator / queue / file handle) held when this cell
+    # last started. A consumable drains IN PLACE, so its identity — and hence
+    # ``compute_hash``'s identity fallback — is unchanged by being drained; this
+    # cell-entry token is the only way to tell "the producer just handed me a
+    # fresh object" (run_all) from "I am looking at my own previous run's
+    # leftovers" (isolated re-run). See ``consumables.py``, CAS-118 / CAS-50.
+    consumable_bases: dict[str, Any] = field(default_factory=dict)
+
     # Written by StatementLineageBuilder after detecting a live-alias derivation
     # (numpy view -> base, pandas groupby/rolling ref-holder -> source frame);
     # read by VirtualLineage (upstream simulation). Maps

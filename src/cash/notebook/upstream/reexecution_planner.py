@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import ast
 import logging
 import re
+import textwrap
 from typing import TYPE_CHECKING
 
 from ..analysis import CodeAnalyzer
+from ..cacheability import consumed_input_names
 from .._trace import trace_event
 
 if TYPE_CHECKING:
@@ -48,6 +51,7 @@ class ReexecutionPlanner:
         upstream_has_modifications: bool,
         stmt_lookup_times: dict[str, float],
         notebook_cells: list[str],
+        consumable_broken_vars: set[str] | None = None,
     ) -> tuple[list[str], list[dict], float]:
         """Build the list of statements to re-execute and restored info.
 
@@ -67,6 +71,10 @@ class ReexecutionPlanner:
             virtual_lineage, virtual_modules, vars_derived_from_loops,
             loop_derived_trust_overridden, upstream_has_modifications,
             simulation_trace_codes, stmt_lookup_times,
+        )
+
+        stmts_to_run_indices = self._schedule_consumable_producer_touches(
+            stmts_to_run_indices, simulation_trace, consumable_broken_vars or set(),
         )
 
         stmts_to_run_indices = self._complete_shadowed_var_producers(
@@ -116,6 +124,65 @@ class ReexecutionPlanner:
         )
 
         return statements_to_reexecute, restored_statements_info, total_restore_time
+
+    def _schedule_consumable_producer_touches(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        consumable_broken_vars: set[str],
+    ) -> list[int]:
+        """Schedule every upstream statement that FILLS a broken consumable.
+
+        The backward scan schedules the producers of a broken var — statements
+        with the var among their trace ``outputs``. That is not enough to rebuild
+        a consumable, because the statements that *fill* it usually do not own it
+        as an output::
+
+            q = Queue()                  outputs={'q'}   <- scheduled
+            for i in range(3):
+                q.put(i)                 outputs={'i'}   <- NOT scheduled
+
+        ``put`` is not in ``MUTATING_METHODS`` (so the static detector does not
+        attribute it), and the runtime's broad-precise mutation observation skips
+        control-structure bodies (the simulation treats a loop as one unit), so
+        the loop's mutation of ``q`` is invisible from both sides. Re-running only
+        ``q = Queue()`` hands the consumer a fresh EMPTY queue — turning
+        ``got=[]`` into ``got=[]`` again. (The same notebook with a TOP-LEVEL
+        ``q.put(1)`` already worked: there the runtime observes the receiver and
+        the trace does carry ``q`` as an output.)
+
+        So for a var broken by the consumable channel specifically, also schedule
+        any upstream statement that *draws on or feeds* it — reusing the same
+        consumption analysis that scoped the channel. ``q.put(i)`` and a
+        first-half consumer (``first3 = [next(it) for _ in range(3)]``) both
+        qualify; a reporting read (``n = q.qsize()``) does not. Indices are
+        merged and sorted, so ``q = Queue()`` still runs before the loop refills
+        it.
+
+        Scoped to ``consumable_broken_vars`` — vars this run's consumable probe
+        actually flagged as diverged — so no other broken var's plan changes.
+        """
+        if not consumable_broken_vars:
+            return stmts_to_run_indices
+        scheduled = set(stmts_to_run_indices)
+        for i, entry in enumerate(simulation_trace):
+            stmt_code, _outputs, inputs = entry[0], entry[1], entry[2]
+            touched = consumable_broken_vars & set(inputs or ())
+            if not touched or i in scheduled:
+                continue
+            try:
+                consumed = consumed_input_names(ast.parse(textwrap.dedent(stmt_code)))
+            except (SyntaxError, ValueError, TypeError):
+                continue
+            if touched & consumed:
+                scheduled.add(i)
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM] Consumable-chain completion: scheduling [%s] "
+                        "which fills/draws %s: %.60s",
+                        i, sorted(touched & consumed), stmt_code,
+                    )
+        return sorted(scheduled)
 
     def _complete_shadowed_var_producers(
         self,

@@ -56,6 +56,7 @@ from .._protocols import ShellProtocol
 from ..analysis import CodeAnalyzer
 from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
+from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import is_control_structure
 from ..statement import ProcessResult
 
@@ -423,6 +424,36 @@ class CellExecutor:
             control_structure_callback=self._control_structure_processor.process,
         )
 
+    def _record_consumable_bases(self, inputs: set[str]) -> None:
+        """Record the cell-entry drain position of every consumable input.
+
+        Only consumable, unrestorable objects (generator / queue / file handle)
+        get an entry; everything else is left out so the dict stays small and
+        the simulator's lookup is a plain miss. Stale names are dropped so a
+        rebound variable cannot be compared against an unrelated predecessor's
+        token.
+        """
+        state = self._statement_processor._tracking_state
+        bases = state.consumable_bases
+        user_ns = self.shell.user_ns
+        for var_name in inputs:
+            value = user_ns.get(var_name)
+            if value is None:
+                bases.pop(var_name, None)
+                continue
+            try:
+                if not is_consumable_unrestorable(value):
+                    bases.pop(var_name, None)
+                    continue
+                token = consumable_state(value)
+            except (TypeError, ValueError, AttributeError, RecursionError):
+                bases.pop(var_name, None)
+                continue
+            if token is None:
+                bases.pop(var_name, None)
+            else:
+                bases[var_name] = token
+
     def _ensure_state_for_inputs(
         self,
         cell_code: str,
@@ -466,6 +497,17 @@ class CellExecutor:
             )
             total_restore_time += upstream_restore_time
             upstream_metrics.extend(reexec_metrics)
+
+            # Snapshot how far each consumable input has been drained, now that
+            # upstream resolution has settled the namespace and before the cell
+            # body draws from it. This is the cell-ENTRY baseline the simulator
+            # compares against on the next run of this cell: equal means the
+            # producer handed us the same state as last time (run_all -> no-op),
+            # different means we are looking at our own previous run's leftovers
+            # (isolated re-run -> re-execute the producer). Must run AFTER
+            # re-execution, or an isolated re-run would record the drained state
+            # and destroy the signal for the run after it. See CAS-118 / CAS-50.
+            self._record_consumable_bases(inputs)
 
         except (RuntimeError, SyntaxError, AmbiguousCellError):
             raise

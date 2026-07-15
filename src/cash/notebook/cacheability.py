@@ -42,6 +42,7 @@ __all__ = [
     "alias_mutation_sources",
     "aliased_sources",
     "crossref_reassigned_vars",
+    "consumed_input_names",
     "subscript_view_bindings",
     # Re-exported dataclasses (moved from mutation_detector / side_effects)
     "MutationInfo",
@@ -2087,6 +2088,88 @@ def crossref_reassigned_vars(tree: ast.Module | None) -> frozenset[str]:
                 read_before.add(n.id)
 
     return frozenset(flagged)
+
+
+# ---------------------------------------------------------------------------
+# Consumption detection (consumable / producer-re-execution engine)
+# ---------------------------------------------------------------------------
+
+# Builtins that merely *inspect* a name without advancing it. Everything else
+# that receives the name as an argument is assumed to consume it — see
+# ``consumed_input_names``.
+_NON_CONSUMING_FUNCS = frozenset({
+    'type', 'id', 'repr', 'isinstance', 'issubclass', 'hasattr', 'getattr',
+    'setattr', 'delattr', 'callable', 'hash', 'dir', 'vars', 'print',
+    'len', 'format',
+})
+
+# Methods that report on a consumable without drawing from it. Being wrong here
+# means a genuine consumption goes undetected (the producer is not re-run and
+# the stale-value bug survives), so the set stays small and unambiguous.
+_NON_CONSUMING_METHODS = frozenset({
+    # queue.Queue / SimpleQueue introspection
+    'qsize', 'empty', 'full', 'task_done', 'join',
+    # file-handle introspection (``seek``/``tell`` do not read bytes; ``seek``
+    # in particular REWINDS, but the divergence probe compares positions and a
+    # rewound handle legitimately reads from the new offset)
+    'tell', 'fileno', 'seekable', 'readable', 'writable', 'flush', 'isatty',
+})
+
+
+def consumed_input_names(tree: ast.Module | None) -> frozenset[str]:
+    """Names this code actually consumes (drains / advances), not merely reads.
+
+    Used to scope the consumable producer-re-execution channel to inputs the
+    re-run cell really draws from: ``for x in g``, ``list(g)`` / ``sum(g)`` /
+    ``next(g)``, comprehensions, ``q.get()``, ``fh.read()``. Reads that leave
+    the object where it stands — ``q.qsize()``, ``q.empty()``, ``type(g)`` —
+    must NOT count, or a cell that merely inspects a consumable would re-run its
+    producer for nothing.
+
+    **This is a cost / side-effect guard, not a correctness guard.** Re-running
+    a producer matches ``run_all`` semantics either way, so an over-broad answer
+    only wastes work while an over-narrow one would let the bug through. The
+    analysis is therefore deliberately conservative in the *consuming*
+    direction: a name is treated as consumed unless every one of its
+    occurrences sits in a recognised non-consuming position. That makes an
+    opaque ``foo(g)`` count as consumption (correct for ``foo = list``, merely
+    redundant for a ``foo`` that only inspects).
+    """
+    if tree is None:
+        return frozenset()
+    parents: dict[ast.AST, ast.AST] = {}
+    for node in ast.walk(tree):
+        for child in ast.iter_child_nodes(node):
+            parents[child] = node
+
+    def _occurrence_consumes(name_node: ast.Name) -> bool:
+        parent = parents.get(name_node)
+        if parent is None:
+            return True
+        # ``type(g)`` / ``print(g)`` — inspected, not drawn from.
+        if (isinstance(parent, ast.Call) and isinstance(parent.func, ast.Name)
+                and parent.func.id in _NON_CONSUMING_FUNCS
+                and name_node is not parent.func):
+            return False
+        if isinstance(parent, ast.Attribute):
+            grand = parents.get(parent)
+            # ``q.qsize()`` / ``fh.tell()`` — receiver of a reporting method.
+            if (isinstance(grand, ast.Call) and grand.func is parent
+                    and parent.attr in _NON_CONSUMING_METHODS):
+                return False
+            # A bare attribute read (``g.gi_frame``, ``q.maxsize``) never draws.
+            if not isinstance(grand, ast.Call):
+                return False
+            # ``q.get()`` / ``fh.read()`` / ``g.send(..)`` — consuming method.
+            return True
+        return True
+
+    consumed: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load):
+            if _occurrence_consumes(node):
+                consumed.add(node.id)
+    return frozenset(consumed)
 
 
 def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
