@@ -1249,8 +1249,8 @@ class Cash:
         counts as a hit (a function that legitimately returned ``None``).
 
         Auto-tracked file dependencies stored in
-        ``metadata.auto_file_deps`` are re-stat'd here; any file with
-        a different mtime/size than recorded forces a miss so the
+        ``metadata.auto_file_deps`` are re-checked here; any file whose
+        content differs from what was recorded forces a miss so the
         function re-reads the changed file.
         """
         if metadata is not None:
@@ -1307,25 +1307,31 @@ class Cash:
     @staticmethod
     def _auto_file_deps_fresh(metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
-        still has the same (mtime, size) on disk.
+        still matches on disk.
 
         Auto-tracked deps are captured during the first compute via
-        `cash.notebook.file_tracker.FileAccessTracker` and stored
-        as ``{path: {'mtime': float, 'size': int}}``. If a recorded path
-        is gone or its (mtime, size) changed, we invalidate the cache
-        so the next compute re-reads the file. A path that disappears
-        is also a change.
+        `cash.notebook.file_tracker.FileAccessTracker` and stored as
+        ``{path: {'mtime': float, 'size': int, 'hash': str}}``. If a recorded
+        path is gone or its content changed, we invalidate the cache so the next
+        compute re-reads the file. A path that disappears is also a change.
+
+        Freshness is decided by the shared
+        :func:`cash.notebook.file_dep_snapshot.file_dep_is_fresh` - the same
+        content-authoritative check the notebook path uses (CAS-98/CAS-10), so
+        the two subsystems can't drift. ``(mtime, size)`` alone was ambiguous in
+        both directions (CAS-119): a touch (identical content, bumped mtime)
+        recomputed needlessly, and a same-size edit under an indistinguishable
+        mtime was missed and served stale. The helper checks the cheap size
+        first and only hashes when the size matches.
         """
         snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
-        import os
+        from cash.notebook.file_dep_snapshot import file_dep_is_fresh
         for path, recorded in snap.items():
-            try:
-                st = os.stat(path)
-            except OSError:
-                return False  # file vanished - invalidate
-            if st.st_mtime != recorded.get('mtime') or st.st_size != recorded.get('size'):
+            is_fresh, reason = file_dep_is_fresh(path, recorded)
+            if not is_fresh:
+                logger.debug("[FILE_DEP] stale (%s): %s", reason, path)
                 return False
         return True
 
@@ -1392,7 +1398,7 @@ class Cash:
                 # Wrap the function call in FileAccessTracker so any
                 # auto-tracked file reads (pandas/numpy/joblib/open/...)
                 # are recorded as implicit cache dependencies - a later
-                # mtime/size change forces a recompute.
+                # content change forces a recompute.
                 from cash.notebook.file_tracker import FileAccessTracker
                 from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
@@ -2624,12 +2630,21 @@ class Cash:
         upstream file changed - the producer recomputes, but its new output
         carries the same lineage hash as the old one. Folding the file deps in
         gives a changed file a distinct lineage. No deps -> unchanged key.
+
+        The fingerprint is built from the recorded content ``hash`` plus the
+        size, NOT the mtime (CAS-119). Content is the authoritative freshness
+        signal everywhere else, and mtime is the untrustworthy one: keying
+        lineage on it would hand a touched-but-identical file a new lineage and
+        needlessly recompute every downstream consumer, while a same-size edit
+        under an indistinguishable mtime would reuse the old lineage and serve
+        stale. Legacy snapshots with no ``hash`` fall back to the mtime so
+        pre-existing entries keep a stable lineage.
         """
         if not auto_file_deps:
             return cache_key
         fp = hashlib.sha256(
             repr(sorted(
-                (p, d.get('mtime'), d.get('size'))
+                (p, d.get('hash') or d.get('mtime'), d.get('size'))
                 for p, d in auto_file_deps.items()
             )).encode('utf-8')
         ).hexdigest()
