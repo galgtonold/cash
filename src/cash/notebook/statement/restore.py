@@ -21,11 +21,19 @@ Different unit of work, same backend.  Both can be safely active in
 the same session because their callers ensure they don't collide.
 
 **Anti-god-class rule (semi-load-bearing):** unlike its sibling
-modules, this one DOES import from ``IPython.display`` — replaying
-captured rich outputs is intrinsically an IPython operation.  If the
-codebase ever needs a non-IPython restore path, the right move is to
-factor *that* out as a non-replay sibling, not to spread the IPython
-imports further.
+modules, this one DOES use ``IPython.display`` — replaying captured
+rich outputs is intrinsically an IPython operation.  If the codebase
+ever needs a non-IPython restore path, the right move is to factor
+*that* out as a non-replay sibling, not to spread the IPython imports
+further.
+
+That import is **function-local, not module-level** (CAS-129).  Base
+``cash`` declares ``dependencies = []`` — IPython lives in the
+``[notebook]`` extra — but this module sits on the ``import cash``
+chain (``core`` → ``notebook`` → ``upstream`` → ``statement``), so a
+module-level ``from IPython.display import ...`` made a bare
+``pip install cash-lib`` unimportable.  Keep the import inside
+:meth:`StatementRestorer._replay_cached_outputs`.
 """
 
 from __future__ import annotations
@@ -35,8 +43,6 @@ import sys
 import time
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
-
-from IPython.display import display, publish_display_data
 
 from ..randomness import restore_object_rng_states, restore_rng_state
 
@@ -234,9 +240,19 @@ class StatementRestorer:
         if stderr:
             print(stderr, end='', file=sys.stderr)
 
-        for output in rich_outputs:
-            if isinstance(output, dict) and 'data' in output:
-                publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
-            else:
-                display(output)
+        if rich_outputs:
+            # Imported lazily so `import cash` works without IPython, which is
+            # an optional ([notebook] extra) dependency — see the module
+            # docstring (CAS-129).  Deliberately NOT wrapped in a try/except
+            # no-op: a notebook user replaying rich output expects it to
+            # actually render, so failing loudly beats silently dropping it.
+            # Guarded by `if rich_outputs` so the common no-rich-output restore
+            # skips the import entirely on this hot path.
+            from IPython.display import display, publish_display_data
+
+            for output in rich_outputs:
+                if isinstance(output, dict) and 'data' in output:
+                    publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
+                else:
+                    display(output)
         return time.time() - t_output
