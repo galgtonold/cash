@@ -176,7 +176,7 @@ Deep-copyable iterators (`map`, `zip`, `enumerate`, `io.StringIO`, `iter(range(6
 are snapshotted fresh by the cache and restore correctly, so they are **not**
 flagged and their producers are never re-run. Opaque `itertools` cursors
 (`cycle`, `chain`, `tee`) expose no observable position and are deliberately
-left alone.
+left alone — see [ADR-015](architecture_decisions.md) for the design record.
 
 ---
 

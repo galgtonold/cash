@@ -18,15 +18,16 @@ This document provides a deep technical overview of how `cash` implements statem
 12. [Custom Type Hashers](#custom-type-hashers)
 13. [Automatic Import Source Tracking](#automatic-import-source-tracking)
 14. [Mutation Detection](#mutation-detection)
-15. [Randomness Detection](#randomness-detection)
-16. [Side Effect Detection](#side-effect-detection)
-17. [File Dependency Tracking](#file-dependency-tracking)
-18. [Provenance Tracking](#provenance-tracking)
-19. [Lazy Deserialization](#lazy-deserialization)
-20. [Execution Flow](#execution-flow)
-21. [Diagrams](#diagrams)
-22. [Performance Considerations](#performance-considerations)
-23. [Debugging & Logging](#debugging-logging)
+15. [Consumable Classification](#consumable-classification)
+16. [Randomness Detection](#randomness-detection)
+17. [Side Effect Detection](#side-effect-detection)
+18. [File Dependency Tracking](#file-dependency-tracking)
+19. [Provenance Tracking](#provenance-tracking)
+20. [Lazy Deserialization](#lazy-deserialization)
+21. [Execution Flow](#execution-flow)
+22. [Diagrams](#diagrams)
+23. [Performance Considerations](#performance-considerations)
+24. [Debugging & Logging](#debugging-logging)
 
 ---
 
@@ -53,53 +54,97 @@ The notebook caching system in `cash` provides **statement-level caching** for i
 
 ```mermaid
 flowchart TD
-    NB["<b>User Notebook</b><br/><code>%cash_on</code><br/><code>df = pd.read_csv('data.csv')</code><br/><code>df = df.sort_values('date')</code><br/><code>result = df.groupby('x').sum()</code>"]
-    MAGICS["<b>CashMagics</b><br/>Intercepts cell execution via IPython hooks<br/>Coordinates all caching components<br/>Manages variable tracking dictionaries<br/>Records provenance for every statement<br/>Drains decorator call log for badge integration"]
-    CA["<b>CodeAnalyzer</b><br/>Parse AST · Find I/O · Strip magic"]
-    UC["<b>UpstreamChecker</b><br/>Detect changes · Simulate · Re-exec"]
-    SP["<b>StatementProcessor</b><br/>Execute · Cache · Track lineage"]
-    FT["<b>FunctionTracker</b><br/>Hash sources · Module reload"]
-    MD["<b>MutationDetector</b><br/>AST scan · In-place mutation · Skip"]
+    NB["<b>User Notebook</b><br/><code>%cash_on</code> or <code>%%cash</code><br/><code>df = pd.read_csv('data.csv')</code><br/><code>df = df.sort_values('date')</code><br/><code>result = df.groupby('x').sum()</code>"]
+    MAGICS["<b>CashMagics</b> · <code>ipython/magics.py</code><br/>Registers the magics · owns display side effects<br/>Patches <code>pre_run_cell</code> (<code>%cash_on</code>) and <code>run_cell_async</code> (top-level await)<br/>Records provenance · drains decorator call log for badges"]
+    CE["<b>CellExecutor</b> · <code>ipython/cell_executor.py</code><br/>THE single entry point — both <code>%cash_on</code> and <code>%%cash</code> delegate here<br/>Cell ID + notebook path → badge/timing init → module-change detection<br/>→ upstream resolution → AST parse → per-statement execution"]
+    CA["<b>CodeAnalyzer</b> · <code>analysis.py</code><br/>Parse AST · Find I/O · Strip magic"]
+    UC["<b>upstream/</b> package (ADR-010)<br/><code>UpstreamChecker</code> · <code>NotebookSimulator</code><br/>Detect changes · Simulate · Plan re-execution"]
+    SP["<b>statement/</b> package (ADR-011)<br/><code>StatementProcessor</code> + freshness · file_deps · lineage · restore<br/>Execute · Cache · Track lineage"]
+    FT["<b>FunctionTracker</b> · <code>function_tracker.py</code><br/>Hash sources · Module reload"]
+    MC["<b>Cacheability</b> · <code>cacheability.py</code> + <code>cacheability_decision.py</code><br/>Pure-AST scan: in-place mutations · side effects<br/>Merged with annotations · <code>@stateful</code> → (cacheable, reasons)"]
     DB["<b>Decorator Bridge</b><br/>Call log · drain() · Badge metrics"]
-    CS["<b>ControlStructure Processor</b><br/>for/while · Per-iteration keys · Branch caching"]
-    FILE["<b>FileTracker</b><br/>Intercept file reads<br/>pandas/numpy/polars/open/joblib<br/>Hash file content"]
-    RAND["<b>Randomness & SideEffect Detectors</b><br/>Unseeded RNG · Side effect scan<br/>Purity checks · <code>@cash:</code> annotations"]
+    CS["<b>control_structures/</b> package (ADR-012)<br/>for/while · Per-iteration keys · Branch caching"]
+    CONS["<b>consumables.py</b> (ADR-015)<br/>Classify drained-in-place, unrestorable inputs<br/>Probe divergence vs the cell-entry baseline<br/>→ re-execute the producer on an isolated re-run"]
+    DE["<b>statement/derivation_edges.py</b> (ADR-016)<br/>numpy views · pandas groupby/rolling ref-holders<br/>Edge store: mutating one side bumps the other's lineage"]
+    FILE["<b>FileTracker</b> · <code>file_tracker.py</code><br/>Intercept file reads + directory listings<br/>pandas/numpy/polars/open/joblib/glob/listdir<br/>Hash file content"]
+    RAND["<b>Randomness</b> · <code>randomness.py</code><br/>Unseeded RNG detection · seed tracking<br/>Capture/replay module + object RNG state"]
     BACK["<b>Cache Backend</b><br/>TieredBackend default: L1=InMemory, L2=FileBackend<br/>Also: SQLite, Redis, S3, Cascading<br/>Optional LazyProxy for deferred deserialization"]
     KEY["<b>cache_key.py</b><br/>Single source of truth for <code>compute_cache_key()</code><br/>Used by StatementProcessor and UpstreamChecker<br/>(simulation, virtual restore, skip checks)"]
 
     NB --> MAGICS
-    MAGICS --> CA & UC & SP & FT & MD & DB
-    SP --> CS & FILE & RAND
+    MAGICS --> CE
+    CE --> CA & UC & SP & FT & DB & CONS
+    SP --> CS & FILE & RAND & MC & DE
+    UC --> CONS & DE
     CS --> BACK
     FILE --> BACK
     KEY --> BACK
 ```
 
+The shape to hold on to: **`CellExecutor` is the waist**. `CashMagics` is a thin
+IPython adapter that registers the magics and owns display; every cell — whether
+it arrived via the `%cash_on` hook, the `%%cash` cell magic, or the
+`run_cell_async` patch for top-level `await` — funnels through
+`CellExecutor.execute_cell`. There is no second code path.
+
 ---
 
 ## Core Components
 
-### 1. CashMagics (`magics.py`)
+The four biggest clusters are **packages**, not modules — each has an ADR
+recording the extraction.
 
-The entry point for notebook integration. Provides:
+### 1. CashMagics (`ipython/magics.py`) — ADR-013
 
-- **Magic Commands**: `%cash_on`, `%cash_off`, `%%cash`, `%cash_debug`
-- **Execution Hook**: Intercepts cell execution via `pre_run_cell` event
-- **State Management**: Maintains tracking dictionaries for variables
+The IPython adapter. Provides:
 
-<!-- test:skip reason="source-code excerpt: references undefined Magics class" -->
+- **Magic Commands**: `%cash_on`, `%cash_off`, `%%cash`, `%cash_debug`, plus the
+  admin magics mixed in from `ipython/admin.py`
+- **Execution Hooks**: intercepts cells via the `pre_run_cell` event, and patches
+  `run_cell_async` — ipykernel dispatches top-level-`await` cells through the
+  latter, not the former
+- **Display**: owns the `display()` / `publish_display_data()` side effects
+- **State**: constructs the single `TrackingState` and hands the *same instance*
+  to every collaborator
+
+`CashMagics` does **not** run the pipeline; it delegates to `CellExecutor`.
+
+### 2. CellExecutor (`ipython/cell_executor.py`) — ADR-013
+
+The cell-level orchestrator, and the **single entry point** both `%cash_on` and
+`%%cash` funnel through — there is no separate code path. Owns the phase
+sequence: cell-ID + notebook path → badge/timing init → module-change detection
+→ upstream resolution → AST parse → pre-execution notifications →
+statement-by-statement execution. `execute_cell_async` is the twin used for
+top-level `await`.
+
+### 3. TrackingState (`_protocols.py`)
+
+The per-session bag of dicts the subsystem reads and writes during cache
+decisions. Created once by `CashMagics` and shared by reference — the tracking
+dictionaries that older versions of this document showed as private attributes
+of `CashMagics` live here now:
+
+<!-- test:skip reason="source-code excerpt: dataclass fields shown without imports" -->
 ```python
-class CashMagics(Magics):
-    def __init__(self, shell, cash_instance):
-        # Tracking dictionaries
-        self._executed_cell_codes = {}    # var_name -> code that defined it
-        self._executed_cell_hashes = {}   # var_name -> hash of defining code
-        self._variable_lineage = {}       # var_name -> lineage hash
-        self._variable_hashes = {}        # var_name -> set of known value hashes
-        self._current_session_hashes = {} # var_name -> current value hash
+@dataclass
+class TrackingState:
+    executed_cell_codes: dict[str, str]      # var_name -> code that defined it
+    executed_cell_hashes: dict[str, set]     # var_name -> hashes of defining code
+    variable_lineage: dict[str, str]         # var_name -> lineage hash
+    variable_hashes: dict[str, set]          # var_name -> known value hashes
+    current_session_hashes: dict[str, str]   # var_name -> current value hash
+    consumable_bases: dict[str, Any]         # var_name -> cell-entry drain baseline
+    derivation_edges: dict[str, set[str]]    # bump source -> vars to bump with it
+    lineage: LineageStore                    # the read/write seam (ADR-008)
 ```
 
-### 2. CodeAnalyzer (`analysis.py`)
+The last three are the newest: `consumable_bases` feeds the consumable
+divergence probe, `derivation_edges` the alias-invalidation store, and
+`lineage` is the single seam that keeps `variable_lineage` and the paired
+`_cash_lineage_hash` attribute from drifting.
+
+### 4. CodeAnalyzer (`analysis.py`)
 
 Static analysis of Python code using AST:
 
@@ -119,16 +164,24 @@ class CodeAnalyzer:
         return (inputs, outputs)
 ```
 
-### 3. StatementProcessor (`statement_processor.py`)
+### 5. The `statement/` package (`StatementProcessor` + siblings) — ADR-011
 
 Executes individual statements with caching:
 
 - **Cache Lookup**: Checks if statement result exists
-- **Execution**: Runs statement and captures outputs
+- **Execution**: Runs statement and captures outputs (`process_statement`, and
+  `process_statement_async` for top-level `await`)
 - **Storage**: Saves results to cache backend
 - **Lineage Update**: Computes and stores variable lineage
 
-### 4. UpstreamChecker (`upstream.py`)
+`StatementProcessor` orchestrates; the work is split across four siblings in the
+same package — `freshness.py` (`CacheFreshnessChecker`), `file_deps.py`
+(`StatementFileDeps`), `lineage.py` (`StatementLineageBuilder`), `restore.py`
+(`StatementRestorer`) — plus `derivation_edges.py` for numpy-view / pandas
+ref-holder alias tracking (ADR-016). Public surface: `StatementProcessor`,
+`ProcessResult`.
+
+### 6. The `upstream/` package (`UpstreamChecker` + `NotebookSimulator`) — ADR-010
 
 Ensures consistency between notebook state and cached state:
 
@@ -136,14 +189,33 @@ Ensures consistency between notebook state and cached state:
 - **Mismatch Detection**: Compares simulated vs. actual variable lineages
 - **Re-execution**: Triggers re-execution of changed upstream statements
 - **Virtual Restore**: Restores cached results without full re-execution
+- **Consumable divergence**: flags read-only inputs that were drained in place
+  and schedules their producers (ADR-015)
 
-### 5. ControlStructureProcessor (`control_structures.py`)
+`checker.py` is the two-phase orchestrator; `simulator.py` the pure-AST replay;
+`virtual_lineage.py`, `mismatch_classifier.py`, and `reexecution_planner.py` the
+helpers. Public surface: `UpstreamChecker`, `UpstreamResult`, `NotebookSimulator`.
+
+### 7. The `control_structures/` package — ADR-012
 
 Handles loops and conditionals with fine-grained caching:
 
 - **Per-Iteration Caching**: Each loop iteration gets its own cache key
 - **Branch Caching**: Only executed if/else branches are cached
 - **Nested Support**: Handles arbitrarily nested control structures
+
+`processor.py` orchestrates and dispatches to the `for_handler.py` /
+`if_handler.py` / `try_handler.py` strategies; `helpers.py` holds the shared
+lineage/badge/error helpers.
+
+### 8. Cacheability (`cacheability.py`, `cacheability_decision.py`)
+
+The pure-AST question "can this statement be cached at all?" — in-place
+mutations, side effects (file writes, network calls), stateful calls.
+`cacheability.py` **folds in the former `mutation_detector.py` and
+`side_effects.py`**; both module names are gone. `cacheability_decision.py`
+merges the AST verdict with annotations, the `@stateful` registry, and the
+forbidden-function scan into one `(cacheable, reasons)` result.
 
 ---
 
@@ -196,10 +268,10 @@ This is the single source of truth for building statement cache keys and is a cr
 ### Why This Matters
 
 Cache keys are computed in multiple contexts:
-1. **Runtime execution** (`statement_processor.py` → `_analyze_and_hash()`)
-2. **Upstream simulation** (`upstream.py` → `_update_virtual_lineage()`)
-3. **Virtual restore** (`upstream.py` → `_try_virtual_restore()`)
-4. **Skip checking** (`upstream.py` — verifying skipped statements)
+1. **Runtime execution** (`statement/processor.py` → `_analyze_and_hash()`)
+2. **Upstream simulation** (`upstream/virtual_lineage.py` → `_update_virtual_lineage()`)
+3. **Virtual restore** (`upstream/virtual_lineage.py` → `_try_virtual_restore()`)
+4. **Skip checking** (`upstream/virtual_lineage.py` — verifying skipped statements)
 
 Any divergence between these computations causes cache misses or stale data after kernel restarts. This has caused critical bugs in the past.
 
@@ -322,6 +394,52 @@ for var_name in required_inputs:
         # Check this variable's lineage
 ```
 
+### The isolated-re-run decision flow
+
+The lineage comparison above answers "is this variable's *code* still what
+produced it?". That question is asked of variables the cell **writes**. A second
+branch asks a different question of the cell's **read-only inputs** — whether a
+live object has been drained since the cell last saw it — and it exists because
+lineage cannot see that at all.
+
+```mermaid
+flowchart TD
+    RUN(["<b>Cell re-run</b><br/>(user runs one cell, not <code>run_all</code>)"])
+    SIM["<b>Simulate upstream</b><br/>Parse notebook cells · compute virtual lineages"]
+    LIN{"<b>Per written var:</b><br/>lineage match?"}
+    TRUST["<b>Trusted</b><br/>keep the cached value"]
+    BROKEN["<b>Broken</b><br/>mark for restore / re-execution"]
+    CONS{"<b>Per read-only input:</b><br/>consumable AND<br/>diverged vs cell-entry baseline?"}
+    LEAVE["<b>Leave alone</b><br/>not consumable · no probe ·<br/>no baseline · not actually consumed"]
+    SCHED["<b>Schedule the producer</b><br/>+ every statement that FILLS it<br/><code>_schedule_consumable_producer_touches</code>"]
+    PLAN["<b>Re-execution plan</b><br/>indices merged + sorted<br/>→ matches what <code>run_all</code> would do"]
+
+    RUN --> SIM
+    SIM --> LIN & CONS
+    LIN -- Match --> TRUST
+    LIN -- Mismatch --> BROKEN
+    CONS -- No --> LEAVE
+    CONS -- Yes --> SCHED
+    TRUST & BROKEN & LEAVE & SCHED --> PLAN
+```
+
+The right-hand branch is the one that breaks the documented assumption. The
+stale-value guard returns early when the set of variables the cell writes is
+empty, so a consumable arriving as a pure input was never examined. Marking it
+broken is also not enough on its own: the statements that *fill* a consumable
+usually do not own it as an output —
+
+```
+q = Queue()                  outputs={'q'}   <- the backward scan finds this
+for i in range(3):
+    q.put(i)                 outputs={'i'}   <- ...but not this
+```
+
+`put` is not a mutating method and the runtime's mutation observation skips
+control bodies, so re-running only `q = Queue()` hands the consumer a fresh
+**empty** queue — turning `got=[]` into `got=[]` again. Hence the extra
+scheduling pass. See [ADR-015](architecture_decisions.md) for the full rationale.
+
 ---
 
 ## Control Structure Processing
@@ -411,6 +529,46 @@ flowchart TD
     CHK -- NO --> LOOK --> DEP --> DESER --> DONE
     CHK -- YES --> DONE
 ```
+
+### What a cache hit actually replays
+
+It is tempting to model a cache hit as "the variable gets its value back". It is
+more than that: `StatementRestorer.restore_from_cache`
+(`src/cash/notebook/statement/restore.py`) replays **five** channels, and a
+statement is only correctly restored when all five land.
+
+```mermaid
+flowchart LR
+    HIT(["<b>Cache hit</b><br/><code>statement/restore.py</code><br/><code>restore_from_cache</code>"])
+    VARS["<b>1 · Variable values</b><br/>Write each output into <code>user_ns</code><br/>+ lineage · defining code/hashes · source key"]
+    RNGM["<b>2 · RNG module globals</b><br/><code>restore_rng_state</code><br/><code>random.setstate</code> · <code>np.random.set_state</code> · torch"]
+    RNGO["<b>3 · RNG object states</b><br/><code>restore_object_rng_states</code><br/><code>Generator.bit_generator.state</code><br/><code>RandomState.set_state</code> · <code>Random.setstate</code>"]
+    FD["<b>4 · File-dep metadata</b><br/><code>StatementFileDeps.restore_from_metadata</code><br/>so the NEXT freshness check knows what was read"]
+    OUT["<b>5 · Display replay</b><br/><code>stdout</code> · <code>stderr</code> · rich outputs<br/>skipped wholesale when <code>silent=True</code>"]
+
+    HIT --> VARS & RNGM & RNGO & FD & OUT
+```
+
+Three details the diagram encodes deliberately:
+
+- **Channel 3 runs *after* channel 1**, not alongside it. A generator that is
+  both an output of the statement *and* an RNG carrier would otherwise end on
+  whatever state the variable dict happened to iterate last; ordering it after
+  the variable loop pins it to the canonical post-state.
+- **Channels 2 and 3 are different problems.** Module globals cover
+  `np.random.rand()`; channel 3 covers a *user-held* `Generator` / `RandomState`
+  / `random.Random`, whose state lives on the object and would otherwise be left
+  un-advanced — so the next draw silently repeats numbers the cached statement
+  already consumed.
+- **Channel 5 is a replay, not a suppression mechanism.** A trailing `;` does
+  *not* work by being restored: the `;` is re-attached to the statement code
+  before execution, `display()` is skipped, and so nothing is ever captured.
+  The empty payload then replays as nothing. (`silent=True` is a separate gate,
+  used when cash re-runs a statement on the user's behalf.)
+
+Entries written before object-RNG capture existed carry no `rng_object_states`
+key; channel 3 treats a missing/empty value as a no-op, so old entries restore
+unchanged rather than erroring.
 
 ### Virtual Restore
 
@@ -656,6 +814,68 @@ flowchart TD
 ```
 
 Mutations are tracked per-variable. The system errs on the side of re-execution rather than serving stale cached data.
+
+---
+
+## Consumable Classification
+
+A **consumable** is an object advanced in place by *reading* it — a generator, a
+`queue.Queue`, an open file handle. When such an object also cannot be
+faithfully snapshotted by the store, an isolated re-run of the cell that drains
+it reads the leftovers of its own previous run. `consumables.py` decides which
+objects fall in that trap.
+
+The classification is deliberately a **two-signal AND**, and the two obvious
+one-signal shortcuts are both wrong — each has a counterexample class that must
+*not* be flagged, or their producers would be re-executed for nothing:
+
+```mermaid
+flowchart TD
+    OBJ(["<b>Candidate input object</b>"])
+    Q{"<code>Queue</code> / <code>SimpleQueue</code><br/>or generator/coroutine?"}
+    SELF{"<b>Self-iterator?</b><br/><code>iter(obj) is obj</code>"}
+    NOT1["<b>Not consumable</b><br/><code>list</code> · <code>dict.keys()</code> · <code>ndarray</code><br/>re-reading hands back a fresh cursor"]
+    REF{"<b>Hits the store's by-ref fallback?</b><br/>probed via <code>__reduce_ex__(4)</code>"}
+    NOT2["<b>Not consumable</b><br/><code>map</code> · <code>zip</code> · <code>StringIO</code> · <code>iter(range(6))</code><br/>deep-copyable → snapshotted fresh at <code>set</code>"]
+    YES["<b>Consumable + unrestorable</b>"]
+    DIV{"<b>Diverged vs cell-entry baseline?</b><br/>generator <code>getgeneratorstate</code><br/>queue <code>qsize()</code> · file <code>tell()</code>"}
+    NOOP["<b>Leave the producer alone</b><br/>baseline matches (<code>run_all</code>) ·<br/>no baseline (first run) · no probe (<code>cycle</code>/<code>chain</code>/<code>tee</code>)"]
+    REX["<b>Re-execute the producer</b><br/>+ the statements that FILL it"]
+
+    OBJ --> Q
+    Q -- Yes --> YES
+    Q -- No --> SELF
+    SELF -- No --> NOT1
+    SELF -- Yes --> REF
+    REF -- No --> NOT2
+    REF -- Yes --> YES
+    YES --> DIV
+    DIV -- No --> NOOP
+    DIV -- Yes --> REX
+```
+
+Why neither signal works alone:
+
+- **"Self-iterator" alone over-classifies.** `iter(range(6))` is a self-iterator
+  but is perfectly restorable — it is literally one of the generator
+  over-invalidation probes in the corpus. `io.StringIO` is deep-copyable too, so
+  an `io.IOBase` type test over-classifies for the same reason.
+- **"Unpicklable" alone over-classifies in the other direction.** A `dict.keys()`
+  view is not deep-copyable, but re-iterating it works fine — it is not a
+  consumable at all.
+
+`queue.Queue` is the one type where the cheap probe and the real store disagree
+(its `__reduce_ex__` succeeds while `deepcopy` chokes on its internal
+`threading.Lock`), so queues take an explicit `isinstance` branch rather than the
+probe. The `__reduce_ex__(4)` probe stands in for `deepcopy` because it only
+*describes* how to rebuild an object rather than rebuilding it: ~3µs versus ~0.1s
+for a `map` over a 2M-element list, with the same verdict on every type in remit.
+
+The **cell-entry baseline** is what makes the whole check self-disabling: on
+`run_all` the producer re-runs first and hands the cell the same state it saw
+last time, so the token matches and nothing happens. See
+[ADR-015](architecture_decisions.md) for the design record, including why
+opaque `itertools` cursors are a deliberate non-goal.
 
 ---
 

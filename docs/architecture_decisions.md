@@ -442,3 +442,74 @@ Wire contract for both dataclasses:
 ### Alternatives Considered
 - **Single shared dataclass for both layers**: rejected — the decorator and statement layers carry genuinely different field sets; a union type would be mostly-`None` either way and obscure which fields each layer owns.
 - **Dataclass all the way into the backends**: rejected — it would force every backend to know the schema and would break the polymorphic channel that lets two unrelated shapes share one storage path.
+
+---
+
+## ADR-015: Consumable Producer Re-execution
+
+**Status:** Accepted
+**Date:** 2026-07-15
+**Context:** An isolated re-run of a cell that drains a live object read the leftovers of its *own* previous run: a drained `queue.Queue` printed `got=[]` and an exhausted generator totalled `0`, where `run_all` — which re-runs the producer first — gives `got=[0, 1, 2]` / `total=55` (CAS-118 / CAS-50). Two existing guards could not catch it. The stale-value guard only ever examines variables the cell **writes** (it returns early when the self-written set is empty), and the object in question is a read-only **input**. The content-base staleness check could not have caught it either: a consumable drains *in place*, so its identity never changes and `compute_hash`'s `sha256(str(id(obj)))` fallback for unpicklable objects returns the same hash before and after draining.
+
+### Decision
+Add a `consumables.py` module that classifies an object as **consumable-unrestorable** only when **both** signals hold — it is a self-iterator (`iter(obj) is obj`) **and** it hits the cache store's by-ref fallback — then probes *divergence* per type against a baseline recorded at the consumer cell's **entry** (`TrackingState.consumable_bases`). A diverged input schedules its producer **and** the statements that fill it (`_schedule_consumable_producer_touches` in `upstream/reexecution_planner.py`).
+
+### Rationale
+- **Two signals, because each alone is wrong in a different direction.** "Self-iterator" alone over-classifies: `iter(range(6))` is a self-iterator but is perfectly restorable — it is literally probe #14 of the 14 generator over-invalidation probes. `io.StringIO` is deep-copyable too, so an `io.IOBase` type test over-classifies for the same reason. "Unpicklable" alone over-classifies the other way: a `dict.keys()` view is not deep-copyable but re-iterating it works fine. Only the AND flags exactly the objects the store hands back already-drained. `map` / `zip` / `filter` / `enumerate` / `iter(list)` / `reversed` must stay unflagged or their producers re-run for nothing.
+- **`__reduce_ex__(4)` probing instead of `deepcopy`.** `InMemoryBackend._safe_deep_copy` decides the by-ref fallback with `copy.deepcopy`, but deep-copying is far too expensive as a *classifier*: a `map` over a 2M-element list deep-copies the whole list (~0.1s) where `__reduce_ex__` is ~3µs, because it only *describes* how to rebuild the object rather than rebuilding it. `__reduce_ex__(4)` is the protocol `deepcopy` itself consults for objects without `__deepcopy__` / `__copy__`, and it was verified to agree with `deepcopy` on every iterator type in remit. It disagrees on exactly one: `queue.Queue`, a plain Python object whose `reduce` succeeds while `deepcopy` chokes on its internal `threading.Lock` — handled by an explicit `isinstance` branch rather than by weakening the probe.
+- **The cell-entry baseline is what makes this self-disabling.** The probe token is compared against the state the consumer cell saw on its *previous entry*. On `run_all` the producer re-runs first and hands the cell the same state (token == baseline → no-op); on a first run there is no baseline (→ no-op). Only an isolated re-run, where the object still holds the previous run's drained state, diverges. Recording the baseline beside `current_session_hashes` — i.e. at *post-execution* time — would have captured `qsize=0` (the drained state) and the check would never fire.
+- **Marking the variable broken is insufficient on its own.** The statements that *fill* a consumable usually do not own it as a trace output. The canonical fill loop
+  ```
+  q = Queue()                  outputs={'q'}   <- the backward scan schedules this
+  for i in range(3):
+      q.put(i)                 outputs={'i'}   <- but NOT this
+  ```
+  has `outputs={'i'}` because `put` ∉ `MUTATING_METHODS` *and* the runtime's mutation verdict skips control bodies (the simulator treats loops as units), so the loop's mutation of `q` is invisible from both sides. Re-running only `q = Queue()` hands the consumer a fresh **empty** queue — turning `got=[]` into `got=[]` again. Hence the extra scheduling pass over statements that draw on or feed a flagged consumable.
+- **Probes are kept out of cache-key derivation.** They never touch `source_hash` and never recompute a cache key, honouring the unified-cache-key rule (ADR-007).
+
+### Consequences
+- `TrackingState` gains `consumable_bases`, written by `CellExecutor` at cell entry and read by the simulator.
+- The upstream channel now examines **read-only inputs**, breaking the previously-safe reading that the guard only looks at variables a cell writes. Any future work on the stale-value guard must not "optimize" the empty-self-written-set early return back into covering this path.
+- Scoped to inputs the cell actually **consumes**: `n = q.qsize()` and `print(type(g))` are reporting reads and leave the producer alone.
+- The scheduling pass is scoped to `consumable_broken_vars` — vars this run's probe actually flagged — so no other broken variable's plan changes.
+- **Deliberate non-goal: opaque `itertools` cursors.** `cycle` / `chain` / `tee` keep their cursor entirely in C with no observable handle, so `consumable_state` returns `None` and the policy is "report NOT diverged, leave the producer alone". The only alternative would be to assume divergence and re-execute their producer on *every* isolated re-run — trading a silent wrong answer for unconditional recompute of anything that touches them. That is a real but narrower gap of the same family as CAS-50, tracked as CAS-122 rather than paid for by every cell here. (`itertools.count` is the exception: it renders its next value via `repr`, so it *is* probeable.)
+- Regression corpus green at adoption: 2704 stress, 1634 unit, and the 14 generator over-invalidation probes.
+
+### Alternatives Considered
+- **Type allow-list (`isinstance` against a fixed set of iterator types)**: rejected — it cannot express the `StringIO`-is-fine / `Queue`-is-not distinction, which is about *restorability*, not type. An `io.IOBase` test flags `StringIO`, which restores correctly.
+- **`deepcopy` as the classifier**: rejected on cost (~40000× slower on a `map` over a large list) for an identical verdict on every type in remit.
+- **Content-hashing the consumable**: rejected — it cannot work by construction. Draining is in-place, so identity and therefore the `id()`-based hash fallback are unchanged.
+- **Marking the variable broken and relying on the existing backward scan**: rejected — demonstrated insufficient (see Rationale); the fill statements are not scheduled.
+- **Assume-diverged for unprobeable cursors**: rejected for now — unconditional producer recompute on every isolated re-run is a worse default than a narrow, documented gap. See CAS-122.
+
+---
+
+## ADR-016: Derivation/Alias Edge Store
+
+**Status:** Accepted
+**Date:** 2026-07-15
+**Context:** Some objects hold a *live* reference to another object that lineage tracking never models: a numpy **view** (`v = a[100:200]`, where `v.base is a`) — mutating `v` in place mutates `a` — and a pandas **ref-holder** (`g = df.groupby('k')`, `r = df.rolling(3)`), where `g.obj is df` — mutating `df` in place changes what `g` aggregates. Lineage freezes each variable's hash at *creation*, so a later in-place mutation of one side never bumps the other and a downstream consumer serves a stale cached result (CAS-115 / CAS-89).
+
+### Decision
+Keep an explicit **derivation edge store** on `TrackingState` (`derivation_edges`), shaped `bump_source_var -> {vars_to_bump_when_source_bumps}`, in `statement/derivation_edges.py`. Split the work in two: **detection** at runtime only (it must observe live `.base` / `.obj` identity) and **replay** in both the runtime and the upstream simulator (which never executes user code and only reads the recorded edges).
+
+### Rationale
+- **The existing lineage graph structurally cannot carry this.** The `LineageStore` resolve ladder is `virtual → store → value._cash_lineage_hash → compute_hash_fn → sha256(str(value))`. For a tracked variable `g`, the store hit returns `variable_lineage[g]` and the ladder **short-circuits before it would ever content-hash** — so a content-based check can never observe that `df` was mutated underneath `g`. The alias relationship has to be recorded out-of-band at creation time, when `g.obj is df` is observable, or it is unrecoverable later.
+- **Identity, not type, is the signal.** Detection walks `.base` / `.obj` by object identity. A `.copy()` gives numpy `base is None` and pandas an independent frame, so no edge is recorded — that is the over-invalidation guard.
+- **Replay must be byte-identical across runtime and simulator.** The bump derives the new hash *deterministically from existing lineage strings only* (`sha256(f"{old}:{src_lineage}")`) and never recomputes `source_hash`, so the two paths cannot drift. Lineage hashes are a separate artifact already computed outside `compute_cache_key()`, so this does not violate ADR-007.
+- **Creation is not mutation.** A bump is suppressed when the target is an *input* of the current statement: at creation (`v = a[...]`) the base `a` IS an input, so a plain view creation does not invalidate the base; at mutation (`v[:] = 9`) the base is not an input, so it is bumped.
+- **The `93979b7` narrowing to named-base views is load-bearing.** The first cut treated any `value.base is not None` as an uncacheable alias. But `np.linspace` — and in some builds `np.arange` and ufunc results — carry a non-`None` `.base` pointing at an **anonymous internal buffer** that no user variable references. Restoring an independent copy of those is perfectly correct, so the crude test wrongly forced `skip_cache` on plain arrays and broke legitimate caching (it regressed `test_cache_plot_data`). An array is only an uncacheable alias when its `.base` chain — or a groupby/rolling `.obj` — resolves to a **named** `user_ns` variable that something else could mutate.
+
+### Consequences
+- `TrackingState` gains `derivation_edges`; `statement/lineage.py`, `statement/processor.py`, and `upstream/virtual_lineage.py` all read or write it.
+- Views and ref-holders whose base is a named live variable are **never restored from cache** — they must re-derive from the live base, because pickling and restoring them breaks the reference identity (the restored object would alias a stale *copy*).
+- `bump_derived_lineages` returns the set of bumped vars, which the simulator unions into the statement's `outputs`. Without that, the reexecution planner would not record the mutation statement as a producer of the aliased base, and an isolated re-run would restore the base to its stale pre-mutation cache while orphaning the mutation statement.
+- Edges are cleared on reassignment (`clear_edges_for`), or `g = other` would keep a dead `df -> g` edge pointing at an object that is no longer a live alias.
+- Bumps cascade transitively with a visited set (view-of-view, groupby-of-…); targets no longer present are pruned lazily.
+- numpy and pandas stay **soft dependencies** — both are lazy-imported inside the detectors.
+
+### Alternatives Considered
+- **Ride the existing lineage graph**: rejected — structurally impossible; the resolve ladder returns the stored lineage before any content check could notice the mutation (see Rationale).
+- **Content-hash views/ref-holders on every access**: rejected — it would pay a hash on every statement to catch a rare case, and for a large base array the hash is sampled anyway, so it is not even reliably correct.
+- **Treat any non-`None` `.base` as an alias**: rejected — over-classifies fresh arrays with anonymous internal buffers (`np.linspace`, ufunc results) and breaks legitimate caching. This was tried and reverted in `93979b7`.
+- **Make views uncacheable wholesale**: rejected — far too broad; most views are created and read without anyone mutating the base.
