@@ -26,8 +26,12 @@ pip install "cash-lib[sqlite]"        # SQLite backend (uses stdlib sqlite3; no 
 pip install "cash-lib[cloudpickle]"   # cloudpickle for serializing closures and lambdas
 pip install "cash-lib[ipynbname]"     # notebook-name detection helper
 pip install "cash-lib[viz]"           # matplotlib + ipywidgets for visualization helpers
-pip install "cash-lib[all]"           # everything above
+pip install "cash-lib[all]"           # every extra above, in one go
 ```
+
+`[all]` is defined as the union of the individual extras above, so it always stays
+in step with them. It does **not** include the contributor-only `dev` and `docs`
+extras — see *Development Installation* below for those.
 
 ## Development Installation
 

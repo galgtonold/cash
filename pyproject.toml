@@ -5,6 +5,22 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cash"]
 
+# Keep local-only artifacts out of the sdist. `tests/` stays in — shipping the
+# suite is a deliberate convention here (downstream packagers run it) — but a
+# coverage report, a dev lockfile, the container recipe and the agent config are
+# not part of the source distribution. `coverage_html/` is the big one: it is a
+# generated directory that no .gitignore rule covers (only `htmlcov/` is listed),
+# so it was silently swept into every sdist.
+# This is an exclude list, not an include list, on purpose: an include list would
+# quietly drop newly added package files and break the sdist build.
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/coverage_html",
+    "/uv.lock",
+    "/Dockerfile",
+    "/CLAUDE.md",
+]
+
 # Single source of truth for the version: src/cash/__init__.py's __version__.
 # Keep the literal there in sync on release; pyproject reads it, so the wheel
 # metadata and cash.__version__ can never disagree.
@@ -44,6 +60,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Scientific/Engineering",
@@ -67,17 +84,18 @@ viz = [
     "matplotlib>=3.5,<4",
     "ipywidgets>=7.0,<9",
 ]
+# `all` = every user-facing extra, composed by reference (PEP 631 self-referential
+# extras) rather than by hand-copying each requirement. Do NOT expand these back
+# into a literal list: the hand-maintained version silently drifted out of sync
+# with the individual extras (it dropped `ipython` entirely, and lost the upper
+# bounds on polars, matplotlib and ipywidgets), so `pip install cash-lib[all]`
+# would happily take a future ipython 10 / ipywidgets 9 / matplotlib 4 / polars 3
+# that the individual extras explicitly exclude. Referencing the extras makes that
+# class of drift structurally impossible — each bound is declared exactly once.
+# `dev` and `docs` are deliberately absent: they are contributor tooling, not part
+# of what a user means by "everything".
 all = [
-    "pandas",
-    "pyarrow>=13.0",
-    "psutil>=5.0,<7",
-    "redis>=4.0,<6",
-    "boto3>=1.26,<2",
-    "cloudpickle>=2.0,<4",
-    "polars",
-    "matplotlib>=3.5",
-    "ipywidgets>=7.0",
-    "ipynbname>=0.1",
+    "cash-lib[cloudpickle,ipynbname,memory,notebook,pandas,polars,redis,s3,sqlite,viz]",
 ]
 docs = [
     "mkdocs>=1.5",
