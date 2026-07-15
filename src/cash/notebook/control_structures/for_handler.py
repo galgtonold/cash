@@ -60,6 +60,22 @@ class ForLoopHandler:
     # Minimum estimated overhead (in seconds) to trigger single-unit mode.
     _MIN_OVERHEAD_SEC = 1.0
 
+    # Builtin callables that PRODUCE an iterable without side effects, so the
+    # single-unit fast path may re-evaluate the loop header a second time
+    # (once here, once inside ``_execute_as_single_unit``) and get the same
+    # iteration.  Any *other* call in the loop iterable (a bare user function
+    # like ``drain()``, or an unknown name) may be a one-shot consumable whose
+    # second evaluation drains an already-exhausted source — those are routed
+    # to the per-iteration path, which iterates the single, already-evaluated
+    # iterator.  Method calls (``df['c'].unique()``, ``d.items()``) are assumed
+    # to be pure accessors and stay on the fast path so re-iterable containers
+    # (ndarray/Series/DataFrame/dict views) keep the current behaviour. [CAS-121]
+    _PURE_ITER_PRODUCERS = frozenset({
+        'range', 'sorted', 'reversed', 'list', 'tuple', 'set', 'frozenset',
+        'dict', 'enumerate', 'zip', 'map', 'filter', 'iter', 'bytes',
+        'bytearray', 'str',
+    })
+
     def __init__(self, shell, statement_processor, debug: bool, dispatcher):
         self.shell = shell
         self.statement_processor = statement_processor
@@ -125,7 +141,20 @@ class ForLoopHandler:
 
             # Fast-loop heuristic: if per-iteration decomposition would be too
             # expensive relative to the computation, execute as a single unit.
-            if self._should_execute_loop_as_single_unit(node, iterable, parent_context):
+            #
+            # The single-unit path re-executes the loop FROM SOURCE, which
+            # evaluates ``node.iter`` a SECOND time (it was already evaluated
+            # above).  That double-eval is harmless for a re-iterable container
+            # produced by a side-effect-free header, but for a one-shot
+            # consumable (a stored generator, ``iter(...)``, ``map``/``zip``, an
+            # open file, or a side-effecting call like ``drain()``) the second
+            # evaluation drains an already-exhausted source, corrupting the
+            # first-run result.  Only take the fast path when re-evaluating the
+            # header is provably safe; otherwise fall through to the
+            # per-iteration path below, which consumes the single, already
+            # evaluated ``iterable``. [CAS-121]
+            if (self._should_execute_loop_as_single_unit(node, iterable, parent_context)
+                    and self._iter_header_safe_to_reevaluate(node.iter, iterable)):
                 if self.debug:
                     logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
                 return self.dispatcher._execute_as_single_unit(node, ttl, silent)
@@ -377,6 +406,48 @@ class ForLoopHandler:
     # ------------------------------------------------------------------
     # Fast-loop heuristic
     # ------------------------------------------------------------------
+
+    def _iter_header_safe_to_reevaluate(self, iter_node: ast.AST, iterable) -> bool:
+        """Whether the loop header may be safely evaluated a second time.
+
+        The single-unit fast path re-executes the loop from source, evaluating
+        ``iter_node`` again after :meth:`process` already evaluated it once.
+        That is only correct when the second evaluation reproduces the same
+        iteration — i.e. the header is a re-iterable container built by a
+        side-effect-free expression.
+
+        Returns ``False`` (route to the per-iteration path, which consumes the
+        single already-evaluated iterator) when EITHER:
+
+        * the evaluated value is a *self-iterator* — ``iter(x) is x`` — a
+          generator, ``map``/``zip``/``filter``/``enumerate``, an open file,
+          a csv reader, or ``iter(...)``: iterating it a second time yields
+          nothing because the first pass exhausted it; OR
+        * the header contains a *call to a bare name that is not a known-pure
+          iterable producer* (``drain()``, ``next_batch()``): such a call may
+          mutate/consume external state, so a second evaluation returns a
+          different (often empty) result.
+
+        Method calls (``df['c'].unique()``, ``d.items()``) are treated as pure
+        accessors and kept on the fast path, so re-iterable containers keep
+        the current byte-identical behaviour. [CAS-121]
+        """
+        # One-shot self-iterators: re-iterating drains an exhausted source.
+        # (Most lack ``__len__`` and never reach the single-unit heuristic, but
+        # a custom self-iterator that defines ``__len__`` would — guard it.)
+        try:
+            if iter(iterable) is iterable:
+                return False
+        except Exception:  # noqa: BLE001 - defensive; non-iterables fail later anyway
+            pass
+
+        # A bare-name call to anything other than a known side-effect-free
+        # iterable producer may consume/mutate state on re-evaluation.
+        for sub in ast.walk(iter_node):
+            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                if sub.func.id not in self._PURE_ITER_PRODUCERS:
+                    return False
+        return True
 
     def _should_execute_loop_as_single_unit(
         self,
