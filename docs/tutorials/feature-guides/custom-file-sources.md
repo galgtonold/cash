@@ -44,10 +44,28 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | `joblib` | `load` |
 | `pickle` | `load` |
 | `json` | `load` |
+| `glob` | `glob`, `iglob` — tracks the *directory* enumerated (see below) |
+| `os` | `listdir`, `scandir` — tracks the *directory* enumerated (see below) |
 
 The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` (`src/cash/notebook/file_tracker.py:63-70`) against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
 
 For `open()`, the wrapper records the path only when the mode contains `'r'` or `'+'` (read or read/write), not pure writes — see `_create_open_handler` at `src/cash/notebook/file_tracker.py:216-222`. So an `open(path, 'w')` for output does *not* get tracked, which is what you want: writes are accounted for by hashing the function's return value, not its outputs.
+
+### Directory enumeration tracks the directory
+
+Reading the files a `glob` matched only ever records the files that *existed* on the first run — so a **new** matching file would be invisible. Cash therefore tracks the enumerated directory itself as a dependency:
+
+```python
+import glob
+
+@cash.cache
+def load_all():
+    return [open(p).read() for p in glob.glob("data/*.csv")]
+```
+
+Drop a new `data/extra.csv` in and `load_all` recomputes. Adding or removing a directory entry bumps the directory's own mtime on local filesystems, which the existing freshness check already notices. For a `glob` pattern, the tracked directory is the longest leading magic-free part of the pattern (`data/` for `data/*.csv`); `os.listdir` / `os.scandir` track the path passed to them.
+
+Two limits worth knowing: a *modification* to an existing file is caught by that file's own dependency, not the directory's; and this leans on the filesystem bumping the directory mtime, which is not guaranteed on some network mounts (see [Network-mounted filesystems](#network-mounted-filesystems)).
 
 ## How to verify what's tracked
 
@@ -181,6 +199,22 @@ Cache entries written **before** content hashing shipped have no `hash` key. For
 
 `_track_path` resolves the path through `os.path.realpath` before storing it (`src/cash/notebook/file_tracker.py:440`). If you read a symlink, Cash records and checks the *target*, and the resolution is frozen at track time. Editing the symlink target's contents invalidates the cache. Repointing the symlink at a different file does **not** — Cash goes on checking the original target, which hasn't changed. This matches what most users expect ("the data file changed"), but if you genuinely care about the symlink identity itself, use `file_depends_on=` with the link path explicitly.
 
+### Relative paths re-resolve against the live cwd
+
+A relative-path read records **two** dependencies: the absolute path resolved at execution time, *and* the un-resolved relative path. The freshness check re-resolves the relative one against the *current* working directory on every lookup, so changing `os.chdir` to a directory holding a different file of the same name is detected:
+
+<!-- test:skip reason="illustrative — spans a chdir cell edit across runs; run_a/run_b don't exist in the harness" -->
+```python { .nb-cell }
+os.chdir("run_a")
+df = pd.read_csv("results.csv")   # run_a/results.csv
+
+# Edit the chdir cell to point at run_b and re-run:
+os.chdir("run_b")
+df = pd.read_csv("results.csv")   # run_b/results.csv — recomputed, not run_a's data
+```
+
+Without the relative dependency, the frozen `run_a/results.csv` realpath still existed and was unmodified, so even `run_all` served the old directory's data. Re-runs from the same cwd resolve to the same file and stay cached.
+
 ### Paths are absolute and platform-normalized
 
 Stored paths are absolute and use forward slashes regardless of OS (`normalize_path` in `src/cash/utils.py:24-36`). Moving the cache directory to a different machine where the same files live at different paths invalidates everything — paths are part of the dependency key. For portable cache archives, expect a full re-compute after relocation.
@@ -192,6 +226,7 @@ NFS, SMB, and similar network mounts often have coarse mtime resolution (1-secon
 Two things on network mounts do still deserve care:
 
 - **`file_depends_on=` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
+- **Directory dependencies are mtime-based too.** A directory has no content to hash, so the [directory tracking](#directory-enumeration-tracks-the-directory) added for `glob` / `listdir` / `scandir` falls back to the mtime path. It relies on the filesystem bumping a directory's mtime when an entry is added or removed — true on local filesystems, not guaranteed on every network mount. If a new file appearing in a globbed directory must invalidate on such a mount, list the files explicitly via `file_depends_on=`.
 - **Content hashing costs a network read.** On a slow mount the hash is I/O over the wire whenever the size matches. The size check short-circuits the common "file was replaced wholesale" case first, and files over 8 MiB only pull 768 KiB of samples, but a large directory of same-size files re-hashed on every lookup is worth measuring.
 
 ### Files outside the working directory

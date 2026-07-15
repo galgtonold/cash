@@ -733,6 +733,29 @@ Cash intercepts file read operations to automatically invalidate caches when dat
 | joblib | `load` |
 | pickle | `load` |
 | json | `load` |
+| glob | `glob`, `iglob` — records the enumerated *directory* |
+| os | `listdir`, `scandir` — records the enumerated *directory* |
+
+### Directory Listings as Dependencies
+
+A cell that enumerates a directory and reads the matches records file-deps only
+for the files read on the *first* run, so a **new** matching file is invisible —
+even to `run_all`. The tracker therefore records the enumerated **directory**
+itself as a dependency (`_create_glob_dir_handler` / `_create_listdir_handler`,
+`src/cash/notebook/file_tracker.py:273-293`).
+
+Adding or removing an entry bumps the directory's own mtime on local
+filesystems, so the existing freshness check invalidates the reader; an
+unchanged directory keeps the cache hit. For a `glob` pattern the tracked
+directory is the longest leading magic-free component (`_glob_base_dir`), e.g.
+`data/` for `data/*.csv`.
+
+A directory has no readable content, so `file_content_hash` returns `None` for
+it and its snapshot carries no `hash` key — meaning it flows down the **legacy
+mtime-tolerance branch** of `file_dep_is_fresh` rather than the
+content-authoritative one. That is the intended design (there is nothing to
+hash), but it inherits the mtime caveat: a filesystem that does not bump
+directory mtimes on entry changes will not invalidate.
 
 ### File Dependency Hash
 

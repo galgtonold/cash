@@ -124,6 +124,31 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
     because Cash can't tell those methods from any other. Treat the warning as a
     helpful catch, not a guarantee that seeded code is the only quiet code.
 
+## RNG state is replayed across cache hits
+
+A cache hit restores more than the value. If you hold your own RNG object — an
+`np.random.Generator`, a legacy `np.random.RandomState`, or a `random.Random` —
+its internal state is captured alongside the cached statement and **replayed**
+when that statement is restored. Draws taken *after* a cached statement
+therefore match what a full re-run would have produced:
+
+<!-- test:skip reason="harness stubs np.random with _FakeRandomState, which has no default_rng" -->
+```python { .nb-cell }
+rng = np.random.default_rng(0)
+a = rng.random(3)     # cache this statement...
+b = rng.random(3)     # ...and b still matches a full re-run
+```
+
+Without the replay, restoring `a` from cache would leave `rng` un-advanced and
+`b` would silently draw `a`'s numbers. Cash captures
+`Generator.bit_generator.state` / `RandomState.get_state()` / `Random.getstate()`
+and re-injects it on the hit, so the carrier ends on the same post-state the
+original execution left it in. Module-global RNG state (`random`,
+`numpy.random`, `torch`) is captured and restored the same way.
+
+Cache entries written before this behaviour existed carry no object-RNG state;
+they restore unchanged rather than erroring.
+
 ## Global TTL — `%cash_on ttl=N` and `%%cash ttl=N`
 
 Two ways to set a default TTL for every cached statement in scope:

@@ -135,6 +135,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CashCacheIneffectiveWarning` fires at the chunk_0 → chunk_1
   transition. To keep gating active on large iterators, lower
   `chunk_max_items` / `chunk_max_bytes` or materialize manually.
+- **Expect a one-time recompute after upgrading.** Four fixes in this
+  release change how decorator cache keys are computed, so affected
+  entries written by an earlier version no longer match and recompute
+  once before settling. Nothing is lost — the old entries are simply
+  not found. The affected shapes, each narrow rather than universal:
+  a cached function that **reads a module global** now folds that
+  global's content into its key (CAS-107); a call passing a **dict**
+  whose keys are not already in sorted order now canonicalises that
+  order (CAS-108, already-sorted dicts keep byte-identical keys); a
+  function declaring `depends_on=[plain_function]` now folds the dep's
+  source in (CAS-110, the edge previously contributed nothing); and a
+  call passing an **object-dtype ndarray** now hashes its content
+  rather than raw pointer bytes (CAS-111 — those keys were never
+  stable across processes, so they rarely hit in the first place).
+  A function matching none of these shapes keeps its existing keys and
+  its cache.
+- **File-dependency freshness on `@cash.cache` is now decided by content,
+  not `(mtime, size)`** (CAS-119), matching the notebook path (CAS-98 /
+  CAS-10) so the two subsystems cannot drift. Two verdicts flip: a
+  *touched* file with identical bytes no longer forces a recompute, and
+  a same-size edit under an indistinguishable mtime is no longer missed
+  and served stale. Existing cache entries are **not** invalidated —
+  snapshots written before this release carry no content hash and keep
+  the old mtime comparison, both for the freshness check and for the
+  lineage hash handed to downstream consumers.
 - **Decorator caches without an explicit `ttl` now honor the backend's
   `default_ttl`.** Cache metadata moved to frozen dataclasses whose
   `to_dict()` omits unset (`None`) fields, so an entry created without a

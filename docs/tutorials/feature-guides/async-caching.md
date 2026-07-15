@@ -88,6 +88,29 @@ One path is explicitly opted out on the async side:
 
 **`use_locking=True` is supported on the async side** via in-process single-flight: concurrent awaits of the same key coalesce so the function computes once. The first awaiter (the *leader*) registers an `asyncio.Event`, computes, and stores; other awaiters of the same key (the *followers*) wait on the event and then read the stored result. If the leader stored nothing (e.g. `cache_if` rejected the value), followers fall through and compute themselves, so correctness is never sacrificed for the optimization. This is *in-process* coalescing keyed on the running event loop — it dedupes an `asyncio.gather` within one process, not across processes (use a distributed lock for that). Test reference: `tests/test_core/test_async_single_flight.py`.
 
+## Notebook cells with top-level `await`
+
+Everything above is about `@cash.cache` on an `async def`. The notebook path has
+its own async entry point, and it needs no opt-in: a cell using Jupyter's
+top-level `await` is cached like any other cell.
+
+<!-- test:skip reason="illustrative — top-level await requires a live IPython kernel" -->
+```python
+%%cash
+rows = await db.fetch("SELECT * FROM events")   # cached like any other cell
+```
+
+ipykernel dispatches such a cell through `shell.run_cell_async` rather than the
+`pre_run_cell` hook that `%cash_on` patches, so cash intercepts that entry point
+too and routes the cell into `CellExecutor.execute_cell_async` →
+`StatementProcessor.process_statement_async`. That pipeline is the line-for-line
+twin of the sync one, so awaited cells get lineage tracking, upstream reset, and
+result caching alike.
+
+The cache-hit check runs *before* the coroutine is built, so an unchanged re-run
+skips the `await` entirely rather than re-issuing the request — which is the
+whole point when the awaited call is a paid API.
+
 ## Common patterns
 
 ### LLM and HTTP API calls

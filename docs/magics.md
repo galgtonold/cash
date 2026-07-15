@@ -239,6 +239,8 @@ processing as `%cash_on` (upstream simulation, file tracking, badge rendering).
   edits won't be seen — save before running).
 - Renders the configured badge (`html` / `print` / off — see
   [`%cash_badge`](#cash_badge)).
+- Caches cells that use top-level `await` on the same terms as any other cell
+  (see below).
 
 **Example:**
 
@@ -249,6 +251,13 @@ import pandas as pd
 df = pd.read_csv("big.csv")
 agg = df.groupby("region").sum()
 ```
+
+**Top-level `await`:** ipykernel dispatches a cell containing top-level `await`
+through `shell.run_cell_async`, not the `pre_run_cell` hook that `%cash_on`
+patches. Cash intercepts that entry point as well, so awaited cells get lineage
+tracking, upstream reset, and result caching — the async pipeline is the
+line-for-line twin of the sync one. A cache hit returns before the coroutine is
+built, so an unchanged re-run skips the `await` rather than re-issuing the call.
 
 ---
 

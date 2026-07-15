@@ -130,6 +130,24 @@ hash flows up through the dependency graph and invalidates
 this via static analysis, but listing it explicitly makes the link
 explicit and lets us follow it across modules.
 
+`depends_on=` also accepts **plain, non-decorated** functions — the dep's
+source is snapshotted at registration and folded into the cache key, so
+editing it invalidates the dependent:
+
+```python
+def score(user):           # not decorated
+    return user.visits * 2
+
+@cash.cache(depends_on=[score])
+def leaderboard():
+    return sorted(load_users(), key=score)
+```
+
+Edit `score` → `leaderboard` recomputes. (Previously this edge was inert:
+a non-decorated callable contributed nothing to the key, so the declared
+dependency was silently ignored.) If a dep's source can't be read at all,
+you get a warning rather than a silently dead edge.
+
 ### `dynamic_depends_on=` — deps that depend on args
 
 When the data source depends on the call's arguments:
@@ -330,11 +348,57 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
   `depends_on` source + transitive helper hashes (so editing a helper
-  invalidates).
+  invalidates) + the content of any **module global the function reads**
+  (see below).
 - `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
   set).
 - `args_hash` is a SHA-256 over the pickled args (with custom hashers
   via `cash.register_hasher` taking precedence for non-picklable types).
+  Dicts are canonicalised to sorted-key order first, so two dicts that
+  are equal but for insertion order share a key —
+  `f({"a": 1, "b": 2})` and `f({"b": 2, "a": 1})` hit the same entry.
+
+### Module globals a function reads
+
+A cached function that reads a module-level global — a config constant, a
+dispatch dict of callables — invalidates when that global changes:
+
+```python
+TAX_RATE = 0.2
+
+@cash.cache
+def net(amount):
+    return amount * (1 - TAX_RATE)
+
+net(100)          # 80.0
+TAX_RATE = 0.5
+net(100)          # 50.0 — recomputed, not the stale 80.0
+```
+
+Only globals the function **reads** participate. Globals it *writes*
+(`global x; x = ...`) or mutates in place are excluded — those are
+side-effect accumulators, and folding them in would invalidate the
+function on its own output. A read global whose value can't be hashed
+warns once rather than failing the call.
+
+!!! warning "Globals read inside a comprehension are not seen"
+    Detection intersects `func.__code__.co_names` with the function's
+    globals. A comprehension, generator expression, or nested `lambda`
+    compiles to its **own** code object, so a global referenced only in
+    there never appears in the outer function's `co_names` and does not
+    invalidate:
+
+    ```python
+    THRESHOLD = 10
+
+    @cash.cache
+    def count_big(values):
+        return sum(v > THRESHOLD for v in values)   # THRESHOLD invisible
+    ```
+
+    Editing `THRESHOLD` leaves `count_big` serving its old result. Read
+    the global into a local first (`t = THRESHOLD`) or pass it as an
+    argument — the shape that's honest about the dependency anyway.
 
 Anything that affects the result should be in one of those. If it
 isn't, the cache will go stale silently — that's where `func.explain()`
@@ -392,6 +456,25 @@ cash.register_hasher(Loader, lambda l: hashlib.sha256(l.path.encode()).hexdigest
 ```
 
 Now both instances share the same args_hash and the second call hits.
+
+### C-extension callables and builtins
+
+Caching a callable with no readable Python source — a C-extension
+function, a builtin, a NumPy ufunc, a dispatcher, or a
+`functools.partial` wrapping one — works rather than crashing. The
+source-hashing and AST-analysis steps have no source to read for these,
+so they degrade to a stable identity-based fallback instead of raising:
+
+```python
+import functools, numpy as np
+
+cached_sqrt = cash.cache(np.sqrt)              # ufunc — fine
+cached_max = cash.cache(functools.partial(max, 0))   # partial over a builtin — fine
+```
+
+Because there is no source to hash, cash cannot notice a change *inside*
+a C extension (upgrading the library, say). That's the same blind spot
+any source-based invalidation has; pin the dependency if it matters.
 
 ### Caching code with side effects
 

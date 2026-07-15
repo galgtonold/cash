@@ -59,6 +59,27 @@ df = df.sort_values('date')
 
 ---
 
+### Top-level `await` cells
+
+Cells using Jupyter's top-level `await` are cached like any other cell — no
+opt-in, no separate magic. ipykernel dispatches them through
+`shell.run_cell_async` rather than the `pre_run_cell` hook, so cash intercepts
+that entry point too and routes the cell into the same pipeline
+(`CellExecutor.execute_cell_async` → `StatementProcessor.process_statement_async`).
+
+<!-- test:skip reason="illustrative — top-level await requires a live IPython kernel" -->
+```python
+%%cash
+data = await fetch_from_api(url)   # cached: lineage, reset, and the result
+```
+
+The async path is the line-for-line twin of the sync one, so awaited cells get
+lineage tracking, upstream reset, **and** result caching. On a cache hit the
+restore returns before the coroutine is ever built, so an unchanged re-run
+skips the `await` entirely rather than re-issuing the request.
+
+---
+
 ### `%cash_debug`
 
 Toggle debug output.
@@ -116,6 +137,66 @@ Suppress randomness warnings for a statement. Also accepts `@cash:allowrandom`.
 # @cash:allow-random
 result = np.random.randn(100)  # No warning about unseeded randomness
 ```
+
+---
+
+## Consumable inputs and isolated re-runs
+
+Some objects are **drained in place** by reading them: a generator, a
+`queue.Queue`, an open file handle. Re-running *only* the cell that drains one
+would otherwise read the leftovers of its own previous run — a drained queue
+gives `got=[]`, an exhausted generator totals `0` — where `run_all` re-runs the
+producer first and gives the real answer.
+
+Cash detects this and re-executes the producer, so an isolated re-run matches
+`run_all`:
+
+<!-- test:skip reason="illustrative — spans multiple notebook cells with a live kernel" -->
+```python
+# Cell 1
+q = Queue()
+for i in range(3):
+    q.put(i)
+
+# Cell 2 — re-running this alone still prints got=[0, 1, 2]
+got = []
+while not q.empty():
+    got.append(q.get())
+print(f"got={got}")
+```
+
+The check compares the object's drain position (generator state, queue
+`qsize()`, file offset) against a baseline recorded at the cell's *entry*, so it
+self-disables on `run_all` — where the producer has already handed the cell the
+same state — and on a cell's first run, which has no baseline. It is also scoped
+to inputs the cell actually consumes: a reporting read like `n = q.qsize()`
+leaves the producer alone.
+
+Deep-copyable iterators (`map`, `zip`, `enumerate`, `io.StringIO`, `iter(range(6))`)
+are snapshotted fresh by the cache and restore correctly, so they are **not**
+flagged and their producers are never re-run. Opaque `itertools` cursors
+(`cycle`, `chain`, `tee`) expose no observable position and are deliberately
+left alone.
+
+---
+
+## Output replay and display suppression
+
+A cache hit replays the statement's captured `stdout`, `stderr`, and rich
+outputs, so a restored cell looks the same as one that just ran.
+
+A trailing `;` still suppresses output on a **cached** re-run. `ast.unparse`
+drops the semicolon, so cash recovers it from the raw cell source and re-attaches
+it to the statement code — the suppression therefore rides through both the cache
+key and the execution path, and nothing is displayed *or* captured:
+
+<!-- test:skip reason="illustrative — display suppression requires a live IPython kernel" -->
+```python
+df.head();   # no repr on the first run, and none on a cached re-run either
+```
+
+Because the `;` is part of the statement code, `df.head()` and `df.head();` are
+distinct cache entries.
 
 ---
 

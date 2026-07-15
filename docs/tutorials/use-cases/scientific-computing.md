@@ -65,6 +65,20 @@ Cash scans your notebook for unseeded RNG calls and warns when it finds them —
 
 If you need an unseeded run for a one-off exploration, do it outside the cached function. Inside the cache, always pass the seed.
 
+### A shared `Generator` keeps its place across cache hits
+
+In a notebook you often keep one `rng` alive across cells and draw from it as you go. That is a *consumable*: restoring a cached statement without advancing `rng` would make the next draw silently repeat numbers the cached statement already consumed.
+
+Cash handles this. A user-held `np.random.Generator`, `np.random.RandomState`, or `random.Random` has its state captured with the statement and replayed on a cache hit, so draws taken after a restored statement match a full re-run:
+
+```python { .nb-cell }
+rng = np.random.default_rng(0)
+sample_a = rng.standard_normal(1000)   # restored from cache...
+sample_b = rng.standard_normal(1000)   # ...and this still matches a fresh run
+```
+
+This does not weaken the rule above — a seed passed as an argument is still the right shape for a `@cash.cache`d simulation. It means an interactive notebook that threads one generator through several cells stays reproducible rather than quietly diverging on the second run.
+
 ## Large arrays and persistence
 
 Simulation outputs are usually arrays — and often big ones. Cash's smart-persistence layer decides automatically when an in-memory entry is worth writing to disk, and multi-megabyte arrays cross that threshold quickly. You normally don't have to do anything.
