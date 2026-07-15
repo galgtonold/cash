@@ -1,12 +1,16 @@
 # Custom file sources — automatic file tracking and the escape hatch
 
-Cash automatically tracks file dependencies. When you call `pd.read_csv('data.csv')` inside a cached function, the file's mtime and size get recorded; the next time you call the function, the cache invalidates if the file changed. This guide covers what's tracked, what isn't, and how to add tracking for non-standard access patterns.
+Cash automatically tracks file dependencies. When you call `pd.read_csv('data.csv')` inside a cached function, the file's size and a content hash get recorded; the next time you call the function, the cache invalidates if the file's *contents* changed. This guide covers what's tracked, what isn't, and how to add tracking for non-standard access patterns.
+
+> **Two mechanisms, two different signals.** This page covers both, and they do not work the same way. **Auto-tracking** (`pd.read_csv`, `open`, … — everything Cash intercepts for you) is **content-authoritative**: it records a content hash and ignores the mtime. The **`file_depends_on=` / `FileDataSource` escape hatch** (below) is **mtime-based**: it folds the file's modification time into the cache key. So a touch that doesn't change any bytes leaves an auto-tracked dependency valid but *does* invalidate a `file_depends_on=` one. Keep the distinction in mind as you read.
 
 ## Why this exists
 
-Without file tracking, every CSV/parquet load you make from a cached function would either *always* hit the cache (silently stale when the file changes on disk) or *always* miss (slow). Neither is acceptable. The conservative middle is to record a cheap fingerprint of every file the function reads — mtime and size — and invalidate when that fingerprint moves. You get hits on identical inputs and re-runs on changed inputs without thinking about it.
+Without file tracking, every CSV/parquet load you make from a cached function would either *always* hit the cache (silently stale when the file changes on disk) or *always* miss (slow). Neither is acceptable. The middle ground is to record a fingerprint of every file the function reads and invalidate when that fingerprint moves. You get hits on identical inputs and re-runs on changed inputs without thinking about it.
 
-The mechanism is a one-time monkey-patch of the popular reader functions: when a `@cash.cache` function executes, Cash installs `FileAccessTracker` around the call, intercepts reads from `builtins.open`, pandas, polars, numpy, joblib, json, and pickle, and stores the resulting file dictionary in the cache metadata. On the next lookup, Cash re-stats every recorded file and re-runs the function if anything moved.
+The fingerprint is `(mtime, size, hash)`, and **content is authoritative whenever the size matches** (CAS-98 / CAS-10). The cheap size check runs first — a differing size proves staleness without reading a byte of data — and only when the size is equal does Cash hash the file to decide. The mtime is recorded but no longer arbitrates: a touch that leaves the bytes alone is a **hit**, and a same-size edit under an indistinguishable mtime is still a **miss**.
+
+The mechanism is a one-time monkey-patch of the popular reader functions: when a `@cash.cache` function executes, Cash installs `FileAccessTracker` around the call, intercepts reads from `builtins.open`, pandas, polars, numpy, joblib, json, and pickle, and stores the resulting file dictionary in the cache metadata. On the next lookup, Cash re-checks every recorded file and re-runs the function if the contents moved.
 
 ## Quick start
 
@@ -24,7 +28,7 @@ load_features()                                  # hit
 load_features()                                  # MISS — file_changed
 ```
 
-No decorator argument, no manual registration. Cash sees the `read_csv` call, records the path, and notices the next time the mtime or size differs.
+No decorator argument, no manual registration. Cash sees the `read_csv` call, records the path, and notices the next time the file's contents differ.
 
 ## What's automatically tracked
 
@@ -68,7 +72,10 @@ load_features.explain()
 #   changed_files: {'data/features.csv': 'mtime changed'}
 ```
 
-The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` at `src/cash/core.py:878-900`. The dict's values are short human-readable strings: `'mtime changed'`, `'size changed'`, or `'file missing'`. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
+The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` at `src/cash/core.py:1124-1145`. The dict's values are short human-readable strings: `'mtime changed'`, `'size changed'`, or `'file missing'`. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
+
+!!! warning "`explain()` can over-report `file_changed`"
+    `_explain_call` still compares raw mtime and size; it has not been moved onto the content-authoritative `file_dep_is_fresh` helper that the real lookup uses. After a **touch** (identical bytes, bumped mtime), `explain()` reports `file_changed` / `'mtime changed'` while an actual call **hits** the cache. Trust the call, not the explanation, in that specific case. Tracked as a known bug.
 
 ## What's NOT tracked
 
@@ -141,23 +148,38 @@ Two caveats from the docstring:
 
 ## Staleness detection
 
-Cash checks freshness on every lookup, not at write time. `_auto_file_deps_fresh` (`src/cash/core.py:1026-1049`) walks the recorded dictionary, stats each path, and short-circuits to a miss as soon as any of three things is true:
+Cash checks freshness on every lookup, not at write time. `_auto_file_deps_fresh` (`src/cash/core.py:1308-1336`) walks the recorded dictionary and delegates each entry to `file_dep_is_fresh` (`src/cash/notebook/file_dep_snapshot.py:126-159`) — the **same** helper the notebook-statement layer uses, so the two subsystems cannot drift. An entry is stale as soon as any of these is true:
 
-- The file is unreadable (`os.stat` raises) — recorded as `file missing` in `explain()`.
-- The mtime moved — `st.st_mtime != recorded['mtime']`.
-- The size moved — `st.st_size != recorded['size']`.
+- The file is unreadable (`os.stat` raises) — reason `unreadable`.
+- The size moved — reason `size`. Checked first, and Cash never hashes on this path.
+- The size matches but the content hash differs — reason `content`. **This is the authoritative check.**
 
-**Why mtime+size and not a content hash?** Hashing a 2 GB parquet file on every cache lookup would defeat the point of caching. mtime+size is one `stat()` syscall per file — sub-millisecond, no I/O on the data itself. The trade-off: if something rewrites a file without changing the mtime *and* the size matches byte-for-byte (rare, but possible with coarse-resolution filesystems and content-preserving touches), Cash will miss the change. In practice the false-negative rate is low enough that nobody cares.
+A matching size *and* a matching content hash is fresh, **regardless of the mtime**. Touching a file does not invalidate an auto-tracked dependency.
 
-The notebook-statement layer uses a slightly different policy in `_invalidate_if_direct_file_changed` (`src/cash/notebook/cache_freshness.py:149-185`): it tolerates mtime deltas under 10 ms and falls back to a size check, which handles filesystems with coarse mtime granularity (HFS+, some ext4 configs). The decorator path is the strict "any drift counts" version above.
+**Why a content hash and not just mtime+size?** Because `(mtime, size)` was ambiguous in both directions, and both failure modes were real bugs. A touch-only change (identical bytes, bumped mtime) recomputed needlessly (CAS-98); a same-size edit written under an mtime the check couldn't distinguish was missed and served stale (CAS-10). Content is the signal that actually answers the question. The cost is bounded by checking size first and by sampling large files (below), so the common case is still one `stat()` and — only when the size matches — a bounded read.
 
-Race condition to be aware of: if a file is rewritten *while* a cached function is running, the snapshot captures the post-write mtime. On the next call Cash sees the same mtime and returns the cached value — which now reflects half-old, half-new data. The window is small and rarely matters, but for high-churn pipelines wrap the write in a tempfile-then-rename so each run sees a consistent snapshot.
+### Large files are sampled, not fully hashed
+
+Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`, `src/cash/notebook/file_dep_snapshot.py:56-91`):
+
+- Files **≤ 8 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
+- Files **> 8 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
+
+**The footgun:** for a file over 8 MiB, an edit that changes **only unsampled interior bytes and preserves the exact size** is **not detected** — Cash serves the stale cache entry. This is the honest residue of the tradeoff: it moved, it didn't vanish. The sampling is deterministic (same bytes + same size → same digest at snapshot time and at every later check), so it never produces *false* invalidation, only this narrow class of missed one.
+
+If you're editing large files in place at fixed offsets — memory-mapped arrays, HDF5 datasets, a record patched at a known offset in a big binary — don't rely on auto-tracking. Use `file_depends_on=` (which keys on mtime and will see the write), or write a `DataSource` subclass whose `state_token()` returns a full hash of the file.
+
+Race condition to be aware of: if a file is rewritten *while* a cached function is running, the snapshot captures the post-write content. On the next call Cash sees a matching hash and returns the cached value — which now reflects half-old, half-new data. The window is small and rarely matters, but for high-churn pipelines wrap the write in a tempfile-then-rename so each run sees a consistent snapshot.
+
+### Legacy snapshots fall back to mtime
+
+Cache entries written **before** content hashing shipped have no `hash` key. For those, `file_dep_is_fresh` falls back to the old mtime tolerance — a drift under 10 ms counts as fresh (`src/cash/notebook/file_dep_snapshot.py:157`) — so pre-existing caches keep working instead of stampeding. This is a compatibility path for old entries only; anything Cash writes today records a hash and never consults it.
 
 ## Caveats
 
 ### Symlinks are followed
 
-`_track_path` resolves the path through `os.path.realpath` before storing it (`src/cash/notebook/file_tracker.py:382`). If you read a symlink, Cash records and stats the *target*. Editing the symlink target invalidates the cache; replacing the symlink to point at a different file with the same target mtime+size does not. This matches what most users expect ("the data file changed"), but if you genuinely care about the symlink identity, you'll need to use `file_depends_on=` with the link path explicitly.
+`_track_path` resolves the path through `os.path.realpath` before storing it (`src/cash/notebook/file_tracker.py:440`). If you read a symlink, Cash records and checks the *target*, and the resolution is frozen at track time. Editing the symlink target's contents invalidates the cache. Repointing the symlink at a different file does **not** — Cash goes on checking the original target, which hasn't changed. This matches what most users expect ("the data file changed"), but if you genuinely care about the symlink identity itself, use `file_depends_on=` with the link path explicitly.
 
 ### Paths are absolute and platform-normalized
 
@@ -165,7 +187,12 @@ Stored paths are absolute and use forward slashes regardless of OS (`normalize_p
 
 ### Network-mounted filesystems
 
-NFS, SMB, and similar network mounts often have coarse mtime resolution (1-second granularity) and the timestamp source is the *server*, not the client. Two writes within the same second can produce identical mtimes — the size check is your safety net but won't catch in-place edits that preserve size. This isn't a Cash-specific limitation; it's general advice for any tooling that relies on mtime. If you're hitting it, switch to `file_depends_on=` and write a `FileDataSource` subclass that uses a content hash on critical files.
+NFS, SMB, and similar network mounts often have coarse mtime resolution (1-second granularity) and the timestamp source is the *server*, not the client, so two writes within the same second can produce identical mtimes. **Auto-tracking is immune to this** — it reads content, not timestamps, so a same-second in-place edit that preserves size is still caught (that was CAS-10, and it's fixed).
+
+Two things on network mounts do still deserve care:
+
+- **`file_depends_on=` remains mtime-based**, so the coarse-resolution problem applies to it in full. On a network mount, prefer auto-tracking for critical files, or write a `DataSource` subclass whose `state_token()` returns a content hash.
+- **Content hashing costs a network read.** On a slow mount the hash is I/O over the wire whenever the size matches. The size check short-circuits the common "file was replaced wholesale" case first, and files over 8 MiB only pull 768 KiB of samples, but a large directory of same-size files re-hashed on every lookup is worth measuring.
 
 ### Files outside the working directory
 

@@ -136,7 +136,7 @@ If you genuinely need library versions to fold into the cache key — e.g. you'r
 - **Iterative solvers with checkpoints.** Cache each checkpoint as a function of `(initial_state, n_steps, params)`. A solver that crashes at step 10,000 can resume from the last cached checkpoint instead of from step 0.
 - **Monte Carlo with multiple seeds.** Wrap the per-seed run in `@cash.cache`, loop over seeds. Adding more seeds is incremental — the existing ones stay cached.
 - **Sensitivity analysis.** Identical to a parameter sweep — vary one input at a time, each combination cached independently, the analysis layer iterates freely.
-- **Embarrassingly parallel sweeps.** Dispatch the cached function across processes with `multiprocessing` or `joblib`. If you want a *guarantee* that two workers don't both compute the same `(alpha, seed)` combination, you need `Cash(use_locking=True)` against a backend that actually implements locking — and only `RedisBackend` does. See [Thread Safety](../feature-guides/thread-safety.md) for the table of backends and the redundancy semantics.
+- **Embarrassingly parallel sweeps.** Dispatch the cached function across processes with `multiprocessing` or `joblib`. If you want a *guarantee* that two workers don't both compute the same `(alpha, seed)` combination, you need `Cash(use_locking=True)` against `RedisBackend`. Every backend single-flights concurrent callers *within* one process, but a `multiprocessing`/`joblib` sweep puts the workers in **separate processes**, and Redis is the only shipped backend whose lock spans them. See [Thread Safety](../feature-guides/thread-safety.md) for the backend table and the redundancy semantics.
 
 ## Caveats
 
@@ -149,7 +149,7 @@ If you genuinely need library versions to fold into the cache key — e.g. you'r
 
 - [Custom Hashers](../feature-guides/custom-hashers.md) — for `mpmath`, JAX, PyTorch, sparse matrices, and other specialised numerical types.
 - [Smart Persistence](../feature-guides/smart-persistence.md) — when Cash decides to push a large array from memory to disk.
-- [Thread Safety](../feature-guides/thread-safety.md) — `use_locking=True` semantics for parallel sweeps; only Redis implements real locks.
+- [Thread Safety](../feature-guides/thread-safety.md) — `use_locking=True` semantics for parallel sweeps; every backend locks in-process, Redis is the one that locks across processes.
 - [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) — RNG-detection warnings, `@cash:no-cache`, `@cash:persist`, and TTL.
 - [Custom File Sources](../feature-guides/custom-file-sources.md) — declaring HDF5, NetCDF, and other non-pandas readers as dependencies.
 - [Dynamic Dependencies](../feature-guides/dynamic-dependencies.md) — folding a library or schema version into the cache key.

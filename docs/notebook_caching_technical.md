@@ -736,6 +736,12 @@ Cash intercepts file read operations to automatically invalidate caches when dat
 
 ### File Dependency Hash
 
+Two distinct signals are in play here, and they are easy to conflate.
+
+**1. The cache-key / lineage component.** Computed by `compute_file_hash_component`
+(`src/cash/notebook/statement/file_deps.py:49-79`) at *capture* time, folding each
+accessed file's path, mtime, and size into the producing variable's lineage:
+
 ```
 file_hash = SHA256(file_path + ":" + str(file_mtime) + ":" + str(file_size))
 ```
@@ -749,6 +755,29 @@ cache_key = SHA256(
     file_dependency_hash        ← includes all files read
 )
 ```
+
+**2. The freshness check — this is what decides invalidation.** A cached entry
+also records a snapshot per file (`{path: {'mtime', 'size', 'hash'}}`), and the
+stale/fresh verdict comes from `file_dep_is_fresh`
+(`src/cash/notebook/file_dep_snapshot.py:126-159`), which is
+**content-authoritative** (CAS-98 / CAS-10):
+
+- Size differs → **stale**, without hashing.
+- Size matches → the **content hash** decides. Equal content is fresh **even if
+  the mtime moved**; differing content is stale **even if the mtime is
+  indistinguishable**.
+- Legacy snapshots with no recorded `hash` fall back to the old 10 ms mtime
+  tolerance (`file_dep_snapshot.py:157`).
+
+So despite the mtime appearing in the formula above, **touching a data file does
+not cause a recompute** — the freshness check sees identical content and
+restores from cache. Pinned by the real-kernel tests in
+`tests/test_notebook_integration/test_file_dep_content_freshness.py`.
+
+Files larger than 8 MiB are **sampled** rather than fully hashed (head, middle,
+and tail — 256 KiB each, plus the byte length; `file_dep_snapshot.py:56-91`), so
+a same-size edit confined to unsampled interior bytes of a large file is not
+detected. The decorator path shares this exact helper, so both subsystems agree.
 
 ### Custom File Handler Registration
 

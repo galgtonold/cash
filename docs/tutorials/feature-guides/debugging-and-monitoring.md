@@ -54,10 +54,13 @@ The return value is a `CacheExplanation` dataclass (`src/cash/core.py:65-117`) w
 | `hit` | Next call returns cached value. | `cached_at`, `cache_age_seconds`, `execution_time_saved` |
 | `no_entry` | No matching cache entry — first call with these args, the cache was cleared, or the function source / a tracked dependency changed since the last write. | `hint` |
 | `ttl_expired` | Entry exists but the configured `ttl` has elapsed. | `ttl_seconds`, `age_seconds`, `cached_at` |
-| `file_changed` | An auto-tracked file dependency's mtime or size moved. | `changed_files: {path: reason}` |
+| `file_changed` | An auto-tracked file dependency changed. Invalidation is decided by **content**: size first, then a content hash when the size matches — a touch alone is not a change. | `changed_files: {path: reason}` |
 | `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
 
 `_explain_call` in `src/cash/core.py` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing.
+
+!!! warning "`explain()` can over-report `file_changed`"
+    The file-dependency arm of `_explain_call` (`src/cash/core.py:1124-1145`) still compares raw mtime and size, whereas a real lookup uses the content-authoritative `file_dep_is_fresh`. After a **touch** (identical bytes, bumped mtime), `explain()` reports `file_changed` with `'mtime changed'` while an actual call **hits**. The `changed_files` values are still `'mtime changed'`, `'size changed'`, or `'file missing'`. Trust the call over the explanation in that case; tracked as a known bug.
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 

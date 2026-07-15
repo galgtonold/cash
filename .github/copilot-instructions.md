@@ -27,22 +27,38 @@ Cash is a smart caching library for Python with two primary use cases:
 - **`notebook/`** - Jupyter integration (the most complex subsystem)
 
 ### Notebook Subsystem (`src/cash/notebook/`)
-The notebook caching is statement-level, not cell-level. Key modules:
-- **`magics.py`** - IPython magic commands (`%cash_on`, `%%cash`), orchestrates execution
+The notebook caching is statement-level, not cell-level. The four biggest clusters are **packages**, not modules — see the ADR referenced on each.
+
+**Packages:**
+- **`ipython/`** - The IPython adapter (ADR-013). `magics.py` holds `CashMagics` (`%cash_on`, `%%cash`); `admin.py` the admin magics (`%cash_status`, `%cash_clear`, ...); `cell_executor.py` the `CellExecutor` that both entry points delegate to. Public surface: `CashMagics`.
+- **`statement/`** - `StatementProcessor` and its four siblings (ADR-011): `freshness.py` (`CacheFreshnessChecker`), `file_deps.py` (`StatementFileDeps`), `lineage.py` (`StatementLineageBuilder`), `restore.py` (`StatementRestorer`), plus `derivation_edges.py` (numpy-view / live-reference lineage bumps, CAS-115/89). Public surface: `StatementProcessor`, `ProcessResult`.
+- **`upstream/`** - Upstream detection + lineage simulation (ADR-010): `checker.py` (`UpstreamChecker`), `simulator.py` (`NotebookSimulator`), `virtual_lineage.py`, `mismatch_classifier.py`, `reexecution_planner.py`. Public surface: `UpstreamChecker`, `UpstreamResult`, `NotebookSimulator`.
+- **`control_structures/`** - Per-iteration caching for loops and conditionals (ADR-012): `processor.py` orchestrates, `for_handler.py` / `if_handler.py` / `try_handler.py` are the strategies, `helpers.py` the shared lineage/badge/error helpers.
+- **`badge_renderer/`** - `BadgeView` IR (`view.py`, `view_builder.py`) + the renderers under `renderers/` (HTML v3, text) and `theme.py`.
+
+**Modules:**
 - **`cache_key.py`** - **Unified cache key computation** (single source of truth for all cache key generation)
-- **`statement_processor.py`** - Processes individual statements, handles cache lookup/store
-- **`upstream.py`** - Detects and re-executes changed upstream cells, manages lineage simulation
 - **`analysis.py`** - AST-based code analysis for inputs/outputs detection
+- **`cacheability.py`** - Pure-AST cacheability analysis. **Folds the former `mutation_detector.py` (in-place mutations) and `side_effects.py` (file writes, network calls) into one module** — both names are gone.
+- **`cacheability_decision.py`** - The runtime merge (`decide_cacheability`): AST analysis + annotations + `@stateful` + forbidden-function scan → `(cacheable, reasons)`
 - **`annotations.py`** - Parses `@cash:` comment directives (no-cache, ttl, persist, allow-random)
+- **`lineage_store.py`** - `LineageStore`: the single seam for reading/writing variable lineage; owns the resolution priority ladder
+- **`restore.py`** - `Restorer`: **variable**-granular cache restoration (distinct from `statement/restore.py`, which is statement-granular)
+- **`consumables.py`** - Classification + divergence probing for consumable, unrestorable inputs (generators, file handles)
 - **`file_tracker.py`** - Intercepts file reads (pandas, numpy, polars, open, joblib, etc.) for dependency tracking
+- **`file_dep_snapshot.py`** - Pure helpers for file-dep snapshots (`{path: {mtime, size, hash}}`) and the **content-authoritative** freshness check shared by the decorator and notebook paths (CAS-98/CAS-10/CAS-119)
 - **`function_tracker.py`** - Tracks function source code changes, module hot reload
-- **`control_structures.py`** - Per-iteration caching for loops and conditionals
-- **`mutation_detector.py`** - AST-based detection of in-place mutations
-- **`side_effects.py`** - Detection of file writes, network calls, and other side effects
+- **`module_invalidator.py`** - Invalidates caches downstream of a changed local module
+- **`object_hashing.py`** - Pure `compute_hash` / sizing helpers for arbitrary objects
 - **`randomness.py`** - Unseeded random call detection and seed tracking
 - **`purity.py`** - `@pure` and `@stateful` decorator system
 - **`provenance.py`** - Variable computation history and dependency graphs
+- **`cache_status.py`** - Cache status enum + execution result types
+- **`cost_model.py`** - Tuned serialise/deserialise cost model behind the cache-or-not decision
+- **`server_discovery.py`** - Jupyter Server integration: notebook path discovery and cell reading
 - **`audit.py`** - Compliance audit logging
+- **`_protocols.py`** - `TrackingState` + the subsystem's Protocol types
+- **`_trace.py`** - Opt-in decision tracing for the upstream checker/simulator
 
 ### Key Data Flows
 1. **Lineage Tracking**: Each variable gets a lineage hash = `hash(code + sorted(input_lineages) + file_deps)`
@@ -205,13 +221,13 @@ Statement cache keys: `stmt:{sha256(code + ':'.join(sorted(input_lineages)) + fi
 ### âš ï¸ Unified Cache Key Computation (CRITICAL ARCHITECTURAL RULE)
 **All cache key computation MUST go through `compute_cache_key()` in `cash.notebook.cache_key`.** This is the single source of truth for building statement cache keys. Never duplicate cache key logic in other modules.
 
-**Why this matters:** Cache keys are computed in multiple contexts â€” runtime execution (`statement_processor.py`), upstream simulation (`upstream.py` `_update_virtual_lineage`), virtual restore (`upstream.py` `_try_virtual_restore`), and skip checks. Any divergence between these computations causes cache misses or stale data after kernel restarts. This has caused critical bugs multiple times in the past.
+**Why this matters:** Cache keys are computed in multiple contexts â€” runtime execution (`statement/processor.py`), upstream simulation (`upstream/virtual_lineage.py` `_update_virtual_lineage`), virtual restore (`upstream/virtual_lineage.py` `_try_virtual_restore`), and skip checks. Any divergence between these computations causes cache misses or stale data after kernel restarts. This has caused critical bugs multiple times in the past.
 
 **Call sites that use `compute_cache_key()`:**
-1. `_analyze_and_hash()` in `statement_processor.py` â€” runtime cache key
-2. `_update_virtual_lineage()` in `upstream.py` â€” simulation forward propagation
-3. `_try_virtual_restore()` in `upstream.py` â€” backward restore from disk
-4. Skipped statement checking in `upstream.py` â€” verifying skipped stmts
+1. `_analyze_and_hash()` in `statement/processor.py` â€” runtime cache key
+2. `_update_virtual_lineage()` in `upstream/virtual_lineage.py` â€” simulation forward propagation
+3. `_try_virtual_restore()` in `upstream/virtual_lineage.py` â€” backward restore from disk
+4. Skipped statement checking in `upstream/virtual_lineage.py` â€” verifying skipped stmts
 
 **Input lineage priority order** (in `compute_cache_key()`):
 1. `virtual_lineage` (simulation context â€” checked FIRST, reflects current simulated code)
@@ -232,7 +248,7 @@ Before executing a statement, check if it was already computed:
 5. Special case: self-assignment (`df = df.sort_values()`) - check output lineage, not input
 
 ### Metrics for Badge Display
-When returning from `process()` in `statement_processor.py`, include:
+When returning from `process_statement()` in `statement/processor.py`, include:
 - `status`: 'COMPUTED', 'RESTORED', or 'SKIPPED'
 - `code`: The statement code
 - `outputs`: List of output variable names

@@ -1,6 +1,6 @@
 # Async caching — `@cash.cache` on coroutine functions
 
-Cash caches `async def` functions with the same TTL, file-dependency tracking, purity analysis, and iterator-chunking it gives sync functions. This page covers the differences between the async and sync wrappers and the two limitations the async path doesn't share with the sync one.
+Cash caches `async def` functions with the same TTL, file-dependency tracking, purity analysis, and iterator-chunking it gives sync functions. This page covers the differences between the async and sync wrappers and the one limitation the async path doesn't share with the sync one: async generators.
 
 ## Why this exists
 
@@ -218,5 +218,5 @@ The decorator surface is unchanged between sync and async — the same kwargs wo
 
 - [LLM API Calls](../use-cases/llm-api-calls.md) — the use case that motivates most async-caching work: prompt iteration, TTL tuning, and structured-output validation.
 - [Iterator Caching](iterator-caching.md) — the chunking path that activates when an `async def` returns a sync generator.
-- [Thread Safety](thread-safety.md) — the sync side of the locking story; useful background for the `use_locking` limitation above.
+- [Thread Safety](thread-safety.md) — the sync side of the locking story; useful background for the `use_locking` single-flight described above.
 - [Decorator (`@cash.cache`)](../../decorator.md) — full kwarg reference for the decorator surface listed in the table above.

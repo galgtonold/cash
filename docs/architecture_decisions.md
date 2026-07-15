@@ -56,6 +56,38 @@ lineage_hash(var) = SHA256(code + sorted(input_lineage_hashes) + file_dep_hashes
 - **Timestamp-based**: Compare file mtimes. Simple but breaks with: same content different time, or content changes within same second
 - **Content hashing of outputs**: Hash the result itself. Expensive for large DataFrames, and some objects aren't hashable
 
+### Amendment (2026-07-15): the file-dependency path caught up with this decision
+
+The two failure modes rejected above under *Timestamp-based* — "same content
+different time" and "content changes within same second" — were not hypothetical.
+They shipped, as bugs, in the **file-dependency** path: while variable lineage was
+content-addressed from the start, file freshness was decided by `(mtime, size)`
+until this wave.
+
+- **CAS-98** = "same content, different time": a touch-only change (identical
+  bytes, bumped mtime) forced a needless recompute — over-invalidation.
+- **CAS-10** = "content changes within same second": a same-size edit under an
+  mtime the coarse check couldn't distinguish was missed and served stale —
+  under-invalidation.
+- **CAS-119** carried the same fix into the `@cash.cache` decorator path, so the
+  two subsystems share one helper and cannot drift.
+
+**Resolution:** auto-tracked file deps now record a content hash alongside
+`(mtime, size)` and treat **content as authoritative whenever the size matches**
+(`file_dep_is_fresh`, `src/cash/notebook/file_dep_snapshot.py`). The cheap size
+check runs first, so the "hashing a 2 GB parquet on every lookup" objection is
+answered by never hashing when the size already proves staleness, and by sampling
+files over 8 MiB (head/middle/tail) rather than reading them whole. The residual
+tradeoff is a narrow one: a same-size edit confined to unsampled interior bytes of
+a >8 MiB file is not detected.
+
+**Still timestamp-based, deliberately:** the explicit `file_depends_on=` /
+`FileDataSource` escape hatch folds the file's mtime into the cache key
+(`state_token()` → `_get_mtime()`, `src/cash/data_source.py`). It is a
+user-declared dependency on a *file*, not an observed read, and users can
+subclass `DataSource` to return a digest instead. This ADR's reasoning applies to
+the automatic path; the escape hatch keeps mtime for cost and predictability.
+
 ---
 
 ## ADR-003: AST Analysis vs Bytecode Inspection

@@ -1,9 +1,24 @@
-"""Documented known limitations: hidden state cash cannot see or restore.
+"""Hidden state cash cannot see or restore — one live limitation, three fixed.
 
-Both are fundamental to source/lineage-based caching (any such system shares
-them) and self-disable on ``run_all`` (the producer cell re-runs first). They are
-recorded as non-strict xfails so the corpus flags it loudly if either ever
-starts passing. Discovered by the correctness probe sweep (2026-06-28).
+This file started (2026-06-28 correctness probe sweep) as a pair of "fundamental"
+xfails. Three of the four have since been fixed, which is the point of keeping
+them here: the corpus is a regression record, not a monument.
+
+Still failing (non-strict xfail):
+
+* ``test_function_hidden_global_mutation_rerun`` — a cell calls ``tick()``, which
+  mutates a global the cell never names. Cash cannot see the mutation, so an
+  isolated re-run does not restore the global to its cell-entry base and the call
+  advances it again. Genuinely fundamental to source/lineage-based caching, and it
+  self-disables on ``run_all`` (the producer cell re-runs first).
+
+Fixed, kept as regression tests:
+
+* ``test_exhausted_generator_rerun`` — CAS-118 / CAS-50: producers of consumed
+  unrestorable inputs are re-executed on an isolated re-run, so the generator is
+  re-seeded instead of being observed empty.
+* ``test_global_keyword_mutation_rerun`` and ``test_mutable_default_arg_rerun`` —
+  CAS-49 family via CAS-93: definition statements always re-execute.
 """
 import pytest
 
@@ -29,11 +44,11 @@ def test_function_hidden_global_mutation_rerun(nb_runner):
     assert nb_runner.get_output(2).strip().endswith("1"), nb_runner.get_output(2)
 
 
-@pytest.mark.xfail(reason="Stateful iterator: an upstream generator is exhausted "
-                          "after first consumption and cannot be pickled/restored, "
-                          "so an isolated re-run of `list(g)` sees an empty "
-                          "generator. Fundamental unrestorable-state limit.",
-                   strict=False)
+# FIXED (CAS-118, CAS-50): an upstream generator is exhausted after first
+# consumption and cannot be pickled/restored — so cash now re-executes the
+# PRODUCER of a consumed unrestorable input on an isolated re-run. `g` is
+# re-seeded and `list(g)` sees the full sequence again instead of an empty
+# generator.
 def test_exhausted_generator_rerun(nb_runner):
     nb_runner.create_notebook([
         "g = (i for i in range(3))",
