@@ -87,13 +87,12 @@ load_features.explain()
 # test:inject: import pathlib, time as _t; pathlib.Path("data/features.csv").write_text("col1,col2\nnew1,new2\n"); _t.sleep(0.01)
 load_features.explain()
 # [MISS] __main__.load_features — file_changed
-#   changed_files: {'data/features.csv': 'mtime changed'}
+#   changed_files: {'data/features.csv': 'content changed'}
 ```
 
-The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` at `src/cash/core.py:1124-1145`. The dict's values are short human-readable strings: `'mtime changed'`, `'size changed'`, or `'file missing'`. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
+The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` in `src/cash/core.py`. The dict's values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, or — only for entries written before content hashing — `'mtime changed'`.
 
-!!! warning "`explain()` can over-report `file_changed`"
-    `_explain_call` still compares raw mtime and size; it has not been moved onto the content-authoritative `file_dep_is_fresh` helper that the real lookup uses. After a **touch** (identical bytes, bumped mtime), `explain()` reports `file_changed` / `'mtime changed'` while an actual call **hits** the cache. Trust the call, not the explanation, in that specific case. Tracked as a known bug.
+`explain()` decides freshness through the same content-authoritative `file_dep_is_fresh` helper a real lookup uses (CAS-127), so it cannot disagree with the call: a **touch** (identical bytes, bumped mtime) explains as `hit`, exactly as it behaves. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
 
 ## What's NOT tracked
 
@@ -244,7 +243,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 | `file_depends_on=path` | `@cash.cache` kwarg | Wraps *path* in `FileDataSource` and adds it to the function's static dependencies. Accepts `str` or `list[str]`. |
 | `c.register_file_handler(module, func, factory)` | `Cash` method | Register a wrapper factory for an additional reader. Catches every subsequent call to `module.func` from cached code. Glob wildcard supported in *func*. |
 | `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
-| `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'mtime changed'`, `'size changed'`, or `'file missing'`. |
+| `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, `'file missing'`, or `'mtime changed'` (legacy entries only). |
 | `FileAccessTracker` | Internal | Context manager that drives the monkey-patch. Auto-installed by `_compute_and_store`; not intended for direct use. |
 | `FileDependencyRegistry` | Internal | Singleton holding the registered handler factories. Accessed through `register_file_handler`; direct use is unsupported. |
 

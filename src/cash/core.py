@@ -1121,21 +1121,25 @@ class Cash:
                     },
                 )
 
-        # Auto-tracked file deps freshness.
+        # Auto-tracked file deps freshness. Routed through the SAME
+        # content-authoritative helper a real lookup uses (CAS-127) - comparing
+        # raw mtime/size here made explain() report file_changed / 'mtime
+        # changed' after a touch while the actual call hit. A diagnostic that
+        # contradicts the behavior it describes is worse than none.
         snap = metadata.auto_file_deps or {}
         if snap:
-            import os
+            from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+            _REASON_TEXT = {
+                'unreadable': 'file missing',
+                'size': 'size changed',
+                'content': 'content changed',
+                'mtime': 'mtime changed',
+            }
             stale: dict[str, str] = {}
             for path, recorded in snap.items():
-                try:
-                    st = os.stat(path)
-                except OSError:
-                    stale[path] = 'file missing'
-                    continue
-                if st.st_mtime != recorded.get('mtime'):
-                    stale[path] = 'mtime changed'
-                elif st.st_size != recorded.get('size'):
-                    stale[path] = 'size changed'
+                is_fresh, reason = file_dep_is_fresh(path, recorded)
+                if not is_fresh:
+                    stale[path] = _REASON_TEXT.get(reason or '', 'changed')
             if stale:
                 return CacheExplanation(
                     would_hit=False,
