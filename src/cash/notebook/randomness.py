@@ -5,9 +5,10 @@ from __future__ import annotations
 import ast
 import logging
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "capture_rng_state", "restore_rng_state", "get_used_rng_modules"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +430,165 @@ def restore_rng_state(state: dict) -> None:
                 torch.cuda.set_rng_state_all(state['torch.cuda'])
         except (ImportError, RuntimeError) as e:
             logger.debug("[RANDOMNESS] Failed to restore torch random state: %s", e)
+
+# -----------------------------------------------------------------------------
+# Per-object RNG carriers
+# -----------------------------------------------------------------------------
+#
+# ``capture_rng_state`` / ``restore_rng_state`` above cover the RNG *module
+# globals* (``random``, ``np.random``, ``torch``).  They cannot see a generator
+# a user holds in a variable — ``rng = np.random.default_rng(42)`` — because
+# that object has no module-level home.
+#
+# The asymmetry that motivates this (CAS-90): a statement drawing from the
+# global channel (``np.random.randint``) replays correctly across a cache hit,
+# because the post-state is captured and re-injected.  A statement drawing from
+# an object-held generator (``rng.integers``) HITS and restores its output, but
+# the live generator is never advanced — so the next draw repeats the values
+# the cached statement already consumed.
+#
+# The fix mirrors the global channel exactly: capture the carrier's post-state
+# at store time and inject it back on a hit.  Capture is scoped to the
+# statement's declared inputs (not all of ``user_ns``) and gated on an
+# ``isinstance`` allowlist, which bounds the cost to the handful of variables a
+# statement actually reads.
+
+_KIND_NP_GENERATOR = 'numpy.Generator'
+_KIND_NP_RANDOMSTATE = 'numpy.RandomState'
+_KIND_PY_RANDOM = 'random.Random'
+
+
+def _classify_rng_carrier(obj: object) -> str | None:
+    """Return the carrier kind for ``obj``, or ``None`` if it isn't one.
+
+    Objects owned by the RNG *module globals* are deliberately excluded: the
+    module channel in :func:`capture_rng_state` already replays those, and
+    capturing them twice under a variable name would let a stale alias fight
+    with the authoritative global state.
+    """
+    import sys
+
+    if 'numpy' in sys.modules or 'numpy.random' in sys.modules:
+        try:
+            import numpy as np
+
+            if isinstance(obj, np.random.Generator):
+                return _KIND_NP_GENERATOR
+            if isinstance(obj, np.random.RandomState):
+                # ``np.random.*`` module functions delegate to this singleton;
+                # the global channel owns it.
+                if obj is not np.random.mtrand._rand:
+                    return _KIND_NP_RANDOMSTATE
+                return None
+        except (ImportError, AttributeError):
+            pass
+
+    if 'random' in sys.modules:
+        try:
+            import random
+
+            if isinstance(obj, random.Random):
+                # ``random.*`` module functions delegate to this singleton.
+                if obj is not getattr(random, '_inst', None):
+                    return _KIND_PY_RANDOM
+                return None
+        except (ImportError, AttributeError):
+            pass
+
+    return None
+
+
+def capture_object_rng_states(
+    names: 'Iterable[str]', user_ns: dict[str, object],
+) -> dict[str, dict]:
+    """Capture the post-state of any RNG carrier bound to one of ``names``.
+
+    Args:
+        names: Variable names to consider — the statement's inputs.  Scoping to
+            inputs is what bounds the cost: no full ``user_ns`` walk.
+        user_ns: The shell namespace to resolve names against.
+
+    Returns:
+        ``{var_name: {'kind': <carrier kind>, 'state': <picklable state>}}``.
+        Empty when the statement reads no RNG carriers, which is the common
+        case — callers should omit the payload key entirely when empty so
+        non-RNG statements keep their existing payload shape.
+    """
+    states: dict[str, dict] = {}
+
+    for name in names:
+        try:
+            obj = user_ns.get(name)
+        except (TypeError, AttributeError):
+            continue
+        if obj is None:
+            continue
+
+        try:
+            kind = _classify_rng_carrier(obj)
+            if kind is None:
+                continue
+            if kind == _KIND_NP_GENERATOR:
+                # Foreign / third-party bit generators may raise or hand back
+                # something unpicklable here; the except below drops them.
+                state = obj.bit_generator.state
+            elif kind == _KIND_NP_RANDOMSTATE:
+                state = obj.get_state()
+            else:
+                state = obj.getstate()
+        except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
+            # e.g. random.SystemRandom.getstate() raises NotImplementedError.
+            logger.debug("[RANDOMNESS] Failed to capture RNG state for %r: %s", name, e)
+            continue
+
+        states[name] = {'kind': kind, 'state': state}
+
+    return states
+
+
+def restore_object_rng_states(
+    states: dict[str, dict] | None, user_ns: dict[str, object],
+) -> None:
+    """Inject captured per-object RNG states back onto the live carriers.
+
+    Guarded on presence (the name still resolves) and on type match (the live
+    object is still the same kind of carrier).  A name that now holds something
+    else is skipped rather than forced.
+
+    Args:
+        states: Mapping produced by :func:`capture_object_rng_states`.  Cache
+            entries written before this field existed pass ``None`` here and
+            restore unchanged.
+        user_ns: The shell namespace to resolve names against.
+    """
+    if not states:
+        return
+
+    for name, entry in states.items():
+        try:
+            kind = entry['kind']
+            state = entry['state']
+        except (TypeError, KeyError):
+            continue
+
+        obj = user_ns.get(name)
+        if obj is None:
+            continue
+
+        # Type match: only write the state back onto the same carrier kind.
+        if _classify_rng_carrier(obj) != kind:
+            continue
+
+        try:
+            if kind == _KIND_NP_GENERATOR:
+                obj.bit_generator.state = state
+            elif kind == _KIND_NP_RANDOMSTATE:
+                obj.set_state(state)
+            else:
+                obj.setstate(state)
+        except (TypeError, ValueError, AttributeError, NotImplementedError) as e:
+            logger.debug("[RANDOMNESS] Failed to restore RNG state for %r: %s", name, e)
+
 
 def get_used_rng_modules(code: str) -> set[str]:
     """

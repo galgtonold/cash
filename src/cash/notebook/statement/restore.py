@@ -38,7 +38,7 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
 
-from ..randomness import restore_rng_state
+from ..randomness import restore_object_rng_states, restore_rng_state
 
 if TYPE_CHECKING:
     from .._protocols import ShellProtocol, TrackingState
@@ -116,14 +116,32 @@ class StatementRestorer:
                     if self.debug:
                         logger.debug("[CACHE DEBUG] Restoring RNG state")
                     restore_rng_state(rng_state)
+                # Absent on entries written before CAS-90 — restore_object_rng_states
+                # treats None/{} as a no-op, so old cache entries load unchanged.
+                object_rng_states = payload.get('rng_object_states')
             else:
                 restored_vars = payload
                 stdout = stderr = ""
                 rich_outputs = []
+                object_rng_states = None
 
             t_var = time.time()
             for var_name, value in restored_vars.items():
                 self._restore_one_var(tracking_state, var_name, value, metadata)
+
+            # CAS-90: advance object-held generators to the post-state the
+            # cached statement left them in — the module-global equivalent of
+            # restore_rng_state above.  Runs AFTER the variable loop so that a
+            # carrier which is also an OUTPUT of this statement ends on the
+            # canonical post-state rather than whatever ordering the dict
+            # happened to have.
+            if object_rng_states:
+                if self.debug:
+                    logger.debug(
+                        "[CACHE DEBUG] Restoring object RNG state for %s",
+                        ', '.join(sorted(object_rng_states)),
+                    )
+                restore_object_rng_states(object_rng_states, self.shell.user_ns)
 
             self._file_deps.restore_from_metadata(tracking_state, restored_vars, metadata)
             var_restore_time = time.time() - t_var

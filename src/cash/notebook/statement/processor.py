@@ -273,6 +273,7 @@ from ..cacheability_decision import decide_cacheability
 from ..purity import analyze_function_purity
 from ..randomness import (
     RandomnessDetector,
+    capture_object_rng_states,
     capture_rng_state,
 )
 
@@ -1727,6 +1728,19 @@ class StatementProcessor:
             'rich_outputs': captured_output.outputs,
             'rng_state': capture_rng_state(),
         }
+
+        # CAS-90: the module-global RNG post-state above misses generators the
+        # user holds in a variable (``rng = np.random.default_rng(42)``).
+        # Capture those too, scoped to this statement's inputs so the cost
+        # stays proportional to what the statement actually reads.  Omitted
+        # entirely when there are none, keeping the payload shape unchanged for
+        # the overwhelming majority of statements.
+        try:
+            object_rng_states = capture_object_rng_states(inputs, self.shell.user_ns)
+            if object_rng_states:
+                payload['rng_object_states'] = object_rng_states
+        except (TypeError, AttributeError) as e:
+            logger.debug("[RANDOMNESS] Object RNG capture skipped: %s", e)
 
         # Dict-on-the-wire: the backend round-trips a plain dict and may
         # inject the resolved ``storage`` destinations back into it. We
