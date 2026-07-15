@@ -381,24 +381,21 @@ side-effect accumulators, and folding them in would invalidate the
 function on its own output. A read global whose value can't be hashed
 warns once rather than failing the call.
 
-!!! warning "Globals read inside a comprehension are not seen"
-    Detection intersects `func.__code__.co_names` with the function's
-    globals. A comprehension, generator expression, or nested `lambda`
-    compiles to its **own** code object, so a global referenced only in
-    there never appears in the outer function's `co_names` and does not
-    invalidate:
+Globals read inside a nested scope count too. A generator expression,
+comprehension, or `lambda` compiles to its own code object, so detection
+recurses into them (CAS-128):
 
-    ```python
-    THRESHOLD = 10
+```python
+THRESHOLD = 10
 
-    @cash.cache
-    def count_big(values):
-        return sum(v > THRESHOLD for v in values)   # THRESHOLD invisible
-    ```
+@cash.cache
+def count_big(values):
+    return sum(v > THRESHOLD for v in values)   # THRESHOLD is tracked
 
-    Editing `THRESHOLD` leaves `count_big` serving its old result. Read
-    the global into a local first (`t = THRESHOLD`) or pass it as an
-    argument — the shape that's honest about the dependency anyway.
+count_big([5, 20])   # 1
+THRESHOLD = 1
+count_big([5, 20])   # 2 — recomputed
+```
 
 Anything that affects the result should be in one of those. If it
 isn't, the cache will go stale silently — that's where `func.explain()`

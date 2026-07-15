@@ -20,7 +20,7 @@ import threading
 import time
 import types
 import warnings
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
 
@@ -2172,16 +2172,47 @@ class Cash:
             f"{state_hash}:boundself:{self_hash}".encode('utf-8')
         ).hexdigest()
 
+    @staticmethod
+    def _iter_code_scopes(code: types.CodeType) -> Iterator[types.CodeType]:
+        """Yield *code* and every code object nested inside it, recursively.
+
+        A generator expression, comprehension, or ``lambda`` compiles to its
+        OWN code object hung off the enclosing ``co_consts``, so anything it
+        references is invisible in the outer ``co_names`` / instruction stream
+        (CAS-128). Walking the const tree is the same trick the CAS-93
+        bytecode hash uses (``notebook/function_tracker.py``
+        ``_update_code_object_hash``) for exactly this reason.
+
+        Comprehensions nest, so this recurses. Note that CPython 3.12+ inlines
+        list/set/dict comprehensions into the enclosing scope (PEP 709) — those
+        already land in the outer ``co_names``; generator expressions and
+        lambdas still get their own scope on every version.
+        """
+        yield code
+        for const in code.co_consts or ():
+            if isinstance(const, types.CodeType):
+                yield from Cash._iter_code_scopes(const)
+
     def _read_global_data_names(self, func: Callable) -> tuple[str, ...]:
         """Global names *func* references that are candidates for data-folding.
 
-        ``code.co_names`` intersected with the function's globals, minus dunders
+        ``co_names`` intersected with the function's globals, minus dunders
         and minus any global the function WRITES (``STORE_GLOBAL`` /
         ``DELETE_GLOBAL``). A written global is a side-effect accumulator (a
         ``global counter; counter += 1``) whose value drifts every call - folding
         it would make every call miss (the CAS-104 lesson, applied to globals).
         Modules / callables / classes are filtered per-call at fold time (a
         name's bound value can change). Cached per code object.
+
+        Both bytecode-derived channels walk the NESTED scopes too (CAS-128):
+        a global read only inside a genexp/lambda otherwise never invalidated
+        (silent stale results), and — the reason the two must move together —
+        the ``STORE_GLOBAL`` of a walrus accumulator inside a genexp lives in
+        the genexp's own code object, so collecting nested reads without
+        collecting nested writes would fold a drifting counter and miss
+        forever. The in-place-mutation exclusion below needs no such change:
+        it is AST-based, and ``ast.walk`` over the function's source already
+        descends into comprehension and lambda bodies.
         """
         code = getattr(func, "__code__", None)
         if code is None:
@@ -2191,12 +2222,14 @@ class Cash:
             return cached
         g = getattr(func, "__globals__", {}) or {}
         import dis
+        scopes = tuple(Cash._iter_code_scopes(code))
         written = {
-            instr.argval for instr in dis.get_instructions(code)
+            instr.argval for scope in scopes
+            for instr in dis.get_instructions(scope)
             if instr.opname in ("STORE_GLOBAL", "DELETE_GLOBAL")
         }
         candidates = {
-            n for n in (code.co_names or ())
+            n for scope in scopes for n in (scope.co_names or ())
             if n in g and not n.startswith("__") and n not in written
         }
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
