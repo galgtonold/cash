@@ -13,7 +13,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        # Keep in lockstep with the `Programming Language :: Python :: 3.x`
+        # classifiers in pyproject.toml: a version we advertise on PyPI but
+        # never run is a support claim backed by nothing. requires-python is
+        # ">=3.10", so 3.10 is the floor and the newest classifier is the ceiling.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     
     steps:
       - uses: actions/checkout@v6
