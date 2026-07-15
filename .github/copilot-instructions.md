@@ -323,10 +323,25 @@ Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-
 ### 3. Bump the version
 Edit the single `__version__ = "..."` line in `src/cash/__init__.py`. That is the **single source of truth** — `pyproject.toml` declares `dynamic = ["version"]` and hatchling reads it from there at build time (`[tool.hatch.version]`), so the wheel metadata, `cash.__version__`, and `cash version` can never disagree. Do **not** add a `version =` line back to `pyproject.toml`.
 
-### 4. Verify
+### 4. Build & verify — **always into an empty `dist/`**
+
+`python -m build` **adds** to `dist/`; it never clears it. Left alone, `dist/`
+accumulates every build you have ever made, and old versions sit there looking
+exactly like fresh ones. Clear it *first*, every time:
+
+```bash
+rm -rf dist/            # MANDATORY — never build on top of an existing dist/
+python -m build
+ls dist/                # MUST list exactly two files, both X.Y.Z: the wheel + the sdist
+```
+
+If `ls dist/` shows any version other than the one you are releasing, stop and
+clean it out before going near an upload — do not "just skip" the extra files.
+
 - `pytest tests/test_notebook -x --timeout=30` (unit suite green)
-- `python -m build` (sdist + wheel build cleanly; inspect contents)
-- `pip install dist/cash_lib-X.Y.Z*.whl` in a fresh venv → `python -c "import cash; print(cash.__version__)"`
+- `twine check dist/*`
+- `pip install dist/cash_lib-X.Y.Z-py3-none-any.whl` in a fresh venv →
+  `python -c "import cash; print(cash.__version__)"` prints `X.Y.Z`
 
 ### 5. Commit & tag
 ```bash
@@ -337,6 +352,29 @@ git tag vX.Y.Z
 
 Push only after the user explicitly confirms — pushing the tag triggers the PyPI publish workflow.
 
-### 6. Verify post-publish
+### 6. Publish
+
+**The normal path is the `Publish to PyPI` workflow** (`.github/workflows/publish.yml`),
+which builds from a fresh checkout and therefore *cannot* pick up local strays.
+Prefer it. Publish by hand only if that workflow is broken.
+
+If you must publish by hand: **never `twine upload dist/*`.** The glob uploads
+whatever happens to be in the directory. Name the two files explicitly, with the
+version in the filename, so the command can only ever publish what you intend:
+
+```bash
+twine upload dist/cash_lib-X.Y.Z-py3-none-any.whl dist/cash_lib-X.Y.Z.tar.gz
+```
+
+**Why this is not negotiable:** a PyPI upload is irreversible. A version can never
+be re-uploaded, even after you delete it — the name is burned forever. A `dist/*`
+glob over a stale directory publishes a real, wrong release. This is not
+hypothetical: this repo's `dist/` sat for months holding `cash_lib-0.2.0` **and** a
+`0.5.0b1` built from an older tree (258 KB vs the real 490 KB), so `twine upload
+dist/*` would have shipped 0.2.0 — and a `0.5.0b1` that was not the code we
+believed it was. `rm -rf dist/` before the build plus an explicit versioned
+filename at upload defeats both, independently.
+
+### 7. Verify post-publish
 - `pypi.org/project/cash-lib/X.Y.Z/` is live with correct metadata
 - `pip install cash-lib==X.Y.Z` resolves on a clean machine
