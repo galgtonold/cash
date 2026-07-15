@@ -9,7 +9,7 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:persist` | — | no | Force-cache this statement, even if the cost model would skip it. |
 | `# @cash:no-cache` | `nocache` | no | Never cache this statement. Wins over `persist`. |
 | `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
-| `# @cash:allow-random` | `allowrandom` | no | Parsed but **currently inert** — see [below](#cashallow-random-alias-allowrandom). |
+| `# @cash:allow-random` | `allowrandom` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random-alias-allowrandom). |
 
 A minimal example:
 
@@ -104,12 +104,41 @@ Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py:5
 
 ### `# @cash:allow-random` (alias: `allowrandom`)
 
-!!! warning "Parsed but currently inert"
-    The parser recognises `@cash:allow-random` and sets the `allow_random` field on the `CacheAnnotation` ([`annotations.py:52-53`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), but no runtime code reads that field. Specifically, `_parse_annotation` at [`statement_processor.py:554-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) only consumes `ttl`, `persist`, and `no_cache`, and the `check_and_warn_randomness` helper that would have honoured it ([`randomness.py:320`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/randomness.py)) is not called from anywhere in `src/`.
+When a statement draws from an RNG that hasn't been seeded, Cash raises a
+`CashRandomnessWarning` telling you the cached value may not be reproducible:
 
-    Practically: **the annotation has no effect today.** Unseeded-randomness warnings still appear regardless of whether you add `# @cash:allow-random`. Wiring it up is tracked for a future release.
+```
+CashRandomnessWarning: Unseeded randomness detected: numpy.random.rand() at line 1.
+Cached results may not be reproducible. Consider calling seed() first or use
+@cash:allow-random to suppress.
+```
 
-If you need to suppress randomness warnings today, the most reliable workaround is to seed the RNG explicitly (`np.random.seed(0)`, `rng = np.random.default_rng(0)`) — then Cash treats the call as deterministic and there's nothing to warn about.
+`# @cash:allow-random` silences that warning for the statement it applies to:
+
+```python
+# @cash:allow-random
+noise = np.random.rand(1000)   # no warning
+```
+
+!!! info "Advisory only — it does not change caching"
+    `allow-random` suppresses a *warning*. It does **not** change whether the
+    statement is cached, and it is **not** an opt-out from caching. An unseeded
+    random statement is cacheable by default, with or without the annotation —
+    that is deliberate, and the annotation only tells Cash you already know.
+
+    If you want the statement to re-run every time, that's a different
+    directive: [`# @cash:no-cache`](#cashno-cache-alias-nocache).
+
+The warning fires **once per statement per session**, not once per run: re-running
+an unchanged cell stays quiet, and editing the statement makes it warn again. A
+random draw inside a loop body warns once, not once per iteration.
+
+Seeding the RNG is the other way to silence it, and the better one when you want
+reproducibility rather than just quiet: after `np.random.seed(0)` or
+`random.seed(0)`, Cash treats subsequent draws from that module as deterministic
+for the rest of the session and stops warning about them. Note that Cash tracks
+seeding per *module* (`random`, `numpy.random`, `torch`, `tensorflow.random`) —
+seeding `numpy.random` does not silence a `random.random()` call.
 
 ## Lookback and scoping
 

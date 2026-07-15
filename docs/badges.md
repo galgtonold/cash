@@ -30,7 +30,7 @@ Every row and the overall badge use one of these statuses. The badge identifies 
 | **MIXED** | (cell header only) | `EXECUTED` summary with both `EXEC` and `CACHED` chips | Cell-level only: some rows restored, some computed. |
 | **FUNCTION_CHANGED** | red | warning chip | A helper function this row calls had its source change since the last run. |
 | **MODULE_RELOADED** | red | warning chip | A tracked local import was edited; everything downstream re-runs. |
-| **WARNING** | red | warning chip | Something to look at (e.g. unseeded random); the row still ran. |
+| **WARNING** | red | warning chip | Something to look at (e.g. an opaque call Cash can't see through); the row still ran. |
 | **ERROR** | red | (error label) | The statement raised. |
 
 Individual examples:
@@ -97,7 +97,13 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 ## 4. Why wasn't this cached?
 
-A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused to store the result. Five common causes:
+A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused to store the result. Four common causes:
+
+!!! note "Unseeded randomness is *not* one of them"
+    A statement that draws from an unseeded RNG is still cached — Cash warns
+    ([`CashRandomnessWarning`](annotations.md#cashallow-random-alias-allowrandom))
+    but does not refuse to store it. If you want it to re-run every time, say so
+    explicitly with `# @cash:no-cache`.
 
 ### Side effects
 
@@ -106,14 +112,6 @@ A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused
 **Why:** The statement writes to a file, sends a network request, mutates a database, or prints/plots — Cash never caches statements with observable side effects because restoring from cache would skip the side effect.
 
 **Fix:** Split the side effect off into its own statement and let the *value-producing* statement above it cache. If the side effect *is* the point of the cell, leave it uncached and use `@cash:no-cache` to suppress the warning.
-
-### Unseeded randomness
-
-<iframe class="cash-badge" src="/_badges/not_cached_unseeded_random.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
-**Why:** The statement called `numpy.random.rand` (or `random.random`, `torch.rand`, `tf.random.*`) without first seeding the RNG. The next run would produce different output, so caching would be a lie.
-
-**Fix:** Seed the RNG explicitly (`np.random.seed(0)` or `rng = np.random.default_rng(0)`) — then Cash treats the call as deterministic. If you want unseeded randomness but also want the warning to go away, the `# @cash:allow-random` annotation is intended for this but is **currently inert** — see [Annotations · `@cash:allow-random`](annotations.md#cashallow-random-alias-allowrandom) for the up-to-date status.
 
 ### Cost model: too cheap to cache
 

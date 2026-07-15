@@ -562,7 +562,7 @@ except Exception as e:
 
 ### Don'ts
 
-❌ Don't cache code with random outputs (use `random.seed()` first, or `@cash:allow-random`)
+❌ Don't rely on cached values from unseeded random code being reproducible — seed with `random.seed()` first, or acknowledge it with `@cash:allow-random` (which silences the warning; it does *not* stop the caching — use `@cash:no-cache` for that)
 ❌ Don't cache code that reads from stdin
 ❌ Don't expect caching of closures over mutable state
 ❌ Don't use identical cell content in multiple cells (causes ambiguity)

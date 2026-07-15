@@ -275,6 +275,7 @@ from ..randomness import (
     RandomnessDetector,
     capture_object_rng_states,
     capture_rng_state,
+    check_and_warn_randomness,
 )
 
 
@@ -442,7 +443,8 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
-        effective_ttl, force_persist, skip_cache = self._parse_annotation(annotation, ttl)
+        effective_ttl, force_persist, skip_cache, allow_random = self._parse_annotation(annotation, ttl)
+        self._warn_unseeded_randomness(code, allow_random)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -586,7 +588,8 @@ class StatementProcessor:
         this method routes through the same ``_analyze_and_hash`` /
         ``_handle_cache_hit`` / ``_post_execute`` helpers.
         """
-        effective_ttl, force_persist, skip_cache = self._parse_annotation(annotation, ttl)
+        effective_ttl, force_persist, skip_cache, allow_random = self._parse_annotation(annotation, ttl)
+        self._warn_unseeded_randomness(code, allow_random)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -686,20 +689,61 @@ class StatementProcessor:
         self,
         annotation: CacheAnnotation | None,
         ttl: int | None,
-    ) -> tuple[int | None, bool, bool]:
-        """Return ``(effective_ttl, force_persist, skip_cache)`` from annotation.
+    ) -> tuple[int | None, bool, bool, bool]:
+        """Return ``(effective_ttl, force_persist, skip_cache, allow_random)``.
 
         ``persist_all`` (config / ``%cash_persist`` magic) forces persistence
-        for every statement, as if each carried ``# @cash:persist``."""
+        for every statement, as if each carried ``# @cash:persist``.
+
+        ``allow_random`` (``# @cash:allow-random``) is *advisory only* — it
+        suppresses the unseeded-randomness warning and nothing else.  It must
+        never reach the cacheability decision: an unseeded random statement is
+        cacheable by design, with or without the directive."""
         effective_ttl = ttl
         force_persist = self.persist_all
         skip_cache = False
+        allow_random = False
         if annotation:
             if annotation.ttl is not None:
                 effective_ttl = annotation.ttl
             force_persist = force_persist or annotation.persist
             skip_cache = annotation.no_cache
-        return effective_ttl, force_persist, skip_cache
+            allow_random = annotation.allow_random
+        return effective_ttl, force_persist, skip_cache, allow_random
+
+    def _warn_unseeded_randomness(self, code: str, allow_random: bool) -> None:
+        """Warn when *code* draws from an unseeded RNG (CAS-114).
+
+        Called on the common path of both ``process_statement`` twins, BEFORE the
+        cache lookup, for two reasons:
+
+        * the warning describes the *source*, so it must not depend on whether
+          this particular run hit or missed the cache; and
+        * ``analyze_code`` doubles as the detector's seed-tracking hook — a
+          ``np.random.seed(42)`` statement must mark its module seeded even on a
+          cache hit, or the next cell warns spuriously.
+
+        Control-structure body statements arrive with an ``# __iteration_context__``
+        / ``# control_context`` discriminator comment prepended, which differs per
+        iteration.  Stripping it before the scan keeps both the memo and the
+        per-statement dedupe keyed on the body's real source, so a random draw
+        inside a 1000-iteration loop warns once, not 1000 times.
+
+        Never allowed to break execution: this is advisory output, so a detector
+        fault must not take the statement down with it.
+        """
+        if '# __iteration_context__:' in code or '# control_context:' in code:
+            code = '\n'.join(
+                line for line in code.split('\n')
+                if not line.startswith('# __iteration_context__:')
+                and not line.startswith('# control_context:')
+            )
+        try:
+            check_and_warn_randomness(
+                code, self.randomness_detector, suppress_warning=allow_random,
+            )
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            logger.debug("%s Randomness detection failed for statement", _LOG_PROCESSOR)
 
     def _do_cache_lookup(
         self,

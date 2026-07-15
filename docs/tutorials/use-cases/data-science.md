@@ -111,7 +111,7 @@ Without Cash: 30s of CSV reloads + aggregations on every iteration. With Cash: e
 
 ## Where to be careful in DS workflows
 
-- **Randomness without a seed.** `df.sample(100)` or `np.random.randn(...)` without a seed produces different values per call. Cash either warns or refuses to cache, depending on the call site. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for `@cash:allow-random`.
+- **Randomness without a seed.** `df.sample(100)` or `np.random.randn(...)` without a seed produces different values per call. Cash still caches these — it warns rather than refusing, and only for calls it can see are RNG calls (`np.random.*`, `random.*`, `torch.*`); a draw hidden behind a method like `df.sample(100)` passes silently. Seed the RNG when you want reproducibility. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for `@cash:allow-random`.
 - **In-place mutations to DataFrames.** `df.sort_values(..., inplace=True)` and friends mutate without returning. Cash can't detect the mutation reliably. Either return new frames (`df = df.sort_values(...)`) or mark the helper with `@stateful` — see [Purity Decorators](../feature-guides/purity-decorators.md).
 - **`datetime.now()` in transforms.** Wall-clock reads inside a cached statement bake the current time into the cache. Pull the timestamp outside the cached path, or skip caching for that statement.
 

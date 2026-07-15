@@ -29,7 +29,7 @@ price = fetch_stock("AAPL")     # re-fetch every minute, ignores the global hour
 model = train_xgb(X, y)         # 12 min to fit — force to disk
 
 # @cash:allow-random
-sample = df.sample(1000)        # we know it's unseeded; don't warn us
+noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
 That's the whole language. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment, `src/cash/notebook/annotations.py:79-97`).
@@ -93,24 +93,36 @@ The annotation sets `force_persist = True` (`src/cash/notebook/statement_process
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list at `src/cash/notebook/randomness.py:26-67`) and warns when it finds one. The reasoning: a cached `df.sample(1000)` call won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
+Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list at `src/cash/notebook/randomness.py`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:
 
 ```python { .nb-cell }
-sample = df.sample(1000, random_state=42)  # no warning, fully reproducible
+np.random.seed(42)
+noise = np.random.rand(1000)  # no warning, fully reproducible
 ```
+
+Seeding is tracked per module for the rest of the session, so one `np.random.seed(42)` quiets every later `np.random.*` draw — but not a `random.random()` one.
 
 Or, if non-reproducibility is exactly what you want (you're exploring, you'll re-roll deliberately), suppress the warning:
 
 ```python { .nb-cell }
 # @cash:allow-random
-sample = df.sample(1000)
+noise = np.random.rand(1000)
 ```
 
-The annotation flips `suppress_warning=True` in `check_and_warn_randomness` (`src/cash/notebook/randomness.py:320-347`); the cell still caches.
+The annotation flips `suppress_warning=True` in `check_and_warn_randomness` (`src/cash/notebook/randomness.py`); **the cell still caches either way.** `allow-random` is advisory — it changes what Cash *says*, never what it *stores*. Unseeded randomness has never blocked caching, and adding the annotation doesn't opt you out of it; if you want the statement to re-run every time, use `@cash:no-cache`.
 
-<iframe class="cash-badge" src="/_badges/not_cached_unseeded_random.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+The warning fires once per statement per session, so a re-run of an unchanged cell won't nag you and a loop won't warn per iteration.
+
+!!! note "What the scanner can and can't see"
+    Detection is name-based: Cash recognises calls rooted at a known RNG
+    *module* (`np.random.*`, `random.*`, `torch.*`, `tf.random.*`), including
+    through aliases and `from ... import`. It does **not** see randomness hiding
+    behind a method on your own objects — `df.sample(1000)` and
+    `model.fit(X, y)` draw from the global NumPy RNG but produce no warning,
+    because Cash can't tell those methods from any other. Treat the warning as a
+    helpful catch, not a guarantee that seeded code is the only quiet code.
 
 ## Global TTL — `%cash_on ttl=N` and `%%cash ttl=N`
 

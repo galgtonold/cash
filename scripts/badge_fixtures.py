@@ -210,17 +210,14 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
-    # §5.b — randomness without seeding and without @cash:allow-random.
-    "not_cached_unseeded_random": [
-        {
-            "status": "COMPUTED",
-            "code": "noise = np.random.rand(1000)",
-            "total_time": 0.003,
-            "evaluated_vars": ["noise"],
-            "uncacheable_reasons": ["unseeded random call: numpy.random.rand"],
-            "is_upstream": False,
-        },
-    ],
+    # §5.b — REMOVED (CAS-114). This fixture hand-wrote an
+    # ``uncacheable_reasons`` entry ("unseeded random call: numpy.random.rand")
+    # that the runtime never emits, so it rendered a badge state that cannot
+    # occur.  Unseeded randomness is *cacheable by design*: ``decide_cacheability``
+    # has no randomness reason-source. What CAS-114 shipped is a
+    # ``CashRandomnessWarning``, which is a Python warning — not a badge row and
+    # not an uncacheable reason.  Making the fixture "real" would have required
+    # inventing the very cacheability rule the design rejects.
     # §5.c — cost model says caching this would be slower than recomputing.
     "not_cached_too_cheap": [
         {

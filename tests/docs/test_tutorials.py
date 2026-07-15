@@ -302,9 +302,13 @@ def _compute_something_small():
 
 
 class _FakeRandomState:
-    """Stub for np.random.* calls in annotations.md."""
+    """Stub for np.random.* calls in annotations.md / controlling-cache-behavior.md."""
     @staticmethod
     def randn(*args):
+        return [0.0] * (args[0] if args else 1)
+
+    @staticmethod
+    def rand(*args):
         return [0.0] * (args[0] if args else 1)
 
     @staticmethod
@@ -417,6 +421,10 @@ _DOC_NAMESPACES: dict[str, dict] = {
     },
     "controlling-cache-behavior": {
         "df": _make_large_stub_df(),
+        # The @cash:allow-random fences draw from np.random (CAS-114): the
+        # directive only fires for calls rooted at a known RNG module, so the
+        # examples must use one.
+        "np": _make_numpy_stub(),
         "fetch_stock": lambda ticker: 150.0,
         "train_xgb": lambda X, y: _make_stub_model(),
         "X": [[1, 2], [3, 4], [5, 6]],

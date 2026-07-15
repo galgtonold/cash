@@ -249,10 +249,62 @@ class RandomnessDetector:
     def __init__(self):
         # Modules that have been seeded in the current session
         self.seeded_modules: set[str] = set()
+        # Memo: code string -> (random_calls, seed_calls) from a pure AST scan.
+        # The scan is the expensive half of analyze_code (parse + full visit) and
+        # is a pure function of the source, so it is safe to reuse across runs.
+        # Only the cheap ``is_seeded`` filter below depends on session state.
+        # Mirrors ``Cash._capture_use_cache`` in core.py: unbounded growth is the
+        # real risk in a long notebook session, so the insert is size-gated.
+        self._scan_cache: dict[str, tuple[tuple[RandomnessCallInfo, ...], tuple[tuple[str, int], ...]]] = {}
+        # Dedupe ledger: (code, warning message) pairs already warned about in
+        # this session.  See ``mark_warned``.
+        self._warned: set[tuple[str, str]] = set()
 
     def reset(self):
         """Reset seeding state (e.g., for new session)."""
         self.seeded_modules.clear()
+        # A new session re-warns: the user is looking at a fresh set of outputs.
+        # ``_scan_cache`` is deliberately kept — it is pure w.r.t. session state.
+        self._warned.clear()
+
+    def mark_warned(self, code: str, message: str) -> bool:
+        """Record ``(code, message)`` as warned; return True if it was new.
+
+        The dedupe unit is *one warning per statement per session*: a statement's
+        source text plus the specific call being flagged.  Editing the statement
+        changes ``code`` and re-warns, which is what the user wants — the warning
+        is about the code they are looking at.  Re-running an unchanged statement
+        stays silent.
+        """
+        key = (code, message)
+        if key in self._warned:
+            return False
+        if len(self._warned) < 4096:
+            self._warned.add(key)
+        return True
+
+    def _scan(self, code: str) -> tuple[tuple[RandomnessCallInfo, ...], tuple[tuple[str, int], ...]]:
+        """Parse + visit *code*, memoized per source string.
+
+        Returns ``(random_calls, seed_calls)`` as tuples so callers cannot mutate
+        the shared memo entry.
+        """
+        cached = self._scan_cache.get(code)
+        if cached is not None:
+            return cached
+
+        try:
+            tree = ast.parse(code)
+        except SyntaxError:
+            result: tuple[tuple[RandomnessCallInfo, ...], tuple[tuple[str, int], ...]] = ((), ())
+        else:
+            visitor = RandomnessVisitor()
+            visitor.visit(tree)
+            result = (tuple(visitor.random_calls), tuple(visitor.seed_calls))
+
+        if len(self._scan_cache) < 4096:
+            self._scan_cache[code] = result
+        return result
 
     def mark_seeded(self, module: str):
         self.seeded_modules.add(module)
@@ -289,25 +341,19 @@ class RandomnessDetector:
             - has_seed_calls is True if the code contains seed function calls
               (these statements should not be cached, as the seed must be executed)
         """
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return [], [], False
+        random_calls, seed_calls = self._scan(code)
 
-        visitor = RandomnessVisitor()
-        visitor.visit(tree)
-
-        has_seed_calls = len(visitor.seed_calls) > 0
+        has_seed_calls = len(seed_calls) > 0
 
         # Update seeding state from any seed calls in this code
-        for module, _lineno in visitor.seed_calls:
+        for module, _lineno in seed_calls:
             self.mark_seeded(module)
 
         # Then check for unseeded random calls
         unseeded_calls = []
         warnings_list = []
 
-        for call in visitor.random_calls:
+        for call in random_calls:
             if not self.is_seeded(call.module):
                 unseeded_calls.append(call)
                 warnings_list.append(
@@ -335,15 +381,25 @@ def check_and_warn_randomness(
         Tuple of (list of unseeded randomness calls, has_seed_calls)
         - has_seed_calls: True if the code contains seed function calls
           (seed statements should not be cached - they must execute to set RNG state)
+
+    Warnings are deduped *once per statement per session* via
+    ``detector.mark_warned``.  The detector — not Python's ``__warningregistry__``
+    — owns the policy: the ``warnings.warn`` call below is on a single line of
+    this module, so the interpreter's default "once per location" dedupe would
+    collapse *every* statement's warning into one for the whole session.  The
+    ``simplefilter('always')`` disables that location dedupe; ``mark_warned``
+    then applies the per-statement one we actually want.
     """
     unseeded_calls, warnings_list, has_seed_calls = detector.analyze_code(code)
 
     if not suppress_warning and warnings_list:
-        # Use 'always' filter so warnings show every time, not just once
-        with warnings.catch_warnings():
-            warnings.simplefilter('always', CashRandomnessWarning)
-            for warning_msg in warnings_list:
-                warnings.warn(warning_msg, CashRandomnessWarning, stacklevel=4)
+        fresh = [msg for msg in warnings_list if detector.mark_warned(code, msg)]
+        if fresh:
+            # Use 'always' filter so warnings show every time, not just once
+            with warnings.catch_warnings():
+                warnings.simplefilter('always', CashRandomnessWarning)
+                for warning_msg in fresh:
+                    warnings.warn(warning_msg, CashRandomnessWarning, stacklevel=4)
 
     return unseeded_calls, has_seed_calls
 
