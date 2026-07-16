@@ -341,6 +341,38 @@ class MismatchClassifier:
         Returns True if the caller should stop processing this variable
         (it was already handled â€” marked broken, kept, or lineage reset).
         """
+        # CAS-165/166: a bare ``est.fit(X, y)`` receiver has a SELF-REFERENTIAL
+        # key. CAS-138 adds it to the statement's OUTPUTS (so the fit bumps its
+        # lineage) while it is also an INPUT (its pre-fit lineage pins the key).
+        # On a warm isolated re-run the bumped lineage is "ahead" of the virtual
+        # (constructor) lineage exactly like the downstream-advancement case, but
+        # the receiver has no Store target so it is NOT in ``current_cell_outputs``
+        # -> without this branch it hits the "read-only input: reject" path below,
+        # whose reset-to-L0 is an incidental side effect of a full upstream
+        # re-derivation. That side channel DESYNCS for a pandas / >8 MiB input, so
+        # the fit perpetually MISSES and re-serialises the model every run. Reset
+        # the receiver's lineage to the virtual (simulated-constructor) lineage:
+        # CHEAP and deterministic, so the key is stable across warm re-runs (HIT),
+        # yet a constructor EDIT changes the virtual lineage and still forces a
+        # re-fit. Gated on ``not upstream_has_modifications`` so a real upstream /
+        # constructor edit falls through to the value-refreshing re-derivation
+        # (a lineage-only reset there would leave the STALE estimator object in
+        # ``user_ns`` and serve a wrong result). Fit-only: ``partial_fit`` is
+        # cumulative, so a lineage-only reset would double-count on a miss -- it
+        # keeps the value-safe path.
+        if (required_inputs and var_name in required_inputs
+                and not upstream_has_modifications
+                and self._is_estimator_fit_selfref(var_name)):
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM_DEBUG]   -> '%s' is a bare estimator .fit() receiver "
+                    "(self-referential CAS-138 key). Resetting lineage from %s to "
+                    "virtual %s for a stable warm-re-run cache hit (CAS-165/166).",
+                    var_name, actual_lineage[:8], final_virtual_hash[:8],
+                )
+            self._restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
+            return True
+
         # Read-only input: reject downstream mutations (e.g., df['SMA']=...)
         if required_inputs and var_name in required_inputs and current_cell_outputs is not None and var_name not in current_cell_outputs:
             if self.debug:
@@ -439,6 +471,52 @@ class MismatchClassifier:
             return var_name in outputs
         except (SyntaxError, ValueError, TypeError):
             return False
+
+    def _is_estimator_fit_selfref(self, var_name: str) -> bool:
+        """True if *var_name* was last produced by a bare ``var_name.fit(...)`` on
+        a live sklearn-style estimator (CAS-165/166).
+
+        A bare ``clf.fit(X, y)`` is routed to CACHING with a self-referential key:
+        CAS-138 adds ``clf`` to the statement's outputs (so the fit bumps its
+        lineage) while ``clf`` is also an input (its pre-fit lineage pins the key),
+        so ``executed_cell_codes['clf']`` records the bare-fit statement. The
+        caller only reaches here on a lineage mismatch with the upstream
+        UNMODIFIED, which for a fit-produced receiver can only happen when the
+        current cell IS that bare fit -- a downstream reader would have the fit in
+        its simulated upstream, so its virtual lineage would already match. That
+        makes the recorded-code check a reliable "is the current cell a bare
+        estimator fit" signal without threading a new current-cell parameter.
+
+        Scoped to ``fit`` ONLY. ``fit`` overwrites the estimator (re-running is
+        idempotent) so a lineage-only reset is safe; ``partial_fit`` is CUMULATIVE,
+        so a lineage-only reset while the partially-fitted object survives in
+        ``user_ns`` would double-count on a miss -- it keeps the value-safe
+        full-re-derivation path. The estimator duck-type (a callable ``fit`` AND a
+        callable ``get_params``) mirrors ``StatementProcessor._estimator_fit_receivers``
+        and excludes ``list.append`` / a generic object that merely exposes ``fit``.
+        """
+        code = self.executed_cell_codes.get(var_name)
+        if not code:
+            return False
+        try:
+            tree = ast.parse(code.strip())
+        except (SyntaxError, ValueError):
+            return False
+        if len(tree.body) != 1 or not isinstance(tree.body[0], ast.Expr):
+            return False
+        call = tree.body[0].value
+        if not isinstance(call, ast.Call) or not isinstance(call.func, ast.Attribute):
+            return False
+        if call.func.attr != 'fit':
+            return False
+        # Receiver must be the bare name itself (``clf.fit`` -> base 'clf'); a
+        # chained/attribute receiver (``obj.model.fit``) is not this var.
+        if not isinstance(call.func.value, ast.Name) or call.func.value.id != var_name:
+            return False
+        v = self.shell.user_ns.get(var_name)
+        if isinstance(v, types.ModuleType):
+            return False
+        return callable(getattr(v, 'fit', None)) and callable(getattr(v, 'get_params', None))
 
     def _handle_lineage_mismatch(
         self,

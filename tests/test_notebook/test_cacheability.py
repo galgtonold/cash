@@ -527,6 +527,95 @@ class TestSideEffects:
 
 
 # ---------------------------------------------------------------------------
+# statement_written_paths — output-path extraction for write-provenance (CAS-153)
+# ---------------------------------------------------------------------------
+
+class TestStatementWrittenPaths:
+    """The write-freshness short-circuit's output-path extractor.
+
+    Correctness contract: resolve a literal / namespace-bound path, and return
+    ``None`` (conservative) for anything computed or unrecognised so a writer is
+    never silently skipped when its target cannot be pinned down.
+    """
+
+    def _paths(self, code, namespace=None):
+        from cash.notebook.cacheability import statement_written_paths
+        return statement_written_paths(code, None, namespace)
+
+    def test_to_csv_string_literal(self):
+        assert self._paths("df.to_csv('out.csv', index=False)") == {'out.csv'}
+
+    def test_to_parquet_pickle_json_feather(self):
+        assert self._paths("df.to_parquet('a.parquet')") == {'a.parquet'}
+        assert self._paths("df.to_pickle('a.pkl')") == {'a.pkl'}
+        assert self._paths("df.to_json('a.json')") == {'a.json'}
+        assert self._paths("df.to_feather('a.feather')") == {'a.feather'}
+
+    def test_open_write_and_append_modes(self):
+        assert self._paths("with open('log.txt', 'w') as f:\n    f.write('x')") == {'log.txt'}
+        assert self._paths("with open('log.txt', 'a') as f:\n    f.write('x')") == {'log.txt'}
+
+    def test_open_read_mode_returns_none(self):
+        # A read is not a write target — nothing to vouch for.
+        assert self._paths("with open('log.txt') as f:\n    body = f.read()") is None
+
+    def test_savefig(self):
+        assert self._paths("plt.savefig('plot.png')") == {'plot.png'}
+
+    def test_numpy_save_first_arg(self):
+        assert self._paths("np.save('arr.npy', data)") == {'arr.npy'}
+
+    def test_bare_save_method_is_conservative(self):
+        # An ambiguous ``.save`` (PIL first-arg vs torch second-arg) is not
+        # resolved: it is path-bearing-but-unresolvable -> None.
+        assert self._paths("img.save('pic.png')") is None
+
+    def test_pathlib_write_text_inline_constructor(self):
+        assert self._paths("Path('out.json').write_text('x')") == {'out.json'}
+        assert self._paths("Path('out.bin').write_bytes(b'x')") == {'out.bin'}
+
+    def test_pathlib_write_text_non_inline_receiver_conservative(self):
+        # ``p.write_text`` with the path not on an inline Path(...) -> None.
+        assert self._paths("p.write_text('x')") is None
+
+    def test_json_dump_into_open(self):
+        assert self._paths("json.dump(obj, open('d.json', 'w'))") == {'d.json'}
+
+    def test_pickle_dump_into_open(self):
+        assert self._paths("pickle.dump(obj, open('d.pkl', 'wb'))") == {'d.pkl'}
+
+    def test_name_bound_to_str_in_namespace(self):
+        assert self._paths("df.to_csv(OUT)", {'OUT': '/tmp/x.csv'}) == {'/tmp/x.csv'}
+
+    def test_name_bound_to_pathlike_in_namespace(self):
+        import pathlib
+        got = self._paths("df.to_csv(OUT)", {'OUT': pathlib.PurePosixPath('/tmp/x.csv')})
+        assert got == {'/tmp/x.csv'}
+
+    def test_fstring_path_returns_none(self):
+        # Computed path -> conservative None (must NOT silently skip the writer).
+        assert self._paths("df.to_csv(f'{base}/out.csv')") is None
+
+    def test_unknown_name_returns_none(self):
+        assert self._paths("df.to_csv(OUT)", {}) is None
+
+    def test_os_path_join_returns_none(self):
+        assert self._paths("df.to_csv(os.path.join(d, 'out.csv'))") is None
+
+    def test_to_sql_is_not_a_file_path(self):
+        # First arg is a table name, not a filesystem path.
+        assert self._paths("df.to_sql('mytable', conn)") is None
+
+    def test_os_remove_not_path_bearing(self):
+        # A delete is a write side effect but not a recognised output-producer.
+        assert self._paths("os.remove('gone.txt')") is None
+
+    def test_non_writer_returns_none(self):
+        assert self._paths("x = 1 + 2") is None
+        assert self._paths("df = pd.read_csv('in.csv')") is None
+
+
+# ---------------------------------------------------------------------------
 # called_names
 # ---------------------------------------------------------------------------
 
@@ -587,6 +676,70 @@ class TestSkipReasons:
         reasons = a.skip_reasons(set())
         assert any('lst' in r for r in reasons)
         assert any('Side effect' in r for r in reasons)
+
+
+class TestAccumulatorHint:
+    """CAS-145 part b: an accumulator mutation (``out.append(f(e))``) that blocks
+    caching also emits a guidance hint pointing at the comprehension form. The
+    hint is advisory — it never changes the caching decision, and it is scoped to
+    the accumulator methods (append/extend/add/update), NOT every in-place
+    mutation (a subscript store / pop / inplace-kwarg call must not get it)."""
+
+    @staticmethod
+    def _tips(reasons):
+        return [r for r in reasons if r.startswith('tip:')]
+
+    def test_append_accumulator_gets_tip(self):
+        # The canonical case: `out = []` then `for e in it: out.append(slow(e))`.
+        # Here `out` is mutated (append) but is not an output -> refused + hint.
+        a = _analyze("for e in it:\n    out.append(slow(e))")
+        reasons = a.skip_reasons(set())
+        tips = self._tips(reasons)
+        assert len(tips) == 1
+        assert 'out = [f(e) for e in it]' in tips[0]
+
+    def test_bare_append_gets_tip(self):
+        reasons = _analyze("out.append(slow(e))").skip_reasons(set())
+        assert self._tips(reasons)
+
+    def test_extend_add_update_get_tip(self):
+        for code in ("acc.extend(xs)", "seen.add(x)", "d.update(other)"):
+            reasons = _analyze(code).skip_reasons(set())
+            assert self._tips(reasons), code
+
+    def test_subscript_store_does_not_get_tip(self):
+        # df['x'] = 1 is an in-place mutation but has no comprehension rewrite.
+        a = _analyze("df['x'] = 1")
+        reasons = a.skip_reasons(set())
+        assert any('In-place mutation on: df' in r for r in reasons)
+        assert self._tips(reasons) == []
+
+    def test_attribute_store_does_not_get_tip(self):
+        reasons = _analyze("obj.attr = 1").skip_reasons(set())
+        assert self._tips(reasons) == []
+
+    def test_non_accumulator_mutating_method_does_not_get_tip(self):
+        # pop/sort mutate in place but are NOT accumulators -> reason but no tip.
+        for code in ("lst.pop()", "lst.sort()", "del d['k']"):
+            reasons = _analyze(code).skip_reasons(set())
+            assert reasons, code
+            assert self._tips(reasons) == [], code
+
+    def test_inplace_kwarg_mutation_does_not_get_tip(self):
+        reasons = _analyze("df.dropna(inplace=True)").skip_reasons(set())
+        assert any('In-place mutation on: df' in r for r in reasons)
+        assert self._tips(reasons) == []
+
+    def test_tip_is_advisory_decision_unchanged(self):
+        # The hint does not change the decision: the statement is still refused
+        # (non-empty reasons) and the mutated-var set is unchanged.
+        a = _analyze("for e in it:\n    out.append(slow(e))")
+        with_tip = a.skip_reasons(set())
+        assert any('In-place mutation on: out' in r for r in with_tip)
+        assert a.top_level_mutated_vars == {'out'}
+        assert 'out' in a.accumulator_mutated_vars
+        # When `out` IS an output, nothing fires at all (tip included).
+        assert a.skip_reasons({'out'}) == []
 
 
 # ---------------------------------------------------------------------------

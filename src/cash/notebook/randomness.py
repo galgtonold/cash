@@ -11,7 +11,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
 
 logger = logging.getLogger(__name__)
 
@@ -1011,6 +1011,120 @@ def check_and_warn_randomness(
             )
 
     return unseeded_calls, has_seed_calls
+
+
+# -----------------------------------------------------------------------------
+# Unseeded estimator fits (CAS-167)
+# -----------------------------------------------------------------------------
+#
+# CAS-138 made a bare ``estimator.fit(X, y)`` cacheable. But the AST channels
+# above are blind to it: the randomness lives inside sklearn's compiled ``.fit()``
+# (bootstrap sampling, feature subsampling, weight init), not in any Python call
+# this module can see. An estimator built without a ``random_state`` therefore
+# gets cached and FROZEN with no warning at all -- the notebook-path analogue of
+# the inline unseeded-randomness hazard the detector already flags, and of the
+# object-cache hazard CAS-158 covers on the decorator path.
+#
+# Detection cannot come off the source, so it is done by the caller against the
+# LIVE estimator (``get_params()['random_state'] is None``); these helpers only
+# format the message and route it through the SAME ``CashRandomnessWarning`` path
+# -- same category, same ``<cash>`` pseudo-filename, same per-statement dedupe --
+# so users' existing warning filters and the once-per-statement contract carry
+# over unchanged. There is no ``lineno`` to attribute (the hazard is not on any
+# one source line), so ``0`` is used.
+
+def format_unseeded_estimator_fit_message(receiver: str) -> str:
+    """Compute-time message for caching an unseeded estimator fit (CAS-167).
+
+    The estimator-fit twin of the inline "detected" warning: advice about the
+    source, framed for the cold run where the fitted model is fresh and correct
+    but about to be frozen into the cache.
+    """
+    return (
+        f"Unseeded randomness detected: {receiver}.fit() on an estimator with "
+        f"random_state=None. cash caches the fit, but the cached fitted model is a "
+        f"frozen replay, not a fresh fit - two genuine fits would differ. Pass "
+        f"random_state=<int> to the estimator for reproducibility, or use "
+        f"@cash:allow-random to suppress."
+    )
+
+
+def format_stale_estimator_fit_message(receiver: str) -> str:
+    """Restore-time message for a replayed unseeded estimator fit (CAS-167).
+
+    Mirrors :func:`format_stale_randomness_message`: a *different claim* from the
+    compute-time one, earned only by a successful restore. The fitted model on
+    screen definitively IS a replay, so "may differ" would understate it. The
+    distinct text also lands in its own ``(code, message)`` dedupe slot.
+    """
+    # ASCII only (matches format_stale_randomness_message): this reaches a
+    # kernel's stderr, where a Windows console codepage mangles an em-dash.
+    return (
+        f"Unseeded estimator fit restored from cache: {receiver}.fit() with "
+        f"random_state=None. The fitted model you are seeing is a replay of an "
+        f"earlier fit, not a fresh draw - re-running will not change it. Use "
+        f"@cash:no-cache to re-fit every time, pass random_state=<int> for real "
+        f"reproducibility, or @cash:allow-random to suppress."
+    )
+
+
+def warn_unseeded_estimator_fit(
+    code: str,
+    receivers: 'Iterable[str]',
+    detector: RandomnessDetector,
+    suppress_warning: bool = False,
+) -> None:
+    """Warn that an unseeded estimator ``.fit()`` is cached as a frozen replay (CAS-167).
+
+    The estimator-fit analogue of :func:`check_and_warn_randomness`. ``receivers``
+    are the unseeded estimator variable names, decided by the caller against the
+    live namespace (the AST cannot see the randomness inside ``.fit()``).
+    Everything else matches the inline path: the ``CashRandomnessWarning``
+    category, the ``<cash>`` pseudo-filename, ``registry=None`` to bypass the
+    "once per location" collapse, and ``detector.mark_warned`` for the
+    once-per-statement-per-session dedupe.
+
+    Args:
+        code: Statement source, used as the dedupe key (edit it -> re-warn).
+        receivers: Unseeded estimator receiver names to flag.
+        detector: Supplies the shared per-statement dedupe ledger.
+        suppress_warning: ``# @cash:allow-random`` -- the user has said they know.
+    """
+    if suppress_warning:
+        return
+    for receiver in receivers:
+        message = format_unseeded_estimator_fit_message(receiver)
+        if not detector.mark_warned(code, message):
+            continue
+        warnings.warn_explicit(
+            message, CashRandomnessWarning,
+            filename='<cash>', lineno=0, registry=None,
+        )
+
+
+def warn_stale_estimator_fit(
+    code: str,
+    receivers: 'Iterable[str]',
+    detector: RandomnessDetector,
+    suppress_warning: bool = False,
+) -> None:
+    """Announce that a cached unseeded estimator fit was replayed (CAS-167).
+
+    Restore-time twin of :func:`warn_unseeded_estimator_fit`, matching how
+    :func:`warn_stale_randomness` follows :func:`check_and_warn_randomness`:
+    called ONLY after a restore has actually succeeded, because the claim is
+    about the value handed back, not about the source.
+    """
+    if suppress_warning:
+        return
+    for receiver in receivers:
+        message = format_stale_estimator_fit_message(receiver)
+        if not detector.mark_warned(code, message):
+            continue
+        warnings.warn_explicit(
+            message, CashRandomnessWarning,
+            filename='<cash>', lineno=0, registry=None,
+        )
 
 # =============================================================================
 # RNG State Capture and Restore

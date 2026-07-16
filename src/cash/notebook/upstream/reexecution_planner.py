@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 from ..analysis import CodeAnalyzer
 from ..cacheability import consumed_input_names
+from ..cache_key import write_provenance_key
+from ..file_dep_snapshot import file_dep_is_fresh
 from .._trace import trace_event
 
 if TYPE_CHECKING:
@@ -515,6 +517,24 @@ class ReexecutionPlanner:
             inputs_changed = bool(set(inputs) & scheduled_outputs) or any(
                 _input_lineage_drifted(v) for v in inputs
             )
+            # ``changed`` fires for every writer after a kernel restart because
+            # ``executed_write_stmt_codes`` is session-scoped and starts empty.
+            # Before re-firing such a writer (which would re-run its
+            # non-idempotent side effect and re-derive stale data), check its
+            # persisted provenance: if the payload is unchanged AND the output
+            # file is still fresh on disk, the effect is already applied — do
+            # NOT schedule it (CAS-153 round-3). Only short-circuit the pure
+            # ``changed`` path; a genuine input change (``inputs_changed``) must
+            # always re-run.
+            if changed and not inputs_changed and self._writer_output_already_fresh(
+                stmt_code, inputs, virtual_lineage, runtime_lineage,
+            ):
+                changed = False
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM] File-writer effect already fresh on disk; "
+                        "not re-firing: %s", stmt_code[:60],
+                    )
             if changed or inputs_changed:
                 writer_indices.append(i)
                 if self.debug:
@@ -523,6 +543,59 @@ class ReexecutionPlanner:
                         "inputs_changed=%s)", i, stmt_code[:40], changed, inputs_changed,
                     )
         return writer_indices
+
+    def _writer_output_already_fresh(
+        self,
+        stmt_code: str,
+        inputs,
+        virtual_lineage: dict | None,
+        runtime_lineage: dict,
+    ) -> bool:
+        """True when a writer's effect is already on disk and provably current.
+
+        Consulted only for a writer that looks ``changed`` purely because its
+        code was never seen THIS session (the post-restart case). Returns True —
+        meaning "do not re-fire" — only when the persisted provenance for this
+        exact writer source is present, EVERY recorded output path is still fresh
+        (:func:`file_dep_is_fresh`), AND every recorded input lineage still
+        matches the writer's current (simulated / runtime) lineage.
+
+        Conservative in every uncertain case: no backend, missing provenance, an
+        unreadable / stale output file, or a drifted input lineage all return
+        False, so the writer is scheduled exactly as before (CAS-153 round-3).
+        """
+        cash = getattr(self._virtual_lineage, 'cash_instance', None)
+        backend = getattr(cash, 'backend', None) if cash is not None else None
+        if backend is None or not hasattr(backend, 'get_metadata'):
+            return False
+        try:
+            record = backend.get_metadata(write_provenance_key(stmt_code))
+        except (OSError, TypeError, ValueError, AttributeError):
+            return False
+        if not record or not record.get('write_provenance'):
+            return False
+        paths = record.get('paths') or []
+        file_deps = record.get('file_deps') or {}
+        if not paths or not file_deps:
+            return False
+        for path in paths:
+            stored = file_deps.get(path)
+            if not stored:
+                return False
+            fresh, _reason = file_dep_is_fresh(path, stored)
+            if not fresh:
+                return False
+        # The output on disk is only the writer's CURRENT output if its inputs
+        # still carry the lineage they had when it was written. A drift means
+        # the file was produced from a now-stale payload.
+        stored_lineages = record.get('input_lineages') or {}
+        for var, stored_lineage in stored_lineages.items():
+            current = (virtual_lineage or {}).get(var)
+            if current is None:
+                current = runtime_lineage.get(var)
+            if current != stored_lineage:
+                return False
+        return True
 
     def _dedup_sorted_indices(self, stmts_to_run_indices: list[int]) -> list[int]:
         """Return *stmts_to_run_indices* sorted and deduplicated while preserving order."""

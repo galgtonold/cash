@@ -19,7 +19,24 @@ from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash.notebook.lineage_store import LineageStore
 
-__all__ = ["CacheKeyContext", "CacheKeyResult", "compute_cache_key"]
+__all__ = [
+    "CacheKeyContext",
+    "CacheKeyResult",
+    "compute_cache_key",
+    "write_provenance_key",
+]
+
+
+def write_provenance_key(code: str) -> str:
+    """Backend key for a file-writer's output-provenance record (CAS-153).
+
+    Derived from the writer statement's source ALONE (not its input lineages),
+    so an edited writer maps to a different key and never matches a stale
+    record, while an unchanged writer resolves to the same key across a kernel
+    restart. Namespaced under ``writeprov:`` so it can never collide with a
+    ``stmt:`` cache entry.
+    """
+    return "writeprov:" + hashlib.sha256(code.encode("utf-8")).hexdigest()
 
 @runtime_checkable
 class FunctionTrackerProtocol(Protocol):

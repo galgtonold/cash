@@ -17,13 +17,17 @@ them directly.
 """
 
 import ast
+import os
 import textwrap
 from dataclasses import dataclass
+from typing import Any
 
 __all__ = [
     # Primary API
     "StatementAnalysis",
     "analyze_statement",
+    "statement_writes_files",
+    "statement_written_paths",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
     "selfref_reassignment_targets",
@@ -66,6 +70,15 @@ MUTATING_METHODS = {
     # set methods
     'add', 'discard', 'intersection_update', 'difference_update', 'symmetric_difference_update',
 }
+
+# The subset of MUTATING_METHODS that GROW a collection element-by-element — the
+# classic accumulator loop (``out = []`` then ``for e in it: out.append(f(e))``).
+# Only these earn the "rewrite as a comprehension" guidance hint in
+# ``StatementAnalysis.skip_reasons``: an accumulator loop has a byte-identical
+# comprehension form (``out = [f(e) for e in it]``) that assigns its result and
+# therefore caches. Other in-place mutations (``pop``/``sort``/``df['x'] = …``)
+# have no such rewrite and must NOT get the hint (CAS-145 part b).
+ACCUMULATOR_METHODS = frozenset({'append', 'extend', 'add', 'update'})
 
 # Pandas methods that accept inplace=True
 PANDAS_INPLACE_METHODS = {
@@ -348,6 +361,156 @@ def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
     return any(e.kind == 'file_write' for e in analysis.side_effects)
 
 
+# Write-call method forms whose FIRST positional argument (or a common path
+# keyword) names the output FILE. Deliberately excludes ``to_sql`` / ``to_gbq``
+# / ``to_clipboard`` (no filesystem path), the file-handle methods
+# ``write`` / ``writelines`` (the path lives on the ``open()`` that made the
+# handle), and ``json``/``pickle`` ``dump`` (path on the nested ``open()``);
+# those are recovered from the ``open()`` call in the same statement instead.
+_PATH_ARG0_WRITE_METHODS: frozenset[str] = frozenset({
+    'to_csv', 'to_parquet', 'to_pickle', 'to_json', 'to_feather',
+    'to_excel', 'to_hdf', 'to_stata', 'savefig',
+})
+
+# Keyword names that carry the output path across the recognised write calls.
+_PATH_KWARG_NAMES: frozenset[str] = frozenset({
+    'path', 'path_or_buf', 'fname', 'excel_writer', 'file',
+})
+
+
+def _resolve_literal_path(node: ast.AST, namespace: dict[str, Any] | None) -> str | None:
+    """Resolve a call argument to an output-path string, or ``None``.
+
+    Only a string literal, or a simple ``Name`` bound to a ``str`` /
+    ``os.PathLike`` in *namespace*, is resolvable. Anything computed — an
+    f-string, a ``str.format``, an ``os.path.join``, an attribute — returns
+    ``None`` so the caller stays conservative and never skips a writer whose
+    target it cannot pin down. *namespace* is an injected argument (kept out of
+    the module's global reach), so this function stays a pure function of its
+    inputs.
+    """
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name) and namespace is not None:
+        val = namespace.get(node.id)
+        if isinstance(val, str):
+            return val
+        if isinstance(val, os.PathLike):
+            try:
+                return os.fspath(val)
+            except TypeError:
+                return None
+    return None
+
+
+def _is_path_constructor(func: ast.AST) -> bool:
+    """True for a ``Path(...)`` / ``pathlib.Path(...)`` constructor call func."""
+    if isinstance(func, ast.Name):
+        return func.id == 'Path'
+    if isinstance(func, ast.Attribute):
+        return func.attr == 'Path'
+    return False
+
+
+def _call_path_argument(
+    call: ast.Call,
+    index: int,
+    namespace: dict[str, Any] | None,
+    kwarg_names: frozenset[str] = frozenset(),
+) -> str | None:
+    """Resolve the path from *call*'s positional arg *index* or a path keyword."""
+    if len(call.args) > index and not isinstance(call.args[index], ast.Starred):
+        return _resolve_literal_path(call.args[index], namespace)
+    for kw in call.keywords:
+        if kw.arg and kw.arg in kwarg_names:
+            return _resolve_literal_path(kw.value, namespace)
+    return None
+
+
+def _write_call_path(
+    call: ast.Call, namespace: dict[str, Any] | None,
+) -> tuple[str | None, bool]:
+    """Return ``(resolved_path_or_None, is_path_bearing)`` for one call node.
+
+    ``is_path_bearing`` marks the recognised writer forms whose own arguments
+    name the output file. When it is True but the path is ``None`` the path was
+    present but not statically resolvable — the caller treats that as "cannot
+    verify" and stays conservative.
+    """
+    func = call.func
+    # open(PATH, 'w'|'a'|...) — only a write mode counts.
+    if isinstance(func, ast.Name) and func.id == 'open':
+        if _is_open_write_mode(call):
+            return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
+        return None, False
+    if isinstance(func, ast.Attribute):
+        method = func.attr
+        # Path(PATH).write_text(...) / Path(PATH).write_bytes(...)
+        if method in ('write_text', 'write_bytes'):
+            recv = func.value
+            if isinstance(recv, ast.Call) and _is_path_constructor(recv.func):
+                return _call_path_argument(recv, 0, namespace), True
+            return None, True  # receiver path not inline -> unresolvable
+        # np.save(PATH, arr) — the path is arg0, but ONLY for a numpy receiver;
+        # torch.save(obj, PATH) puts the path second and PIL ``img.save(PATH)``
+        # is ambiguous, so a non-numpy ``save`` stays conservative.
+        if method == 'save':
+            base = _get_base_name(func.value)
+            if base in ('np', 'numpy'):
+                return _call_path_argument(call, 0, namespace), True
+            return None, True
+        if method in _PATH_ARG0_WRITE_METHODS:
+            return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
+    return None, False
+
+
+def statement_written_paths(
+    code: str,
+    tree: 'ast.Module | None' = None,
+    namespace: dict[str, Any] | None = None,
+) -> set[str] | None:
+    """Resolvable output path(s) a file-writing statement writes, or ``None`` (CAS-153).
+
+    Extracts the literal / resolvable output path for the common write forms:
+    ``df.to_csv(PATH)`` and its ``to_parquet`` / ``to_pickle`` / ``to_json`` /
+    ``to_feather`` / ``to_excel`` / ``to_hdf`` siblings, ``savefig(PATH)``,
+    ``np.save(PATH, ...)``, ``open(PATH, 'w'|'wb'|'a'|...)``,
+    ``Path(PATH).write_text/write_bytes(...)``, and the nested-handle forms
+    ``json.dump(obj, open(PATH, ...))`` / ``pickle.dump(obj, open(PATH, ...))``
+    (the path comes from the ``open()``).
+
+    Returns the set of resolved paths only when EVERY path-bearing write call in
+    the statement resolves to a string literal (or a simple ``Name`` bound to a
+    ``str`` / ``os.PathLike`` in *namespace*). Returns ``None`` the moment a path
+    is not statically resolvable (f-string, computed expression, unknown name),
+    or no path-bearing write call is recognised — so the caller falls through to
+    its conservative re-fire behaviour rather than skip a writer whose effect it
+    cannot verify. Failure-tolerant: any extraction ambiguity yields ``None``.
+    """
+    if not any(m in code for m in _WRITE_TEXT_MARKERS):
+        return None
+    if tree is None:
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except (SyntaxError, ValueError):
+            return None
+    paths: set[str] = set()
+    saw_path_bearing = False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        resolved, is_path_bearing = _write_call_path(node, namespace)
+        if not is_path_bearing:
+            continue
+        saw_path_bearing = True
+        if resolved is None:
+            return None  # a write target we could not pin down -> conservative
+        paths.add(resolved)
+    if not saw_path_bearing or not paths:
+        return None
+    return paths
+
+
 def _get_call_name(func_node: ast.AST) -> str | None:
     """Extract the function name from a call's func node."""
     if isinstance(func_node, ast.Name):
@@ -467,12 +630,19 @@ class StatementAnalysis:
     ``called_names`` — bare-name function-call targets (``ast.Call`` nodes
     whose ``func`` is an ``ast.Name``).  Caller resolves each against
     ``user_ns`` via ``_check_callable_stateful``.
+
+    ``accumulator_mutated_vars`` — the subset of ``top_level_mutated_vars``
+    grown by an accumulator method (``append``/``extend``/``add``/``update``;
+    see :data:`ACCUMULATOR_METHODS`).  Purely advisory: it gates the
+    comprehension guidance hint in :meth:`skip_reasons` and never changes a
+    caching decision.
     """
 
     top_level_mutated_vars: frozenset[str]
     all_mutated_vars: frozenset[str]
     side_effects: tuple[SideEffectInfo, ...]
     called_names: frozenset[str]
+    accumulator_mutated_vars: frozenset[str] = frozenset()
 
     def skip_reasons(self, outputs: set[str]) -> list[str]:
         """Render structured findings as human-readable skip reasons.
@@ -488,6 +658,17 @@ class StatementAnalysis:
         pure_mutations = self.top_level_mutated_vars - outputs
         if pure_mutations:
             reasons.append(f"In-place mutation on: {', '.join(sorted(pure_mutations))}")
+            # Guidance only (CAS-145 part b): when the blocking mutation is an
+            # accumulator (``out.append(f(e))`` in a loop), point the user at the
+            # byte-identical comprehension form, which assigns its result and so
+            # caches. Scoped to accumulator methods — a ``df['x'] = …`` subscript
+            # store has no comprehension rewrite and gets no hint. Advisory: the
+            # statement stays uncacheable (the reason above already fired).
+            if pure_mutations & self.accumulator_mutated_vars:
+                reasons.append(
+                    "tip: assign the result to cache it — e.g. "
+                    "`out = [f(e) for e in it]` instead of a for-append loop"
+                )
         for e in self.side_effects:
             reasons.append(f"Side effect: {e.description} ({e.kind})")
         return reasons
@@ -2449,6 +2630,14 @@ def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:
         top_level_visitor.visit(node)
     top_level_mutated = frozenset(m.variable for m in top_level_visitor.mutations)
 
+    # Top-level vars grown by an accumulator method (append/extend/add/update) —
+    # the only mutations that earn the comprehension guidance hint (CAS-145 b).
+    accumulator_mutated = frozenset(
+        m.variable
+        for m in top_level_visitor.mutations
+        if m.kind == 'method_call' and m.method in ACCUMULATOR_METHODS
+    )
+
     # --- Side effects ---
     se_visitor = _SideEffectVisitor()
     se_visitor.visit(tree)
@@ -2464,4 +2653,5 @@ def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:
         all_mutated_vars=all_mutated,
         side_effects=tuple(se_visitor.effects),
         called_names=frozenset(called),
+        accumulator_mutated_vars=accumulator_mutated,
     )

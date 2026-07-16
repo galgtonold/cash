@@ -136,3 +136,64 @@ class TestBenchmarkMagic:
         assert "Benchmark Results" in captured.out
         assert "Without caching" in captured.out
         assert "Speedup" in captured.out
+
+    def test_compare_uncached_arm_forces_recompute(self, magics_fixture, capsys):
+        """CAS-168: the --compare 'without caching' arm must genuinely recompute
+        on every iteration instead of being served from cache.
+
+        Before the fix, the uncached arm ran the cell through cash's *patched*
+        ``run_cell`` (which dispatches to ``_execute_cell``), so the result was
+        stored on the first iteration and restored from cache on every later
+        one. The benchmark then compared cache-hit vs cache-hit and printed a
+        meaningless ~1x speedup. The fix routes the uncached arm through the
+        original, unpatched IPython ``run_cell`` (``_original_run_cell``).
+        """
+        import time as _time
+        magics, shell, backend = magics_fixture
+
+        # Genuine (uncached) recompute path: counts every invocation and is
+        # deliberately slow so its mean dwarfs a cache hit. This mimics the
+        # original, unpatched IPython run_cell that executes the user code.
+        uncached_runs = {'n': 0}
+
+        def fake_original_run_cell(code, *args, **kwargs):
+            uncached_runs['n'] += 1
+            _time.sleep(0.005)
+            return MagicMock(success=True)
+
+        magics._original_run_cell = fake_original_run_cell
+
+        # Cash-cached path: computes once (cold store), then serves instant
+        # cache hits — exactly what _execute_cell does for a cached statement.
+        cache_state = {'stored': False}
+        cached_computes = {'n': 0}
+
+        def fake_execute_cell(code, *args, **kwargs):
+            if not cache_state['stored']:
+                cached_computes['n'] += 1
+                _time.sleep(0.005)  # cold store
+                cache_state['stored'] = True
+            # else: cache hit — return instantly, no recompute
+            return None
+
+        magics._execute_cell = fake_execute_cell
+
+        iterations = 3
+        magics._run_benchmark(
+            "y = slow_compute()", iterations=iterations,
+            cold_start=False, compare_mode=True,
+        )
+        out = capsys.readouterr().out
+
+        # THE CAS-168 assertion: the uncached arm really recomputed on every
+        # iteration. Pre-fix this is 0 — the arm went through the cache path
+        # (fake_execute_cell) instead of the uncached path.
+        assert uncached_runs['n'] == iterations, (
+            f"uncached arm recomputed {uncached_runs['n']}x, expected {iterations} "
+            "(without-caching arm was served from cache)"
+        )
+        # The with-caching arm was warmed exactly once, then measured pure hits.
+        assert cached_computes['n'] == 1
+        # And the reported speedup is a real number, not the resolution fallback.
+        assert "Speedup" in out
+        assert "n/a" not in out

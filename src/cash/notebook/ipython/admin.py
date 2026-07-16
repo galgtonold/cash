@@ -781,10 +781,32 @@ class CashAdminMagicsMixin:
         # on Windows and produces zero-duration measurements for fast cells.
         uncached_times: list[float] = []
         if compare_mode:
+            # The "without caching" arm must genuinely recompute on EVERY
+            # iteration. ``self.shell.run_cell`` is the cash-PATCHED entry point
+            # (installed at init, it dispatches to ``_execute_cell`` — cash's
+            # full caching pipeline), so running the cell through it stores the
+            # result on the first iteration and then RESTORES it from cache on
+            # every later one. That measured cache-hit-vs-cache-hit and reported
+            # a meaningless ~1x "speedup" on a workload that was really ~170x
+            # faster to restore than recompute (CAS-168).
+            #
+            # ``self._original_run_cell`` is the real, unpatched IPython
+            # ``run_cell`` captured *before* cash installed its hook, so it
+            # executes the user code as if cash were not present: a true
+            # recompute each iteration, and the honest "without caching"
+            # baseline.
             for _i in range(iterations):
                 start = time.perf_counter()
-                self.shell.run_cell(cell_code, silent=True)
+                self._original_run_cell(cell_code, silent=True)
                 uncached_times.append(time.perf_counter() - start)
+
+            # The uncached arm bypassed cash entirely, so nothing was stored in
+            # cash's cache. Warm it once (untimed) so the "with caching" arm
+            # below measures a genuine cache HIT rather than a first-run store.
+            # Skipped under --cold, whose contract is to clear the cache before
+            # each timed iteration (i.e. deliberately measure the miss path).
+            if not cold_start:
+                self._execute_cell(cell_code)
 
         cached_times: list[float] = []
         for _i in range(iterations):

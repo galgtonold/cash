@@ -194,3 +194,157 @@ def test_downstream_invalidates_when_data_changes(nb_runner):
         "downstream did not reflect the new data -- the fit was not invalidated "
         f"(mutation_verdicts recording broke?): {first!r} == {second!r}"
     )
+
+
+def test_bare_fit_pandas_input_restores_repeatedly(nb_runner):
+    """CAS-165: a bare fit on a PANDAS DataFrame input is a CLEAN cache hit on
+    every warm re-run -- no upstream churn.
+
+    CAS-138's self-referential key (the receiver is both input and output) drifts
+    after the fit bumps the receiver's lineage L0->L1. The only thing that recovers
+    the pre-fit key today is the upstream checker re-deriving the receiver: it marks
+    the receiver a "read-only" mismatch and RE-EXECUTES the constructor upstream on
+    *every* warm re-run (cell badge ``EXECUTED`` + an ``Upstream:`` section). That
+    incidental cascade is the CAS-165/166 waste ("re-serialises... for nothing").
+    The fix resets the receiver's lineage to the virtual (constructor) lineage
+    directly, so the re-run is a pure cache HIT with no upstream re-execution.
+
+    Fails without the fix (the ``Upstream:`` constructor re-execution is present);
+    passes with it (clean ``RESTORED`` hit, no upstream churn).
+    """
+    pytest.importorskip("pandas")
+    nb_runner.create_notebook([
+        SETUP,
+        "import pandas as pd\n"
+        "rs = np.random.RandomState(0)\n"
+        "X_train = pd.DataFrame(rs.rand(4000, 20), columns=[f'f{i}' for i in range(20)])\n"
+        "y_train = (X_train['f0'] > 0.5).astype(int)",
+        "clf = RandomForestClassifier(n_estimators=160, random_state=0)",
+        "clf.fit(X_train, y_train)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    for i in range(3):
+        nb_runner.run_cell(4)  # isolated warm re-run -- must be a clean cache hit
+        out = nb_runner.get_output(4)
+        assert "RESTORED" in out, (
+            f"pandas bare fit warm re-run #{i + 1} did not restore: {out!r}"
+        )
+        # THE discriminator: no upstream constructor re-execution. Without the fix
+        # the drifted self-referential key forces the constructor to re-run upstream
+        # every warm re-run; with it the receiver's lineage is reset in place.
+        assert "Upstream:" not in out, (
+            f"pandas bare fit warm re-run #{i + 1} re-executed the constructor "
+            f"upstream instead of a clean cache hit (self-referential key drifted): {out!r}"
+        )
+
+
+def test_constructor_edit_invalidates_cached_fit(nb_runner):
+    """THE WRONG-result guard: editing the constructor MUST re-run the cached fit.
+
+    The warm-re-run cache hit resets the receiver's lineage to the VIRTUAL
+    (constructor-derived) lineage. A constructor edit changes that virtual
+    lineage, so the fit's key changes and the fit re-runs on the freshly rebuilt
+    estimator -- the downstream reader must reflect the NEW ``n_estimators``, not
+    the stale cached value. The check cell is ``@cash:no-cache`` so it reads the
+    live namespace instead of replaying its run_all output.
+    """
+    nb_runner.create_notebook([
+        SETUP,
+        DATA,
+        "clf = RandomForestClassifier(n_estimators=50, random_state=0)",   # 3
+        "clf.fit(X, y)",                                                   # 4
+        "# @cash:no-cache\nprint('n', clf.n_estimators)",                  # 5
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "n 50" in nb_runner.get_output(5), nb_runner.get_output(5)
+
+    # Edit the constructor 50 -> 200. The cached fit must be invalidated and re-run
+    # on the rebuilt estimator (NOT served stale from the n=50 cache entry).
+    nb_runner.set_cell_source(
+        3, "clf = RandomForestClassifier(n_estimators=200, random_state=0)"
+    )
+    nb_runner.run_cells([4, 5])
+    out = nb_runner.get_output(5)
+    assert "n 200" in out, (
+        f"constructor edit did not invalidate the cached fit -- stale result served: {out!r}"
+    )
+
+
+def test_partial_fit_stays_cumulative(nb_runner):
+    """``partial_fit`` is CUMULATIVE, so it must stay on the value-safe path.
+
+    The fit cheap-reset routing is scoped to ``fit`` only. A lineage-only reset of
+    a ``partial_fit`` receiver would either reset or double-count the accumulated
+    state on a miss. Two batches (100 + 60 samples) give ``clf.t_ == 161``
+    (samples seen + 1); an isolated re-run of the second ``partial_fit`` must keep
+    that -- not 61 (reset) nor 221 (double-count). The check cell is
+    ``@cash:no-cache`` so it reads the live estimator.
+    """
+    pytest.importorskip("sklearn")
+    nb_runner.create_notebook([
+        "import numpy as np\n"
+        "from sklearn.linear_model import SGDClassifier\n"
+        "import cash\n"
+        "%cash_on\n"
+        "%cash_badge print",
+        "rs = np.random.RandomState(0)\n"
+        "Xa = rs.rand(100, 5); ya = (Xa[:, 0] > 0.5).astype(int)\n"
+        "Xb = rs.rand(60, 5); yb = (Xb[:, 0] > 0.5).astype(int)",
+        "clf = SGDClassifier(random_state=0)",
+        "clf.partial_fit(Xa, ya, classes=np.array([0, 1]))",   # 4
+        "clf.partial_fit(Xb, yb)",                             # 5
+        "# @cash:no-cache\nprint('t', int(clf.t_))",           # 6
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "t 161" in nb_runner.get_output(6), (
+        f"cumulative partial_fit setup wrong: {nb_runner.get_output(6)!r}"
+    )
+
+    # Isolated re-run of the second partial_fit must not corrupt the cumulative state.
+    nb_runner.run_cell(5)
+    nb_runner.run_cell(6)
+    out = nb_runner.get_output(6)
+    assert "t 161" in out, (
+        f"partial_fit cumulative state corrupted on isolated re-run "
+        f"(expected t 161; 61=reset, 221=double-count): {out!r}"
+    )
+
+
+def test_bare_fit_large_numpy_restores_after_restart(nb_runner):
+    """CAS-166: a >8 MiB numpy bare fit RESTORES from disk after a real restart.
+
+    Inputs over ~8 MiB take ``compute_hash``'s sampling path, and the drifting
+    self-referential key poisoned the disk entry so it never restored across a
+    restart. Forced to disk with ``# @cash:persist`` and run twice pre-restart to
+    reproduce the drifted-disk case; after a real kernel restart the rebuilt
+    estimator keys off the stable virtual lineage and RESTORES.
+    """
+    nb_runner.create_notebook([
+        SETUP,
+        "X = np.random.RandomState(0).rand(110000, 10)\n"   # ~8.8 MiB > 8 MiB
+        "y = (X[:, 0] > 0.5).astype(int)",
+        "clf = RandomForestClassifier(n_estimators=12, random_state=0)",
+        "# @cash:persist\nclf.fit(X, y)\nprint('fitted', clf.n_estimators)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "fitted 12" in nb_runner.get_output(4)
+    # Two warm pre-restart runs reproduce the drifted-disk-entry case.
+    nb_runner.run_cell(4)
+    nb_runner.run_cell(4)
+
+    _restart(nb_runner)
+    nb_runner.run_cell(1)  # imports + %cash_on
+    nb_runner.run_cell(2)  # X, y (re-derives the same lineage)
+    nb_runner.run_cell(3)  # clf (fresh, unfitted)
+
+    nb_runner.run_cell(4)
+    out = nb_runner.get_output(4)
+    assert "RESTORED" in out, (
+        f"large bare fit did not restore from disk after restart (CAS-166): {out!r}"
+    )
+    assert "fitted 12" in out

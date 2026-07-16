@@ -212,3 +212,91 @@ def test_writer_input_restored_after_kernel_restart(nb_runner, tmp_path):
     assert "sum = 499500" in out, (
         f"reader crashed or served wrong data after restart: {out!r}"
     )
+
+
+def _restart_kernel(nb_runner):
+    """Perform a REAL kernel restart and re-establish the notebook path + cash."""
+    import asyncio
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
+    loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
+    nb_runner._inject_notebook_path()
+
+
+def test_append_writer_not_refired_after_restart(nb_runner, tmp_path):
+    """CAS-153 round-3 (headline correctness gate): a non-idempotent append-mode
+    writer, run once, must NOT re-fire when only a downstream reader runs after a
+    kernel restart.
+
+    Post-restart ``executed_write_stmt_codes`` is empty, so the writer looks
+    "changed" and the old planner re-scheduled it during freshness simulation —
+    appending a SECOND line to the log on disk (a re-fired side effect) and
+    handing the reader 2 (truth: 1). The persisted write-provenance +
+    output-file freshness check must recognise the effect is already applied and
+    leave the writer alone.
+    """
+    log = _p(tmp_path / "audit.log")
+    nb_runner.create_notebook([
+        "import cash",                                                    # 1: import
+        "%cash_on",                                                       # 2: enable
+        f"with open('{log}', 'a') as f:\n    f.write('entry\\n')\nprint('appended')",  # 3: append writer
+        f"with open('{log}') as f:\n    nlines = sum(1 for _ in f)\nprint('nlines =', nlines)",  # 4: reader
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "nlines = 1" in nb_runner.get_output(4)
+    with open(log) as fh:
+        assert sum(1 for _ in fh) == 1
+
+    _restart_kernel(nb_runner)
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(2)
+
+    # Run ONLY the reader. The writer must not re-fire.
+    nb_runner.run_cell(4)
+    out = nb_runner.get_output(4)
+    assert "nlines = 1" in out, (
+        f"reader saw a re-fired append (log grew) after restart: {out!r}"
+    )
+    with open(log) as fh:
+        on_disk = sum(1 for _ in fh)
+    assert on_disk == 1, (
+        f"append writer re-fired during freshness simulation: audit.log grew to "
+        f"{on_disk} lines on disk (a re-run non-idempotent side effect)"
+    )
+
+
+def test_writer_refired_after_restart_when_output_deleted(nb_runner, tmp_path):
+    """The freshness short-circuit must NOT suppress a writer whose output file
+    is gone: a deleted output makes the recorded snapshot stale, so the writer
+    is re-scheduled and re-creates the file.
+    """
+    out_path = _p(tmp_path / "made.txt")
+    nb_runner.create_notebook([
+        "import cash",                                                        # 1
+        "%cash_on",                                                           # 2
+        f"with open('{out_path}', 'w') as f:\n    f.write('payload')\nprint('wrote')",  # 3: writer
+        f"with open('{out_path}') as f:\n    body = f.read()\nprint('body =', body)",   # 4: reader
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "body = payload" in nb_runner.get_output(4)
+
+    _restart_kernel(nb_runner)
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(2)
+
+    # Delete the output on disk: the recorded snapshot is now stale.
+    import os
+    os.remove(tmp_path / "made.txt")
+
+    # Run ONLY the reader: upstream must re-fire the writer to re-create the file.
+    nb_runner.run_cell(4)
+    out = nb_runner.get_output(4)
+    assert "body = payload" in out, (
+        f"deleted output was not re-created: writer wrongly skipped: {out!r}"
+    )
+    assert os.path.exists(tmp_path / "made.txt"), (
+        "writer was not re-fired to re-create its deleted output file"
+    )

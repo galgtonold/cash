@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import inspect
 import logging
+import os
 import pickle
 import sys
 import time
@@ -18,7 +19,7 @@ from typing import Any, TypedDict
 
 from cash.exceptions import CacheBackendError, CacheKeyComputationError, CacheSerializationError
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
-from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
+from cash.notebook.cache_key import CacheKeyContext, compute_cache_key, write_provenance_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
 from cash.notebook.file_dep_snapshot import snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size
@@ -281,7 +282,9 @@ from ..randomness import (
     capture_object_rng_states,
     capture_rng_state,
     check_and_warn_randomness,
+    warn_stale_estimator_fit,
     warn_stale_randomness,
+    warn_unseeded_estimator_fit,
 )
 
 
@@ -534,6 +537,11 @@ class StatementProcessor:
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
+        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
+        # with no warning -- cash's AST detector cannot see the randomness inside
+        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
+        # the restore-time warning on a cache hit below (CAS-167).
+        unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
 
         if not skip_cache:
             cacheable, reasons = decide_cacheability(
@@ -561,6 +569,7 @@ class StatementProcessor:
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
+                self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = self._execute_and_drain(
@@ -672,6 +681,11 @@ class StatementProcessor:
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
+        # An UNSEEDED estimator fit routed to caching above is frozen on re-run
+        # with no warning -- cash's AST detector cannot see the randomness inside
+        # sklearn's compiled .fit(). Warn now (compute time); the same set drives
+        # the restore-time warning on a cache hit below (CAS-167).
+        unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
 
         if not skip_cache:
             cacheable, reasons = decide_cacheability(
@@ -701,6 +715,7 @@ class StatementProcessor:
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
+                self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = await self._execute_and_drain_async(
@@ -835,6 +850,85 @@ class StatementProcessor:
             )
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Stale-randomness warning failed for statement", _LOG_PROCESSOR)
+
+    def _unseeded_estimator_fits(self, est_fit: set[str]) -> list[str]:
+        """Return the sorted subset of *est_fit* receivers that are UNSEEDED (CAS-167).
+
+        A bare ``estimator.fit(X, y)`` caches via the CAS-138 path, but cash's AST
+        randomness detector cannot see the randomness inside sklearn's compiled
+        ``.fit()``. An estimator built without a ``random_state`` draws fresh
+        entropy each fit, so the cached fitted model is a frozen replay -- two
+        honest fits would differ. This flags exactly those receivers.
+
+        UNSEEDED iff ``get_params()`` contains ``random_state`` AND it is ``None``.
+        An int / ``RandomState`` / ``Generator`` seed -> SEEDED (no warning). No
+        ``random_state`` param at all (e.g. ``LinearRegression``) -> deterministic
+        (no warning). Any ``get_params`` failure -> no warning: advisory output
+        must never crash the statement.
+        """
+        unseeded: list[str] = []
+        for rf in est_fit:
+            try:
+                est = self.shell.user_ns.get(rf)
+                if est is None:
+                    continue
+                params = est.get_params()
+                if 'random_state' in params and params['random_state'] is None:
+                    unseeded.append(rf)
+            except (AttributeError, TypeError, ValueError, KeyError):
+                continue
+        return sorted(unseeded)
+
+    def _warn_unseeded_estimator_fit(
+        self, code: str, est_fit: set[str], allow_random: bool,
+    ) -> list[str]:
+        """Warn that an UNSEEDED estimator ``.fit()`` is cached as a frozen replay (CAS-167).
+
+        The estimator-fit analogue of :meth:`_warn_unseeded_randomness`, emitted at
+        COMPUTE time on the common path (before the cache lookup) so the warning
+        describes the *source* independently of this run's hit/miss outcome. Goes
+        out on the SAME ``CashRandomnessWarning`` path as CAS-135, so users'
+        existing filters catch it.
+
+        Returns the unseeded receivers found, so the cache-hit path can announce
+        the replay without re-deriving them. ``# @cash:allow-random`` suppresses
+        the warning (but the set is still returned; the restore twin re-checks the
+        directive and stays silent too). Never allowed to break execution.
+        """
+        if not est_fit:
+            return []
+        unseeded = self._unseeded_estimator_fits(est_fit)
+        if not unseeded:
+            return []
+        try:
+            warn_unseeded_estimator_fit(
+                self._strip_control_markers(code), unseeded,
+                self.randomness_detector, suppress_warning=allow_random,
+            )
+        except (ValueError, AttributeError, RecursionError):
+            logger.debug("%s Estimator-fit randomness warning failed", _LOG_PROCESSOR)
+        return unseeded
+
+    def _warn_stale_estimator_fit(
+        self, code: str, unseeded_fits: list[str], allow_random: bool,
+    ) -> None:
+        """Announce that a cached UNSEEDED estimator fit was just replayed (CAS-167).
+
+        The restore-time twin of :meth:`_warn_unseeded_estimator_fit`, mirroring
+        how :meth:`_warn_stale_randomness` follows :meth:`_warn_unseeded_randomness`:
+        it makes the stronger claim only a successful restore licenses -- the
+        fitted model on screen IS a replay, not merely "may differ". Called ONLY
+        after ``_handle_cache_hit`` reports a successful restore.
+        """
+        if allow_random or not unseeded_fits:
+            return
+        try:
+            warn_stale_estimator_fit(
+                self._strip_control_markers(code), unseeded_fits,
+                self.randomness_detector, suppress_warning=allow_random,
+            )
+        except (ValueError, AttributeError, RecursionError):
+            logger.debug("%s Stale estimator-fit warning failed", _LOG_PROCESSOR)
 
     def _do_cache_lookup(
         self,
@@ -1062,6 +1156,12 @@ class StatementProcessor:
         try:
             if any(e.kind == 'file_write' for e in statement_analysis.side_effects):
                 self._tracking_state.executed_write_stmt_codes.add(code)
+                # Persist write provenance so a post-restart isolated reader can
+                # tell an already-on-disk writer effect (skip it) from a stale
+                # one (re-fire it) — ``executed_write_stmt_codes`` is empty after
+                # a restart, which used to force every writer to re-fire and
+                # re-run its non-idempotent side effect (CAS-153 round-3).
+                self._persist_write_provenance(code, inputs, tree)
         except AttributeError:
             pass
 
@@ -1101,6 +1201,55 @@ class StatementProcessor:
             saved_time=0.0,
             code_hash=cache_key,
         )
+
+    def _persist_write_provenance(
+        self,
+        code: str,
+        inputs: set[str],
+        tree: ast.Module | None,
+    ) -> None:
+        """Record what file(s) a just-executed writer statement produced (CAS-153).
+
+        Persists ``{paths, file_deps snapshot, input lineages}`` to the backend
+        under a writer-specific key derived from the statement source, so a
+        post-restart isolated downstream reader can short-circuit an
+        already-fresh writer (:meth:`ReexecutionPlanner._writer_output_already_fresh`)
+        instead of re-firing a non-idempotent side effect and re-deriving stale
+        data. Best-effort and CONSERVATIVE: an unresolvable output path (f-string
+        / computed) records nothing, so that writer keeps re-firing as before.
+        """
+        try:
+            from cash.notebook.cacheability import statement_written_paths
+
+            raw_paths = statement_written_paths(code, tree, self.shell.user_ns)
+            if not raw_paths:
+                return  # path(s) not statically resolvable -> stay conservative
+            paths = sorted({os.path.abspath(p) for p in raw_paths})
+            file_deps = snapshot_file_deps(set(paths))
+            # Every recorded path must be readable now, else there is nothing to
+            # vouch for (and a later freshness check would fail anyway).
+            if any(p not in file_deps for p in paths):
+                return
+            input_lineages = {
+                v: self.variable_lineage[v]
+                for v in inputs
+                if v in self.variable_lineage
+            }
+            record = {
+                'write_provenance': True,
+                'paths': paths,
+                'file_deps': file_deps,
+                'input_lineages': input_lineages,
+                'code': code,
+                'ttl': None,  # provenance must not expire out from under a reader
+            }
+            backend = self.cash_instance.backend if self.cash_instance else None
+            if backend is not None:
+                self._stmt_restorer.persist_metadata_only(
+                    backend, write_provenance_key(code), record,
+                )
+        except (OSError, TypeError, ValueError, AttributeError):
+            logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
 
     def _classify_method_mutations(
         self,
