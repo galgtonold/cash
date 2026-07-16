@@ -81,10 +81,16 @@ _IDENTITY_COUPLED_BASES: Mapping[str, str] = {
 # ``fig, axes = plt.subplots(2, 2)`` binds ``axes`` to a numpy object-array of
 # Axes, and ``axs = fig.subplots(2, 2)`` never binds the Figure at all — so a
 # top-level type check alone would miss it and silently cache the Axes (which
-# drags the Figure).  A *bounded* shallow scan catches the common spellings
-# without walking a million-element list on the hot path: these containers are
-# homogeneous, so the first few elements settle it.
+# drags the Figure).  A *bounded* scan catches the common spellings without
+# walking a million-element list on the hot path: these containers are
+# homogeneous, so the first few elements settle it.  It also recurses a few
+# levels and covers ``dict`` — ``rows = list(axes)`` nests a list of ndarrays,
+# and ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` (and typically
+# binds ONLY that dict, so nothing bare-Figure/Axes co-occurs to trip the check
+# for the statement) — CAS-155.  The depth cap also makes the plain recursion
+# cycle-safe (unlike ``deepcopy`` it has no memo).
 _CONTAINER_SCAN_LIMIT = 8
+_CONTAINER_SCAN_MAX_DEPTH = 4  # dict-of-list-of-Axes is 2 deep; leave headroom.
 
 # Builtin-ish names that never need lineage tracking.  Kept in module scope
 # so the per-input loop does not rebuild ``set(dir(builtins))`` on every call.
@@ -127,15 +133,24 @@ def _coupled_kind(value: Any) -> str | None:
     return None
 
 
-def _coupled_kind_in_container(value: Any) -> str | None:
-    """Return the friendly name if a *shallow* container holds a coupled object.
+def _coupled_kind_in_container(value: Any, _depth: int = 0) -> str | None:
+    """Return the friendly name if a container holds a coupled object.
 
-    Bounded by ``_CONTAINER_SCAN_LIMIT``.  Only object-dtype numpy arrays are
-    scanned — a numeric array cannot hold an Axes, and checking ``dtype`` first
-    keeps big numeric arrays off this path entirely.
+    Bounded by ``_CONTAINER_SCAN_LIMIT`` per level and ``_CONTAINER_SCAN_MAX_DEPTH``
+    levels deep.  Handles list/tuple/set/frozenset, ``dict`` (scanning values —
+    ``subplot_mosaic`` returns ``dict[str, Axes]``), and object-dtype numpy
+    arrays.  Only object-dtype arrays are scanned — a numeric array cannot hold
+    an Axes, and checking ``dtype`` first keeps big numeric arrays off this path
+    entirely.  Recurses so ``rows = list(axes)`` (a list of ndarrays of Axes)
+    and other nestings are caught; the depth cap also keeps a pathological
+    self-referential container from looping (CAS-155).
     """
-    if isinstance(value, (list, tuple, set, frozenset)):
-        items: Any = value
+    if _depth >= _CONTAINER_SCAN_MAX_DEPTH:
+        return None
+    if isinstance(value, dict):
+        items: Any = value.values()
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        items = value
     elif type(value).__module__ == 'numpy' and getattr(getattr(value, 'dtype', None), 'kind', '') == 'O':
         items = value.flat
     else:
@@ -144,7 +159,7 @@ def _coupled_kind_in_container(value: Any) -> str | None:
     for index, item in enumerate(items):
         if index >= _CONTAINER_SCAN_LIMIT:
             break
-        kind = _coupled_kind(item)
+        kind = _coupled_kind(item) or _coupled_kind_in_container(item, _depth + 1)
         if kind is not None:
             return kind
     return None

@@ -286,6 +286,46 @@ class TestIdentityCoupledReason:
         axes = figure_mod.Figure().subplots(2, 2)
         assert identity_coupled_reason("axes", axes) is not None
 
+    def test_1d_ndarray_of_axes_is_refused(self):
+        """``fig, axes = plt.subplots(1, 2)`` binds a 1-D object-array of Axes."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        axes = figure_mod.Figure().subplots(1, 2)
+        assert identity_coupled_reason("axes", axes) is not None
+
+    def test_dict_of_axes_is_refused(self):
+        """CAS-155: ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` and
+        typically binds ONLY the dict, so nothing bare-Figure/Axes co-occurs."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        fig = figure_mod.Figure()
+        axd = {'a': fig.add_subplot(2, 1, 1), 'b': fig.add_subplot(2, 1, 2)}
+        assert identity_coupled_reason("axd", axd) is not None
+
+    def test_nested_list_of_axes_is_refused(self):
+        """CAS-155: a hand-built ``[[ax, ax], [ax, ax]]`` grid (no numpy)."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        fig = figure_mod.Figure()
+        grid = [[fig.add_subplot(2, 2, 1), fig.add_subplot(2, 2, 2)],
+                [fig.add_subplot(2, 2, 3), fig.add_subplot(2, 2, 4)]]
+        assert identity_coupled_reason("grid", grid) is not None
+
+    def test_list_of_ndarray_rows_is_refused(self):
+        """CAS-155: ``rows = list(axes)`` after ``subplots(2, 2)`` — a list of
+        1-D ndarrays of Axes; the pre-fix one-level scan saw only the ndarrays."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        rows = list(figure_mod.Figure().subplots(2, 2))
+        assert identity_coupled_reason("rows", rows) is not None
+
+    def test_container_scan_is_depth_bounded_and_cycle_safe(self):
+        """The scan is depth-bounded: a self-referential container terminates
+        (returns None rather than looping), and a coupled object within the cap
+        is still found."""
+        figure_mod = pytest.importorskip("matplotlib.figure")
+        cyclic: list = []
+        cyclic.append(cyclic)
+        assert identity_coupled_reason("cyclic", cyclic) is None
+        ax = figure_mod.Figure().add_subplot()
+        assert identity_coupled_reason("wrapped", [[ax]]) is not None
+
     def test_other_matplotlib_artists_stay_cacheable(self):
         """Precision guard: do NOT blanket-ban matplotlib. Line2D is an Artist
         but is not identity-coupled to pyplot's globals, so it stays cacheable."""

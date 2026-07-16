@@ -136,3 +136,38 @@ def test_badge_tells_the_truth_about_the_refused_figure(nb_runner):
     output = nb_runner.get_output(2)
     assert "NOT CACHED" in output, f"The refused figure must show as NOT CACHED. Got:\n{output}"
     assert "Identity-coupled" in output, f"The badge must say WHY the figure was refused. Got:\n{output}"
+
+
+@pytest.mark.timeout(90)
+def test_subplot_mosaic_dict_is_not_cached(nb_runner):
+    """CAS-155: ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` and binds
+    ONLY that dict -- no bare Figure/Axes co-occurs as a statement output. The
+    original one-level container scan didn't descend into dict values, so the
+    dict was cached, its Axes detached from pyplot's current figure on the
+    deep-copy, and ``plt.savefig()`` would blank. Same crisp invariant as the
+    single-Axes case: the drawn Axes must stay pyplot's current figure.
+    """
+    import matplotlib
+    mpl_ver = tuple(int(x) for x in matplotlib.__version__.split(".")[:2])
+    if mpl_ver < (3, 3):
+        pytest.skip("subplot_mosaic added in matplotlib 3.3")
+
+    nb_runner.create_notebook([
+        SETUP,
+        # subplot_mosaic returns (fig, dict); take [1] to bind ONLY the dict of
+        # Axes -- destructuring `fig, axd = ...` would bind a bare Figure that
+        # trips the check anyway, so this isolates the dict-container path.
+        "axd = plt.subplot_mosaic([['a', 'b']], figsize=(4, 2))[1]\n"
+        "axd['a'].plot([1, 2, 3], [1, 4, 9])\n"
+        "print('IS_GCF:', axd['a'].figure is plt.gcf())\n"
+        "print('LINES:', len(plt.gcf().axes[0].lines) if plt.gcf().axes else 0)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    output = nb_runner.get_output(2)
+    assert "IS_GCF: True" in output, (
+        f"subplot_mosaic's axes detached from plt.gcf() under %cash_on -- the dict "
+        f"of Axes was cached (CAS-155). Got:\n{output}"
+    )
+    assert "LINES: 1" in output, f"pyplot's current figure lost the user's data. Got:\n{output}"
