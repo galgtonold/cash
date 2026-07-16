@@ -35,7 +35,10 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"  Cache dir:  {config.cache_dir}")
     print(f"  Debug:      {config.debug}")
     print(f"  Compress:   {config.compress}")
-    print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB")
+    if config.max_cache_size is None:
+        print("  Max size:   auto (scaled to disk/RAM per tier)")
+    else:
+        print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB")
     print(f"  Threshold:  {config.smart_persistence_threshold}s")
     if config.tiers:
         print(f"  Tiers:      {', '.join(t.type for t in config.tiers)}")
