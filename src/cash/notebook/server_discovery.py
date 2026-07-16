@@ -20,9 +20,28 @@ import os
 import time as _time
 import urllib.error
 import urllib.request
+import warnings
 from urllib.parse import unquote
 
+from ..exceptions import CashWarning
+
 logger = logging.getLogger(__name__)
+
+
+class CashNotebookDiscoveryWarning(CashWarning):
+    """Notebook path discovery failed, so upstream dependency tracking is off.
+
+    Emitted once per session when :func:`get_notebook_path` cannot locate the
+    running notebook — typically under papermill / nbconvert / CI / scheduled
+    jobs (no live Jupyter Server), or when a stale Jupyter runtime entry makes
+    discovery time out. Statement-level caching still works; only cross-cell
+    upstream staleness detection is disabled.
+
+    Part of the :class:`~cash.exceptions.CashWarning` family, so the documented
+    blanket filter silences it::
+
+        warnings.filterwarnings("ignore", category=cash.CashWarning)
+    """
 
 # Session-level cache for notebook path discovery.
 #
@@ -47,6 +66,62 @@ _cached_notebook_path: str | None = None
 _cached_notebook_path_time: float = 0.0
 _NOTEBOOK_PATH_CACHE_TTL: float = 300.0  # seconds (5 minutes)
 
+# Negative (not-found) cache for notebook path discovery.
+#
+# Discovery that FAILS is even more expensive than one that succeeds: a stale or
+# dead Jupyter runtime entry makes ``ipynbname`` / ``list_running_servers`` block
+# on a network round-trip until it times out, then returns nothing.  The success
+# cache above never covered this — every failed lookup re-probed from scratch —
+# and the upstream checker resolves the path many times per cell, so a single
+# ``run_all`` under slow-failing discovery paid that timeout dozens of times
+# (CAS-150: measured ~78s to cache ``z = 1 + 1``).
+#
+# We memoize the failure too, but with a MUCH shorter TTL than the success case:
+# long enough to dedupe the many resolves within one ``run_all`` down to a single
+# probe, short enough that a Jupyter server started *after* cash loaded is still
+# picked up on the next cell.  ``%cash_on`` (via invalidate_notebook_path_cache)
+# and an explicit set_notebook_path() clear it immediately, so a real notebook is
+# never shadowed by a stale negative for longer than the TTL.
+#
+# The timestamp is recorded when the probe COMPLETES (not when it started), so a
+# slow probe whose own latency exceeds the TTL still dedupes correctly.
+_negative_cache_time: float = 0.0  # monotonic time of last failed probe (0 = none)
+_NOTEBOOK_PATH_NEGATIVE_TTL: float = 2.0  # seconds
+
+# One-shot session flag for the "notebook not found" advisory (CAS-150).  Set the
+# first time discovery fails during an upstream check; keeps the warning to once
+# per session instead of once per cell.
+_warned_notebook_not_found: bool = False
+
+
+def warn_notebook_not_found_once() -> None:
+    """Emit the "upstream tracking disabled" advisory at most once per session.
+
+    Called by the upstream checker when :func:`get_notebook_path` returns
+    ``None`` for a cell that would otherwise get dependency tracking.  A user
+    must know cash's headline feature is off (papermill / nbconvert / CI, or a
+    stale Jupyter runtime) rather than silently receiving no upstream checks.
+    """
+    global _warned_notebook_not_found
+    if _warned_notebook_not_found:
+        return
+    _warned_notebook_not_found = True
+    msg = (
+        "Cash: notebook not found — upstream dependency tracking is disabled "
+        "for this session. Statement-level caching still works, but changes in "
+        "one cell will not auto-invalidate dependent cells. This is expected "
+        "under papermill / nbconvert / CI (no live Jupyter Server); in "
+        "JupyterLab or VS Code it can mean a stale Jupyter runtime."
+    )
+    logger.warning(msg)
+    warnings.warn(msg, category=CashNotebookDiscoveryWarning, stacklevel=2)
+
+
+def reset_notebook_discovery_warning() -> None:
+    """Re-arm the once-per-session "notebook not found" advisory (tests)."""
+    global _warned_notebook_not_found
+    _warned_notebook_not_found = False
+
 
 def invalidate_notebook_path_cache() -> None:
     """
@@ -55,9 +130,13 @@ def invalidate_notebook_path_cache() -> None:
     This should be called when %cash_on is invoked to handle
     notebook switches within the same kernel session (Issue 23).
     """
-    global _cached_notebook_path, _cached_notebook_path_time
+    global _cached_notebook_path, _cached_notebook_path_time, _negative_cache_time
     _cached_notebook_path = None
     _cached_notebook_path_time = 0.0
+    # Drop the negative (not-found) cache too, so a server that came up after
+    # cash loaded is re-probed immediately on the next lookup instead of being
+    # shadowed by a stale negative for the rest of its TTL (CAS-150).
+    _negative_cache_time = 0.0
     # A notebook switch invalidates any cached cell parse for the old path too.
     invalidate_notebook_cells_cache()
 
@@ -70,10 +149,12 @@ def set_notebook_path(path: str) -> None:
     source, e.g. extracted from a VS Code cell ID URI.  The value is
     stored in the same session-level cache used by ``get_notebook_path()``.
     """
-    global _cached_notebook_path, _cached_notebook_path_time
+    global _cached_notebook_path, _cached_notebook_path_time, _negative_cache_time
     if path and os.path.exists(path):
         _cached_notebook_path = path
         _cached_notebook_path_time = _time.monotonic()
+        # A known-good path supersedes any prior not-found result.
+        _negative_cache_time = 0.0
         logger.debug("[UTILS] Notebook path set explicitly: %s", path)
 
 
@@ -176,16 +257,30 @@ def get_notebook_path() -> str | None:
     3. Jupyter Server REST API
     4. ``None`` (upstream checking disabled gracefully)
     """
-    global _cached_notebook_path, _cached_notebook_path_time
+    global _cached_notebook_path, _cached_notebook_path_time, _negative_cache_time
     now = _time.monotonic()
     if _cached_notebook_path and (now - _cached_notebook_path_time) < _NOTEBOOK_PATH_CACHE_TTL:
         return _cached_notebook_path
+    # Negative cache: a recent failed probe short-circuits to None without
+    # re-paying the (possibly multi-second) discovery timeout.  Checked AFTER the
+    # success cache so a resolved path always wins (CAS-150).
+    if _negative_cache_time and (now - _negative_cache_time) < _NOTEBOOK_PATH_NEGATIVE_TTL:
+        return None
 
     def _cache_and_return(path: str) -> str:
-        global _cached_notebook_path, _cached_notebook_path_time
+        global _cached_notebook_path, _cached_notebook_path_time, _negative_cache_time
         _cached_notebook_path = path
         _cached_notebook_path_time = now
+        _negative_cache_time = 0.0  # a success supersedes any prior not-found
         return path
+
+    def _cache_not_found() -> None:
+        # Record completion time (a fresh monotonic read, NOT the stale ``now``
+        # captured before the probe): a probe slower than the TTL must still
+        # dedupe, and it can only do so if the window starts when it finishes.
+        global _negative_cache_time
+        _negative_cache_time = _time.monotonic()
+        return None
 
     if result := _try_vscode_path():
         return _cache_and_return(result)
@@ -199,12 +294,12 @@ def get_notebook_path() -> str | None:
         kernel_id = os.path.basename(connection_file).split('-', 1)[1].split('.')[0]
     except (ImportError, AttributeError, OSError, RuntimeError):
         logger.debug("[UTILS] Failed to get kernel connection file")
-        return None
+        return _cache_not_found()
 
     if result := _search_servers_for_notebook(kernel_id):
         return _cache_and_return(result)
 
-    return None
+    return _cache_not_found()
 
 
 # Tunables for the save-settle wait (see _wait_for_notebook_save).

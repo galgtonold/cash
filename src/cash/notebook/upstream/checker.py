@@ -259,6 +259,12 @@ class UpstreamChecker:
         # latest reference.
         self.simulator._virtual_lineage.function_tracker = self.function_tracker
 
+        # Resolve the notebook path ONCE for the whole cell check (CAS-150) and
+        # thread it through the analysis helpers + Phase 2, instead of each site
+        # re-running discovery. The negative cache in server_discovery bounds a
+        # failed probe, and this collapses the success case to a single resolve.
+        notebook_path = self._resolve_notebook_path()
+
         # Phase 1 — Lineage-based staleness check (diagnostic-only).
         # Detects when variables are inconsistent with each other based on
         # their recorded lineage hashes. This phase only LOGS mismatches;
@@ -316,7 +322,7 @@ class UpstreamChecker:
             # pays nothing.
             current_cell_stateful_funcs: set[str] = set()
             if standalone_call_arg_targets(ast.parse(cell_code)):
-                func_sources = self._notebook_function_sources(cell_code)
+                func_sources = self._notebook_function_sources(cell_code, notebook_path)
                 func_arg_muts = function_arg_mutations(
                     ast.parse(cell_code), func_sources.get
                 ) - nocache_vars
@@ -339,7 +345,7 @@ class UpstreamChecker:
             # accumulating across calls. Force-reset the function so its ``def``
             # re-runs and recreates fresh state on an isolated re-run (CAS-68 B).
             if _called_function_names(ast.parse(cell_code)):
-                func_sources_all = self._notebook_function_sources(cell_code)
+                func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
                 current_cell_stateful_funcs = set(
                     stateful_self_functions(ast.parse(cell_code), func_sources_all.get)
                 ) - nocache_vars
@@ -347,7 +353,7 @@ class UpstreamChecker:
                 # an inner function that mutates factory-local state accumulates
                 # across calls; force-reset it so ``c = make_counter()`` re-runs
                 # and rebuilds the closure fresh (CAS-68 B closure case).
-                var_factories = self._notebook_var_factories(cell_code)
+                var_factories = self._notebook_var_factories(cell_code, notebook_path)
 
                 def _resolve_var_factory(name, _fs=func_sources_all, _vf=var_factories):
                     src = _fs.get(_vf.get(name))
@@ -371,7 +377,7 @@ class UpstreamChecker:
                 # — the higher-order caller invokes it, so the mutation happens but
                 # the cell text doesn't name it. Attribute it back and add to the
                 # cell's inputs so its producer's base is restored (CAS-72).
-                partial_bindings = self._notebook_partial_bindings(cell_code)
+                partial_bindings = self._notebook_partial_bindings(cell_code, notebook_path)
                 hidden_muts = (
                     partial_arg_mutations(
                         ast.parse(cell_code), partial_bindings.get, func_sources_all.get
@@ -415,14 +421,14 @@ class UpstreamChecker:
                 for n in op_tree.body
             )
             if has_op_trigger:
-                class_sources = self._notebook_class_sources(cell_code)
-                op_func_sources = self._notebook_function_sources(cell_code)
-                op_var_factories = self._notebook_var_factories(cell_code)
+                class_sources = self._notebook_class_sources(cell_code, notebook_path)
+                op_func_sources = self._notebook_function_sources(cell_code, notebook_path)
+                op_var_factories = self._notebook_var_factories(cell_code, notebook_path)
                 # ``@ClassName def task`` binds ``task`` to a ClassName INSTANCE
                 # (a class-based decorator), and ``h = g`` aliases one name to
                 # another; both feed the object-protocol resolvers (CAS-80).
-                op_decorated_instances = self._notebook_decorated_instances(cell_code)
-                op_name_aliases = self._notebook_name_aliases(cell_code)
+                op_decorated_instances = self._notebook_decorated_instances(cell_code, notebook_path)
+                op_name_aliases = self._notebook_name_aliases(cell_code, notebook_path)
 
                 def _resolve_alias(name, _al=op_name_aliases):
                     # follow ``h = g = ...`` chains (bounded by the alias count)
@@ -495,7 +501,7 @@ class UpstreamChecker:
                     other_class_defs: set[str] = set()
                     other_init_free: set[str] = set()
                     seen_current = False
-                    for _code in self._other_notebook_cells(cell_code):
+                    for _code in self._other_notebook_cells(cell_code, notebook_path):
                         if not seen_current and _code == cell_code:
                             seen_current = True
                             continue
@@ -572,6 +578,7 @@ class UpstreamChecker:
         # virtual lineage against the actual in-memory state to find changed code.
         all_metrics, total_restore_time, total_execution_time = self._check_notebook_based(
             cell_code, required_inputs, process_statement_callback, global_ttl,
+            notebook_path=notebook_path,
             current_cell_outputs=current_cell_outputs,
             current_cell_reassigned=current_cell_reassigned,
             current_cell_mutated=current_cell_mutated,
@@ -637,7 +644,43 @@ class UpstreamChecker:
         )
         return hashlib.sha256(expected_lineage_str.encode('utf-8')).hexdigest()
 
-    def _notebook_function_sources(self, cell_code: str) -> dict[str, str]:
+    def _resolve_notebook_path(self) -> str | None:
+        """Resolve the current notebook path once per cell's upstream check.
+
+        Single choke point for path discovery (CAS-150): the per-statement /
+        per-upstream-cell analysis helpers used to each call ``get_notebook_path``
+        independently, so one cell re-probed discovery 5-15 times — catastrophic
+        when a stale Jupyter runtime makes each probe block on a network timeout.
+        Resolving once and threading the result collapses that to a single probe.
+
+        Also emits the once-per-session "upstream tracking disabled" advisory when
+        discovery fails, so a user knows cash's headline feature is off rather
+        than inferring it from silently-stale results.
+        """
+        from ..server_discovery import (
+            get_notebook_path,
+            warn_notebook_not_found_once,
+        )
+        path = get_notebook_path()
+        if path is None:
+            warn_notebook_not_found_once()
+        return path
+
+    def _notebook_cells_for(self, notebook_path: str | None) -> list[str]:
+        """Read the notebook's on-disk cell sources for a pre-resolved path.
+
+        ``get_notebook_cells`` is memoized by the file's (mtime, size), so the
+        several analysis helpers that each need the cells share a single parse.
+        Returns ``[]`` when no path resolved or the read fails.
+        """
+        if not notebook_path:
+            return []
+        try:
+            return get_notebook_cells(notebook_path) or []
+        except (OSError, ValueError, RuntimeError):
+            return []
+
+    def _notebook_function_sources(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{function_name: source}`` for every top-level ``def`` across the
         notebook cells plus the current cell.
 
@@ -648,14 +691,7 @@ class UpstreamChecker:
         same cell still resolves; later same-name defs win (last definition).
         """
         sources: dict[str, str] = {}
-        cells: list[str] = []
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                cells = get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            cells = []
+        cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
             try:
                 tree = ast.parse(code)
@@ -669,21 +705,14 @@ class UpstreamChecker:
                         continue
         return sources
 
-    def _other_notebook_cells(self, cell_code: str) -> list[str]:
+    def _other_notebook_cells(self, cell_code: str, notebook_path: str | None) -> list[str]:
         """The notebook's cell sources (which already include the current cell;
         the caller skips its first occurrence of *cell_code*). Used to detect a
         class variable mutated by more than one cell — a cross-cell accumulator
         whose class-def reset must be suppressed (CAS-73 / CAS-75)."""
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                return get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            pass
-        return []
+        return self._notebook_cells_for(notebook_path)
 
-    def _notebook_class_sources(self, cell_code: str) -> dict[str, str]:
+    def _notebook_class_sources(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{class_name: source}`` for every top-level ``class`` across the
         notebook cells plus the current cell.
 
@@ -694,14 +723,7 @@ class UpstreamChecker:
         dunder bodies (CAS-69/70/71/73). Later same-name defs win.
         """
         sources: dict[str, str] = {}
-        cells: list[str] = []
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                cells = get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            cells = []
+        cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
             try:
                 tree = ast.parse(code)
@@ -715,21 +737,14 @@ class UpstreamChecker:
                         continue
         return sources
 
-    def _notebook_decorated_instances(self, cell_code: str) -> dict[str, str]:
+    def _notebook_decorated_instances(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{func_name: decorator_name}`` for every top-level ``@Deco def f``
         across the notebook (CAS-80). When the decorator is a class, ``f`` is an
         INSTANCE of it (a class-based decorator: ``@Counter def task`` → ``task``
         is a ``Counter``). The caller filters to decorators that resolve to a
         class. Only bare-``Name`` decorators are captured. Last definition wins."""
         instances: dict[str, str] = {}
-        cells: list[str] = []
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                cells = get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            cells = []
+        cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
             try:
                 tree = ast.parse(code)
@@ -743,19 +758,12 @@ class UpstreamChecker:
                             break
         return instances
 
-    def _notebook_name_aliases(self, cell_code: str) -> dict[str, str]:
+    def _notebook_name_aliases(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{alias: source}`` for every top-level ``alias = source`` bare-Name
         binding across the notebook (``h = g``), so a called alias resolves to the
         decorator/factory of the name it aliases (CAS-80). Last binding wins."""
         aliases: dict[str, str] = {}
-        cells: list[str] = []
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                cells = get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            cells = []
+        cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
             try:
                 tree = ast.parse(code)
@@ -768,7 +776,7 @@ class UpstreamChecker:
                     aliases[node.targets[0].id] = node.value.id
         return aliases
 
-    def _notebook_var_factories(self, cell_code: str) -> dict[str, str]:
+    def _notebook_var_factories(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{var: factory_name}`` for every top-level ``var = factory(...)``
         assignment across the notebook (``c = make_counter()`` → ``make_counter``).
 
@@ -777,14 +785,7 @@ class UpstreamChecker:
         (CAS-68 B closure case). Last assignment wins.
         """
         factories: dict[str, str] = {}
-        cells: list[str] = []
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                cells = get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            cells = []
+        cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
             try:
                 tree = ast.parse(code)
@@ -798,21 +799,14 @@ class UpstreamChecker:
                     factories[node.targets[0].id] = node.value.func.id
         return factories
 
-    def _notebook_partial_bindings(self, cell_code: str) -> dict[str, tuple[str, list]]:
+    def _notebook_partial_bindings(self, cell_code: str, notebook_path: str | None) -> dict[str, tuple[str, list]]:
         """Map ``{var: (target_func, [bound_arg_vars])}`` for every top-level
         ``var = partial(f, x, ...)`` / ``functools.partial(...)`` across the
         notebook (CAS-72). Bound args are Name ids (or ``None`` for non-Name),
         aligned to ``f``'s positional params. Last assignment wins.
         """
         bindings: dict[str, tuple[str, list]] = {}
-        cells: list[str] = []
-        try:
-            from ..server_discovery import get_notebook_path
-            path = get_notebook_path()
-            if path:
-                cells = get_notebook_cells(path) or []
-        except (OSError, ValueError, RuntimeError):
-            cells = []
+        cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
             try:
                 tree = ast.parse(code)
@@ -1010,16 +1004,22 @@ class UpstreamChecker:
         cell_code: str,
         required_inputs: set[str],
         current_cell_outputs: set[str] | None,
+        notebook_path: str | None,
     ) -> tuple[list[str] | None, int | None]:
         """Load the notebook and resolve the current cell index.
 
-        Returns ``(notebook_cells, current_cell_idx)``.  If the notebook cannot
-        be found or the cell index cannot be resolved, ``current_cell_idx`` may
-        be ``None``, which the caller should treat as "return early with empty".
-        ``notebook_cells`` is ``None`` when no notebook file exists.
+        ``notebook_path`` is the path resolved once at the start of the cell's
+        upstream check (CAS-150) and threaded here, so Phase 2 does not re-run
+        discovery.  Returns ``(notebook_cells, current_cell_idx)``.  If the
+        notebook cannot be found or the cell index cannot be resolved,
+        ``current_cell_idx`` may be ``None``, which the caller should treat as
+        "return early with empty".  ``notebook_cells`` is ``None`` when no
+        notebook file exists.
         """
-        from ..server_discovery import get_notebook_path
-        notebook_path = get_notebook_path()
+        # Pass the (possibly None) resolved path straight through: when it is
+        # None, get_notebook_cells re-resolves internally, but that lookup is
+        # bounded by the negative cache (CAS-150), so it stays cheap while
+        # preserving the get_notebook_cells seam that callers/tests patch.
         notebook_cells = get_notebook_cells(notebook_path)
 
         if not notebook_cells:
@@ -1146,6 +1146,7 @@ class UpstreamChecker:
         required_inputs: set[str],
         process_statement_callback: Callable[..., ProcessResult],
         global_ttl: int | None,
+        notebook_path: str | None = None,
         current_cell_outputs: set[str] | None = None,
         current_cell_reassigned: set[str] | None = None,
         current_cell_mutated: set[str] | None = None,
@@ -1166,7 +1167,7 @@ class UpstreamChecker:
         """
         try:
             notebook_cells, current_cell_idx = self._load_notebook_and_find_cell(
-                cell_code, required_inputs, current_cell_outputs
+                cell_code, required_inputs, current_cell_outputs, notebook_path
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
