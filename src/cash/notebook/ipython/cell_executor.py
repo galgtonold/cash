@@ -187,9 +187,10 @@ class CellExecutor:
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
-        # 5. AST parse
+        # 5. AST parse (tolerate a top-level ``await`` — CAS-164; a bare
+        # ast.parse rejects module-level await and would silently skip the cell)
         try:
-            tree = ast.parse(raw_cell)
+            tree = CodeAnalyzer._parse_cell(raw_cell)
         except SyntaxError:
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _PipelineSyntaxError()
@@ -263,9 +264,10 @@ class CellExecutor:
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
-        # 5. AST parse
+        # 5. AST parse (tolerate a top-level ``await`` — CAS-164; a bare
+        # ast.parse rejects module-level await and would silently skip the cell)
         try:
-            tree = ast.parse(raw_cell)
+            tree = CodeAnalyzer._parse_cell(raw_cell)
         except SyntaxError:
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _PipelineSyntaxError()

@@ -488,15 +488,142 @@ class CodeAnalyzer:
         return resolved_qualnames
 
     @staticmethod
-    def strip_magics(code: str) -> str:
-        """Remove Jupyter magics from code."""
-        lines = []
-        for line in code.split('\n'):
-            stripped = line.strip()
-            if stripped.startswith(('%', '!')):
+    def _logical_line_start_flags(code: str) -> list[bool]:
+        """Return one bool per physical line: True if the line *begins* a new
+        logical (top-level) Python line.
+
+        A physical line does NOT begin a logical line when it continues the
+        previous one — i.e. it sits inside an open ``()``/``[]``/``{}`` group,
+        inside a triple-quoted string, or follows a ``\\`` line continuation.
+        This lets :meth:`strip_magics` distinguish a real cell/line magic
+        (``%time`` / ``!ls`` at the *start* of a statement) from a ``%`` or
+        ``!`` that merely begins a *continuation* line of a multi-line
+        statement (``print("...%.4f"\\n      % (a, b))``) — the latter is
+        ordinary Python and must not be deleted (CAS-163).
+        """
+        lines = code.split('\n')
+        flags: list[bool] = []
+        depth = 0            # open bracket/paren/brace nesting (outside strings)
+        in_str: str | None = None   # open triple-quote delimiter, or None
+        prev_backslash = False
+        for line in lines:
+            is_start = (depth == 0 and in_str is None and not prev_backslash)
+            flags.append(is_start)
+            # A dropped magic is a self-contained logical line; do not let its
+            # characters perturb the scanner state for following lines.
+            if is_start and line.strip().startswith(('%', '!')):
+                prev_backslash = False
                 continue
-            lines.append(line)
-        return '\n'.join(lines)
+            i, n = 0, len(line)
+            backslash = False
+            while i < n:
+                c = line[i]
+                if in_str is not None:                 # inside a triple string
+                    if c == '\\':
+                        i += 2
+                        continue
+                    if line.startswith(in_str, i):
+                        in_str = None
+                        i += 3
+                        continue
+                    i += 1
+                    continue
+                if c == '#':                           # comment to end of line
+                    break
+                if c == '\\' and i == n - 1:           # explicit continuation
+                    backslash = True
+                    i += 1
+                    continue
+                if c in '([{':
+                    depth += 1
+                    i += 1
+                    continue
+                if c in ')]}':
+                    depth = max(0, depth - 1)
+                    i += 1
+                    continue
+                if c in ('"', "'"):
+                    if line.startswith(c * 3, i):      # triple-quoted string
+                        delim = c * 3
+                        j, closed = i + 3, False
+                        while j < n:
+                            if line[j] == '\\':
+                                j += 2
+                                continue
+                            if line.startswith(delim, j):
+                                j += 3
+                                closed = True
+                                break
+                            j += 1
+                        if closed:
+                            i = j
+                            continue
+                        in_str = delim                 # spills onto next line
+                        i = n
+                        continue
+                    j = i + 1                          # single-line string
+                    while j < n:
+                        if line[j] == '\\':
+                            j += 2
+                            continue
+                        if line[j] == c:
+                            j += 1
+                            break
+                        j += 1
+                    i = j
+                    continue
+                i += 1
+            prev_backslash = backslash
+        return flags
+
+    @staticmethod
+    def strip_magics(code: str) -> str:
+        """Remove Jupyter magics from code.
+
+        Only lines that *begin a logical line* and start with ``%`` or ``!``
+        are treated as magics. A ``%`` (modulo / ``%``-format) or ``!`` that
+        opens a continuation line of a multi-line statement is real Python and
+        is preserved — otherwise a valid statement such as::
+
+            print("Asian call = %.4f\\n"
+                  "European   = %.4f"
+                  % (a, b))
+
+        would be mangled into unparseable code, making the simulator raise a
+        *fictional* SyntaxError that silently disables cache restore (CAS-163).
+        """
+        # Fast path: a cell that already parses contains no magics to strip
+        # (a statement-leading ``%``/``!`` is never valid top-level Python), so
+        # return it untouched and avoid any line surgery on multi-line code.
+        # Await-tolerant so an async cell takes this path too (CAS-164).
+        try:
+            CodeAnalyzer._parse_cell(code)
+            return code
+        except SyntaxError:
+            pass
+        starts = CodeAnalyzer._logical_line_start_flags(code)
+        return '\n'.join(
+            line
+            for line, is_start in zip(code.split('\n'), starts)
+            if not (is_start and line.strip().startswith(('%', '!')))
+        )
+
+    @staticmethod
+    def _parse_cell(code: str) -> ast.Module:
+        """Parse a notebook cell (or statement) to an AST, tolerating a
+        top-level ``await``.
+
+        Plain ``ast.parse`` raises ``SyntaxError`` on a module-level ``await``
+        (it needs ``PyCF_ALLOW_TOP_LEVEL_AWAIT``), so a legitimate top-level-await
+        cell used to be seen as a syntax error and silently skipped (CAS-164).
+        This mirrors the flag IPython itself uses to compile async cells. A
+        genuine syntax error still raises, so callers' error handling is
+        unchanged.
+        """
+        return compile(
+            code, '<cash-cell>', 'exec',
+            ast.PyCF_ONLY_AST | ast.PyCF_ALLOW_TOP_LEVEL_AWAIT,
+        )
 
     @staticmethod
     def analyze_code_block(code: str, tree: ast.Module | None = None) -> tuple[set[str], set[str]]:
@@ -512,7 +639,7 @@ class CodeAnalyzer:
         """
         if tree is None:
             clean_code = CodeAnalyzer.strip_magics(code)
-            tree = ast.parse(clean_code)  # propagate SyntaxError to callers
+            tree = CodeAnalyzer._parse_cell(clean_code)  # tolerate top-level await (CAS-164)
 
         visitor = _FlowVisitor()
         visitor.visit(tree)
