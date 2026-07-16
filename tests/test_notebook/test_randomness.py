@@ -575,6 +575,76 @@ class TestRngCarrierDetection:
         assert len(calls) == 1
         assert calls[0].carrier == 'g'
 
+    def test_rng_param_not_resolved_against_stale_global(self):
+        """CAS-154 Symptom B: a parameter draw must not resolve against a
+        same-named unseeded GLOBAL left in the session ledger by an earlier cell.
+
+        ``def f(rng): rng.standard_normal()`` is pure w.r.t. the module-level
+        ``rng`` — the parameter shadows it. Without lexical scoping the flat
+        ledger fired a spurious warning; with it the def is silent whether or not
+        the outer name was ``del``-eted.
+        """
+        # Variant WITHOUT del: the stale global is still bound in the session.
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "def f(rng):\n    rng.standard_normal(10)",
+        ) == []
+        # Variant WITH del: the ``del rng`` that used to be the only silencer.
+        assert self._carriers(
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            "del rng",
+            "def f(rng):\n    rng.standard_normal(10)",
+        ) == []
+        # A parameter locally rebound to a concrete unseeded carrier still warns
+        # (today's flat resolution is correct there — the binding is real).
+        assert len(self._carriers(
+            "import numpy as np",
+            "def f(rng):\n    rng = np.random.default_rng()\n    rng.standard_normal(10)",
+        )) == 1
+
+    def test_unseeded_rng_arg_flows_into_param_draw(self):
+        """CAS-154 Symptom A: an unseeded generator passed as a keyword argument
+        into a function that draws off that parameter must warn at the call site.
+
+        This is the idiomatic Monte-Carlo shape (``price(..., rng=default_rng())``)
+        that cached and froze in total silence, while the equivalent inline draw
+        was correctly warned.
+        """
+        # The def alone is silent (the argument decides seededness).
+        # The call with an UNSEEDED argument warns exactly once, at the call site.
+        calls = self._carriers(
+            "import numpy as np",
+            "def price(rng):\n    return rng.standard_normal(5)",
+            "price(rng=np.random.default_rng())",
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'rng'
+        assert calls[0].function == 'standard_normal'
+        assert calls[0].module == 'numpy.random'
+        # The warning is attributed to the CALL statement (line 1 of that source).
+        assert calls[0].lineno == 1
+
+        # Seeded argument -> reproducible -> no warning.
+        assert self._carriers(
+            "import numpy as np",
+            "def price(rng):\n    return rng.standard_normal(5)",
+            "price(rng=np.random.default_rng(42))",
+        ) == []
+
+    def test_call_arg_flow_silent_when_callee_never_scanned(self):
+        """Conservative bias: an out-of-order / imported callee stays quiet.
+
+        Nothing in the session says ``price`` draws off ``rng``, so passing an
+        unseeded generator to it must not warn — matching the module's standing
+        false-positive-avoidance philosophy.
+        """
+        assert self._carriers(
+            "import numpy as np",
+            "price(rng=np.random.default_rng())",
+        ) == []
+
     def test_np_random_seed_does_not_quiet_a_generator(self):
         """The module seed ledger must not reach across to a Generator.
 

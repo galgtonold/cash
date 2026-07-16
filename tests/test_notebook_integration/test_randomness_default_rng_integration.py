@@ -128,3 +128,67 @@ def test_allow_random_suppresses_default_rng_warning(nb_runner):
 
     assert WARNING_TEXT not in nb_runner.get_raw_output(3)
     assert "len 1000" in nb_runner.get_output(4)
+
+
+def test_pure_function_param_does_not_warn_against_stale_global(nb_runner):
+    """CAS-154 Symptom B: a def whose parameter shadows a stale same-named
+    unseeded global must NOT warn — the parameter is a different variable.
+
+    Before lexical scoping the def-only cell fired a spurious warning purely
+    because ``rng`` was left in the session ledger by the cell above it.
+    """
+    nb_runner.create_notebook([
+        "import numpy as np",             # cell 1
+        "rng = np.random.default_rng()",  # cell 2: stale unseeded global, same name
+        # cell 3 -- a pure function: the parameter shadows the global, no draw yet.
+        "def draw(rng):\n    return float(rng.standard_normal(1000).mean())",
+        "print('defined', callable(draw))",  # cell 4
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    # The def cell must be silent: the parameter is not the stale global.
+    assert WARNING_TEXT not in nb_runner.get_raw_output(3)
+    assert "defined True" in nb_runner.get_output(4)
+
+
+def test_unseeded_rng_argument_at_call_site_warns(nb_runner):
+    """CAS-154 Symptom A: handing an unseeded generator to a function that draws
+    off that parameter must warn at the CALL site.
+
+    This is the idiomatic Monte-Carlo shape that cached and froze in silence
+    while the equivalent inline draw was correctly warned.
+    """
+    nb_runner.create_notebook([
+        "import numpy as np",  # cell 1
+        "def price(n, rng):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+        "m = price(1000, rng=np.random.default_rng())",  # cell 3: the call site
+        "print('m', isinstance(m, float))",  # cell 4
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    out = nb_runner.get_raw_output(3)  # the call cell
+    assert WARNING_TEXT in out
+    assert "CashRandomnessWarning" in out
+    assert "standard_normal" in out
+    assert "@cash:allow-random" in out
+    # The def cell itself said nothing — seededness is decided by the argument.
+    assert WARNING_TEXT not in nb_runner.get_raw_output(2)
+    assert "m True" in nb_runner.get_output(4)
+
+
+def test_seeded_rng_argument_at_call_site_does_not_warn(nb_runner):
+    """Control for the case above: a seeded argument is reproducible, so the
+    call site must stay quiet."""
+    nb_runner.create_notebook([
+        "import numpy as np",  # cell 1
+        "def price(n, rng):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+        "m = price(1000, rng=np.random.default_rng(42))",  # cell 3: seeded call site
+        "print('m', isinstance(m, float))",  # cell 4
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    assert WARNING_TEXT not in nb_runner.get_raw_output(3)
+    assert "m True" in nb_runner.get_output(4)

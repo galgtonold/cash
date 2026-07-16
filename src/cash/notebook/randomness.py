@@ -236,6 +236,25 @@ class RandomnessVisitor(ast.NodeVisitor):
         # on a previous statement, which this visitor cannot see.  The detector
         # resolves them against session state.
         self.carrier_calls: list[tuple[str, str, int, int]] = []
+        # Lexical scope of the ``def``/``async def`` currently being visited:
+        # a stack of ``(func_name, {param names})``.  A draw off a name that is a
+        # parameter of an enclosing function must NOT resolve against the flat,
+        # session-wide carrier ledger (a same-named unseeded global from an
+        # earlier cell is a different variable) — see ``_check_carrier_call``.
+        self._function_stack: list[tuple[str, set[str]]] = []
+        # Draws taken off a parameter, per enclosing function:
+        # func_name -> [(param, draw_fn, lineno, col_offset)].  Whether such a
+        # draw is unseeded depends on the ARGUMENT passed at a call site, which
+        # this visitor cannot see; the detector settles it against the call-arg
+        # candidates below.
+        self.param_draws: dict[str, list[tuple[str, str, int, int]]] = {}
+        # Keyword arguments handing a candidate RNG to a bare-name callee:
+        # (callee, param, arg_spec, lineno, col_offset), where ``arg_spec`` is
+        # ``('inline', kind, seeded)`` for an inline constructor or
+        # ``('alias', name)`` for a bare-name argument the detector resolves
+        # against session state.  Positional args are a documented gap: without
+        # the callee's signature their parameter names are unknown.
+        self.call_arg_candidates: list[tuple[str, str, tuple, int, int]] = []
 
     def visit_Import(self, node: ast.Import):
         """Track imports like 'import random', 'import numpy as np'."""
@@ -251,6 +270,39 @@ class RandomnessVisitor(ast.NodeVisitor):
                 name = alias.asname or alias.name
                 self.imports[name] = f"{node.module}.{alias.name}"
         self.generic_visit(node)
+
+    def visit_FunctionDef(self, node: ast.FunctionDef):
+        """Give the function body a lexical scope for its parameter names."""
+        self._visit_function(node)
+
+    def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+        """``async def`` scopes its parameters exactly like ``def``."""
+        self._visit_function(node)
+
+    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef):
+        params: set[str] = set()
+        self._collect_param_names(node.args, params)
+        self._function_stack.append((node.name, params))
+        # generic_visit still walks decorators, defaults and the body, so every
+        # existing channel (carrier draws, module draws, seed calls) keeps
+        # firing inside the body; the stack only changes how a bare parameter
+        # draw is routed in ``_check_carrier_call``.
+        self.generic_visit(node)
+        self._function_stack.pop()
+
+    @staticmethod
+    def _collect_param_names(args: ast.arguments, into: set[str]) -> None:
+        """Register every parameter name (mirrors analysis._add_args_to_scope)."""
+        for arg in args.args:
+            into.add(arg.arg)
+        for arg in args.posonlyargs:
+            into.add(arg.arg)
+        for arg in args.kwonlyargs:
+            into.add(arg.arg)
+        if args.vararg:
+            into.add(args.vararg.arg)
+        if args.kwarg:
+            into.add(args.kwarg.arg)
 
     def _resolve_module(self, name: str) -> str | None:
         """Resolve a name to its module, handling aliases."""
@@ -354,8 +406,42 @@ class RandomnessVisitor(ast.NodeVisitor):
         self._check_random_call(chain, full_name, node)
         self._check_seed_call(chain, full_name, node)
         self._check_carrier_call(chain, node)
+        self._check_call_args(chain, node)
 
         self.generic_visit(node)
+
+    def _check_call_args(self, chain: list[str], node: ast.Call):
+        """Record a keyword argument that hands an RNG to a bare-name callee.
+
+        Scoped to bare-name calls (``price(...)``) and to KEYWORD arguments on
+        purpose: without the callee's signature a positional argument cannot be
+        mapped to a parameter name, so positional RNG arguments are a documented
+        follow-up gap (consistent with the ``self.rng.normal()`` and
+        ``df.sample()`` gaps this module already carries).
+
+        Left unresolved: whether ``price`` actually draws off that parameter, and
+        whether a bare-name argument is a seeded carrier, are both session facts
+        the detector settles later.
+        """
+        if len(chain) != 1:
+            return  # a bare-name callee only; ``obj.method(...)`` is out of scope
+        callee = chain[0]
+        for kw in node.keywords:
+            if kw.arg is None:
+                continue  # ``**kwargs`` — no parameter name to bind to
+            value = kw.value
+            kind = self._carrier_kind_of(value)
+            if kind is not None:
+                seeded = _rng_constructor_is_seeded(value)
+                self.call_arg_candidates.append(
+                    (callee, kw.arg, ('inline', kind, seeded),
+                     node.lineno, node.col_offset)
+                )
+            elif isinstance(value, ast.Name):
+                self.call_arg_candidates.append(
+                    (callee, kw.arg, ('alias', value.id),
+                     node.lineno, node.col_offset)
+                )
 
     def _check_carrier_call(self, chain: list[str], node: ast.Call):
         """Collect ``<name>.<draw>()`` as a *candidate* carrier draw.
@@ -375,6 +461,22 @@ class RandomnessVisitor(ast.NodeVisitor):
             return
         if base in MODULE_ALIASES or self._resolve_module(base) is not None:
             return  # an imported module, not an object
+
+        # A draw off a *parameter* of an enclosing function is not a draw off a
+        # session global that happens to share the name.  Route it to
+        # ``param_draws`` (settled interprocedurally at the call site) and do NOT
+        # add it to ``carrier_calls``, so it never resolves against the flat
+        # session ledger.  A parameter locally rebound to a concrete carrier
+        # (``base in self.carrier_assigns``) keeps the existing flat resolution —
+        # that binding is real and this-source, not a stale global.
+        if base not in self.carrier_assigns:
+            for owner, params in reversed(self._function_stack):
+                if base in params:
+                    self.param_draws.setdefault(owner, []).append(
+                        (base, func_name, node.lineno, node.col_offset)
+                    )
+                    return
+
         self.carrier_calls.append((base, func_name, node.lineno, node.col_offset))
 
     def _check_random_call(self, chain: list[str], full_name: str, node: ast.Call):
@@ -484,6 +586,10 @@ class _ScanResult(NamedTuple):
     carrier_clears: frozenset[str]
     carrier_calls: tuple[tuple[str, str, int, int], ...]
     carrier_aliases: tuple[tuple[str, str], ...]
+    # func_name -> ((param, draw_fn, lineno, col), ...): draws off a parameter.
+    param_draws: tuple[tuple[str, tuple[tuple[str, str, int, int], ...]], ...]
+    # (callee, param, arg_spec, lineno, col): keyword RNG arguments at a call.
+    call_arg_candidates: tuple[tuple[str, str, tuple, int, int], ...]
 
 
 class RandomnessDetector:
@@ -511,6 +617,15 @@ class RandomnessDetector:
         # the same reason: ``rng = np.random.default_rng()`` and the draw off it
         # are separate statements, each scanned on its own.
         self.rng_carriers: dict[str, tuple[str, bool]] = {}
+        # Functions that draw off one of their parameters, discovered as their
+        # ``def`` is scanned: func_name -> {param -> (draw_fn, lineno, col)}.
+        # Session-scoped like ``rng_carriers`` because the ``def`` and the call
+        # that supplies the unseeded argument are separate statements.  This is
+        # the registry the call-site channel resolves an argument against — the
+        # only interprocedural link in the module, and the reason a same-named
+        # global cannot leak into a function body (that resolution never happens
+        # for a parameter draw; see ``_check_carrier_call``).
+        self.risky_params: dict[str, dict[str, tuple[str, int, int]]] = {}
         # Memo: code string -> the pure AST scan (see ``_ScanResult``).
         # The scan is the expensive half of analyze_code (parse + full visit) and
         # is a pure function of the source, so it is safe to reuse across runs.
@@ -529,6 +644,7 @@ class RandomnessDetector:
         """Reset seeding state (e.g., for new session)."""
         self.seeded_modules.clear()
         self.rng_carriers.clear()
+        self.risky_params.clear()
         # A new session re-warns: the user is looking at a fresh set of outputs.
         # ``_scan_cache`` is deliberately kept — it is pure w.r.t. session state.
         self._warned.clear()
@@ -563,7 +679,7 @@ class RandomnessDetector:
         try:
             tree = ast.parse(code)
         except SyntaxError:
-            result = _ScanResult((), (), (), frozenset(), (), ())
+            result = _ScanResult((), (), (), frozenset(), (), (), (), ())
         else:
             visitor = RandomnessVisitor()
             visitor.visit(tree)
@@ -574,6 +690,8 @@ class RandomnessDetector:
                 frozenset(visitor.carrier_clears),
                 tuple(visitor.carrier_calls),
                 tuple(visitor.carrier_aliases),
+                tuple((fn, tuple(draws)) for fn, draws in visitor.param_draws.items()),
+                tuple(visitor.call_arg_candidates),
             )
 
         if len(self._scan_cache) < 4096:
@@ -632,6 +750,67 @@ class RandomnessDetector:
             ))
         return found
 
+    def register_param_draws(self, param_draws) -> None:
+        """Fold a ``def``'s parameter draws into the session ``risky_params``.
+
+        Called as the ``def`` statement is analyzed, before any call to it is
+        resolved, so a single statement that both defines and calls a function
+        settles against itself.  Replaces the entry for a re-scanned function
+        (first draw per parameter wins), size-gated like the other ledgers.
+        """
+        for func_name, draws in param_draws:
+            if len(self.risky_params) >= 4096 and func_name not in self.risky_params:
+                continue
+            entry: dict[str, tuple[str, int, int]] = {}
+            for param, draw_fn, lineno, col_offset in draws:
+                entry.setdefault(param, (draw_fn, lineno, col_offset))
+            self.risky_params[func_name] = entry
+
+    def _resolve_call_arg_carriers(self, candidates) -> list[RandomnessCallInfo]:
+        """Turn ``callee(param=<unseeded rng>)`` into a confirmed draw.
+
+        The interprocedural half of the detector: an unseeded generator passed
+        to a function that draws off that parameter is exactly as unreproducible
+        as the inline draw, but the draw itself lives in the callee's body, one
+        statement away.  ``risky_params`` (built as the ``def`` was scanned)
+        supplies the link; this resolves it at the CALL SITE, where the argument
+        is written and where the warning belongs.
+
+        Silent unless the callee was scanned this session AND actually draws off
+        that parameter — an out-of-order or imported ``def`` stays quiet, matching
+        the module's standing false-positive-avoidance bias.  Only keyword
+        arguments are handled; positional ones are a documented gap.
+        """
+        found: list[RandomnessCallInfo] = []
+        for callee, param, arg_spec, lineno, col_offset in candidates:
+            params = self.risky_params.get(callee)
+            if not params:
+                continue
+            draw = params.get(param)
+            if draw is None:
+                continue
+
+            if arg_spec[0] == 'inline':
+                _tag, kind, seeded = arg_spec
+            else:  # ('alias', name): resolve the argument against session state
+                _tag, name = arg_spec
+                entry = self.rng_carriers.get(name)
+                if entry is None:
+                    continue  # not a known carrier — stay silent (conservative)
+                kind, seeded = entry
+            if seeded:
+                continue
+
+            draw_fn, _dl, _dc = draw
+            found.append(RandomnessCallInfo(
+                module=_CARRIER_MODULES.get(kind, kind),
+                function=draw_fn,
+                lineno=lineno,
+                col_offset=col_offset,
+                carrier=param,
+            ))
+        return found
+
     def mark_seeded(self, module: str):
         self.seeded_modules.add(module)
         # Also mark parent modules
@@ -680,6 +859,10 @@ class RandomnessDetector:
         # x = rng.normal()``, or a whole ``def`` body — resolves against itself.
         self.bind_carriers(scan.carrier_assigns, scan.carrier_clears, scan.carrier_aliases)
 
+        # Register any parameter draws THIS statement's defs contain before
+        # resolving its own call sites, so a def-and-call in one statement links.
+        self.register_param_draws(scan.param_draws)
+
         # Then check for unseeded random calls
         unseeded_calls = []
         warnings_list = []
@@ -689,6 +872,7 @@ class RandomnessDetector:
                 unseeded_calls.append(call)
 
         unseeded_calls.extend(self._resolve_carrier_calls(scan.carrier_calls))
+        unseeded_calls.extend(self._resolve_call_arg_carriers(scan.call_arg_candidates))
         # Source order, so a statement with several draws reads top-to-bottom.
         unseeded_calls.sort(key=lambda c: (c.lineno, c.col_offset))
 
