@@ -426,7 +426,7 @@ class StatementProcessor:
         self.executed_input_lineages = state.executed_input_lineages
         self.mutation_verdicts = state.mutation_verdicts
 
-    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
+    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False, force_outputs: set[str] | None = None) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
 
@@ -446,6 +446,15 @@ class StatementProcessor:
                 statements (e.g. single-unit for loops) where the user needs
                 to see progress.  When True, ``metrics['_output_flushed']``
                 is set so callers don't replay the output a second time.
+            force_outputs: Extra output variable names to capture/restore on top
+                of those AST analysis discovers, and to treat as expected writes
+                so an in-place mutation on them does NOT block caching. Used by
+                the accumulator-loop fast path (CAS-145) to route ``out = []`` +
+                ``for e in it: out.append(f(e))`` through the cache as one unit,
+                capturing the accumulator AND the leaked loop variable. Does NOT
+                affect the cache key (outputs only enter it when they are
+                modules), so the key still tracks the loop source + input
+                lineages.
 
         Returns:
             ProcessResult with keys: 'status', 'execution_time', 'total_time',
@@ -475,6 +484,15 @@ class StatementProcessor:
             _parsed_tree = None
 
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
+        # Caller-forced outputs (accumulator-loop fast path, CAS-145): capture
+        # and restore these on top of the AST-discovered outputs, and mark them
+        # as expected writes so an in-place accumulator mutation (``out.append``)
+        # is not read as a caching blocker. Added AFTER the cache key is computed
+        # so it is unaffected — the key already tracks the loop source + input
+        # lineages (a forced output only ever enters the key when it is a module,
+        # which an accumulator never is).
+        if force_outputs:
+            outputs = outputs | force_outputs
         # Expose the cache key on metrics so the badge can show a short
         # prefix in the row-detail "Key" field. Lets users see at a glance
         # when two runs of the same statement land in the same vs. a
