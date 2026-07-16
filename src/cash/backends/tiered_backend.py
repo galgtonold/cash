@@ -55,6 +55,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         self.promotion_policy = promotion_policy or self._default_promotion_policy
         self._min_persist_compute_s = min_persist_compute_s
         self._min_persist_savings_pct = min_persist_savings_pct
+        # Once-per-session dedup for the oversize-refusal warning (CAS-142).
+        self._warned_oversize = False
 
     def _promotion_backend_kind(self) -> str:
         """Cost-model backend kind of the first tier past RAM (the primary
@@ -98,6 +100,30 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         """
         return self._cost_model_promote(
             "", size_bytes, execution_time, self._promotion_backend_kind()
+        )
+
+    def _warn_oversize_not_persisted(self, key: str, size_bytes: int) -> None:
+        """Warn once/session that a worth-persisting value fit no disk tier.
+
+        The object is larger than a safe fraction (half) of every persistent
+        tier's cap, so persisting it would thrash. Cash keeps it in RAM (where
+        it dies on restart) rather than write-and-evict forever, and tells the
+        user how to actually cache it. Deduped to once per session."""
+        if self._warned_oversize:
+            return
+        self._warned_oversize = True
+        import warnings
+
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from .adaptive_caps import human_bytes
+        warnings.warn(
+            f"Cash: cached value {key!r} ({human_bytes(size_bytes)}) exceeds a "
+            f"safe fraction of every persistent cache tier's cap; keeping it in "
+            f"RAM only, so it will not survive a kernel restart. Storing it "
+            f"would force a write-and-evict treadmill -- raise max_cache_size "
+            f"to persist objects this large.",
+            CashCacheIneffectiveWarning,
+            stacklevel=3,
         )
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
@@ -182,17 +208,25 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # (the notebook path sets no plain 'size' key).
             cap_size = size or metadata.get('cost_model_size_bytes', 0)
 
+            size_refused = False  # a tier skipped this object because it's too big
             for i in range(1, len(self.backends)):
                 backend = self.backends[i]
                 if not past_compute_floor:
                     continue
-                cap = getattr(type(backend), 'max_size_bytes', None)
+                cap = backend._promotion_size_cap()
+                # Guard against non-numeric caps (e.g. a MagicMock tier in
+                # tests) — treat anything that isn't a real number as no cap.
+                if isinstance(cap, bool) or not isinstance(cap, (int, float)):
+                    cap = None
                 if cap is not None and cap_size and cap_size > cap:
-                    # This tier doesn't want objects this large.
+                    # This tier doesn't want objects this large. For the disk
+                    # tier that means "bigger than half my cap" — storing it
+                    # would thrash, so a clean skip beats the treadmill.
                     logger.debug(
                         "[TIERED] Skipping %s for key %r: size %d > cap %d",
                         type(backend).__name__, key, cap_size, cap,
                     )
+                    size_refused = True
                     continue
                 try:
                     backend.set(key, value, metadata, serializer)
@@ -200,6 +234,14 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                     stored_destinations.append(_label)
                 except Exception as e:  # noqa: BLE001 (intentional: backend errors must not propagate)
                     logger.warning("[TIERED] Failed to write to backend %s: %s", type(backend).__name__, e)
+
+            # The value was worth persisting (cleared the compute floor) but
+            # every persistent tier refused it as too big for its cap — it will
+            # live in RAM only and vanish on the next kernel restart. A clean
+            # no-op beats a treadmill, but the user should know why nothing
+            # durable was written and how to fix it (CAS-142).
+            if size_refused and not any(d != "RAM" for d in stored_destinations):
+                self._warn_oversize_not_persisted(key, cap_size)
 
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:

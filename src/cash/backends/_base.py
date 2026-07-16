@@ -352,6 +352,21 @@ class CacheBackend(ABC):
         metadata.setdefault('access_count', 0)
         return metadata
 
+    def _promotion_size_cap(self) -> int | None:
+        """Largest single object this backend accepts via *tiered* promotion.
+
+        The default is the static class-level :attr:`max_size_bytes` hint
+        (Redis 10 MB, SQLite 100 MB, unbounded elsewhere). Backends whose
+        cap is *dynamic* — notably the file tier, whose LRU cap is scaled to
+        free disk (CAS-142) — override this to derive a per-object refusal
+        threshold from their own instance cap, so an object too big to hold
+        without thrashing is skipped rather than written-then-evicted.
+
+        Consulted only by ``TieredBackend.set()``; a bare-backend ``set()``
+        still writes whatever it is given.
+        """
+        return type(self).max_size_bytes
+
     def tier_labels(self) -> list[str]:
         """Ordered labels of the storage tiers this backend exposes.
 

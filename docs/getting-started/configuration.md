@@ -49,7 +49,7 @@ the `CASH_*` binding; the TOML key matches the field name.
 |---|---|---|---|
 | `cache_dir` | `CASH_CACHE_DIR` | `".cash"` | Where the default `FileBackend` writes. **Add to `.gitignore`** — this is the disk cache, not the config. |
 | `compress` | `CASH_COMPRESS` | `false` | gzip data files on disk. |
-| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `1073741824` (1 GiB) | LRU eviction threshold on `FileBackend`, in bytes. |
+| `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (**auto**) | Disk-tier LRU eviction threshold, in bytes. `null` scales the cap to the machine — a fraction of free disk for the disk tier, a fraction of RAM for the memory tier — instead of a flat 1 GiB that capped every tier and thrashed persist-heavy workloads. Set an integer to pin the disk cap. |
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` (unlimited) | Cap on `InMemoryBackend` entries — LRU eviction when exceeded. |
 | `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | Seconds between `FileBackend`'s background metadata-flush cycles. |
 
@@ -131,14 +131,15 @@ export CASH_TIER_1_HOST=prod-redis.example.com
 
 ### Per-tier size caps
 
-Each backend declares a class-level `max_size_bytes` cap that
-`TieredBackend` uses as a *promotion hint*. A value larger than the cap
-quietly skips that tier but still writes to the unconstrained ones.
+Each backend declares a `max_size_bytes` cap that `TieredBackend` uses as
+a *promotion hint*. A value larger than the cap quietly skips that tier but
+still writes to the unconstrained ones. Most caps are static class-level
+values; the file tier's is *dynamic* — half its (machine-scaled) LRU cap.
 
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
-| `FileBackend` | unbounded | Disk has its own `max_cache_size` LRU. |
+| `FileBackend` | **½ of its LRU cap** | Refuses a single object larger than half the disk cap rather than write-then-evict it (the treadmill); warns once. See `max_cache_size`. |
 | `RedisBackend` | **10 MiB** | Redis is in-memory server-side; protocol disfavours multi-MB values. |
 | `SQLiteBackend` | **100 MiB** | SQLite blobs degrade past this. |
 | `S3Backend` | unbounded | S3 is fine arbitrarily large. |

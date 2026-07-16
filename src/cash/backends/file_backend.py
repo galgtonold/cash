@@ -60,6 +60,14 @@ class FileBackend(CacheBackend):
         self._max_size_bytes = max_size_bytes
         self._default_ttl = default_ttl
         self._current_size_bytes = 0
+        # Evict-after-write detection (CAS-142): a monotonic write counter and
+        # the seq at which each key was last written, so eviction can tell when
+        # it is discarding something written only a couple of ops ago — the
+        # signature of a cache too small to retain the working set. Warned
+        # about once per session (per instance = per Cash session).
+        self._write_seq = 0
+        self._write_seq_by_key: dict[str, int] = {}
+        self._warned_evict_after_write = False
         self._dirty_metadata: set[str] = set()
         self._metadata_cache: dict[str, dict] = {}  # partial cache for LRU tracking
         self._lock = threading.RLock()
@@ -357,6 +365,11 @@ class FileBackend(CacheBackend):
             self._metadata_cache[key] = metadata
             self._current_size_bytes += metadata['size'] + actual_meta_size
 
+            # Stamp the write order so _check_and_evict can spot a just-written
+            # entry being evicted almost immediately (the treadmill signature).
+            self._write_seq += 1
+            self._write_seq_by_key[key] = self._write_seq
+
     def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         """Serialize the value on the calling thread, then write to disk
         in the background. ``set()`` returns once the bytes are captured;
@@ -472,6 +485,7 @@ class FileBackend(CacheBackend):
                 del self._metadata_cache[key]
             if key in self._dirty_metadata:
                 self._dirty_metadata.remove(key)
+            self._write_seq_by_key.pop(key, None)
             self._current_size_bytes -= size_to_remove
 
         if os.path.exists(meta_path):
@@ -485,12 +499,18 @@ class FileBackend(CacheBackend):
             except OSError as exc:
                 logger.debug("Failed to remove data file %s: %s", data_path, exc)
 
+    # Evict-after-write is only a treadmill signal if the evicted entry was
+    # written within roughly this many writes — something older getting
+    # evicted is healthy LRU, not thrash. Only writes bump the counter.
+    _EVICT_WARN_RECENT_OPS = 3
+
     def _check_and_evict(self) -> None:
         """Evict items if over max size."""
         if not self._max_size_bytes or self._current_size_bytes <= self._max_size_bytes:
             return
 
         keys_to_delete = []
+        evicted_recent = False
         with self._lock:
             items = []
             for k, m in self._metadata_cache.items():
@@ -506,10 +526,59 @@ class FileBackend(CacheBackend):
                     break
                 keys_to_delete.append(key)
                 evicted_size += size
+                # Was this entry written only a couple of ops ago?
+                written_at = self._write_seq_by_key.get(key)
+                if written_at is not None and self._write_seq - written_at <= self._EVICT_WARN_RECENT_OPS:
+                    evicted_recent = True
 
         # Delete outside the first lock scope (delete acquires lock)
         for key in keys_to_delete:
             self.delete(key)
+
+        if evicted_recent:
+            self._warn_evict_after_write(len(keys_to_delete))
+
+    def _promotion_size_cap(self) -> int | None:
+        """Refuse (skip) any single object larger than half this tier's cap.
+
+        The file tier's LRU cap is adaptive (a fraction of free disk,
+        CAS-142), so its per-object refusal threshold is derived from the
+        instance cap rather than a static class attr. Storing something bigger
+        than half the cap would leave under half the cap for everything else
+        and invite a write-and-evict treadmill; a clean skip (the value stays
+        in RAM, and ``TieredBackend`` warns) beats the thrash. Falls back to
+        the class-level hint when no cap is configured (a bare, unbounded
+        FileBackend accepts anything).
+        """
+        if self._max_size_bytes:
+            return self._max_size_bytes // 2
+        return type(self).max_size_bytes
+
+    def _warn_evict_after_write(self, n_evicted: int) -> None:
+        """Warn once/session that the cache evicted freshly-written entries.
+
+        The disk cache is too small to retain what is being written to it, so
+        entries are evicted within a couple of ops of landing — cash keeps
+        re-writing and re-evicting instead of caching anything durably, which
+        can make it slower than not caching at all. Deduped to once per
+        session (per instance) so a churning workload doesn't spam.
+        """
+        if self._warned_evict_after_write:
+            return
+        self._warned_evict_after_write = True
+        import warnings
+
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from .adaptive_caps import human_bytes
+        warnings.warn(
+            f"Cash: the disk cache evicted an entry within a couple of writes "
+            f"of storing it. The cache cap ({human_bytes(self._max_size_bytes)}) "
+            f"is too small to retain this workload, so cash is re-writing and "
+            f"re-evicting instead of caching durably -- this can be slower than "
+            f"no cache. Raise max_cache_size so the working set fits.",
+            CashCacheIneffectiveWarning,
+            stacklevel=2,
+        )
 
     def clear(self) -> None:
         self._ensure_initialized()
@@ -526,6 +595,7 @@ class FileBackend(CacheBackend):
         with self._lock:
             self._metadata_cache.clear()
             self._dirty_metadata.clear()
+            self._write_seq_by_key.clear()
             self._current_size_bytes = 0
 
     def shutdown(self) -> None:
