@@ -118,6 +118,88 @@ class TestPromotionPolicy:
         assert "RAM" in stored_meta["storage"]
 
 
+class TestCAS141LargeFramePersistence:
+    """Headline CAS-141 acceptance: a big, expensive frame is now PROMOTED to
+    disk by the serialization-aware cost model and RESTORES from the disk tier
+    after a simulated restart — the exact case the inverted bandwidth model
+    left RAM-only (a 0.68 GB / 7 s workload whose ``.cash`` held only 393 KB).
+
+    The promotion decision is metadata-driven (the notebook path writes
+    ``cost_model_family`` / ``cost_model_size_bytes`` onto the entry's metadata
+    at store time — see ``statement/processor.py``), so these tests inject that
+    metadata directly rather than materialising a real 0.68 GB frame.
+    """
+
+    def _smart_tiered(self, tmp_path):
+        from cash.config import CashConfig
+        from cash.backends.factory import build_backend_from_config
+
+        cfg = CashConfig(
+            cache_dir=str(tmp_path / ".cash"),
+            smart_persistence=True,
+            compress=False,
+        )
+        return build_backend_from_config(cfg), cfg
+
+    def _frame_meta(self, execution_time, size_bytes):
+        return {
+            "execution_time": execution_time,
+            "cost_model_family": "dataframe_numeric",
+            "cost_model_type_name": "DataFrame",
+            "cost_model_size_bytes": size_bytes,
+        }
+
+    def test_expensive_large_frame_is_promoted_to_disk(self, tmp_path):
+        """0.68 GB frame at 7 s compute → written to the disk tier, not RAM-only."""
+        backend, _ = self._smart_tiered(tmp_path)
+        size = int(0.68 * 1024**3)
+        meta = self._frame_meta(execution_time=7.0, size_bytes=size)
+
+        backend.set("stmt:big_frame", {"df": "payload"}, meta)
+
+        # It landed on RAM *and* DISK, not RAM only.
+        assert meta["storage"] == ["RAM", "DISK"]
+        disk_tier = backend.backends[1]
+        assert isinstance(disk_tier, FileBackend)
+        _, disk_val = disk_tier.get("stmt:big_frame")
+        assert disk_val == {"df": "payload"}
+
+    def test_promoted_frame_restores_after_simulated_restart(self, tmp_path):
+        """After a restart (fresh backend, empty RAM tier), the frame restores
+        from the disk tier."""
+        backend, cfg = self._smart_tiered(tmp_path)
+        size = int(0.68 * 1024**3)
+        backend.set(
+            "stmt:big_frame",
+            {"df": "payload"},
+            self._frame_meta(execution_time=7.0, size_bytes=size),
+        )
+
+        # Simulated kernel restart: a brand-new backend on the same cache dir.
+        # Its RAM tier is empty, so a hit can only come from disk.
+        from cash.backends.factory import build_backend_from_config
+
+        restarted = build_backend_from_config(cfg)
+        assert restarted.backends[0].get("stmt:big_frame") == (None, None)  # RAM cold
+
+        meta, val = restarted.get("stmt:big_frame")
+        assert val == {"df": "payload"}
+        assert meta.get("source") == "DISK"
+
+    def test_cheap_large_frame_stays_ram_only(self, tmp_path):
+        """Cost, not size, drives the decision: a large frame that is CHEAP to
+        recompute (restore would cost more) is correctly NOT promoted."""
+        backend, _ = self._smart_tiered(tmp_path)
+        size = 1024**3  # 1 GB: predicted restore (~2.1 s) > 0.5 s recompute
+        meta = self._frame_meta(execution_time=0.5, size_bytes=size)
+
+        backend.set("stmt:cheap_frame", {"df": "payload"}, meta)
+
+        assert meta["storage"] == ["RAM"]
+        _, disk_val = backend.backends[1].get("stmt:cheap_frame")
+        assert disk_val is None
+
+
 class TestReadRepair:
     """Test read-repair / promotion from slow to fast tiers."""
 

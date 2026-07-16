@@ -57,10 +57,10 @@ the `CASH_*` binding; the TOML key matches the field name.
 
 | Field | Env var | Default | Description |
 |---|---|---|---|
-| `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to a simpler bandwidth check. |
-| `smart_persistence_threshold` | `CASH_SMART_PERSISTENCE_THRESHOLD` | `1.0` (seconds) | Below this compute time, values stay in RAM and aren't promoted to disk/Redis/S3. |
+| `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
+| `smart_persistence_threshold` | `CASH_SMART_PERSISTENCE_THRESHOLD` | `1.0` (seconds) | **Legacy / no longer consulted (CAS-141).** Superseded by the cost-model comparison; kept for compatibility. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | "Too cheap to cache at all" floor — statements faster than this never get a cache entry. |
-| `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Notebook path: skip caching when predicted savings < 20 % of compute. |
+| `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
 
 ### Observability

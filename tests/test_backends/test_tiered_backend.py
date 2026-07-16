@@ -53,34 +53,41 @@ class TestTieredBackend:
         assert val == "value"
 
     def test_large_object_promotion_prevention(self, tmp_path):
-        """Test that huge objects that are fast to compute but slow to read aren't cached on disk."""
+        """Objects whose predicted restore exceeds their recompute cost aren't
+        promoted to disk (CAS-141).
+
+        The fitted cost model — not a size-scaled bandwidth guess — decides:
+        a 1 GB result that took only 1.5 s to compute restores in ~2.1 s, so
+        rehydrating costs more than recomputing and it stays RAM-only. A tiny
+        result at the same compute time restores near-instantly and IS promoted.
+        """
         l1 = MagicMock()
         l2 = MagicMock()
-        
+
         # When getting from L1, return empty (simulating set flow check or just to satisfy protocol)
         # But set() uses the passed metadata.
-        
+
         backend = TieredBackend([l1, l2])
-        
-        size = 200 * 1024 * 1024
+
+        size = 1024 ** 3  # 1 GB: predicted restore (~2.1 s) > 1.5 s recompute
         backend.set("huge_key", "value", metadata={"execution_time": 1.5, "size": size})
-        
+
         # Check L1 set called
         l1.set.assert_called_once()
-        
+
         # Check L2 set NOT called
         l2.set.assert_not_called()
-        
+
         # Counter-case: Small object, same time
         l1.reset_mock()
         l2.reset_mock()
-        
+
         small_size = 100
         backend.set("small_key", "value", metadata={"execution_time": 1.5, "size": small_size})
-        
+
         # Check L1 set called
         l1.set.assert_called_once()
-        
+
         # Check L2 set CALLED (Promoted)
         l2.set.assert_called_once()
 

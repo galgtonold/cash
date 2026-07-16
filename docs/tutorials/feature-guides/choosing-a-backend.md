@@ -108,10 +108,10 @@ c.register_magic()
 
 A list of backends ordered fastest-first. A `get` walks the list in order; on a hit, the value is promoted (written back) to every faster tier so the next read comes from RAM (`src/cash/backends/tiered_backend.py:49-76`). A `set` always writes to tier 0, then asks the promotion policy whether each subsequent tier should also get a copy.
 
-The default policy (`_default_promotion_policy` at `src/cash/backends/tiered_backend.py:33-47`) is a two-gate filter:
+The default policy (`_default_promotion_policy` at `src/cash/backends/tiered_backend.py`) is a two-gate filter:
 
-1. Execution time must be at least 1.0 second — anything faster than that isn't worth persisting.
-2. Re-execution must take longer than re-reading from the next tier (size / 100 MB/s).
+1. Execution time must clear a compute floor (1.0 s for this fallback) — anything faster isn't worth persisting.
+2. Re-executing must cost more than restoring, using the fitted cost model's predicted read+deserialize time (`cost_model.estimated_restore_time`) — not a raw bandwidth guess (CAS-141).
 
 So a `pd.read_csv` that takes 50 ms and produces a 10 MB frame stays in RAM; a model fit that takes 30 s and produces a 200 MB pickle goes to RAM **and** disk. See [Smart Persistence](smart-persistence.md) for the full policy and how `@cash:persist` overrides it.
 

@@ -172,7 +172,7 @@ Full list: [docs/api/](docs/api/index.md).
 
 Disk cache: **`./.cash/`** next to your notebook (whatever the kernel's working directory is). One sub-file per cached statement, named by its cache-key SHA. Override with the `CASH_CACHE_DIR` environment variable, or pass `cache_dir=` when constructing a `Cash()` instance.
 
-The default `TieredBackend` is **smart about what reaches disk**: cells that took **< 100 ms** stay RAM-only (disk I/O alone would cost more than rerunning), while 100 ms – 1 s cells with small results (< 64 KB) always persist so a fresh kernel can restore them. For heavier intermediates, the `smart_persistence_threshold` config knob (default 1 s) decides. Force-persist any cell with a `# @cash:persist` annotation when you know better than the heuristic.
+The default `TieredBackend` is **smart about what reaches disk**: cells that took **< 100 ms** stay RAM-only (disk I/O alone would cost more than rerunning). Above that floor, a fitted cost model promotes a result to disk when recomputing it would cost more than restoring it — so an expensive frame is persisted even when it's large, while a huge-but-cheap result that would be slower to reload than to recompute stays in RAM. Force-persist any cell with a `# @cash:persist` annotation when you know better than the heuristic.
 
 To wipe the cache: delete `.cash/` or run `%cash_repair --full`.
 

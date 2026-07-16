@@ -193,9 +193,15 @@ class CashConfig:
     values."""
 
     smart_persistence_threshold: float = 1.0
-    """Compute-time threshold (seconds) above which results
-    *always* persist past RAM, regardless of size. The default of
-    1 s means anything that took > 1 s to compute is worth saving."""
+    """Legacy compute-time threshold (seconds). **Superseded by the
+    serialization-aware cost model (CAS-141):** whether a result persists
+    past RAM is now decided by comparing its *predicted restore time*
+    against its compute time — promote when
+    ``execution_time - est_restore > min_cache_savings_pct · execution_time``
+    (a 0.1 s compute floor still applies). Bigger results are therefore
+    *more* likely to persist when they are expensive to recompute, not
+    less. Retained for backward compatibility and surfaced by
+    ``cash config``; no longer consulted by the promotion policy."""
 
     min_execution_time_to_cache_seconds: float = 0.01
     """Hard floor (seconds). Compute under this duration is never

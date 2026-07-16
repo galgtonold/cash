@@ -100,27 +100,59 @@ def _build_default_tiered(config: "CashConfig") -> TieredBackend:
         flush_interval=config.flush_interval,
     )
 
-    promotion = _build_smart_persistence_policy(config) if config.smart_persistence else None
-    if promotion is None:
+    if not config.smart_persistence:
         return TieredBackend([ram, disk])
-    return TieredBackend([ram, disk], promotion_policy=promotion)
+    return _build_smart_tiered([ram, disk], config)
+
+
+# Compute floor for the smart-persistence stack: nothing under this many
+# seconds is promoted past RAM (disk I/O alone would cost more than rerunning).
+_SMART_PERSIST_COMPUTE_FLOOR_S = 0.1
+
+
+def _config_number(config: "CashConfig", attr: str, default: float) -> float:
+    """Read a numeric config attribute, defaulting on anything non-numeric.
+
+    Guards against test doubles (``MagicMock`` auto-attributes coerce to
+    ``1.0`` under ``float()``, so an ``isinstance`` check is required rather
+    than a ``try: float(...)``)."""
+    value = getattr(config, attr, default)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return default
+    return float(value)
+
+
+def _build_smart_tiered(backends: list[CacheBackend], config: "CashConfig") -> TieredBackend:
+    """Wrap *backends* in a serialization-aware smart-persistence policy."""
+    min_savings = _config_number(config, "min_cache_savings_pct", 0.20)
+    return TieredBackend(
+        backends,
+        promotion_policy=_build_smart_persistence_policy(config),
+        min_persist_compute_s=_SMART_PERSIST_COMPUTE_FLOOR_S,
+        min_persist_savings_pct=min_savings,
+    )
 
 
 def _build_smart_persistence_policy(config: "CashConfig"):
-    threshold = config.smart_persistence_threshold
-    min_persist_compute_s = 0.1
-    small_result_bytes = 64 * 1024
+    """The 2-arg fallback policy for entries with no cost-model family.
+
+    Serialization-aware, using the fitted ``cost_model`` (same rule the
+    statement processor's Gate A applies) instead of the old raw-bandwidth
+    arithmetic that made bigger objects *less* likely to persist. Since the
+    2-arg signature carries no type, it assumes the slowest (``_GENERIC``)
+    family — a conservative floor. The set path recomputes with the real type
+    whenever ``metadata['cost_model_family']`` is present.
+    """
+    min_persist_compute_s = _SMART_PERSIST_COMPUTE_FLOOR_S
+    min_savings = _config_number(config, "min_cache_savings_pct", 0.20)
 
     def policy(execution_time: float, size_bytes: int) -> bool:
         if execution_time < min_persist_compute_s:
             return False
-        if size_bytes < small_result_bytes:
-            return True
-        if execution_time < threshold:
-            return False
-        disk_bandwidth = 100 * 1024 * 1024  # 100 MB/s
-        io_time = (size_bytes / disk_bandwidth) * 2
-        return execution_time > io_time
+        from cash.notebook import cost_model
+
+        est_restore = cost_model.estimated_restore_time("", size_bytes, "disk")
+        return execution_time - est_restore > min_savings * execution_time
 
     return policy
 
@@ -133,10 +165,9 @@ def _build_tiered_from_tier_list(config: "CashConfig") -> TieredBackend:
     backends: list[CacheBackend] = []
     for tier in config.tiers:
         backends.append(_build_tier(tier, config))
-    promotion = _build_smart_persistence_policy(config) if config.smart_persistence else None
-    if promotion is None:
+    if not config.smart_persistence:
         return TieredBackend(backends)
-    return TieredBackend(backends, promotion_policy=promotion)
+    return _build_smart_tiered(backends, config)
 
 
 def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:

@@ -83,13 +83,15 @@ class TestCashInit:
             c = Cash(register_magic=False)
             assert isinstance(c.backend, TieredBackend)
 
-    def test_smart_persistence_policy_persists_small_medium_slow_results(self, tmp_path):
-        """Regression: 100 ms–1 s cells with small results must reach disk.
+    def test_smart_persistence_policy_persists_by_restore_vs_compute(self, tmp_path):
+        """The promotion policy promotes when recomputing costs more than the
+        predicted restore — not on a size-scaled bandwidth guess (CAS-141).
 
-        Before this fix the policy short-circuited on
-        ``execution_time < threshold`` and never reached the small-result
-        branch, so notebook cells in the 0.1 s–1 s range stayed RAM-only and
-        cold-kernel restarts couldn't restore them.
+        The old policy modelled raw disk I/O (``execution_time > 2·size/100MB/s``)
+        with zero serialization cost, so a *bigger* result was *less* likely to
+        persist — the exact inversion that left large frames RAM-only. The
+        corrected rule mirrors the statement processor's Gate A:
+        ``promote iff execution_time - est_restore > min_savings · execution_time``.
         """
         with patch('cash.core.get_config') as mock_config:
             mock_config.return_value = MagicMock(
@@ -98,6 +100,7 @@ class TestCashInit:
                 debug=False,
                 smart_persistence=True,
                 smart_persistence_threshold=1.0,
+                min_cache_savings_pct=0.20,
                 max_memory_entries=1000,
                 max_cache_size=None,
                 flush_interval=5,
@@ -105,23 +108,34 @@ class TestCashInit:
             c = Cash(register_magic=False)
             policy = c.backend.promotion_policy
 
-            # Sub-100 ms cells: never persist (disk I/O alone dominates).
+            # Sub-100 ms cells: never persist (below the compute floor — disk
+            # I/O alone would cost more than rerunning).
             assert policy(0.001, 100) is False
             assert policy(0.05, 50_000) is False
 
-            # 100 ms–1 s cells with a SMALL result: persist (the real fix).
+            # 100 ms–1 s cells whose tiny result restores far cheaper than it
+            # recomputes: persist.
             assert policy(0.15, 100) is True
             assert policy(0.5, 50_000) is True
 
-            # 100 ms–1 s cells with a LARGER result: still skipped — the
-            # ``smart_persistence_threshold`` setting governs heavy intermediates.
-            assert policy(0.15, 200_000) is False
+            # A 200 KB result computed in 150 ms: restore (~11 ms) is a small
+            # fraction of the 150 ms recompute, so it IS worth persisting. (The
+            # old threshold short-circuit wrongly refused this.)
+            assert policy(0.15, 200_000) is True
 
-            # > 1 s, large result whose I/O cost is still cheaper than recompute.
+            # > 1 s, medium result whose restore is far cheaper than recompute.
             assert policy(5.0, 10 * 1024 * 1024) is True
 
-            # > 1 s, but result so huge that re-running is faster than rehydrating.
-            assert policy(1.5, 500 * 1024 * 1024) is False
+            # HEADLINE FIX: a 500 MB result computed in 1.5 s. Predicted restore
+            # (~1.05 s) still saves more than the 20% floor, so it persists —
+            # where the inverted bandwidth model refused it.
+            assert policy(1.5, 500 * 1024 * 1024) is True
+
+            # Genuine refuse: a 1 GB result computed in only 0.5 s. Predicted
+            # restore (~2.1 s) is slower than recomputing, so rehydrating would
+            # cost more than it saves — keep it RAM-only.
+            assert policy(0.5, 1024 ** 3) is False
+            assert policy(1.0, 1024 ** 3) is False
 
     def test_repr(self):
         """Cash repr includes backend and function count."""

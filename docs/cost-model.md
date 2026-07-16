@@ -119,37 +119,32 @@ This filter only matters if you're using `TieredBackend` (the default). With a s
 
 ### The smart_persistence_policy
 
-`_create_default_backend` at [`core.py:204-247`](https://github.com/galgtonold/cash/blob/main/src/cash/core.py) constructs the closure used as the tier-promotion policy. Pulled verbatim from [`core.py:226-244`](https://github.com/galgtonold/cash/blob/main/src/cash/core.py):
+`_build_smart_persistence_policy` at [`factory.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/factory.py) constructs the closure used as the tier-promotion policy. Since CAS-141 it applies the **same fitted cost model** as filter 1 (the notebook Gate A), so the two persistence gates agree instead of contradicting each other:
 
-<!-- test:skip reason="source-code excerpt: references undefined name 'threshold' from outer closure" -->
+<!-- test:skip reason="source-code excerpt: references cost_model / min_savings from outer closure" -->
 ```python
-min_persist_compute_s = 0.1                     # HARDCODED
-small_result_bytes = 64 * 1024                  # HARDCODED — 64 KB
+min_persist_compute_s = 0.1                     # HARDCODED compute floor
 
 def smart_persistence_policy(execution_time: float, size_bytes: int) -> bool:
     if execution_time < min_persist_compute_s:
         return False                            # tiny compute: never
-    if size_bytes < small_result_bytes:
-        return True                             # small result: always
-    if execution_time < threshold:              # threshold = config.smart_persistence_threshold
-        return False
-    disk_bandwidth = 100 * 1024 * 1024
-    io_time = (size_bytes / disk_bandwidth) * 2
-    return execution_time > io_time
+    # Fitted cost model: predicted read + deserialize seconds for this size.
+    est_restore = cost_model.estimated_restore_time("", size_bytes, "disk")
+    # Promote only when recompute saves more than restore, by min_savings.
+    return execution_time - est_restore > min_savings * execution_time
 ```
 
-Four cases:
+Three cases (the 2-arg closure has no type, so it predicts with the slowest `_GENERIC` family; when the entry records a `cost_model_family`, `TieredBackend.set` predicts with the real type):
 
-| Compute time | Result size | Decision |
+| Compute time | Result | Decision |
 |---|---|---|
 | `< 0.1 s` | (any) | **No** — disk I/O round-trip alone costs more than rerunning the cell. |
-| `≥ 0.1 s` | `< 64 KB` | **Yes** — tiny disk write, full execution_time saved on cold restart. |
-| `< smart_persistence_threshold` | `≥ 64 KB` | **No** — user opted out of persisting medium-fast intermediates. |
-| `≥ smart_persistence_threshold` | `≥ 64 KB` | **Yes** if `execution_time > 2 × size / 100 MB/s`. |
+| `≥ 0.1 s` | expensive to recompute vs. restore | **Yes** — restoring saves more than `min_cache_savings_pct` of the compute. |
+| `≥ 0.1 s` | cheap to recompute, slow to restore | **No** — a large result whose predicted restore exceeds the recompute cost stays RAM-only. |
 
-The 0.1 s minimum and 64 KB cutoff are **not configurable**. They're constants in the closure body. To change them you'd have to subclass and provide your own promotion policy.
+The 0.1 s minimum is **not configurable** — it's a constant in the closure body. To change it you'd have to provide your own promotion policy.
 
-The 100 MB/s disk bandwidth is also hardcoded; on NVMe or RAM-disk you may be under-promoting, on a slow USB drive you may be over-promoting.
+The cost-model coefficients were fitted on one dev machine's NVMe; on very different storage the predictions drift (per-machine recalibration is a planned follow-up).
 
 ### Force-promote via @cash:persist
 
@@ -175,9 +170,9 @@ All on `CashConfig` (see [`src/cash/config.py:32-51`](https://github.com/galgton
 
 | Field | Env var | Default | Filter | Effect |
 |---|---|---|---|---|
-| `smart_persistence` | — | `True` | 2 | When `False`, every passing write goes to both tiers unconditionally. |
-| `smart_persistence_threshold` | — | `1.0` s | 2 | Filter-2 cutoff for medium-fast cells with non-tiny results. |
-| `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | 1 | Predicted savings ratio required; raise to skip more aggressively. |
+| `smart_persistence` | — | `True` | 2 | When `False`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
+| `smart_persistence_threshold` | — | `1.0` s | — | **Legacy / no longer consulted (CAS-141);** superseded by the cost-model comparison. |
+| `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | 1 & 2 | Predicted savings ratio required; now used by both filter 1 and the tier policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET` | `0.05` s | 1 | Floor on the restore-time budget. Trivial cells get this much budget regardless of compute. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE` | `0.01` s | floor | Statements faster than this never cache. |
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `None` | RAM tier | LRU cap on `InMemoryBackend`. Indirect: forces eviction even when filter 1 said cache. |
@@ -266,15 +261,13 @@ Only filter 1 emits this string. The cheap-floor and filter 2 produce only debug
 
 ### "Why isn't my big DataFrame cached?"
 
-Most likely: it **is** RAM-cached, but **not promoted to disk**. The badge probably shows a green `cached` status (RAM hit) in-session but rebuilds from scratch after a kernel restart.
-
-Walk through:
+If the frame took real time to build, it **is** promoted to disk now (that was the CAS-141 fix — the old bandwidth model wrongly refused large results). If it's still RAM-only, the frame is **cheap to recompute relative to its restore cost**:
 
 - Filter 1 passes trivially because the primary tier is `InMemoryBackend`. A 400 MB DataFrame's `est_restore_time` on RAM is around 65 ms — well under the 50 ms fixed budget (close, but `max(0.05, 0.8 × execution_time)` will be governed by execution_time for a non-trivial cell).
-- Filter 2 likely fails: if compute was < 1 s (the default `smart_persistence_threshold`) and the result is > 64 KB, the policy returns `False` immediately. No disk write.
+- Filter 2 (the tier policy) predicts the *disk* restore time and compares it to compute. A frame that took only, say, 0.3 s to build but would take ~1 s to reload is deliberately kept RAM-only — rehydrating it costs more than rerunning.
 - After a kernel restart the RAM tier is empty. The lookup misses. The cell reruns.
 
-**Fix:** lower `smart_persistence_threshold` to e.g. 0.1 (any cell over 100 ms persists), or add `# @cash:persist` to the offending cell, or set `smart_persistence=False` to disable filter 2 entirely.
+**Fix:** lower `min_cache_savings_pct` toward `0` so nearly any hit clears the promotion bar, or add `# @cash:persist` to the offending cell to force it past both gates.
 
 ### "Why is this tiny computation re-running?"
 
@@ -406,7 +399,7 @@ Set them programmatically:
 import cash
 cash_instance = cash.Cash(config=cash.CashConfig(
     min_cache_savings_pct=0.5,
-    smart_persistence_threshold=0.1,
+    min_cache_fixed_budget_seconds=0.1,
 ))
 ```
 

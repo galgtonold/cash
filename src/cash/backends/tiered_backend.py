@@ -20,31 +20,85 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
     Implements smart promotion and read-repair.
     """
 
-    def __init__(self, backends: list[CacheBackend], promotion_policy: Callable[[float, int], bool] | None = None) -> None:
+    # Map a backend implementation class to the cost-model backend kind used
+    # to predict restore time. Anything unmapped is treated as disk (the
+    # cost model itself also falls back to "disk" for unknown kinds).
+    _BACKEND_KIND_BY_CLASS = {
+        "InMemoryBackend": "ram",
+        "FileBackend": "disk",
+        "SQLiteBackend": "disk",
+        "RedisBackend": "redis",
+        "S3Backend": "s3",
+    }
+
+    def __init__(
+        self,
+        backends: list[CacheBackend],
+        promotion_policy: Callable[[float, int], bool] | None = None,
+        *,
+        min_persist_compute_s: float = 1.0,
+        min_persist_savings_pct: float = 0.20,
+    ) -> None:
         """
         Args:
             backends: List of cache backends, ordered by speed (fastest first).
             promotion_policy: Callable taking (execution_time, size_bytes) and returning True if should promote.
+            min_persist_compute_s: Compute floor for the serialization-aware
+                decision — nothing below this is promoted past tier 0. The
+                default (1.0 s) matches the fallback ``_default_promotion_policy``;
+                the factory lowers it to 0.1 s for the smart-persistence stack.
+            min_persist_savings_pct: Required fraction of compute time that a
+                cache hit must save to be worth promoting. Mirrors
+                ``CashConfig.min_cache_savings_pct`` (Gate A's threshold).
         """
         self.backends = backends
         self.promotion_policy = promotion_policy or self._default_promotion_policy
-        self._disk_bandwidth_est = 100 * 1024 * 1024 # 100 MB/s conservative estimate
+        self._min_persist_compute_s = min_persist_compute_s
+        self._min_persist_savings_pct = min_persist_savings_pct
+
+    def _promotion_backend_kind(self) -> str:
+        """Cost-model backend kind of the first tier past RAM (the primary
+        persistence target). Used to predict restore cost at ``set`` time."""
+        if len(self.backends) > 1:
+            name = type(self.backends[1]).__name__
+            return self._BACKEND_KIND_BY_CLASS.get(name, "disk")
+        return "disk"
+
+    def _cost_model_promote(
+        self, type_name: str, size_bytes: int, execution_time: float, backend_kind: str
+    ) -> bool:
+        """Serialization-aware promotion decision (the same rule Gate A uses):
+        promote only when recomputing costs more than the predicted restore.
+
+        ``promote if execution_time - est_restore_time > min_savings * execution_time``
+
+        The prediction comes from the fitted ``cost_model`` (serialize+write /
+        read+deserialize end-to-end), so — unlike the old raw-bandwidth model —
+        bigger objects are correctly *more* likely to persist when their
+        recompute cost is high.
+        """
+        if execution_time < self._min_persist_compute_s:
+            return False
+        # Lazy import: only notebook-cached values carry the cost-model family,
+        # and by then cash.notebook is already loaded. Keeps this module (and a
+        # bare install / the decorator path) free of the notebook import.
+        from cash.notebook import cost_model
+
+        est_restore = cost_model.estimated_restore_time(type_name, size_bytes, backend_kind)
+        return execution_time - est_restore > self._min_persist_savings_pct * execution_time
 
     def _default_promotion_policy(self, execution_time: float, size_bytes: int) -> bool:
-        """
-        Default policy: Promote if execution time is significant AND
-        recomputing is likely slower than reading from next tier.
-        """
-        # Threshold 1: Logic must take at least 1.0s to be worth caching on disk
-        if execution_time < 1.0:
-            return False
+        """Fallback policy used when no ``promotion_policy`` is supplied and the
+        entry's metadata carries no cost-model family (so ``set`` can't predict
+        with the real type).
 
-        # Threshold 2: Reading from disk shouldn't be slower than recomputing
-        # Time to read = Size / Bandwidth
-        read_time = size_bytes / self._disk_bandwidth_est
-
-        # If execution time is much larger than read time, cache it.
-        return execution_time > read_time
+        Serialization-aware like the smart policy, but assumes the slowest
+        (``_GENERIC``) family since the caller gave only ``size_bytes``. Keeps
+        the 1.0 s compute floor as a designed floor for the fallback path.
+        """
+        return self._cost_model_promote(
+            "", size_bytes, execution_time, self._promotion_backend_kind()
+        )
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         for i, backend in enumerate(self.backends):
@@ -105,19 +159,39 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # Check if force_persist is set via @cash:persist annotation
             force_persist = metadata.get('force_persist', False)
 
-            # Universal compute floor — same for every tier past tier 0.
-            past_compute_floor = force_persist or self.promotion_policy(exec_time, size)
+            # Promotion decision — same rule as the statement processor's Gate A
+            # (predicted restore vs compute), applied here so the two gates can
+            # never contradict each other. When the entry carries a cost-model
+            # family (notebook-cached values), predict restore time with the
+            # real type; otherwise fall through to the 2-arg promotion_policy
+            # (injected test lambdas, the decorator path, legacy metadata).
+            family = metadata.get('cost_model_family')
+            if force_persist:
+                past_compute_floor = True
+            elif family is not None:
+                past_compute_floor = self._cost_model_promote(
+                    metadata.get('cost_model_type_name', ''),
+                    metadata.get('cost_model_size_bytes', size),
+                    exec_time,
+                    self._promotion_backend_kind(),
+                )
+            else:
+                past_compute_floor = self.promotion_policy(exec_time, size)
+
+            # Size used for per-tier caps — prefer the cost-model estimate
+            # (the notebook path sets no plain 'size' key).
+            cap_size = size or metadata.get('cost_model_size_bytes', 0)
 
             for i in range(1, len(self.backends)):
                 backend = self.backends[i]
                 if not past_compute_floor:
                     continue
                 cap = getattr(type(backend), 'max_size_bytes', None)
-                if cap is not None and size and size > cap:
+                if cap is not None and cap_size and cap_size > cap:
                     # This tier doesn't want objects this large.
                     logger.debug(
                         "[TIERED] Skipping %s for key %r: size %d > cap %d",
-                        type(backend).__name__, key, size, cap,
+                        type(backend).__name__, key, cap_size, cap,
                     )
                     continue
                 try:
