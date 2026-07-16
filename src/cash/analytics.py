@@ -10,15 +10,45 @@ package root rather than inside ``notebook/``.
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import logging
 import sqlite3
 import time
 import uuid
+import weakref
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Live managers whose in-memory buffers may still hold un-persisted events.
+# Tracked *weakly* so this module can drain them on a clean interpreter/kernel
+# shutdown via an ``atexit`` hook WITHOUT keeping the managers alive — a strong
+# reference here would defeat ``__del__`` and leak one manager per
+# ``StatementProcessor`` across a long-running session (e.g. the test suite,
+# which builds thousands of them).
+#
+# Best-effort by design (CAS-149): ``atexit`` runs on a *clean* exit, so the
+# buffered analytics events survive a normal kernel shutdown. On a *hard* kill
+# (kernel crash, SIGKILL, power loss) ``atexit`` does not run and the last
+# ``< _flush_threshold`` buffered events are lost. That is acceptable because
+# analytics is best-effort observability, not correctness — losing a handful of
+# telemetry rows on a crash changes no cached result.
+_live_managers: weakref.WeakSet[AnalyticsManager] = weakref.WeakSet()
+
+
+def _flush_live_managers_atexit() -> None:
+    """Drain every live manager's buffer at clean interpreter shutdown."""
+    for mgr in list(_live_managers):
+        # Errors during interpreter shutdown are common and harmless here;
+        # analytics is best-effort, so swallow them.
+        with contextlib.suppress(sqlite3.Error, OSError):
+            mgr.flush()
+
+
+atexit.register(_flush_live_managers_atexit)
+
 
 class AnalyticsManager:
     """
@@ -47,6 +77,9 @@ class AnalyticsManager:
         self._event_buffer: list[tuple] = []
         self._flush_threshold = 50  # Flush every 50 events
         self._init_db()
+        # Register for the clean-shutdown drain (see ``_live_managers`` above).
+        # Weak reference only, so this never blocks garbage collection.
+        _live_managers.add(self)
 
     def __del__(self):
         """Flush remaining buffered events on garbage collection."""

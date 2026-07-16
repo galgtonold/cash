@@ -1088,11 +1088,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         hook_total = time.time() - hook_start
 
-        # Flush buffered analytics events to avoid stale data
-        try:
-            self._statement_processor.analytics_manager.flush()
-        except (AttributeError, TypeError, OSError):
-            logger.debug("Analytics flush failed in _execute_cell")
+        # Analytics events are intentionally NOT flushed here, per cell.
+        # The AnalyticsManager buffers events and flushes on its own policy —
+        # every ~50 events, on any stats query, and via an atexit hook on a
+        # clean shutdown.  Forcing a SQLite connect+commit on *every* cell
+        # fsync'd the DB per cell and dominated per-cell wall time (~12 ms/cell,
+        # measured), defeating the very batch buffer it was draining (CAS-149).
+        # Trade-off: on a hard kernel kill the last < 50 buffered analytics
+        # events may be lost — acceptable because analytics is best-effort
+        # observability, not correctness.
 
         # Post-execution: auto-track any newly imported local modules.
         # On the FIRST run of `import trackmod`, auto_track_local_imports couldn't
