@@ -894,8 +894,17 @@ class CellExecutor:
                 if is_control_structure(node):
                     if self._debug:
                         print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                    # ``raw_cell`` (not the annotation) is what goes down: the
+                    # structure's statements each resolve their OWN directive
+                    # against the original source, and ``ast.unparse`` has already
+                    # dropped the comments by the time they are dispatched. The
+                    # ``annotation`` computed above is the node's WHOLE-range
+                    # merge, which cannot tell a directive on the loop from one on
+                    # a single body statement — passing it would disable caching
+                    # for every sibling in the body (CAS-135).
                     ctrl_result = self._control_structure_processor.process(
                         node, ttl=self._magics._global_ttl, silent=True,
+                        raw_cell=raw_cell,
                     )
                     buffered_result_outputs = self._collect_ctrl_outputs(
                         ctrl_result, is_last, all_metrics, buffered_result_outputs,
@@ -985,8 +994,17 @@ class CellExecutor:
                 if is_control_structure(node):
                     if self._debug:
                         print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                    # ``raw_cell`` (not the annotation) is what goes down: the
+                    # structure's statements each resolve their OWN directive
+                    # against the original source, and ``ast.unparse`` has already
+                    # dropped the comments by the time they are dispatched. The
+                    # ``annotation`` computed above is the node's WHOLE-range
+                    # merge, which cannot tell a directive on the loop from one on
+                    # a single body statement — passing it would disable caching
+                    # for every sibling in the body (CAS-135).
                     ctrl_result = self._control_structure_processor.process(
                         node, ttl=self._magics._global_ttl, silent=True,
+                        raw_cell=raw_cell,
                     )
                     buffered_result_outputs = self._collect_ctrl_outputs(
                         ctrl_result, is_last, all_metrics, buffered_result_outputs,

@@ -18,7 +18,95 @@ import logging
 import sys
 from typing import Any
 
+from ..annotations import (
+    CacheAnnotation,
+    get_statement_annotations,
+    parse_annotations_in_range,
+)
+
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Annotation resolution (CAS-135)
+# ---------------------------------------------------------------------------
+#
+# ``@cash:`` directives were computed in ``cell_executor`` for each TOP-LEVEL
+# node and then dropped for anything nested: ``ControlStructureProcessor.process``
+# never took an annotation, so a ``# @cash:no-cache`` on a statement inside a
+# loop body was silently ignored. The parser was never the problem — the
+# directive binds to the body statement correctly — so these helpers only need
+# to resolve it at the right scope, and the handlers need to pass ``raw_cell``.
+#
+# The governing rule is: **annotation granularity follows cache granularity.**
+#
+# * A ``for``/``if`` body is decomposed into per-statement cache entries, so each
+#   body statement resolves its OWN annotation, and a directive on one statement
+#   must not leak onto its siblings.
+# * A ``while``/``with`` (and a ``for`` with break/continue, or one taking the
+#   fast-loop path) executes as ONE cache unit, so a directive anywhere inside it
+#   scopes to the whole unit — there is no finer entry for it to attach to.
+# * A directive on a control structure's HEADER scopes to that structure, and is
+#   therefore inherited by every statement within it.
+
+
+def resolve_header_annotation(
+    raw_cell: str | None,
+    node: ast.AST,
+    inherited: CacheAnnotation | None = None,
+) -> CacheAnnotation | None:
+    """The annotation attached to a control structure's *header*.
+
+    Scans only the header line and the comment block immediately above it — NOT
+    the node's whole line range. That separation is the point: the whole-range
+    scan cannot tell ``# @cash:no-cache`` written above ``for`` (scopes to the
+    loop) from one written on a single statement inside its body (scopes to that
+    statement), and conflating them would disable caching for every sibling.
+
+    Returns the merge with *inherited* so an enclosing structure's directive
+    flows down into a nested one.
+    """
+    if raw_cell is None:
+        return inherited
+    lineno = getattr(node, 'lineno', None)
+    if lineno is None:
+        return inherited
+    header = parse_annotations_in_range(raw_cell.splitlines(), lineno, lineno)
+    if inherited is None:
+        return header if header.has_directives() else None
+    return inherited.merge(header)
+
+
+def resolve_statement_annotation(
+    raw_cell: str | None,
+    node: ast.AST,
+    inherited: CacheAnnotation | None = None,
+) -> CacheAnnotation | None:
+    """The effective annotation for one statement nested in a control structure.
+
+    Its own directives (from the comment block above it and its own lines),
+    merged under any inherited from the structures enclosing it.
+    """
+    if raw_cell is None:
+        return inherited
+    own = get_statement_annotations(raw_cell, node)
+    if inherited is None:
+        return own if own.has_directives() else None
+    return inherited.merge(own)
+
+
+def resolve_unit_annotation(
+    raw_cell: str | None,
+    node: ast.AST,
+    inherited: CacheAnnotation | None = None,
+) -> CacheAnnotation | None:
+    """The effective annotation for a control structure executed as ONE unit.
+
+    Deliberately the node's WHOLE range: the unit is a single cache entry, so a
+    directive anywhere inside it applies to the entry. This is the one place the
+    coarse whole-range scan is the correct reading rather than a conflation.
+    """
+    return resolve_statement_annotation(raw_cell, node, inherited)
 
 
 # ---------------------------------------------------------------------------

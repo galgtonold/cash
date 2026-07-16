@@ -52,6 +52,8 @@ class IfHandler:
         node: ast.If,
         ttl: int | None,
         silent: bool,
+        raw_cell: str | None = None,
+        inherited_annotation=None,
     ):
         """Execute an if/elif/else by processing each branch statement individually.
 
@@ -81,6 +83,12 @@ class IfHandler:
             # Build a context hash for cache key uniqueness (which branch)
             branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
 
+            # A directive on the ``if``/``elif`` header scopes to the branch, so
+            # it flows down into every statement in it (CAS-135).
+            branch_annotation = _helpers.resolve_header_annotation(
+                raw_cell, node, inherited_annotation,
+            )
+
             # Build the full body_statements for badge display (only executed branch)
             body_stmts = [f"{branch_label}:"]
             for body_node in branch_body:
@@ -88,7 +96,8 @@ class IfHandler:
 
             for body_node in branch_body:
                 was_computed = self._execute_if_branch_stmt(
-                    body_node, branch_hash, branch_label, ttl, silent, all_metrics
+                    body_node, branch_hash, branch_label, ttl, silent, all_metrics,
+                    raw_cell, branch_annotation,
                 )
                 if was_computed:
                     computed_count += 1
@@ -135,12 +144,20 @@ class IfHandler:
         ttl: int | None,
         silent: bool,
         all_metrics: list,
+        raw_cell: str | None = None,
+        branch_annotation=None,
     ) -> bool:
-        """Execute one statement from an if-branch; return True if computed (not cached)."""
+        """Execute one statement from an if-branch; return True if computed (not cached).
+
+        Each branch statement is its own cache entry, so its ``@cash:`` directive
+        is resolved per statement and must not leak onto its siblings (CAS-135).
+        """
         from .processor import is_control_structure
 
         if is_control_structure(body_node):
-            result = self.dispatcher.process(body_node, ttl, silent, None)
+            result = self.dispatcher.process(
+                body_node, ttl, silent, None, raw_cell, branch_annotation,
+            )
             _helpers.tag_control_metrics(result, branch_hash, branch_label, all_metrics)
             if not result.success:
                 err = result.error or RuntimeError("Error in nested control structure")
@@ -151,7 +168,12 @@ class IfHandler:
             return result.computed_iterations > 0
         stmt_code = ast.unparse(body_node)
         modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
-        metrics = self.statement_processor.process_statement(modified_code, ttl, silent)
+        annotation = _helpers.resolve_statement_annotation(
+            raw_cell, body_node, branch_annotation,
+        )
+        metrics = self.statement_processor.process_statement(
+            modified_code, ttl, silent, annotation=annotation,
+        )
         metrics['control_context'] = branch_hash
         metrics['branch_label'] = branch_label
         _helpers.flush_metrics_output(metrics)

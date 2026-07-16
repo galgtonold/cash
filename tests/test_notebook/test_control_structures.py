@@ -458,7 +458,7 @@ class TestOutputFlushing:
         """For loop body statements should flush stdout immediately, not after all iterations."""
         # Each process() call returns metrics with stdout
         call_count = [0]
-        def mock_process(code, ttl=None, silent=True):
+        def mock_process(code, ttl=None, silent=True, annotation=None, **kwargs):
             call_count[0] += 1
             return {
                 'status': CacheStatus.COMPUTED,

@@ -54,6 +54,8 @@ class TryHandler:
         node: ast.Try,
         ttl: int | None,
         silent: bool,
+        raw_cell: str | None = None,
+        inherited_annotation=None,
     ):
         """Execute a try/except/else/finally by processing each statement individually.
 
@@ -80,8 +82,14 @@ class TryHandler:
 
         try:
             branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
+            # A directive on the ``try`` header scopes to the whole construct and
+            # flows down into every branch within it (CAS-135).
+            try_annotation = _helpers.resolve_header_annotation(
+                raw_cell, node, inherited_annotation,
+            )
             try_body_succeeded, caught_exception, c, d = self._execute_try_body_stmts(
-                node, branch_hash, branch_label, ttl, silent, all_metrics
+                node, branch_hash, branch_label, ttl, silent, all_metrics,
+                raw_cell, try_annotation,
             )
             cached_count += c
             computed_count += d
@@ -95,7 +103,8 @@ class TryHandler:
                     handler_hash = hashlib.sha256(handler_label.encode()).hexdigest()[:16]
                     self._bind_exception_to_handler(matched_handler, caught_exception)
                     c, d = self._execute_simple_branch(
-                        matched_handler.body, handler_hash, handler_label, ttl, silent, all_metrics
+                        matched_handler.body, handler_hash, handler_label, ttl, silent,
+                        all_metrics, raw_cell, try_annotation,
                     )
                     cached_count += c
                     computed_count += d
@@ -106,14 +115,20 @@ class TryHandler:
             if try_body_succeeded and node.orelse:
                 else_label = "else"
                 else_hash = hashlib.sha256(else_label.encode()).hexdigest()[:16]
-                c, d = self._execute_simple_branch(node.orelse, else_hash, else_label, ttl, silent, all_metrics)
+                c, d = self._execute_simple_branch(
+                    node.orelse, else_hash, else_label, ttl, silent, all_metrics,
+                    raw_cell, try_annotation,
+                )
                 cached_count += c
                 computed_count += d
 
             if getattr(node, 'finalbody', None):
                 finally_label = "finally"
                 finally_hash = hashlib.sha256(finally_label.encode()).hexdigest()[:16]
-                c, d = self._execute_simple_branch(node.finalbody, finally_hash, finally_label, ttl, silent, all_metrics)
+                c, d = self._execute_simple_branch(
+                    node.finalbody, finally_hash, finally_label, ttl, silent, all_metrics,
+                    raw_cell, try_annotation,
+                )
                 cached_count += c
                 computed_count += d
 
@@ -158,6 +173,8 @@ class TryHandler:
         ttl: int | None,
         silent: bool,
         all_metrics: list,
+        raw_cell: str | None = None,
+        branch_annotation=None,
     ) -> tuple[int, int]:
         """Execute body nodes under a context hash; return (cached_count, computed_count).
 
@@ -169,7 +186,9 @@ class TryHandler:
         cached = computed = 0
         for body_node in body_nodes:
             if is_control_structure(body_node):
-                result = self.dispatcher.process(body_node, ttl, silent, None)
+                result = self.dispatcher.process(
+                    body_node, ttl, silent, None, raw_cell, branch_annotation,
+                )
                 _helpers.tag_control_metrics(result, ctx_hash, ctx_label, all_metrics)
                 if not result.success:
                     raise result.error or RuntimeError("Error in nested control structure")
@@ -180,7 +199,12 @@ class TryHandler:
             else:
                 stmt_code = ast.unparse(body_node)
                 modified_code = f"# control_context: {ctx_hash}\n{stmt_code}"
-                metrics = self.statement_processor.process_statement(modified_code, ttl, silent)
+                annotation = _helpers.resolve_statement_annotation(
+                    raw_cell, body_node, branch_annotation,
+                )
+                metrics = self.statement_processor.process_statement(
+                    modified_code, ttl, silent, annotation=annotation,
+                )
                 metrics['control_context'] = ctx_hash
                 metrics['branch_label'] = ctx_label
                 _helpers.flush_metrics_output(metrics)
@@ -201,6 +225,8 @@ class TryHandler:
         ttl: int | None,
         silent: bool,
         all_metrics: list,
+        raw_cell: str | None = None,
+        branch_annotation=None,
     ) -> tuple[bool, Exception | None, int, int]:
         """Execute the try-body statements; return (succeeded, caught_exc, cached, computed)."""
         from .processor import is_control_structure
@@ -211,7 +237,9 @@ class TryHandler:
         for body_node in node.body:
             if is_control_structure(body_node):
                 try:
-                    result = self.dispatcher.process(body_node, ttl, silent, None)
+                    result = self.dispatcher.process(
+                        body_node, ttl, silent, None, raw_cell, branch_annotation,
+                    )
                     _helpers.tag_control_metrics(result, branch_hash, branch_label, all_metrics)
                     if not result.success:
                         caught_exception = result.error or RuntimeError("Error in nested control structure")
@@ -228,8 +256,13 @@ class TryHandler:
             else:
                 stmt_code = ast.unparse(body_node)
                 modified_code = f"# control_context: {branch_hash}\n{stmt_code}"
+                annotation = _helpers.resolve_statement_annotation(
+                    raw_cell, body_node, branch_annotation,
+                )
                 try:
-                    metrics = self.statement_processor.process_statement(modified_code, ttl, silent)
+                    metrics = self.statement_processor.process_statement(
+                        modified_code, ttl, silent, annotation=annotation,
+                    )
                 except Exception as e:  # noqa: BLE001 - catching user-raised exceptions from statement execution
                     caught_exception = e
                     try_body_succeeded = False

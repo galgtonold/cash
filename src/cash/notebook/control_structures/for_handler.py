@@ -92,6 +92,8 @@ class ForLoopHandler:
         ttl: int | None,
         silent: bool,
         parent_context: dict[str, Any] | None,
+        raw_cell: str | None = None,
+        inherited_annotation=None,
     ):
         """
         Process a for loop with per-iteration caching.
@@ -100,7 +102,8 @@ class ForLoopHandler:
         1. Bind the loop target variable(s) into user_ns.
         2. Build an iteration context (target values + iterable lineage).
         3. Process each body statement through the statement processor with
-           an ``# __iteration_context__: <hash>`` comment prepended.
+           an ``# __iteration_context__: <hash>`` comment prepended, and with
+           its own ``@cash:`` annotation resolved from *raw_cell* (CAS-135).
 
         The statement processor's mutation detection (which runs before any
         cache lookup) will automatically set ``skip_cache=True`` for
@@ -123,6 +126,13 @@ class ForLoopHandler:
         computed_iterations = 0
 
         target_names = extract_target_names(node.target)
+
+        # A directive on the loop HEADER scopes to the loop, so it flows down
+        # into every body statement. Resolved once here rather than per
+        # iteration — it is a property of the source, not of the iteration.
+        loop_annotation = _helpers.resolve_header_annotation(
+            raw_cell, node, inherited_annotation,
+        )
 
         if self.debug:
             logger.debug("[CONTROL] Processing FOR loop with targets: %s", target_names)
@@ -157,7 +167,12 @@ class ForLoopHandler:
                     and self._iter_header_safe_to_reevaluate(node.iter, iterable)):
                 if self.debug:
                     logger.debug("[CONTROL] Fast-loop: executing as single unit (overhead > benefit)")
-                return self.dispatcher._execute_as_single_unit(node, ttl, silent)
+                # Single-unit mode makes the loop ONE cache entry, so the unit
+                # annotation (whole range) is the right scope — a body directive
+                # has no finer entry to attach to here.
+                return self.dispatcher._execute_as_single_unit(
+                    node, ttl, silent, raw_cell, inherited_annotation,
+                )
 
             # all iterations.
             iterable_lineage = _helpers.get_iterable_lineage(
@@ -172,6 +187,7 @@ class ForLoopHandler:
                 if self._process_one_iteration(
                     node, iteration_value, iterable_lineage, target_names,
                     ttl, silent, all_metrics, parent_context,
+                    raw_cell, loop_annotation,
                 ):
                     cached_iterations += 1
                 else:
@@ -229,6 +245,8 @@ class ForLoopHandler:
         silent: bool,
         all_metrics: list,
         parent_context: dict | None,
+        raw_cell: str | None = None,
+        loop_annotation=None,
     ) -> bool:
         """Process a single loop iteration; return True if fully cached."""
         from .processor import (
@@ -278,10 +296,12 @@ class ForLoopHandler:
             if is_control_structure(body_node):
                 was_computed = self._execute_loop_body_nested_control(
                     body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
+                    raw_cell, loop_annotation,
                 )
             else:
                 was_computed = self._execute_loop_body_statement(
                     body_node, iteration_context, ttl, silent, all_metrics,
+                    raw_cell, loop_annotation,
                 )
             for m in all_metrics[before_count:]:
                 if not isinstance(m, dict):
@@ -303,7 +323,8 @@ class ForLoopHandler:
         code: str,
         iteration_context: dict[str, Any],
         ttl: int | None,
-        silent: bool
+        silent: bool,
+        annotation=None,
     ) -> dict[str, Any]:
         """
         Process a single body statement with iteration context in the cache key.
@@ -314,13 +335,20 @@ class ForLoopHandler:
         The statement processor's mutation detection will automatically detect
         statements like ``a.append(x)`` or ``d[k] = v`` and set
         ``skip_cache=True``, ensuring they always re-execute.
+
+        *annotation* is the body statement's own ``@cash:`` directives, resolved
+        by the caller against the original cell source. It cannot be recovered
+        from *code*: ``ast.unparse`` drops comments, so by the time a body
+        statement gets here its directive is already gone from the text (CAS-135).
         """
         from .processor import compute_context_hash
 
         context_hash = compute_context_hash(iteration_context)
         modified_code = f"# __iteration_context__: {context_hash}\n{code}"
 
-        result = self.statement_processor.process_statement(modified_code, ttl, silent)
+        result = self.statement_processor.process_statement(
+            modified_code, ttl, silent, annotation=annotation,
+        )
 
         # Attach human-readable loop variable values to the metrics
         loop_vars = {
@@ -341,6 +369,8 @@ class ForLoopHandler:
         context_hash: str,
         loop_vars: dict[str, Any],
         all_metrics: list,
+        raw_cell: str | None = None,
+        loop_annotation=None,
     ) -> bool:
         """Process a nested control structure inside a for loop body.
 
@@ -348,10 +378,15 @@ class ForLoopHandler:
         context comment into nested metrics for correct badge grouping, and
         flushes output immediately for real-time streaming.
 
+        The enclosing loop's annotation is passed down as *inherited*, so a
+        directive on the outer loop reaches statements in the inner one.
+
         Returns True if any nested iterations were computed (not cached).
         Raises on error, annotating the exception with the body node's line number.
         """
-        result = self.dispatcher.process(body_node, ttl, silent, iteration_context)
+        result = self.dispatcher.process(
+            body_node, ttl, silent, iteration_context, raw_cell, loop_annotation,
+        )
         # Inject __iteration_context__ into nested metrics so the badge
         # renderer keeps them inside the loop group.
         for m in result.metrics:
@@ -380,6 +415,8 @@ class ForLoopHandler:
         ttl: int | None,
         silent: bool,
         all_metrics: list,
+        raw_cell: str | None = None,
+        loop_annotation=None,
     ) -> bool:
         """Process a plain (non-control-structure) statement inside a for loop body.
 
@@ -387,10 +424,21 @@ class ForLoopHandler:
         output immediately, and raises on error — annotating the exception with
         the body node's source line number.
 
+        The statement's OWN annotation is resolved here, under the loop's. Body
+        statements are separate cache entries, so a ``# @cash:no-cache`` on one
+        must not leak onto its siblings — resolving per statement rather than
+        applying the loop's whole-range scan is what keeps the sibling cached
+        (CAS-135).
+
         Returns True if the statement was freshly computed (status == 'COMPUTED').
         """
         stmt_code = ast.unparse(body_node)
-        metrics = self._process_body_statement(stmt_code, iteration_context, ttl, silent)
+        annotation = _helpers.resolve_statement_annotation(
+            raw_cell, body_node, loop_annotation,
+        )
+        metrics = self._process_body_statement(
+            stmt_code, iteration_context, ttl, silent, annotation,
+        )
         _helpers.flush_metrics_output(metrics)
         all_metrics.append(metrics)
         if metrics.get('status') == CacheStatus.ERROR:

@@ -243,12 +243,56 @@ After the backward walk, the parser also scans the lines *inside* the statement'
 ```python
 for i in range(10):
     # @cash:no-cache
-    result = compute(i)     # whole for-loop is no-cache
+    result = compute(i)     # this statement re-runs every iteration
 ```
 
 Verified by [`tests/test_notebook/test_annotations.py:125-134`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py).
 
 Because the forward walk runs *after* the backward walk, an in-body annotation overrides a header annotation when they conflict (see [Merging](#merging-multiple-annotations)).
+
+### Scoping inside control structures
+
+**Annotation granularity follows cache granularity.** Cash caches `for` and `if`
+bodies *per statement*, so a directive inside one is scoped to the statement it
+sits on — not to the whole block:
+
+```python
+for i in range(10):
+    # @cash:no-cache
+    fresh = compute(i)      # re-runs every iteration
+    heavy = i * i           # still cached per-iteration
+```
+
+To scope a directive to the **whole loop**, put it on the header. Every statement
+inside then inherits it:
+
+```python
+# @cash:no-cache
+for i in range(10):
+    fresh = compute(i)      # re-runs
+    heavy = i * i           # also re-runs — inherited from the loop
+```
+
+`while` and `with` blocks (and a `for` containing `break`/`continue`) execute as a
+**single cache unit**, so there is no finer entry for a directive to attach to —
+one anywhere inside applies to the whole unit:
+
+<!-- test:skip reason="illustrative loop over undefined convergence state" -->
+```python
+while not converged:
+    # @cash:no-cache
+    step()                  # the entire while block is no-cache
+```
+
+Directives merge from the outside in: an enclosing structure's directive is
+combined with the statement's own using the rules under
+[Merging](#merging-multiple-annotations).
+
+!!! warning "Before Cash 0.5.0b2, directives inside control structures did nothing"
+    `@cash:` annotations were resolved only for top-level statements and were
+    **silently dropped** for anything nested in a loop or branch — no error, no
+    warning. If you worked around it by hoisting code out of a loop or reaching
+    for `%cash_off`, you can put it back.
 
 ### Trailing annotations
 

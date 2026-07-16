@@ -40,6 +40,7 @@ from ..cache_status import CacheStatus
 from . import helpers as _helpers
 
 if TYPE_CHECKING:
+    from ..annotations import CacheAnnotation
     from ..statement import ProcessResult
 
 __all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
@@ -203,7 +204,9 @@ class ControlStructureProcessor:
         node: ast.AST,
         ttl: int | None = None,
         silent: bool = False,
-        parent_context: dict[str, Any] | None = None
+        parent_context: dict[str, Any] | None = None,
+        raw_cell: str | None = None,
+        inherited_annotation: 'CacheAnnotation | None' = None,
     ) -> ControlStructureResult:
         """
         Process a control structure node.
@@ -216,6 +219,14 @@ class ControlStructureProcessor:
             ttl: Time-to-live for cache entries
             silent: Suppress output
             parent_context: Iteration context from an enclosing loop (for nesting)
+            raw_cell: The cell's original source. Required to honour ``@cash:``
+                directives inside the structure — ``ast.unparse`` drops comments,
+                so a body statement's directive can only be recovered from the
+                original text (CAS-135). ``None`` disables annotation handling,
+                which is the pre-CAS-135 behaviour and keeps direct callers
+                (tests constructing handlers with mock deps) working unchanged.
+            inherited_annotation: Directives from enclosing structures, already
+                resolved, to merge into everything within this one.
 
         Returns:
             ControlStructureResult with metrics
@@ -225,13 +236,23 @@ class ControlStructureProcessor:
             if contains_break_or_continue(node.body):
                 if self.debug:
                     logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
-                return self._execute_as_single_unit(node, ttl, silent)
-            return self._for_handler.process(node, ttl, silent, parent_context)
+                return self._execute_as_single_unit(
+                    node, ttl, silent, raw_cell, inherited_annotation,
+                )
+            return self._for_handler.process(
+                node, ttl, silent, parent_context, raw_cell, inherited_annotation,
+            )
         if isinstance(node, ast.If):
-            return self._if_handler.process(node, ttl, silent)
+            return self._if_handler.process(
+                node, ttl, silent, raw_cell, inherited_annotation,
+            )
         if isinstance(node, ast.Try):
-            return self._try_handler.process(node, ttl, silent)
-        return self._execute_as_single_unit(node, ttl, silent)
+            return self._try_handler.process(
+                node, ttl, silent, raw_cell, inherited_annotation,
+            )
+        return self._execute_as_single_unit(
+            node, ttl, silent, raw_cell, inherited_annotation,
+        )
 
     # ------------------------------------------------------------------
     # Single-unit execution (for while/with and break/continue loops)
@@ -241,7 +262,9 @@ class ControlStructureProcessor:
         self,
         node: ast.AST,
         ttl: int | None,
-        silent: bool
+        silent: bool,
+        raw_cell: str | None = None,
+        inherited_annotation: 'CacheAnnotation | None' = None,
     ) -> ControlStructureResult:
         """
         Execute an entire control structure as a single unit.
@@ -250,6 +273,11 @@ class ControlStructureProcessor:
         break/continue. The whole code is passed to the statement processor,
         which handles caching decisions (mutation detection, side-effect
         checks, etc.).
+
+        The unit is ONE cache entry, so a ``@cash:`` directive anywhere inside
+        it scopes to the whole thing — there is no finer entry for it to attach
+        to. That is why this resolves the node's whole range rather than a
+        per-statement annotation (CAS-135).
         """
         try:
             code = ast.unparse(node)
@@ -258,7 +286,12 @@ class ControlStructureProcessor:
                 cs_type = get_control_structure_type(node)
                 logger.debug("[CONTROL] Processing %s as single unit: %s...", cs_type, code[:80])
 
-            metrics = self.statement_processor.process_statement(code, ttl, silent, stream_output=True)
+            annotation = _helpers.resolve_unit_annotation(
+                raw_cell, node, inherited_annotation,
+            )
+            metrics = self.statement_processor.process_statement(
+                code, ttl, silent, annotation=annotation, stream_output=True,
+            )
 
             # After execution, update lineage for mutated variables
             if metrics.get('status') in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
