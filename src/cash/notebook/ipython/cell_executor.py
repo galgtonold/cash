@@ -551,39 +551,28 @@ class CellExecutor:
                 code=upstream_label,
             )
 
+        caught: Exception | None = None
         try:
             upstream_metrics, total_restore_time, total_execution_time = self._ensure_state_for_inputs(
                 raw_cell, progress_callback=_upstream_progress_cb,
             )
+        except KeyboardInterrupt:
+            raise
         except Exception as e:  # noqa: BLE001 - broad fallback for upstream simulation failures
-            if isinstance(e, KeyboardInterrupt):
-                raise
-            if original_run_cell is None:
-                # Magic path: SyntaxError from upstream sim is best surfaced as
-                # a normal "log + return" (matches the executor's own AST-parse
-                # SyntaxError path).  Any other exception propagates so the
-                # magic's caller sees the real error.
-                if isinstance(e, SyntaxError):
-                    self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-                    return _EarlyReturn(None)
-                raise
-            if isinstance(e, SyntaxError):
-                self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-                return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
-            if isinstance(e, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
-                # Re-raise inside the user's cell so IPython renders the traceback
-                # as if the cell itself raised.  Import the exception class
-                # explicitly because the user's namespace may not have it.
-                cls = type(e)
-                error_code = (
-                    f"from {cls.__module__} import {cls.__name__}; "
-                    f"raise {cls.__name__}('''{str(e)}''')"
-                )
-                self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-                return _EarlyReturn(original_run_cell(error_code, *args, **kwargs))
-            logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", e)
-            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
-            return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
+            # Do NOT dispatch original_run_cell (or render the badge) from inside
+            # this suite: it is a LIVE except block, so sys.exc_info() is set to
+            # this internal exception.  Any exception IPython raises while
+            # surfacing the user's error would then be implicitly chained onto it
+            # via __context__, leaking cash's own frames plus a spurious "During
+            # handling of the above exception, another exception occurred" banner
+            # into the user's traceback (CAS-156).  Capture here and dispatch
+            # AFTER the block exits, when sys.exc_info() is clear.
+            caught = e
+
+        if caught is not None:
+            return self._handle_upstream_resolution_failure(
+                caught, raw_cell, badge_display_id, args, kwargs, original_run_cell,
+            )
 
         timing_breakdown['upstream_check_raw'] = time.time() - t_ensure
         timing_breakdown['total_restore_time'] = total_restore_time
@@ -599,6 +588,71 @@ class CellExecutor:
             print(f"[TIMING_PROXY] Pure overhead (excl. restore+exec): {((time.time() - t_ensure) - total_restore_time - total_execution_time)*1000:.2f}ms")
 
         return upstream_metrics, total_restore_time, total_execution_time
+
+    def _handle_upstream_resolution_failure(
+        self,
+        caught: Exception,
+        raw_cell: str,
+        badge_display_id: str,
+        args: tuple,
+        kwargs: dict,
+        original_run_cell: Callable[..., Any] | None,
+    ) -> _EarlyReturn:
+        """Surface an upstream-resolution failure to the user with a clean traceback.
+
+        Deliberately called AFTER :meth:`_resolve_upstream_state`'s try/except
+        has fully exited, so ``sys.exc_info()`` is already clear.  That timing is
+        load-bearing (CAS-156): dispatching ``original_run_cell`` from *inside*
+        the live ``except`` block made Python implicitly chain the fresh (or
+        IPython-raised) exception onto cash's internal one via ``__context__``,
+        and IPython's ultratb then rendered cash's own frames
+        (``analysis.py``/``virtual_lineage.py``/``cell_executor.py``/
+        ``checker.py``) plus a spurious "During handling of the above exception,
+        another exception occurred" banner — making a plain user typo look like
+        cash crashed.  Running the dispatch here keeps the traceback as short and
+        clean as cash-off.
+
+        Behaviour is otherwise identical to the old in-``except`` dispatch:
+
+        - ``original_run_cell is None`` (``%%cash`` magic path): a SyntaxError
+          becomes a quiet "log + return"; anything else re-raises so the magic's
+          caller sees the real error.
+        - SyntaxError (hook path): re-run the raw cell through IPython so the
+          user sees the parse error attributed to their cell.
+        - RuntimeError / AmbiguousCellError / UpstreamStateError: synthesise a
+          fresh raise inside the user's cell (the CAS-87 / CAS-153 "fail the cell
+          loudly" path) so IPython attributes the traceback to the cell.
+        - anything else: log and fall back to normal execution.
+        """
+        if original_run_cell is None:
+            # Magic path: SyntaxError from upstream sim is best surfaced as
+            # a normal "log + return" (matches the executor's own AST-parse
+            # SyntaxError path).  Any other exception propagates so the
+            # magic's caller sees the real error.
+            if isinstance(caught, SyntaxError):
+                self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+                return _EarlyReturn(None)
+            raise caught
+        if isinstance(caught, SyntaxError):
+            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
+        if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
+            # Re-raise inside the user's cell so IPython renders the traceback
+            # as if the cell itself raised.  Import the exception class
+            # explicitly because the user's namespace may not have it.  The
+            # trailing ``from None`` suppresses any ambient context so the
+            # synthesised raise carries only the message, never a chain back
+            # into cash's internals.
+            cls = type(caught)
+            error_code = (
+                f"from {cls.__module__} import {cls.__name__}; "
+                f"raise {cls.__name__}('''{str(caught)}''') from None"
+            )
+            self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+            return _EarlyReturn(original_run_cell(error_code, *args, **kwargs))
+        logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", caught)
+        self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+        return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
 
     # ------------------------------------------------------------------
     # Phase 6: pre-execution notifications
