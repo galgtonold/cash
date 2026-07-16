@@ -33,7 +33,10 @@ class TestCashConfigStructure:
         assert c.cache_dir == ".cash"
         assert c.debug is False
         assert c.compress is False
-        assert c.max_cache_size == 1024 ** 3
+        # max_cache_size defaults to None = "auto": the factory scales the
+        # disk cap to free disk and the RAM cap to system memory, instead of
+        # the old flat 1 GiB that capped every tier and thrashed (CAS-142).
+        assert c.max_cache_size is None
         # Cost-aware policy unchanged.
         assert c.smart_persistence is True
         assert c.smart_persistence_threshold == 1.0

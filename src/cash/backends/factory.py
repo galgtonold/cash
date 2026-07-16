@@ -48,6 +48,39 @@ def build_backend_from_config(config: "CashConfig") -> CacheBackend:
 
 
 # ---------------------------------------------------------------------------
+# Cap resolution (CAS-142) — a single ``max_cache_size`` no longer caps every
+# tier at a flat 1 GiB. The disk tier scales to free disk, the RAM tier to
+# system memory; an explicit ``max_cache_size`` pins the DISK tier only, and
+# the RAM tier keeps its own modest auto cap either way.
+# ---------------------------------------------------------------------------
+
+def _resolve_disk_cap(config: "CashConfig") -> int | None:
+    """Byte cap for a disk tier's LRU.
+
+    ``max_cache_size`` explicit → that value (backward compatible: it has
+    always capped the disk tier). ``None`` (auto) → a generous fraction of
+    free space on the cache volume, so the disk tier can actually retain
+    what the user persists instead of thrashing under a flat 1 GiB.
+    """
+    explicit = config.max_cache_size
+    if explicit is not None:
+        return explicit
+    from .adaptive_caps import resolve_disk_cap
+    return resolve_disk_cap(config.cache_dir)
+
+
+def _resolve_ram_cap(config: "CashConfig") -> int:
+    """Byte cap for the RAM tier — always its own modest, machine-scaled cap.
+
+    Independent of ``max_cache_size`` (which caps disk): a user pinning the
+    disk cap should not accidentally make the RAM tier unbounded, and the RAM
+    tier should stay a small fraction of system memory regardless.
+    """
+    from .adaptive_caps import resolve_ram_cap
+    return resolve_ram_cap()
+
+
+# ---------------------------------------------------------------------------
 # Single-backend construction (simple mode, non-default backend)
 # ---------------------------------------------------------------------------
 
@@ -59,13 +92,13 @@ def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBacke
         return FileBackend(
             cache_dir=config.cache_dir,
             compress=config.compress,
-            max_size_bytes=config.max_cache_size,
+            max_size_bytes=_resolve_disk_cap(config),
             flush_interval=config.flush_interval,
         )
     if backend_type == "sqlite":
         return SQLiteBackend(
             db_path=config.cache_dir,  # reuse cache_dir as path for simple mode
-            max_size_bytes=config.max_cache_size,
+            max_size_bytes=_resolve_disk_cap(config),
         )
     if backend_type == "redis":
         return _build_redis(
@@ -92,11 +125,14 @@ def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBacke
 # ---------------------------------------------------------------------------
 
 def _build_default_tiered(config: "CashConfig") -> TieredBackend:
-    ram = InMemoryBackend(max_entries=config.max_memory_entries)
+    ram = InMemoryBackend(
+        max_entries=config.max_memory_entries,
+        max_size_bytes=_resolve_ram_cap(config),
+    )
     disk = FileBackend(
         cache_dir=config.cache_dir,
         compress=config.compress,
-        max_size_bytes=config.max_cache_size,
+        max_size_bytes=_resolve_disk_cap(config),
         flush_interval=config.flush_interval,
     )
 
@@ -181,18 +217,19 @@ def _build_tier(tier: "TierConfig", config: "CashConfig") -> CacheBackend:
     if t == "memory":
         return InMemoryBackend(
             max_entries=tier.max_entries if tier.max_entries is not None else config.max_memory_entries,
+            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_ram_cap(config),
         )
     if t == "file":
         return FileBackend(
             cache_dir=tier.cache_dir or config.cache_dir,
             compress=tier.compress if tier.compress is not None else config.compress,
-            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else config.max_cache_size,
+            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_disk_cap(config),
             flush_interval=tier.flush_interval if tier.flush_interval is not None else config.flush_interval,
         )
     if t == "sqlite":
         return SQLiteBackend(
             db_path=tier.db_path or tier.cache_dir or config.cache_dir,
-            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else config.max_cache_size,
+            max_size_bytes=tier.max_size_bytes if tier.max_size_bytes is not None else _resolve_disk_cap(config),
             default_ttl=tier.default_ttl,
         )
     if t == "redis":

@@ -32,18 +32,28 @@ class InMemoryBackend(CacheBackend):
     """
     source_label: str = "RAM"
 
-    def __init__(self, max_memory_percent: float = 0.9, check_interval: int = 10, max_entries: int | None = None) -> None:
+    def __init__(self, max_memory_percent: float = 0.9, check_interval: int = 10, max_entries: int | None = None,
+                 max_size_bytes: int | None = None) -> None:
         """
         Args:
             max_memory_percent: Memory usage percentage (0.0 to 1.0) at which to trigger eviction.
             check_interval: Number of 'set' operations between memory checks.
             max_entries: Maximum number of cache entries. When exceeded, LRU eviction is triggered.
                          None means unlimited entries (eviction only via memory pressure).
+            max_size_bytes: Soft byte cap for the RAM tier (CAS-142). When the tracked
+                         total exceeds it, least-recently-used entries are evicted down to
+                         ~90% of the cap. ``None`` (default) means unbounded — eviction is
+                         driven only by ``max_entries`` and psutil memory pressure, exactly
+                         as before. The factory sets this to a modest fraction of system RAM
+                         (``adaptive_caps.resolve_ram_cap``) so the RAM tier is bounded
+                         independently of the disk tier.
         """
         self._store: dict[str, tuple[MetadataDict, Any]] = {}  # Stores (metadata, value)
         self.max_memory_percent = max_memory_percent
         self.check_interval = check_interval
         self.max_entries = max_entries
+        self._max_size_bytes = max_size_bytes
+        self._current_size_bytes = 0
         self._set_count = 0
 
     @staticmethod
@@ -79,23 +89,38 @@ class InMemoryBackend(CacheBackend):
         size = self._get_object_size(value)
         metadata['size'] = size
 
+        # Byte-cap bookkeeping: on replacement, discount the old entry's size
+        # before recording the new one so the running total stays accurate.
+        if key in self._store:
+            self._current_size_bytes -= self._store[key][0].get('size', 0)
         self._store[key] = (metadata, self._safe_deep_copy(value, key))
+        self._current_size_bytes += size
 
         # Check max_entries limit
         if self.max_entries is not None and len(self._store) > self.max_entries:
             self._evict_lru(len(self._store) - self.max_entries)
+
+        # Enforce the soft byte cap (adaptive RAM cap; None = unbounded).
+        if self._max_size_bytes is not None and self._current_size_bytes > self._max_size_bytes:
+            self._evict_to_byte_cap()
 
         # Check memory pressure periodically
         self._set_count += 1
         if self._set_count % self.check_interval == 0:
             self._check_and_evict()
 
+    def _drop(self, key: str) -> None:
+        """Remove *key*, keeping the byte-cap running total in sync."""
+        entry = self._store.pop(key, None)
+        if entry is not None:
+            self._current_size_bytes -= entry[0].get('size', 0)
+
     def delete(self, key: str) -> None:
-        if key in self._store:
-            del self._store[key]
+        self._drop(key)
 
     def clear(self) -> None:
         self._store.clear()
+        self._current_size_bytes = 0
         # Also try to free memory back to OS
         self._try_malloc_trim()
 
@@ -109,7 +134,7 @@ class InMemoryBackend(CacheBackend):
                 keys_to_delete.append(key)
 
         for key in keys_to_delete:
-            del self._store[key]
+            self._drop(key)
 
         if keys_to_delete:
             self._try_malloc_trim()
@@ -195,7 +220,7 @@ class InMemoryBackend(CacheBackend):
 
         for _score, _last_access, key, _size in items:
             if key in self._store:
-                del self._store[key]
+                self._drop(key)
                 evicted_count += 1
 
                 if psutil is None:
@@ -205,6 +230,31 @@ class InMemoryBackend(CacheBackend):
                     break
 
         if evicted_count > 0:
+            self._try_malloc_trim()
+
+    def _evict_to_byte_cap(self) -> None:
+        """Evict least-recently-used entries until under ~90% of the byte cap.
+
+        Mirrors the file backend's LRU eviction: sort by ``last_access``
+        (oldest first) and drop until the running total falls to 90% of the
+        cap, giving headroom so the next few writes don't immediately
+        re-trigger eviction. No-op when the cap is unset or already satisfied.
+        """
+        if not self._max_size_bytes or self._current_size_bytes <= self._max_size_bytes:
+            return
+        target = self._max_size_bytes * 0.9
+        items = [
+            (meta.get('last_access', 0), key)
+            for key, (meta, _) in self._store.items()
+        ]
+        items.sort()  # oldest first
+        evicted = 0
+        for _last_access, key in items:
+            if self._current_size_bytes <= target:
+                break
+            self._drop(key)
+            evicted += 1
+        if evicted:
             self._try_malloc_trim()
 
     def _evict_lru(self, count: int):
@@ -217,8 +267,7 @@ class InMemoryBackend(CacheBackend):
             items.append((last_access, key))
         items.sort()  # oldest first
         for _, key in items[:count]:
-            if key in self._store:
-                del self._store[key]
+            self._drop(key)
 
     def _try_malloc_trim(self) -> None:
         """Try to clean up memory on Linux."""

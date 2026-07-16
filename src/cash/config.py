@@ -159,10 +159,19 @@ class CashConfig:
     blobs (CSV, JSON). Already-compressed formats (Parquet, joblib)
     don't shrink much."""
 
-    max_cache_size: int = 1024 ** 3
-    """Maximum total cache size in bytes (default 1 GiB). When the
-    file backend exceeds this, it evicts least-recently-accessed
-    entries until it fits."""
+    max_cache_size: int | None = None
+    """Maximum total **disk** cache size in bytes. ``None`` (default)
+    means **auto**: cash scales the cap to the machine — a generous
+    fraction of the free space on the cache volume for the disk tier,
+    and a modest fraction of system RAM for the memory tier (see
+    ``cash.backends.adaptive_caps``). Set an integer to pin the disk
+    cap explicitly; the memory tier keeps its own auto/modest cap.
+
+    Historically this defaulted to a flat 1 GiB applied to *every*
+    tier, which capped the disk tier at one medium DataFrame and put
+    persist-heavy workloads into a write-and-evict treadmill (CAS-142).
+    When the file backend exceeds the resolved cap it evicts
+    least-recently-accessed entries until it fits."""
 
     max_memory_entries: int | None = None
     """LRU entry cap for the in-memory tier. ``None`` (default)
@@ -646,7 +655,10 @@ debug = false
 compress = false
 
 # Max disk cache size (bytes). LRU eviction kicks in above this.
-max_cache_size = 1073741824
+# Leave unset (the default) to auto-scale the cap to the machine — a
+# fraction of free disk for the disk tier, a fraction of RAM for the
+# memory tier. Uncomment to pin the disk cap explicitly, e.g. 5 GiB:
+# max_cache_size = 5368709120
 
 # Persist every notebook statement, bypassing the cost-aware floors
 # (same as putting # @cash:persist on each statement). Off by default;
