@@ -347,3 +347,108 @@ class TestAnnotationDoesNotChangeCacheability:
             "import numpy as np\n# @cash:allow-random\nx = np.random.rand(1000)",
         )
         assert annotated["cache_key"] == plain["cache_key"]
+
+
+class TestStaleRandomnessAnnouncedOnRestore:
+    """The replay warning (CAS-135 hole 2).
+
+    CAS-114 warned on the COLD run — where the value is freshly computed and
+    correct — and went silent on every restore after it, where the value is a
+    frozen replay. The alarm was quiet exactly when it mattered.
+
+    The mechanism was NOT that the warning path is skipped on a cache hit: it is
+    reached (the call sits before the lookup on the common path). It is that the
+    ``(code, message)`` dedupe had already been satisfied by the cold run. But
+    simply dropping the dedupe would only have re-emitted "may not be
+    reproducible" — the wrong claim for a restore, and the pre-lookup call site
+    cannot make the right one, because the hit/miss outcome does not exist yet.
+    Hence a second, distinct warning at a site that can observe the outcome.
+    """
+
+    def _restore_warnings(self, magics, code: str, runs: int = 2) -> list[list[str]]:
+        """Run *code* *runs* times; return the randomness messages per run."""
+        per_run = []
+        for _ in range(runs):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                magics.cash("", code)
+            per_run.append([
+                str(w.message) for w in caught
+                if issubclass(w.category, CashRandomnessWarning)
+            ])
+        return per_run
+
+    def test_restore_announces_the_replay(self, magics_fixture):
+        magics, shell, _backend, _cash = magics_fixture
+        import numpy as np
+        shell.user_ns['np'] = np
+        runs = self._restore_warnings(
+            magics, "# @cash:persist\nx = np.random.rand(200000)",
+        )
+        # Cold run: source-level advice.
+        assert len(runs[0]) == 1
+        assert "Unseeded randomness detected" in runs[0][0]
+        # Restore: the value is a replay, and it says so.
+        assert len(runs[1]) == 1
+        message = runs[1][0]
+        assert "Unseeded randomness restored from cache" in message
+        assert "replay" in message
+        assert "@cash:no-cache" in message
+
+    def test_replay_warning_is_deduped_like_the_cold_one(self, magics_fixture):
+        """CAS-114's anti-spam contract has to survive: the fact does not change
+        between run 2 and run 20, so it is stated once per session."""
+        magics, shell, _backend, _cash = magics_fixture
+        import numpy as np
+        shell.user_ns['np'] = np
+        runs = self._restore_warnings(
+            magics, "# @cash:persist\nx = np.random.rand(200000)", runs=4,
+        )
+        assert len(runs[0]) == 1  # cold: "detected"
+        assert len(runs[1]) == 1  # first restore: "restored from cache"
+        assert runs[2] == []      # thereafter: silence
+        assert runs[3] == []
+
+    def test_non_random_restore_is_silent(self, magics_fixture):
+        """Control: the noise floor. This is what stops the fix from becoming a
+        'you hit the cache' banner over every restore in the notebook."""
+        magics, _shell, _backend, _cash = magics_fixture
+        runs = self._restore_warnings(
+            magics, "# @cash:persist\ny = sum(i * i for i in range(200000))",
+        )
+        assert runs == [[], []]
+
+    def test_seeded_restore_is_silent(self, magics_fixture):
+        """Control: a seeded draw replays honestly — the cached value is exactly
+        what a recompute would produce, so there is nothing to report."""
+        magics, shell, _backend, _cash = magics_fixture
+        import numpy as np
+        shell.user_ns['np'] = np
+        magics.cash("", "np.random.seed(0)")
+        runs = self._restore_warnings(
+            magics, "# @cash:persist\nx = np.random.rand(200000)",
+        )
+        assert runs == [[], []]
+
+    def test_allow_random_suppresses_both_warnings(self, magics_fixture):
+        """The directive means 'I know'. A half-suppression would be worse than
+        none: the user would think they had silenced it and still get noise."""
+        magics, shell, _backend, _cash = magics_fixture
+        import numpy as np
+        shell.user_ns['np'] = np
+        runs = self._restore_warnings(
+            magics, "# @cash:persist\n# @cash:allow-random\nx = np.random.rand(200000)",
+        )
+        assert runs == [[], []]
+
+    def test_replay_warning_does_not_change_cacheability(self, magics_fixture):
+        """The new warning is advisory too — it must not turn into a de-facto
+        no-cache, which would silently undo the documented policy."""
+        magics, shell, _backend, _cash = magics_fixture
+        import numpy as np
+        shell.user_ns['np'] = np
+        code = "# @cash:persist\nx = np.random.rand(200000)"
+        first = _last_metric(magics, code)
+        second = _last_metric(magics, code)
+        assert first['status'] == CacheStatus.COMPUTED
+        assert second['status'] == CacheStatus.RESTORED

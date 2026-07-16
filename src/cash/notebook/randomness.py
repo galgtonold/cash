@@ -11,7 +11,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
 
 logger = logging.getLogger(__name__)
 
@@ -695,19 +695,86 @@ class RandomnessDetector:
         for call in unseeded_calls:
             if call.carrier is not None:
                 warnings_list.append(
-                    f"Unseeded randomness detected: {call.carrier}.{call.function}() "
+                    f"Unseeded randomness detected: {describe_random_call(call)} "
                     f"at line {call.lineno}. '{call.carrier}' came from an unseeded "
                     f"{call.module} generator, so cached results are frozen, not random. "
                     f"Pass a seed to the generator, or use @cash:allow-random to suppress."
                 )
             else:
                 warnings_list.append(
-                    f"Unseeded randomness detected: {call.module}.{call.function}() "
+                    f"Unseeded randomness detected: {describe_random_call(call)} "
                     f"at line {call.lineno}. Cached results may not be reproducible. "
                     f"Consider calling seed() first or use @cash:allow-random to suppress."
                 )
 
         return unseeded_calls, warnings_list, has_seed_calls
+
+
+def describe_random_call(call: RandomnessCallInfo) -> str:
+    """Render a call the way the user wrote it: ``rng.normal()``/``np.random.rand()``."""
+    if call.carrier is not None:
+        return f"{call.carrier}.{call.function}()"
+    return f"{call.module}.{call.function}()"
+
+
+def format_stale_randomness_message(call: RandomnessCallInfo) -> str:
+    """The message for a cached unseeded value being replayed (CAS-135).
+
+    Deliberately a *different claim* from the compute-time warning, not a
+    re-wording of it. On the cold run the value is fresh and correct and the
+    warning is advice about the source ("may not be reproducible"). On a restore
+    the value on screen is definitively a replay — "may" would understate the
+    one thing the user needs to know.
+
+    The distinct text also earns the message its own slot in the dedupe ledger,
+    which is keyed on ``(code, message)``. That is what lets the replay be
+    announced without disturbing CAS-114's once-per-statement-per-session
+    contract for the compute-time warning.
+    """
+    # ASCII only: this lands in a kernel's stderr, and a Windows console
+    # codepage renders an em-dash as a replacement char mid-sentence.
+    return (
+        f"Unseeded randomness restored from cache: {describe_random_call(call)} "
+        f"at line {call.lineno}. The value you are seeing is a replay of an "
+        f"earlier run, not a fresh draw - re-running will not change it. Use "
+        f"@cash:no-cache to re-run it every time, seed the RNG for real "
+        f"reproducibility, or @cash:allow-random to suppress."
+    )
+
+
+def warn_stale_randomness(
+    code: str,
+    unseeded_calls: 'Iterable[RandomnessCallInfo]',
+    detector: RandomnessDetector,
+    suppress_warning: bool = False,
+) -> None:
+    """Announce that a cached value derived from unseeded randomness was served.
+
+    Called on the cache-*hit* path, after the restore has actually succeeded —
+    the claim is about the value handed back, so it must not be made for a
+    restore that fell through to execution.
+
+    Args:
+        code: The statement source, control-structure markers already stripped,
+            so the dedupe key matches the compute-time warning's.
+        unseeded_calls: The unseeded calls ``check_and_warn_randomness`` already
+            found for this statement. Passed in rather than re-derived: the scan
+            has run on the common path, and re-running it here would double the
+            detector's seed-tracking side effects.
+        detector: Supplies the shared per-statement dedupe ledger.
+        suppress_warning: ``# @cash:allow-random`` — the user has said they know.
+    """
+    if suppress_warning or not unseeded_calls:
+        return
+
+    for call in unseeded_calls:
+        message = format_stale_randomness_message(call)
+        if not detector.mark_warned(code, message):
+            continue
+        warnings.warn_explicit(
+            message, CashRandomnessWarning,
+            filename='<cash>', lineno=call.lineno, registry=None,
+        )
 
 def check_and_warn_randomness(
     code: str,

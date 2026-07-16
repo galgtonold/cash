@@ -129,9 +129,33 @@ noise = np.random.rand(1000)   # no warning
     If you want the statement to re-run every time, that's a different
     directive: [`# @cash:no-cache`](#cashno-cache-alias-nocache).
 
-The warning fires **once per statement per session**, not once per run: re-running
-an unchanged cell stays quiet, and editing the statement makes it warn again. A
-random draw inside a loop body warns once, not once per iteration.
+### The two warnings
+
+Cash raises a *different* warning when it serves you a cached value that came
+from an unseeded draw:
+
+```
+CashRandomnessWarning: Unseeded randomness restored from cache: numpy.random.rand()
+at line 1. The value you are seeing is a replay of an earlier run, not a fresh
+draw - re-running will not change it. Use @cash:no-cache to re-run it every time,
+seed the RNG for real reproducibility, or @cash:allow-random to suppress.
+```
+
+The distinction matters, because they are different claims:
+
+| when | warning | what it means |
+|---|---|---|
+| the statement is **computed** | `Unseeded randomness detected` | advice about the code you wrote — this *may* not reproduce |
+| the value is **restored** | `Unseeded randomness restored from cache` | a fact about the number in front of you — it *is* a replay |
+
+The second is the one that catches a frozen Monte Carlo. On a restore, the value
+on screen is not what your code would produce if it ran — so re-running to "see
+how much it varies" measures nothing.
+
+Both fire **once per statement per session**, not once per run: re-running an
+unchanged cell a third time stays quiet, and editing the statement makes it warn
+again. A random draw inside a loop body warns once, not once per iteration.
+`# @cash:allow-random` suppresses both.
 
 To silence the warning globally rather than per statement, filter the class —
 it's exported from the package root and belongs to the `CashWarning` family:

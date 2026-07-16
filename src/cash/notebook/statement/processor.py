@@ -281,6 +281,7 @@ from ..randomness import (
     capture_object_rng_states,
     capture_rng_state,
     check_and_warn_randomness,
+    warn_stale_randomness,
 )
 
 
@@ -449,7 +450,7 @@ class StatementProcessor:
             on cache status.
         """
         effective_ttl, force_persist, skip_cache, allow_random = self._parse_annotation(annotation, ttl)
-        self._warn_unseeded_randomness(code, allow_random)
+        unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -543,6 +544,8 @@ class StatementProcessor:
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
             hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
             if hit_result is not None:
+                # The restore SUCCEEDED, so the value handed back is a replay.
+                self._warn_stale_randomness(code, unseeded_calls, allow_random)
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = self._execute_and_drain(
@@ -594,7 +597,7 @@ class StatementProcessor:
         ``_handle_cache_hit`` / ``_post_execute`` helpers.
         """
         effective_ttl, force_persist, skip_cache, allow_random = self._parse_annotation(annotation, ttl)
-        self._warn_unseeded_randomness(code, allow_random)
+        unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -666,6 +669,8 @@ class StatementProcessor:
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
             hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
             if hit_result is not None:
+                # The restore SUCCEEDED, so the value handed back is a replay.
+                self._warn_stale_randomness(code, unseeded_calls, allow_random)
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = await self._execute_and_drain_async(
@@ -716,7 +721,25 @@ class StatementProcessor:
             allow_random = annotation.allow_random
         return effective_ttl, force_persist, skip_cache, allow_random
 
-    def _warn_unseeded_randomness(self, code: str, allow_random: bool) -> None:
+    @staticmethod
+    def _strip_control_markers(code: str) -> str:
+        """Drop the per-iteration / per-branch cache-key discriminator comments.
+
+        Control-structure body statements arrive with an ``# __iteration_context__``
+        / ``# control_context`` comment prepended, which differs per iteration.
+        Stripping it keeps the detector memo AND the per-statement dedupe keyed on
+        the body's real source, so a random draw inside a 1000-iteration loop
+        warns once, not 1000 times.
+        """
+        if '# __iteration_context__:' not in code and '# control_context:' not in code:
+            return code
+        return '\n'.join(
+            line for line in code.split('\n')
+            if not line.startswith('# __iteration_context__:')
+            and not line.startswith('# control_context:')
+        )
+
+    def _warn_unseeded_randomness(self, code: str, allow_random: bool) -> list:
         """Warn when *code* draws from an unseeded RNG (CAS-114).
 
         Called on the common path of both ``process_statement`` twins, BEFORE the
@@ -728,27 +751,60 @@ class StatementProcessor:
           ``np.random.seed(42)`` statement must mark its module seeded even on a
           cache hit, or the next cell warns spuriously.
 
-        Control-structure body statements arrive with an ``# __iteration_context__``
-        / ``# control_context`` discriminator comment prepended, which differs per
-        iteration.  Stripping it before the scan keeps both the memo and the
-        per-statement dedupe keyed on the body's real source, so a random draw
-        inside a 1000-iteration loop warns once, not 1000 times.
+        Returns the unseeded calls it found, so the cache-hit path can report the
+        replay without re-running the scan (which would double the seed-tracking
+        side effect above).
 
         Never allowed to break execution: this is advisory output, so a detector
         fault must not take the statement down with it.
         """
-        if '# __iteration_context__:' in code or '# control_context:' in code:
-            code = '\n'.join(
-                line for line in code.split('\n')
-                if not line.startswith('# __iteration_context__:')
-                and not line.startswith('# control_context:')
-            )
+        code = self._strip_control_markers(code)
         try:
-            check_and_warn_randomness(
+            unseeded_calls, _has_seed = check_and_warn_randomness(
                 code, self.randomness_detector, suppress_warning=allow_random,
             )
+            return list(unseeded_calls)
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Randomness detection failed for statement", _LOG_PROCESSOR)
+            return []
+
+    def _warn_stale_randomness(
+        self, code: str, unseeded_calls: list, allow_random: bool,
+    ) -> None:
+        """Announce that a cached unseeded random value was just replayed (CAS-135).
+
+        Called ONLY after a restore has actually succeeded, because that is the
+        event being reported: not "this statement contains randomness" (true on
+        every run, and already covered by ``_warn_unseeded_randomness``), but
+        "the number you are looking at is a replay of an earlier run".
+
+        That claim can only be made here.  ``_warn_unseeded_randomness`` runs
+        before the cache lookup, where the hit/miss outcome does not exist yet —
+        so it can only ever say "may not be reproducible".  On a restore that
+        understates it: the value *is* frozen.  CAS-114 warned on the COLD run,
+        when the value is freshly computed and correct, and said nothing on the
+        restores, when it is not.  This is the missing half.
+
+        Gated on a successful restore specifically: ``_handle_cache_hit``
+        returns None when restoration fails and the caller falls through to real
+        execution, in which case the value is fresh and "replay" would be a lie.
+
+        The dedupe is deliberately kept.  It is keyed on ``(code, message)``, and
+        this message is a different claim from the compute-time one, so it lands
+        in its own slot: the replay is announced once per statement per session,
+        on the first restore.  Removing the dedupe instead would flood a
+        re-run — the very thing CAS-114 avoided so users don't learn to filter
+        the whole class away.
+        """
+        if allow_random or not unseeded_calls:
+            return
+        try:
+            warn_stale_randomness(
+                self._strip_control_markers(code), unseeded_calls,
+                self.randomness_detector, suppress_warning=allow_random,
+            )
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            logger.debug("%s Stale-randomness warning failed for statement", _LOG_PROCESSOR)
 
     def _do_cache_lookup(
         self,
