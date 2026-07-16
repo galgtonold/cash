@@ -89,6 +89,12 @@ class CashSession:
             'total_compute_time': 0.0,
             'total_restored_time': 0.0,
             'total_time_saved': 0.0,
+            # Cash's OWN added wall-time this session (restore + simulation +
+            # hashing + badge machinery), accumulated per cell. Subtracted from
+            # the gross ``total_time_saved`` to report an honest NET saving so a
+            # session whose overhead outweighs its cache hits reads as a cost,
+            # not a phantom win (CAS-143).
+            'total_overhead': 0.0,
         }
         self.provenance: ProvenanceTracker = ProvenanceTracker()
         self.audit: AuditLogger = AuditLogger()
@@ -1113,7 +1119,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._update_last_cell_metrics(all_metrics, hook_total)
 
         # Update session-wide statistics
-        self._update_session_stats(all_metrics)
+        self._update_session_stats(all_metrics, hook_total)
 
         self._record_observability(all_metrics)
 
@@ -1201,21 +1207,39 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             'status': overall_status,
         }
 
-    def _update_session_stats(self, all_metrics: list[ProcessResult]) -> None:
-        """Increment session-wide caching statistics from *all_metrics*."""
+    def _update_session_stats(self, all_metrics: list[ProcessResult], cell_total_time: float = 0.0) -> None:
+        """Increment session-wide caching statistics from *all_metrics*.
+
+        ``cell_total_time`` is this cell's full cash-mediated wall time
+        (``hook_total``). Cash's own overhead for the cell is that wall time
+        minus the user compute that would have run anyway (the COMPUTED
+        statements). What remains — cache restores, upstream simulation,
+        hashing, badge machinery — is time cash *added*, so it is accumulated
+        into ``total_overhead`` and later subtracted from the gross
+        ``total_time_saved`` to report an honest NET figure (CAS-143). This is
+        a single float subtraction per cell, no I/O — it must never
+        reintroduce the per-cell fsync that CAS-149 removed.
+        """
         stats = self._session.stats
         stats['cells_executed'] += 1
+        cell_compute_time = 0.0
         for m in all_metrics:
             status = m.get('status')
             if status == CacheStatus.COMPUTED:
                 stats['statements_computed'] += 1
-                stats['total_compute_time'] += m.get('execution_time', 0.0)
+                exec_time = m.get('execution_time', 0.0)
+                stats['total_compute_time'] += exec_time
+                cell_compute_time += exec_time
             elif status == CacheStatus.RESTORED:
                 stats['statements_restored'] += 1
                 stats['total_restored_time'] += m.get('saved_time', 0.0)
                 stats['total_time_saved'] += m.get('saved_time', 0.0)
             elif status == CacheStatus.SKIPPED:
                 stats['statements_skipped'] += 1
+        # Overhead = cell wall time minus the user compute that ran this cell.
+        # Floor at 0: the wall time always covers the compute it contains, but
+        # clamp defensively against clock skew / partial timing.
+        stats['total_overhead'] += max(0.0, cell_total_time - cell_compute_time)
 
     def _record_observability(self, all_metrics: list[ProcessResult]) -> None:
         """Record provenance + audit entries for each statement in *all_metrics*.

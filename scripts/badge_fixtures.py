@@ -293,11 +293,16 @@ FIXTURES: dict[str, MetricsList] = {
             "cache_key": "stmt:88a1c2d3e4f50617",
             "is_upstream": False,
         },
-        # Current cell — computed because miss_reason.
+        # Current cell — computed because miss_reason. ``execution_time`` is the
+        # raw user compute the runtime always records for a COMPUTED statement;
+        # the honest header-saving (CAS-143) subtracts cash's overhead
+        # (cell wall time minus this compute) from the gross restore savings, so
+        # the fixture must carry it to mirror a real cell.
         {
             "status": "COMPUTED",
             "code": "preds = decorated_predict(features)",
             "total_time": 0.341,
+            "execution_time": 0.341,
             "evaluated_vars": ["preds"],
             "storage": ["RAM", "DISK"],
             "cache_key": "stmt:c1e8a72f4b9d0156",

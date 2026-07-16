@@ -99,7 +99,7 @@ For health checks rather than per-call diagnostics, you want aggregates.
 %cash_stats
 ```
 
-Prints a session-wide summary: entries cached, hits, misses, overall hit rate, and total time saved. `%cash_stats json` returns the same as a dict for programmatic use; `%cash_stats reset` zeros the counters (`src/cash/notebook/magic_admin.py:248-313`).
+Prints a session-wide summary: entries cached, hits, misses, overall hit rate, and the savings broken out as gross saved, cash overhead, and net saved (net = gross − overhead). The net line is the honest headline — it subtracts cash's own per-cell overhead from the gross recompute it avoided, and shows a negative ("cash cost you Xs this session") when a run of cheap cells paid more overhead than it saved. `%cash_stats json` returns the same as a dict for programmatic use (including `total_overhead` and `net_time_saved`); `%cash_stats reset` zeros the counters (`src/cash/notebook/ipython/admin.py`).
 
 ### On a decorated function — `cache_info()`
 

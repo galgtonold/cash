@@ -166,19 +166,26 @@ Set the badge display mode for subsequent cached cells. See
 
 ### `%cash_stats`
 
-Show session-wide cache statistics: counts, hit rate, compute time, time saved,
-tracked variables. The command deliberately avoids walking the backend so it
-stays cheap on large on-disk caches.
+Show session-wide cache statistics: counts, hit rate, compute time, and the
+savings broken out as **gross saved**, **cash overhead**, and **net saved**
+(net = gross − overhead), plus tracked variables. Reporting net keeps the
+headline honest: cash's own per-cell overhead is subtracted from the gross
+recompute it avoided, and a session whose overhead outweighs its hits reads as
+a plain "cash cost you Xs this session" rather than a phantom win. The command
+deliberately avoids walking the backend so it stays cheap on large on-disk
+caches.
 
 **Signature:** `%cash_stats [mode]`
 
 **Arguments:**
 
 - *(no argument)* — Human-readable summary printed to stdout.
-- `json` — Pretty-print as JSON (includes `hit_rate_percent`).
+- `json` — Pretty-print as JSON (includes `total_overhead`, `net_time_saved`,
+  and `hit_rate_percent`).
 - `reset` — Zero out the in-memory counters (`cells_executed`,
   `statements_computed`, `statements_restored`, `statements_skipped`,
-  `total_compute_time`, `total_restored_time`, `total_time_saved`).
+  `total_compute_time`, `total_restored_time`, `total_time_saved`,
+  `total_overhead`).
 
 **Example:**
 

@@ -189,7 +189,7 @@ samples = np.random.randn(100)  # Suppress randomness warning
 
 Run `%cash_help` in any notebook for the full list of magics. A few you'll use often:
 
-- `%cash_stats` — hit/miss counts and time saved this session
+- `%cash_stats` — hit/miss counts and net time saved this session (gross saving minus cash's own overhead)
 - `%cash_debug on` — log detailed cache decisions to the kernel output
 - `%cash_badge print` — switch to text-only badges (no HTML)
 

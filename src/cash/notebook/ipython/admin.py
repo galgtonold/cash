@@ -38,6 +38,19 @@ def _fmt_time(seconds: float) -> str:
     return f"{seconds/60:.1f}min"
 
 
+def _fmt_signed_time(seconds: float) -> str:
+    """Format a possibly-negative duration, e.g. ``-2.3s``.
+
+    ``_fmt_time`` assumes a non-negative value (its ``< 0.001`` branch would
+    turn -2.3 into ``-2300000us``), so the NET saving — which is deliberately
+    allowed to go negative when cash cost more than it saved — is formatted
+    here as ``-<magnitude>`` (CAS-143).
+    """
+    if seconds < 0:
+        return f"-{_fmt_time(-seconds)}"
+    return _fmt_time(seconds)
+
+
 def _fmt_size(bytes_val: int) -> str:
     if bytes_val < 1024:
         return f"{bytes_val}B"
@@ -262,6 +275,7 @@ class CashAdminMagicsMixin:
                 'total_compute_time': 0.0,
                 'total_restored_time': 0.0,
                 'total_time_saved': 0.0,
+                'total_overhead': 0.0,
             })
             print("[OK] Session statistics reset.")
             return
@@ -269,6 +283,14 @@ class CashAdminMagicsMixin:
         stats = self._session.stats
         total_stmts = stats['statements_computed'] + stats['statements_restored'] + stats['statements_skipped']
         hit_rate = (stats['statements_restored'] + stats['statements_skipped']) / max(total_stmts, 1) * 100
+
+        # NET = gross recompute avoided − cash's own added wall-time this
+        # session. Deliberately allowed to go negative: a session of cheap
+        # cells that stored nothing pays overhead for no saving, and hiding
+        # that behind the gross number is the overstatement CAS-143 fixes.
+        gross_saved = stats['total_time_saved']
+        overhead = stats.get('total_overhead', 0.0)
+        net_saved = gross_saved - overhead
 
         # NOTE: We deliberately don't walk the backend here (no
         # ``list_entries()``). On disk-backed caches with thousands of
@@ -281,6 +303,7 @@ class CashAdminMagicsMixin:
             import json
             result = {
                 **stats,
+                'net_time_saved': net_saved,
                 'hit_rate_percent': round(hit_rate, 1),
             }
             print(json.dumps(result, indent=2))
@@ -295,7 +318,15 @@ class CashAdminMagicsMixin:
         print(f"  Cache hit rate:      {hit_rate:.1f}%")
         print()
         print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
-        print(f"  Time saved:          {_fmt_time(stats['total_time_saved'])}")
+        print(f"  Gross time saved:    {_fmt_time(gross_saved)}")
+        print(f"  Cash overhead:       {_fmt_time(overhead)}")
+        # NET is the honest headline: what cash actually bought you once its
+        # own tax is paid. Show a negative plainly rather than flooring it.
+        if net_saved >= 0:
+            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}")
+        else:
+            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}"
+                  f"  (cash cost you {_fmt_time(-net_saved)} this session)")
         print()
         tracked = len(self._tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")

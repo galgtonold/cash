@@ -43,7 +43,11 @@ class TestCashStats:
         captured = capsys.readouterr()
         assert "Cells executed:" in captured.out
         assert "Cache hit rate:" in captured.out
-        assert "Time saved:" in captured.out
+        # Gross / overhead / net are shown separately so the headline saving
+        # cannot overstate what cash actually bought (CAS-143).
+        assert "Gross time saved:" in captured.out
+        assert "Cash overhead:" in captured.out
+        assert "Net time saved:" in captured.out
         # "Cache entries:" was removed in the 2026-05-18 overhead pass;
         # the command now refers users to %cash_admin for backend info.
         assert "Tracked variables:" in captured.out

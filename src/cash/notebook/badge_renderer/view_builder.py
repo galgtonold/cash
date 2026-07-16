@@ -1018,13 +1018,29 @@ def build_interactive_badge(
         or str(m.get("status")) == str(CacheStatus.ERROR)
     )
     summary_time = cell_total_time if cell_total_time is not None else total_exec
+    # Honest header saving (CAS-143): never advertise more than the cell's NET
+    # win. When we know the cell's wall time we subtract cash's own overhead
+    # (wall time minus the user compute that ran) from the gross saving, so the
+    # collapsed badge can't claim a 7s saving when the cell's own overhead ate
+    # into it. Floor at 0 here — the per-cell badge stays non-alarming and the
+    # negative-net story lives in the aggregate %cash_stats. With no wall time
+    # (unit renders that pass no cell_total_time) fall back to the gross value.
+    header_saved = total_saved
+    if cell_total_time is not None:
+        cell_compute = sum(
+            float(m.get("execution_time", 0.0) or 0.0)
+            for m in metrics
+            if str(m.get("status")) == str(CacheStatus.COMPUTED)
+        )
+        cell_overhead = max(0.0, cell_total_time - cell_compute)
+        header_saved = max(0.0, total_saved - cell_overhead)
     header = BadgeHeader(
         status=BadgeStatus.WARNING if status == "RUNNING" else _summary_status(restored, computed, skipped_count),
         restored_count=restored,
         computed_count=computed,
         skipped_count=skipped_count,
         warn_count=warn_count,
-        total_saved_s=total_saved,
+        total_saved_s=header_saved,
         total_exec_s=summary_time,
         current_step=current_step,
         total_steps=total_steps,
