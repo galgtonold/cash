@@ -114,8 +114,15 @@ class StatementRestorer:
         metadata: 'StatementCacheMetadata | None',
         silent: bool,
         process_start: float,
+        inplace_restore: 'set[str] | frozenset[str] | None' = None,
     ) -> None:
-        """Restore a cached statement's outputs into ``user_ns`` and replay display."""
+        """Restore a cached statement's outputs into ``user_ns`` and replay display.
+
+        *inplace_restore* names estimator-fit receivers (CAS-138) whose fitted
+        state must be transferred onto the EXISTING object rather than rebinding
+        the name, so every alias sees the fit. Empty/None for every other
+        statement, which keeps the plain-rebind behaviour.
+        """
         t_restore = time.time()
 
         try:
@@ -140,8 +147,9 @@ class StatementRestorer:
                 object_rng_states = None
 
             t_var = time.time()
+            inplace = inplace_restore or frozenset()
             for var_name, value in restored_vars.items():
-                self._restore_one_var(tracking_state, var_name, value, metadata)
+                self._restore_one_var(tracking_state, var_name, value, metadata, inplace)
 
             # CAS-90: advance object-held generators to the post-state the
             # cached statement left them in — the module-global equivalent of
@@ -187,9 +195,17 @@ class StatementRestorer:
         var_name: str,
         value: Any,
         metadata: 'StatementCacheMetadata | None',
+        inplace_restore: 'set[str] | frozenset[str]' = frozenset(),
     ) -> None:
-        """Write one restored variable into the shell namespace and update tracking state."""
-        self.shell.user_ns[var_name] = value
+        """Write one restored variable into the shell namespace and update tracking state.
+
+        For a var in *inplace_restore* (a bare ``estimator.fit(...)`` receiver,
+        CAS-138) the fitted state is transferred ONTO the existing object rather
+        than rebinding the name, so every alias of the receiver (``backup = clf``)
+        observes the fit -- mirroring what an in-place ``.fit()`` does at runtime.
+        A rebind would leave aliases pointing at the stale, unfitted object.
+        """
+        self._write_restored_value(var_name, value, inplace_restore)
 
         if metadata:
             output_lineages = metadata.output_lineages or {}
@@ -208,6 +224,56 @@ class StatementRestorer:
 
         if metadata and metadata.key is not None:
             tracking_state.variable_sources[var_name] = metadata.key
+
+    def _write_restored_value(
+        self,
+        var_name: str,
+        value: Any,
+        inplace_restore: 'set[str] | frozenset[str]',
+    ) -> None:
+        """Land a restored *value* into ``user_ns`` -- in place for an
+        estimator-fit receiver (CAS-138), else a plain rebind.
+
+        An in-place transfer mutates the EXISTING receiver object so every alias
+        (``backup = clf``) observes the restored (fitted) state, matching what
+        the original in-place ``.fit()`` did. Falls back to a rebind when the
+        name is absent (no alias can exist, so a rebind is safe), the existing
+        object and the cached value are not the SAME class, or the transfer
+        raises for any reason -- a restore must never crash.
+        """
+        if var_name in inplace_restore and var_name in self.shell.user_ns:
+            existing = self.shell.user_ns[var_name]
+            if type(existing) is type(value):
+                try:
+                    self._transfer_state_in_place(existing, value)
+                    return
+                except Exception as e:  # noqa: BLE001 -- never crash a restore
+                    if self.debug:
+                        logger.debug(
+                            "[CACHE DEBUG] In-place restore of '%s' failed (%s); rebinding",
+                            var_name, e,
+                        )
+        self.shell.user_ns[var_name] = value
+
+    @staticmethod
+    def _transfer_state_in_place(existing: Any, value: Any) -> None:
+        """Copy *value*'s state onto *existing* in place.
+
+        Prefers the pickle protocol (``__setstate__`` fed from ``__getstate__``)
+        so an object with a custom state contract -- sklearn estimators define
+        both -- is transferred exactly as it would be unpickled. Falls back to a
+        ``__dict__`` swap for a plain object (whose ``object.__setstate__`` is
+        absent). Raises on failure; the caller catches and rebinds.
+        """
+        getstate = getattr(value, '__getstate__', None)
+        setstate = getattr(existing, '__setstate__', None)
+        if callable(getstate) and callable(setstate):
+            state = getstate()
+            if state is not None:
+                setstate(state)
+                return
+        existing.__dict__.clear()
+        existing.__dict__.update(value.__dict__)
 
     def _record_restored_var_hash(
         self,

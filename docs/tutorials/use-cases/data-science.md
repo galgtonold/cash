@@ -75,12 +75,12 @@ y = df['churned']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-# @cash:persist
 model = RandomForestClassifier(n_estimators=100, random_state=42)
+# @cash:persist
 model.fit(X_train, y_train)
 ```
 
-`@cash:persist` forces the trained model to disk. If the kernel restarts, the model is restored — even if training took ten minutes.
+Cash caches `model.fit(...)` — the fitted estimator is the cached value, restored *in place* onto `model` on a hit, so any alias of `model` (`backup = model`) sees the fit too. An expensive fit is written to disk and restored after a kernel restart automatically; `# @cash:persist` on the `fit` line forces it to disk even when the cost model would otherwise keep it in memory — so a restart restores it even if training took ten minutes. (Annotations attach to the statement directly below them, so `# @cash:persist` goes on the `fit` line, not the constructor.)
 
 ### Cell 6: Evaluation
 

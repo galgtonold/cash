@@ -508,15 +508,30 @@ class StatementProcessor:
         # owns its body's mutation lineage.
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
+            est_fit: set[str] = set()
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
-        if mut_pre_route:
-            outputs = outputs | mut_pre_route
+            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs)
+        # A bare ``estimator.fit(X, y)`` mutates its receiver in place, so the
+        # classifier above would route it to skip-caching -- but a fit is the
+        # single most expensive cell in an ML notebook, and its cache key is
+        # already input-lineage-based (the estimator is an input, so its pre-fit
+        # lineage + X + y pin the key). Route estimator fits to CACHING instead:
+        # add the receiver to ``outputs`` (so its source-based lineage is bumped
+        # AND the fitted value is captured/saved) but do NOT skip-cache it, so the
+        # normal lookup runs (hit -> in-place restore; miss -> execute + save). A
+        # receiver that is BOTH an estimator fit AND another genuine skip receiver
+        # still skips (the skip wins for that receiver). ``est_fit`` also threads
+        # to the cache-hit path so its restore is IN PLACE (CAS-138).
+        skip_pre_route = mut_pre_route - est_fit
+        if mut_pre_route or est_fit:
+            outputs = outputs | mut_pre_route | est_fit
+        if skip_pre_route:
             skip_cache = True
             metrics['uncacheable_reasons'].append(
-                f"In-place mutation on: {', '.join(sorted(mut_pre_route))} "
+                f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
 
@@ -542,7 +557,7 @@ class StatementProcessor:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
 
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
-            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
+            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit)
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
@@ -574,7 +589,7 @@ class StatementProcessor:
             execution_time, effective_ttl, cache_key, source_hash,
             captured, skip_cache, force_persist, metrics, process_start,
             _parsed_tree, statement_analysis,
-            mut_observe, mut_assumed, mut_record,
+            mut_observe, mut_assumed, mut_record, est_fit,
         )
 
         return metrics
@@ -631,15 +646,30 @@ class StatementProcessor:
 
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
+            est_fit: set[str] = set()
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
-        if mut_pre_route:
-            outputs = outputs | mut_pre_route
+            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs)
+        # A bare ``estimator.fit(X, y)`` mutates its receiver in place, so the
+        # classifier above would route it to skip-caching -- but a fit is the
+        # single most expensive cell in an ML notebook, and its cache key is
+        # already input-lineage-based (the estimator is an input, so its pre-fit
+        # lineage + X + y pin the key). Route estimator fits to CACHING instead:
+        # add the receiver to ``outputs`` (so its source-based lineage is bumped
+        # AND the fitted value is captured/saved) but do NOT skip-cache it, so the
+        # normal lookup runs (hit -> in-place restore; miss -> execute + save). A
+        # receiver that is BOTH an estimator fit AND another genuine skip receiver
+        # still skips (the skip wins for that receiver). ``est_fit`` also threads
+        # to the cache-hit path so its restore is IN PLACE (CAS-138).
+        skip_pre_route = mut_pre_route - est_fit
+        if mut_pre_route or est_fit:
+            outputs = outputs | mut_pre_route | est_fit
+        if skip_pre_route:
             skip_cache = True
             metrics['uncacheable_reasons'].append(
-                f"In-place mutation on: {', '.join(sorted(mut_pre_route))} "
+                f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
 
@@ -667,7 +697,7 @@ class StatementProcessor:
         # CACHE HIT — returns before any coroutine is built, so an identical
         # second run of a top-level-await cell skips the await entirely.
         if cached_data and not self._import_needs_reexecution(_parsed_tree):
-            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start)
+            hit_result = self._handle_cache_hit(cached_data, metadata, silent, cache_key, inputs, metrics, process_start, est_fit)
             if hit_result is not None:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
@@ -690,7 +720,7 @@ class StatementProcessor:
             execution_time, effective_ttl, cache_key, source_hash,
             captured, skip_cache, force_persist, metrics, process_start,
             _parsed_tree, statement_analysis,
-            mut_observe, mut_assumed, mut_record,
+            mut_observe, mut_assumed, mut_record, est_fit,
         )
 
         return metrics
@@ -947,6 +977,7 @@ class StatementProcessor:
         mut_observe: set[str] = frozenset(),
         mut_assumed: set[str] = frozenset(),
         mut_record: bool = False,
+        est_fit: set[str] = frozenset(),
     ) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics."""
         # Broad-precise mutation observation: for a standalone method call whose
@@ -958,12 +989,20 @@ class StatementProcessor:
         if mut_record:
             newly_mutated = {b for b in mut_observe if self._receiver_mutated(b)}
             if newly_mutated:
+                # Estimator fits still enter ``outputs`` (source-based lineage
+                # bump + fitted value capture) and are still recorded in
+                # ``mutation_verdicts`` below (so the upstream simulation bumps
+                # downstream lineage on a data edit), but they are NOT
+                # skip-cached -- they cache + restore in place (CAS-138). Any
+                # other observed mutation still skip-caches its receiver.
                 outputs = outputs | newly_mutated
-                skip_cache = True
-                metrics.setdefault('uncacheable_reasons', []).append(
-                    f"In-place mutation on: {', '.join(sorted(newly_mutated))} "
-                    "(observed; receiver lineage bumped; statement re-executes)"
-                )
+                skip_observed = newly_mutated - est_fit
+                if skip_observed:
+                    skip_cache = True
+                    metrics.setdefault('uncacheable_reasons', []).append(
+                        f"In-place mutation on: {', '.join(sorted(skip_observed))} "
+                        "(observed; receiver lineage bumped; statement re-executes)"
+                    )
             self.mutation_verdicts[source_hash] = set(mut_assumed) | newly_mutated
 
         # Auto-track newly imported local modules so _capture_variables includes
@@ -1114,6 +1153,46 @@ class StatementProcessor:
         record_verdict = verdict is None and bool(observe or assumed)
         return pre_route - outputs, observe, assumed, record_verdict
 
+    def _estimator_fit_receivers(
+        self,
+        tree: ast.Module | None,
+        outputs: set[str],
+    ) -> set[str]:
+        """Receivers of a standalone ``est.fit(...)`` / ``est.partial_fit(...)``
+        whose live value is a duck-typed sklearn estimator (CAS-138).
+
+        A bare ``model.fit(X, y)`` mutates its receiver in place, so the general
+        mutation classifier routes it to skip-caching. But a fit is the most
+        expensive cell in an ML notebook and its cache key is already
+        input-lineage-based (the estimator is an input), so it is both safe and
+        valuable to cache. This narrow gate selects ONLY sklearn-style
+        estimators: the ``fit`` / ``partial_fit`` method name plus the
+        ``BaseEstimator`` duck-type contract -- a callable ``fit`` AND a callable
+        ``get_params``. ``get_params`` is what excludes ``list.append`` /
+        ``dict.update`` and a generic object that merely happens to expose a
+        ``fit`` method, so the estimator-caching path never loosens general
+        mutation caching.
+
+        Modules are excluded (mirroring ``_classify_method_mutations``): a
+        ``pkg.fit(...)`` module-function call is not a receiver mutation. Names
+        already surfaced as AST outputs are excluded too -- those are produced by
+        an assignment (a fresh binding each run), so an in-place transfer onto a
+        pre-existing object would be wrong for them.
+        """
+        candidates = standalone_method_call_receivers(tree)
+        if not candidates:
+            return set()
+        receivers: set[str] = set()
+        for base, method in candidates:
+            if method not in ('fit', 'partial_fit'):
+                continue
+            v = self.shell.user_ns.get(base)
+            if isinstance(v, types.ModuleType):
+                continue
+            if callable(getattr(v, 'fit', None)) and callable(getattr(v, 'get_params', None)):
+                receivers.add(base)
+        return receivers - outputs
+
     def _receiver_observable(self, base: str) -> bool:
         """Return True if *base*'s value can be reliably content-hashed.
 
@@ -1179,11 +1258,18 @@ class StatementProcessor:
         inputs: set[str],
         metrics: ProcessResult,
         process_start: float,
+        inplace_restore: set[str] = frozenset(),
     ) -> ProcessResult | None:
         """Restore from cache and populate *metrics* for a cache-hit path.
 
         Returns the completed *metrics* dict on success, or ``None`` if
         restoration fails (caller should fall through to execution).
+
+        *inplace_restore* names the estimator-fit receivers whose fitted state
+        must be transferred onto the EXISTING object rather than rebound, so
+        every alias observes the fit (CAS-138). It is recomputed each call from
+        the live namespace (never read from ``mutation_verdicts``, which is empty
+        right after a kernel restart).
         """
         try:
             if self.debug:
@@ -1191,7 +1277,7 @@ class StatementProcessor:
                 logger.debug("%s Input lineages used: %s", _LOG_CACHE_HIT, [(v, self.variable_lineage.get(v, 'NONE')[:16] + '...') for v in inputs if v not in ['get_ipython', '__builtins__', 'print']])
                 if metadata:
                     logger.debug("%s Stored lineages in cache: %s", _LOG_CACHE_HIT, [(k, v[:16]+'...') for k,v in (metadata.output_lineages or {}).items()])
-            self._stmt_restorer.restore_from_cache(self._tracking_state, cached_data, metadata, silent, process_start)
+            self._stmt_restorer.restore_from_cache(self._tracking_state, cached_data, metadata, silent, process_start, inplace_restore)
 
             metrics['status'] = CacheStatus.RESTORED
             metrics['saved_time'] = (metadata.execution_time or 0.0) if metadata else 0.0
