@@ -382,9 +382,24 @@ class ReexecutionPlanner:
 
         tracking = getattr(self._classifier, '_tracking_state', None)
         runtime_lineage = getattr(tracking, 'variable_lineage', None) or {}
+        # Live kernel namespace, to tell "provably unchanged" apart from
+        # "absent". A writer input that is gone from user_ns (kernel restart,
+        # ``del``, or an isolated re-run whose producer never ran this session)
+        # has no runtime lineage -- but neither does an unchanged one, so the
+        # lineage comparison below reads absent-as-unchanged and never schedules
+        # the input's producer. That left ``df.to_csv(path)`` scheduled WITHOUT
+        # its producer, so it ran against a missing ``df`` and raised NameError
+        # post-restart, poisoning the whole notebook (CAS-153).
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
 
         def _input_changed(name: str) -> bool:
             if name in changed_inputs:
+                return True
+            if user_ns is not None and name not in user_ns:
+                # Genuinely absent from the live namespace: schedule its producer
+                # so the writer runs against a re-materialised (cache-restored or
+                # recomputed) input rather than crashing -- exactly what run_all
+                # already does for the same notebook.
                 return True
             if virtual_lineage is None:
                 return False

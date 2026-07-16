@@ -167,3 +167,48 @@ def test_unrelated_edit_does_not_rerun_writer(nb_runner, tmp_path):
     assert not writer_reruns, (
         f"unrelated edit re-executed the writer: {writer_reruns}"
     )
+
+
+def test_writer_input_restored_after_kernel_restart(nb_runner, tmp_path):
+    """CAS-153: after a REAL kernel restart, running only a downstream file
+    reader must not crash.
+
+    Post-restart ``executed_write_stmt_codes`` is empty, so the bare
+    ``df.to_csv(path)`` writer looks stale and is scheduled — but its input
+    ``df`` is gone from the restarted namespace. The scheduler used to read
+    "no lineage either side" as "unchanged" and never scheduled df's producer,
+    so the writer ran against a missing ``df`` and raised NameError, which was
+    re-raised into whatever cell the user ran and poisoned the whole notebook.
+    The producer must be re-materialised (cache-restored or recomputed) first.
+    """
+    p = _p(tmp_path / "sales.csv")
+    nb_runner.create_notebook([
+        "import cash\nimport pandas as pd",                                  # 1: imports
+        "%cash_on",                                                          # 2: enable
+        "df = pd.DataFrame({'v': list(range(1000))})\nprint('built', len(df))",  # 3: producer
+        f"df.to_csv('{p}', index=False)\nprint('wrote')",                    # 4: bare writer
+        f"df2 = pd.read_csv('{p}')\nprint('sum =', int(df2['v'].sum()))",    # 5: reader
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "sum = 499500" in nb_runner.get_output(5)
+
+    # ACTUAL kernel restart — clears user_ns, so df is genuinely absent.
+    import asyncio
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
+    loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
+    nb_runner._inject_notebook_path()
+    nb_runner.run_cell(1)
+    nb_runner.run_cell(2)
+
+    # Run ONLY the reader. Upstream must re-materialise df and re-run the writer
+    # instead of exec-ing df.to_csv against a missing name.
+    nb_runner.run_cell(5)
+    out = nb_runner.get_output(5)
+    assert "NameError" not in out and "UpstreamStateError" not in out, (
+        f"writer re-fired against a missing df, poisoning the notebook: {out!r}"
+    )
+    assert "sum = 499500" in out, (
+        f"reader crashed or served wrong data after restart: {out!r}"
+    )
