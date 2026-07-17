@@ -278,6 +278,7 @@ from ..cacheability import (
     RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
+    assigned_method_call_receivers,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -1426,7 +1427,12 @@ class StatementProcessor:
         * ``record_verdict`` — True when this statement's verdict is being learned.
         """
         candidates = standalone_method_call_receivers(tree)
-        if not candidates:
+        # CAS-199: captured-return draws (``counts, bins, _ = ax.hist(...)``) are
+        # assignments, so they never appear in the bare-``Expr`` candidate set;
+        # they are classified by the identity-coupled pass below and must not be
+        # short-circuited by the ``not candidates`` guard.
+        assigned = assigned_method_call_receivers(tree)
+        if not candidates and not assigned:
             return set(), set(), set(), False
         tier1 = standalone_method_mutation_receivers(tree)
         verdict = self.mutation_verdicts.get(source_hash)
@@ -1469,6 +1475,22 @@ class StatementProcessor:
                 observe.add(base)
             else:
                 assumed.add(base)
+                pre_route.add(base)
+        # CAS-199: the CAPTURED-return form ``counts, bins, _ = ax.hist(...)`` is
+        # an ``ast.Assign``, so the bare-``Expr`` candidate set above never saw
+        # it. Route its receiver as a draw too — but ONLY when it is identity-
+        # coupled (a live Axes/Figure). That single discriminator is what keeps a
+        # genuine pure capture (``m = df.mean()``, DataFrame receiver) on the
+        # caching path: the general tier-3 "assume-mutate" logic above is
+        # deliberately NOT applied here, so a non-coupled captured receiver is
+        # never over-invalidated.
+        for base, _method in assigned:
+            if base in pre_route:
+                continue
+            receiver = self.shell.user_ns.get(base)
+            if isinstance(receiver, types.ModuleType):
+                continue
+            if receiver_is_identity_coupled(receiver):
                 pre_route.add(base)
         record_verdict = verdict is None and bool(observe or assumed)
         return pre_route - outputs, observe, assumed, record_verdict

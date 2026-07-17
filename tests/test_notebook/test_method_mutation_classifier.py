@@ -91,3 +91,42 @@ def test_axes_hist_is_a_mutation_but_dataframe_writes_are_not(classifiers):
     assert 'df' not in _routes_mutation(proc, shell, "df.head()")
 
     plt.close(fig)
+
+
+def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifiers):
+    """CAS-199: a draw whose return is CAPTURED into an assignment must route too.
+
+    ``standalone_method_call_receivers`` sees only bare-``Expr`` calls, so the
+    captured form (``counts, bins, _ = ax.hist(...)`` -- an ``ast.Assign``)
+    slipped the CAS-194 routing and was cached, blanking the chart on a warm
+    re-run. The extension keys on the RECEIVER (live Axes/Figure), never the
+    statement shape: a captured pure read on an ordinary receiver still caches.
+    """
+    pd = pytest.importorskip("pandas")
+    plt = pytest.importorskip("matplotlib.pyplot")
+    proc, shell = classifiers
+
+    fig, ax = plt.subplots()
+    shell.user_ns.update({
+        'df': pd.DataFrame({'x': [1, 2, 3]}),
+        'ax': ax,
+        'fig': fig,
+        'data': [1, 2, 3, 4, 5],
+        'sizes': [30, 20, 50],
+    })
+
+    # Captured-return draws on a live Axes -> mutation, whatever the return type.
+    assert 'ax' in _routes_mutation(proc, shell, "counts, bins, patches = ax.hist(data)")
+    assert 'ax' in _routes_mutation(proc, shell, "h = ax.hist(data, bins=11)")          # single target
+    assert 'ax' in _routes_mutation(proc, shell, "wedges, texts = ax.pie(sizes)")       # sibling: pie
+    assert 'ax' in _routes_mutation(proc, shell, "ml, sl, bl = ax.stem(data)")          # sibling: stem
+    # Nested in a larger RHS expression is still caught (whole RHS is walked).
+    assert 'ax' in _routes_mutation(proc, shell, "n = int((ax.hist(data)[0] > 0).sum())")
+
+    # No over-invalidation: a captured pure read on an ORDINARY (non-Axes)
+    # receiver must NOT route -- the discriminator is the receiver, not the shape.
+    assert 'df' not in _routes_mutation(proc, shell, "m = df.mean()")
+    assert 'df' not in _routes_mutation(proc, shell, "s = df.describe()")
+    assert 'df' not in _routes_mutation(proc, shell, "top = df.head()")
+
+    plt.close(fig)

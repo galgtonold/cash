@@ -25,6 +25,7 @@ from ..analysis import CodeAnalyzer
 from ..cacheability import (
     KNOWN_PURE_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
+    assigned_method_call_receivers,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -137,7 +138,10 @@ class VirtualLineage:
         mutating (conservative).
         """
         candidates = standalone_method_call_receivers(tree)
-        if not candidates:
+        # CAS-199: captured-return draws are assignments, absent from the
+        # bare-``Expr`` candidate set; keep the guard from short-circuiting them.
+        assigned = assigned_method_call_receivers(tree)
+        if not candidates and not assigned:
             return set()
         tier1 = standalone_method_mutation_receivers(tree)
         receivers: set[str] = set()
@@ -164,6 +168,20 @@ class VirtualLineage:
                     receivers.add(base)
             else:
                 receivers.add(base)  # unknown -> conservative
+        # CAS-199: mirror the runtime — a captured-return draw
+        # (``counts, bins, _ = ax.hist(...)``) routes its receiver as a mutation
+        # too, gated SOLELY by the identity-coupled check so the simulated lineage
+        # bumps the same source-based receiver the runtime does (unified-key
+        # rule; a runtime-only bump would desync cross-cell restore). A
+        # non-coupled captured receiver (``m = df.mean()``) is never routed.
+        for base, _method in assigned:
+            if base in receivers:
+                continue
+            receiver = self.shell.user_ns.get(base)
+            if isinstance(receiver, types.ModuleType):
+                continue
+            if receiver_is_identity_coupled(receiver):
+                receivers.add(base)
         return receivers
 
     def reset_caches(self) -> None:

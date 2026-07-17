@@ -33,6 +33,7 @@ from cash.notebook.cacheability import (
     standalone_call_arg_targets,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
+    assigned_method_call_receivers,
     selfref_inplace_write_vars,
 )
 
@@ -351,6 +352,53 @@ class TestStandaloneMethodCallReceivers:
 
     def test_none_tree(self):
         assert standalone_method_call_receivers(None) == frozenset()
+
+
+class TestAssignedMethodCallReceivers:
+    """``assigned_method_call_receivers`` returns ``(base, method)`` for method
+    calls on the RHS of a top-level assignment — the captured-return set the
+    runtime routes as a draw when the receiver is identity-coupled (CAS-199).
+    The dual of ``standalone_method_call_receivers``: assignments here, bare
+    ``Expr`` there.
+    """
+
+    @staticmethod
+    def _calls(code: str) -> frozenset:
+        return assigned_method_call_receivers(ast.parse(code))
+
+    def test_tuple_unpack_captured(self):
+        assert self._calls("counts, bins, patches = ax.hist(data)") == {('ax', 'hist')}
+
+    def test_single_target_captured(self):
+        assert self._calls("h = ax.hist(data, bins=11)") == {('ax', 'hist')}
+
+    def test_annotated_assignment_captured(self):
+        assert self._calls("h: object = ax.hist(data)") == {('ax', 'hist')}
+
+    def test_bare_annotation_has_no_value(self):
+        assert self._calls("h: object") == frozenset()
+
+    def test_nested_in_larger_rhs_expression(self):
+        # whole RHS is walked, so a draw nested in an expression is caught
+        assert self._calls("n = int((ax.hist(data)[0] > 0).sum())") == {('ax', 'hist')}
+
+    def test_pure_capture_included_as_candidate(self):
+        # the helper is receiver-agnostic; the identity-coupled gate (applied by
+        # the runtime/sim, not here) is what keeps df.mean() cacheable
+        assert self._calls("m = df.mean()") == {('df', 'mean')}
+
+    def test_bare_expr_excluded(self):
+        assert self._calls("ax.hist(data)") == frozenset()
+
+    def test_augassign_excluded(self):
+        assert self._calls("total += box.value()") == frozenset()
+
+    def test_loop_and_function_bodies_excluded(self):
+        assert self._calls("for i in xs:\n    r = a.pop(i)") == frozenset()
+        assert self._calls("def f():\n    r = a.pop()") == frozenset()
+
+    def test_none_tree(self):
+        assert assigned_method_call_receivers(None) == frozenset()
 
 
 class TestKnownPureMethods:

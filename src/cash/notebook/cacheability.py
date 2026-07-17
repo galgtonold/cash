@@ -31,6 +31,7 @@ __all__ = [
     "statement_saves_current_pyplot_figure",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
+    "assigned_method_call_receivers",
     "selfref_reassignment_targets",
     "cacheable_accumulator_loop",
     "selfref_inplace_write_vars",
@@ -2721,6 +2722,48 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
         base = _extract_base_name(call.func.value)
         if base:
             calls.add((base, call.func.attr))
+    return frozenset(calls)
+
+
+def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[str, str]]:
+    """``(receiver_base, method_name)`` for method calls on the RHS of a top-level assignment.
+
+    The captured-return companion to :func:`standalone_method_call_receivers`.
+    That helper only sees a bare-``Expr`` method call, so it misses the far more
+    common form that BINDS the return value —
+    ``counts, bins, patches = ax.hist(data)`` (an ``ast.Assign``) or
+    ``h: BarContainer = ax.hist(data)`` (an ``ast.AnnAssign``). Such a statement
+    BOTH draws on ``ax`` (the bars — a live-Axes mutation that cannot be replayed
+    from the cached tuple) AND binds a value; caching the tuple while skipping the
+    draw is the exact incoherence CAS-194 kills, one statement-shape further out
+    (CAS-199).
+
+    The whole RHS value is walked, so a draw nested in a larger expression
+    (``h = [ax.hist(d) for d in data]``) is caught too. The runtime and the
+    simulation route ONLY the identity-coupled (live Axes/Figure) receivers from
+    this set — keyed on the RECEIVER, exactly as the bare-``Expr`` path is — so a
+    genuine pure capture on an ordinary receiver (``m = df.mean()``) is never
+    routed and still caches. Scope is ``tree.body`` (top-level) assignments only,
+    matching the bare-``Expr`` helper.
+    """
+    if tree is None:
+        return frozenset()
+    calls: set[tuple[str, str]] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            value: ast.AST | None = node.value
+        elif isinstance(node, ast.AnnAssign):
+            value = node.value  # None for a bare annotation (``x: int``)
+        else:
+            continue
+        if value is None:
+            continue
+        for sub in ast.walk(value):
+            if not isinstance(sub, ast.Call) or not isinstance(sub.func, ast.Attribute):
+                continue
+            base = _extract_base_name(sub.func.value)
+            if base:
+                calls.add((base, sub.func.attr))
     return frozenset(calls)
 
 
