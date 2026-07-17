@@ -556,9 +556,14 @@ class StatementProcessor:
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
         # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
-        # skip-caching: the statement re-executes and is never serialised. That is
-        # net-NEUTRAL and makes aliases correct BY CONSTRUCTION -- the real
-        # ``.fit()`` mutates the shared object, so ``backup = clf`` sees the fit.
+        # skip-caching: the statement re-executes and is never serialised, which is
+        # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
+        #
+        # It does NOT make aliases safe. CAS-170 originally claimed skipping the fit
+        # made ``backup = clf`` correct "by construction"; CAS-184 disproved that.
+        # ``backup = clf`` is an ORDINARY ASSIGNMENT that cash caches on its own, and
+        # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
+        # statement has no bearing on it either way. Do not restore that reasoning.
         #
         # Caching a bare fit instead (CAS-138) is the OPT-IN path, kept because it
         # is a large win when it lands but demoted from the default because its
@@ -719,9 +724,14 @@ class StatementProcessor:
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
         # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
-        # skip-caching: the statement re-executes and is never serialised. That is
-        # net-NEUTRAL and makes aliases correct BY CONSTRUCTION -- the real
-        # ``.fit()`` mutates the shared object, so ``backup = clf`` sees the fit.
+        # skip-caching: the statement re-executes and is never serialised, which is
+        # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
+        #
+        # It does NOT make aliases safe. CAS-170 originally claimed skipping the fit
+        # made ``backup = clf`` correct "by construction"; CAS-184 disproved that.
+        # ``backup = clf`` is an ORDINARY ASSIGNMENT that cash caches on its own, and
+        # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
+        # statement has no bearing on it either way. Do not restore that reasoning.
         #
         # Caching a bare fit instead (CAS-138) is the OPT-IN path, kept because it
         # is a large win when it lands but demoted from the default because its

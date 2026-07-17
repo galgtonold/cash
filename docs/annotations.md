@@ -276,12 +276,22 @@ seeding the legacy global says nothing about your Generator. Pass the seed to th
 generator instead.
 
 !!! warning "Detection is rooted at the RNG, not at the draw"
-    Cash finds these by following the generator from where it is constructed. A
-    draw off an object it never saw constructed — `df.sample()`, a generator
-    handed in as a function argument, or one reached through an attribute
-    (`self.rng.normal()`) — is **not** detected and will cache silently. Seed
-    explicitly, or use [`# @cash:no-cache`](#cashno-cache-alias-nocache), when a
-    statement must genuinely re-run every time.
+    Cash finds these by following the generator from where it is constructed, so
+    a draw off an object it never saw constructed is **not** detected and caches
+    silently. Two cases in particular: `df.sample()`, and a generator reached
+    through an attribute (`self.rng.normal()`).
+
+    A generator passed **into a function** *is* followed — both
+    `price(rng=default_rng())` and `price(default_rng(), n)` warn, provided cash
+    scanned that function's `def` this session and can see it draw off that
+    parameter. It stays silent when it cannot be sure: a callee it never scanned,
+    one that isn't a plain Python function (a class, a builtin, a `partial`), an
+    argument landing in `*args`, or anything after a `*unpacking`. Each of those
+    is a missing warning, never a false one.
+
+    Seed explicitly, or use [`# @cash:no-cache`](#cashno-cache-alias-nocache),
+    when a statement must genuinely re-run every time. The warning is advisory —
+    it never changes what gets cached.
 
 ## Lookback and scoping
 

@@ -78,20 +78,27 @@ y = df['churned']
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
 @cash.cache
-def train_model(X_train, y_train, n_estimators=100):
+def train_model(X_train, y_train, n_estimators):
     model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X_train, y_train)
     return model
 
-model = train_model(X_train, y_train)
+model = train_model(X_train, y_train, n_estimators=100)
 ```
 
-The decorator caches on the function's arguments, so the fitted model comes back from cache whenever `X_train`/`y_train`/the hyperparameters are unchanged — including after a kernel restart — and re-trains the moment any of them differ. The value is a plain return value, so there's no ambiguity about what got cached or which name it lands on.
+The decorator caches on the arguments you **pass** and on the function's **body**, so the fitted model comes back from cache when they're unchanged — including after a kernel restart — and re-trains when either differs. The value is a plain return value, so there's no ambiguity about what got cached or which name it lands on.
+
+!!! danger "Pass your hyperparameters — don't put them in default values"
+    The cache key covers the arguments at the call site and the function body. It does **not** cover a parameter's *default value*. Editing `def train_model(..., n_estimators=100)` to `=200` and re-running gives you an instant cache **hit** and the **old 100-tree model**, even though `inspect.signature` now says 200.
+
+    This is silent, and it is worst exactly where you'd notice it least: sweeping a hyperparameter by editing its default returns identical scores every time, which reads as "accuracy has plateaued" rather than "nothing retrained". Write the value at the call site (as above) and every change re-trains correctly.
 
 !!! warning "A bare `model.fit(X, y)` is **not** cached"
     A statement like `model.fit(X_train, y_train)` mutates `model` in place and returns nothing. Cash does **not** cache it — the badge reads `NOT CACHED` with an *In-place mutation* reason, and the fit re-executes on every run.
 
-    That's deliberate. Skipping it costs nothing (the model is never serialised, so a fit that keeps missing can't cost more than it saves) and it keeps your objects correct: because the real `.fit()` runs, `model` is genuinely fitted and any alias of it (`backup = model`) sees the fit, exactly as plain Python would.
+    That's deliberate: skipping it costs nothing, because the model is never serialised, so a fit that keeps missing can't cost more than it saves. The real `.fit()` runs every time, so `model` itself is genuinely fitted.
+
+    **It does not make aliases safe.** `backup = model` is an ordinary assignment, so Cash caches *that* statement — and a restore can rebind `backup` to a deserialised copy taken before the fit. On a warm re-run `backup is model` can be `False` with `backup` unfitted, which is not what a plain kernel does. Don't keep a second name for a model you fit in place; see the identity caveat below.
 
     Assignment forms are ordinary statements and **do** cache with no directive:
 
