@@ -2586,6 +2586,27 @@ class Cash:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form."""
         def get_arg_hash(arg):
+            # Content-authoritative builtin hashers FIRST (CAS-202). pandas /
+            # numpy / polars / pyarrow / modin / dask hash the argument's
+            # *content*, which is byte-stable across processes and kernel
+            # restarts. The notebook's in-memory ``_cash_lineage_hash`` (checked
+            # next) is recomputed per session and is NOT reproducible across a
+            # restart -- keying a persisted @cash.cache entry on it makes the
+            # decorator miss after a restart even though the argument is
+            # byte-identical (re-training the model the docs promise survives a
+            # restart). A value that has a content hash must key on content so
+            # the entry survives; the modest extra hashing cost is the price of
+            # the flagship "restart-and-run-all in seconds" guarantee. Mirrors
+            # CAS-185's principle: the reproducible signal, not the volatile
+            # in-memory one, is authoritative.
+            builtin_hash = self._try_builtin_type_hash(arg)
+            if builtin_hash is not None:
+                return builtin_hash
+            # Notebook lineage hash: the authoritative, cheap identity for
+            # values that carry NO content hasher (custom objects). Kept ahead
+            # of registered hashers so a lineage-carrying object short-circuits
+            # its (possibly expensive) registered hasher within a session
+            # (test_hasher_priority_cash_hash_first).
             if hasattr(arg, '_cash_lineage_hash'):
                 return arg._cash_lineage_hash
             for type_, (hasher_fn, src_hash) in self._type_hashers.items():
@@ -2594,10 +2615,6 @@ class Cash:
                     # hasher's body invalidates dependent cache entries
                     # even when the hasher's output coincidentally matches.
                     return f"{src_hash}:{hasher_fn(arg)}"
-            # 3. Try built-in type hashers for common non-picklable types
-            builtin_hash = self._try_builtin_type_hash(arg)
-            if builtin_hash is not None:
-                return builtin_hash
             return arg
 
         hashed_args = tuple(get_arg_hash(a) for a in args)

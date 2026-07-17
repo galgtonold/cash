@@ -42,15 +42,16 @@ WHAT IT DOES
   6. Cleans up: quit + tree-kill the server (idempotent, rerun-safe).
 
 THE SCENARIOS (each a separate assertion; RED = invariant violated = bug present)
-  S1  restart survival of @cash.cache on the sklearn pipeline (CAS-202) -> RED
+  S1  restart survival of @cash.cache on the sklearn pipeline (CAS-202) -> GREEN
   S2  to_csv audit-log not re-fired by a downstream reader     (CAS-196) -> RED
   S3  same sklearn pipeline warm-re-runs WITHIN a session       (CAS-185) -> GREEN
   S4  a plain @cash.cache int fn survives a restart (control)             -> GREEN
 
-The S1(RED)/S3(GREEN) contrast isolates the failure to "sklearn pipeline +
-restart"; S4(GREEN) shows restart-survival works when no sklearn import poisons
-the file-dep set. A harness that passed everything would be the exact CAS-190
-blindness it is meant to cure -- so S1/S2 going RED is the proof of non-vacuity.
+S1 was RED until CAS-202 was fixed (the decorator arg-hash keyed a DataFrame
+argument on its per-session _cash_lineage_hash instead of its stable content,
+so the persisted entry was never found after a restart). S2 (CAS-196) is still
+RED, so the harness is still non-vacuous -- a harness that passed everything
+would be the exact CAS-190 blindness it is meant to cure.
 
 RUN IT
 ------
@@ -60,8 +61,9 @@ RUN IT
     python scripts/wheel_gate.py --reuse-venv          # skip venv rebuild
 
 Exit code 0 iff the observed RED/GREEN matrix matches the recorded baseline
-(S1 RED, S2 RED, S3 GREEN, S4 GREEN). A mismatch (a green invariant regressed,
-or a known bug got fixed and the baseline needs updating) exits 1. Takes roughly
+(S1 GREEN since CAS-202 fixed, S2 RED, S3 GREEN, S4 GREEN). A mismatch (a green
+invariant regressed, or a known bug got fixed and the baseline needs updating)
+exits 1. Takes roughly
 6-12 min cold (wheel build + venv install dominate) and ~2-4 min with
 --reuse-venv. Kept OUT of the default pytest collection because it is slow; see
 tests/test_wheel_gate/ for the CI shim (skipped unless CASH_WHEEL_GATE=1).
@@ -400,7 +402,11 @@ def _pipeline_cells(counter_file: str):
 # ---------------------------------------------------------------------------
 
 def scenario_s1(py: Path, port: int) -> Result:
-    r = Result("S1", "restart survival of @cash.cache sklearn pipeline (CAS-202)", "RED")
+    # Baseline flipped RED -> GREEN when CAS-202 was fixed (core.py
+    # _hash_arg_payload now keys a content-bearing argument on its stable
+    # content hash, not the per-session _cash_lineage_hash). S2 stays RED, so
+    # the harness is still non-vacuous.
+    r = Result("S1", "restart survival of @cash.cache sklearn pipeline (CAS-202)", "GREEN")
     work = _fresh_work("s1")
     counter = work / "calls.log"
     cells = _pipeline_cells("calls.log")

@@ -53,16 +53,19 @@ restored on a cache hit and so cannot witness a silent re-run.
 
 | id | invariant (external signal) | issue | baseline |
 |----|-----------------------------|-------|----------|
-| **S1** | multi-cell `make_classification → DataFrame → train_test_split → @cash.cache train()` restores after a **kernel restart** (fit counter unchanged) | CAS-202 | **RED** |
+| **S1** | multi-cell `make_classification → DataFrame → train_test_split → @cash.cache train()` restores after a **kernel restart** (fit counter unchanged) | CAS-202 | **GREEN** (was RED until CAS-202 fixed) |
 | **S2** | a downstream reader does **not** re-fire an upstream `df.to_csv('audit.log', mode='a')` — `audit.log` byte-stable vs a `%cash_off` baseline | CAS-196 | **RED** |
 | **S3** | the **single-cell** version of the same sklearn `@cash.cache` work survives a restart (fit counter unchanged) | CAS-202 control | **GREEN** |
 | **S4** | a plain `@cash.cache` int fn survives a restart (call counter unchanged) | control | **GREEN** |
 
-`RED` = the invariant is violated = the bug is present. The **S1 (RED) vs S3
-(GREEN)** contrast isolates the failure to *multi-cell sklearn provenance across
-a restart*; **S4 (GREEN)** shows restart-survival works when no sklearn import
-poisons the file-dep set. A harness that passed everything would be the exact
-CAS-190 blindness it is meant to cure — so **S1/S2 going RED is the proof of
+`RED` = the invariant is violated = the bug is present. S1 was **RED** until
+CAS-202 was fixed: the decorator arg-hash keyed a DataFrame argument on its
+per-session `_cash_lineage_hash` instead of its stable content, so the persisted
+entry was never found after a restart and the model re-trained. Now the
+**S1 (GREEN) vs the still-**RED** S2** keeps the harness non-vacuous; **S4
+(GREEN)** shows restart-survival works when no sklearn import poisons the
+file-dep set. A harness that passed everything would be the exact CAS-190
+blindness it is meant to cure — so **S2 staying RED is the proof of
 non-vacuity.**
 
 ## How to run
@@ -82,8 +85,9 @@ python scripts/wheel_gate.py --scenarios S1,S2
 ```
 
 **Exit code 0** iff the observed RED/GREEN matrix matches the recorded baseline
-(S1/S2 RED, S3/S4 GREEN). A mismatch exits 1 — either a green invariant
-regressed, or a known-open bug got fixed and the baseline needs updating.
+(S2 RED, S1/S3/S4 GREEN — S1 flipped to GREEN when CAS-202 was fixed). A
+mismatch exits 1 — either a green invariant regressed, or a known-open bug got
+fixed and the baseline needs updating.
 
 ### From pytest / CI
 
