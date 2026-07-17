@@ -20,6 +20,7 @@ import threading
 import time
 import types
 import warnings
+import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
@@ -56,9 +57,6 @@ except ImportError:  # IPython not installed
 # Sentinel object used by wrapper helpers to signal a cache miss without
 # conflicting with any legitimate cached value (including None).
 _CACHE_MISS = object()
-# Sentinel distinguishing "signature not yet computed" from a cached None
-# (which means introspection failed and normalization is disabled for the func).
-_SIG_UNSET = object()
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -512,11 +510,25 @@ class Cash:
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (CAS-107 global folding)
         self._global_read_cache: dict = {}
-        # func_name -> inspect.Signature (or None if introspection failed). Used
-        # to bind call arguments to a canonical form so that logically-identical
-        # calls written differently (positional vs keyword, omitted vs explicit
-        # default, kwargs in different orders) share one cache key.
-        self._signatures: dict[str, inspect.Signature | None] = {}
+        # func_name -> (function the signature was read from, inspect.Signature
+        # or None if introspection failed). Used to bind call arguments to a
+        # canonical form so that logically-identical calls written differently
+        # (positional vs keyword, omitted vs explicit default, kwargs in
+        # different orders) share one cache key.
+        #
+        # The function is stored alongside so the memo can be invalidated when
+        # the name is REBOUND to a new function object (a notebook cell re-run).
+        # Keying by name alone pinned the first signature forever, so
+        # `apply_defaults()` kept folding a default the callee no longer has
+        # (CAS-183).
+        self._signatures: dict[str, tuple[Callable | None, inspect.Signature | None]] = {}
+        # function object -> digest of its parameter defaults, for defaults that
+        # are immutable and therefore cannot drift between calls (CAS-183).
+        # Weak so the memo dies with the function instead of pinning it (and so
+        # a later function object can never inherit a dead one's entry by
+        # id-reuse). Mutable defaults are deliberately absent: they must be
+        # re-hashed per call to stay correct.
+        self._defaults_pins: weakref.WeakKeyDictionary = weakref.WeakKeyDictionary()
         # In-process async single-flight registry: cache_key -> (event_loop,
         # asyncio.Event). When use_locking is set, concurrent awaits of the
         # same key coalesce - one coroutine computes, the rest wait on the
@@ -920,6 +932,14 @@ class Cash:
                 func_name, own_source_override=self._pin_own_source(func),
             )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
+            folded_defaults = self._fold_defaults(func, func_name, current_state_hash)
+            if folded_defaults is None:
+                # An unhashable default: we cannot tell whether it changed, so
+                # caching at all risks a stale result. Run uncached (CAS-183).
+                result = func(*args, **kwargs)
+                self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
+                return (_CACHE_MISS, result, 'unhashable')
+            current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
@@ -1005,6 +1025,24 @@ class Cash:
                 func_name, own_source_override=self._pin_own_source(func),
             )
             current_state_hash = self._fold_closure(func, func_name, current_state_hash)
+            folded_defaults = self._fold_defaults(
+                func, func_name, current_state_hash, warn=False,
+            )
+            if folded_defaults is None:
+                return CacheExplanation(
+                    would_hit=False,
+                    reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                    func_name=func_name,
+                    details={
+                        'error': 'unhashable parameter default',
+                        'hint': (
+                            'A parameter default could not be hashed, so cash '
+                            'cannot detect a change to it and will not cache '
+                            'this call.'
+                        ),
+                    },
+                )
+            current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
         except (TypeError, ValueError, RuntimeError) as e:
@@ -2134,6 +2172,176 @@ class Cash:
             return state_hash
         return hashlib.sha256(f"{state_hash}:closure:{clo}".encode()).hexdigest()
 
+    @staticmethod
+    def _defaults_of(func: Callable) -> tuple[tuple, dict]:
+        """The parameter defaults that decide what *func* computes (CAS-183).
+
+        ``__defaults__`` (positional/keyword params) and ``__kwdefaults__``
+        (keyword-only params) are separate containers; both are collected.
+
+        Wrapped callees are walked too. ``func.__defaults__`` is what the call
+        literally binds, but when *func* is a ``functools.wraps`` wrapper its own
+        defaults are typically empty (a ``*args, **kwargs`` passthrough) while the
+        values that actually decide the result sit on ``__wrapped__`` — which is
+        also what ``inspect.signature`` reports and therefore what
+        ``_normalize_call_args`` binds. Folding every level is the conservative
+        choice: folding a default that turns out not to bind costs at most a
+        one-time miss, whereas missing one that does bind is a silent wrong
+        answer.
+        """
+        pos: list[Any] = []
+        kwd: dict[str, Any] = {}
+        seen: set[int] = set()
+        fn: Any = func
+        depth = 0
+        while fn is not None and id(fn) not in seen and depth < 8:
+            seen.add(id(fn))
+            pos.extend(getattr(fn, "__defaults__", None) or ())
+            # Qualify by depth so a wrapper and its wrappee can't collide on a
+            # shared kwonly name; sort so dict order never leaks into the key.
+            level_kwd = getattr(fn, "__kwdefaults__", None) or {}
+            for name in sorted(level_kwd):
+                kwd[f"{depth}:{name}"] = level_kwd[name]
+            fn = getattr(fn, "__wrapped__", None)
+            depth += 1
+        return tuple(pos), kwd
+
+    def _fold_defaults(
+        self, func: Callable, func_name: str, state_hash: str, warn: bool = True,
+    ) -> str | None:
+        """Mix the callee's parameter defaults into the state hash (CAS-183).
+
+        A default is an input to the result exactly like a passed argument, but
+        it lives on the FUNCTION OBJECT, not in the code object — so the bytecode
+        fingerprint the state hash falls back to when source is unavailable
+        (functions defined in an IPython cell, the documented ML path) cannot see
+        it. Editing ``n_estimators=300`` to ``400`` left the key byte-identical
+        and returned the 300-tree model on an instant HIT while
+        ``inspect.signature`` reported 400 — a wrong answer that reads as a
+        finding ("accuracy has plateaued") rather than as a bug.
+
+        Defaults are hashed by VALUE through the same payload hasher arguments
+        use, so ``register_hasher`` and the pandas/numpy-aware hashers apply
+        identically. Returns ``None`` when a default cannot be hashed; the caller
+        must then refuse to cache, because silently ignoring it would resurrect
+        exactly the silent staleness this fold exists to prevent.
+        """
+        # Memo first: this runs on EVERY decorated call, so the hot path must be
+        # one lookup plus one hash, with no re-walk of the function.
+        # Not every callable can be weak-referenced (numpy's dispatcher can't),
+        # and WeakKeyDictionary raises on LOOKUP too, not just on store.
+        try:
+            entry = self._defaults_pins.get(func)
+            pinnable = True
+        except TypeError:
+            entry = None
+            pinnable = False
+        if entry is not None:
+            # Validate against the live containers rather than trusting the
+            # function object's identity: `f.__defaults__ = (400,)` rebinds them
+            # on the SAME object, and a memo keyed on identity alone would pin
+            # the old digest and hand back a stale result — the very failure
+            # this fold exists to prevent. Only immutable defaults are pinned,
+            # so comparing the containers by value is sound (and is a cheap
+            # C-level compare of a tiny tuple/dict).
+            pin_pos, pin_kwd, digest = entry
+            if pin_pos == getattr(func, "__defaults__", None) and pin_kwd == (
+                getattr(func, "__kwdefaults__", None) or {}
+            ):
+                return hashlib.sha256(
+                    f"{state_hash}:defaults:{digest}".encode('utf-8')
+                ).hexdigest()
+        pos, kwd = self._defaults_of(func)
+        if not pos and not kwd:
+            # No defaults: leave the hash byte-identical so entries already on
+            # disk for such functions keep hitting.
+            return state_hash
+        try:
+            digest = self._hash_arg_payload(pos, kwd)
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
+            # A callback default (`def f(x, key=lambda v: v)`) is unpicklable but
+            # is not opaque: its SOURCE defines it, which is the same fingerprint
+            # register_hasher embeds for a hasher. Retry with function-valued
+            # defaults replaced by that -- strictly better than dropping them (an
+            # edited lambda now invalidates) and it keeps such functions
+            # cacheable, which a bare refuse-to-cache would not.
+            try:
+                digest = self._hash_arg_payload(
+                    tuple(self._fingerprint_default(v) for v in pos),
+                    {k: self._fingerprint_default(v) for k, v in kwd.items()},
+                )
+            except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
+                return self._defaults_unhashable(func_name, pos, kwd, e, warn)
+        return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable)
+
+    @staticmethod
+    def _fingerprint_default(v: Any) -> Any:
+        """Replace a plain function/method default with a digest of its source.
+
+        Restricted to functions, methods and builtins: their behaviour IS their
+        code. An arbitrary callable INSTANCE is left alone so it takes the
+        unhashable path rather than being keyed on its class and silently
+        sharing entries across instances with different state.
+        """
+        if inspect.isfunction(v) or inspect.ismethod(v) or inspect.isbuiltin(v):
+            return f"__cash_callable__:{Cash._hash_callable_source(v)}"
+        return v
+
+    def _defaults_unhashable(
+        self, func_name: str, pos: tuple, kwd: dict, e: Exception, warn: bool,
+    ) -> None:
+        """Warn (once) that a default is unhashable; ``None`` = refuse to cache."""
+        bad_type = self._first_unhashable_arg_type(pos, kwd)
+        if warn:
+            self._warn_once(
+                CashCacheIneffectiveWarning,
+                func_name,
+                bad_type,
+                f"@cash.cache on {func_name}: a parameter default of type "
+                f"{bad_type} could not be hashed ({type(e).__name__}). "
+                f"Cash cannot tell whether that default changed, so the call "
+                f"will not cache rather than risk returning a stale result. "
+                f"Consider cash.register_hasher({bad_type}, ...) or passing "
+                f"the value at the call site.",
+                stacklevel=6,
+            )
+        else:
+            logger.debug("defaults hash failed for %s: %s", func_name, e)
+        return None
+
+    def _finish_defaults_fold(
+        self, func: Callable, state_hash: str, digest: str,
+        pos: tuple, kwd: dict, pinnable: bool,
+    ) -> str:
+        """Memoize *digest* when it cannot drift, then mix it into *state_hash*."""
+        # Two conditions gate the memo, and both are load-bearing:
+        #
+        # 1. Every default must be immutable. A mutable default is shared across
+        #    calls and can be mutated in place (`def f(xs=[])`), so its content
+        #    must be re-read every call; a memo would pin the first call's value
+        #    and hand that result back forever.
+        # 2. The callee must not wrap another function. The memo is validated
+        #    against `func`'s OWN containers, which say nothing about defaults
+        #    reached through `__wrapped__`; re-hashing those per call keeps the
+        #    validation honest rather than merely cheap.
+        if (
+            pinnable
+            and getattr(func, "__wrapped__", None) is None
+            and all(self._is_immutable_capture(v) for v in pos)
+            and all(self._is_immutable_capture(v) for v in kwd.values())
+        ):
+            try:
+                self._defaults_pins[func] = (
+                    getattr(func, "__defaults__", None),
+                    dict(getattr(func, "__kwdefaults__", None) or {}),
+                    digest,
+                )
+            except TypeError:
+                pass  # not weak-referenceable; recompute per call
+        return hashlib.sha256(
+            f"{state_hash}:defaults:{digest}".encode('utf-8')
+        ).hexdigest()
+
     def _fold_bound_self(
         self, func: Callable, func_name: str, state_hash: str, warn: bool = True,
     ) -> str:
@@ -2332,14 +2540,19 @@ class Cash:
         signature, ``*args`` calls that don't match, deliberately mismatched
         calls) returns the inputs unchanged, so behavior never regresses.
         """
-        sig = self._signatures.get(func_name, _SIG_UNSET)
-        if sig is _SIG_UNSET:
-            func = self.functions.get(func_name)
+        func = self.functions.get(func_name)
+        cached = self._signatures.get(func_name)
+        # Re-read the signature when the name has been rebound to a different
+        # function object: a notebook cell re-run with an edited default keeps
+        # the qualname but changes what `apply_defaults()` must fold (CAS-183).
+        if cached is not None and cached[0] is func:
+            sig = cached[1]
+        else:
             try:
                 sig = inspect.signature(func) if func is not None else None
             except (ValueError, TypeError):
                 sig = None
-            self._signatures[func_name] = sig
+            self._signatures[func_name] = (func, sig)
         if sig is None:
             return args, kwargs
         try:
