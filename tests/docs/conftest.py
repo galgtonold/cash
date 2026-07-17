@@ -400,8 +400,18 @@ def mock_polars(monkeypatch):
         def collect(self): return self
     class _FakeDataFrame:
         pass
+    class _FakeSeries:
+        pass
     fake_pl.DataFrame = _FakeDataFrame
     fake_pl.LazyFrame = _FakeLazyFrame
+    # ``Series`` is not used by any doc fence -- it is here because THIRD-PARTY
+    # code probes this stub. sklearn's ``is_polars_df_or_series`` reads
+    # ``sys.modules["polars"]`` directly and does
+    # ``isinstance(X, (pl.DataFrame, pl.Series))``, so a page that merely calls
+    # ``train_test_split`` raises AttributeError on the missing attribute. A
+    # stub standing in for a real module must satisfy whoever duck-types it,
+    # not only the code under test.
+    fake_pl.Series = _FakeSeries
     fake_pl.read_csv = lambda path, **kwargs: _FakeDataFrame()
     fake_pl.read_parquet = lambda path, **kwargs: _FakeDataFrame()
     monkeypatch.setitem(sys.modules, "polars", fake_pl)
