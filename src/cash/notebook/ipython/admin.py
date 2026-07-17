@@ -16,6 +16,8 @@ from IPython.core.magic import line_magic
 
 from cash.utils import safe_text
 
+from ._args import parse_mode, strip_inline_comment
+
 if TYPE_CHECKING:
     from .magics import CashMagics
 
@@ -198,7 +200,18 @@ class CashAdminMagicsMixin:
             %cash_repair --full       # Full reset (clear all cache + state)
             %cash_repair --state      # Reset only in-memory state (keep cache)
         """
-        mode = line.strip().lower() if line else ''
+        # An unrecognised argument must NEVER fall through to the default
+        # repair: this magic is the documented recovery from a poisoned cache,
+        # so quietly running a lesser repair and reporting success turns a
+        # recoverable state into a confidently wrong one (CAS-181).
+        mode = parse_mode(line, ('', '--full', '--state'))
+        if mode is None:
+            print(f"[Error] %cash_repair: unrecognised argument: {strip_inline_comment(line)!r}")
+            print("   Nothing was repaired. Valid forms:")
+            print("     %cash_repair            Remove corrupted entries (keeps cache)")
+            print("     %cash_repair --state    Reset in-memory state (keeps cache)")
+            print("     %cash_repair --full     Clear ALL cache and state")
+            return
 
         if mode == '--full':
             print("[Repair] Full repair: clearing all cache and state...")
@@ -248,7 +261,12 @@ class CashAdminMagicsMixin:
             if stale_vars:
                 print(f"\n[Cleaned] {len(stale_vars)} stale lineage entries: {', '.join(stale_vars[:5])}")
 
-            print("\n[OK] Repair complete.")
+            # Name the repair that ran. A bare "Repair complete." reads as "your
+            # cache is clean now" — which is what the user reaching for this
+            # command after a bad value actually wants to hear, and is not what
+            # this branch did (CAS-181).
+            print("\n[OK] Repair complete (default mode): corrupted entries removed.")
+            print("   Cached values were kept. To clear the cache: %cash_repair --full")
 
     # ------------------------------------------------------------------
     # Session statistics
@@ -264,20 +282,21 @@ class CashAdminMagicsMixin:
             %cash_stats json      # Return JSON format
             %cash_stats reset     # Reset session stats
         """
-        mode = line.strip().lower() if line else ''
+        # ``reset`` mutates state, so an unrecognised argument must not fall
+        # through to "print the stats" — that reports success (stats appear) for
+        # a reset that never happened (CAS-181).
+        mode = parse_mode(line, ('', 'json', 'reset'))
+        if mode is None:
+            print(f"[Error] %cash_stats: unrecognised argument: {strip_inline_comment(line)!r}")
+            print("   Valid forms: %cash_stats | %cash_stats json | %cash_stats reset")
+            return
 
         if mode == 'reset':
-            self._session.stats.update({
-                'cells_executed': 0,
-                'statements_computed': 0,
-                'statements_restored': 0,
-                'statements_skipped': 0,
-                'total_compute_time': 0.0,
-                'total_restored_time': 0.0,
-                'total_time_saved': 0.0,
-                'total_verified_saved': 0.0,
-                'total_overhead': 0.0,
-            })
+            # Rebuilt from the same definition a fresh session uses, so a new
+            # counter can never be added to the stats and silently survive a
+            # reset (it already happened once).
+            from .magics import new_session_stats
+            self._session.stats.update(new_session_stats())
             # The verified-saving baselines are part of the stats, not of the
             # cache: a reset must drop them too or savings would be credited
             # against measurements the reset claims to have forgotten.
@@ -288,6 +307,19 @@ class CashAdminMagicsMixin:
         stats = self._session.stats
         total_stmts = stats['statements_computed'] + stats['statements_restored'] + stats['statements_skipped']
         hit_rate = (stats['statements_restored'] + stats['statements_skipped']) / max(total_stmts, 1) * 100
+
+        # The rate over ALL statements answers a question nobody asked: its
+        # denominator is dominated by prints, imports and cheap assignments that
+        # cash deliberately never tried to cache. Counting cash's own correct
+        # "not worth caching" decisions as misses reported 14.9% for a session
+        # in which 100% of the expensive statements hit (CAS-177). CAS-157 fixed
+        # an OVERstatement of savings; that is the same failure inverted, so the
+        # same rule binds: the number must not imply a conclusion the data does
+        # not support, in EITHER direction.
+        cacheable_hit = stats.get('statements_cacheable_hit', 0)
+        cacheable_miss = stats.get('statements_cacheable_miss', 0)
+        cacheable_total = cacheable_hit + cacheable_miss
+        cacheable_rate = (cacheable_hit / cacheable_total * 100) if cacheable_total else None
 
         # Two nets, because two different qualities of evidence (CAS-157).
         #
@@ -328,6 +360,14 @@ class CashAdminMagicsMixin:
                 # so its sign is not evidence of anything.
                 'net_sign_verified': net_saved >= 0 or net_upper < 0,
                 'hit_rate_percent': round(hit_rate, 1),
+                # Hits over the statements caching was ever on the table for.
+                # ``None`` (not 0.0) when nothing this session cleared the
+                # floor: a rate with an empty denominator is undefined, and
+                # emitting 0.0 would read as "cash missed everything" (CAS-177).
+                'hit_rate_cacheable_percent': (
+                    round(cacheable_rate, 1) if cacheable_rate is not None else None
+                ),
+                'statements_cacheable_total': cacheable_total,
             }
             print(json.dumps(result, indent=2))
             return
@@ -338,7 +378,25 @@ class CashAdminMagicsMixin:
         print(f"  Statements computed: {stats['statements_computed']}")
         print(f"  Statements restored: {stats['statements_restored']}")
         print(f"  Statements skipped:  {stats['statements_skipped']}")
-        print(f"  Cache hit rate:      {hit_rate:.1f}%")
+        trivial = total_stmts - cacheable_total
+        if cacheable_rate is None:
+            # Honest silence. No statement was expensive enough to cache, so
+            # there is no hit rate to report -- printing "0%" here would blame
+            # cash for correctly declining to cache a notebook of prints.
+            print("  Cache hit rate:      n/a  (no statement was expensive "
+                  "enough to cache)")
+        elif trivial <= 0:
+            print(f"  Cache hit rate:      {cacheable_rate:.1f}%  "
+                  f"({cacheable_hit}/{cacheable_total} statements)")
+        else:
+            # Both numbers, with the meaningful one first and each labelled by
+            # its own denominator so neither can be read as the other.
+            print(f"  Cache hit rate:      {cacheable_rate:.1f}%  "
+                  f"({cacheable_hit}/{cacheable_total} statements worth caching)")
+            print(f"                       {hit_rate:.1f}% counting all {total_stmts} "
+                  f"statements -- the other {trivial} were too")
+            print("                       cheap to cache, so cash never tried: "
+                  "not misses.")
         print()
         print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
         print(f"  Gross time saved:    {_fmt_time(gross_saved)}  (estimated)")
@@ -386,7 +444,7 @@ class CashAdminMagicsMixin:
             %cash_export results.cache --vars x,y,z # Export specific variables
             %cash_export results.json --json         # Export lineage as JSON
         """
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
         if not parts:
             print("Usage: %cash_export <filename> [--vars x,y,z] [--json]")
             return
@@ -477,7 +535,7 @@ class CashAdminMagicsMixin:
         """
         import pickle as pkl
 
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
         if not parts:
             print("Usage: %cash_import <filename> [--merge]")
             return
@@ -524,7 +582,7 @@ class CashAdminMagicsMixin:
             %cash_diff other_session.cache       - Compare with exported cache
             %cash_diff other_session.cache --vars - Show variable-level diff
         """
-        args = line.strip().split()
+        args = strip_inline_comment(line).split()
         if not args:
             print("Usage: %cash_diff <cache_file> [--vars]")
             return
@@ -574,7 +632,7 @@ class CashAdminMagicsMixin:
             %cash_track --list             - List tracked modules
             %cash_track --check            - Check for changes
         """
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
         ft = self._statement_processor.function_tracker
 
         if not parts or parts[0] == '--list':
@@ -609,7 +667,7 @@ class CashAdminMagicsMixin:
             %cash_log clear        - Clear log buffer
             %cash_log json         - Output as JSON array
         """
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
 
         handler = self._find_cash_log_handler()
         if handler is None:
@@ -661,7 +719,7 @@ class CashAdminMagicsMixin:
             %cash_provenance --all       - List all tracked variables
             %cash_provenance --clear     - Clear provenance data
         """
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
 
         if not parts or parts[0] == '--all':
             tracked = sorted(self._session.provenance.tracked_variables)
@@ -713,7 +771,7 @@ class CashAdminMagicsMixin:
             %cash_audit summary              - Show summary statistics
             %cash_audit clear                - Clear audit entries
         """
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
         if not parts:
             status = "enabled" if self._session.audit.enabled else "disabled"
             print(f"Audit logging: {status}")
@@ -790,7 +848,7 @@ class CashAdminMagicsMixin:
             %cash_benchmark --cold      - Clear cache before each run (cold start)
             %cash_benchmark --compare   - Compare cached vs uncached execution
         """
-        parts = line.strip().split()
+        parts = strip_inline_comment(line).split()
 
         iterations = 3
         cold_start = '--cold' in parts

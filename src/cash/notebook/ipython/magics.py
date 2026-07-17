@@ -19,6 +19,7 @@ from IPython.display import HTML, display, publish_display_data
 
 from ...core import Cash
 from ...utils import safe_text
+from ._args import strip_inline_comment
 from .. import badge_renderer as _badge
 from .._protocols import ShellProtocol
 from ..audit import AuditLogger
@@ -36,6 +37,11 @@ from ..object_hashing import compute_hash
 from ..restore import Restorer
 from ..provenance import ProvenanceTracker
 from ..statement import ProcessResult, StatementProcessor
+# The SAME floor reader the cache-write decision uses. The cacheable/trivial
+# split in %cash_stats is only honest if "worth caching" means exactly what the
+# cache meant by it, so this deliberately shares the reader rather than
+# re-deriving the threshold here (CAS-177).
+from ..statement.processor import _config_float
 from ..upstream import UpstreamChecker
 
 from ._types import CellMetrics, TimingBreakdown
@@ -70,18 +76,17 @@ class _CurrentStdoutHandler(logging.StreamHandler):
         pass
 
 
-class CashSession:
-    """Groups session-level concerns owned by a single CashMagics instance.
+def new_session_stats() -> dict[str, Any]:
+    """A zeroed session-stats dict.
 
-    Separating these from execution-level state (backend, shell, tracking
-    dictionaries) makes the sub-boundary explicit and each component
-    independently addressable.
+    The single definition of what the stats ARE, so that creating a session and
+    resetting one cannot disagree. ``%cash_stats reset`` used to re-list the
+    keys by hand, which silently left any later-added counter carrying over the
+    reset -- the reset would report success while the next session inherited
+    the last one's numbers. Same rule as ``measured_compute`` (CAS-157): a
+    reset must forget everything the stats claim to summarise.
     """
-
-    __slots__ = ('stats', 'provenance', 'audit', 'measured_compute')
-
-    def __init__(self) -> None:
-        self.stats: dict[str, Any] = {
+    return {
             'cells_executed': 0,
             'statements_computed': 0,
             'statements_restored': 0,
@@ -105,7 +110,30 @@ class CashSession:
             # session whose overhead outweighs its cache hits reads as a cost,
             # not a phantom win (CAS-143).
             'total_overhead': 0.0,
-        }
+            # The hit rate over ALL statements is dominated by print/import
+            # trivia that cash deliberately never tried to cache, so it made a
+            # session where every expensive statement hit read as 14.9% —
+            # arithmetically true, practically meaningless (CAS-177). These two
+            # count only statements whose compute cost cleared cash's OWN
+            # caching floor (``min_execution_time_to_cache_seconds``), i.e. the
+            # statements caching was ever on the table for.
+            'statements_cacheable_hit': 0,
+            'statements_cacheable_miss': 0,
+    }
+
+
+class CashSession:
+    """Groups session-level concerns owned by a single CashMagics instance.
+
+    Separating these from execution-level state (backend, shell, tracking
+    dictionaries) makes the sub-boundary explicit and each component
+    independently addressable.
+    """
+
+    __slots__ = ('stats', 'provenance', 'audit', 'measured_compute')
+
+    def __init__(self) -> None:
+        self.stats: dict[str, Any] = new_session_stats()
         self.provenance: ProvenanceTracker = ProvenanceTracker()
         self.audit: AuditLogger = AuditLogger()
         # source -> execution_time measured in THIS session. Bounded by the
@@ -369,16 +397,24 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_on              # Enable with no TTL
             %cash_on ttl=3600     # Enable with 1-hour TTL
         """
-        # Parse optional TTL
+        # Parse optional TTL. Comment-stripped first, or `%cash_on ttl=3600  #
+        # one hour` would parse "3600  # one hour" as an int, fail, and silently
+        # leave caching OFF on the `return` below (CAS-181).
         ttl = None
-        if line:
-            parts = line.split('=')
+        arg = strip_inline_comment(line)
+        if arg:
+            parts = arg.split('=')
             if len(parts) == 2 and parts[0].strip() == 'ttl':
                 try:
                     ttl = int(parts[1].strip())
                 except ValueError:
-                    logger.warning("Invalid TTL value")
+                    print(f"[Error] %cash_on: invalid TTL value: {parts[1].strip()!r}. "
+                          "Caching NOT enabled.")
                     return
+            else:
+                print(f"[Error] %cash_on: unrecognised argument: {arg!r}. Caching NOT enabled.")
+                print("   Valid forms: %cash_on | %cash_on ttl=<seconds>")
+                return
 
         # Invalidate notebook path cache so we re-discover the current notebook
         # (fixes Issue 23: switching notebooks within the same kernel session)
@@ -432,7 +468,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_debug json        - Enable JSON-formatted debug output
             %cash_debug file path   - Also log to file in JSON format
         """
-        parts = line.strip().lower().split()
+        parts = strip_inline_comment(line).lower().split()
         mode = parts[0] if parts else ''
 
         if mode in ('on', 'true', '1', 'enable'):
@@ -533,11 +569,18 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_persist off      - restore the default cost-aware policy
             %cash_persist          - toggle
         """
-        mode = line.strip().lower()
+        # A bare %cash_persist toggles, so an unparsed argument doesn't merely
+        # get ignored here — it inverts the request. ``%cash_persist on  #
+        # comment`` used to turn persistence OFF if it was already on (CAS-181).
+        mode = strip_inline_comment(line).lower()
         if mode in ('on', 'true', '1', 'enable'):
             self._persist_all = True
         elif mode in ('off', 'false', '0', 'disable'):
             self._persist_all = False
+        elif mode:
+            print(f"[Error] %cash_persist: unrecognised argument: {mode!r}")
+            print("   Valid forms: %cash_persist on | off | (no argument to toggle)")
+            return
         else:
             self._persist_all = not getattr(self, '_persist_all', False)
         self._statement_processor.persist_all = self._persist_all
@@ -549,7 +592,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
     @line_magic
     def cash_help(self, line: str) -> None:
         """Display a quick-reference card for Cash magic commands."""
-        topic = line.strip().lower() if line else ''
+        topic = strip_inline_comment(line).lower()
         if topic in ('badge', 'badges'):
             print(
                 "Badge Display\n"
@@ -663,11 +706,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             %cash_badge print  - Text summary printed once after cell completes
             %cash_badge off    - No badge output at all
         """
-        mode = line.strip().lower()
+        mode = strip_inline_comment(line).lower()
         if mode in ('html', 'print', 'off'):
             self._badge_mode = mode
             print(f"Badge mode set to: {mode}")
         else:
+            if mode:
+                print(f"[Error] %cash_badge: unrecognised argument: {mode!r} (mode unchanged)")
             print(f"Current badge mode: {self._badge_mode}")
             print("Usage: %cash_badge html|print|off")
 
@@ -693,7 +738,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         import json
 
-        mode = line.strip().lower() if line else 'print'
+        mode = strip_inline_comment(line).lower() or 'print'
 
         # Build comprehensive status
         status = {
@@ -1250,6 +1295,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         measured = self._session.measured_compute
         stats['cells_executed'] += 1
         cell_compute_time = 0.0
+        # Cash's own "too cheap to cache" floor, so the cacheable/trivial split
+        # below matches the decision the cache actually made rather than a
+        # second opinion invented here (CAS-177).
+        floor = _config_float(
+            getattr(self._cash_instance, 'config', None),
+            'min_execution_time_to_cache_seconds', 0.01,
+        )
         for m in all_metrics:
             status = m.get('status')
             if status == CacheStatus.COMPUTED:
@@ -1260,11 +1312,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 code = m.get('code')
                 if code:
                     measured[code] = exec_time
+                # Measured today: a real miss on a statement worth caching.
+                if exec_time >= floor:
+                    stats['statements_cacheable_miss'] += 1
             elif status == CacheStatus.RESTORED:
                 stats['statements_restored'] += 1
                 saved = m.get('saved_time', 0.0)
                 stats['total_restored_time'] += saved
                 stats['total_time_saved'] += saved
+                # ``saved`` is the cache's stale baseline, so it is NOT trusted
+                # for time (CAS-157) — it is used only to answer "was this the
+                # kind of statement caching was for?". A hit is a fact either
+                # way; only the denominator's membership rests on the baseline.
+                if saved >= floor:
+                    stats['statements_cacheable_hit'] += 1
                 # Credit a VERIFIED saving only where this session computed the
                 # same statement itself and so knows today's cost. Take the
                 # min: if the cache's baseline is the smaller of the two it is

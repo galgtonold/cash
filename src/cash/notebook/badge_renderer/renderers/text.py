@@ -9,6 +9,7 @@ notebook stdout stream.
 from __future__ import annotations
 
 from .. import theme
+from .._reasons import guard_summary_line, is_guard_reason, shorten_skipped_reason
 from ..view import (
     BadgeHeader,
     BadgeStatus,
@@ -91,7 +92,11 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
             reasons = ", ".join(row.uncacheable_reasons)
             return f"  {tag}: {code}  ({row.time_s:.2f}s) — {reasons}"
         if row.skipped_reason:
-            return f"  {tag}: {code}  ({row.time_s:.2f}s) — {row.skipped_reason}"
+            # Shortened, not dropped: the row still says it wasn't cached and
+            # why. The guard's full paragraph is emitted once per cell by
+            # ``_guard_summary_lines`` instead of once per statement (CAS-182).
+            return (f"  {tag}: {code}  ({row.time_s:.2f}s) — "
+                    f"{shorten_skipped_reason(row.skipped_reason)}")
         if row.storage_tiers:
             return f"  {tag}: {code}  ({row.time_s:.2f}s) → {'+'.join(row.storage_tiers)}"
         return f"  {tag}: {code}  ({row.time_s:.2f}s)"
@@ -150,6 +155,34 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
     return lines
 
 
+def _iter_rows(item: SectionItem):
+    """Yield every StatementRow reachable under *item*."""
+    if isinstance(item, StatementRow):
+        yield item
+    elif isinstance(item, ControlGroup):
+        yield from item.rows
+    elif isinstance(item, ControlGroupSingle):
+        yield item.row
+    elif isinstance(item, SkippedBucket):
+        for sub in item.items:
+            yield from _iter_rows(sub)
+    # ForLoopGroup holds IterationRows, not StatementRows, and the guard
+    # attaches its reason to statements — nothing to count there.
+
+
+def _guard_summary_lines(badge: InteractiveBadge) -> list[str]:
+    """The guard's explanation, once per cell rather than once per statement."""
+    count = sum(
+        1
+        for section in badge.sections
+        for item in section.items
+        for row in _iter_rows(item)
+        if is_guard_reason(row.skipped_reason)
+    )
+    line = guard_summary_line(count)
+    return [line] if line else []
+
+
 def render_text(badge: InteractiveBadge) -> str:
     """Render an :class:`InteractiveBadge` to a flat plain-text summary."""
     lines = [f"[Cash] {_header_line(badge.header)}"]
@@ -175,4 +208,5 @@ def render_text(badge: InteractiveBadge) -> str:
             lines.extend(_item_lines(item, is_upstream=False))
 
     lines.extend(_decorator_lines(badge.sections))
+    lines.extend(_guard_summary_lines(badge))
     return "\n".join(lines)
