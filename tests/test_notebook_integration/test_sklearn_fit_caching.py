@@ -6,14 +6,19 @@ Ground-truth probes for the design decision:
   * ``model = model.fit(X, y)``    -> caches (pure reassignment shape)
   * ``m = Model().fit(X, y)``      -> caches; restores across a real restart
 
-The DEFAULT is the correctness crux (``test_bare_fit_alias_correct_by_default``).
 A bare in-place fit re-executes, so the real ``.fit()`` mutates the shared object
-and every alias (``backup = clf``) sees the fit BY CONSTRUCTION. Caching it
-instead means a hit must rebind or transfer state per statement, which cannot
-preserve alias identity compositionally -- on a warm run-all the CONSTRUCTOR
-statement's own hit-restore rebinds the receiver before the fit's transfer lands.
-Skipping the cache is also net-NEUTRAL rather than net-negative: the model is
-never serialised, so a perpetually-missing fit cannot cost more than it saves.
+rather than a restored copy. Skipping the cache is also net-NEUTRAL rather than
+net-negative: the model is never serialised, so a perpetually-missing fit cannot
+cost more than it saves.
+
+**Withdrawn (CAS-184):** this file used to claim that a re-executing fit made
+aliases "correct BY CONSTRUCTION". It does not. ``backup = clf`` is an ORDINARY
+assignment, so cash cached *that statement* and restored ``backup`` to a
+deserialised copy taken before the fit -- the alias broke at a statement the fit
+has no bearing on. The fit was innocent. CAS-184 fixes it by refusing to cache a
+bare alias bind at all; ``test_bare_fit_alias_survives_warm_reruns`` below is the
+guard, and it only fails from the SECOND warm re-run, which is how the original
+one-repetition test came to confirm the wrong belief.
 
 ``# @cash:cache-fit`` opts back in to the CAS-138 machinery for users who want it.
 """
@@ -91,18 +96,31 @@ def test_bare_fit_not_cached_by_default(nb_runner):
     assert "fitted 160" in nb_runner.get_output(5)
 
 
-def test_bare_fit_alias_correct_by_default(nb_runner):
-    """THE WRONG-result guard: by default an alias of the receiver sees the fit.
+def test_bare_fit_alias_survives_warm_reruns(nb_runner):
+    """THE WRONG-result guard, in the shape a user-tester actually hit (CAS-184).
 
-    ``backup = clf`` aliases the estimator. Because the bare fit re-executes
-    rather than restoring, the real ``clf.fit`` mutates the shared object and both
-    names observe it -- correct BY CONSTRUCTION, with no in-place-restore
-    machinery involved. Under CAS-138's default-on caching, a warm re-run could
-    rebind ``clf`` to a fresh restored object and leave ``backup`` stale/unfitted:
-    a silently WRONG result.
+    ``backup = clf`` aliases the estimator, then the bare fit mutates the shared
+    object. A plain kernel gives ``backup is clf`` -> True and a fitted backup on
+    every run. Cash must agree.
 
-    The check cell is ``@cash:no-cache`` so it re-reads the LIVE namespace instead
-    of replaying its own cached output.
+    This is the REAL-WORLD half of the CAS-184 guard (the mechanism is pinned
+    deterministically in ``test_alias_assignment_identity.py``): a fitted
+    RandomForest is slow enough to hash that the alias bind's measured time clears
+    the 10ms ``min_execution_time_to_cache_seconds`` floor, so cash writes a cache
+    entry for it WITHOUT any ``@cash:persist`` -- which is why this reproduced in
+    the wild on an ordinary notebook.
+
+    Two things this test's ancestor got wrong, both load-bearing:
+
+    * It ran ONE warm re-run of the FIT cell and never re-ran the alias cell. The
+      alias restore lands from the SECOND warm re-run, so it passed and was read
+      as proof that aliases were "correct by construction". They are not; the fit
+      was innocent and the assignment was the bug. Hence ``run_all`` x4.
+    * Its probe cell put ONE ``@cash:no-cache`` above THREE prints. The directive
+      binds to a single statement (it walks back over consecutive COMMENT lines
+      only), so prints 2 and 3 cached and replayed -- the cell printed a stale
+      ``backup_fit True`` next to a live ``same False``. Every print now carries
+      its own directive, and the test asserts nothing in the probe was RESTORED.
     """
     nb_runner.create_notebook([
         SETUP, DATA, MODEL,                       # 1, 2, 3
@@ -110,23 +128,34 @@ def test_bare_fit_alias_correct_by_default(nb_runner):
         "clf.fit(X, y)",                          # 5
         "# @cash:no-cache\n"                      # 6
         "print('clf_fit', hasattr(clf, 'classes_'))\n"
+        "# @cash:no-cache\n"
         "print('backup_fit', hasattr(backup, 'classes_'))\n"
+        "# @cash:no-cache\n"
         "print('same', clf is backup)",
     ])
     nb_runner.start_kernel()
-    nb_runner.run_all()
 
-    nb_runner.run_cell(5)  # warm isolated re-run of the fit
-    assert "RESTORED" not in nb_runner.get_output(5), (
-        f"bare fit must not restore by default: {nb_runner.get_output(5)!r}"
-    )
+    for rep in range(4):  # 1 cold + 3 warm; the alias restore lands on warm #2
+        nb_runner.run_all()
 
-    nb_runner.run_cell(6)
-    out = nb_runner.get_output(6)
-    assert "clf_fit True" in out, out
-    # THE assertions: identity is preserved and the alias is fitted.
-    assert "same True" in out, f"the fit rebound the receiver: {out!r}"
-    assert "backup_fit True" in out, f"alias left stale/unfitted: {out!r}"
+        assert "RESTORED" not in nb_runner.get_output(5), (
+            f"rep {rep}: bare fit must not restore by default: "
+            f"{nb_runner.get_output(5)!r}"
+        )
+        out = nb_runner.get_output(6)
+        assert "RESTORED" not in out, (
+            f"rep {rep}: the probe cell replayed from cache instead of reading the "
+            f"live namespace -- this probe is invalid, not passing: {out!r}"
+        )
+        assert "clf_fit True" in out, f"rep {rep}: {out!r}"
+        # THE assertions: identity is preserved and the alias is fitted.
+        assert "same True" in out, (
+            f"rep {rep}: `backup = clf` restored a copy, so the alias is no longer "
+            f"the fitted estimator (CAS-184): {out!r}"
+        )
+        assert "backup_fit True" in out, (
+            f"rep {rep}: alias left stale/unfitted (CAS-184): {out!r}"
+        )
 
 
 # ----------------------------------------------------------------------
@@ -166,7 +195,7 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
     restore is per statement, so if the CONSTRUCTOR statement's own cache hit
     rebinds the receiver first, the alias graph is already broken upstream and no
     in-place transfer here can repair it. That is exactly why this path is opt-in
-    and the default (``test_bare_fit_alias_correct_by_default``) is not.
+    and the default (``test_bare_fit_alias_survives_warm_reruns``) is not.
 
     Deterministic setup via a real restart: cells 1-4 run in order so ``backup``
     aliases the freshly rebuilt (unfitted) ``clf`` right before the fit cell,

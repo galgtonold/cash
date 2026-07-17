@@ -843,7 +843,10 @@ class StatementProcessor:
         ``cache_fit`` (``# @cash:cache-fit``) opts a bare ``estimator.fit(X, y)``
         statement IN to the estimator-fit caching path (CAS-138).  It is off by
         default: without it a bare fit is skip-cached and simply re-executes,
-        which is net-neutral and keeps aliases correct by construction (CAS-170).
+        which is net-neutral (CAS-170).  It does NOT, as this comment used to
+        claim, keep aliases correct: ``backup = model`` is an ordinary assignment
+        whose own restore rebinds a pre-fit copy, independently of the fit
+        (CAS-184 — fixed by refusing to cache a bare alias bind).
         """
         effective_ttl = ttl
         force_persist = self.persist_all
@@ -1458,7 +1461,8 @@ class StatementProcessor:
 
         Called ONLY for a statement carrying ``# @cash:cache-fit`` (CAS-170); the
         default is to leave a bare fit on the skip-cache path, where it
-        re-executes and aliases stay correct by construction.
+        re-executes.  That re-execution does NOT by itself make aliases correct —
+        ``backup = model`` breaks on its own restore, not on the fit (CAS-184).
 
         A bare ``model.fit(X, y)`` mutates its receiver in place, so the general
         mutation classifier routes it to skip-caching. But a fit is the most

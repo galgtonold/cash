@@ -18,6 +18,7 @@ from cash.notebook.cacheability import (
     alias_mutation_sources,
     aliased_sources,
     analyze_statement,
+    bare_alias_targets,
     crossref_reassigned_vars,
     subscript_view_bindings,
     function_arg_mutations,
@@ -1673,3 +1674,96 @@ class TestAliasedSources:
 
     def test_empty_names(self):
         assert self._f("y = x", set()) == frozenset()
+
+
+class TestBareAliasTargets:
+    """``bare_alias_targets`` finds bindings that are pure pointer copies of a
+    bare ``Name`` — the statements that must never cache, because a restore hands
+    back a copy where Python guarantees identity (CAS-184)."""
+
+    def _f(self, code):
+        return bare_alias_targets(ast.parse(code))
+
+    # --- the shapes that ARE aliases ---
+
+    def test_simple_alias(self):
+        assert self._f("b = a") == {'b'}
+
+    def test_chained_alias(self):
+        # ``b = c = a``: BOTH names bind a's object.
+        assert self._f("b = c = a") == {'b', 'c'}
+
+    def test_tuple_alias_1to1(self):
+        # The RHS tuple is built then unpacked element-wise: two pointer copies.
+        assert self._f("b, c = a, d") == {'b', 'c'}
+
+    def test_list_display_alias(self):
+        assert self._f("[b, c] = [a, d]") == {'b', 'c'}
+
+    # --- the shapes that are NOT aliases ---
+
+    def test_unpack_from_single_name_is_not_alias(self):
+        # ``b, c = a`` INDEXES a: b is a[0], a different object from a.
+        assert self._f("b, c = a") == frozenset()
+
+    def test_self_bind_excluded(self):
+        assert self._f("x = x") == frozenset()
+
+    def test_copy_is_not_alias(self):
+        assert self._f("b = a.copy()") == frozenset()
+
+    def test_slice_is_not_alias(self):
+        assert self._f("b = a[:]") == frozenset()
+
+    def test_attribute_rhs_is_not_alias(self):
+        # ``b = a.attr`` can alias a live mutable, but it is not a bare Name and
+        # may be expensive, so the cost half of the argument does not transfer.
+        assert self._f("b = a.attr") == frozenset()
+
+    def test_subscript_rhs_is_not_alias(self):
+        assert self._f("b = a[0]") == frozenset()
+
+    def test_call_rhs_is_not_alias(self):
+        assert self._f("b = f(a)") == frozenset()
+
+    def test_literal_rhs_is_not_alias(self):
+        assert self._f("b = 5") == frozenset()
+
+    def test_tuple_with_computed_element_is_not_alias(self):
+        # ``f()`` is real work worth caching, so the statement keeps its cache.
+        assert self._f("b, c = a, f()") == frozenset()
+
+    def test_tuple_arity_mismatch_is_not_alias(self):
+        # A starred unpack is not a 1:1 pointer copy.
+        assert self._f("b, *c = a, d, e") == frozenset()
+
+    def test_subscript_target_is_not_alias(self):
+        assert self._f("d['k'] = a") == frozenset()
+
+    def test_attribute_target_is_not_alias(self):
+        assert self._f("o.attr = a") == frozenset()
+
+    def test_none_tree(self):
+        assert bare_alias_targets(None) == frozenset()
+
+
+class TestAliasSkipReason:
+    """The alias finding must reach the cacheability verdict via ``skip_reasons``
+    — that is the seam ``decide_cacheability`` consults."""
+
+    def test_alias_statement_reports_reason(self):
+        analysis = analyze_statement("backup = model", None)
+        assert analysis.alias_targets == {'backup'}
+        reasons = analysis.skip_reasons({'backup'})
+        assert any('Alias assignment' in r for r in reasons), reasons
+
+    def test_non_alias_statement_has_no_alias_reason(self):
+        analysis = analyze_statement("backup = model.copy()", None)
+        assert analysis.alias_targets == frozenset()
+        assert analysis.skip_reasons({'backup'}) == []
+
+    def test_alias_reason_fires_even_when_target_not_in_outputs(self):
+        # The refusal is a property of the statement's SHAPE, not of the caller's
+        # output set, so it must not depend on how outputs were computed.
+        analysis = analyze_statement("b = a", None)
+        assert any('Alias assignment' in r for r in analysis.skip_reasons(set()))

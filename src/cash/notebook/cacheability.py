@@ -46,6 +46,7 @@ __all__ = [
     "ObjectProtocolResets",
     "alias_mutation_sources",
     "aliased_sources",
+    "bare_alias_targets",
     "crossref_reassigned_vars",
     "consumed_input_names",
     "subscript_view_bindings",
@@ -637,6 +638,11 @@ class StatementAnalysis:
     see :data:`ACCUMULATOR_METHODS`).  Purely advisory: it gates the
     comprehension guidance hint in :meth:`skip_reasons` and never changes a
     caching decision.
+
+    ``alias_targets`` — names bound by a pure pointer copy of a bare ``Name``
+    (``b = a``); see :func:`bare_alias_targets`.  Unlike the advisory field
+    above this DOES block caching: restoring such a binding hands back a copy
+    where Python guarantees identity (CAS-184).
     """
 
     top_level_mutated_vars: frozenset[str]
@@ -644,6 +650,7 @@ class StatementAnalysis:
     side_effects: tuple[SideEffectInfo, ...]
     called_names: frozenset[str]
     accumulator_mutated_vars: frozenset[str] = frozenset()
+    alias_targets: frozenset[str] = frozenset()
 
     def skip_reasons(self, outputs: set[str]) -> list[str]:
         """Render structured findings as human-readable skip reasons.
@@ -656,6 +663,17 @@ class StatementAnalysis:
                      caching (the output itself gets a fresh lineage).
         """
         reasons: list[str] = []
+        # An alias bind (``b = a``) is free to execute and MUST NOT be restored:
+        # a hit rebinds the target to a deserialised copy, silently breaking the
+        # ``b is a`` identity Python guarantees (CAS-184). Reported first — it is
+        # a property of the statement's shape, not of its effects.
+        if self.alias_targets:
+            names = ', '.join(sorted(self.alias_targets))
+            reasons.append(
+                f"Alias assignment: {names} names the same object as the "
+                "right-hand side; restoring a copy would break identity "
+                "(and rebinding costs nothing to re-run)"
+            )
         pure_mutations = self.top_level_mutated_vars - outputs
         if pure_mutations:
             reasons.append(f"In-place mutation on: {', '.join(sorted(pure_mutations))}")
@@ -2435,6 +2453,74 @@ def aliased_sources(tree: ast.Module | None, names) -> frozenset[str]:
     return frozenset(out)
 
 
+def bare_alias_targets(tree: ast.Module | None) -> frozenset[str]:
+    """Names bound by a top-level statement that does NOTHING but pointer-copy a
+    bare ``Name`` — ``b = a``, ``b = c = a``, ``b, c = a, d`` (CAS-184).
+
+    Such a statement must never be cached. Two independent reasons, either alone
+    sufficient:
+
+    * **Correctness.** ``b = a`` binds *the same object* to a second name; Python
+      guarantees ``b is a``. A cache hit rebinds ``b`` to a DESERIALISED COPY, so
+      the two names silently stop being the same object and a later mutation
+      through ``a`` (``a.fit(..)``, ``a.append(..)``) is invisible through ``b``.
+      The window opens on the SECOND warm re-run — the first re-run still
+      re-executes — which is why a one-repetition test reports it as working.
+    * **Cost.** A pointer copy is free. Caching it serialises and deserialises a
+      whole object to avoid a nanosecond of work, so refusing is also a strictly
+      cheaper default. There is no configuration in which caching this shape wins.
+
+    Deliberately NARROW — only bindings that are provably pure pointer copies:
+
+    * every target of a ``Name``-valued assign must itself be a plain ``Name``, so
+      ``b, c = a`` (an unpack that INDEXES ``a``, binding ``a[0]``/``a[1]``, not
+      ``a``) is excluded;
+    * the tuple form is restricted to a 1:1 literal unpack of bare ``Name``\\ s, so
+      ``b, c = a, f()`` (``f()`` is real work worth caching) is excluded;
+    * anything computed from a name — ``b = a.attr``, ``b = a[0]``, ``b = f(a)``,
+      ``b = a.copy()`` — is excluded. Those CAN alias a live mutable object too,
+      but they can equally be expensive, so the cost half of the argument does not
+      transfer and they keep their cache.
+
+    Self-binds (``x = x``) are skipped, matching :func:`_cell_alias_map`.
+
+    The statement still executes and still participates in lineage: the caller
+    only refuses to store/restore the value (``capture_and_track_variables`` runs
+    unconditionally), so downstream cache keys and the upstream simulation are
+    unaffected.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        value = node.value
+        # ``b = a`` / ``b = c = a``: each target names the very same object.
+        if isinstance(value, ast.Name):
+            if all(isinstance(t, ast.Name) for t in node.targets):
+                out.update(
+                    t.id for t in node.targets
+                    if isinstance(t, ast.Name) and t.id != value.id
+                )
+            continue
+        # ``b, c = a, d``: the RHS tuple is built and unpacked element-wise, so
+        # every binding is its own pointer copy. Requires equal arity and bare
+        # ``Name``\\ s on both sides (no ``*rest``, no computed element).
+        if isinstance(value, (ast.Tuple, ast.List)) and len(node.targets) == 1:
+            target = node.targets[0]
+            if (isinstance(target, (ast.Tuple, ast.List))
+                    and len(target.elts) == len(value.elts)
+                    and all(isinstance(e, ast.Name) for e in target.elts)
+                    and all(isinstance(e, ast.Name) for e in value.elts)):
+                out.update(
+                    t.id for t, v in zip(target.elts, value.elts)
+                    if isinstance(t, ast.Name) and isinstance(v, ast.Name)
+                    and t.id != v.id
+                )
+    return frozenset(out)
+
+
 def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
     """Upstream variables whose object is mutated in place through an alias (CAS-60).
 
@@ -2808,4 +2894,5 @@ def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:
         side_effects=tuple(se_visitor.effects),
         called_names=frozenset(called),
         accumulator_mutated_vars=accumulator_mutated,
+        alias_targets=bare_alias_targets(tree),
     )
