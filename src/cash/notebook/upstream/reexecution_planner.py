@@ -4,10 +4,12 @@ import ast
 import logging
 import re
 import textwrap
+import warnings
 from typing import TYPE_CHECKING
 
+from ...exceptions import CashWarning
 from ..analysis import CodeAnalyzer
-from ..cacheability import consumed_input_names
+from ..cacheability import consumed_input_names, statement_saves_current_pyplot_figure
 from ..cache_key import write_provenance_key
 from ..file_dep_snapshot import file_dep_is_fresh
 from .._trace import trace_event
@@ -18,6 +20,14 @@ if TYPE_CHECKING:
     from .virtual_lineage import VirtualLineage
 
 logger = logging.getLogger(__name__)
+
+# A pyplot call that REGISTERS a new current figure in the process-global Gcf
+# registry -- what ``plt.gcf()`` (and therefore ``plt.savefig()``) resolves to.
+# Used to find the current-figure producer for a module-level save when the
+# producer bound no name for the carrier-output check to catch (``plt.figure()``).
+_PYPLOT_FIGURE_MAKER = re.compile(
+    r'\b(?:plt|pyplot)\s*\.\s*(?:subplots|subplot_mosaic|figure|subplot|axes)\b'
+)
 
 
 class ReexecutionPlanner:
@@ -94,6 +104,10 @@ class ReexecutionPlanner:
         )
 
         stmts_to_run_indices, restored_statements_info = self._complete_stateful_carrier_history(
+            stmts_to_run_indices, simulation_trace, restored_statements_info,
+        )
+
+        stmts_to_run_indices, restored_statements_info = self._guard_global_figure_writes(
             stmts_to_run_indices, simulation_trace, restored_statements_info,
         )
 
@@ -451,6 +465,109 @@ class ReexecutionPlanner:
                 if info.get('code') not in added_codes
             ]
         return sorted(scheduled), restored_statements_info
+
+    def _latest_current_figure_producer(
+        self, simulation_trace: list, before: int, user_ns,
+    ) -> int | None:
+        """Trace index of the statement that most recently registered the current figure.
+
+        Models what ``plt.gcf()`` (hence ``plt.savefig()``) would resolve to:
+        scanning backward from *before*, the nearest statement that either binds a
+        matplotlib Figure/Axes carrier (``fig, ax = plt.subplots()``) or textually
+        calls a pyplot figure-registering function (``plt.figure()`` bound to no
+        name). ``None`` when no figure producer precedes the write in the trace.
+        """
+        for p in range(before - 1, -1, -1):
+            if user_ns is not None:
+                for out in simulation_trace[p][1]:  # outputs
+                    try:
+                        if stateful_carrier_kind(user_ns.get(out)) in (
+                            'matplotlib Figure', 'matplotlib Axes',
+                        ):
+                            return p
+                    except (TypeError, ValueError, AttributeError, RecursionError):
+                        pass
+            if _PYPLOT_FIGURE_MAKER.search(simulation_trace[p][0]):
+                return p
+        return None
+
+    def _guard_global_figure_writes(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        restored_statements_info: list[dict],
+    ) -> tuple[list[int], list[dict]]:
+        """Refuse to re-run a ``plt.savefig()`` orphaned from its figure (CAS-187).
+
+        ``plt.savefig(path)`` writes pyplot's CURRENT figure through the
+        process-global ``Gcf`` registry; its only variable input is the module
+        ``plt``. Unlike the receiver-bound ``fig.savefig(path)`` that
+        ``_complete_stateful_carrier_history`` defends, there is NO value-level
+        edge for the planner to follow to the figure. So if the plan schedules
+        such a write while the statement that registered the current figure
+        (``fig, ax = plt.subplots()`` / ``plt.figure()``) is NOT scheduled,
+        re-running the write calls ``plt.gcf()``, which INVENTS a blank default
+        figure and flushes it over the user's chart -- a silent on-disk wrong
+        answer with no in-notebook signal. (Measured: a 960x540 chart becomes a
+        640x480 blank -- exactly matplotlib's default figure geometry.)
+
+        We cannot follow the Gcf edge, so -- in the spirit of CAS-172 -- we bound
+        the CONSEQUENCE instead of trying to enumerate what might skip the
+        producer: drop the orphaned write from the plan and warn. The user
+        re-runs the cell; the good chart on disk is left untouched. Governing
+        principle: cash must never write a figure the user did not draw -- either
+        the real one, or a loud refusal.
+
+        Fires ONLY for a module-level ``plt.savefig`` whose most-recent preceding
+        figure producer is absent from the plan. On the healthy path (first run,
+        or any plan that also rebuilds the figure) the producer is scheduled and
+        this is a no-op, so ``fig.savefig`` and the CAS-144/175 tests are
+        untouched. A missed re-save is acceptable; a blank PNG on disk is not.
+        """
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
+        scheduled = set(stmts_to_run_indices)
+        refused: set[int] = set()
+
+        for w in sorted(scheduled):
+            code = simulation_trace[w][0]
+            if not statement_saves_current_pyplot_figure(code, user_ns):
+                continue
+            producer = self._latest_current_figure_producer(simulation_trace, w, user_ns)
+            if producer is not None and producer in scheduled:
+                continue  # the figure is being (re)built coherently -- allow
+            refused.add(w)
+            self._warn_orphaned_figure_write(code, producer, w)
+
+        if not refused:
+            return stmts_to_run_indices, restored_statements_info
+
+        remaining = [i for i in stmts_to_run_indices if i not in refused]
+        # A refused write must not linger in the restored set either -- it is not
+        # being run at all this pass.
+        refused_codes = {simulation_trace[i][0] for i in refused}
+        restored_statements_info = [
+            info for info in restored_statements_info
+            if info.get('code') not in refused_codes
+        ]
+        return remaining, restored_statements_info
+
+    def _warn_orphaned_figure_write(self, code: str, producer: int | None, w: int) -> None:
+        """Emit the CAS-187 refusal as a CashWarning (and a trace/debug record)."""
+        warnings.warn(
+            "cash refused to re-run a plt.savefig() during upstream reconstruction: "
+            "the statement that drew the current figure is not being re-run, so the "
+            "save would flush a blank/wrong figure over your chart on disk. Re-run "
+            "the plot cell to regenerate it. (plt.savefig() has no variable link to "
+            "its figure; use fig.savefig(path) to let cash track it. CAS-187.)",
+            CashWarning,
+            stacklevel=2,
+        )
+        trace_event("refuse_orphaned_figure_write", stmt=code[:80], producer=producer)
+        if self.debug:
+            logger.debug(
+                "[UPSTREAM] CAS-187 refusing orphaned plt.savefig at [%s] (figure "
+                "producer %s not scheduled): %.60s", w, producer, code,
+            )
 
     # Cheap textual pre-filter before running the full AST side-effect
     # analysis on a trace statement. Superset of the names in the write

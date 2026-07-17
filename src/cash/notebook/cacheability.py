@@ -28,6 +28,7 @@ __all__ = [
     "analyze_statement",
     "statement_writes_files",
     "statement_written_paths",
+    "statement_saves_current_pyplot_figure",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
     "selfref_reassignment_targets",
@@ -511,6 +512,64 @@ def statement_written_paths(
     if not saw_path_bearing or not paths:
         return None
     return paths
+
+
+def _receiver_is_pyplot_module(recv: ast.AST, namespace: dict[str, Any] | None) -> bool:
+    """True when *recv* is the ``matplotlib.pyplot`` MODULE, not a Figure/Axes.
+
+    ``plt.savefig(...)`` (receiver is the module) saves pyplot's process-global
+    current figure; ``fig.savefig(...)`` (receiver is a Figure) is receiver-bound
+    and defended elsewhere. The only reliable separator is what the receiver name
+    resolves to at runtime, so *namespace* is consulted when available.
+    """
+    # ``matplotlib.pyplot.savefig(...)`` -- an attribute chain ending in .pyplot.
+    if isinstance(recv, ast.Attribute):
+        return recv.attr == 'pyplot'
+    if isinstance(recv, ast.Name):
+        if namespace is not None and recv.id in namespace:
+            mod = namespace[recv.id]
+            # A Figure/Axes has no ``__name__``; the pyplot module's is exact.
+            return getattr(mod, '__name__', '') == 'matplotlib.pyplot'
+        # Namespace unavailable / name not bound: accept the conventional alias
+        # as a conservative fallback (everyone imports pyplot as ``plt``).
+        return recv.id in ('plt', 'pyplot')
+    return False
+
+
+def statement_saves_current_pyplot_figure(
+    code: str,
+    namespace: dict[str, Any] | None = None,
+) -> bool:
+    """True when *code* saves pyplot's CURRENT figure via a module-level call (CAS-187).
+
+    ``plt.savefig(path)`` writes whatever figure pyplot's process-global ``Gcf``
+    registry holds. Its only variable input is the MODULE ``plt`` -- there is no
+    value-level edge from the statement to the figure it saves. So when the
+    re-execution planner schedules such a write while the ``plt.subplots()`` /
+    ``plt.figure()`` that registered the current figure is NOT scheduled,
+    re-running the write makes ``plt.gcf()`` invent a blank default figure and
+    flush it over the user's chart -- a silent on-disk wrong answer (CAS-187).
+
+    This isolates that undefended module-level form so the planner can refuse it.
+    The receiver-bound ``fig.savefig(path)`` is NOT flagged: it is defended by the
+    carrier-history pass (its input ``fig`` is a tracked carrier). Detection is
+    namespace-aware where possible and falls back to the conventional ``plt`` /
+    ``pyplot`` alias. Failure-tolerant: any parse/analysis error returns False.
+    """
+    if 'savefig' not in code:
+        return False
+    try:
+        tree = ast.parse(textwrap.dedent(code))
+    except (SyntaxError, ValueError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute) and func.attr == 'savefig':
+            if _receiver_is_pyplot_module(func.value, namespace):
+                return True
+    return False
 
 
 def _get_call_name(func_node: ast.AST) -> str | None:
