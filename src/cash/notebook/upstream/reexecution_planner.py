@@ -11,6 +11,7 @@ from ..cacheability import consumed_input_names
 from ..cache_key import write_provenance_key
 from ..file_dep_snapshot import file_dep_is_fresh
 from .._trace import trace_event
+from .stateful_carriers import stateful_carrier_kind
 
 if TYPE_CHECKING:
     from .mismatch_classifier import MismatchClassifier
@@ -90,6 +91,10 @@ class ReexecutionPlanner:
         stmts_to_run_indices, restored_statements_info = self._schedule_file_write_statements(
             stmts_to_run_indices, simulation_trace, restored_statements_info,
             broken_vars, virtual_lineage,
+        )
+
+        stmts_to_run_indices, restored_statements_info = self._complete_stateful_carrier_history(
+            stmts_to_run_indices, simulation_trace, restored_statements_info,
         )
 
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
@@ -333,6 +338,119 @@ class ReexecutionPlanner:
         if not additions:
             return stmts_to_run_indices
         return sorted(scheduled | additions)
+
+    def _latest_producer(self, simulation_trace: list, var: str, before: int) -> int | None:
+        """Index of the LAST statement before *before* that outputs *var*."""
+        for p in range(before - 1, -1, -1):
+            if var in simulation_trace[p][1]:
+                return p
+        return None
+
+    def _complete_stateful_carrier_history(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        restored_statements_info: list[dict],
+    ) -> tuple[list[int], list[dict]]:
+        """Never re-execute a SUBSET of a stateful carrier's history (CAS-175/178).
+
+        The backward scan resolves a scheduled statement's inputs by *value
+        lineage*. A **stateful carrier** (see ``stateful_carriers``) breaks that
+        model: the consumer depends on the carrier's hidden internal state, and
+        no value-level edge records it. So the scan schedules the consumer and
+        leaves the statements that ESTABLISHED the state behind, producing a
+        result matching no execution of the notebook::
+
+            [7] OMIT  rng = np.random.default_rng(7)     <- establishes position
+            [8] RUN   steps = rng.standard_normal(n)     <- redraws from an
+                                                            ALREADY-ADVANCED rng
+
+            [9]  RUN   fig, ax = plt.subplots()          <- fresh BLANK figure
+            [10] OMIT  ax.bar(names, totals)             <- fills it
+            [11] OMIT  ax.set_title('Totals')
+            [12] RUN   fig.savefig(path)                 <- writes the BLANK one
+                                                            over the good chart
+
+        Both are the same defect, so both take the same repair: for a scheduled
+        statement consuming carrier ``v``, re-execute ``v``'s whole establishing
+        history — its producer ``p``, plus every statement between ``p`` and the
+        consumer that mutates ANY name ``p`` produced. The sibling-name clause is
+        what catches ``ax.bar`` for a ``fig.savefig``: the write's receiver is
+        ``fig``, the fill targets ``ax``, and only their CO-PRODUCTION by
+        ``fig, ax = plt.subplots()`` ties them together.
+
+        Gated on ``stateful_carrier_kind`` — a deliberately small, measured table.
+        Widening it is not free: a hit FORCES a producer re-execution, and doing
+        that for the consumable types (generators/queues), which ``consumables.py``
+        already covers behind a divergence probe, re-initialised cross-cell
+        accumulators and regressed 12 integration tests.
+
+        The CAS-75 cross-cell-accumulator hazard does not apply here, for the
+        reason the consumable channel gives: re-executing a producer chain IN
+        TRACE ORDER is exactly what ``run_all`` does. The danger there is
+        re-deriving an object while re-executing only PART of what fills it —
+        precisely what this pass exists to prevent.
+        """
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
+        if user_ns is None:
+            return stmts_to_run_indices, restored_statements_info
+
+        scheduled = set(stmts_to_run_indices)
+        added: set[int] = set()
+
+        # Fixed point: a newly scheduled producer is itself a consumer whose own
+        # carrier inputs must be completed. Bounded by the trace length.
+        changed = True
+        while changed:
+            changed = False
+            for i in sorted(scheduled):
+                for v in simulation_trace[i][2]:  # inputs
+                    try:
+                        kind = stateful_carrier_kind(user_ns.get(v))
+                    except (TypeError, ValueError, AttributeError, RecursionError):
+                        kind = None
+                    if kind is None:
+                        continue
+                    p = self._latest_producer(simulation_trace, v, i)
+                    if p is None:
+                        continue
+                    pending = set()
+                    if p not in scheduled:
+                        pending.add(p)
+                    sibling_names = set(simulation_trace[p][1])
+                    for j in range(p + 1, i):
+                        if j in scheduled or j in pending:
+                            continue
+                        if set(simulation_trace[j][1]) & sibling_names:
+                            pending.add(j)
+                    if not pending:
+                        continue
+                    if self.debug:
+                        logger.debug(
+                            "[UPSTREAM] Carrier-history completion for '%s' (%s) consumed "
+                            "by [%s]: scheduling %s so the carrier is not rebuilt from a "
+                            "subset of its history",
+                            v, kind, i, sorted(pending),
+                        )
+                    for idx in sorted(pending):
+                        trace_event(
+                            "carrier_history_completion", var=v, kind=kind,
+                            consumer=i, stmt=simulation_trace[idx][0][:80],
+                        )
+                    scheduled |= pending
+                    added |= pending
+                    changed = True
+
+        if added:
+            # A statement promoted to re-execution must not ALSO appear as
+            # restored: its plan-time restore was decided against the carrier's
+            # stale state, and re-execution in trace order supersedes it.
+            added_codes = {simulation_trace[i][0] for i in added}
+            restored_statements_info = [
+                info for info in restored_statements_info
+                if info.get('code') not in added_codes
+            ]
+        return sorted(scheduled), restored_statements_info
 
     # Cheap textual pre-filter before running the full AST side-effect
     # analysis on a trace statement. Superset of the names in the write
