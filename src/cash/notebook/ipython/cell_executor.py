@@ -57,7 +57,7 @@ from ..analysis import CodeAnalyzer
 from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
-from ..control_structures import is_control_structure
+from ..control_structures import contains_top_level_await, is_control_structure
 from ..statement import ProcessResult
 
 if TYPE_CHECKING:
@@ -1049,21 +1049,35 @@ class CellExecutor:
 
             try:
                 if is_control_structure(node):
-                    if self._debug:
-                        print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
-                    # ``raw_cell`` (not the annotation) is what goes down: the
-                    # structure's statements each resolve their OWN directive
-                    # against the original source, and ``ast.unparse`` has already
-                    # dropped the comments by the time they are dispatched. The
-                    # ``annotation`` computed above is the node's WHOLE-range
-                    # merge, which cannot tell a directive on the loop from one on
-                    # a single body statement — passing it would disable caching
-                    # for every sibling in the body (CAS-135).
-                    ctrl_result = self._control_structure_processor.process(
-                        node, ttl=self._magics._global_ttl, silent=True,
-                        raw_cell=raw_cell,
-                        prev_node=tree.body[i - 1] if i > 0 else None,
-                    )
+                    if contains_top_level_await(node):
+                        # A control body that awaits (``for x in xs: r = await
+                        # fetch(x)``) cannot be compiled by the sync
+                        # ControlStructureProcessor — its unflagged compile()
+                        # raises ``SyntaxError: 'await' outside function``
+                        # (CAS-198). Run the whole structure as one awaited unit
+                        # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
+                        if self._debug:
+                            print("[CONTROL] Await inside control body, running as awaited single unit")
+                        ctrl_result = await self._control_structure_processor.process_await_unit(
+                            node, ttl=self._magics._global_ttl, silent=True,
+                            raw_cell=raw_cell,
+                        )
+                    else:
+                        if self._debug:
+                            print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                        # ``raw_cell`` (not the annotation) is what goes down: the
+                        # structure's statements each resolve their OWN directive
+                        # against the original source, and ``ast.unparse`` has already
+                        # dropped the comments by the time they are dispatched. The
+                        # ``annotation`` computed above is the node's WHOLE-range
+                        # merge, which cannot tell a directive on the loop from one on
+                        # a single body statement — passing it would disable caching
+                        # for every sibling in the body (CAS-135).
+                        ctrl_result = self._control_structure_processor.process(
+                            node, ttl=self._magics._global_ttl, silent=True,
+                            raw_cell=raw_cell,
+                            prev_node=tree.body[i - 1] if i > 0 else None,
+                        )
                     buffered_result_outputs = self._collect_ctrl_outputs(
                         ctrl_result, is_last, all_metrics, buffered_result_outputs,
                     )

@@ -46,6 +46,7 @@ THE SCENARIOS (each a separate assertion; RED = invariant violated = bug present
   S2  to_csv audit-log not re-fired by a downstream reader     (CAS-196) -> RED
   S3  same sklearn pipeline warm-re-runs WITHIN a session       (CAS-185) -> GREEN
   S4  a plain @cash.cache int fn survives a restart (control)             -> GREEN
+  S6  top-level await inside a for-loop body caches, no SyntaxError (CAS-198) -> GREEN
 
 S1 was RED until CAS-202 was fixed (the decorator arg-hash keyed a DataFrame
 argument on its per-session _cash_lineage_hash instead of its stable content,
@@ -832,12 +833,85 @@ def scenario_s5(py: Path, port: int) -> Result:
     return r
 
 
+# ---------------------------------------------------------------------------
+# S6 -- top-level await INSIDE a for-loop body caches and does not SyntaxError
+#       (CAS-198) -> GREEN
+#
+# ``for x in xs: r = await fetch(x)`` -- THE canonical async-batch pattern --
+# reached the sync ControlStructureProcessor, whose unflagged compile() raised
+# ``SyntaxError: 'await' outside function``. The CAS-164 top-level-await support
+# had landed on the regular-statement path but not the control-body path. The fix
+# routes an await-bearing control structure through the
+# PyCF_ALLOW_TOP_LEVEL_AWAIT-capable async statement path as one awaited unit.
+#
+# External signal: the async fetch appends to a counter file, so the loop body's
+# real execution is witnessed from OUTSIDE the kernel -- a badge or a print would
+# be restored on a cache hit and could not witness a silent skip.
+# ---------------------------------------------------------------------------
+
+_S6_LOOP_CELL = (
+    "import cash, asyncio\n"
+    "async def fetch(x):\n"
+    "    open('s6calls.log', 'a').write('F')   # external counter: proves body ran\n"
+    "    await asyncio.sleep(0)\n"
+    "    return x * 10\n"
+    "results = []\n"
+    "for x in [1, 2, 3, 4, 5]:\n"
+    "    r = await fetch(x)\n"
+    "    results.append(r)\n"
+    "print('RESULTS', results)\n"
+    "print('SUM', sum(results))"
+)
+
+
+def scenario_s6(py: Path, port: int) -> Result:
+    r = Result("S6", "top-level await inside a for-loop body caches, no SyntaxError (CAS-198)", "GREEN")
+    work = _fresh_work("s6")
+    counter = work / "s6calls.log"
+    cells = [_CELL_ON, _S6_LOOP_CELL]
+    drv = Driver(py, work, port)
+    try:
+        drv.start()
+        _guard_venv(drv, VENV_DIR)
+        for i, src in enumerate(cells):
+            drv.set(i, src)
+        drv.run(0)
+        out = drv.run(1).get("out", "")
+        n_cold = _count(counter)
+        syntax_error = "SyntaxError" in out or "'await' outside function" in out
+        correct = "RESULTS [10, 20, 30, 40, 50]" in out and "SUM 150" in out
+        r.evidence = {
+            "cold_body_calls": n_cold,
+            "syntax_error": syntax_error,
+            "correct_result": correct,
+            "out_tail": out[-200:],
+        }
+        if syntax_error:
+            r.status = "RED"
+            r.detail = "await inside for-loop body raised SyntaxError under %cash_on"
+        elif not correct or n_cold != 5:
+            r.status, r.detail = "ERROR", (
+                f"await-loop produced wrong result/counter: correct={correct}, "
+                f"body_calls={n_cold} (expected 5)")
+        else:
+            r.status = "GREEN"
+            r.detail = f"await-loop ran under %cash_on: results correct, body ran {n_cold}x, no SyntaxError"
+    except SystemExit as e:
+        r.status, r.detail = "ERROR", str(e)
+    except Exception:
+        r.status, r.detail = "ERROR", traceback.format_exc()
+    finally:
+        drv.close()
+    return r
+
+
 SCENARIOS = {
     "S1": scenario_s1,
     "S2": scenario_s2,
     "S3": scenario_s3,
     "S4": scenario_s4,
     "S5": scenario_s5,
+    "S6": scenario_s6,
 }
 
 
@@ -850,7 +924,7 @@ def main() -> int:
     ap.add_argument("--wheel", help="use a prebuilt wheel instead of building")
     ap.add_argument("--reuse-venv", action="store_true",
                     help="reuse an already-provisioned venv (skip rebuild/install)")
-    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5",
+    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5,S6",
                     help="comma list of scenarios to run (default all)")
     ap.add_argument("--port-base", type=int, default=8921)
     args = ap.parse_args()

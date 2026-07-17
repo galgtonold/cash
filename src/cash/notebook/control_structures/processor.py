@@ -43,7 +43,7 @@ if TYPE_CHECKING:
     from ..annotations import CacheAnnotation
     from ..statement import ProcessResult
 
-__all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
+__all__ = ["ControlStructureResult", "ControlStructureProcessor", "is_control_structure", "get_control_structure_type", "contains_break_or_continue", "contains_top_level_await", "extract_target_names", "bind_target_values", "build_iteration_context", "compute_context_hash"]
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +87,26 @@ def contains_break_or_continue(nodes: list[ast.AST]) -> bool:
         for child in ast.walk(node):
             if isinstance(child, (ast.Break, ast.Continue)):
                 return True
+    return False
+
+def contains_top_level_await(node: ast.AST) -> bool:
+    """True if *node* holds an ``await`` / ``async for`` / ``async with`` that
+    would need ``PyCF_ALLOW_TOP_LEVEL_AWAIT`` to compile — i.e. one that is NOT
+    nested inside a ``def`` / ``async def`` / ``lambda`` (those own their own
+    coroutine scope and compile fine without the flag).
+
+    ``ast.walk`` is scope-blind, so this recurses manually and prunes function
+    bodies. Used to detect a control structure whose body awaits (``for x in xs:
+    r = await fetch(x)``) — the one shape the per-iteration / sync single-unit
+    path cannot compile (CAS-198), which must instead run as ONE awaited unit.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.Await, ast.AsyncFor, ast.AsyncWith)):
+            return True
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            continue  # separate scope — its awaits are not top-level here
+        if contains_top_level_await(child):
+            return True
     return False
 
 # --- Helper Functions (Module Level) ---
@@ -330,46 +350,7 @@ class ControlStructureProcessor:
                 code, ttl, silent, annotation=annotation, stream_output=True,
                 force_outputs=force_outputs,
             )
-
-            # After execution, update lineage for mutated variables
-            if metrics.get('status') in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
-                _helpers.update_lineage_after_execution(
-                    self.shell, self.statement_processor, node, code, debug=self.debug,
-                )
-
-            # Annotate metrics with control structure body statements
-            # so the badge can show individual statements instead of the
-            # entire block as one opaque line.
-            cs_type = get_control_structure_type(node)
-            metrics['control_type'] = cs_type
-            body_stmts = _helpers.extract_body_statements(node)
-            if body_stmts:
-                metrics['body_statements'] = body_stmts
-
-            # Extract error and annotate with line info for clean traceback.
-            # For single-unit control structures, the <cash> frame has a line
-            # number relative to the unparsed code.  We need to offset it by
-            # the node's starting line in the cell so _show_clean_error points
-            # to the correct cell line.
-            error = metrics.get('error') if metrics.get('status') == CacheStatus.ERROR else None
-            if error is not None:
-                # Try to extract the actual error line from the <cash> traceback
-                cash_lineno = _helpers.extract_cash_frame_lineno(error)
-                if cash_lineno is not None:
-                    # ast.unparse produces code starting at line 1;
-                    # the node in the cell starts at node.lineno.
-                    cell_lineno = getattr(node, 'lineno', 1) + cash_lineno - 1
-                    with contextlib.suppress(AttributeError, TypeError):
-                        error._cash_error_lineno = cell_lineno
-
-            return ControlStructureResult(
-                success=metrics.get('status') != CacheStatus.ERROR,
-                metrics=[metrics],
-                error=error,
-                total_iterations=1,
-                cached_iterations=1 if metrics.get('status') == CacheStatus.RESTORED else 0,
-                computed_iterations=1 if metrics.get('status') == CacheStatus.COMPUTED else 0
-            )
+            return self._finalize_single_unit(node, code, metrics)
         except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
             logger.error("[CONTROL] Error executing control structure as single unit: %s", e, exc_info=True)
             return ControlStructureResult(
@@ -377,4 +358,100 @@ class ControlStructureProcessor:
                 metrics=[],
                 error=e
             )
+
+    async def process_await_unit(
+        self,
+        node: ast.AST,
+        ttl: int | None = None,
+        silent: bool = False,
+        raw_cell: str | None = None,
+        inherited_annotation: 'CacheAnnotation | None' = None,
+    ) -> ControlStructureResult:
+        """Run a control structure whose body contains a top-level ``await`` as
+        ONE awaited unit.
+
+        The per-iteration and sync single-unit paths compile body statements
+        with an unflagged ``compile()``, which raises ``SyntaxError: 'await'
+        outside function`` (CAS-198).  This routes the whole structure through
+        :meth:`StatementProcessor.process_statement_async`, whose compile carries
+        ``PyCF_ALLOW_TOP_LEVEL_AWAIT`` and awaits the resulting coroutine on
+        IPython's live loop — the same primitive the regular top-level-await
+        statement path already uses (CAS-164/116).
+
+        A whole-structure unit (never per-iteration) is the correct granularity
+        here: an ``await`` is I/O, so per-iteration caching is inappropriate
+        anyway, and the sync ``ControlStructureProcessor`` never reaches its
+        break/continue-style per-iteration decomposition for these.
+        """
+        try:
+            code = ast.unparse(node)
+            if self.debug:
+                cs_type = get_control_structure_type(node)
+                logger.debug("[CONTROL] Processing %s as awaited single unit: %s...", cs_type, code[:80])
+
+            annotation = _helpers.resolve_unit_annotation(
+                raw_cell, node, inherited_annotation,
+            )
+            metrics = await self.statement_processor.process_statement_async(
+                code, ttl, silent, annotation=annotation, stream_output=True,
+            )
+            return self._finalize_single_unit(node, code, metrics)
+        except Exception as e:  # noqa: BLE001 - broad fallback wrapping arbitrary user code executed as a unit
+            logger.error("[CONTROL] Error executing awaited control structure as single unit: %s", e, exc_info=True)
+            return ControlStructureResult(
+                success=False,
+                metrics=[],
+                error=e
+            )
+
+    def _finalize_single_unit(
+        self, node: ast.AST, code: str, metrics: 'ProcessResult',
+    ) -> ControlStructureResult:
+        """Shared post-execution bookkeeping for a single-unit control structure.
+
+        Called by BOTH the sync (:meth:`_execute_as_single_unit`) and awaited
+        (:meth:`process_await_unit`) paths so their lineage update, badge
+        annotation, and clean-traceback line offset can never drift — the drift
+        between a flagged and an unflagged compile path is exactly what produced
+        CAS-198.
+        """
+        # After execution, update lineage for mutated variables
+        if metrics.get('status') in (CacheStatus.COMPUTED, CacheStatus.RESTORED):
+            _helpers.update_lineage_after_execution(
+                self.shell, self.statement_processor, node, code, debug=self.debug,
+            )
+
+        # Annotate metrics with control structure body statements
+        # so the badge can show individual statements instead of the
+        # entire block as one opaque line.
+        cs_type = get_control_structure_type(node)
+        metrics['control_type'] = cs_type
+        body_stmts = _helpers.extract_body_statements(node)
+        if body_stmts:
+            metrics['body_statements'] = body_stmts
+
+        # Extract error and annotate with line info for clean traceback.
+        # For single-unit control structures, the <cash> frame has a line
+        # number relative to the unparsed code.  We need to offset it by
+        # the node's starting line in the cell so _show_clean_error points
+        # to the correct cell line.
+        error = metrics.get('error') if metrics.get('status') == CacheStatus.ERROR else None
+        if error is not None:
+            # Try to extract the actual error line from the <cash> traceback
+            cash_lineno = _helpers.extract_cash_frame_lineno(error)
+            if cash_lineno is not None:
+                # ast.unparse produces code starting at line 1;
+                # the node in the cell starts at node.lineno.
+                cell_lineno = getattr(node, 'lineno', 1) + cash_lineno - 1
+                with contextlib.suppress(AttributeError, TypeError):
+                    error._cash_error_lineno = cell_lineno
+
+        return ControlStructureResult(
+            success=metrics.get('status') != CacheStatus.ERROR,
+            metrics=[metrics],
+            error=error,
+            total_iterations=1,
+            cached_iterations=1 if metrics.get('status') == CacheStatus.RESTORED else 0,
+            computed_iterations=1 if metrics.get('status') == CacheStatus.COMPUTED else 0
+        )
 
