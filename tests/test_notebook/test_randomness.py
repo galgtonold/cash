@@ -11,6 +11,8 @@ Tests cover:
 """
 
 import warnings
+from types import SimpleNamespace
+
 from cash.notebook.randomness import (
     RandomnessDetector,
     RandomnessVisitor,
@@ -644,6 +646,234 @@ class TestRngCarrierDetection:
             "import numpy as np",
             "price(rng=np.random.default_rng())",
         ) == []
+
+
+class TestPositionalRngCarrierArguments:
+    """The POSITIONAL half of the call-site argument flow (CAS-154 round 4).
+
+    CAS-154 taught the detector that ``price(rng=default_rng())`` freezes a
+    Monte Carlo, but scoped the lesson to KEYWORD arguments: a parameter name is
+    written in the source there, while a positional argument knows only its
+    index. So the form quants actually write —
+    ``price_asian(np.random.default_rng(), S0, K, ...)`` — cached and froze in
+    total silence, and a "converged" price was a stale replay of one old draw.
+
+    The index is mapped to a parameter name through the callee's runtime
+    signature. That makes the two halves that matter here: an unseeded generator
+    in a drawn-from slot must warn, and every slot the signature cannot name
+    unambiguously must stay SILENT. A mapping that satisfied only the first could
+    just warn on every positional argument.
+    """
+
+    @staticmethod
+    def _ns(*sources):
+        """A live namespace holding the real function objects *sources* define.
+
+        Positional mapping reads the callee's signature off the live object, so
+        the test has to supply one — this is the unit-level stand-in for the
+        kernel's ``user_ns``.
+        """
+        ns: dict = {}
+        for source in sources:
+            exec(source, ns)
+        return ns
+
+    def _carriers(self, ns, *statements):
+        """Feed statements to one detector wired to *ns*, as a session would."""
+        detector = RandomnessDetector(shell=SimpleNamespace(user_ns=ns))
+        found = []
+        for stmt in statements:
+            calls, _msgs, _seed = detector.analyze_code(stmt)
+            found.extend(calls)
+        return found
+
+    DEF_FIRST = "def price(rng, n):\n    return rng.standard_normal(n)"
+    DEF_SECOND = "def price(n, rng):\n    return rng.standard_normal(n)"
+
+    def test_unseeded_rng_positional_arg_flows_into_param_draw(self):
+        """The headline gap: an unseeded generator passed POSITIONALLY warns.
+
+        Both slots are exercised, because a mapping that always reported the
+        first parameter would pass a first-slot-only test while being wrong.
+        """
+        calls = self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            self.DEF_FIRST,
+            "price(np.random.default_rng(), 5)",
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'rng'
+        assert calls[0].function == 'standard_normal'
+        assert calls[0].module == 'numpy.random'
+        # Attributed to the CALL statement, where the unseeded argument is written.
+        assert calls[0].lineno == 1
+
+        # The generator in a LATER slot resolves through the signature too.
+        calls = self._carriers(
+            self._ns(self.DEF_SECOND),
+            "import numpy as np",
+            self.DEF_SECOND,
+            "price(5, np.random.default_rng())",
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'rng'
+        assert calls[0].function == 'standard_normal'
+
+    def test_seeded_rng_positional_arg_does_not_warn(self):
+        """Control: a seeded generator is reproducible, so the call site is quiet.
+
+        This is what makes the test above a detector rather than a rubber stamp
+        on every positional argument.
+        """
+        assert self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            self.DEF_FIRST,
+            "price(np.random.default_rng(42), 5)",
+        ) == []
+
+    def test_keyword_arg_still_warns_with_a_shell_present(self):
+        """Regression: CAS-154's keyword path is untouched by the positional one."""
+        calls = self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            self.DEF_FIRST,
+            "price(rng=np.random.default_rng(), n=5)",
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'rng'
+
+    def test_session_carrier_passed_positionally_warns(self):
+        """The other spelling of the same hazard: a session generator handed over
+        positionally, rather than constructed inline at the call site."""
+        calls = self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            "rng = np.random.default_rng()",
+            self.DEF_FIRST,
+            "price(rng, 5)",
+        )
+        assert len(calls) == 1
+        assert calls[0].carrier == 'rng'
+        # Seeded twin stays quiet.
+        assert self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            "rng = np.random.default_rng(1)",
+            self.DEF_FIRST,
+            "price(rng, 5)",
+        ) == []
+
+    def test_positional_flow_silent_when_callee_never_scanned(self):
+        """Conservative: nothing in the session says ``price`` draws off its
+        first parameter, so a positional generator must not warn — even though
+        the callee is right there in the namespace."""
+        assert self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            "price(np.random.default_rng(), 5)",
+        ) == []
+
+    def test_positional_flow_silent_when_callee_absent_from_namespace(self):
+        """Deliberate silence: without the live callee there is no signature, so
+        the index cannot be named. A missing warning beats a guessed one."""
+        assert self._carriers(
+            {},  # empty user_ns: the def was scanned, but nothing is bound
+            "import numpy as np",
+            self.DEF_FIRST,
+            "price(np.random.default_rng(), 5)",
+        ) == []
+
+    def test_positional_arg_landing_in_star_args_stays_silent(self):
+        """``*args`` swallows the slot, so nothing can be said about it.
+
+        ``price(100, default_rng())`` binds ``rng=100`` and drops the generator
+        into ``rest``, where it is never drawn from — the silence is correct as
+        well as conservative.
+        """
+        source = "def price(rng, *rest):\n    return rng.standard_normal(5)"
+        assert self._carriers(
+            self._ns(source),
+            "import numpy as np",
+            source,
+            "price(100, np.random.default_rng())",
+        ) == []
+
+    def test_positional_args_after_an_unpacking_stay_silent(self):
+        """``price(*cfg, rng)``: every index after ``*cfg`` depends on its runtime
+        length, so no later slot can be named."""
+        assert self._carriers(
+            self._ns(self.DEF_FIRST),
+            "import numpy as np",
+            self.DEF_FIRST,
+            "price(*cfg, np.random.default_rng())",
+        ) == []
+
+    def test_non_rng_positional_arg_stays_silent(self):
+        """A positional argument that is not a generator must never warn."""
+        ns = self._ns(self.DEF_FIRST)
+        # A literal in the risky slot.
+        assert self._carriers(ns, "import numpy as np", self.DEF_FIRST, "price(5)") == []
+        # A bare name that is not a known carrier.
+        assert self._carriers(ns, "import numpy as np", self.DEF_FIRST, "price(config)") == []
+        # A generator in a slot the callee does not draw from.
+        assert self._carriers(
+            self._ns(self.DEF_SECOND),
+            "import numpy as np",
+            self.DEF_SECOND,
+            "price(np.random.default_rng(), 5)",  # slot 0 is ``n``, not ``rng``
+        ) == []
+
+    def test_non_function_callee_stays_silent(self):
+        """Only a plain function's signature is mapped: a class or a partial
+        binds arguments in ways this mapping would have to guess at."""
+        ns = self._ns(
+            "class price:\n    def __init__(self, rng, n):\n        pass",
+        )
+        assert self._carriers(
+            ns,
+            "import numpy as np",
+            self.DEF_FIRST,  # teaches the session that ``price`` draws off ``rng``
+            "price(np.random.default_rng(), 5)",
+        ) == []
+
+    def test_positional_warning_names_the_parameter_and_the_escape_hatch(self):
+        """The user-facing half: the warning has to reach a filter and a fix."""
+        ns = self._ns(self.DEF_FIRST)
+        detector = RandomnessDetector(shell=SimpleNamespace(user_ns=ns))
+        detector.analyze_code("import numpy as np")
+        detector.analyze_code(self.DEF_FIRST)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            check_and_warn_randomness("price(np.random.default_rng(), 5)", detector)
+        assert len(w) == 1
+        assert issubclass(w[0].category, CashRandomnessWarning)
+        assert "rng.standard_normal()" in str(w[0].message)
+        assert "@cash:allow-random" in str(w[0].message)
+
+    def test_allow_random_suppresses_the_positional_warning(self):
+        """The documented opt-out has to cover the newly-detected form."""
+        ns = self._ns(self.DEF_FIRST)
+        detector = RandomnessDetector(shell=SimpleNamespace(user_ns=ns))
+        detector.analyze_code("import numpy as np")
+        detector.analyze_code(self.DEF_FIRST)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            check_and_warn_randomness(
+                "price(np.random.default_rng(), 5)", detector, suppress_warning=True,
+            )
+        assert len(w) == 0
+
+    def test_randomness_never_changes_cacheability(self):
+        """The advisory-only contract: detection must not make a statement
+        uncacheable. ``has_seed_calls`` is the only cacheability signal this
+        module emits, and a positional RNG argument is not a seed call."""
+        detector = RandomnessDetector(shell=SimpleNamespace(user_ns=self._ns(self.DEF_FIRST)))
+        detector.analyze_code("import numpy as np")
+        detector.analyze_code(self.DEF_FIRST)
+        _calls, _msgs, has_seed = detector.analyze_code("price(np.random.default_rng(), 5)")
+        assert has_seed is False
 
     def test_np_random_seed_does_not_quiet_a_generator(self):
         """The module seed ledger must not reach across to a Generator.

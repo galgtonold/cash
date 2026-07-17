@@ -3,7 +3,9 @@ from __future__ import annotations
 """Detection of unseeded random calls that compromise cache reproducibility."""
 
 import ast
+import inspect
 import logging
+import types
 import warnings
 from collections.abc import Iterable
 from dataclasses import dataclass
@@ -248,13 +250,15 @@ class RandomnessVisitor(ast.NodeVisitor):
         # this visitor cannot see; the detector settles it against the call-arg
         # candidates below.
         self.param_draws: dict[str, list[tuple[str, str, int, int]]] = {}
-        # Keyword arguments handing a candidate RNG to a bare-name callee:
-        # (callee, param, arg_spec, lineno, col_offset), where ``arg_spec`` is
+        # Arguments handing a candidate RNG to a bare-name callee:
+        # (callee, param_ref, arg_spec, lineno, col_offset), where ``arg_spec`` is
         # ``('inline', kind, seeded)`` for an inline constructor or
         # ``('alias', name)`` for a bare-name argument the detector resolves
-        # against session state.  Positional args are a documented gap: without
-        # the callee's signature their parameter names are unknown.
-        self.call_arg_candidates: list[tuple[str, str, tuple, int, int]] = []
+        # against session state.  ``param_ref`` is the parameter NAME for a
+        # keyword argument (the source states it) and ``('pos', index)`` for a
+        # positional one — naming that slot needs the callee's signature, which
+        # is session state, so the detector maps it at resolve time.
+        self.call_arg_candidates: list[tuple[str, str | tuple[str, int], tuple, int, int]] = []
 
     def visit_Import(self, node: ast.Import):
         """Track imports like 'import random', 'import numpy as np'."""
@@ -411,37 +415,71 @@ class RandomnessVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _check_call_args(self, chain: list[str], node: ast.Call):
-        """Record a keyword argument that hands an RNG to a bare-name callee.
+        """Record an argument that hands a candidate RNG to a bare-name callee.
 
-        Scoped to bare-name calls (``price(...)``) and to KEYWORD arguments on
-        purpose: without the callee's signature a positional argument cannot be
-        mapped to a parameter name, so positional RNG arguments are a documented
-        follow-up gap (consistent with the ``self.rng.normal()`` and
-        ``df.sample()`` gaps this module already carries).
+        Scoped to bare-name calls (``price(...)``); ``obj.method(...)`` stays out
+        of scope, consistent with the ``self.rng.normal()`` and ``df.sample()``
+        gaps this module already carries.
 
-        Left unresolved: whether ``price`` actually draws off that parameter, and
-        whether a bare-name argument is a seeded carrier, are both session facts
-        the detector settles later.
+        BOTH argument forms are recorded, differing only in how the parameter
+        they bind to is named:
+
+        * a KEYWORD argument states its parameter in the source, so it is
+          recorded under that name;
+        * a POSITIONAL argument knows only its INDEX here, because naming the
+          slot requires the callee's signature — a session fact this visitor
+          cannot see.  It is recorded as ``('pos', index)`` and mapped to a name
+          at resolve time (:meth:`RandomnessDetector._param_name_for_position`).
+
+        Deferring the index rather than resolving it here is what preserves
+        ``_ScanResult``'s purity contract: the scan stays a pure function of the
+        source, so it remains memoizable for the life of the session.
+
+        Also left unresolved, for the same reason: whether ``price`` actually
+        draws off that parameter, and whether a bare-name argument is a seeded
+        carrier.
         """
         if len(chain) != 1:
             return  # a bare-name callee only; ``obj.method(...)`` is out of scope
         callee = chain[0]
+
+        for index, value in enumerate(node.args):
+            if isinstance(value, ast.Starred):
+                # ``price(*args, rng)``: every slot after an unpacking depends on
+                # the runtime length of ``args``, so no later index can be named.
+                # Stop rather than mis-attribute one parameter's risk to another.
+                break
+            self._record_call_arg(callee, ('pos', index), value, node)
+
         for kw in node.keywords:
             if kw.arg is None:
                 continue  # ``**kwargs`` — no parameter name to bind to
-            value = kw.value
-            kind = self._carrier_kind_of(value)
-            if kind is not None:
-                seeded = _rng_constructor_is_seeded(value)
-                self.call_arg_candidates.append(
-                    (callee, kw.arg, ('inline', kind, seeded),
-                     node.lineno, node.col_offset)
-                )
-            elif isinstance(value, ast.Name):
-                self.call_arg_candidates.append(
-                    (callee, kw.arg, ('alias', value.id),
-                     node.lineno, node.col_offset)
-                )
+            self._record_call_arg(callee, kw.arg, kw.value, node)
+
+    def _record_call_arg(
+        self, callee: str, param_ref: str | tuple[str, int],
+        value: ast.expr, node: ast.Call,
+    ):
+        """Record *value* as a candidate RNG argument bound to *param_ref*.
+
+        The classification (inline constructor vs bare-name alias) is shared by
+        the keyword and positional paths on purpose: the two forms differ only in
+        how the parameter is addressed, never in what counts as an RNG argument.
+        Anything else — a literal, an attribute, a call that is not an RNG
+        constructor — is not recorded at all, so it can never warn.
+        """
+        kind = self._carrier_kind_of(value)
+        if kind is not None:
+            seeded = _rng_constructor_is_seeded(value)
+            self.call_arg_candidates.append(
+                (callee, param_ref, ('inline', kind, seeded),
+                 node.lineno, node.col_offset)
+            )
+        elif isinstance(value, ast.Name):
+            self.call_arg_candidates.append(
+                (callee, param_ref, ('alias', value.id),
+                 node.lineno, node.col_offset)
+            )
 
     def _check_carrier_call(self, chain: list[str], node: ast.Call):
         """Collect ``<name>.<draw>()`` as a *candidate* carrier draw.
@@ -588,8 +626,10 @@ class _ScanResult(NamedTuple):
     carrier_aliases: tuple[tuple[str, str], ...]
     # func_name -> ((param, draw_fn, lineno, col), ...): draws off a parameter.
     param_draws: tuple[tuple[str, tuple[tuple[str, str, int, int], ...]], ...]
-    # (callee, param, arg_spec, lineno, col): keyword RNG arguments at a call.
-    call_arg_candidates: tuple[tuple[str, str, tuple, int, int], ...]
+    # (callee, param_ref, arg_spec, lineno, col): RNG arguments at a call site.
+    # ``param_ref`` is a parameter name (keyword arg) or ``('pos', index)``
+    # (positional arg) — see ``RandomnessVisitor._check_call_args``.
+    call_arg_candidates: tuple[tuple[str, str | tuple[str, int], tuple, int, int], ...]
 
 
 class RandomnessDetector:
@@ -609,7 +649,18 @@ class RandomnessDetector:
     applies to the cells after it.
     """
 
-    def __init__(self):
+    def __init__(self, shell: object | None = None):
+        """
+        Args:
+            shell: The live IPython shell, used for the ONE question the source
+                cannot answer: which parameter a POSITIONAL argument binds to
+                (see :meth:`_param_name_for_position`).  Optional, and resolved
+                lazily via ``IPython.get_ipython()`` when not supplied, so a
+                detector constructed before/outside a kernel still works — it
+                just stays silent about positional arguments, which is the
+                module's standing conservative bias anyway.
+        """
+        self.shell = shell
         # Modules that have been seeded in the current session
         self.seeded_modules: set[str] = set()
         # RNG carriers bound in this session: var name -> (kind, seeded).
@@ -766,8 +817,82 @@ class RandomnessDetector:
                 entry.setdefault(param, (draw_fn, lineno, col_offset))
             self.risky_params[func_name] = entry
 
+    def _live_callee(self, callee: str) -> object | None:
+        """The live object bound to *callee*, or None if it cannot be reached.
+
+        Defensive to the point of paranoia by design: this runs on every call
+        site in every statement, and its only job is to feed an ADVISORY warning.
+        Any namespace that will not answer (no shell, no ``user_ns``, a mapping
+        that raises) is treated as "unknown" — never as an error.
+        """
+        shell = self.shell
+        if shell is None:
+            try:
+                from IPython import get_ipython
+                shell = get_ipython()
+            except ImportError:  # IPython is an optional dependency (CAS-129)
+                return None
+        try:
+            return shell.user_ns[callee]
+        except (AttributeError, TypeError, KeyError):
+            return None
+
+    def _param_name_for_position(self, callee: str, index: int) -> str | None:
+        """Name the parameter a positional argument at *index* binds to.
+
+        The source alone cannot answer this — ``price(rng, 100)`` says only
+        "slot 0" — so the callee's RUNTIME signature is consulted. That is the
+        same object the call is about to invoke, which is what makes the mapping
+        trustworthy rather than a guess.
+
+        Returns None (-> the caller stays silent) for every shape that is not an
+        unambiguous positional slot on a plain function:
+
+        * the callee is not in the namespace, or the namespace is unreachable;
+        * it is not a plain function — a class, a builtin, a ``functools.partial``
+          or a bound method binds ``self``/arguments in ways this mapping would
+          have to guess at;
+        * its signature cannot be introspected at all;
+        * *index* is not a fixed positional slot: it lands in ``*args``, or past
+          the end of the signature, or in keyword-only territory.
+
+        Decorated functions come out right for free: ``inspect.signature``
+        follows ``__wrapped__``, so a ``functools.wraps`` wrapper reports the
+        wrapped signature, and a wrapper that discards it reports
+        ``(*args, **kwargs)`` and lands in the ``*args`` silence above.
+        """
+        func = self._live_callee(callee)
+        if not isinstance(func, types.FunctionType):
+            return None
+
+        try:
+            parameters = inspect.signature(func).parameters.values()
+        except (TypeError, ValueError):  # unintrospectable signature
+            return None
+
+        positional: list[str] = []
+        for param in parameters:
+            if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD):
+                positional.append(param.name)
+            else:
+                # ``*args`` swallows this index and every later one; keyword-only
+                # and ``**kwargs`` end the positional run. Either way there are no
+                # further nameable slots.
+                break
+
+        if index < len(positional):
+            return positional[index]
+        return None
+
+    def _param_name(self, callee: str, param_ref: str | tuple[str, int]) -> str | None:
+        """Resolve a candidate's ``param_ref`` to a callee parameter name."""
+        if isinstance(param_ref, tuple):  # ('pos', index)
+            return self._param_name_for_position(callee, param_ref[1])
+        return param_ref  # a keyword argument named its parameter in the source
+
     def _resolve_call_arg_carriers(self, candidates) -> list[RandomnessCallInfo]:
-        """Turn ``callee(param=<unseeded rng>)`` into a confirmed draw.
+        """Turn ``callee(<unseeded rng>)`` / ``callee(param=<unseeded rng>)`` into
+        a confirmed draw.
 
         The interprocedural half of the detector: an unseeded generator passed
         to a function that draws off that parameter is exactly as unreproducible
@@ -776,16 +901,24 @@ class RandomnessDetector:
         supplies the link; this resolves it at the CALL SITE, where the argument
         is written and where the warning belongs.
 
+        Keyword and positional arguments differ only in how the parameter is
+        addressed — ``_param_name`` normalises that away, and the risk lookup
+        below is then literally the same code for both.  A positional argument
+        whose slot cannot be named unambiguously resolves to None and is dropped
+        here, so the gap it leaves is a missing warning, never a wrong one.
+
         Silent unless the callee was scanned this session AND actually draws off
         that parameter — an out-of-order or imported ``def`` stays quiet, matching
-        the module's standing false-positive-avoidance bias.  Only keyword
-        arguments are handled; positional ones are a documented gap.
+        the module's standing false-positive-avoidance bias.
         """
         found: list[RandomnessCallInfo] = []
-        for callee, param, arg_spec, lineno, col_offset in candidates:
+        for callee, param_ref, arg_spec, lineno, col_offset in candidates:
             params = self.risky_params.get(callee)
             if not params:
                 continue
+            param = self._param_name(callee, param_ref)
+            if param is None:
+                continue  # unnameable slot — stay silent (conservative)
             draw = params.get(param)
             if draw is None:
                 continue

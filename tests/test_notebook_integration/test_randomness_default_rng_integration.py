@@ -192,3 +192,50 @@ def test_seeded_rng_argument_at_call_site_does_not_warn(nb_runner):
 
     assert WARNING_TEXT not in nb_runner.get_raw_output(3)
     assert "m True" in nb_runner.get_output(4)
+
+
+def test_unseeded_rng_positional_argument_at_call_site_warns(nb_runner):
+    """CAS-154 round 4: the POSITIONAL spelling of the call-site flow.
+
+    CAS-154 shipped the keyword form only, so the way the idiomatic Monte Carlo
+    is actually written — ``price_asian(np.random.default_rng(), S0, K, ...)`` —
+    stayed silent, and a "converged" price was really a frozen replay of one old
+    draw. Naming the slot needs the callee's live signature, which only exists in
+    a real kernel: this is the test the unit twin cannot be.
+    """
+    nb_runner.create_notebook([
+        "import numpy as np",  # cell 1
+        "def price(rng, n):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+        "m = price(np.random.default_rng(), 1000)",  # cell 3: unseeded, POSITIONAL
+        "print('m', isinstance(m, float))",  # cell 4
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    out = nb_runner.get_raw_output(3)  # the call cell
+    assert WARNING_TEXT in out
+    assert "CashRandomnessWarning" in out
+    assert "standard_normal" in out
+    assert "@cash:allow-random" in out
+    # The def cell itself said nothing — the argument decides seededness.
+    assert WARNING_TEXT not in nb_runner.get_raw_output(2)
+    assert "m True" in nb_runner.get_output(4)
+
+
+def test_seeded_rng_positional_argument_at_call_site_does_not_warn(nb_runner):
+    """Control: a seeded generator passed positionally is reproducible.
+
+    Without this, the test above would be satisfied by a detector that shouted at
+    every positional argument it could not resolve.
+    """
+    nb_runner.create_notebook([
+        "import numpy as np",  # cell 1
+        "def price(rng, n):\n    return float(rng.standard_normal(n).mean())",  # cell 2
+        "m = price(np.random.default_rng(42), 1000)",  # cell 3: seeded, POSITIONAL
+        "print('m', isinstance(m, float))",  # cell 4
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    assert WARNING_TEXT not in nb_runner.get_raw_output(3)
+    assert "m True" in nb_runner.get_output(4)
