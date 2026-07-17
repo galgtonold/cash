@@ -141,13 +141,25 @@ class CacheFreshnessChecker:
         return cached_data
 
     def _input_file_changed(self, tracking_state: 'TrackingState', input_var: str, fpath: str) -> bool:
-        """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached."""
-        resolved = resolve_file_dep_path(fpath)
-        if resolved is None:
-            self.last_miss_reason = f"input file missing (via {input_var}): {fpath}"
-            if self.debug:
-                logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
-            return True
+        """Return True if *fpath* (a dep of *input_var*) has been modified since it was cached.
+
+        The producer's PERSISTED snapshot is the authority on what actually
+        counts as a dependency, and it must be consulted before *fpath* is
+        judged missing (CAS-185). ``tracking_state.executed_file_deps`` is a
+        strict superset of that snapshot: it records every path the tracker saw
+        an access *attempt* for, including reads that raised (``tracked_open``
+        records before it calls through), while ``snapshot_file_deps`` silently
+        drops paths that could not be stat'd. Importing sklearn makes
+        ``importlib.metadata`` probe for optional metadata that legitimately
+        does not exist (``direct_url.json``, ``entry_points.txt``,
+        ``pythonXY.zip`` on ``sys.path``); those land in the in-memory set and
+        never in the snapshot. Judging them missing first invalidated the
+        consumer of every such variable on every run, forever — a path that
+        never existed cannot have *changed*.
+
+        A dep that WAS snapshotted and has since been deleted is still caught:
+        it is present in ``source_file_deps``, so it reaches the check below.
+        """
         source_cache_key = tracking_state.variable_sources.get(input_var)
         if not source_cache_key:
             return False
@@ -158,6 +170,12 @@ class CacheFreshnessChecker:
         source_file_deps = source_meta.file_dependencies or {}
         if fpath not in source_file_deps:
             return False
+        resolved = resolve_file_dep_path(fpath)
+        if resolved is None:
+            self.last_miss_reason = f"input file missing (via {input_var}): {fpath}"
+            if self.debug:
+                logger.debug("[CACHE DEBUG] Input '%s' file dependency missing: %s", input_var, fpath)
+            return True
         # Same content-authoritative freshness as the direct-dep check.
         is_fresh, reason = file_dep_is_fresh(resolved, source_file_deps[fpath])
         if not is_fresh:
