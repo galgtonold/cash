@@ -275,8 +275,13 @@ class CashAdminMagicsMixin:
                 'total_compute_time': 0.0,
                 'total_restored_time': 0.0,
                 'total_time_saved': 0.0,
+                'total_verified_saved': 0.0,
                 'total_overhead': 0.0,
             })
+            # The verified-saving baselines are part of the stats, not of the
+            # cache: a reset must drop them too or savings would be credited
+            # against measurements the reset claims to have forgotten.
+            self._session.measured_compute.clear()
             print("[OK] Session statistics reset.")
             return
 
@@ -284,13 +289,27 @@ class CashAdminMagicsMixin:
         total_stmts = stats['statements_computed'] + stats['statements_restored'] + stats['statements_skipped']
         hit_rate = (stats['statements_restored'] + stats['statements_skipped']) / max(total_stmts, 1) * 100
 
-        # NET = gross recompute avoided − cash's own added wall-time this
-        # session. Deliberately allowed to go negative: a session of cheap
-        # cells that stored nothing pays overhead for no saving, and hiding
-        # that behind the gross number is the overstatement CAS-143 fixes.
+        # Two nets, because two different qualities of evidence (CAS-157).
+        #
+        # ``gross_saved`` is a counterfactual: each restore is credited with the
+        # compute time recorded when the value was FIRST cached. Nothing
+        # re-measures that. If the first run was colder — cold page cache, cold
+        # imports — the credit is stale-high, and a session that was slower by
+        # wall clock still prints a win. That is the lie CAS-157 fixes, and it
+        # is not fixable by estimating harder: the true recompute cost cannot be
+        # known without doing the recompute.
+        #
+        # So the HEADLINE net is credited only from savings this session
+        # verified by computing the same statement itself. The gross figure is
+        # still shown, explicitly as an unverified upper bound. This
+        # deliberately UNDERSTATES a session that really did save time but never
+        # re-measured a baseline — an understatement is a defensible error here;
+        # an overstatement is the bug.
         gross_saved = stats['total_time_saved']
+        verified_saved = stats.get('total_verified_saved', 0.0)
         overhead = stats.get('total_overhead', 0.0)
-        net_saved = gross_saved - overhead
+        net_saved = verified_saved - overhead
+        net_upper = gross_saved - overhead
 
         # NOTE: We deliberately don't walk the backend here (no
         # ``list_entries()``). On disk-backed caches with thousands of
@@ -304,6 +323,10 @@ class CashAdminMagicsMixin:
             result = {
                 **stats,
                 'net_time_saved': net_saved,
+                'net_time_saved_upper_bound': net_upper,
+                # False ⇒ the upper bound rests on baselines nobody re-measured,
+                # so its sign is not evidence of anything.
+                'net_sign_verified': net_saved >= 0 or net_upper < 0,
                 'hit_rate_percent': round(hit_rate, 1),
             }
             print(json.dumps(result, indent=2))
@@ -318,15 +341,30 @@ class CashAdminMagicsMixin:
         print(f"  Cache hit rate:      {hit_rate:.1f}%")
         print()
         print(f"  Compute time:        {_fmt_time(stats['total_compute_time'])}")
-        print(f"  Gross time saved:    {_fmt_time(gross_saved)}")
-        print(f"  Cash overhead:       {_fmt_time(overhead)}")
-        # NET is the honest headline: what cash actually bought you once its
-        # own tax is paid. Show a negative plainly rather than flooring it.
+        print(f"  Gross time saved:    {_fmt_time(gross_saved)}  (estimated)")
+        print(f"  Cash overhead:       {_fmt_time(overhead)}  (measured)")
+        # NET is the honest headline: what cash actually bought you once its own
+        # tax is paid, counting only savings this session could verify. Show a
+        # negative plainly rather than flooring it.
         if net_saved >= 0:
-            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}")
+            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}  (verified)")
+        elif net_upper < 0:
+            # Even the most generous reading of the cache's own baselines is a
+            # loss, so the sign is certain without verifying anything.
+            print(f"  Net time saved:      {_fmt_signed_time(net_upper)}"
+                  f"  (cash cost you {_fmt_time(-net_upper)} this session)")
         else:
-            print(f"  Net time saved:      {_fmt_signed_time(net_saved)}"
-                  f"  (cash cost you {_fmt_time(-net_saved)} this session)")
+            # The unverified case: gross says win, measurement says nothing.
+            # Report the floor, and the ceiling as a claim rather than a fact.
+            print(f"  Net time saved:      at least {_fmt_signed_time(net_saved)}, "
+                  f"at best {_fmt_signed_time(net_upper)}")
+            print(f"    Cash measured only the {_fmt_time(overhead)} it spent. The "
+                  f"{_fmt_time(gross_saved)} it avoided is what these values cost")
+            print("    when first cached; if they would recompute faster today "
+                  "(warm file cache,")
+            print("    warm imports), the real figure is nearer the low end. Time "
+                  "a run with")
+            print("    caching off to settle it.")
         print()
         tracked = len(self._tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")

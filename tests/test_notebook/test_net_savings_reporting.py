@@ -58,7 +58,14 @@ def _stats_json(magics, capsys) -> dict:
 
 
 class TestNetPositive:
-    """One expensive restore: net clearly positive and below gross."""
+    """One expensive restore: overhead is subtracted from gross.
+
+    CAS-157 moved the *headline* net onto verified savings only, so a restore
+    whose baseline nobody re-measured no longer prints a positive net — that
+    guarantee is pinned in ``test_stale_baseline_savings.py``. What CAS-143
+    owns, and what these tests still pin, is that the overhead is subtracted
+    at all rather than gross being paraded as the saving.
+    """
 
     def test_expensive_restore_nets_positive_and_below_gross(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
@@ -71,14 +78,22 @@ class TestNetPositive:
         data = _stats_json(magics, capsys)
         assert data["total_time_saved"] == pytest.approx(7.0)
         assert data["total_overhead"] == pytest.approx(0.4)
-        # NET is positive and STRICTLY below gross — overhead was subtracted.
-        assert data["net_time_saved"] == pytest.approx(6.6)
-        assert 0 < data["net_time_saved"] < data["total_time_saved"]
+        # The best-case net is positive and STRICTLY below gross — overhead was
+        # subtracted, which is the CAS-143 guarantee.
+        assert data["net_time_saved_upper_bound"] == pytest.approx(6.6)
+        assert 0 < data["net_time_saved_upper_bound"] < data["total_time_saved"]
 
     def test_human_output_reads_positive_and_non_alarming(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
+        # Compute the statement first, so the 7.0s baseline is one THIS session
+        # measured and the saving is a verified win rather than a claim.
         magics._update_session_stats(
-            [{"status": CacheStatus.RESTORED, "saved_time": 7.0, "execution_time": 0.0}],
+            [{"status": CacheStatus.COMPUTED, "execution_time": 7.0, "code": "m = fit()"}],
+            cell_total_time=7.1,
+        )
+        magics._update_session_stats(
+            [{"status": CacheStatus.RESTORED, "saved_time": 7.0,
+              "execution_time": 0.0, "code": "m = fit()"}],
             cell_total_time=0.4,
         )
         capsys.readouterr()
@@ -157,6 +172,7 @@ class TestDiscriminatesGrossOverstatement:
             "statements_restored": 1,
             "total_restored_time": 7.4,
             "total_time_saved": 7.4,
+            "total_verified_saved": 7.4,
             "total_overhead": 3.0,
         })
         data = _stats_json(magics, capsys)

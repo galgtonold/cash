@@ -78,7 +78,7 @@ class CashSession:
     independently addressable.
     """
 
-    __slots__ = ('stats', 'provenance', 'audit')
+    __slots__ = ('stats', 'provenance', 'audit', 'measured_compute')
 
     def __init__(self) -> None:
         self.stats: dict[str, Any] = {
@@ -88,7 +88,17 @@ class CashSession:
             'statements_skipped': 0,
             'total_compute_time': 0.0,
             'total_restored_time': 0.0,
+            # GROSS avoided recompute. Every contribution is a ``saved_time``
+            # copied off cache metadata — i.e. how long the statement took when
+            # it was FIRST computed, on a possibly colder machine. It is an
+            # estimate of a counterfactual, never a measurement of this
+            # session, and it may overstate without bound (CAS-157).
             'total_time_saved': 0.0,
+            # The subset of ``total_time_saved`` whose baseline this session
+            # measured itself: the statement was COMPUTED here before it was
+            # RESTORED here, so the recompute cost is known under today's
+            # conditions rather than assumed from the cache (CAS-157).
+            'total_verified_saved': 0.0,
             # Cash's OWN added wall-time this session (restore + simulation +
             # hashing + badge machinery), accumulated per cell. Subtracted from
             # the gross ``total_time_saved`` to report an honest NET saving so a
@@ -98,6 +108,9 @@ class CashSession:
         }
         self.provenance: ProvenanceTracker = ProvenanceTracker()
         self.audit: AuditLogger = AuditLogger()
+        # source -> execution_time measured in THIS session. Bounded by the
+        # notebook's statement count; pure in-memory floats, no I/O (CAS-149).
+        self.measured_compute: dict[str, float] = {}
 
 
 _OP_MAP = {
@@ -1219,8 +1232,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         ``total_time_saved`` to report an honest NET figure (CAS-143). This is
         a single float subtraction per cell, no I/O — it must never
         reintroduce the per-cell fsync that CAS-149 removed.
+
+        Upstream COMPUTED statements count as user compute, NOT as overhead:
+        they are the user's own notebook code, and the state they rebuild is
+        state the user would have had to rebuild by hand (that is the restart
+        pain cash exists to absorb). Booking them as cash's overhead would make
+        cash understate itself by the size of the user's own ETL on exactly the
+        sessions where it helps most — a mirror-image lie (CAS-157).
+
+        The gross saving is credited from ``saved_time``, which is a *stale*
+        baseline (see ``total_time_saved``). Restores whose baseline this
+        session re-measured are additionally credited to
+        ``total_verified_saved``, which is what ``%cash_stats`` reports as the
+        headline NET — so an unverifiable claim can never print as a win.
         """
         stats = self._session.stats
+        measured = self._session.measured_compute
         stats['cells_executed'] += 1
         cell_compute_time = 0.0
         for m in all_metrics:
@@ -1230,10 +1257,22 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 exec_time = m.get('execution_time', 0.0)
                 stats['total_compute_time'] += exec_time
                 cell_compute_time += exec_time
+                code = m.get('code')
+                if code:
+                    measured[code] = exec_time
             elif status == CacheStatus.RESTORED:
                 stats['statements_restored'] += 1
-                stats['total_restored_time'] += m.get('saved_time', 0.0)
-                stats['total_time_saved'] += m.get('saved_time', 0.0)
+                saved = m.get('saved_time', 0.0)
+                stats['total_restored_time'] += saved
+                stats['total_time_saved'] += saved
+                # Credit a VERIFIED saving only where this session computed the
+                # same statement itself and so knows today's cost. Take the
+                # min: if the cache's baseline is the smaller of the two it is
+                # the one we can defend, and if today's measurement is smaller
+                # the cache's baseline was stale-high and must not be credited.
+                today = measured.get(m.get('code'))
+                if today is not None:
+                    stats['total_verified_saved'] += min(saved, today)
             elif status == CacheStatus.SKIPPED:
                 stats['statements_skipped'] += 1
         # Overhead = cell wall time minus the user compute that ran this cell.
