@@ -42,11 +42,18 @@ For non-pandas file readers (HDF5, custom binary formats, anything Cash doesn't 
 
 ```python { .nb-cell }
 customers = customers.dropna(subset=['email', 'signup_date'])
-customers['signup_date'] = pd.to_datetime(customers['signup_date'])
-transactions['date'] = pd.to_datetime(transactions['date'])
+customers = customers.assign(signup_date=pd.to_datetime(customers['signup_date']))
+transactions = transactions.assign(date=pd.to_datetime(transactions['date']))
 ```
 
 Each statement is cached independently. Change the `dropna` logic and only that statement (plus its dependents) recomputes.
+
+!!! tip "Use `.assign()`, not `df['col'] = ...`, for columns worth caching"
+    `df['col'] = ...` mutates the frame **in place** and returns nothing, so Cash can't cache it — the statement recomputes on every run, forever. `df = df.assign(col=...)` produces a new frame and binds it to a name, which is an ordinary cacheable statement.
+
+    This is the same in-place rule as `sort_values(inplace=True)` below, but it's easy to miss because subscript-assign doesn't *look* like a mutating method call. On a real ETL it's worth having: a tester measured roughly a fifth of their runtime going to columns that could never cache, purely because of this idiom.
+
+    It only matters for expensive columns. `df['flag'] = 0` is not worth restructuring.
 
 ### Cell 4: Feature Engineering
 
@@ -163,6 +170,7 @@ Without Cash: 30s of CSV reloads + aggregations on every iteration. With Cash: e
 
 - **Randomness without a seed.** `df.sample(100)` or `np.random.randn(...)` without a seed produces different values per call. Cash still caches these — it warns rather than refusing, and only for calls it can see are RNG calls (`np.random.*`, `random.*`, `torch.*`); a draw hidden behind a method like `df.sample(100)` passes silently. Seed the RNG when you want reproducibility. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for `@cash:allow-random`.
 - **In-place mutations to DataFrames.** `df.sort_values(..., inplace=True)` and friends mutate without returning. Cash can't detect the mutation reliably. Either return new frames (`df = df.sort_values(...)`) or mark the helper with `@stateful` — see [Purity Decorators](../feature-guides/purity-decorators.md).
+- **`df['col'] = ...` never caches.** Same rule, easier to miss: subscript-assign mutates in place, so the statement recomputes every run. Use `df = df.assign(col=...)` for any column expensive enough to be worth caching. See the tip in Cell 3.
 - **`datetime.now()` in transforms.** Wall-clock reads inside a cached statement bake the current time into the cache. Pull the timestamp outside the cached path, or skip caching for that statement.
 
 ## Tips for data science workflows

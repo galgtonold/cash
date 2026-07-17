@@ -33,12 +33,28 @@ https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c
 
 | Without Cash | With Cash |
 |---|---|
-| Edit one line → re-run notebook → wait 3 minutes for the CSV to reload | Edit one line → re-run → ~5 seconds, only the changed line recomputes |
-| 10 runs/day × 3 min each = **30 min wasted** | 10 runs/day × ~10 sec each = **2 min total** |
-| Cloud notebook bills for every re-run | Cache survives kernel restarts; bills drop with cache hit rate |
+| Edit one line → re-run → every cell above it recomputes | Edit one line → re-run → only that line and its dependents recompute |
+| Kernel restart → rebuild all state by hand | Cache survives restarts; re-running rehydrates what's worth persisting |
+| Cloud notebook bills for every re-run | Bills drop with cache hit rate |
 | Sharing preprocessed data = "rerun the pipeline" | Export the cache, teammate imports → instant results |
 
-For a team of 10, that's roughly **$75K/year in recovered productivity**, on top of cloud compute savings.
+### How much faster, honestly
+
+**It depends on the ratio of compute cost to result size**, and the range is wide. Numbers below are measured by independent testers on real workloads, not projections:
+
+| Workload | Measured |
+|---|---|
+| An expensive loop body (backtest windows, per-entity API calls) | **~190x** on the loop |
+| Model training via `@cash.cache` | **~9–11x** |
+| Monte Carlo / restart-and-re-run | **~4–5.5x** |
+| Big-frame pandas ETL, written the way people naturally write pandas | **~1.2x** |
+| The same ETL, restructured cache-friendly | **~1.4–1.6x** |
+
+**Run #1 is slower** — around 1.3x on a big-frame ETL. Cash pays to fill the cache before it can pay you back; the win is on iteration and restart, not the first execution.
+
+The pattern: Cash wins big when a statement is **expensive to compute and cheap to store** (a long fit, a slow API call, a heavy loop). It wins little, or loses, when the result is a multi-hundred-MB frame that is nearly as slow to load from disk as to recompute — Cash's cost model tries to detect this and decline to persist, and testers who overrode it with `# @cash:persist` measured it was right to.
+
+`%cash_stats` will tell you which case you're in, and it will say so plainly when Cash cost you time.
 
 ---
 
