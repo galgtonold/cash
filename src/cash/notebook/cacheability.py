@@ -58,6 +58,7 @@ __all__ = [
     "MUTATING_METHODS",
     "PANDAS_INPLACE_METHODS",
     "KNOWN_PURE_METHODS",
+    "RECEIVER_READONLY_WRITE_METHODS",
 ]
 
 # ---------------------------------------------------------------------------
@@ -103,6 +104,38 @@ KNOWN_PURE_METHODS = frozenset({
     'notna', 'notnull', 'nlargest', 'nsmallest', 'idxmax', 'idxmin',
     # display / plotting
     'plot', 'hist', 'boxplot', 'show',
+})
+
+# pandas ``to_*`` writers: they READ the DataFrame/Series and write it out to a
+# file / external sink.  They do NOT mutate the receiver, so they must never bump
+# its lineage — the receiver-mutation classifier would otherwise assume-mutate a
+# DataFrame receiver (``compute_hash`` samples large frames, so it cannot prove
+# purity) and make ``df.to_csv(path)`` a spurious *producer* of ``df``.  That
+# spurious edge makes upstream reconstruction re-schedule the write as if to
+# rebuild ``df``, re-firing a NON-IDEMPOTENT append (``df.to_csv(log, mode='a')``)
+# and corrupting the file (CAS-196).
+#
+# This governs ONLY the receiver-mutation question.  The file-WRITE side effect
+# these calls carry is tracked SEPARATELY (``_WRITE_METHODS`` /
+# ``statement_writes_files`` / the re-execution planner's writer scheduling), so
+# a genuinely-edited writer still re-runs — it just no longer masquerades as a
+# mutation of the frame it read.
+#
+# Deliberately EXCLUDES ``savefig``: its receiver is an identity-coupled
+# matplotlib Figure (never cached, always re-derived as a unit), and savefig
+# OVERWRITES its PNG (idempotent), so treating it as a Figure mutation carries
+# none of the non-idempotent CAS-196 harm — and doing so is load-bearing for the
+# CAS-175 carrier-coherence path, which relies on the savefig→fig edge to
+# re-derive the chart when the plotted data is edited.  The identity-coupled
+# receiver check routes ``fig.savefig(...)`` (like every other Figure/Axes method)
+# to the mutation path.  ``save`` / ``write`` / ``writelines`` are likewise
+# excluded: they collide with methods on other receiver types (a custom
+# ``obj.save()`` may well mutate), and those receivers stay on the observe/assume
+# path where a real mutation is still caught.
+RECEIVER_READONLY_WRITE_METHODS = frozenset({
+    'to_csv', 'to_parquet', 'to_pickle', 'to_json', 'to_feather',
+    'to_excel', 'to_hdf', 'to_stata', 'to_sql', 'to_gbq',
+    'to_clipboard', 'to_html', 'to_markdown', 'to_latex',
 })
 
 

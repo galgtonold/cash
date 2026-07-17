@@ -44,7 +44,11 @@ from cash.notebook.cacheability import StatementAnalysis
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["decide_cacheability", "identity_coupled_reason"]
+__all__ = [
+    "decide_cacheability",
+    "identity_coupled_reason",
+    "receiver_is_identity_coupled",
+]
 
 # --- Identity-coupled library objects (CAS-144) ---------------------------
 #
@@ -181,6 +185,24 @@ def identity_coupled_reason(var_name: str, value: Any) -> str | None:
         "detach pyplot's current figure from yours and make plt.savefig() "
         "write a blank image (CAS-144)."
     )
+
+
+def receiver_is_identity_coupled(value: Any) -> bool:
+    """True when *value* is a live matplotlib Figure/Axes (or a container of them).
+
+    A method call on such a receiver DRAWS on the figure — it adds artists or
+    sets Axes state — regardless of what it *returns*.  ``ax.hist(...)`` returns a
+    ``(counts, bins, BarContainer)`` data tuple yet mutates the Axes exactly like
+    ``ax.plot(...)`` returns a ``Line2D``; keying the mutation decision on the
+    RECEIVER (this predicate) rather than the return type is what tells
+    ``ax.hist()`` (Axes -> in-place draw) apart from ``df.hist()`` (DataFrame ->
+    genuinely receiver-pure, must not bump ``df``) — CAS-194.
+
+    Reuses the CAS-144 identity-coupled scan (direct value + bounded container
+    walk for the ``fig, axes = plt.subplots(2, 2)`` object-array spelling), so it
+    imports no matplotlib and covers subclasses/projections.
+    """
+    return bool(_coupled_kind(value) or _coupled_kind_in_container(value))
 
 
 def decide_cacheability(

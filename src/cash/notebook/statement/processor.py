@@ -275,12 +275,17 @@ from ..annotations import CacheAnnotation
 from ..function_tracker import FunctionTracker
 from ..cacheability import (
     KNOWN_PURE_METHODS,
+    RECEIVER_READONLY_WRITE_METHODS,
     StatementAnalysis,
     analyze_statement,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
-from ..cacheability_decision import decide_cacheability, identity_coupled_reason
+from ..cacheability_decision import (
+    decide_cacheability,
+    identity_coupled_reason,
+    receiver_is_identity_coupled,
+)
 from ..purity import analyze_function_purity
 from ..randomness import (
     RandomnessDetector,
@@ -1429,10 +1434,27 @@ class StatementProcessor:
         observe: set[str] = set()
         assumed: set[str] = set()
         for base, method in candidates:
-            if isinstance(self.shell.user_ns.get(base), types.ModuleType):
+            receiver = self.shell.user_ns.get(base)
+            if isinstance(receiver, types.ModuleType):
                 continue  # ``time.sleep()`` / ``np.foo()`` is a module function
                           # call, not a method mutation of the receiver.
             if base in tier1:
+                pre_route.add(base)
+                continue
+            if method in RECEIVER_READONLY_WRITE_METHODS:
+                # ``df.to_csv(path)`` READS the frame and writes a file; it does
+                # not mutate ``df``, so it must not bump its lineage (CAS-196).
+                # The file-write side effect is scheduled elsewhere. (``savefig``
+                # is intentionally NOT here — see the identity-coupled branch.)
+                continue
+            if receiver_is_identity_coupled(receiver):
+                # A method call on a live matplotlib Axes/Figure DRAWS on it — it
+                # adds artists / sets state — whatever it returns. ``ax.hist(...)``
+                # returns a data tuple yet mutates the Axes just like ``ax.bar()``;
+                # route it to the mutation path so the figure's fill statements are
+                # rebuilt with it and never cached as an ordinary value (CAS-194).
+                # ``fig.savefig(...)`` lands here too: bumping an identity-coupled
+                # Figure is idempotent + load-bearing for CAS-175 chart coherence.
                 pre_route.add(base)
                 continue
             if method in KNOWN_PURE_METHODS:

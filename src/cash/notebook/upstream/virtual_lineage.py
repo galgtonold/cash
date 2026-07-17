@@ -24,9 +24,11 @@ from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..cacheability import (
     KNOWN_PURE_METHODS,
+    RECEIVER_READONLY_WRITE_METHODS,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
+from ..cacheability_decision import receiver_is_identity_coupled
 from ..file_dep_snapshot import file_dep_is_fresh
 from ..cache_key import CacheKeyContext, compute_cache_key
 from ..cache_status import CacheStatus
@@ -142,10 +144,18 @@ class VirtualLineage:
         source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
         verdict = self.mutation_verdicts.get(source_hash)
         for base, method in candidates:
-            if isinstance(self.shell.user_ns.get(base), types.ModuleType):
+            receiver = self.shell.user_ns.get(base)
+            if isinstance(receiver, types.ModuleType):
                 continue  # module function call, not a method mutation
             if base in tier1:
                 receivers.add(base)
+                continue
+            # Mirror the runtime classifier (``_classify_method_mutations``) so the
+            # simulation reproduces its decision exactly (unified-key rule).
+            if method in RECEIVER_READONLY_WRITE_METHODS:
+                continue  # df.to_csv reads the frame, writes a file (CAS-196)
+            if receiver_is_identity_coupled(receiver):
+                receivers.add(base)  # Axes/Figure draw method mutates it (CAS-194)
                 continue
             if method in KNOWN_PURE_METHODS:
                 continue
