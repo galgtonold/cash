@@ -15,6 +15,7 @@ class CacheAnnotation:
     no_cache: bool = False      # Disable caching entirely
     ttl: int | None = None   # Override TTL in seconds
     allow_random: bool = False  # Suppress randomness warnings
+    cache_fit: bool = False     # Opt in to caching a bare ``estimator.fit(X, y)``
 
     def merge(self, other: CacheAnnotation) -> CacheAnnotation:
         """Merge with another annotation (other takes precedence for ttl)."""
@@ -22,12 +23,14 @@ class CacheAnnotation:
             persist=self.persist or other.persist,
             no_cache=self.no_cache or other.no_cache,
             ttl=other.ttl if other.ttl is not None else self.ttl,
-            allow_random=self.allow_random or other.allow_random
+            allow_random=self.allow_random or other.allow_random,
+            cache_fit=self.cache_fit or other.cache_fit
         )
 
     def has_directives(self) -> bool:
         """Check if any directives are set."""
-        return self.persist or self.no_cache or self.ttl is not None or self.allow_random
+        return (self.persist or self.no_cache or self.ttl is not None
+                or self.allow_random or self.cache_fit)
 
 # Regex patterns for annotation parsing ([\w-]+ allows hyphens in directive names)
 # Whitespace is tolerated after the colon and around ``=`` so both the
@@ -55,6 +58,8 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
         return CacheAnnotation(no_cache=True)
     if directive == 'allow-random' or directive == 'allowrandom':
         return CacheAnnotation(allow_random=True)
+    if directive == 'cache-fit' or directive == 'cachefit':
+        return CacheAnnotation(cache_fit=True)
     if directive == 'ttl' and value is not None:
         try:
             return CacheAnnotation(ttl=int(value))

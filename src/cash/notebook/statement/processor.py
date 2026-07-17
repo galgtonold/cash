@@ -28,6 +28,11 @@ from cash.notebook.statement._metadata import StatementCacheMetadata
 from cash.notebook.statement.file_deps import StatementFileDeps
 from cash.notebook.statement.freshness import CacheFreshnessChecker
 from cash.notebook.statement.lineage import StatementLineageBuilder
+from cash.notebook.statement.miss_guard import (
+    GUARD_SKIP_REASON,
+    MissGuard,
+    resolve_cache_dir,
+)
 from cash.notebook.statement.restore import StatementRestorer
 
 __all__ = [
@@ -344,6 +349,20 @@ class StatementProcessor:
             debug=debug,
         )
 
+        # Perpetual-miss guard (CAS-172): learns which statements can never hit
+        # (unstable cache key -> a new key every run -> zero hits) and stops
+        # SERIALISING them, while keeping the hash + the lookup. Verdicts persist
+        # to the cache dir so a restart doesn't re-pay the learning. Resolved
+        # defensively: the backend is a MagicMock in a good number of tests, and
+        # an unresolvable dir just means session-scoped verdicts.
+        try:
+            _guard_dir = resolve_cache_dir(
+                cash_instance.backend if cash_instance is not None else None
+            )
+        except (AttributeError, TypeError):
+            _guard_dir = None
+        self._miss_guard = MissGuard(_guard_dir)
+
         # Statement-level file-dep tracker. Stateless w.r.t. tracking state —
         # receives it per call. ``executed_file_deps`` and ``executed_file_mtimes``
         # live on TrackingState.
@@ -461,7 +480,7 @@ class StatementProcessor:
             'saved_time', 'restored_vars', 'code', plus optional keys depending
             on cache status.
         """
-        effective_ttl, force_persist, skip_cache, allow_random = self._parse_annotation(annotation, ttl)
+        effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
@@ -534,18 +553,36 @@ class StatementProcessor:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
-            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs)
-        # A bare ``estimator.fit(X, y)`` mutates its receiver in place, so the
-        # classifier above would route it to skip-caching -- but a fit is the
-        # single most expensive cell in an ML notebook, and its cache key is
-        # already input-lineage-based (the estimator is an input, so its pre-fit
-        # lineage + X + y pin the key). Route estimator fits to CACHING instead:
-        # add the receiver to ``outputs`` (so its source-based lineage is bumped
-        # AND the fitted value is captured/saved) but do NOT skip-cache it, so the
-        # normal lookup runs (hit -> in-place restore; miss -> execute + save). A
-        # receiver that is BOTH an estimator fit AND another genuine skip receiver
-        # still skips (the skip wins for that receiver). ``est_fit`` also threads
-        # to the cache-hit path so its restore is IN PLACE (CAS-138).
+            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
+        # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
+        # mutates its receiver in place, so the classifier above routes it to
+        # skip-caching: the statement re-executes and is never serialised. That is
+        # net-NEUTRAL and makes aliases correct BY CONSTRUCTION -- the real
+        # ``.fit()`` mutates the shared object, so ``backup = clf`` sees the fit.
+        #
+        # Caching a bare fit instead (CAS-138) is the OPT-IN path, kept because it
+        # is a large win when it lands but demoted from the default because its
+        # correctness surface exceeds what per-statement restore can guarantee:
+        #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
+        #     pre-fit object. Not fixable per-statement -- on a warm run-all the
+        #     CONSTRUCTOR statement's own hit-restore rebinds the receiver before
+        #     the fit's in-place transfer lands, so the alias graph is already
+        #     broken upstream; and
+        #   * the duck-type gate admits the whole sklearn-compatible universe
+        #     (xgboost/lightgbm/custom), each with its own ``__getstate__``
+        #     contract, and several never restore -- re-serialising every run for
+        #     a net LOSS.
+        # For reliable ML caching, wrap training in a returning function under
+        # ``@cash.cache`` instead (verified 9-11x, no identity caveat).
+        #
+        # When opted in: add the receiver to ``outputs`` (so its source-based
+        # lineage is bumped AND the fitted value is captured/saved) but do NOT
+        # skip-cache it, so the normal lookup runs (hit -> in-place restore; miss
+        # -> execute + save). A receiver that is BOTH an estimator fit AND another
+        # genuine skip receiver still skips (the skip wins for that receiver).
+        # ``est_fit`` also threads to the cache-hit path so its restore is IN
+        # PLACE (CAS-138). Without the directive ``est_fit`` is empty and every
+        # site below degrades to the pre-CAS-138 skip-cache behaviour.
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit:
             outputs = outputs | mut_pre_route | est_fit
@@ -578,6 +615,7 @@ class StatementProcessor:
                 metrics['uncacheable_reasons'].extend(reasons)
                 skip_cache = True
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
+        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data)
 
         if self.debug:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
@@ -638,7 +676,7 @@ class StatementProcessor:
         this method routes through the same ``_analyze_and_hash`` /
         ``_handle_cache_hit`` / ``_post_execute`` helpers.
         """
-        effective_ttl, force_persist, skip_cache, allow_random = self._parse_annotation(annotation, ttl)
+        effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
@@ -678,18 +716,36 @@ class StatementProcessor:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
-            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs)
-        # A bare ``estimator.fit(X, y)`` mutates its receiver in place, so the
-        # classifier above would route it to skip-caching -- but a fit is the
-        # single most expensive cell in an ML notebook, and its cache key is
-        # already input-lineage-based (the estimator is an input, so its pre-fit
-        # lineage + X + y pin the key). Route estimator fits to CACHING instead:
-        # add the receiver to ``outputs`` (so its source-based lineage is bumped
-        # AND the fitted value is captured/saved) but do NOT skip-cache it, so the
-        # normal lookup runs (hit -> in-place restore; miss -> execute + save). A
-        # receiver that is BOTH an estimator fit AND another genuine skip receiver
-        # still skips (the skip wins for that receiver). ``est_fit`` also threads
-        # to the cache-hit path so its restore is IN PLACE (CAS-138).
+            est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
+        # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
+        # mutates its receiver in place, so the classifier above routes it to
+        # skip-caching: the statement re-executes and is never serialised. That is
+        # net-NEUTRAL and makes aliases correct BY CONSTRUCTION -- the real
+        # ``.fit()`` mutates the shared object, so ``backup = clf`` sees the fit.
+        #
+        # Caching a bare fit instead (CAS-138) is the OPT-IN path, kept because it
+        # is a large win when it lands but demoted from the default because its
+        # correctness surface exceeds what per-statement restore can guarantee:
+        #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
+        #     pre-fit object. Not fixable per-statement -- on a warm run-all the
+        #     CONSTRUCTOR statement's own hit-restore rebinds the receiver before
+        #     the fit's in-place transfer lands, so the alias graph is already
+        #     broken upstream; and
+        #   * the duck-type gate admits the whole sklearn-compatible universe
+        #     (xgboost/lightgbm/custom), each with its own ``__getstate__``
+        #     contract, and several never restore -- re-serialising every run for
+        #     a net LOSS.
+        # For reliable ML caching, wrap training in a returning function under
+        # ``@cash.cache`` instead (verified 9-11x, no identity caveat).
+        #
+        # When opted in: add the receiver to ``outputs`` (so its source-based
+        # lineage is bumped AND the fitted value is captured/saved) but do NOT
+        # skip-cache it, so the normal lookup runs (hit -> in-place restore; miss
+        # -> execute + save). A receiver that is BOTH an estimator fit AND another
+        # genuine skip receiver still skips (the skip wins for that receiver).
+        # ``est_fit`` also threads to the cache-hit path so its restore is IN
+        # PLACE (CAS-138). Without the directive ``est_fit`` is empty and every
+        # site below degrades to the pre-CAS-138 skip-cache behaviour.
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit:
             outputs = outputs | mut_pre_route | est_fit
@@ -722,6 +778,7 @@ class StatementProcessor:
                 metrics['uncacheable_reasons'].extend(reasons)
                 skip_cache = True
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
+        self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data)
 
         if self.debug:
             self._print_cache_debug(code, cache_key, inputs, cached_data, analysis_time, hash_time, cache_check_time)
@@ -762,8 +819,8 @@ class StatementProcessor:
         self,
         annotation: CacheAnnotation | None,
         ttl: int | None,
-    ) -> tuple[int | None, bool, bool, bool]:
-        """Return ``(effective_ttl, force_persist, skip_cache, allow_random)``.
+    ) -> tuple[int | None, bool, bool, bool, bool]:
+        """Return ``(effective_ttl, force_persist, skip_cache, allow_random, cache_fit)``.
 
         ``persist_all`` (config / ``%cash_persist`` magic) forces persistence
         for every statement, as if each carried ``# @cash:persist``.
@@ -771,18 +828,26 @@ class StatementProcessor:
         ``allow_random`` (``# @cash:allow-random``) is *advisory only* — it
         suppresses the unseeded-randomness warning and nothing else.  It must
         never reach the cacheability decision: an unseeded random statement is
-        cacheable by design, with or without the directive."""
+        cacheable by design, with or without the directive.
+
+        ``cache_fit`` (``# @cash:cache-fit``) opts a bare ``estimator.fit(X, y)``
+        statement IN to the estimator-fit caching path (CAS-138).  It is off by
+        default: without it a bare fit is skip-cached and simply re-executes,
+        which is net-neutral and keeps aliases correct by construction (CAS-170).
+        """
         effective_ttl = ttl
         force_persist = self.persist_all
         skip_cache = False
         allow_random = False
+        cache_fit = False
         if annotation:
             if annotation.ttl is not None:
                 effective_ttl = annotation.ttl
             force_persist = force_persist or annotation.persist
             skip_cache = annotation.no_cache
             allow_random = annotation.allow_random
-        return effective_ttl, force_persist, skip_cache, allow_random
+            cache_fit = annotation.cache_fit
+        return effective_ttl, force_persist, skip_cache, allow_random, cache_fit
 
     @staticmethod
     def _strip_control_markers(code: str) -> str:
@@ -872,7 +937,8 @@ class StatementProcessor:
     def _unseeded_estimator_fits(self, est_fit: set[str]) -> list[str]:
         """Return the sorted subset of *est_fit* receivers that are UNSEEDED (CAS-167).
 
-        A bare ``estimator.fit(X, y)`` caches via the CAS-138 path, but cash's AST
+        A bare ``estimator.fit(X, y)`` under ``# @cash:cache-fit`` caches via the
+        CAS-138 path, but cash's AST
         randomness detector cannot see the randomness inside sklearn's compiled
         ``.fit()``. An estimator built without a ``random_state`` draws fresh
         entropy each fit, so the cached fitted model is a frozen replay -- two
@@ -961,6 +1027,40 @@ class StatementProcessor:
         if self.debug:
             logger.debug("%s Skipping cache lookup due to missing input lineage or @cash:no-cache", _LOG_ANNOTATION)
         return None, None, 0.0
+
+    def _observe_miss_guard(
+        self,
+        skip_cache: bool,
+        code: str,
+        source_hash: str,
+        cache_key: str,
+        cached_data: Any,
+    ) -> None:
+        """Feed one lookup outcome to the perpetual-miss guard (CAS-172).
+
+        Called on every run that actually performed a lookup — a skipped lookup
+        never serialises either, so it carries no evidence about whether
+        serialising pays back.
+
+        A *hit* is "the key matched an entry", i.e. ``cached_data`` is not None.
+        A key that matched but whose entry was invalidated (TTL / changed file
+        dep) reads as a miss here, and correctly so: the key was STABLE, so it
+        registers no churn and cannot move the counter. That workflow —
+        recompute because a file changed, cache for the next unchanged run — is
+        exactly the one that must never be guarded.
+
+        Control-structure BODY statements are excluded, following the same
+        precedent as mutation classification: they arrive with a per-iteration
+        marker comment, so every iteration is a different ``source_hash``. The
+        "identical source, run repeatedly" signature is meaningless for them, and
+        recording one per iteration would grow the store by the loop's trip
+        count.
+        """
+        if skip_cache:
+            return
+        if '# __iteration_context__:' in code or '# control_context:' in code:
+            return
+        self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
 
     def _execute_and_drain(
         self,
@@ -1101,12 +1201,14 @@ class StatementProcessor:
         if mut_record:
             newly_mutated = {b for b in mut_observe if self._receiver_mutated(b)}
             if newly_mutated:
-                # Estimator fits still enter ``outputs`` (source-based lineage
-                # bump + fitted value capture) and are still recorded in
+                # ``est_fit`` is non-empty only under ``# @cash:cache-fit``
+                # (CAS-170). Those receivers still enter ``outputs`` (source-based
+                # lineage bump + fitted value capture) and are still recorded in
                 # ``mutation_verdicts`` below (so the upstream simulation bumps
                 # downstream lineage on a data edit), but they are NOT
-                # skip-cached -- they cache + restore in place (CAS-138). Any
-                # other observed mutation still skip-caches its receiver.
+                # skip-cached -- they cache + restore in place (CAS-138). Every
+                # other observed mutation -- including a bare fit WITHOUT the
+                # directive -- still skip-caches its receiver.
                 outputs = outputs | newly_mutated
                 skip_observed = newly_mutated - est_fit
                 if skip_observed:
@@ -1192,12 +1294,28 @@ class StatementProcessor:
             if self.debug:
                 logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
+        # Perpetual-miss guard (CAS-172): this statement's key has churned for
+        # ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` runs with zero hits, so
+        # serialising it again buys nothing. Routed through the SAME
+        # metadata-only path as the size-aware skip rather than through
+        # ``skip_cache``: output lineages must still persist for the upstream
+        # simulation, and only the value payload is the wasted cost.
+        # ``force_persist`` (``# @cash:persist`` / ``%cash_persist``) wins — a
+        # user who explicitly asks for persistence gets it; the guard is a
+        # default, not a veto.
+        miss_guarded = (
+            not skip_cache
+            and not force_persist
+            and not self._miss_guard.should_serialise(source_hash)
+        )
+
         saved_metadata = None
         if not skip_cache:
             saved_metadata = self._save_to_cache(
                 cache_key, code, result, inputs, outputs, accessed_files,
                 execution_time, effective_ttl, captured, process_start,
                 source_hash, captured_vars, force_persist=force_persist,
+                miss_guarded=miss_guarded,
             )
         elif self.debug:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
@@ -1328,11 +1446,15 @@ class StatementProcessor:
         """Receivers of a standalone ``est.fit(...)`` / ``est.partial_fit(...)``
         whose live value is a duck-typed sklearn estimator (CAS-138).
 
+        Called ONLY for a statement carrying ``# @cash:cache-fit`` (CAS-170); the
+        default is to leave a bare fit on the skip-cache path, where it
+        re-executes and aliases stay correct by construction.
+
         A bare ``model.fit(X, y)`` mutates its receiver in place, so the general
         mutation classifier routes it to skip-caching. But a fit is the most
         expensive cell in an ML notebook and its cache key is already
-        input-lineage-based (the estimator is an input), so it is both safe and
-        valuable to cache. This narrow gate selects ONLY sklearn-style
+        input-lineage-based (the estimator is an input), so a user who asks for it
+        can have it cached. This narrow gate selects ONLY sklearn-style
         estimators: the ``fit`` / ``partial_fit`` method name plus the
         ``BaseEstimator`` duck-type contract -- a callable ``fit`` AND a callable
         ``get_params``. ``get_params`` is what excludes ``list.append`` /
@@ -1762,7 +1884,7 @@ class StatementProcessor:
         """Update lineage and variable tracking."""
         self._lineage.capture_and_track_variables(self._tracking_state, outputs, inputs, code, source_hash, cache_key=cache_key, accessed_files=accessed_files, tree=tree)
 
-    def _save_to_cache(self, cache_key: str, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], execution_time: float, ttl: int | None, captured: Any, process_start: float, source_hash: str, captured_vars: dict[str, Any], force_persist: bool = False) -> StatementCacheMetadata | None:
+    def _save_to_cache(self, cache_key: str, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], execution_time: float, ttl: int | None, captured: Any, process_start: float, source_hash: str, captured_vars: dict[str, Any], force_persist: bool = False, miss_guarded: bool = False) -> StatementCacheMetadata | None:
         if getattr(result, 'skipped', False):
              return None
 
@@ -1788,7 +1910,8 @@ class StatementProcessor:
             source_hash=source_hash,
             code=code,
             file_dependencies=all_file_deps,
-            force_persist=force_persist
+            force_persist=force_persist,
+            miss_guarded=miss_guarded,
         )
 
 
@@ -1999,7 +2122,8 @@ class StatementProcessor:
         source_hash: str,
         code: str,
         file_dependencies: set[str],
-        force_persist: bool = False
+        force_persist: bool = False,
+        miss_guarded: bool = False,
     ) -> StatementCacheMetadata | None:
         """Store execution results and metadata in the cache. Returns
         metadata, or ``None`` when the statement was so cheap to compute
@@ -2062,6 +2186,18 @@ class StatementProcessor:
                     f"{', '.join(_unrestorable)} are unrestorable by value; "
                     f"statement re-executes (lineage persists)"
                 )
+        # Perpetual-miss guard (CAS-172). Placed LAST so it can override the
+        # exemptions above: ``has_file_dependencies`` waives the whole size-aware
+        # cost model, and that waiver is precisely how CAS-165/171 shipped — a fit
+        # on a CSV-derived frame inherits the read's file deps, so the cost model
+        # never got a vote and the frame was re-serialised every run for a cache
+        # that could never hit. An unstable key does not become stable because the
+        # statement touched a file. ``force_persist`` is checked by the caller and
+        # is the one thing that outranks this.
+        if not should_skip and miss_guarded:
+            should_skip = True
+            skip_reason = GUARD_SKIP_REASON
+
         # Cost-model prediction fields are shared by both the skip and the
         # full-store branches; build them once.
         cost_fields: dict[str, Any] = {}

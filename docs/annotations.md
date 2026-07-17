@@ -10,6 +10,7 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:no-cache` | `nocache` | no | Never cache this statement. Wins over `persist`. |
 | `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
 | `# @cash:allow-random` | `allowrandom` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random-alias-allowrandom). |
+| `# @cash:cache-fit` | `cachefit` | no | Opt a bare `estimator.fit(X, y)` in to caching. Off by default — see [below](#cashcache-fit-alias-cachefit). |
 
 A minimal example:
 
@@ -128,6 +129,82 @@ noise = np.random.rand(1000)   # no warning
 
     If you want the statement to re-run every time, that's a different
     directive: [`# @cash:no-cache`](#cashno-cache-alias-nocache).
+
+### `# @cash:cache-fit` (alias: `cachefit`)
+
+Opts a bare, in-place `estimator.fit(X, y)` statement in to caching. **Without it,
+such a statement is not cached** — the badge reads `NOT CACHED` with an *In-place
+mutation* reason and the fit re-executes on every run:
+
+<!-- test:skip reason="illustrative: needs a real sklearn estimator and training data" -->
+```python
+clf = RandomForestClassifier(n_estimators=100, random_state=42)
+
+clf.fit(X, y)                  # NOT cached — re-executes every run
+
+# @cash:cache-fit
+clf.fit(X, y)                  # cached; a hit restores the fitted estimator
+```
+
+The default is deliberate, and it is the *safe* default in both directions:
+
+- **It cannot cost you anything.** A skipped statement is never serialised, so a
+  fit that keeps missing can't be a net loss.
+- **It cannot give you a wrong object.** The real `.fit()` runs and mutates the
+  receiver, so `model` is genuinely fitted and any alias of it (`backup = model`)
+  sees the fit, exactly as plain Python behaves.
+
+Only the **bare-expression** form is affected. An assignment is an ordinary
+statement and caches with no directive:
+
+<!-- test:skip reason="illustrative: needs a real sklearn estimator and training data" -->
+```python
+clf = clf.fit(X, y)                                    # caches
+m = RandomForestClassifier(n_estimators=100).fit(X, y) # caches
+```
+
+The gate is a duck-type — the method must be `fit`/`partial_fit` and the receiver
+must expose a callable `fit` **and** a callable `get_params` — so `lst.append(x)`
+and an arbitrary object that merely happens to have a `fit` method are never
+swept in.
+
+!!! warning "The identity caveat — read before opting in"
+    A cache hit may **rebind** the receiver rather than update it in place. An
+    alias taken earlier (`backup = model`) can then be left pointing at the
+    pre-fit, unfitted object — a wrong result that looks like a right one.
+
+    Cash restores **per statement**, and that is why this can't simply be fixed:
+    on a warm run-all the *constructor* statement's own cache hit rebinds `model`
+    before the `fit` statement's in-place transfer runs, so the alias graph is
+    already broken upstream of the fit. Per-statement restore cannot preserve
+    alias identity compositionally.
+
+    The duck-type gate also admits the whole sklearn-compatible universe
+    (xgboost, lightgbm, your own estimator), each with its own `__getstate__`
+    contract; some never restore cleanly, which means paying serialisation every
+    run for nothing.
+
+    Opt in when the receiver has no aliases and you've confirmed the badge really
+    reads `RESTORED` on a warm re-run.
+
+For expensive training, prefer the decorator — wrap the fit in a function that
+*returns* the model. It caches on the arguments, has no identity caveat, and is
+the recommended ML path:
+
+<!-- test:skip reason="illustrative: needs a real sklearn estimator and training data" -->
+```python
+@cash.cache
+def train_model(X, y, n_estimators=100):
+    model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    model.fit(X, y)
+    return model
+
+model = train_model(X_train, y_train)
+```
+
+An unseeded opted-in fit warns that the cached model is a frozen replay (the
+`.fit()`'s internal randomness is invisible to the AST scanner);
+[`# @cash:allow-random`](#cashallow-random-alias-allowrandom) suppresses it.
 
 ### The two warnings
 
@@ -313,6 +390,7 @@ When several annotations apply to a single statement (stacked above, on the line
 | `persist` | logical OR |
 | `no_cache` | logical OR |
 | `allow_random` | logical OR |
+| `cache_fit` | logical OR |
 | `ttl` | "other wins if set" — order-sensitive |
 
 That means:

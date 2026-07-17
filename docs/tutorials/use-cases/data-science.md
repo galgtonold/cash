@@ -65,6 +65,8 @@ df = customers.merge(tx_features, on='customer_id', how='left')
 
 ### Cell 5: Model Training
 
+**Wrap training in a function and decorate it with `@cash.cache`.** This is the recommended way to cache model training, and the only one Cash recommends for expensive fits:
+
 ```python { .nb-cell }
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
@@ -75,12 +77,53 @@ y = df['churned']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
+@cash.cache
+def train_model(X_train, y_train, n_estimators=100):
+    model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
+    model.fit(X_train, y_train)
+    return model
+
+model = train_model(X_train, y_train)
+```
+
+The decorator caches on the function's arguments, so the fitted model comes back from cache whenever `X_train`/`y_train`/the hyperparameters are unchanged — including after a kernel restart — and re-trains the moment any of them differ. The value is a plain return value, so there's no ambiguity about what got cached or which name it lands on.
+
+!!! warning "A bare `model.fit(X, y)` is **not** cached"
+    A statement like `model.fit(X_train, y_train)` mutates `model` in place and returns nothing. Cash does **not** cache it — the badge reads `NOT CACHED` with an *In-place mutation* reason, and the fit re-executes on every run.
+
+    That's deliberate. Skipping it costs nothing (the model is never serialised, so a fit that keeps missing can't cost more than it saves) and it keeps your objects correct: because the real `.fit()` runs, `model` is genuinely fitted and any alias of it (`backup = model`) sees the fit, exactly as plain Python would.
+
+    Assignment forms are ordinary statements and **do** cache with no directive:
+
+    ```python
+    model = RandomForestClassifier(n_estimators=100, random_state=42).fit(X, y)
+    ```
+
+    Prefer `@cash.cache` over both — it's the path with the strongest guarantees.
+
+<details markdown="1">
+<summary>Advanced: <code># @cash:cache-fit</code> — opting a bare fit in</summary>
+
+If you specifically want a bare in-place fit cached, ask for it per statement:
+
+```python
 model = RandomForestClassifier(n_estimators=100, random_state=42)
+# @cash:cache-fit
 # @cash:persist
 model.fit(X_train, y_train)
 ```
 
-Cash caches `model.fit(...)` — the fitted estimator is the cached value, restored *in place* onto `model` on a hit, so any alias of `model` (`backup = model`) sees the fit too. An expensive fit is written to disk and restored after a kernel restart automatically; `# @cash:persist` on the `fit` line forces it to disk even when the cost model would otherwise keep it in memory — so a restart restores it even if training took ten minutes. (Annotations attach to the statement directly below them, so `# @cash:persist` goes on the `fit` line, not the constructor.)
+Cash then treats the fitted estimator as the statement's cached value: the constructor's lineage plus `X_train`/`y_train` pin the key, and a hit transfers the fitted state back onto `model`. `# @cash:persist` forces it to disk so a restart restores it even if training took ten minutes. (Annotations attach to the statement directly below them, so both go on the `fit` line, not the constructor.)
+
+**Know the identity caveat before you use it.** Restores happen per statement, so Cash cannot promise your object graph survives one:
+
+- On a hit, `model` may be **rebound** to a restored object rather than updated in place. An alias taken earlier (`backup = model`) can be left pointing at the pre-fit, unfitted object — a wrong result that looks like a right one.
+- This isn't fixable by trying harder at the `fit` statement: on a warm run-all the *constructor* statement's own cache hit rebinds `model` before the fit's transfer runs, so the aliasing is already broken upstream.
+- The estimator gate is a duck-type (`fit` + `get_params`), so it admits non-sklearn estimators (xgboost, lightgbm, your own class). Each has its own pickle contract, and some never restore cleanly — which means paying serialisation on every run for nothing.
+
+Use it when the receiver has no aliases and you've confirmed the badge actually reads `RESTORED` on a warm re-run. Otherwise use `@cash.cache`.
+
+</details>
 
 ### Cell 6: Evaluation
 
@@ -106,7 +149,7 @@ Without Cash: 30s of CSV reloads + aggregations on every iteration. With Cash: e
 
 - **Loading large CSV/parquet.** Pandas readers are intercepted automatically and DataFrames serialize as Parquet, so cached restores skip both the disk read and the pandas parsing path.
 - **Feature engineering iteration.** Each statement is cached independently, so tweaking one feature doesn't invalidate the dozen others above it.
-- **Model training with `@cash:persist`.** The trained estimator goes to disk, survives kernel restarts, and is restored on import — see [Smart Persistence](../feature-guides/smart-persistence.md).
+- **Model training via `@cash.cache`.** Wrap the fit in a function that *returns* the model. The trained estimator goes to disk, survives kernel restarts, and re-trains only when the data or hyperparameters change.
 - **Notebook ↔ kernel-restart workflow.** When the kernel dies (OOM, package upgrade, accidental restart), the disk cache is still there. Re-running the notebook rehydrates everything Cash decided was worth persisting.
 
 ## Where to be careful in DS workflows
