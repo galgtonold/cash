@@ -679,7 +679,10 @@ def _s2_baseline_lines(py: Path, port: int) -> int:
 
 
 def scenario_s2(py: Path, port: int) -> Result:
-    r = Result("S2", "to_csv audit-log not re-fired during reconstruction (CAS-196)", "RED")
+    # CAS-196 fixed by the reconstruction-scope gate: an upstream file-writer
+    # whose output no relevant consumer reads is never re-fired during another
+    # cell's reconstruction. Baseline flipped RED -> GREEN with that fix.
+    r = Result("S2", "to_csv audit-log not re-fired during reconstruction (CAS-196)", "GREEN")
     try:
         baseline = _s2_baseline_lines(py, port)      # %cash_off ground truth
     except SystemExit as e:
@@ -733,11 +736,108 @@ def scenario_s2(py: Path, port: int) -> Result:
     return r
 
 
+# ---------------------------------------------------------------------------
+# S5 -- post-restart, a cell BELOW a plot cell must not re-fire the plot writer
+#       nor UpstreamStateError on the plot's evicted RAM-only input (CAS-200/193)
+# ---------------------------------------------------------------------------
+
+# The PLOT cell (cell 3) draws a pie from a RAM-only intermediate ``itm`` and
+# writes ``chart.png`` via a non-cacheable ``fig.savefig``. The DOWNSTREAM cell
+# (cell 5, ``grand_total``) reads only ``records`` -- it has ZERO data-dependency
+# on the plot. Pre-fix, reconstructing that unrelated cell re-fired the plot
+# writer (an unscoped file-write re-schedule): it re-created a deleted chart.png
+# and, in the field, raised ``UpstreamStateError: name 'itm' is not defined`` on
+# the evicted intermediate, wedging the tail. The scope gate must reconstruct
+# only what the current cell's lineage needs.
+_S5_CELLS = [
+    ('import cash\n%cash_on\n'
+     'import matplotlib\nmatplotlib.use("Agg")\nimport matplotlib.pyplot as plt\n'
+     'import pandas as pd, numpy as np\nprint("cash on")'),                          # 0
+    ("records = pd.DataFrame({'cat': list('abcde'), 'v': [10, 20, 30, 40, 50]})\n"
+     "print('records', records.shape)"),                                            # 1
+    ("summary = records.groupby('cat', as_index=False).agg(total=('v', 'sum'))\n"
+     "print('summary', summary.shape)"),                                            # 2
+    ("itm = summary['total'].tolist()\n"                     # RAM-only intermediate
+     "fig, ax = plt.subplots()\n"
+     "ax.pie(itm, labels=summary['cat'].tolist())\n"        # non-cacheable draw
+     "fig.savefig('chart.png')\n"                           # the plot writer
+     "print('PLOTTED', len(itm))"),                                                 # 3
+    ("grand_total = int(records['v'].sum())\n"              # depends ONLY on records
+     "print('GRAND_TOTAL', grand_total)"),                                          # 4
+    ("n_cats = int(records['cat'].nunique())\n"            # also plot-independent
+     "print('N_CATS', n_cats)"),                                                    # 5
+]
+_S5_TAIL = 4   # 0-based index of the independent downstream cell (grand_total)
+
+
+def scenario_s5(py: Path, port: int) -> Result:
+    r = Result(
+        "S5",
+        "plot writer not re-fired by an unrelated cell post-restart (CAS-200/193)",
+        "GREEN",
+    )
+    work = _fresh_work("s5")
+    chart = work / "chart.png"
+    drv = Driver(py, work, port)
+    try:
+        drv.start()
+        _guard_venv(drv, VENV_DIR)               # guard reuses cell 0 slot...
+        for i, src in enumerate(_S5_CELLS):      # ...then S5 overwrites with %cash_on
+            drv.set(i, src)
+        for i in range(len(_S5_CELLS)):
+            drv.run(i)
+        chart_after_runall = chart.exists()
+        # Restart, re-enable cash + rebuild ONLY the imports/records/summary
+        # producers (cells 0-2) -- NOT the plot cell (3) -- DELETE the chart,
+        # then run the independent tail cell. The tail cell shares no variable
+        # with the plot; a correct system reconstructs only ``records`` and never
+        # touches the plot writer.
+        drv.restart()
+        drv.run(0)                               # imports + %cash_on
+        drv.run(1)                               # records
+        drv.run(2)                               # summary
+        chart.unlink()                           # remove the plot artifact
+        tail_out = drv.run(_S5_TAIL).get("out", "")
+        chart_recreated = chart.exists()
+        upstream_error = "UpstreamStateError" in tail_out
+        r.evidence = {
+            "chart_after_runall": chart_after_runall,
+            "chart_recreated_by_unrelated_cell": chart_recreated,
+            "upstream_error": upstream_error,
+            "tail_ok": "GRAND_TOTAL 150" in tail_out,
+        }
+        if not chart_after_runall:
+            r.status, r.detail = "ERROR", "plot cell never wrote chart.png on run-all"
+        elif upstream_error:
+            r.status = "RED"
+            r.detail = ("running an unrelated downstream cell raised "
+                        "UpstreamStateError reconstructing the plot cell")
+        elif chart_recreated:
+            r.status = "RED"
+            r.detail = ("cash re-fired the plot writer (fig.savefig) during an "
+                        "unrelated cell's reconstruction: deleted chart.png was "
+                        "re-created")
+        elif "GRAND_TOTAL 150" not in tail_out:
+            r.status, r.detail = "ERROR", f"tail cell produced wrong value: {tail_out[:200]!r}"
+        else:
+            r.status = "GREEN"
+            r.detail = ("unrelated cell reconstructed only its own lineage: plot "
+                        "writer not re-fired, no UpstreamStateError")
+    except SystemExit as e:
+        r.status, r.detail = "ERROR", str(e)
+    except Exception:
+        r.status, r.detail = "ERROR", traceback.format_exc()
+    finally:
+        drv.close()
+    return r
+
+
 SCENARIOS = {
     "S1": scenario_s1,
     "S2": scenario_s2,
     "S3": scenario_s3,
     "S4": scenario_s4,
+    "S5": scenario_s5,
 }
 
 
@@ -750,7 +850,7 @@ def main() -> int:
     ap.add_argument("--wheel", help="use a prebuilt wheel instead of building")
     ap.add_argument("--reuse-venv", action="store_true",
                     help="reuse an already-provisioned venv (skip rebuild/install)")
-    ap.add_argument("--scenarios", default="S1,S2,S3,S4",
+    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5",
                     help="comma list of scenarios to run (default all)")
     ap.add_argument("--port-base", type=int, default=8921)
     args = ap.parse_args()

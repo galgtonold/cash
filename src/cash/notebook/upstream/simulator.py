@@ -20,6 +20,7 @@ from typing import Any
 
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from .._trace import trace_event
+from ..analysis import CodeAnalyzer
 from ..cacheability import analyze_statement, consumed_input_names
 from ..consumables import consumable_state, has_diverged, is_consumable_unrestorable
 from ..control_structures import is_control_structure  # noqa: F401  re-exported for test patching (mocked via @patch in test_issue_reproduction)
@@ -586,6 +587,75 @@ class NotebookSimulator:
                 continue
         return muts
 
+    def _compute_relevant_read_paths(
+        self,
+        required_inputs: set[str] | None,
+        simulation_trace: list,
+        notebook_cells: list[str] | None,
+        current_cell_idx: int | None,
+    ) -> tuple[set[str], bool]:
+        """File paths this cell's reconstruction actually READS (CAS-193/196/200).
+
+        A file-writer is only worth re-firing during reconstruction when a
+        consumer relevant to the current cell reads the file it writes. This
+        collects those consumed paths from three sources:
+
+        * the recorded file-deps of the current cell's required inputs (the
+          within-session, already-propagated read edges), and
+        * every file READ statically named by an upstream trace statement, and
+        * every file READ statically named by the current cell itself (the only
+          signal that survives a kernel restart, when the tracking dicts are
+          empty and the reader is the cell the user ran).
+
+        Returns ``(paths, fully_known)``. ``fully_known`` is ``False`` when any
+        recognised read target could not be statically resolved (an f-string /
+        computed path) — the caller must then suppress no writer, since it cannot
+        prove the writer's output is unread. A writer whose resolvable output
+        path is in none of these paths is an unrelated / terminal side-effect and
+        must not be re-fired for THIS cell.
+        """
+        from ..cacheability import statement_read_paths
+
+        paths: set[str] = set()
+        fully_known = True
+        user_ns = getattr(self.shell, 'user_ns', None)
+
+        efd = getattr(self._tracking_state, 'executed_file_deps', None) or {}
+        for v in (required_inputs or ()):
+            dep = efd.get(v)
+            if not dep:
+                continue
+            # Recorded file deps are usually {path: snapshot} but some code paths
+            # store a plain set/list of paths -- accept either shape.
+            paths.update(dep.keys() if hasattr(dep, 'keys') else dep)
+
+        def _collect(src: str) -> None:
+            nonlocal fully_known
+            try:
+                clean = CodeAnalyzer.strip_magics(src.replace('\r\n', '\n'))
+            except (ValueError, TypeError):
+                return
+            if not clean.strip():
+                return
+            try:
+                r = statement_read_paths(clean, namespace=user_ns)
+            except (SyntaxError, ValueError, TypeError):
+                r = None
+            if r is None:
+                fully_known = False
+            else:
+                paths.update(r)
+
+        for entry in simulation_trace:
+            code = entry[0]
+            if 'read' in code or 'open(' in code or 'load' in code:
+                _collect(code)
+
+        if notebook_cells and current_cell_idx is not None and 0 <= current_cell_idx < len(notebook_cells):
+            _collect(notebook_cells[current_cell_idx])
+
+        return paths, fully_known
+
     def _simulate_and_find_changes(
         self,
         current_cell_idx: int,
@@ -710,6 +780,13 @@ class NotebookSimulator:
                 broken_vars -= removed
                 trace_event("broken_drop_nocache", dropped=removed, broken=broken_vars)
 
+        # Scope the writer-scheduling to files THIS cell's reconstruction reads
+        # (CAS-193/196/200): a writer whose output no relevant consumer reads is
+        # an unrelated / terminal side-effect that must never be re-fired here.
+        relevant_read_paths, relevant_read_paths_known = self._compute_relevant_read_paths(
+            required_inputs, simulation_trace, notebook_cells, current_cell_idx,
+        )
+
         # File writes have no variable edge, so an edited/new upstream writer
         # statement leaves broken_vars empty while the on-disk state a reader
         # depends on is stale (CAS-81/82). The plan must still be built so
@@ -717,6 +794,8 @@ class NotebookSimulator:
         has_stale_file_writers = bool(
             self._planner._find_stale_file_writer_indices(
                 simulation_trace, virtual_lineage=virtual_lineage,
+                relevant_read_paths=relevant_read_paths,
+                relevant_read_paths_known=relevant_read_paths_known,
             )
         )
 
@@ -747,6 +826,8 @@ class NotebookSimulator:
             vars_mutated_by_loops, upstream_has_modifications,
             stmt_lookup_times, notebook_cells,
             consumable_broken_vars=consumable_broken_vars,
+            relevant_read_paths=relevant_read_paths,
+            relevant_read_paths_known=relevant_read_paths_known,
         )
         self._apply_phase_mutations()
         return result

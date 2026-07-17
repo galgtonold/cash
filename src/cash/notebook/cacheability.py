@@ -28,6 +28,7 @@ __all__ = [
     "analyze_statement",
     "statement_writes_files",
     "statement_written_paths",
+    "statement_read_paths",
     "statement_saves_current_pyplot_figure",
     "standalone_method_mutation_receivers",
     "standalone_method_call_receivers",
@@ -545,6 +546,88 @@ def statement_written_paths(
         paths.add(resolved)
     if not saw_path_bearing or not paths:
         return None
+    return paths
+
+
+# Cheap textual pre-filter for statement_read_paths.
+_READ_TEXT_MARKERS: tuple[str, ...] = ('open(', 'read', 'load')
+
+
+def _read_call_path(
+    call: ast.Call, namespace: dict[str, Any] | None,
+) -> tuple[str | None, bool]:
+    """Return ``(resolved_path_or_None, is_path_bearing)`` for one READ call node.
+
+    Mirror of :func:`_write_call_path` for the recognised file-READ forms:
+    ``open(PATH)`` in a non-write mode, ``*.read_csv(PATH)`` / any ``.read_<x>``
+    reader, ``np.load(PATH)`` / ``joblib.load(PATH)``, the nested-handle
+    ``pickle.load(open(PATH))`` / ``json.load(open(PATH))``, and
+    ``Path(PATH).read_text/read_bytes()``. ``is_path_bearing`` marks a recognised
+    reader whose args name an input file; a ``None`` path there means the target
+    was present but not statically resolvable (caller stays conservative).
+    """
+    func = call.func
+    # open(PATH) / open(PATH, 'r'|'rb'|...) -- only a NON-write mode counts.
+    if isinstance(func, ast.Name) and func.id == 'open':
+        if _is_open_write_mode(call):
+            return None, False
+        return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
+    if isinstance(func, ast.Attribute):
+        method = func.attr
+        # Path(PATH).read_text(...) / Path(PATH).read_bytes(...)
+        if method in ('read_text', 'read_bytes'):
+            recv = func.value
+            if isinstance(recv, ast.Call) and _is_path_constructor(recv.func):
+                return _call_path_argument(recv, 0, namespace), True
+            return None, True
+        # np.load / numpy.load / joblib.load(PATH); pickle/json.load(open(PATH)).
+        if method == 'load':
+            base = _get_base_name(func.value)
+            if call.args and isinstance(call.args[0], ast.Call):
+                inner = call.args[0]
+                if isinstance(inner.func, ast.Name) and inner.func.id == 'open':
+                    return _call_path_argument(inner, 0, namespace, _PATH_KWARG_NAMES), True
+            if base in ('np', 'numpy', 'joblib'):
+                return _call_path_argument(call, 0, namespace), True
+            return None, False
+        # pandas / polars readers: any ``.read_<fmt>(PATH)`` takes the path arg0.
+        if method.startswith('read_'):
+            return _call_path_argument(call, 0, namespace, _PATH_KWARG_NAMES), True
+    return None, False
+
+
+def statement_read_paths(
+    code: str,
+    tree: 'ast.Module | None' = None,
+    namespace: dict[str, Any] | None = None,
+) -> set[str] | None:
+    """Resolvable input path(s) a statement READS, or ``None`` when uncertain.
+
+    Companion to :func:`statement_written_paths`, used by the re-execution
+    planner to scope file-writer re-firing to writers whose output a downstream
+    consumer actually reads (CAS-193/196/200). Returns the set of statically
+    resolved read paths, an **empty set** when the statement has no path-bearing
+    read at all, or ``None`` the moment a recognised reader's path is NOT
+    statically resolvable (f-string / computed) -- so the caller treats the read
+    set as unknown and never suppresses a writer it cannot prove is unread.
+    """
+    if not any(m in code for m in _READ_TEXT_MARKERS):
+        return set()
+    if tree is None:
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except (SyntaxError, ValueError):
+            return None
+    paths: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        resolved, is_path_bearing = _read_call_path(node, namespace)
+        if not is_path_bearing:
+            continue
+        if resolved is None:
+            return None  # a read target we could not pin down -> unknown
+        paths.add(resolved)
     return paths
 
 

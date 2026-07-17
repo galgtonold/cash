@@ -54,19 +54,21 @@ restored on a cache hit and so cannot witness a silent re-run.
 | id | invariant (external signal) | issue | baseline |
 |----|-----------------------------|-------|----------|
 | **S1** | multi-cell `make_classification → DataFrame → train_test_split → @cash.cache train()` restores after a **kernel restart** (fit counter unchanged) | CAS-202 | **GREEN** (was RED until CAS-202 fixed) |
-| **S2** | a downstream reader does **not** re-fire an upstream `df.to_csv('audit.log', mode='a')` — `audit.log` byte-stable vs a `%cash_off` baseline | CAS-196 | **RED** |
+| **S2** | a downstream reader does **not** re-fire an upstream `df.to_csv('audit.log', mode='a')` — `audit.log` byte-stable vs a `%cash_off` baseline | CAS-196 | **GREEN** (was RED until CAS-196 fixed) |
 | **S3** | the **single-cell** version of the same sklearn `@cash.cache` work survives a restart (fit counter unchanged) | CAS-202 control | **GREEN** |
 | **S4** | a plain `@cash.cache` int fn survives a restart (call counter unchanged) | control | **GREEN** |
+| **S5** | after a restart, a cell **below** a plot cell (sharing no variable with it) does **not** re-fire the plot's `fig.savefig(...)` — a deleted `chart.png` is not re-created — nor `UpstreamStateError` on the plot's evicted RAM-only intermediate | CAS-200/193 | **GREEN** (was RED until CAS-200 fixed) |
 
 `RED` = the invariant is violated = the bug is present. S1 was **RED** until
-CAS-202 was fixed: the decorator arg-hash keyed a DataFrame argument on its
-per-session `_cash_lineage_hash` instead of its stable content, so the persisted
-entry was never found after a restart and the model re-trained. Now the
-**S1 (GREEN) vs the still-**RED** S2** keeps the harness non-vacuous; **S4
-(GREEN)** shows restart-survival works when no sklearn import poisons the
-file-dep set. A harness that passed everything would be the exact CAS-190
-blindness it is meant to cure — so **S2 staying RED is the proof of
-non-vacuity.**
+CAS-202 was fixed (the decorator arg-hash keyed a DataFrame argument on its
+per-session `_cash_lineage_hash` instead of its stable content). **S2** was RED
+until CAS-196's reconstruction-scope gate landed: an upstream file-writer whose
+output no consumer relevant to the current cell reads is never re-fired during
+another cell's reconstruction. **S5** was added for CAS-200/193 and the *same*
+scope gate flips it RED→GREEN. **S4 (GREEN)** shows restart-survival works when
+no sklearn import poisons the file-dep set. When these bugs were open,
+**S1/S2/S5 going RED was the proof of non-vacuity** — the exact CAS-190
+blindness the harness cures; the fast suite reported all of them green.
 
 ## How to run
 

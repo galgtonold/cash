@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import ast
 import logging
+import os
 import re
 import textwrap
 import warnings
 from typing import TYPE_CHECKING
 
 from ...exceptions import CashWarning
+from ...utils import resolve_file_dep_path
 from ..analysis import CodeAnalyzer
 from ..cacheability import consumed_input_names, statement_saves_current_pyplot_figure
 from ..cache_key import write_provenance_key
@@ -65,6 +67,8 @@ class ReexecutionPlanner:
         stmt_lookup_times: dict[str, float],
         notebook_cells: list[str],
         consumable_broken_vars: set[str] | None = None,
+        relevant_read_paths: set[str] | None = None,
+        relevant_read_paths_known: bool = True,
     ) -> tuple[list[str], list[dict], float]:
         """Build the list of statements to re-execute and restored info.
 
@@ -101,6 +105,8 @@ class ReexecutionPlanner:
         stmts_to_run_indices, restored_statements_info = self._schedule_file_write_statements(
             stmts_to_run_indices, simulation_trace, restored_statements_info,
             broken_vars, virtual_lineage,
+            relevant_read_paths=relevant_read_paths,
+            relevant_read_paths_known=relevant_read_paths_known,
         )
 
         stmts_to_run_indices, restored_statements_info = self._complete_stateful_carrier_history(
@@ -584,6 +590,8 @@ class ReexecutionPlanner:
         restored_statements_info: list[dict],
         broken_vars: set[str] | None = None,
         virtual_lineage: dict | None = None,
+        relevant_read_paths: set[str] | None = None,
+        relevant_read_paths_known: bool = True,
     ) -> tuple[list[int], list[dict]]:
         """Schedule upstream file-WRITING statements whose effect is stale (CAS-81/82).
 
@@ -647,6 +655,8 @@ class ReexecutionPlanner:
         writer_indices = self._find_stale_file_writer_indices(
             simulation_trace, scheduled_outputs=changed_inputs, skip=scheduled,
             virtual_lineage=virtual_lineage,
+            relevant_read_paths=relevant_read_paths,
+            relevant_read_paths_known=relevant_read_paths_known,
         )
         if not writer_indices:
             return stmts_to_run_indices, restored_statements_info
@@ -712,6 +722,8 @@ class ReexecutionPlanner:
         scheduled_outputs: frozenset | set = frozenset(),
         skip: frozenset | set = frozenset(),
         virtual_lineage: dict | None = None,
+        relevant_read_paths: set[str] | None = None,
+        relevant_read_paths_known: bool = True,
     ) -> list[int]:
         """Trace indices of file-WRITING statements whose effect is stale.
 
@@ -722,6 +734,15 @@ class ReexecutionPlanner:
         simulator to gate its no-broken-vars early return, so the common
         path stays cheap: a textual marker pre-filter runs before any AST
         analysis.
+
+        Scoped to the current cell (CAS-193/196/200): a writer whose resolvable
+        output path is read by NO consumer relevant to this reconstruction
+        (``relevant_read_paths``) is an unrelated / terminal side-effect and is
+        never scheduled — re-firing it can only repeat an external write (a
+        non-idempotent ``mode='a'`` append corrupts the file) without helping
+        reconstruct any value the current cell needs. The gate applies only when
+        the read set is fully known and the writer's own path resolves; every
+        uncertain case falls through to the prior (conservative) behaviour.
         """
         tracking = getattr(self._classifier, '_tracking_state', None)
         executed_writes = getattr(tracking, 'executed_write_stmt_codes', None)
@@ -747,6 +768,18 @@ class ReexecutionPlanner:
                 continue
             stmt_code, _outputs, inputs = entry[0], entry[1], entry[2]
             if not statement_writes_files(stmt_code):
+                continue
+            # Scope gate: skip a writer whose output file no relevant consumer
+            # reads (CAS-193/196/200). Its write runs when the user runs its own
+            # cell; reconstruction of an unrelated cell must never re-fire it.
+            if self._writer_output_unread(
+                stmt_code, relevant_read_paths, relevant_read_paths_known,
+            ):
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM] File-writer output read by no relevant "
+                        "consumer; not scheduling (scope): %s", stmt_code[:60],
+                    )
                 continue
             changed = stmt_code not in executed_writes
             inputs_changed = bool(set(inputs) & scheduled_outputs) or any(
@@ -778,6 +811,60 @@ class ReexecutionPlanner:
                         "inputs_changed=%s)", i, stmt_code[:40], changed, inputs_changed,
                     )
         return writer_indices
+
+    @staticmethod
+    def _normalize_path_forms(path: str) -> set[str]:
+        """Comparable forms of a file path: resolved-abspath (normcased) + basename.
+
+        Both sides of the writer-output vs relevant-reads comparison are reduced
+        to this set so a cwd-relative write (``'audit.log'``) and an absolute read
+        of the same file compare equal, while a basename match keeps the gate
+        biased toward NOT suppressing (a false "read" only foregoes a suppression;
+        a false "unread" would wrongly drop a needed write).
+        """
+        forms: set[str] = set()
+        try:
+            resolved = resolve_file_dep_path(path)
+        except (OSError, ValueError, TypeError):
+            resolved = None
+        for candidate in (resolved, path):
+            if not candidate:
+                continue
+            try:
+                forms.add(os.path.normcase(os.path.abspath(candidate)))
+                forms.add(os.path.normcase(os.path.basename(candidate)))
+            except (OSError, ValueError, TypeError):
+                continue
+        return forms
+
+    def _writer_output_unread(
+        self,
+        stmt_code: str,
+        relevant_read_paths: set[str] | None,
+        relevant_read_paths_known: bool,
+    ) -> bool:
+        """True when a writer's output file is read by no relevant consumer.
+
+        The scope gate for CAS-193/196/200. Conservative in every uncertain
+        case — returns ``False`` (do not suppress) unless the read set is fully
+        known AND the writer's output path(s) all resolve statically AND none of
+        them match any relevant read path. Then the writer is an unrelated /
+        terminal side-effect for this cell and must not be re-fired.
+        """
+        if not relevant_read_paths_known or relevant_read_paths is None:
+            return False
+        from ..cacheability import statement_written_paths
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
+        written = statement_written_paths(stmt_code, namespace=user_ns)
+        if not written:
+            return False  # unresolvable target -> stay conservative
+        read_forms: set[str] = set()
+        for rp in relevant_read_paths:
+            read_forms |= self._normalize_path_forms(rp)
+        for wp in written:
+            if self._normalize_path_forms(wp) & read_forms:
+                return False  # this output IS read by a relevant consumer
+        return True
 
     def _writer_output_already_fresh(
         self,
