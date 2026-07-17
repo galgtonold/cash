@@ -5,10 +5,11 @@ import hashlib
 import logging
 import re
 import types
+import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...exceptions import AmbiguousCellError, UpstreamStateError
+from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, UpstreamStateError
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
@@ -120,6 +121,13 @@ class UpstreamChecker:
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
         self.function_tracker: Any | None = None
 
+        # CAS-173: per-session ledger of already-warned broken upstream cells,
+        # keyed by cell index -> cell source hash. Keeps the "cell N has a
+        # syntax error" warning to once per distinct break (not once per
+        # downstream cell run) while still re-warning when the break changes or
+        # a fixed cell is broken again.
+        self._warned_broken_cells: dict[int, str] = {}
+
         ts = tracking_state or TrackingState()
         self._wire_state(ts)
 
@@ -143,6 +151,9 @@ class UpstreamChecker:
         from interfering with the current one.
         """
         self.simulator.reset_caches()
+        # Re-arm the broken-upstream-cell warning for the new notebook (CAS-173):
+        # its cell indices/hashes are meaningless across a notebook switch.
+        self._warned_broken_cells.clear()
 
     def _wire_state(self, state: TrackingState) -> None:
         """Internal: alias tracking dicts onto self so existing attribute
@@ -1132,6 +1143,75 @@ class UpstreamChecker:
             if self.debug:
                 logger.debug("[UPSTREAM] CAS-62 evicted orphaned variable '%s'", var)
 
+    def _warn_broken_upstream_cells(
+        self,
+        notebook_cells: list[str],
+        current_cell_idx: int,
+    ) -> set[int]:
+        """Emit a visible warning for any UPSTREAM cell that cannot be parsed.
+
+        A half-written cell the user has SAVED but not run makes the upstream
+        simulator SKIP that cell (see ``VirtualLineage._simulate_one_cell``,
+        CAS-173) so unrelated downstream cells keep caching. But the user must
+        still be told: the broken cell will not run, and any cell that depends
+        on it can no longer have its dependency tracked. Without this, caching
+        degrades silently mid-edit while every signal the user has (the badge,
+        ``auto_cache_enabled``) still says it is on — the exact trap that cost
+        two round-5 testers a long debugging detour.
+
+        Deduped per ``(cell index, cell hash)`` on this checker so a persistent
+        break warns once — not on every downstream cell run — but a NEW or
+        CHANGED break re-warns, and a fixed cell that is later re-broken warns
+        again. Parsing mirrors the simulator exactly (``strip_magics`` then
+        ``ast.parse`` on ``\\r\\n``-normalised source) so a VALID cell — the
+        multi-line ``%``-format print of CAS-163 included — is never falsely
+        flagged. Returns the set of broken cell indices (0-based).
+        """
+        broken: dict[int, str] = {}
+        for idx in range(min(current_cell_idx, len(notebook_cells))):
+            raw = notebook_cells[idx]
+            try:
+                clean = CodeAnalyzer.strip_magics(raw.replace('\r\n', '\n'))
+            except (ValueError, TypeError):
+                continue
+            if not clean.strip():
+                continue
+            try:
+                ast.parse(clean)
+            except SyntaxError:
+                broken[idx] = hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+        for idx, cell_hash in broken.items():
+            if self._warned_broken_cells.get(idx) == cell_hash:
+                continue  # already warned about this exact break — stay quiet
+            raw = notebook_cells[idx]
+            snippet = next((ln.strip() for ln in raw.splitlines() if ln.strip()), '')
+            if len(snippet) > 60:
+                snippet = snippet[:57] + '...'
+            message = (
+                f"Cash: cell {idx + 1} has a syntax error and could not be "
+                f"parsed ({snippet!r}). Caching continues for cells that do "
+                f"not depend on it, but cell {idx + 1} will not run and any "
+                f"cell that depends on it can no longer be dependency-tracked "
+                f"until you fix it."
+            )
+            logger.warning(message)
+            # warn_explicit with registry=None bypasses the "once per location"
+            # __warningregistry__ dedupe (every break is raised from this one
+            # line); our own per-(idx, hash) ledger supplies the dedupe we
+            # actually want, and this still consults the user's filters. Mirrors
+            # randomness.py's established pattern.
+            warnings.warn_explicit(
+                message, CashUpstreamSyntaxWarning,
+                filename='<cash>', lineno=idx + 1, registry=None,
+            )
+
+        # Replace the ledger with exactly the current break set: a fixed cell
+        # drops out (so a later re-break warns again); a changed break re-warned
+        # above and its new hash is recorded here.
+        self._warned_broken_cells = broken
+        return set(broken)
+
     def _sum_execution_times(self, executed_metrics: list) -> float:
         """Sum ``total_time`` from a list of metric dicts."""
         total = 0.0
@@ -1171,6 +1251,13 @@ class UpstreamChecker:
             )
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
+
+            # CAS-173: disclose any unparseable UPSTREAM cell BEFORE simulating.
+            # The simulator skips such a cell (VirtualLineage._simulate_one_cell)
+            # so unrelated downstream cells keep caching, but the user must be
+            # told which cell is broken — otherwise caching degrades silently
+            # mid-edit while the badge and auto_cache_enabled still say it is on.
+            self._warn_broken_upstream_cells(notebook_cells, current_cell_idx)
 
             # CAS-62: a variable whose definition was removed/renamed across an
             # edit is orphaned — no cell produces it anymore. Evict it (and its

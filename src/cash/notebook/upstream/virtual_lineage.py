@@ -1011,8 +1011,29 @@ class VirtualLineage:
                 )
 
         except SyntaxError:
-            logger.debug("[UPSTREAM] Syntax error in cell %d, raising error.", i)
-            raise  # Re-raise syntax error to stop execution
+            # CAS-173: a single unparseable upstream cell (a half-written cell
+            # the user has SAVED but not run) must NOT abort the whole
+            # simulation and silently disable caching for every cell below it —
+            # a notebook with one mid-edit cell is the normal state of the
+            # workflow cash exists to speed up. An unparseable cell cannot have
+            # executed, so it contributes no runtime state: treat it as a no-op
+            # (carry the virtual state through unchanged, empty trace) by
+            # falling through to the cache-entry append below, so cells that do
+            # NOT depend on it keep their lineage and their cache. A cell that
+            # DID depend on it then follows an ordinary lineage mismatch and
+            # recomputes from the current (last-valid) memory — never a wrong
+            # cache hit, because the broken cell never ran to change that
+            # memory. The visible ``CashUpstreamSyntaxWarning`` naming the
+            # offending cell is emitted by
+            # ``UpstreamChecker._warn_broken_upstream_cells``; here we only keep
+            # the simulation alive. Non-syntax errors still propagate below —
+            # they signal a real bug, not a user typo. (Was: re-raise, which
+            # poisoned every downstream cell silently — CAS-173.)
+            logger.debug(
+                "[UPSTREAM] Syntax error in cell %d; skipping it and continuing "
+                "simulation so unrelated downstream cells keep caching (CAS-173).",
+                i,
+            )
         except (KeyError, TypeError, ValueError, OSError, AttributeError) as e:
             logger.debug("[UPSTREAM] Error simulating cell %d: %s", i, e)
             raise

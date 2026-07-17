@@ -58,6 +58,7 @@ def test_core_exports_stable():
         'CashWarning', 'CashCacheIneffectiveWarning',
         'CashCacheStoreFailedWarning', 'CashImpurityWarning',
         'CashRandomnessWarning',  # public since CAS-114 (users filter on it)
+        'CashUpstreamSyntaxWarning',  # public since CAS-173 (users filter on it)
     }
     actual = set(cash.__all__)
     assert actual == expected_stable

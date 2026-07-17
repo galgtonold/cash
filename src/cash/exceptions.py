@@ -21,6 +21,7 @@ __all__ = [
     "CashCacheIneffectiveWarning",
     "CashCacheStoreFailedWarning",
     "CashImpurityWarning",
+    "CashUpstreamSyntaxWarning",
 ]
 
 class CashError(Exception):
@@ -94,6 +95,17 @@ class CashCacheIneffectiveWarning(CashWarning):
     generator; use_locking=True on an async function. The user's
     function ran (or will run) but its result is not being cached
     or re-used.
+    """
+
+class CashUpstreamSyntaxWarning(CashWarning):
+    """An upstream notebook cell could not be parsed (a half-written cell the
+    user has saved but not run).
+
+    The unparseable cell is skipped so downstream cells that do not depend on
+    it keep caching, but a cell that DID depend on it can no longer have its
+    dependency tracked. Emitted by the notebook upstream checker naming the
+    offending cell (1-based), so caching never silently stops mid-edit without
+    telling the user why (CAS-173).
     """
 
 class CashCacheStoreFailedWarning(CashWarning):

@@ -33,6 +33,7 @@ from .exceptions import (
     CashError,
     CashImpureFunctionError,
     CashImpurityWarning,
+    CashUpstreamSyntaxWarning,
     CashWarning,
     DependencyNotFoundError,
     UpstreamStateError,
@@ -372,6 +373,7 @@ __all__ = [
     "CashCacheIneffectiveWarning",
     "CashCacheStoreFailedWarning",
     "CashImpurityWarning",
+    "CashUpstreamSyntaxWarning",
     "CashRandomnessWarning",
 ]
 
