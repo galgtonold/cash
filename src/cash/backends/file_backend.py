@@ -335,8 +335,18 @@ class FileBackend(CacheBackend):
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
         opener = gzip.open if self.compress else open
-        with opener(data_path, 'wb') as f:
-            f.write(serialized_value)
+        try:
+            with opener(data_path, 'wb') as f:
+                f.write(serialized_value)
+        except FileNotFoundError:
+            # The cache dir vanished under a live process. The README suggests
+            # deleting ./.cash to wipe the cache, and doing that with the kernel
+            # still running used to fail the next write with CacheBackendError
+            # instead of simply recreating the directory. Recreate + retry once;
+            # costs nothing on the normal path.
+            os.makedirs(self.cache_dir, exist_ok=True)
+            with opener(data_path, 'wb') as f:
+                f.write(serialized_value)
 
         try:
             actual_data_size = os.path.getsize(data_path)

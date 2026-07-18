@@ -108,3 +108,31 @@ class TestFileBackendEnhanced:
         b2.list_entries()  # triggers _ensure_initialized()
         assert b2._current_size_bytes == size
         b2.shutdown()
+
+
+class TestCacheDirDeletedWhileLive:
+    """The README suggests deleting ./.cash to wipe the cache. Doing that while a
+    kernel is still running used to make the next write fail with
+    CacheBackendError instead of simply recreating the directory."""
+
+    def test_set_recreates_a_deleted_cache_dir(self, tmp_path):
+        import shutil
+
+        cache_dir = tmp_path / "cache"
+        backend = FileBackend(str(cache_dir))
+        backend.set("before", "v1")
+        backend._writes.wait_all()
+        assert cache_dir.exists()
+
+        # User nukes ./.cash from outside while the backend is still live.
+        shutil.rmtree(cache_dir)
+        assert not cache_dir.exists()
+
+        # Must not raise CacheBackendError — recreate and write.
+        backend.set("after", "v2")
+        backend._writes.wait_all()
+
+        assert cache_dir.exists()
+        _meta, value = backend.get("after")   # get() returns (metadata, value)
+        assert value == "v2"
+        backend.shutdown()
