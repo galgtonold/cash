@@ -19,6 +19,8 @@ them directly.
 import ast
 import os
 import textwrap
+import types
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -50,6 +52,7 @@ __all__ = [
     "alias_mutation_sources",
     "aliased_sources",
     "bare_alias_targets",
+    "reference_alias_targets",
     "crossref_reassigned_vars",
     "consumed_input_names",
     "subscript_view_bindings",
@@ -2697,6 +2700,110 @@ def bare_alias_targets(tree: ast.Module | None) -> frozenset[str]:
     return frozenset(out)
 
 
+def _is_free_reference_expr(node: ast.expr) -> bool:
+    """True for an expression that only DEREFERENCES existing state (CAS-188).
+
+    These are the shapes that share BOTH halves of the CAS-184 argument, which is
+    what makes them safe to refuse:
+
+    * they alias — the result can be a live sub-object of a tracked variable, so
+      restoring a deserialised copy silently breaks the identity Python
+      guarantees; and
+    * they are FREE to re-run — an attribute lookup or a constant-key subscript
+      is a pointer dereference, so refusing to cache is also strictly cheaper.
+
+    ``bare_alias_targets``' docstring lumps these in with ``b = f(a)`` and
+    excludes them all on the grounds that they "can equally be expensive". That
+    is true of a CALL, but not of a deref: whatever built ``obj.inner`` is cached
+    at its own statement; re-reading the attribute costs nothing.
+
+    Accepted, rooted in a bare ``Name`` so the base is a live tracked variable:
+
+    * ``a.attr``, ``a.b.c``        — attribute chains
+    * ``a[0]``, ``a['k']``         — subscript with a LITERAL key
+    * ``a if cond else b``         — ternary whose branches are themselves free
+
+    Deliberately NOT accepted:
+
+    * any ``Call`` (``f(a)``, ``list(a)``, ``a.copy()``) — may do real work, so
+      the cost half does not transfer. ``b = list(a)`` additionally aliases only
+      one level down (``b[0] is a[0]`` while ``b is not a``), which refusing to
+      cache the binding would not fix anyway.
+    * a subscript with a NON-literal key (``a[i]``, ``a[mask]``, ``a[1:]``) —
+      ``df[mask]`` is a filter that does real work and must keep its cache.
+    """
+    if isinstance(node, ast.Name):
+        return True
+    if isinstance(node, ast.Attribute):
+        return _is_free_reference_expr(node.value)
+    if isinstance(node, ast.Subscript):
+        # Literal key only: a computed key can be an expensive filter.
+        key = node.slice
+        if not isinstance(key, ast.Constant):
+            return False
+        return _is_free_reference_expr(node.value)
+    if isinstance(node, ast.IfExp):
+        return (_is_free_reference_expr(node.body)
+                and _is_free_reference_expr(node.orelse))
+    if isinstance(node, ast.Constant):
+        return True   # the ``else None`` arm of a ternary
+    return False
+
+
+def _root_name(node: ast.expr) -> str | None:
+    """The base variable a dereference chain is rooted in, or None."""
+    while isinstance(node, (ast.Attribute, ast.Subscript)):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
+def reference_alias_targets(
+    tree: ast.Module | None,
+    user_ns: Mapping[str, Any] | None = None,
+) -> frozenset[str]:
+    """Names bound by a pure DEREFERENCE of live state — the CAS-188 half.
+
+    ``b = obj.inner`` / ``b = holder['k']`` / ``b = lst[0]`` / ``b = obj if c
+    else None`` each bind the *same object* that is already reachable through a
+    tracked variable. A cache hit rebinds the target to a deserialised copy, so
+    ``b is obj.inner`` stops holding and a later mutation through ``obj`` is
+    invisible through ``b`` — measured divergence from a ``%cash_off`` kernel on
+    the FIRST warm re-run, surviving a kernel restart.
+
+    Same enforcement as :func:`bare_alias_targets`: the statement still executes
+    and still participates in lineage; only store/restore is refused.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        # The RHS must itself be a DEREFERENCE. Gating on the top-level node type
+        # matters: ``_is_free_reference_expr`` accepts a bare ``Name`` (a valid
+        # base) and a ``Constant`` (a valid ternary arm), but neither can alias
+        # as a whole RHS -- ``b = a`` is bare_alias_targets' job, and ``x = 21``
+        # binds a fresh immutable. Accepting Constant here refused caching for
+        # every plain literal assignment in the suite.
+        if not isinstance(node.value, (ast.Attribute, ast.Subscript, ast.IfExp)):
+            continue
+        if not _is_free_reference_expr(node.value):
+            continue
+        # A MODULE attribute (``v = mod.VERSION``) is not an alias hazard worth
+        # refusing: module-level names are overwhelmingly immutable constants and
+        # functions, so there is no live object whose identity a restore could
+        # break -- and granular module-dependency invalidation relies on these
+        # bindings being cached. Only skip when we can SEE it is a module; with
+        # no namespace we keep the conservative refusal.
+        if user_ns is not None:
+            root = _root_name(node.value)
+            if root is not None and isinstance(user_ns.get(root), types.ModuleType):
+                continue
+        if all(isinstance(t, ast.Name) for t in node.targets):
+            out.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return frozenset(out)
+
+
 def alias_mutation_sources(tree: ast.Module | None) -> frozenset[str]:
     """Upstream variables whose object is mutated in place through an alias (CAS-60).
 
@@ -3053,16 +3160,24 @@ def cacheable_accumulator_loop(
     return acc, tuple(loop_vars), for_node.iter, call
 
 
-def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:
+def analyze_statement(
+    code: str,
+    tree: ast.Module | None,
+    user_ns: Mapping[str, Any] | None = None,
+) -> StatementAnalysis:
     """Return a :class:`StatementAnalysis` for *code* using pure-AST analysis.
 
-    No runtime state, no ``user_ns`` access, no annotation parsing.
+    Analysis is pure AST with one exception: *user_ns*, when supplied, is read
+    ONLY to tell a module apart from an ordinary object, so
+    :func:`reference_alias_targets` can exempt ``v = mod.CONST`` from the alias
+    refusal. Omitting it keeps the conservative refusal.
 
     Args:
         code: Python source code of the statement.
         tree: Optional pre-parsed AST.  When ``None`` the code is parsed
               here; a :class:`SyntaxError` produces an empty analysis
               rather than raising.
+        user_ns: Optional live namespace, used only for the module check above.
     """
     if tree is None:
         try:
@@ -3112,5 +3227,5 @@ def analyze_statement(code: str, tree: ast.Module | None) -> StatementAnalysis:
         side_effects=tuple(se_visitor.effects),
         called_names=frozenset(called),
         accumulator_mutated_vars=accumulator_mutated,
-        alias_targets=bare_alias_targets(tree),
+        alias_targets=bare_alias_targets(tree) | reference_alias_targets(tree, user_ns),
     )

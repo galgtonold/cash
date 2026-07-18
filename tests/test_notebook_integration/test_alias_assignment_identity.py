@@ -274,30 +274,42 @@ def test_chained_and_tuple_alias_forms_keep_identity(nb_runner):
 # ----------------------------------------------------------------------
 
 def test_computed_rhs_still_caches(nb_runner):
-    """The refusal is NARROW: only a bare ``Name`` RHS. Real work still caches.
+    """The refusal stays NARROW: a CALL on the RHS still caches.
 
-    ``b = a.copy()`` / ``b = list(a)`` / ``b = a[0]`` can be arbitrarily
-    expensive, so the cost half of the CAS-184 argument does not transfer and they
-    keep their cache. Without this the rule could quietly grow into "never cache
-    an assignment whose RHS mentions a variable", which would gut the cache.
+    ``b = a.copy()`` / ``c = list(a)`` can be arbitrarily expensive, so the cost
+    half of the CAS-184 argument does not transfer and they keep their cache.
+    This is the anchor that stops the rule quietly growing into "never cache an
+    assignment whose RHS mentions a variable", which would gut the cache.
+
+    NOTE — the boundary moved under CAS-188. This test originally also asserted
+    that ``d = a[0]`` keeps its cache, on the same "can be arbitrarily expensive"
+    reasoning. That reasoning is sound for a call but NOT for a literal-key
+    subscript, which is an O(1) dereference: measured against a ``%cash_off``
+    kernel, ``b = lst[0]`` restored a stale pre-mutation COPY and diverged on the
+    first warm re-run. A deref is free to re-run, so refusing it satisfies BOTH
+    halves of the CAS-184 argument exactly as ``b = a`` does. Literal-key
+    subscripts, attribute chains and ternaries over them are therefore refused
+    now; see ``reference_alias_targets``. Computed-key subscripts (``a[i]``,
+    ``df[mask]``) remain cached — those can be real filters.
     """
     nb_runner.create_notebook([
         SETUP,                                        # 1
         "a = [1, 2, 3]",                              # 2
         "# @cash:persist\nb = a.copy()",              # 3
         "# @cash:persist\nc = list(a)",               # 4
-        "# @cash:persist\nd = a[0]",                  # 5
+        "i = 0",                                      # 5
+        "# @cash:persist\nd = a[i]",                  # 6  computed key -> filter-shaped
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     for rep in range(3):
-        nb_runner.run_cells([3, 4, 5])
-        for cell in (3, 4, 5):
+        nb_runner.run_cells([3, 4, 6])
+        for cell in (3, 4, 6):
             out = nb_runner.get_output(cell)
             assert "Alias assignment" not in out, (
                 f"rep {rep}: computed RHS in cell {cell} wrongly refused as an "
-                f"alias -- the CAS-184 gate is over-broad: {out!r}"
+                f"alias -- the gate is over-broad: {out!r}"
             )
 
 
