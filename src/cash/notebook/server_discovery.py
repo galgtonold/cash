@@ -247,6 +247,28 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
     return None
 
 
+def _kernel_id_from_connection_file(connection_file: str | None) -> str | None:
+    """Return the kernel id from a ``kernel-<id>.json`` connection filename.
+
+    Returns ``None`` — never raises — for any filename that carries no id.
+    Under bare nbclient / papermill / nbconvert the connection file can be a
+    plain ``kernel.json`` with no ``-``, and indexing the split blindly
+    (``.split('-', 1)[1]``) raised an ``IndexError`` that was NOT in the caller's
+    except tuple. It escaped ``get_notebook_path``, disabled caching for the whole
+    run, and printed "Cash auto-caching failed: list index out of range" on EVERY
+    cell instead of cash's intended one-time "notebook not found" disclosure
+    (CAS-205).
+
+    Semantics are otherwise identical to the original expression: split on the
+    FIRST ``-`` (so a UUID's own dashes are preserved) and drop at the first ``.``.
+    """
+    base = os.path.basename(connection_file or "")
+    _, sep, rest = base.partition("-")
+    if not sep:
+        return None
+    return rest.split(".")[0] or None
+
+
 def get_notebook_path() -> str | None:
     """Try to find the path of the current notebook.
 
@@ -291,9 +313,14 @@ def get_notebook_path() -> str | None:
     try:
         import ipykernel
         connection_file = ipykernel.get_connection_file()
-        kernel_id = os.path.basename(connection_file).split('-', 1)[1].split('.')[0]
-    except (ImportError, AttributeError, OSError, RuntimeError):
+        kernel_id = _kernel_id_from_connection_file(connection_file)
+    except (ImportError, AttributeError, OSError, RuntimeError, IndexError, ValueError):
         logger.debug("[UTILS] Failed to get kernel connection file")
+        return _cache_not_found()
+
+    if not kernel_id:
+        # No id in the filename -> nothing to match a server session against.
+        logger.debug("[UTILS] No kernel id in connection file %r", connection_file)
         return _cache_not_found()
 
     if result := _search_servers_for_notebook(kernel_id):
