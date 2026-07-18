@@ -63,7 +63,15 @@ class TestFileBackendEnhanced:
         time.sleep(0.1)
         backend.set("k2", large_val)
         
-        # Access k1 to make it fresh
+        # Access k1 to make it fresh.
+        #
+        # The sleep is load-bearing: without it this get() lands ~0.4ms after
+        # the set("k2") above, and _check_and_evict sorts by last_access with a
+        # STABLE sort. On a clock coarse enough to round both to the same tick
+        # — Windows, especially under CI load — k1 and k2 tie, insertion order
+        # wins, and eviction takes k1 instead of k2. The test then fails as
+        # "k2 should have been evicted" on one job in five, at random.
+        time.sleep(0.1)
         backend.get("k1")
         
         time.sleep(0.1)
