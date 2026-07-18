@@ -33,12 +33,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+from collections.abc import Iterable
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "snapshot_file_deps",
+    "existing_file_deps",
     "split_file_dep_value",
     "file_content_hash",
     "file_dep_is_fresh",
@@ -110,6 +112,24 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
             entry["hash"] = content_hash
         snapshot[f] = entry
     return snapshot
+
+
+def existing_file_deps(paths: Iterable[str]) -> list[str]:
+    """Filter tracked paths down to the ones that actually exist, sorted.
+
+    ``executed_file_deps`` is a strict SUPERSET of the persisted snapshot: the
+    tracker records an access *attempt*, so ``importlib.metadata``'s probes for
+    optional metadata that legitimately does not exist (``entry_points.txt``,
+    ``direct_url.json``, ``pythonXY.zip`` on ``sys.path``) land in it. Those are
+    already correctly ignored for freshness (CAS-185/202), but they leaked into
+    the ``%cash_provenance`` display as 100+ phantom venv paths, making a
+    variable look like it depended on all of site-packages.
+
+    Call this at DISPLAY time only — never per statement. Filtering at record
+    time would put one ``stat`` per tracked path on the hot path to fix what is
+    purely a readability problem.
+    """
+    return sorted({p for p in paths if os.path.exists(p)})
 
 
 def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:

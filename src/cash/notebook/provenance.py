@@ -6,6 +6,12 @@ import json
 import time
 from dataclasses import dataclass, field
 
+from .file_dep_snapshot import existing_file_deps
+
+# Cap the rendered dep list: a long one is unreadable, and the count carries the
+# rest. Applies to the human-readable view only, never the JSON output.
+_MAX_FILE_DEPS_SHOWN = 8
+
 __all__ = ["ProvenanceRecord", "ProvenanceTracker"]
 
 @dataclass
@@ -265,8 +271,16 @@ class ProvenanceTracker:
         lines.append(f"  Code: {latest.code.strip()[:80]}")
         if latest.inputs:
             lines.append(f"  Inputs: {', '.join(latest.inputs)}")
-        if latest.file_deps:
-            lines.append(f"  File deps: {', '.join(latest.file_deps)}")
+        # Only REAL files, and never an unreadable wall of them: the tracked set
+        # is a superset that includes importlib.metadata probes for files that
+        # never existed (CAS-185), which used to render as 100+ phantom venv
+        # entry_points.txt paths — as if the variable depended on site-packages.
+        real_deps = existing_file_deps(latest.file_deps)
+        if real_deps:
+            shown = real_deps[:_MAX_FILE_DEPS_SHOWN]
+            more = len(real_deps) - len(shown)
+            suffix = f" (+{more} more)" if more else ""
+            lines.append(f"  File deps: {', '.join(shown)}{suffix}")
         if latest.duration_ms > 0:
             lines.append(f"  Duration: {latest.duration_ms:.1f}ms")
         lines.append(f"  History: {len(history)} records")

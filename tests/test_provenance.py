@@ -269,3 +269,50 @@ class TestCashProvenanceMagic:
         data = json.loads(output)
         assert len(data) == 1
         assert data[0]["variable"] == "x"
+
+
+class TestFileDepsDisplayHygiene:
+    """Round-8 gate (P2): %cash_provenance dumped 100+ phantom venv
+    entry_points.txt paths into "File deps", so a variable looked like it
+    depended on all of site-packages. Those are importlib.metadata probes for
+    files that never existed — already ignored for freshness (CAS-185), but they
+    leaked into the display."""
+
+    def _tracker(self):
+        from cash.notebook.provenance import ProvenanceTracker
+        return ProvenanceTracker()
+
+    def test_phantom_paths_are_not_displayed(self, tmp_path):
+        real = tmp_path / "sales.csv"
+        real.write_text("a,b\n")
+        phantoms = [str(tmp_path / "venv" / f"pkg{i}" / "entry_points.txt")
+                    for i in range(120)]
+
+        t = self._tracker()
+        t.record(variable="df", code="df = load()", inputs=[], status="COMPUTED",
+                 file_deps=[str(real), *phantoms])
+        out = t.format_provenance("df")
+
+        assert "entry_points.txt" not in out
+        assert "sales.csv" in out
+
+    def test_long_real_dep_list_is_capped_with_a_count(self, tmp_path):
+        paths = []
+        for i in range(25):
+            p = tmp_path / f"f{i}.csv"
+            p.write_text("x")
+            paths.append(str(p))
+
+        t = self._tracker()
+        t.record(variable="v", code="v = 1", inputs=[], status="COMPUTED",
+                 file_deps=paths)
+        out = t.format_provenance("v")
+
+        assert "(+17 more)" in out          # 25 real - 8 shown
+        assert out.count("f0.csv") == 1
+
+    def test_all_phantom_deps_render_no_file_deps_line(self, tmp_path):
+        t = self._tracker()
+        t.record(variable="x", code="x = 1", inputs=[], status="COMPUTED",
+                 file_deps=[str(tmp_path / "nope" / "entry_points.txt")])
+        assert "File deps" not in t.format_provenance("x")
