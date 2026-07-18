@@ -18,6 +18,7 @@ import logging
 import sys
 from typing import Any
 
+from ..compiled_source import is_cash_filename
 from ..annotations import (
     CacheAnnotation,
     get_statement_annotations,
@@ -147,13 +148,15 @@ def tag_control_metrics(
 # ---------------------------------------------------------------------------
 
 def extract_cash_frame_lineno(exc: Exception) -> int | None:
-    """Extract the line number from the ``<cash>`` frame in the traceback.
+    """Extract the line number from the cash-compiled frame in the traceback.
 
-    Returns None if no ``<cash>`` frame is found.
+    Returns None if no cash frame is found. Matches on the ``<cash`` prefix, not
+    a bare ``<cash>``: each statement now compiles under its own
+    ``<cash-{digest}>`` name so its source resolves in linecache (CAS-201).
     """
     tb = getattr(exc, '__traceback__', None)
     while tb is not None:
-        if tb.tb_frame.f_code.co_filename == '<cash>':
+        if is_cash_filename(tb.tb_frame.f_code.co_filename):
             return tb.tb_lineno
         tb = tb.tb_next
     return None

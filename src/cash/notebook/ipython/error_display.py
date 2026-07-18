@@ -14,6 +14,8 @@ import sys
 import traceback as tb_mod
 from typing import TYPE_CHECKING
 
+from ..compiled_source import is_cash_filename
+
 if TYPE_CHECKING:
     from cash.notebook._protocols import ShellProtocol
 
@@ -85,8 +87,8 @@ def show_clean_error(
     if original_tb is not None:
         tb = original_tb
         while tb is not None:
-            if tb.tb_frame.f_code.co_filename == '<cash>':
-                user_inner_tb = tb.tb_next  # frames below <cash>
+            if is_cash_filename(tb.tb_frame.f_code.co_filename):
+                user_inner_tb = tb.tb_next  # frames below the cash-compiled unit
                 break
             tb = tb.tb_next
 

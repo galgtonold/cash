@@ -272,6 +272,7 @@ except ImportError:
 from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
+from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
 from ..cacheability import (
     KNOWN_PURE_METHODS,
@@ -1817,6 +1818,11 @@ class StatementProcessor:
                              # Fallback to standard exec if parse fails (though it shouldn't if compiled worked, but good for safety)
                              tree = None
 
+                    # One linecache-registered filename per statement, so a
+                    # traceback inside a function DEFINED here shows its source
+                    # instead of "<cash>" with no line (CAS-201).
+                    cash_file = register_cell_source(code)
+
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
                          body_nodes = tree.body[:-1]
                          last_node = tree.body[-1]
@@ -1825,13 +1831,13 @@ class StatementProcessor:
                              mod = ast.Module(body=body_nodes, type_ignores=[])
                              # Locations must be fixed for some python versions/ast nodes
                              # but usually parse provides them.
-                             c_body = compile(mod, '<cash>', 'exec')
+                             c_body = compile(mod, cash_file, 'exec')
                              exec(c_body, self.shell.user_ns, self.shell.user_ns)
 
                          expr_val = last_node.value
                          mod_expr = ast.Expression(body=expr_val)
                          ast.fix_missing_locations(mod_expr)
-                         c_expr = compile(mod_expr, '<cash>', 'eval')
+                         c_expr = compile(mod_expr, cash_file, 'eval')
                          result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
 
                          # A trailing ``;`` suppresses the repr in IPython. The
@@ -1842,7 +1848,7 @@ class StatementProcessor:
                              from IPython.display import display
                              display(result_val)
                     else:
-                        compiled_code = compile(code, '<cash>', 'exec')
+                        compiled_code = compile(code, cash_file, 'exec')
                         exec(compiled_code, self.shell.user_ns, self.shell.user_ns)
                         result_val = None
 
@@ -1893,13 +1899,17 @@ class StatementProcessor:
                         except SyntaxError:
                             tree = None
 
+                    # Same per-statement linecache registration as the sync path
+                    # so an await-bearing cell's tracebacks resolve too (CAS-201).
+                    cash_file = register_cell_source(code)
+
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
                         body_nodes = tree.body[:-1]
                         last_node = tree.body[-1]
 
                         if body_nodes:
                             mod = ast.Module(body=body_nodes, type_ignores=[])
-                            c_body = compile(mod, '<cash>', 'exec', flags=_FLAG)
+                            c_body = compile(mod, cash_file, 'exec', flags=_FLAG)
                             coro = eval(c_body, self.shell.user_ns, self.shell.user_ns)
                             if c_body.co_flags & inspect.CO_COROUTINE:
                                 await coro
@@ -1907,7 +1917,7 @@ class StatementProcessor:
                         expr_val = last_node.value
                         mod_expr = ast.Expression(body=expr_val)
                         ast.fix_missing_locations(mod_expr)
-                        c_expr = compile(mod_expr, '<cash>', 'eval', flags=_FLAG)
+                        c_expr = compile(mod_expr, cash_file, 'eval', flags=_FLAG)
                         result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
                         if c_expr.co_flags & inspect.CO_COROUTINE:
                             result_val = await result_val
@@ -1916,7 +1926,7 @@ class StatementProcessor:
                             from IPython.display import display
                             display(result_val)
                     else:
-                        compiled_code = compile(code, '<cash>', 'exec', flags=_FLAG)
+                        compiled_code = compile(code, cash_file, 'exec', flags=_FLAG)
                         coro = eval(compiled_code, self.shell.user_ns, self.shell.user_ns)
                         if compiled_code.co_flags & inspect.CO_COROUTINE:
                             await coro
@@ -2483,7 +2493,7 @@ class StatementProcessor:
         while tb is not None:
             frame = tb.tb_frame
             filename = frame.f_code.co_filename
-            if filename == '<cash>':
+            if is_cash_filename(filename):
                 clean_tb = tb
                 break
             tb = tb.tb_next
