@@ -155,6 +155,20 @@ def safe_text(s: str, *, stream: object | None = None) -> str:
     return "".join(out)
 
 
+def _basename_candidates(stored_path: str) -> list[str]:
+    """Basenames to try for *stored_path*, most-trusted first.
+
+    The host reading comes first so a POSIX file whose name really does
+    contain a backslash still resolves correctly; the separator-agnostic
+    reading is only consulted when that finds nothing.
+    """
+    candidates = [os.path.basename(stored_path)]
+    agnostic = stored_path.replace('\\', '/').rsplit('/', 1)[-1]
+    if agnostic and agnostic not in candidates:
+        candidates.append(agnostic)
+    return [c for c in candidates if c]
+
+
 def resolve_file_dep_path(stored_path: str) -> str | None:
     """Resolve a stored file dependency path, trying fallbacks if it doesn't exist.
 
@@ -172,12 +186,20 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
     if os.path.exists(stored_path):
         return stored_path
 
-    basename = os.path.basename(stored_path)
-
-    # Fallback 1: basename in CWD
-    cwd_candidate = os.path.join(os.getcwd(), basename)
-    if os.path.exists(cwd_candidate):
-        return normalize_path(os.path.realpath(cwd_candidate))
+    # Fallback 1: basename in CWD.
+    #
+    # ``os.path.basename`` only understands the HOST separator, so on POSIX a
+    # path stored on Windows ("C:\\proj\\data.csv") has no recognisable
+    # basename at all and this fallback silently resolves nothing — the exact
+    # cross-platform case this function exists to survive. Fallback 2 below
+    # already normalises separators; this one has to as well.
+    #
+    # Try the host interpretation first: on POSIX a filename may legitimately
+    # contain a backslash, and that reading must keep winning.
+    for basename in _basename_candidates(stored_path):
+        cwd_candidate = os.path.join(os.getcwd(), basename)
+        if os.path.exists(cwd_candidate):
+            return normalize_path(os.path.realpath(cwd_candidate))
 
     # Fallback 2: try progressively longer path suffixes relative to CWD.
     # E.g. stored = "C:/old/root/project/examples/data.csv"
