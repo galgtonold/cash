@@ -95,10 +95,10 @@ model = train_model(X_train, y_train, n_estimators=100)
 
 The decorator caches on the arguments you **pass** and on the function's **body**, so the fitted model comes back from cache when they're unchanged — including after a kernel restart — and re-trains when either differs. The value is a plain return value, so there's no ambiguity about what got cached or which name it lands on.
 
-!!! danger "Pass your hyperparameters — don't put them in default values"
-    The cache key covers the arguments at the call site and the function body. It does **not** cover a parameter's *default value*. Editing `def train_model(..., n_estimators=100)` to `=200` and re-running gives you an instant cache **hit** and the **old 100-tree model**, even though `inspect.signature` now says 200.
+!!! tip "Hyperparameters in default values are keyed too"
+    The cache key covers the arguments at the call site, the function body, **and** each parameter's *default value*. Editing `def train_model(..., n_estimators=100)` to `=200` and re-running re-trains and returns a 200-tree model — the two defaults are distinct cache entries, so reverting to `=100` restores the original from cache rather than re-fitting.
 
-    This is silent, and it is worst exactly where you'd notice it least: sweeping a hyperparameter by editing its default returns identical scores every time, which reads as "accuracy has plateaued" rather than "nothing retrained". Write the value at the call site (as above) and every change re-trains correctly.
+    Passing hyperparameters explicitly at the call site (as above) is still the clearer habit — a sweep reads better when the value is visible where it varies — but relying on a default is not a correctness trap.
 
 !!! warning "A bare `model.fit(X, y)` is **not** cached"
     A statement like `model.fit(X_train, y_train)` mutates `model` in place and returns nothing. Cash does **not** cache it — the badge reads `NOT CACHED` with an *In-place mutation* reason, and the fit re-executes on every run.
