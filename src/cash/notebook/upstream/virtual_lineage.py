@@ -1828,22 +1828,63 @@ class VirtualLineage:
                     return set(), time_module.time() - start_time, 0.0
         return None
 
+    def _lineage_confirmed_vars(
+        self,
+        metadata: dict,
+        file_deps: dict[str, float],
+        expected_lineages: dict[str, str] | None,
+    ) -> frozenset[str]:
+        """Vars whose cached lineage was positively matched against the expected one.
+
+        Only these may have an EMPTY cached value restored over a non-empty
+        in-memory one (CAS-101). A confirmed lineage means the empty value is
+        the correct current result — a filter that legitimately matched nothing
+        — rather than a corrupt or truncated entry.
+
+        The guard condition mirrors ``_check_lineage_consistency`` exactly: when
+        that check does not run (file deps present, or no expected lineages),
+        nothing is confirmed, so the conservative empty-guard below stays in
+        force. Absence of evidence is not treated as evidence.
+        """
+        if file_deps or not expected_lineages or 'output_lineages' not in metadata:
+            return frozenset()
+        cached = metadata['output_lineages']
+        return frozenset(
+            var
+            for var, expected_hash in expected_lineages.items()
+            if cached.get(var) and cached.get(var) == expected_hash
+        )
+
     def _restore_vars_from_cache(
         self,
         variables_to_restore: dict,
         metadata: dict,
+        lineage_confirmed: frozenset[str] = frozenset(),
     ) -> set[str]:
-        """Restore variables into shell namespace.  Returns the set of restored var names."""
+        """Restore variables into shell namespace.  Returns the set of restored var names.
+
+        ``lineage_confirmed`` names the variables whose cached lineage matched
+        the expected one; it defaults to empty so any caller that cannot
+        establish that keeps the conservative behaviour.
+        """
         restored_vars: set[str] = set()
         for var, val in variables_to_restore.items():
-            if var in self.shell.user_ns:
+            if var in self.shell.user_ns and var not in lineage_confirmed:
+                # Refuse to let an empty cached value clobber live data UNLESS
+                # its lineage was confirmed above. Without that confirmation an
+                # empty value is indistinguishable from a corrupt entry, and
+                # overwriting 1000 rows with 0 is the more expensive mistake.
+                # With it, blocking the restore is what costs correctness: the
+                # statement re-executes forever and a legitimately-empty result
+                # can never be served from cache (CAS-101).
                 existing = self.shell.user_ns[var]
                 try:
                     if len(existing) > 0 and len(val) == 0:
                         if self.debug:
                             logger.debug(
                                 "[UPSTREAM] Restore BLOCKED for '%s': cached value is empty "
-                                "but in-memory has %d items. Keeping in-memory value.",
+                                "but in-memory has %d items, and its lineage is unconfirmed. "
+                                "Keeping in-memory value.",
                                 var, len(existing),
                             )
                         continue
@@ -2108,7 +2149,11 @@ class VirtualLineage:
                 # 4. Success! Restore into shell.
                 # Cache stores variables under 'variables' key (see _store_in_cache)
                 variables_to_restore = cached_data.get('variables', {})
-                restored_vars = self._restore_vars_from_cache(variables_to_restore, metadata)
+                restored_vars = self._restore_vars_from_cache(
+                    variables_to_restore,
+                    metadata,
+                    self._lineage_confirmed_vars(metadata, file_deps, expected_lineages),
+                )
                 self._update_tracking_after_restore(restored_vars, metadata, input_hashes)
                 return restored_vars, time_module.time() - start_time, saved_time
 
