@@ -9,6 +9,7 @@ import os
 import pickle
 import threading
 import time
+import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -18,6 +19,56 @@ from ._base import CacheBackend, MetadataDict, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
+
+
+# Every live write queue, grouped by the cache directory it writes into.
+#
+# A cache directory IS the cache; two FileBackend instances pointing at one
+# directory are two views of the same store, not two stores. But each carries
+# its OWN PendingWrites, and ``get()`` only ever waited on its own queue -- so a
+# second instance reading a directory the first was still writing saw a
+# half-populated cache and reported clean misses. In the regression that
+# exposed this, only 2-3 of 19 entries had reached disk when the second
+# instance started reading.
+#
+# WeakSet: a backend that goes out of scope must not keep its queue (or itself)
+# alive, and must stop being waited on.
+_WRITERS_BY_DIR: dict[str, weakref.WeakSet] = {}
+_WRITERS_LOCK = threading.Lock()
+
+
+def _writer_scope(cache_dir: str) -> str:
+    """Normalized identity of a cache directory.
+
+    ``realpath`` so ``/var/...`` and ``/private/var/...`` (the macOS symlink)
+    or a relative path and its absolute form resolve to one scope.
+    """
+    try:
+        return os.path.realpath(cache_dir)
+    except OSError:
+        return os.path.abspath(cache_dir)
+
+
+def _register_writer(cache_dir: str, writes: PendingWrites) -> None:
+    scope = _writer_scope(cache_dir)
+    with _WRITERS_LOCK:
+        bucket = _WRITERS_BY_DIR.get(scope)
+        if bucket is None:
+            bucket = weakref.WeakSet()
+            _WRITERS_BY_DIR[scope] = bucket
+        bucket.add(writes)
+        # Opportunistically drop scopes whose backends have all been collected,
+        # so a long test session doesn't accumulate an entry per temp dir.
+        if len(_WRITERS_BY_DIR) > 64:
+            for dead in [s for s, b in _WRITERS_BY_DIR.items() if not b]:
+                del _WRITERS_BY_DIR[dead]
+
+
+def _sibling_writers(cache_dir: str, own: PendingWrites) -> list[PendingWrites]:
+    """Live write queues over *cache_dir* other than *own*."""
+    with _WRITERS_LOCK:
+        bucket = _WRITERS_BY_DIR.get(_writer_scope(cache_dir))
+        return [w for w in bucket if w is not own] if bucket else []
 
 __all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
 
@@ -78,6 +129,7 @@ class FileBackend(CacheBackend):
         # thread, the actual disk I/O runs in this executor so a slow
         # write doesn't block cell execution.
         self._writes = PendingWrites()
+        _register_writer(self.cache_dir, self._writes)
 
         # Lazy initialization: defer directory creation, stat scanning,
         # and background thread to first actual use.
@@ -264,7 +316,7 @@ class FileBackend(CacheBackend):
         self._ensure_initialized()
         # Wait for any in-flight write for this key so we never return
         # stale-or-missing data when get() races set().
-        self._writes.wait(key)
+        self._wait_for_writes(key)
         # Check memory cache first for metadata
         cached_meta = self._metadata_cache.get(key)
 
@@ -319,7 +371,8 @@ class FileBackend(CacheBackend):
 
             metadata.setdefault('source', self.source_label)
             return metadata, value
-        except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError) as exc:
+        except (OSError, pickle.PickleError, ValueError, AttributeError,
+                ImportError) as exc:
             # AttributeError/ImportError: the pickled value references a
             # binding that doesn't exist in this process (e.g. a __main__
             # class from a previous kernel session, CAS-93). The entry is
@@ -327,6 +380,31 @@ class FileBackend(CacheBackend):
             # instead of crashing the user's cell.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
+
+    def _wait_for_writes(self, key: str) -> None:
+        """Wait for every live write to *key* in this cache directory.
+
+        Own queue first, then any sibling backend's (see ``_WRITERS_BY_DIR``):
+        the durability boundary is the directory, not the instance.
+
+        A background write worker never waits on a sibling. If it did, two
+        backends over one directory could each have their worker blocked on the
+        other's future and deadlock. Workers only ever touch their own queue,
+        which the existing per-key re-entrancy guard already handles.
+
+        Sibling failures are swallowed rather than re-raised: a failed write
+        cleans up its partial files, so the read below simply finds nothing and
+        reports a miss. Surfacing another instance's write error to whoever
+        happens to read next would attribute it to the wrong caller.
+        """
+        self._writes.wait(key)
+        if PendingWrites.in_worker_thread():
+            return
+        for sibling in _sibling_writers(self.cache_dir, self._writes):
+            try:
+                sibling.wait(key)
+            except Exception:  # noqa: BLE001 — see docstring
+                logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
     def _write_cache_files(self, key: str, meta_path: str, data_path: str, metadata: dict, serialized_value: bytes) -> None:
         """Write serialized data and metadata to disk, updating size tracking.
@@ -356,6 +434,14 @@ class FileBackend(CacheBackend):
             metadata['size'] = len(serialized_value)
             logger.debug("Could not stat data file %s; using serialized length", data_path, exc_info=True)
 
+        # NOTE: this write is NOT atomic, so a concurrent reader can still
+        # observe a partial file (see get()'s EOFError exposure). Replacing it
+        # with a temp-file + os.replace DOES fix that, but it also breaks
+        # test_decorator_chain_restores_on_first_call_after_restart on Windows,
+        # deterministically: 6/6 passes without it, 0/6 with it. Whatever the
+        # notebook restore path depends on here, it is not just the bytes.
+        # Left as-is until that is understood rather than traded for a
+        # regression in a headline path.
         with open(meta_path, 'wb') as f:
             pickle.dump(metadata, f)
 
