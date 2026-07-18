@@ -1,9 +1,11 @@
 """Text renderer for the BadgeView IR.
 
 Walks an :class:`InteractiveBadge` tree and produces a plain-text summary
-suitable for ``print()`` output. The text format is intentionally flat
-(no collapsible groups, no HTML chrome) — readers are humans scanning a
-notebook stdout stream.
+suitable for ``print()`` output. The text format carries no chrome — no
+collapsible groups, no per-row drawers — because readers are humans
+scanning a notebook stdout stream. Nesting is conveyed by indentation
+alone: a loop or control nested inside another control body renders its
+rows one step further in.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from ..view import (
     ForLoopGroup,
     InteractiveBadge,
     IterationRow,
+    LoopStatement,
     OverheadBreakdown,
     Section,
     SectionItem,
@@ -113,23 +116,66 @@ def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
     return _row_line(pseudo, is_upstream=is_upstream)
 
 
-def _item_lines(item: SectionItem, *, is_upstream: bool) -> list[str]:
+#: Leaf item types that render as exactly one line at their parent's level.
+#: Anything else is a *group* and gets one extra indent step when it appears
+#: inside a control body or a loop body (CAS-195).
+_LEAF_ITEMS = (StatementRow, ControlGroupSingle)
+
+#: One indent step, matching the two-space lead-in ``_row_line`` already emits.
+_INDENT = "  "
+
+
+def _loop_body(item: ForLoopGroup) -> tuple:
+    """Body of *item* in source order.
+
+    ``ForLoopGroup.body`` interleaves direct :class:`LoopStatement`s with
+    loops/controls nested inside the body, ordered by the runtime's
+    ``body_index_chain``. Older metric sources leave it empty, so fall back
+    to ``stmts + nested`` the same way the HTML renderer does.
+    """
+    return item.body or (tuple(item.stmts) + tuple(item.nested))
+
+
+def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> list[str]:
+    """Lines for *item*, recursing into nested groups.
+
+    A control or loop body may hold further ``ControlGroup`` /
+    ``ControlGroupSingle`` / ``ForLoopGroup`` nodes rather than only flat
+    ``StatementRow``s (``view_builder`` builds ``ControlGroup.rows`` by the
+    same recursive dispatch used at the top level). Dispatch on type at every
+    level; feeding a group to ``_row_line`` raised ``AttributeError``, which
+    escaped into the kernel's message handler and hung the client (CAS-195).
+    """
+    pad = _INDENT * indent
     if isinstance(item, StatementRow):
-        return [_row_line(item, is_upstream=is_upstream)]
+        return [pad + _row_line(item, is_upstream=is_upstream)]
     if isinstance(item, ForLoopGroup):
         out: list[str] = []
-        for ls in item.stmts:
-            for it in ls.iterations:
-                out.append(_iteration_line(it, is_upstream=is_upstream))
+        for sub in _loop_body(item):
+            if isinstance(sub, LoopStatement):
+                out.extend(
+                    pad + _iteration_line(it, is_upstream=is_upstream)
+                    for it in sub.iterations
+                )
+            else:
+                out.extend(
+                    _item_lines(sub, is_upstream=is_upstream, indent=indent + 1)
+                )
         return out
     if isinstance(item, ControlGroup):
-        return [_row_line(r, is_upstream=is_upstream) for r in item.rows]
+        out = []
+        for r in item.rows:
+            step = 0 if isinstance(r, _LEAF_ITEMS) else 1
+            out.extend(
+                _item_lines(r, is_upstream=is_upstream, indent=indent + step)
+            )
+        return out
     if isinstance(item, ControlGroupSingle):
-        return [_row_line(item.row, is_upstream=is_upstream)]
+        return [pad + _row_line(item.row, is_upstream=is_upstream)]
     if isinstance(item, SkippedBucket):
         out = []
         for sub in item.items:
-            out.extend(_item_lines(sub, is_upstream=is_upstream))
+            out.extend(_item_lines(sub, is_upstream=is_upstream, indent=indent))
         return out
     if isinstance(item, OverheadBreakdown | DecoratorCallGroup):
         return []  # rendered separately
@@ -156,18 +202,29 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
 
 
 def _iter_rows(item: SectionItem):
-    """Yield every StatementRow reachable under *item*."""
+    """Yield every StatementRow reachable under *item*.
+
+    Recurses through nested groups: ``ControlGroup.rows`` may hold further
+    groups rather than bare ``StatementRow``s, and the callers below read
+    ``.skipped_reason`` off whatever this yields (CAS-195).
+    """
     if isinstance(item, StatementRow):
         yield item
     elif isinstance(item, ControlGroup):
-        yield from item.rows
+        for r in item.rows:
+            yield from _iter_rows(r)
     elif isinstance(item, ControlGroupSingle):
         yield item.row
     elif isinstance(item, SkippedBucket):
         for sub in item.items:
             yield from _iter_rows(sub)
-    # ForLoopGroup holds IterationRows, not StatementRows, and the guard
-    # attaches its reason to statements — nothing to count there.
+    elif isinstance(item, ForLoopGroup):
+        # A loop's own body statements are IterationRows, which carry no
+        # skipped_reason — but a control nested in the body does hold real
+        # StatementRows, so descend into the non-LoopStatement children only.
+        for sub in _loop_body(item):
+            if not isinstance(sub, LoopStatement):
+                yield from _iter_rows(sub)
 
 
 def _guard_summary_lines(badge: InteractiveBadge) -> list[str]:
