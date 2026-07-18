@@ -81,6 +81,7 @@ All of these are keyword-only and optional.
 | `chunk_max_items=` / `chunk_max_bytes=` | For iterator returns, chunk thresholds (1M items / 1 GB default) |
 | `strict=` | Raise `CashImpureFunctionError` at first call if purity analyzer finds issues |
 | `assume_safe=` | Silence the purity warning; you've audited and know caching is safe |
+| `allow_random=` | Silence the unseeded-randomness warning; you know the result is frozen |
 
 Mutually exclusive: `strict` and `assume_safe` — pass both and the
 decorator raises `ValueError` immediately.
@@ -211,6 +212,52 @@ Three modes:
 See [Purity tutorial](tutorials/feature-guides/purity-decorators.md) for the full story including
 `@pure`, `@stateful`, and `mark_pure`/`mark_stateful` for third-party
 callables.
+
+### `allow_random=` — unseeded randomness
+
+At decoration time, `@cash.cache` scans the function's source for draws
+from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
+
+```python
+@cash.cache
+def sample():
+    return np.random.randn()      # no seed anywhere
+# CashRandomnessWarning: Unseeded randomness detected: numpy.random.randn()
+```
+
+The warning matters because the first call's value is cached and
+replayed forever — later calls never consult the RNG again, so the
+"random" number is frozen, and it won't survive a cleared cache either.
+
+This is the same detector the notebook path uses, so both paths agree on
+what counts as unseeded. Two ways to make it silent:
+
+- **Seed the RNG** — `np.random.seed(0)`, `random.seed(0)`, or
+  `np.random.default_rng(42)`. A seeded draw is reproducible, so no
+  warning fires. This is the real fix.
+- **`allow_random=True`** — acknowledge the freeze and move on.
+
+```python
+@cash.cache(allow_random=True)
+def jitter():
+    return np.random.randn()
+```
+
+The notebook's [`# @cash:allow-random`](annotations.md#cashallow-random-alias-allowrandom)
+comment is also honoured inside a decorated function's body.
+
+!!! note
+    `allow_random` suppresses a *warning*. It does **not** stop the
+    caching — the value is still frozen. Use
+    [`cache_if=`](#cache_if--skip-caching-by-result) or drop the
+    decorator if you want a fresh draw every call.
+
+Detection is source-based and runs **once per function at decoration
+time**, so cached calls pay nothing for it. Two consequences: a function
+with no retrievable source (defined via `exec`, or in a bare REPL) is
+not scanned, and randomness *inside* a compiled library call — an
+unseeded `estimator.fit()`, for example — is invisible to it. Pass an
+explicit `random_state=` to such estimators.
 
 ### `chunk_max_items=` / `chunk_max_bytes=` — iterator chunking
 

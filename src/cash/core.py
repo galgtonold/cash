@@ -43,6 +43,17 @@ from .exceptions import (
 )
 from .graph import DependencyGraph
 from .notebook.analysis import CodeAnalyzer
+# The decorator path reuses the notebook path's randomness detector verbatim
+# (CAS-158) so the two cannot diverge on what counts as an unseeded draw.
+# Imported from the submodule directly, like CodeAnalyzer above, to sidestep
+# ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
+# depends on ``..exceptions``, so there is no cycle.
+from .notebook.annotations import parse_annotation_line
+from .notebook.randomness import (
+    CashRandomnessWarning,
+    RandomnessDetector,
+    describe_random_call,
+)
 from .purity_analyzer import PurityReport, get_analyzer
 
 # Configure Logging
@@ -705,6 +716,7 @@ class Cash:
         chunk_max_bytes: int = ...,
         strict: bool = ...,
         assume_safe: bool = ...,
+        allow_random: bool = ...,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
     def cache(
@@ -720,6 +732,7 @@ class Cash:
         chunk_max_bytes: int = 1_000_000_000,
         strict: bool = False,
         assume_safe: bool = False,
+        allow_random: bool = False,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
         """Decorator to cache a function's return value.
 
@@ -790,6 +803,20 @@ class Cash:
                 analyzer still runs because it captures helper
                 source hashes for cache invalidation. Mutually
                 exclusive with ``strict``.
+            allow_random: When ``True``, suppress the one-shot
+                `CashRandomnessWarning` raised at decoration time
+                if the function's source draws from an unseeded RNG
+                (``np.random.randn()``, ``random.random()``,
+                ``np.random.default_rng()`` with no seed, ...).
+                The decorator-path counterpart of the notebook's
+                ``# @cash:allow-random``; that comment is also
+                honoured when it appears in the decorated
+                function's own source. Suppresses only the
+                *warning* - it does not change whether the result
+                is cached, and the first call's value is still
+                frozen and replayed. Seeding the RNG silences the
+                warning on its own, because a seeded draw is
+                reproducible.
 
         Returns:
             The decorated function with caching behavior.
@@ -812,7 +839,7 @@ class Cash:
                 f, depends_on=depends_on, dynamic_depends_on=dynamic_depends_on,
                 file_depends_on=file_depends_on, ttl=ttl, cache_if=cache_if,
                 chunk_max_items=chunk_max_items, chunk_max_bytes=chunk_max_bytes,
-                strict=strict, assume_safe=assume_safe,
+                strict=strict, assume_safe=assume_safe, allow_random=allow_random,
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
@@ -833,6 +860,13 @@ class Cash:
                 stacklevel=3,
             )
             return func
+
+        # Unseeded-randomness check (CAS-158). Deliberately here and not in the
+        # wrapper: it is a pure function of the source, so it runs ONCE per
+        # decorated function and adds nothing to the per-call path. Placed after
+        # the async-generator early return because that path is not cached at
+        # all, and the hazard being warned about is a frozen cached value.
+        self._warn_unseeded_randomness(func, func_name, allow_random)
 
         if inspect.iscoroutinefunction(func):
             wrapper = self._make_async_wrapper(
@@ -3088,6 +3122,100 @@ class Cash:
             f"concurrent calls with the same args may compute redundantly. "
             f"Investigate the backend (disk full, permissions, broken lockfile?).",
             stacklevel=stacklevel,
+        )
+
+    def _warn_unseeded_randomness(
+        self,
+        func: Callable,
+        func_name: str,
+        allow_random: bool,
+    ) -> None:
+        """Warn once if *func*'s source draws from an unseeded RNG (CAS-158).
+
+        The decorator used to be completely silent here while the notebook path
+        warned, so ``@cash.cache`` would freeze a non-deterministic result
+        forever with nothing on screen to say so. The two paths now share ONE
+        detector — :class:`~cash.notebook.randomness.RandomnessDetector`, reused
+        verbatim — so "what counts as unseeded" cannot drift between them.
+
+        Runs at DECORATION time, once per function. The analysis is a pure
+        function of the source, so there is no reason to pay for it per call,
+        and ``cache()`` already reads the source anyway (``_register_func`` ->
+        ``get_source_hash``), which warms ``linecache`` for us.
+
+        A fresh detector is used per function rather than one shared across the
+        instance. The detector's seed-tracking is *session*-scoped, which is
+        right for a notebook (cells run top-to-bottom in one namespace) but
+        wrong here: decoration order is not call order, so letting a
+        ``np.random.seed(0)`` inside function A silence function B would be
+        unsound. Per-function analysis keeps the verdict a property of the
+        source we are actually looking at.
+
+        Silent when:
+
+        * ``allow_random=True``, or the notebook's ``# @cash:allow-random``
+          appears in the function's own source (same directive vocabulary,
+          parsed by the same ``parse_annotation_line``);
+        * the RNG is seeded — the whole point, and the reason a seeded draw
+          must not be flagged;
+        * the source cannot be read (``exec``/REPL-defined functions). The
+          purity analyzer has the identical blind spot and treats it the same
+          way: no source, no claim.
+        """
+        if allow_random:
+            return
+
+        try:
+            src_lines, first_lineno = inspect.getsourcelines(func)
+        except (OSError, TypeError):
+            # No retrievable source (exec'd, REPL, C function). Staying silent
+            # is the conservative choice: we cannot see a draw, so we cannot
+            # honestly claim there is one.
+            return
+        src = textwrap.dedent("".join(src_lines))
+
+        # Honour the notebook's in-source opt-out too. Users coming from
+        # ``%cash_on`` reach for the comment, and the source is already in hand.
+        for line in src.splitlines():
+            ann = parse_annotation_line(line)
+            if ann is not None and ann.allow_random:
+                return
+
+        try:
+            unseeded, _messages, _has_seed = RandomnessDetector().analyze_code(src)
+        except Exception:  # pragma: no cover - detector must never break caching
+            logger.debug("randomness scan failed for %s", func_name, exc_info=True)
+            return
+
+        if not unseeded:
+            return
+
+        call = unseeded[0]
+        extra = ""
+        if len(unseeded) > 1:
+            extra = f" (+{len(unseeded) - 1} more unseeded call(s) in this function)"
+        # ``call.lineno`` is relative to the source we handed the detector, which
+        # starts at the function's first line. Rebase it onto the file so the
+        # number in the message matches what the user's editor shows.
+        # ``getsourcelines`` returns 0 for sources it cannot place; keep the
+        # relative number rather than reporting a nonsense negative line.
+        abs_lineno = call.lineno + first_lineno - 1 if first_lineno else call.lineno
+
+        # ASCII only: this lands in a terminal whose codepage may not be UTF-8.
+        message = (
+            f"@cash.cache on {func_name}: Unseeded randomness detected: "
+            f"{describe_random_call(call)} at line {abs_lineno}{extra}. "
+            f"The first call's result is cached and replayed on every later "
+            f"call - the RNG is never consulted again, so the value is frozen "
+            f"and not reproducible across a cleared cache. Seed the RNG, or "
+            f"pass @cash.cache(allow_random=True) to suppress this warning."
+        )
+        # ``_warn_once`` keys on (category, func_name, "") -> one warning per
+        # decorated function for the life of this Cash instance, and it also
+        # files the message into ``f.cache_info()['warnings']`` so it stays
+        # discoverable if the user missed the stderr emission.
+        self._warn_once(
+            CashRandomnessWarning, func_name, "", message, stacklevel=3,
         )
 
     def _warn_once(
