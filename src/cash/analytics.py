@@ -22,6 +22,13 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Sanity cap on the telemetry db file. An events log this large is runaway
+# growth or a corrupt/garbage file (CAS-203 saw a 2.8 GB SQLITE_NOTADB file that
+# made every ``import cash`` print an error). Analytics is best-effort
+# observability, so a file over the cap is dropped and recreated rather than
+# carried forever.
+_MAX_DB_BYTES = 64 * 1024 * 1024  # 64 MiB
+
 # Live managers whose in-memory buffers may still hold un-persisted events.
 # Tracked *weakly* so this module can drain them on a clean interpreter/kernel
 # shutdown via an ``atexit`` hook WITHOUT keeping the managers alive — a strong
@@ -76,6 +83,10 @@ class AnalyticsManager:
         self.session_id = str(uuid.uuid4())
         self._event_buffer: list[tuple] = []
         self._flush_threshold = 50  # Flush every 50 events
+        # Set True only if the db cannot be created even after a recreate
+        # (read-only dir, disk full). Analytics then no-ops for the session
+        # rather than retrying a doomed connect on every event (CAS-203).
+        self._disabled = False
         self._init_db()
         # Register for the clean-shutdown drain (see ``_live_managers`` above).
         # Weak reference only, so this never blocks garbage collection.
@@ -89,31 +100,73 @@ class AnalyticsManager:
             self.flush()
 
     def _init_db(self) -> None:
-        """Initialize the database schema if it doesn't exist."""
+        """Create the schema, self-healing an unreadable or runaway db.
+
+        Analytics is best-effort observability (CAS-149), never correctness, so
+        a pre-existing db that cannot be opened — corrupt pages, a truncated
+        write, a non-sqlite or oversized file — must NEVER surface a raw sqlite
+        error to the user on every ``import cash`` (CAS-203, which saw a 2.8 GB
+        ``SQLITE_NOTADB`` file warn forever). The recovery ladder:
+
+          1. Drop a file over ``_MAX_DB_BYTES`` up front (runaway / bloat).
+          2. Try to create the schema.
+          3. On any sqlite error (corrupt / not-a-db), unlink and recreate ONCE.
+          4. If that still fails, disable analytics silently for the session.
+
+        Every failure logs at ``debug`` — a first-time user must not see an
+        alarming error for a telemetry subsystem that changes no cached result.
+        """
+        # (1) A file over the sanity cap is corruption or runaway growth; drop
+        # it rather than carry a multi-GB/garbage file forever.
+        with contextlib.suppress(OSError):
+            if Path(self.db_path).stat().st_size > _MAX_DB_BYTES:
+                logger.debug("Analytics db %s exceeds %d bytes; recreating",
+                             self.db_path, _MAX_DB_BYTES)
+                Path(self.db_path).unlink()
+
+        try:  # (2)
+            self._create_schema()
+            return
+        except sqlite3.Error as e:  # (3)
+            logger.debug("Analytics db at %s is unreadable (%s); recreating",
+                         self.db_path, e)
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                    CREATE TABLE IF NOT EXISTS events (
-                        id INTEGER PRIMARY KEY AUTOINCREMENT,
-                        session_id TEXT NOT NULL,
-                        timestamp REAL NOT NULL,
-                        status TEXT NOT NULL,
-                        execution_time REAL,
-                        saved_time REAL,
-                        code_hash TEXT
-                    )
-                """)
-                # Index for faster queries
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_session_id ON events (session_id)
-                """)
-                cursor.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_timestamp ON events (timestamp)
-                """)
-                conn.commit()
-        except sqlite3.Error as e:
-            logger.warning("Failed to initialize analytics database: %s", e)
+            with contextlib.suppress(FileNotFoundError):
+                Path(self.db_path).unlink()
+            self._create_schema()
+        except (sqlite3.Error, OSError) as e:  # (4)
+            logger.debug("Analytics disabled this session (db init failed: %s)", e)
+            self._disabled = True
+
+    def _create_schema(self) -> None:
+        """Create the events table + indexes (idempotent). Raises on a db that
+        cannot be opened; the caller (:meth:`_init_db`) owns recovery.
+
+        The connection is CLOSED even on failure (``contextlib.closing``): a
+        ``sqlite3.connect`` context manager only manages the transaction, not the
+        handle, and on Windows a still-open handle to the corrupt file would
+        block :meth:`_init_db`'s ``unlink`` recovery (CAS-203)."""
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT NOT NULL,
+                    timestamp REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    execution_time REAL,
+                    saved_time REAL,
+                    code_hash TEXT
+                )
+            """)
+            # Index for faster queries
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_session_id ON events (session_id)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_timestamp ON events (timestamp)
+            """)
+            conn.commit()
 
     def record_event(self,
                     status: str,
@@ -133,6 +186,10 @@ class AnalyticsManager:
             saved_time: Time saved by using cache (for hits)
             code_hash: Optional hash of the code executed
         """
+        if self._disabled:
+            # No writable db this session (CAS-203); drop telemetry instead of
+            # growing an in-memory buffer that can never flush.
+            return
         self._event_buffer.append((
             self.session_id,
             time.time(),

@@ -1,6 +1,8 @@
 """Tests for the AnalyticsManager (analytics.py)."""
+import logging
 import os
-from cash.analytics import AnalyticsManager
+
+from cash.analytics import _MAX_DB_BYTES, AnalyticsManager
 
 
 class TestAnalyticsManager:
@@ -110,3 +112,57 @@ class TestAnalyticsManager:
         db_path = str(tmp_path / "subdir" / "deep" / "analytics.db")
         AnalyticsManager(db_path=db_path)
         assert os.path.exists(db_path)
+
+
+class TestCorruptDbSelfHeal:
+    """CAS-203: a corrupt / oversized analytics db must self-heal silently, not
+    surface a raw sqlite error to the user on every ``import cash``."""
+
+    def test_corrupt_db_is_recreated_not_warned(self, tmp_path, caplog):
+        """A non-sqlite / corrupt file at db_path is dropped + recreated once,
+        and NO user-facing warning is logged (analytics is best-effort)."""
+        db_path = tmp_path / "analytics.db"
+        # A valid SQLite header followed by garbage -> SQLITE_NOTADB on read,
+        # exactly the 2.8 GB file CAS-203 saw (just small).
+        db_path.write_bytes(b"SQLite format 3\x00" + b"\xde\xad\xbe\xef" * 4096)
+
+        with caplog.at_level(logging.WARNING, logger="cash.analytics"):
+            am = AnalyticsManager(db_path=str(db_path))
+            # It recovered: recording + querying works on the recreated db.
+            am.record_event("HIT", 0.001, saved_time=1.5)
+            stats = am.get_session_stats()
+
+        assert stats["total_events"] == 1
+        assert am._disabled is False
+        # The whole point of CAS-203: no WARNING (or worse) reaches the user.
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []
+
+    def test_oversized_db_is_recreated(self, tmp_path):
+        """A db file over the sanity cap (runaway growth / bloat) is dropped and
+        recreated small, rather than carried forever."""
+        db_path = tmp_path / "analytics.db"
+        # Sparse-ish oversized file, one byte past the cap.
+        with open(db_path, "wb") as fh:
+            fh.seek(_MAX_DB_BYTES + 1)
+            fh.write(b"\x00")
+        assert db_path.stat().st_size > _MAX_DB_BYTES
+
+        am = AnalyticsManager(db_path=str(db_path))
+        am.record_event("MISS", 1.0)
+        assert am.get_session_stats()["total_events"] == 1
+        # Recreated as a real (small) sqlite db, well under the cap.
+        assert db_path.stat().st_size < _MAX_DB_BYTES
+
+    def test_healthy_db_across_two_managers(self, tmp_path, caplog):
+        """The double-init that printed the warning twice (two managers on one
+        db) is clean once the first recreates a corrupt file."""
+        db_path = tmp_path / "analytics.db"
+        db_path.write_bytes(b"not a database at all")
+
+        with caplog.at_level(logging.WARNING, logger="cash.analytics"):
+            AnalyticsManager(db_path=str(db_path))   # heals it
+            am2 = AnalyticsManager(db_path=str(db_path))  # opens the healed db
+            am2.record_event("HIT", 0.001)
+
+        assert am2.get_session_stats()["total_events"] == 1
+        assert [r for r in caplog.records if r.levelno >= logging.WARNING] == []

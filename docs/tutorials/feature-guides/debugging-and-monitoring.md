@@ -175,6 +175,15 @@ cash inspect ./.cash
 
 The output lists the five biggest recent entries with sizes. If a single statement is responsible for most of the size, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
+!!! note "The `~/.cash/analytics.db` telemetry file"
+    Separate from the project-local `./.cash/` cache, Cash keeps a small global
+    SQLite file at `~/.cash/analytics.db` recording per-session hit/miss/timing
+    events (this is what `%cash_stats` reads). It is **best-effort observability,
+    never correctness** — deleting it is always safe and loses only telemetry, no
+    cached results. Cash recreates it automatically if it is missing, corrupt, or
+    oversized, so you should never see an error about it; if you want to reset the
+    telemetry, just delete the file.
+
 ## Cache management — export, import, clear
 
 When diagnosis is done and you need to *act*, four notebook magics and one CLI command cover the lifecycle:
