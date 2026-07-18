@@ -105,15 +105,29 @@ class TestCostModelFieldsPopulated:
 
 class TestCostModelFieldsAbsentOnFloorExit:
     """test_cost_model_fields_absent_on_floor_exit:
-    A trivially cheap statement short-circuits via the 10 ms floor —
-    no metadata entry is written and the four cost-model fields must
-    not appear on ProcessResult.
+    A statement whose measured execution time falls under the floor
+    short-circuits — no metadata entry is written and the four
+    cost-model fields must not appear on ProcessResult.
     """
 
     def test_cost_model_fields_absent_on_floor_exit(self, processor):
-        """a = 1 is below the 10 ms floor; backend stays empty; fields absent."""
-        # Use the default floor (10 ms).  The assignment 'a = 1' executes in
-        # microseconds and must not produce a cache entry.
+        """A pinned floor guarantees the short-circuit; backend stays empty; fields absent."""
+        # The floor compares MEASURED wall-clock execution_time against
+        # min_execution_time_to_cache_seconds, so trusting `a = 1` to land under
+        # the 10 ms default makes this a race against the machine, not a test of
+        # the floor. On a contended runner (macos-latest gives 3 vCPUs while
+        # addopts pins -n 16) the measured time for this statement has been seen
+        # at 74 ms: the floor correctly declines to call that "too cheap", the
+        # cost-model fields appear, and the test fails having found nothing
+        # wrong. Pin the floor above any plausible scheduling stall so the
+        # short-circuit is what is actually under test.
+        #
+        # Mutating the real config rather than swapping in a MagicMock (as the
+        # siblings above do) is deliberate: `persist_all` is snapshotted into
+        # the processor during __init__, so a truthy MagicMock attribute would
+        # set force_persist and bypass this guard entirely.
+        processor.cash_instance.config.min_execution_time_to_cache_seconds = 3600.0
+
         result = processor.process_statement("a = 1")
 
         for key in _COST_MODEL_KEYS:

@@ -32,9 +32,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       
+      # `-n auto` overrides the `-n 16` in pyproject's addopts, which is tuned
+      # for a 32-thread dev box. Hosted runners have 3-4 vCPUs, so 16 workers is
+      # a 4-5x oversubscription that stalls timed sections and turns wall-clock
+      # heuristics into coin flips — it is what made the cost-model floor test
+      # fail only on the 3-vCPU macOS runner.
       - name: Run unit tests
         run: |
-          pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_bench_eval.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config_unified.py tests/test_backend_enhancements.py --tb=short -q
+          pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_bench_eval.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config_unified.py tests/test_backend_enhancements.py -n auto --tb=short -q
 
       # Curated subset of the notebook integration suite — the headline-feature
       # tests (basic flow, restore-after-restart, file invalidation, decorator
@@ -52,7 +57,7 @@ jobs:
             tests/test_notebook_integration/test_badge_integration.py \
             tests/test_notebook_integration/test_forward_probe_upstream_skip.py \
             tests/test_notebook_integration/test_file_dep_path_fallback.py \
-            --tb=short -q
+            -n auto --tb=short -q
         timeout-minutes: 10
 
   lint:
@@ -90,10 +95,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `docs-test` carries the third-party packages doc examples import. The
+      # autouse fixtures in tests/docs/conftest.py stub them by monkeypatching
+      # the real module, so it has to be importable or the fixture no-ops and
+      # the page dies on the import instead.
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,docs-test]"
 
       - name: Run docs feature-parity tests
-        run: pytest tests/docs/ -v --tb=short
+        run: pytest tests/docs/ -n auto -v --tb=short

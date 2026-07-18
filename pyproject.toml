@@ -103,6 +103,19 @@ docs = [
     "mkdocstrings[python]>=0.24",
     "mkdocs-mermaid2-plugin>=1.2",
 ]
+# Third-party packages that documentation pages import in their examples.
+# tests/docs/ EXECUTES those pages, and its autouse fixtures stub the network
+# and backend calls by monkeypatching the real module — so the module has to be
+# importable for the stub to have anything to patch. When it is absent the
+# fixture no-ops and the page dies on the real import instead, which is how the
+# docs-parity job read as four broken pages when nothing was wrong with them.
+# Everything else the docs touch (openai, httpx, boto3, sklearn, polars, ...)
+# is injected as a fake module and needs no install.
+docs-test = [
+    "aiohttp>=3.9",
+    "redis>=4.0,<6",
+    "fakeredis>=2.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-subtests",

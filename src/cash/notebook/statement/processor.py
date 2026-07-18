@@ -2404,10 +2404,16 @@ class StatementProcessor:
             min_exec_time = _config_float(
                 config_obj, 'min_execution_time_to_cache_seconds', 0.01
             )
-            # On Windows, time.perf_counter() can report exactly 0.0 for
-            # genuinely instantaneous statements (a = 1) because the timer
-            # resolution is coarser than the operation. Treat 0 the same
-            # as "below the floor" — both mean "too cheap to cache".
+            # ``execution_time`` is wall clock (``time.time()``), not CPU time,
+            # so it charges the statement for any scheduling stall too. On
+            # Windows the clock can report exactly 0.0 for a genuinely
+            # instantaneous statement (a = 1) because its resolution is coarser
+            # than the operation; treat 0 the same as "below the floor" — both
+            # mean "too cheap to cache". The converse also holds: on a heavily
+            # contended machine a trivial statement can measure tens of ms and
+            # legitimately clear the floor, so nothing may assume this branch is
+            # taken for a given statement (see the floor-exit test, which pins
+            # the threshold rather than trusting the machine to be fast).
             if execution_time < min_exec_time:
                 if self.debug:
                     logger.debug(
