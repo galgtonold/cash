@@ -737,6 +737,10 @@ class NotebookTestRunner:
         self._loop = None
         self._run_async = None
     
+    # Whether start_kernel() injected __vsc_ipynb_file__; restart() mirrors it so
+    # a no-path run stays a no-path run across a restart.
+    _inject_path: bool = True
+
     def load(self, notebook_path: Union[str, Path]) -> 'NotebookTestRunner':
         """
         Load a notebook by copying it to the work directory.
@@ -774,14 +778,37 @@ class NotebookTestRunner:
         with open(self.nb_path, 'w', encoding='utf-8') as f:
             nbformat.write(self.nb, f)
     
-    def start_kernel(self, with_cash: bool = True) -> 'NotebookTestRunner':
+    def start_kernel(
+        self,
+        with_cash: bool = True,
+        inject_notebook_path: bool = True,
+    ) -> 'NotebookTestRunner':
         """
         Start the kernel and optionally initialize cash.
-        
+
         If using the kernel pool, cash is already pre-initialized in pooled kernels.
+
+        Args:
+            with_cash: install cash + ``%cash_on``. NOTE this records INTENT, not
+                outcome — warm-kernel reuse and the kernel pool can both hand back
+                a kernel that already has cash installed. If your test's
+                conclusion depends on an arm really being cash-off, call
+                :meth:`assert_cash_active` rather than trusting this flag: a
+                cash-ON "control" reports the same warm-count as a genuine hit.
+            inject_notebook_path: define ``__vsc_ipynb_file__`` so cash can
+                resolve the notebook. Defaults True because upstream tracking
+                needs it — but that default is also a BLIND SPOT: real
+                papermill / nbconvert runs have no such variable, and because the
+                suite always injected it, cash's no-path branch was never
+                exercised and shipped an uncaught IndexError that disabled
+                caching and printed an internal error on every cell (CAS-205).
+                Pass False to test that environment.
         """
         if self.nb is None:
             raise ValueError("No notebook loaded. Call load() or create_notebook() first.")
+
+        # Remembered so restart() re-injects (or keeps NOT injecting) to match.
+        self._inject_path = inject_notebook_path
         
         self.client = NotebookClient(
             self.nb,
@@ -795,8 +822,11 @@ class NotebookTestRunner:
         # Warm-kernel reuse (opt-in). Only for the common with_cash=True path;
         # with_cash=False tests want a bare kernel with no cash hooks installed,
         # which a persistent warm kernel can't provide, so they fall through to a
-        # fresh boot below.
-        if _REUSE_KERNEL and with_cash:
+        # fresh boot below. Likewise skipped when the caller asked for NO path
+        # injection: prepare_for_test() always defines __vsc_ipynb_file__, which
+        # would silently defeat the no-path environment the test is trying to
+        # reproduce (CAS-205).
+        if _REUSE_KERNEL and with_cash and inject_notebook_path:
             wk = _get_warm_kernel(self.kernel_name)
             self._warm = wk
             # Drive ALL kernel I/O on the warm kernel's own loop so the async
@@ -834,7 +864,8 @@ class NotebookTestRunner:
         
         # Inject notebook path so cash can find the notebook file
         # This is required for upstream detection to work
-        self._inject_notebook_path()
+        if inject_notebook_path:
+            self._inject_notebook_path()
         
         # Only init cash if requested AND not already initialized in pooled kernel
         if with_cash and not cash_already_initialized:
@@ -889,9 +920,78 @@ class NotebookTestRunner:
             f"kernel failed to boot after 3 attempts: {last_exc!r}"
         ) from last_exc
     
+    def probe_cash_active(self) -> bool:
+        """Whether cash auto-caching is ACTUALLY live in the kernel right now.
+
+        OBSERVED by asking the kernel, never inferred from the ``with_cash``
+        argument. That distinction is the whole point: ``start_kernel`` records
+        intent, but warm-kernel reuse and the kernel pool can both hand back a
+        kernel with cash already installed, so a test that *asked* for
+        ``with_cash=False`` may still be running cash-ON. When that happens the
+        control arm reports ``warm == 0`` -- byte-identical to a genuine cache
+        hit -- so the comparison silently proves nothing. Assert on this in any
+        test whose conclusion depends on an arm really being cash-off.
+        """
+        probe = (
+            "try:\n"
+            "    _ip = get_ipython()\n"
+            "    _lm = _ip.magics_manager.magics.get('line', {})\n"
+            "    _loaded = 'cash_on' in _lm\n"
+            "    _mag = getattr(_ip, '_cash_magics_instance', None)\n"
+            "    _auto = bool(getattr(_mag, '_auto_cache_enabled', False)) if _mag else None\n"
+            "    _on = bool(_loaded) if _auto is None else bool(_auto)\n"
+            "except Exception:\n"
+            "    _on = False\n"
+            "print('CASH_ACTIVE=' + ('1' if _on else '0'))"
+        )
+        seen = []
+
+        def _hook(msg):
+            if msg['msg_type'] == 'stream':
+                seen.append(msg['content'].get('text', ''))
+
+        self._run_async(
+            self.client.kc._async_execute_interactive(
+                probe, store_history=False, output_hook=_hook,
+            )
+        )
+        return 'CASH_ACTIVE=1' in ''.join(seen)
+
+    def assert_cash_active(self, expected: bool) -> 'NotebookTestRunner':
+        """Fail loudly if the kernel's real cash state isn't *expected*.
+
+        Use this to validate a control arm BEFORE trusting its numbers.
+        """
+        actual = self.probe_cash_active()
+        if actual is not expected:
+            raise AssertionError(
+                f"cash is {'ON' if actual else 'OFF'} in the kernel but the test "
+                f"expected {'ON' if expected else 'OFF'}. A cash-ON 'control' "
+                f"reports the same warm-count as a genuine cache hit, so any "
+                f"comparison built on it is meaningless. If you wanted a bare "
+                f"kernel, pass start_kernel(with_cash=False)."
+            )
+        return self
+
+    def restart(self) -> 'NotebookTestRunner':
+        """Restart the kernel in place, preserving the runner's wiring.
+
+        Restart behaviour is a whole class of bug the suite was blind to
+        (CAS-190): nb_runner shipped no restart, so every test that needed one
+        hand-rolled ``km._async_restart_kernel`` -- 9 copies across the suite,
+        each free to get the re-injection wrong. Re-injects the notebook path
+        afterwards ONLY if this runner was started with injection, so a
+        no-path run stays a no-path run across the restart.
+        """
+        self._run_async(self.client.km._async_restart_kernel(now=True))
+        self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
+        if self._inject_path:
+            self._inject_notebook_path()
+        return self
+
     def _inject_notebook_path(self) -> None:
         """Inject the notebook path into the kernel namespace.
-        
+
         This allows cash's get_notebook_path() to find the notebook file,
         which is required for upstream detection to work correctly.
         """
