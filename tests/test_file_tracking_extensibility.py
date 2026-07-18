@@ -18,7 +18,11 @@ class TestFileTrackingExtensibility(unittest.TestCase):
         # Test helpers
         with tempfile.NamedTemporaryFile(delete=False, mode='w+') as tf:
             tf.write("data")
-            self.temp_path = tf.name.replace(os.sep, '/')
+            # Canonical form — see the note in test_file_tracking.py: the CI
+            # runners' temp dirs are spelled non-canonically (macOS /var
+            # symlink, Windows 8.3 short name) and cash records the resolved
+            # path, so the raw name never matches there.
+            self.temp_path = os.path.realpath(tf.name).replace(os.sep, '/')
 
     def tearDown(self):
         if os.path.exists(self.temp_path):

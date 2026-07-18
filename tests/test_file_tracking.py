@@ -30,7 +30,15 @@ class TestFileTracking(unittest.TestCase):
         # Create a temp file
         with tempfile.NamedTemporaryFile(delete=False, mode='w+') as tf:
             tf.write("data1")
-            self.temp_path = tf.name.replace(os.sep, '/')
+            # realpath, not just a separator swap: cash records dependencies in
+            # canonical form (resolve_file_dep_path -> normalize_path(realpath))
+            # so that two spellings of one file are one dependency. The temp
+            # directory is spelled non-canonically on both CI platforms -- macOS
+            # hands out /var/... for /private/var/..., and the Windows runner's
+            # TEMP is the 8.3 short name C:\Users\RUNNER~1 for runneradmin -- so
+            # comparing against the raw name failed there while passing on any
+            # machine whose temp dir happens to already be canonical.
+            self.temp_path = os.path.realpath(tf.name).replace(os.sep, '/')
 
     def tearDown(self):
         if os.path.exists(self.temp_path):
