@@ -94,7 +94,7 @@ def euclidean(p, q):
 
 `@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper (`src/cash/notebook/purity.py:18-43`).
 
-When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful` (`src/cash/notebook/statement_processor.py:707-722`), which:
+When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful` (`src/cash/notebook/statement/processor.py:707-722`), which:
 
 1. Returns `False` (not stateful) if the name is a known-pure builtin like `len` or `sum`.
 2. Returns `True` if the resolved object has `_cash_stateful = True`.

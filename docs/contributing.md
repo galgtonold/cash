@@ -49,7 +49,7 @@ src/cash/
 ├── notebook/               # Jupyter integration
 │   ├── magics.py           # IPython magic commands
 │   ├── cache_key.py        # Unified cache key computation (single source of truth)
-│   ├── statement_processor.py  # Statement-level caching
+│   ├── statement/processor.py  # Statement-level caching
 │   ├── upstream.py         # Upstream cell tracking & virtual restore
 │   ├── analysis.py         # AST-based code analysis
 │   ├── annotations.py      # @cash: directive parser

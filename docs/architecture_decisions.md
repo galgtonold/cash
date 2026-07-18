@@ -204,7 +204,7 @@ All cache key computation goes through a single function: `compute_cache_key()` 
 ### Rationale
 - **Past bugs**: Divergent cache key computation between runtime and simulation caused subtle bugs where cache misses occurred after kernel restart, or stale data was served
 - **Single source of truth**: One function, one formula, one set of tests
-- **Multiple call sites**: Used by `statement_processor.py` (runtime), `upstream.py` (simulation, virtual restore, skip checks)
+- **Multiple call sites**: Used by `statement/processor.py` (runtime), `upstream.py` (simulation, virtual restore, skip checks)
 
 ### Consequences
 - Any cache key change must be made in exactly one place
@@ -312,7 +312,7 @@ notebook/file_dep_snapshot.py    # NEW — snapshot_file_deps + split_file_dep_v
                                   # Pure file-dep snapshot utilities used cross-subsystem.
 
 notebook/statement/__init__.py
-notebook/statement/processor.py   # was statement_processor.py
+notebook/statement/processor.py   # was statement/processor.py
 notebook/statement/lineage.py     # was statement_lineage.py
 notebook/statement/restore.py     # was statement_restore.py
 notebook/statement/file_deps.py   # was statement_file_deps.py
@@ -406,7 +406,7 @@ Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `Cel
 - Patch-target migrations: `@patch('cash.notebook.magics.display')`, `@patch('cash.notebook.magics.publish_display_data')`, `@patch('cash.notebook.magics.get_notebook_cells')` → repointed at `cash.notebook.ipython.magics.X`. `@patch('cash.notebook.cell_executor.CodeAnalyzer.analyze_code_block')` → `cash.notebook.ipython.cell_executor.CodeAnalyzer.analyze_code_block`.
 - One test (`test_vscode_cell_id_path.py`) that imports `CellExecutor` directly migrates to the full internal path `cash.notebook.ipython.cell_executor.CellExecutor`.
 - `src/cash/notebook/__init__.py`'s lazy `__getattr__` for `CashMagics` repoints at `from .ipython.magics import CashMagics`.
-- `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement_processor.py` → `statement/processor.py`).
+- `magic_admin.py`'s rename to `admin.py` matches the same convention as ADR-011 (`statement/processor.py` → `statement/processor.py`).
 - No backward-compatibility shims at the old paths.
 - The three metrics TypedDicts (`TimingBreakdown`, `StatementSummary`, `CellMetrics`) are extracted to `ipython/_types.py` (mirroring `upstream/_types.py`) so `magics.py` is just the orchestrator file. `CashSession` stays in `magics.py` for now — it carries instance state (`provenance`, `audit`) rather than being pure data, so it doesn't belong in `_types.py`.
 

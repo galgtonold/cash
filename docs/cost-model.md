@@ -28,7 +28,7 @@ The README's claim that "TieredBackend is smart about what reaches disk" refers 
 
 ### The rule
 
-For each output variable, the gate computes a predicted restore time, then compares it to a budget derived from the statement's actual execution time. Cited from [`statement_processor.py:1591-1596`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
+For each output variable, the gate computes a predicted restore time, then compares it to a budget derived from the statement's actual execution time. Cited from [`statement/processor.py:1591-1596`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py):
 
 <!-- test:skip reason="source-code excerpt: incomplete if-body and references undefined names" -->
 ```python
@@ -81,7 +81,7 @@ The coefficients live in the `_COEFFS` table at [`cost_model.py:33-73`](https://
 
 ### Which backend is "primary"?
 
-The gate measures cost against the **first tier** of the backend, not the slowest. From [`statement_processor.py:1506-1511`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
+The gate measures cost against the **first tier** of the backend, not the slowest. From [`statement/processor.py:1506-1511`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py):
 
 <!-- test:skip reason="source-code excerpt: references undefined names (backend_type, backend)" -->
 ```python
@@ -97,7 +97,7 @@ The default Cash setup is `TieredBackend([InMemoryBackend, FileBackend])`. Filte
 
 ### The "too cheap to cache" floor
 
-Before filter 1 even runs, there's an earlier short-circuit at [`statement_processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
+Before filter 1 even runs, there's an earlier short-circuit at [`statement/processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
@@ -193,8 +193,8 @@ Lower floor ⇒ more cheap statements get cached. Useful when you have many chea
 
 Bypasses **all three** decision points:
 
-1. The cheap-floor at [`statement_processor.py:1672`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) (`if not force_persist and not file_dependencies:`).
-2. The cost-model gate at [`statement_processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) (`if force_persist or has_file_dependencies: return False, None, ...`).
+1. The cheap-floor at [`statement/processor.py:1672`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) (`if not force_persist and not file_dependencies:`).
+2. The cost-model gate at [`statement/processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) (`if force_persist or has_file_dependencies: return False, None, ...`).
 3. The tier-promotion policy at [`tiered_backend.py:102`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py) (`if force_persist or self.promotion_policy(...):`).
 
 ```python
@@ -208,7 +208,7 @@ Use it when *you* know the cost model is wrong — typically when:
 - The cost model is undercharging an exotic backend (Redis over WAN, encrypted S3 with KMS) and you've seen filter 1 over-promote.
 - You're benchmarking restore overhead and need the value on disk regardless.
 
-The flow: [`annotations.py:48-49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) parses the comment → [`statement_processor.py:_parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) at lines 559-568 extracts `persist=True` → `_run_and_process` threads `force_persist=True` into `_store_in_cache` → the three bypass sites above all check that flag.
+The flow: [`annotations.py:48-49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) parses the comment → [`statement/processor.py:_parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) at lines 559-568 extracts `persist=True` → `_run_and_process` threads `force_persist=True` into `_store_in_cache` → the three bypass sites above all check that flag.
 
 ### `# @cash:no-cache`
 
@@ -216,7 +216,7 @@ A different mechanism — opts out *earlier*, at the cacheability decision in [`
 
 ### File-dependent statements always cache
 
-When a statement reads a file Cash knows about (auto-detected, or declared via `file_depends_on=` on a `@cash.cache`-decorated function), filter 1 is bypassed at [`statement_processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
+When a statement reads a file Cash knows about (auto-detected, or declared via `file_depends_on=` on a `@cash.cache`-decorated function), filter 1 is bypassed at [`statement/processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
@@ -230,7 +230,7 @@ Filter 2 still runs — file-dependent values can be RAM-only if compute was sub
 
 ## What you see when caching is refused
 
-The skip reason is built at [`statement_processor.py:1600-1605`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py):
+The skip reason is built at [`statement/processor.py:1600-1605`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py):
 
 <!-- test:skip reason="source-code excerpt: references undefined names (var_name, size_mb, etc.)" -->
 ```python
@@ -253,7 +253,7 @@ That string is stored on the cache metadata as `skipped_reason` and surfaced in 
 
 - **Badge tooltip (HTML)** — emitted as `<dt>Skipped</dt><dd>{reason}</dd>` at [`renderers/html.py:995-996`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/badge_renderer/renderers/html.py).
 - **Badge text mode** — appended after the timing at [`renderers/text.py:70,93-94`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/badge_renderer/renderers/text.py).
-- **Debug log** — line `[SIZE_AWARE] {reason}` at [`statement_processor.py:1607`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) when `debug=True`.
+- **Debug log** — line `[SIZE_AWARE] {reason}` at [`statement/processor.py:1607`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) when `debug=True`.
 
 Only filter 1 emits this string. The cheap-floor and filter 2 produce only debug log lines; the cheap-floor doesn't even write metadata, so the badge has nothing to render.
 
@@ -308,7 +308,7 @@ A grab bag of things that have bitten users.
 
 ### The default backend makes filter 1 permissive
 
-Because `backend.backends[0]` of the default `TieredBackend` is `InMemoryBackend`, filter 1 measures cost against **RAM** — the `deepcopy` family — which is 1-2 orders of magnitude cheaper than pickle. A 10 MB DataFrame's est_restore_time on RAM is around 1.7 ms, well under the 50 ms fixed budget. **The skip path mostly fires for hundreds-of-megabytes objects.** See [`statement_processor.py:1506-1513`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py).
+Because `backend.backends[0]` of the default `TieredBackend` is `InMemoryBackend`, filter 1 measures cost against **RAM** — the `deepcopy` family — which is 1-2 orders of magnitude cheaper than pickle. A 10 MB DataFrame's est_restore_time on RAM is around 1.7 ms, well under the 50 ms fixed budget. **The skip path mostly fires for hundreds-of-megabytes objects.** See [`statement/processor.py:1506-1513`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py).
 
 ### README "smart about disk" refers to filter 2, not filter 1
 
@@ -320,11 +320,11 @@ When the README says TieredBackend is smart about what reaches disk, it means th
 
 ### Cheap-floor writes no metadata
 
-Statements that hit the `< 0.01 s` floor at [`statement_processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) return `None` — no metadata file, no badge entry. The badge has nothing to show, so the cell just looks "uncached" with no reason. This is intentional: writing 100 metadata-only entries for a notebook of trivial assignments would mean 100 cache lookups on the next run, all of them slow misses.
+Statements that hit the `< 0.01 s` floor at [`statement/processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) return `None` — no metadata file, no badge entry. The badge has nothing to show, so the cell just looks "uncached" with no reason. This is intentional: writing 100 metadata-only entries for a notebook of trivial assignments would mean 100 cache lookups on the next run, all of them slow misses.
 
 ### `# @cash:persist` has three independent bypass sites
 
-The annotation must be honoured at the cheap-floor ([`statement_processor.py:1672`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py)), the cost-model gate ([`statement_processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py)), **and** the tier-promotion policy ([`tiered_backend.py:102`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py)). Forgetting to thread `force_persist` through any one of these would silently re-introduce skipping. If you're modifying the persistence path, this is the thing to watch.
+The annotation must be honoured at the cheap-floor ([`statement/processor.py:1672`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), the cost-model gate ([`statement/processor.py:1545`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), **and** the tier-promotion policy ([`tiered_backend.py:102`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py)). Forgetting to thread `force_persist` through any one of these would silently re-introduce skipping. If you're modifying the persistence path, this is the thing to watch.
 
 ### Backend-specific costs aren't modelled
 
@@ -409,13 +409,13 @@ Or via environment variables (see the table in [Knobs you can tune](#knobs-you-c
 
 | Decision | Code location |
 |---|---|
-| Cheap-floor (< 0.01 s, no metadata) | [`statement_processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) |
-| Filter 1 dispatch | [`statement_processor.py:1445-1552`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) |
-| Filter 1 per-variable rule | [`statement_processor.py:1591-1596`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) |
-| Filter 1 skip-reason string | [`statement_processor.py:1600-1605`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) |
+| Cheap-floor (< 0.01 s, no metadata) | [`statement/processor.py:1672-1688`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) |
+| Filter 1 dispatch | [`statement/processor.py:1445-1552`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) |
+| Filter 1 per-variable rule | [`statement/processor.py:1591-1596`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) |
+| Filter 1 skip-reason string | [`statement/processor.py:1600-1605`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) |
 | Filter 2 policy closure | [`core.py:226-244`](https://github.com/galgtonold/cash/blob/main/src/cash/core.py) |
 | Filter 2 application | [`tiered_backend.py:95-110`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/tiered_backend.py) |
 | Cost-model coefficients | [`cost_model.py:33-73`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cost_model.py) |
-| `# @cash:persist` parse | [`annotations.py:48-49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) → [`statement_processor.py:559-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py) |
+| `# @cash:persist` parse | [`annotations.py:48-49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) → [`statement/processor.py:559-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py) |
 
 See also: [Annotations](annotations.md), [Reading the Cash Badge](badges.md), [Configuration](getting-started/configuration.md), [Smart persistence tutorial](tutorials/feature-guides/smart-persistence.md).

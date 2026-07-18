@@ -86,7 +86,7 @@ One path is explicitly opted out on the async side:
 
 - **Async generators (`async def` with `yield`).** Detected at `src/cash/core.py:627-636` *before* the async/sync wrapper split. The decorator emits a one-shot `CashCacheIneffectiveWarning` ("async generators are not cached in this release. The function is returned unwrapped.") and returns the bare async generator function. The user can still iterate it; nothing is cached. Test reference: `test_async_generator_emits_warning_and_returns_unwrapped` at `tests/test_core/test_async_generator_warns.py:11`. The escape hatch when you need the chunked-cache treatment is to write `async def f(): return (... for ... in ...)` (return a sync generator from the coroutine) — that path *is* supported, see the iterator bullet above.
 
-**`use_locking=True` is supported on the async side** via in-process single-flight: concurrent awaits of the same key coalesce so the function computes once. The first awaiter (the *leader*) registers an `asyncio.Event`, computes, and stores; other awaiters of the same key (the *followers*) wait on the event and then read the stored result. If the leader stored nothing (e.g. `cache_if` rejected the value), followers fall through and compute themselves, so correctness is never sacrificed for the optimization. This is *in-process* coalescing keyed on the running event loop — it dedupes an `asyncio.gather` within one process, not across processes (use a distributed lock for that). Test reference: `tests/test_core/test_async_single_flight.py`.
+**Single-flight coalescing is supported on the async side**, enabled by constructing your Cash instance with `Cash(use_locking=True)` — it is a *constructor* option, **not** a decorator keyword (`@cash.cache(use_locking=True)` raises `TypeError`). Concurrent awaits of the same key then coalesce so the function computes once. The first awaiter (the *leader*) registers an `asyncio.Event`, computes, and stores; other awaiters of the same key (the *followers*) wait on the event and then read the stored result. If the leader stored nothing (e.g. `cache_if` rejected the value), followers fall through and compute themselves, so correctness is never sacrificed for the optimization. This is *in-process* coalescing keyed on the running event loop — it dedupes an `asyncio.gather` within one process, not across processes (use a distributed lock for that). Test reference: `tests/test_core/test_async_single_flight.py`.
 
 ## Notebook cells with top-level `await`
 
@@ -163,7 +163,7 @@ async def fetch(uid):
 results = await asyncio.gather(*[fetch(uid) for uid in uids])
 ```
 
-If `uids` contains the same id twice and both calls miss, the default (no `use_locking`) computes both. Pass `use_locking=True` to coalesce them via in-process single-flight (one computes, the other reads the stored result), or pre-deduplicate the input list.
+If `uids` contains the same id twice and both calls miss, the default computes both. Construct your instance as `Cash(use_locking=True)` to coalesce them via in-process single-flight (one computes, the other reads the stored result), or pre-deduplicate the input list.
 
 ### Cache the orchestrator vs. the leaves
 
@@ -202,7 +202,7 @@ When the function names are distinct (the normal case), sync and async caches co
 
 - **Don't cache async functions that return live connections.** Anything whose validity is tied to the *current* event loop — open sockets, `aiohttp.ClientSession`, database cursors, file handles — will be useless on the next call because the loop that owned it is gone. Cache the *data* extracted from those objects, not the objects themselves.
 - **`asyncio.Lock()` held inside the function body is skipped on hits.** The lock acquisition lives inside `func(*args, **kwargs)`; on a cache hit the wrapper never enters the function, so any side-effecting "I hold this lock" semantics don't fire. This is the same behaviour as the sync wrapper with `threading.Lock()`, but it's worth flagging because async-lock patterns (e.g. fair-queue rate limiters) are more common.
-- **In-process await dedup needs `use_locking=True`.** By default two `asyncio.gather`d calls of the same key both compute on a cold cache. Pass `use_locking=True` for built-in single-flight coalescing (one computes, the rest read the stored result). It is *in-process* only — keyed on the running event loop, it does not dedup across processes. If you need a hand-rolled equivalent (or cross-process semantics), gate at the call site:
+- **In-process await dedup needs `Cash(use_locking=True)`.** By default two `asyncio.gather`d calls of the same key both compute on a cold cache. Construct the instance with `Cash(use_locking=True)` for built-in single-flight coalescing (one computes, the rest read the stored result) — it is a constructor option, not a decorator keyword. It is *in-process* only — keyed on the running event loop, it does not dedup across processes. If you need a hand-rolled equivalent (or cross-process semantics), gate at the call site:
 
     ```python
     _inflight: dict[str, asyncio.Task] = {}
@@ -232,7 +232,7 @@ The decorator surface is unchanged between sync and async — the same kwargs wo
 | `file_depends_on=...` | Honored. Augments the `FileDataSource` set the wrapper consults at key-build time. |
 | `cache_if=fn` | Honored. Sync predicate; runs on the awaited value (`src/cash/core.py:1290-1295, 1336-1341`). |
 | `chunk_max_items`, `chunk_max_bytes` | Honored when the awaited value is a one-shot iterator (`src/cash/core.py:1278-1329`). |
-| `use_locking=True` | **Supported** via in-process single-flight: concurrent same-key awaits coalesce (leader computes, followers read the stored result). In-process only, keyed on the running event loop. See `tests/test_core/test_async_single_flight.py`. |
+| `Cash(use_locking=True)` — **constructor, not a decorator kwarg** | **Supported** via in-process single-flight: concurrent same-key awaits coalesce (leader computes, followers read the stored result). In-process only, keyed on the running event loop. Passing it to the decorator (`@cash.cache(use_locking=True)`) raises `TypeError`. See `tests/test_core/test_async_single_flight.py`. |
 | `strict=True`, `assume_safe=True` | Honored. Same purity-mode wiring as sync (`src/cash/core.py:624`). |
 | `cache_info()`, `cache_clear()`, `explain()` | Attached by `_wrap_with_stats`; all three are synchronous even on async wrappers (`src/cash/core.py:1482-1486`). |
 | Async generator (`async def` with `yield`) | **Not supported.** Warns once at decoration time, returns the function unwrapped (`src/cash/core.py:627-636`). |

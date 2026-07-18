@@ -27,11 +27,11 @@ ts = datetime.utcnow()           # never cached
 
 ## Grammar
 
-Annotations are matched by a single regex at [`src/cash/notebook/annotations.py:33`][regex]:
+Annotations are matched by a single regex at [`src/cash/notebook/annotations.py`][regex]:
 
 <!-- test:skip reason="source-code excerpt: references re module without import" -->
 ```python
-ANNOTATION_PATTERN = re.compile(r'#\s*@cash:([\w-]+)(?:=(\d+))?')
+ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')
 ```
 
 It's applied with `re.search` (not `re.match`), so the directive can appear **anywhere on the line** — including trailing on a normal code line.
@@ -39,7 +39,7 @@ It's applied with `re.search` (not `re.match`), so the directive can appear **an
 A few details that bite people:
 
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py:45`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
-- **No space is allowed between `:` and the directive.** `# @cash: persist` (note the space) **silently does nothing**. This is one of the most common mistakes — see [Common mistakes](#common-mistakes).
+- **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
 - **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl=`, `# @cash:ttl=abc`, and `# @cash:ttl=-5` all silently no-op (the regex requires `\d+`).
 - **Unknown directives silently drop.** `# @cash:typo` produces no warning and no log line. Spell-check your directives.
@@ -59,7 +59,7 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py:49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement_processor.py:566`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py)), which bypasses the cost-model skip logic downstream.
+Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py:49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py:566`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
 
@@ -101,7 +101,7 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py:54-58`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement_processor.py:564-565`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py)).
+Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py:54-58`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py:564-565`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random` (alias: `allowrandom`)
 
@@ -429,14 +429,15 @@ model = train()                  # no_cache wins; never cached
 
 These are the failure modes that produce *no error and no warning* — the annotation just doesn't take effect. Worth memorising.
 
-### Space after the colon
+### Space after the colon — *not* a mistake
 
 ```python
-# @cash: persist          # WRONG — silently ignored
-model = train()
+# @cash: persist          # OK — this works
+# @cash:persist           # OK — equivalent
+# @cash:ttl = 60          # OK — spacing around '=' is allowed too
 ```
 
-The regex is `#\s*@cash:([\w-]+)`. `\w` does not match a space, so `@cash: persist` doesn't match the directive name capture, and there's no fallback to forgive it. Write `# @cash:persist` (no space after the colon).
+The pattern is `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?` — the `\s*` after the colon absorbs the space, so both spellings take effect. (Earlier versions of this page listed the spaced form as a common mistake; that was wrong, and the regex quoted alongside it was stale.)
 
 ### Wrong case for `@cash:`
 
@@ -536,7 +537,7 @@ For source-diving:
 - `parse_annotation_line`: [`annotations.py:35-60`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
 - Lookback semantics: [`annotations.py:62-105`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
 - Merge rules: [`annotations.py:19-26`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- Consumer (statement processor): [`statement_processor.py:554-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement_processor.py)
+- Consumer (statement processor): [`statement/processor.py:554-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)
 - `no-cache` short-circuit: [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py)
 - Tests: [`tests/test_notebook/test_annotations.py`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py)
 

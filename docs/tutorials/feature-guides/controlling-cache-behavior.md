@@ -71,7 +71,7 @@ hourly_report = generate_summary(df)       # one hour
 daily_data = fetch_daily_metrics()         # one day
 ```
 
-The annotation TTL overrides the global TTL set by `%cash_on ttl=N` or `%%cash ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies (`src/cash/notebook/statement_processor.py:586-595`).
+The annotation TTL overrides the global TTL set by `%cash_on ttl=N` or `%%cash ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies (`src/cash/notebook/statement/processor.py:586-595`).
 
 The check itself is at `src/cash/core.py:1731-1735`: on a lookup hit, `_validate_ttl` compares `time.time() - metadata['timestamp']` against the TTL and raises `CacheExpiredError` when it's stale. Stale entries fall through to recompute as if the cache had missed.
 
@@ -89,7 +89,7 @@ model = train_neural_network(X, y)         # 15 min — save it
 embeddings = compute_embeddings(corpus)    # 2 GB of vectors — persist them
 ```
 
-The annotation sets `force_persist = True` (`src/cash/notebook/statement_processor.py:593`), which the post-execute path threads into the tiered backend so promotion runs unconditionally.
+The annotation sets `force_persist = True` (`src/cash/notebook/statement/processor.py:593`), which the post-execute path threads into the tiered backend so promotion runs unconditionally.
 
 ### `@cash:allow-random` — accept non-reproducibility
 
@@ -168,7 +168,7 @@ result = compute_something()
 
 `%cash_on ttl=N` sets `self._global_ttl` on the magic (`src/cash/notebook/magics.py:277`). `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell (`src/cash/notebook/magics.py:1033-1052`), so the cell-scoped value doesn't leak out.
 
-A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set (`src/cash/notebook/statement_processor.py:591-592`).
+A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set (`src/cash/notebook/statement/processor.py:591-592`).
 
 ## Function-level controls on `@cash.cache`
 
@@ -239,13 +239,13 @@ For the annotations that *don't* skip caching:
 
 - `@cash:allow-random` is purely advisory — it suppresses warnings but does not influence the cacheability decision. You can combine it with anything.
 
-- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`statement_processor.py:591-592`).
+- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`statement/processor.py:591-592`).
 
 - A negative or non-integer TTL: the regex `\d+` only matches non-negative integers (`src/cash/notebook/annotations.py:33`), and bad values return `None` from `parse_annotation_line` and are silently dropped.
 
 ## API reference
 
-| Annotation | Triggers (regex `#\s*@cash:([\w-]+)(?:=(\d+))?`) | Effect |
+| Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?`) | Effect |
 |---|---|---|
 | `# @cash:no-cache` | directive=`no-cache` (alias `nocache`) | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
 | `# @cash:ttl=N` | directive=`ttl`, value=`N` (digits only) | Sets `CacheAnnotation.ttl=N`. Overrides global `_global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
@@ -255,7 +255,7 @@ For the annotations that *don't* skip caching:
 | `%%cash ttl=N` | cell-magic flag | Swaps `_global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
 
-All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:([\w-]+)(?:=(\d+))?')` (`annotations.py:33`).
+All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')` (`annotations.py`).
 
 ## Related
 
