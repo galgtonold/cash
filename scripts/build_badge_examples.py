@@ -16,8 +16,10 @@ The renderer normally calls ``uuid.uuid4()`` to mint unique checkbox
 IDs. For doc snippets we need byte-stable output across runs, so we
 monkey-patch ``uuid.uuid4`` with a deterministic counter for the
 lifetime of this script. IDs become ``id-0000000001``,
-``id-0000000002``, ... — still unique within and across fixtures, just
-reproducible.
+``id-0000000002``, ... — unique within each fixture, just reproducible.
+
+The counter restarts for every fixture so a snapshot depends only on its
+own fixture, never on how many UUIDs were minted earlier in the process.
 """
 from __future__ import annotations
 
@@ -50,6 +52,27 @@ _uuid_counter = itertools.count(1)
 
 def _deterministic_uuid4() -> _DeterministicUUID:
     return _DeterministicUUID(next(_uuid_counter))
+
+
+def _reset_uuid_counter() -> None:
+    """Restart the ID sequence so each fixture renders independently.
+
+    A single process-wide counter made every snapshot depend on how many
+    ``uuid.uuid4()`` calls happened *earlier in the process* — including calls
+    made while importing unrelated third-party packages. That is not
+    hypothetical: the machine these fixtures were first generated on had
+    ``opentelemetry`` in its user site-packages, which mints 4 UUIDs at import,
+    so every committed file was offset by 4 against what a clean environment
+    renders. CI has no opentelemetry, so the drift test failed everywhere while
+    passing locally.
+
+    Resetting per fixture makes the output a pure function of the fixture.
+    IDs stay unique *within* a badge, which is all the renderer needs — each
+    file is a standalone document in its own iframe, so IDs need not be unique
+    across fixtures.
+    """
+    global _uuid_counter
+    _uuid_counter = itertools.count(1)
 
 
 # Patch BEFORE importing the renderer so the module-level ``import uuid``
@@ -85,6 +108,9 @@ def main() -> int:
     }
 
     for name, metrics in FIXTURES.items():
+        # Per-fixture reset: the snapshot must not depend on ambient uuid4
+        # consumption elsewhere in the process (see _reset_uuid_counter).
+        _reset_uuid_counter()
         view = build_interactive_badge(metrics, **fixture_kwargs.get(name, {}))
         badge_html = render_html(view)
         doc = _wrap_standalone(badge_html, title=name)
