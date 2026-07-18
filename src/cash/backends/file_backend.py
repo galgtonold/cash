@@ -372,12 +372,20 @@ class FileBackend(CacheBackend):
             metadata.setdefault('source', self.source_label)
             return metadata, value
         except (OSError, pickle.PickleError, ValueError, AttributeError,
-                ImportError) as exc:
+                ImportError, EOFError) as exc:
             # AttributeError/ImportError: the pickled value references a
             # binding that doesn't exist in this process (e.g. a __main__
             # class from a previous kernel session, CAS-93). The entry is
             # unrestorable here - report it absent so callers recompute
             # instead of crashing the user's cell.
+            #
+            # EOFError: an empty or truncated file. Writes are not atomic (see
+            # _write_cache_files), so a concurrent reader can open a data file
+            # between creation and the bytes landing. EOFError subclasses
+            # Exception directly - not OSError, not ValueError - so it escaped
+            # this handler and surfaced to the user as "Ran out of input"
+            # instead of a recompute. Degrading to a miss is correct either
+            # way: an unreadable entry is an absent entry.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 

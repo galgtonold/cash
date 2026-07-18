@@ -137,8 +137,64 @@ class TestWorkerThreadMarker:
         assert done.wait(timeout=30), "cross-instance read deadlocked"
 
 
-def test_pickle_roundtrip_still_works_through_the_atomic_path(tmp_path):
-    """Guard against the atomic path corrupting ordinary writes."""
+class TestUnreadableEntryDegradesToMiss:
+    """An entry that cannot be read is an entry that is absent.
+
+    Writes are deliberately NOT atomic (see the note in _write_cache_files), so
+    a concurrent reader can still open a data file between its creation and its
+    bytes landing, and a cache directory can hold a partial file left by a
+    killed process or a full disk. ``EOFError`` subclasses Exception directly —
+    not OSError, not ValueError — so it escaped ``get()``'s handler and reached
+    the user as "Ran out of input" instead of a recompute. That is what
+    test_registry_identity and test_tiered hit on the macOS runners.
+
+    Zero length, not half: a half-written pickle raises UnpicklingError, which
+    was already caught. Only an empty file produces the actual CI signature.
+    """
+
+    def test_empty_data_file_is_a_miss(self, tmp_path):
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend.set("k", {"big": list(range(1000))})
+        assert backend.get("k")[1] is not None  # settles the write
+
+        _, data_path = backend._get_paths("k")
+        with open(data_path, "wb"):
+            pass
+        backend._metadata_cache.pop("k", None)
+
+        metadata, value = backend.get("k")
+        assert value is None and metadata is None
+
+    def test_empty_metadata_file_is_a_miss(self, tmp_path):
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend.set("k", "v")
+        assert backend.get("k")[1] == "v"
+
+        meta_path, _ = backend._get_paths("k")
+        with open(meta_path, "wb"):
+            pass
+        backend._metadata_cache.pop("k", None)
+
+        assert backend.get("k") == (None, None)
+
+    def test_a_miss_lets_the_caller_recompute_and_rewrite(self, tmp_path):
+        """Degrading must leave the cache usable, not poisoned."""
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend.set("k", "original")
+        assert backend.get("k")[1] == "original"
+
+        _, data_path = backend._get_paths("k")
+        with open(data_path, "wb"):
+            pass
+        backend._metadata_cache.pop("k", None)
+        assert backend.get("k") == (None, None)
+
+        backend.set("k", "recomputed")
+        assert backend.get("k")[1] == "recomputed"
+
+
+def test_pickle_roundtrip_is_unaffected(tmp_path):
+    """Guard against the write path corrupting ordinary values."""
     backend = FileBackend(cache_dir=str(tmp_path / "c"))
     payload = {"a": [1, 2, 3], "b": "x" * 10_000}
     backend.set("k", payload)

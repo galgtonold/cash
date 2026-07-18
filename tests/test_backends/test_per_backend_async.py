@@ -81,16 +81,28 @@ class TestSetReturnsBeforeWriteCompletes:
         # tell whether set() actually waited for it.
         original_write = slow_backend._do_set_sync
         def slow_write(*args, **kwargs):
-            time.sleep(0.5)
+            # Generous: the window only has to outlast however long a loaded
+            # runner takes to get back to the calling thread after set().
+            time.sleep(2.0)
             return original_write(*args, **kwargs)
         monkeypatch.setattr(slow_backend, "_do_set_sync", slow_write)
 
-        t0 = time.perf_counter()
         slow_backend.set("k", "value")
-        elapsed = time.perf_counter() - t0
-        # set() should return in much less than the 0.5s the underlying
-        # write takes — we accept up to 100ms for serialization overhead.
-        assert elapsed < 0.1, f"set() blocked for {elapsed:.3f}s — should be async"
+
+        # Assert the PROPERTY, not a stopwatch: if set() returned without
+        # waiting, the write it scheduled is necessarily still in flight.
+        #
+        # This used to assert `elapsed < 0.1`, which measures the runner as
+        # much as the code. It failed on contended Windows jobs at 0.109s and
+        # again at 0.519s while the behaviour was perfectly correct — a shared
+        # 2-4 vCPU box can stall a thread for longer than the thing being
+        # timed. The pending-count check only fails if set() genuinely blocks
+        # until the write completes, which is the regression worth catching,
+        # and it stays valid however slow the machine is.
+        assert slow_backend._writes.pending_count() > 0, (
+            "set() returned only after its write finished — it should schedule "
+            "the write and return"
+        )
 
 
 class TestReadAfterWriteConsistency:
