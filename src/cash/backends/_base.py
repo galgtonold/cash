@@ -22,6 +22,14 @@ __all__ = ["CacheMetadata", "MetadataDict", "CacheBackend", "PendingWrites"]
 # check-and-create, never around a compute.
 _KEY_LOCK_BOOTSTRAP = threading.Lock()
 
+# Marks any thread currently running a PendingWrites task, for ANY instance.
+# ``PendingWrites._tls.current_key`` already answers "am I the worker for this
+# key, on this instance?"; this answers the broader "am I a write worker at
+# all?", which is what a backend needs before blocking on a SIBLING backend's
+# write queue. Without it, two backends over one cache directory could each
+# have their worker waiting on the other's future and deadlock.
+_WORKER_THREAD = threading.local()
+
 # The metadata channel backends actually see: an opaque dict they round-trip
 # without inspecting (the channel is polymorphic — both CacheMetadata and the
 # notebook layer's StatementCacheMetadata flow through it as plain dicts). The
@@ -76,10 +84,22 @@ class PendingWrites:
         """Worker-side wrapper: marks ``current_key`` so re-entrant
         ``drain``/``wait`` for the same key see the marker and bail out."""
         self._tls.current_key = key
+        prev_worker = getattr(_WORKER_THREAD, "active", False)
+        _WORKER_THREAD.active = True
         try:
             return fn(*args, **kwargs)
         finally:
             self._tls.current_key = None
+            _WORKER_THREAD.active = prev_worker
+
+    @staticmethod
+    def in_worker_thread() -> bool:
+        """True when the calling thread is running a background write task.
+
+        A write worker must never block on another backend's queue — see
+        ``_WORKER_THREAD``.
+        """
+        return getattr(_WORKER_THREAD, "active", False)
 
     def submit(self, key: str, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> concurrent.futures.Future:
         """Submit ``fn(*args, **kwargs)`` to run in the background, tagged with *key*.
