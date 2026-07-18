@@ -32,6 +32,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev]"
       
+      # EXCLUDE, never enumerate (CAS-152). This step used to name the ~8 files
+      # it ran, which silently omitted 18 top-level test files and four of the
+      # five test directories — and anything added later. A tracked regression
+      # test for an Urgent correctness bug (CAS-175) sat red on main for weeks
+      # because nothing outside the allowlist was ever executed by CI.
+      #
+      # So the default is now "run everything" and each exclusion has to justify
+      # itself here:
+      #   test_notebook_integration/  793 kernel-spinning files, ~16 min. The
+      #                               headline features are covered by the smoke
+      #                               subset below; run the rest locally.
+      #   test_wheel_gate/            builds a wheel and starts a real Jupyter
+      #                               server; belongs to the release gate.
+      #   docs/                       has its own job, which needs the extra
+      #                               docs-test dependencies.
+      # Everything else — including anything added tomorrow — runs by default.
+      #
       # `-n auto` overrides the `-n 16` in pyproject's addopts, which is tuned
       # for a 32-thread dev box. Hosted runners have 3-4 vCPUs, so 16 workers is
       # a 4-5x oversubscription that stalls timed sections and turns wall-clock
@@ -39,7 +56,11 @@ jobs:
       # fail only on the 3-vCPU macOS runner.
       - name: Run unit tests
         run: |
-          pytest tests/test_notebook/ tests/test_benchmarks.py tests/test_bench_eval.py tests/test_memory_eviction.py tests/test_statement_lineage.py tests/test_output_order.py tests/test_vscode_duplicates.py tests/test_config_unified.py tests/test_backend_enhancements.py -n auto --tb=short -q
+          pytest tests/ \
+            --ignore=tests/test_notebook_integration \
+            --ignore=tests/test_wheel_gate \
+            --ignore=tests/docs \
+            -n auto --tb=short -q
 
       # Curated subset of the notebook integration suite — the headline-feature
       # tests (basic flow, restore-after-restart, file invalidation, decorator
