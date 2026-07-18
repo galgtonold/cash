@@ -15,6 +15,7 @@ import importlib.abc
 import importlib.util
 import logging
 import os
+import pathlib
 import sys
 import threading
 from collections.abc import Callable
@@ -104,6 +105,44 @@ def _install_module_patches(module_name: str, module_obj: Any) -> None:
                 setattr(module_obj, name, wrapper)
             except (AttributeError, TypeError) as e:
                 logger.debug("[FILE_TRACKER] Failed to patch %s.%s: %s", module_name, name, e)
+
+
+def _patch_pathlib_accessor() -> None:
+    """Route pathlib's own opener through the tracker on Python 3.10.
+
+    On 3.11+ ``Path.open`` calls ``io.open`` directly, so the ``io.open`` patch
+    covers pathlib. On 3.10 it goes through ``Path._accessor.open``, and
+    ``_NormalAccessor.open = io.open`` captures the ORIGINAL at class-definition
+    time — when ``pathlib`` is first imported, long before cash patches
+    anything. Patching ``io.open`` therefore never reached pathlib there, and
+    every pathlib read was invisible: a cell doing ``Path(p).read_text()``
+    recorded no file dependency at all and was never invalidated when ``p``
+    changed. Silent staleness, not a visible error.
+
+    The accessor attribute holds a BUILTIN, which has no descriptor protocol,
+    so pathlib calls it as ``acc.open(path, ...)``. A plain Python function
+    installed in its place would bind as a method and swallow ``path`` as
+    ``self`` — hence ``staticmethod``.
+    """
+    accessor = getattr(pathlib, '_NormalAccessor', None)
+    if accessor is None:
+        return  # 3.11+: patching io.open already covers pathlib
+
+    original = getattr(accessor, 'open', None)
+    if original is None or getattr(original, '_is_file_tracker_patch', False):
+        return
+
+    real_original = _unwrap_to_real(original)
+    if not callable(real_original):
+        return
+
+    wrapper = FileDependencyRegistry()._create_open_handler(real_original, _dispatch_track)
+    wrapper._is_file_tracker_patch = True
+    wrapper._original_func = real_original
+    try:
+        accessor.open = staticmethod(wrapper)
+    except (AttributeError, TypeError) as e:
+        logger.debug("[FILE_TRACKER] Failed to patch pathlib accessor: %s", e)
 
 
 def _unwrap_to_real(func: Any) -> Any:
@@ -475,6 +514,10 @@ class FileAccessTracker:
 
         # 2. Patch User Namespace (for interactive sessions showing 'open')
         self._patch_user_ns()
+
+        # 2b. Python 3.10 only: pathlib captured io.open at import time, so the
+        # io.open patch above misses every pathlib read. See the function.
+        _patch_pathlib_accessor()
 
         # 3. Patch Loaded Modules
         # Iterate over registered modules
