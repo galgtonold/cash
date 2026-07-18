@@ -82,6 +82,39 @@ class TestCiTargetsTheWholeTree:
         )
 
 
+class TestStepsParseOnEveryRunner:
+    """A step that runs on Windows must parse in the shell Windows uses.
+
+    Windows runners default to ``pwsh``, where a trailing ``\\`` is not a line
+    continuation. A multi-line command written in bash style dies with
+    "Missing expression after unary operator '--'" BEFORE pytest starts, so the
+    job fails with no test output at all — it reads like a test failure and
+    isn't one. Every Windows job failed this way for two full runs.
+
+    Any step whose body relies on backslash continuations therefore has to
+    declare ``shell: bash`` (available on all three runners).
+    """
+
+    def test_backslash_continuations_declare_bash(self):
+        text = CI_YML.read_text(encoding="utf-8")
+        steps = re.split(r"\n(?=\s*- name: )", text)
+        offenders = []
+        for step in steps:
+            m = re.search(r"- name: (?P<name>.+)", step)
+            if m is None:
+                continue
+            body = step.split("run:", 1)[1] if "run:" in step else ""
+            uses_continuation = re.search(r"\\\s*\n", body)
+            declares_bash = re.search(r"shell:\s*bash", step)
+            if uses_continuation and not declares_bash:
+                offenders.append(m.group("name").strip())
+        assert not offenders, (
+            "These CI steps use `\\` line continuations without `shell: bash`. "
+            "They parse in bash but not in pwsh, so they break on the Windows "
+            f"runners before running anything: {offenders}"
+        )
+
+
 class TestExclusionsAreHonest:
     def test_every_exclusion_still_exists(self, unit_step):
         """A stale --ignore hides that its target vanished or was renamed."""

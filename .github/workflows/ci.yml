@@ -61,6 +61,11 @@ jobs:
             --ignore=tests/test_wheel_gate \
             --ignore=tests/docs \
             -n auto --tb=short -q
+        # Windows runners default to pwsh, where `\` is NOT a line continuation:
+        # the backslashes above parse as "Missing expression after unary
+        # operator '--'" and pytest never runs at all. Every Windows job failed
+        # that way for two full runs while looking like a test failure.
+        shell: bash
 
       # Curated subset of the notebook integration suite — the headline-feature
       # tests (basic flow, restore-after-restart, file invalidation, decorator
@@ -79,6 +84,10 @@ jobs:
             tests/test_notebook_integration/test_forward_probe_upstream_skip.py \
             tests/test_notebook_integration/test_file_dep_path_fallback.py \
             -n auto --tb=short -q
+        # Ubuntu-only today, but the continuations above would break the moment
+        # this step ran on Windows. Declare the shell rather than depend on the
+        # `if:` above staying ubuntu-only.
+        shell: bash
         timeout-minutes: 10
 
   lint:
