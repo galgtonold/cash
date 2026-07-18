@@ -54,6 +54,39 @@ _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
 
+# --- Loop-persist amplification guard (CAS-160) ----------------------------
+# ``# @cash:persist`` inside (or on) a loop makes EVERY iteration a persist
+# target. When the loop grows one object -- the classic "add a column per
+# iteration" frame build -- each iteration snapshots the whole object at its
+# current width, so a 40 MB final frame costs sum(widths) on disk: 13x for 25
+# columns, and quadratic in the iteration count thereafter. CAS-142's caps are
+# structurally blind to this: its per-object refusal compares ONE value against
+# half the tier cap (40 MB vs >=4 GiB -> fine) and its evict-after-write warning
+# needs the total to exceed the cap (520 MB vs >=8 GiB -> never evicts). Neither
+# looks at *cumulative writes for one statement*, which is the dimension that
+# actually blows up.
+#
+# So track that dimension directly. Once one statement's cumulative persisted
+# bytes exceed both an absolute floor and a multiple of the value's CURRENT
+# size, stop value-persisting it (metadata-only, exactly like the size-aware
+# skip) and warn once. Skipping beats evict-after-write here: it also stops
+# paying the rising per-iteration serialisation cost, which is the "re-runs got
+# slower" half of the symptom.
+#
+# The floor keeps the guard off small loops entirely (nobody's disk is at risk
+# from a few MB), and the accounting is only ever done for statements carrying
+# an iteration/branch context marker, so an ordinary single-statement
+# ``# @cash:persist`` can never trip it -- it writes once, and is not in a loop.
+_PERSIST_AMPLIFICATION_FLOOR_BYTES = 64 * 1024 * 1024
+_PERSIST_AMPLIFICATION_LIMIT = 4
+
+# Badge/metadata reason for a write refused by the guard above. A constant so
+# consumers compare identity rather than pattern-matching the wording.
+AMPLIFICATION_SKIP_REASON = (
+    "loop caching a growing object would store every intermediate state; "
+    "further iterations kept metadata-only (see the emitted warning)"
+)
+
 _COST_MODEL_KEYS = (
     'cost_model_size_bytes',
     'cost_model_restore_seconds',
@@ -340,6 +373,14 @@ class StatementProcessor:
             self.persist_all = False
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
 
+        # Loop-persist amplification guard (CAS-160). Cumulative value-persisted
+        # bytes per loop-body statement (keyed on the body's real source, with
+        # the per-iteration discriminator comment stripped, so all iterations of
+        # one statement share a counter), plus the set of statements already
+        # warned about so a 1000-iteration loop warns once, not 1000 times.
+        self._persist_bytes_by_stmt: dict[str, int] = {}
+        self._warned_persist_amplification: set[str] = set()
+
         self.analytics_manager = AnalyticsManager()
 
         self.randomness_detector = RandomnessDetector()
@@ -534,7 +575,7 @@ class StatementProcessor:
         # Compute the pure-AST StatementAnalysis once. Used both by the
         # cacheability decision and (on the cache-miss path) by
         # _post_execute for in-place-mutation tracking.
-        statement_analysis = analyze_statement(code, _parsed_tree)
+        statement_analysis = analyze_statement(code, _parsed_tree, self.shell.user_ns)
 
         # A standalone bare-Expr method call (``lst.append(x)``, ``bus.on(fn)``)
         # has no Store target, so AST analysis never surfaces the receiver as an
@@ -719,7 +760,7 @@ class StatementProcessor:
         if early_result is not None:
             return early_result
 
-        statement_analysis = analyze_statement(code, _parsed_tree)
+        statement_analysis = analyze_statement(code, _parsed_tree, self.shell.user_ns)
 
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
@@ -2177,6 +2218,141 @@ class StatementProcessor:
                     logger.debug("[CACHE DEBUG] Variable '%s' cannot be pickled (%s), skipping cache storage.", k, e)
         return safe
 
+    @staticmethod
+    def _amplification_size(prediction: dict[str, Any] | None) -> int:
+        """Size of the largest output var, or 0 when it isn't usable.
+
+        Reads the estimate ``_should_skip_large_object_caching`` already
+        computed, so the guard adds no sizing work to the write path.
+        """
+        if prediction is None:
+            return 0
+        try:
+            size = int(prediction.get('size_bytes') or 0)
+        except (TypeError, ValueError):
+            return 0
+        return max(size, 0)
+
+    def _amplification_stmt_id(self, code: str) -> str | None:
+        """Per-statement accounting key, or ``None`` if it cannot amplify.
+
+        Only a statement replayed under a control structure writes more than
+        once per run, so only those are accounted. Stripping the per-iteration
+        discriminator comment makes every iteration of one loop body share a
+        counter; an ordinary ``# @cash:persist`` on a single statement has no
+        marker, gets ``None`` here, and is untouched by the whole mechanism.
+        """
+        if ('# __iteration_context__:' not in code
+                and '# control_context:' not in code):
+            return None
+        return self._strip_control_markers(code).strip()
+
+    def _check_persist_amplification(
+        self,
+        code: str,
+        prediction: dict[str, Any] | None,
+    ) -> tuple[bool, str | None]:
+        """Return ``(skip, reason)`` for the CAS-160 loop-persist guard.
+
+        Consulted immediately before a value-persist: refuse once this
+        statement's cumulative *durably stored* bytes are out of all proportion
+        to the value being stored. The counter is fed by
+        :meth:`_account_persisted_bytes` after the write actually lands.
+
+        Two thresholds must BOTH be crossed, which is what keeps the guard off
+        healthy notebooks: an absolute floor
+        (``_PERSIST_AMPLIFICATION_FLOOR_BYTES``), so small loops never engage at
+        all, and a ratio against the current value, so a loop that legitimately
+        stores a lot of *distinct* results is judged on proportion rather than
+        volume.
+
+        The verdict LATCHES per statement: once a statement has demonstrated
+        amplification, later iterations stay metadata-only. Without the latch the
+        guard would disengage exactly when it matters -- the running total
+        freezes while the object keeps growing, so ``LIMIT x size`` would
+        eventually overtake it and the writes would resume mid-loop.
+        """
+        size = self._amplification_size(prediction)
+        if size <= 0:
+            return False, None
+        stmt_id = self._amplification_stmt_id(code)
+        if stmt_id is None:
+            return False, None
+
+        if stmt_id in self._warned_persist_amplification:
+            return True, AMPLIFICATION_SKIP_REASON
+
+        cumulative = self._persist_bytes_by_stmt.get(stmt_id, 0)
+        if (cumulative > _PERSIST_AMPLIFICATION_FLOOR_BYTES
+                and cumulative > _PERSIST_AMPLIFICATION_LIMIT * size):
+            self._warned_persist_amplification.add(stmt_id)
+            self._warn_persist_amplification(stmt_id, cumulative, size)
+            return True, AMPLIFICATION_SKIP_REASON
+        return False, None
+
+    def _account_persisted_bytes(
+        self,
+        code: str,
+        prediction: dict[str, Any] | None,
+        wire: dict[str, Any],
+    ) -> None:
+        """Add a completed write to its statement's running total (CAS-160).
+
+        Counts a write only when it reached a **persistent** tier. The backend
+        reports the resolved destinations back on the metadata dict, so this is
+        a read of information the write already produced.
+
+        Excluding RAM-only writes is what makes the guard track the resource the
+        user is actually losing. A loop body that misses the promotion floor is
+        cached in RAM and never touches the disk at all; counting those would
+        warn about "filling your disk" for a notebook whose disk cache is a few
+        KB, which is both false and noisy.
+        """
+        stmt_id = self._amplification_stmt_id(code)
+        if stmt_id is None:
+            return
+        size = self._amplification_size(prediction)
+        if size <= 0:
+            return
+        destinations = wire.get('storage') or ()
+        if not isinstance(destinations, (list, tuple)):
+            return
+        if not any(d != 'RAM' for d in destinations):
+            return
+        self._persist_bytes_by_stmt[stmt_id] = (
+            self._persist_bytes_by_stmt.get(stmt_id, 0) + size
+        )
+
+    def _warn_persist_amplification(
+        self, stmt_id: str, cumulative: int, size: int
+    ) -> None:
+        """Warn once that a looped persist is snapshotting a growing object.
+
+        Names the amplification in the user's own terms -- what it has already
+        written versus how big the value actually is -- and points at the fix,
+        which is to persist the finished object once instead of every
+        intermediate state of it.
+        """
+        import warnings
+
+        from cash.backends.adaptive_caps import human_bytes
+        from cash.exceptions import CashCacheIneffectiveWarning
+
+        first_line = (stmt_id.splitlines() or [''])[0].strip()
+        if len(first_line) > 60:
+            first_line = first_line[:57] + '...'
+        warnings.warn(
+            f"Cash: `{first_line}` runs in a loop and has already cached "
+            f"{human_bytes(cumulative)} of intermediate snapshots for a value "
+            f"that is currently only {human_bytes(size)} -- caching a growing "
+            f"object every iteration costs the SUM of every intermediate size, "
+            f"not the final one. Further iterations are not being stored. Move "
+            f"`# @cash:persist` off the loop and onto a statement that produces "
+            f"the finished object, so it is cached once.",
+            CashCacheIneffectiveWarning,
+            stacklevel=2,
+        )
+
     def _store_in_cache(
         self,
         cache_key: str,
@@ -2266,6 +2442,20 @@ class StatementProcessor:
             should_skip = True
             skip_reason = GUARD_SKIP_REASON
 
+        # Loop-persist amplification guard (CAS-160). Placed after every other
+        # gate so it only accounts writes that would ACTUALLY have happened, and
+        # so it can override ``force_persist`` -- which is the whole point: a
+        # user asking to persist one value must not silently get every
+        # intermediate state of it written to their disk. It is the last word
+        # because it is a disk-safety guard, not a cost heuristic.
+        if not should_skip:
+            amplified, amplified_reason = self._check_persist_amplification(
+                code, prediction
+            )
+            if amplified:
+                should_skip = True
+                skip_reason = amplified_reason
+
         # Cost-model prediction fields are shared by both the skip and the
         # full-store branches; build them once.
         cost_fields: dict[str, Any] = {}
@@ -2348,6 +2538,11 @@ class StatementProcessor:
             self.cash_instance.backend.set(cache_key, payload, wire)
         except (OSError, TypeError, ValueError, pickle.PicklingError, RuntimeError) as e:
             logger.warning("[CACHE] Failed to write to cache backend: %s", e)
+        else:
+            # Charge this write to its statement's amplification budget, now
+            # that the backend has reported which tiers actually took it
+            # (CAS-160). Only durable destinations count.
+            self._account_persisted_bytes(code, prediction, wire)
 
         try:
             backend = self.cash_instance.backend
