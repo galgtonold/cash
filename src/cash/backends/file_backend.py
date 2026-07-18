@@ -7,10 +7,8 @@ import gzip
 import logging
 import os
 import pickle
-import tempfile
 import threading
 import time
-import weakref
 from collections.abc import Callable
 from typing import Any
 
@@ -20,56 +18,6 @@ from ._base import CacheBackend, MetadataDict, PendingWrites
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
-
-
-# Every live write queue, grouped by the cache directory it writes into.
-#
-# A cache directory IS the cache; two FileBackend instances pointing at one
-# directory are two views of the same store, not two stores. But each carries
-# its OWN PendingWrites, and ``get()`` only ever waited on its own queue -- so a
-# second instance reading a directory the first was still writing saw a
-# half-populated cache and reported clean misses. In the regression that
-# exposed this, only 2-3 of 19 entries had reached disk when the second
-# instance started reading.
-#
-# WeakSet: a backend that goes out of scope must not keep its queue (or itself)
-# alive, and must stop being waited on.
-_WRITERS_BY_DIR: dict[str, weakref.WeakSet] = {}
-_WRITERS_LOCK = threading.Lock()
-
-
-def _writer_scope(cache_dir: str) -> str:
-    """Normalized identity of a cache directory.
-
-    ``realpath`` so ``/var/...`` and ``/private/var/...`` (the macOS symlink)
-    or a relative path and its absolute form resolve to one scope.
-    """
-    try:
-        return os.path.realpath(cache_dir)
-    except OSError:
-        return os.path.abspath(cache_dir)
-
-
-def _register_writer(cache_dir: str, writes: PendingWrites) -> None:
-    scope = _writer_scope(cache_dir)
-    with _WRITERS_LOCK:
-        bucket = _WRITERS_BY_DIR.get(scope)
-        if bucket is None:
-            bucket = weakref.WeakSet()
-            _WRITERS_BY_DIR[scope] = bucket
-        bucket.add(writes)
-        # Opportunistically drop scopes whose backends have all been collected,
-        # so a long test session doesn't accumulate an entry per temp dir.
-        if len(_WRITERS_BY_DIR) > 64:
-            for dead in [s for s, b in _WRITERS_BY_DIR.items() if not b]:
-                del _WRITERS_BY_DIR[dead]
-
-
-def _sibling_writers(cache_dir: str, own: PendingWrites) -> list[PendingWrites]:
-    """Live write queues over *cache_dir* other than *own*."""
-    with _WRITERS_LOCK:
-        bucket = _WRITERS_BY_DIR.get(_writer_scope(cache_dir))
-        return [w for w in bucket if w is not own] if bucket else []
 
 __all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
 
@@ -130,7 +78,6 @@ class FileBackend(CacheBackend):
         # thread, the actual disk I/O runs in this executor so a slow
         # write doesn't block cell execution.
         self._writes = PendingWrites()
-        _register_writer(self.cache_dir, self._writes)
 
         # Lazy initialization: defer directory creation, stat scanning,
         # and background thread to first actual use.
@@ -317,7 +264,7 @@ class FileBackend(CacheBackend):
         self._ensure_initialized()
         # Wait for any in-flight write for this key so we never return
         # stale-or-missing data when get() races set().
-        self._wait_for_writes(key)
+        self._writes.wait(key)
         # Check memory cache first for metadata
         cached_meta = self._metadata_cache.get(key)
 
@@ -372,80 +319,14 @@ class FileBackend(CacheBackend):
 
             metadata.setdefault('source', self.source_label)
             return metadata, value
-        except (OSError, pickle.PickleError, ValueError, AttributeError,
-                ImportError, EOFError) as exc:
+        except (OSError, pickle.PickleError, ValueError, AttributeError, ImportError) as exc:
             # AttributeError/ImportError: the pickled value references a
             # binding that doesn't exist in this process (e.g. a __main__
             # class from a previous kernel session, CAS-93). The entry is
             # unrestorable here - report it absent so callers recompute
             # instead of crashing the user's cell.
-            #
-            # EOFError: a truncated file. ``_atomic_write`` now prevents cash
-            # from producing one, but a cache directory can still hold a
-            # partial file written by an older version, a killed process, or a
-            # full disk. EOFError subclasses Exception directly - not OSError,
-            # not ValueError - so it used to escape this handler and crash the
-            # caller with "Ran out of input" instead of degrading to a miss.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
-
-    def _wait_for_writes(self, key: str) -> None:
-        """Wait for every live write to *key* in this cache directory.
-
-        Own queue first, then any sibling backend's (see ``_WRITERS_BY_DIR``):
-        the durability boundary is the directory, not the instance.
-
-        A background write worker never waits on a sibling. If it did, two
-        backends over one directory could each have their worker blocked on the
-        other's future and deadlock. Workers only ever touch their own queue,
-        which the existing per-key re-entrancy guard already handles.
-
-        Sibling failures are swallowed rather than re-raised: a failed write
-        cleans up its partial files, so the read below simply finds nothing and
-        reports a miss. Surfacing another instance's write error to whoever
-        happens to read next would attribute it to the wrong caller.
-        """
-        self._writes.wait(key)
-        if PendingWrites.in_worker_thread():
-            return
-        for sibling in _sibling_writers(self.cache_dir, self._writes):
-            try:
-                sibling.wait(key)
-            except Exception:  # noqa: BLE001 — see docstring
-                logger.debug("Sibling write for key %r failed", key, exc_info=True)
-
-    def _atomic_write(self, path: str, payload: bytes, *, use_gzip: bool) -> None:
-        """Write *payload* to *path* so no reader can observe a partial file.
-
-        A plain ``open(path, 'wb')`` makes the file visible the instant it is
-        created — while it still holds zero or half its bytes. Any concurrent
-        reader (a second Cash instance, or another process sharing the cache
-        directory) can pass ``get()``'s ``os.path.exists`` check and then
-        unpickle a truncated file. That is what surfaced on the macOS CI
-        runners as ``EOFError: Ran out of input``.
-
-        Writing to a temp file in the SAME directory and renaming makes the
-        entry appear all at once: a reader sees either the previous contents or
-        the complete new ones, never a torn mixture. ``os.replace`` is atomic on
-        POSIX and on Windows, and same-directory keeps it a rename rather than a
-        cross-filesystem copy.
-        """
-        directory = os.path.dirname(path) or '.'
-        # mkstemp in the target directory; the leading dot keeps the partial out
-        # of the ``*.data`` / ``*.meta`` globs the backend scans.
-        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.tmp-', suffix='.part')
-        os.close(fd)
-        try:
-            opener = gzip.open if use_gzip else open
-            with opener(tmp_path, 'wb') as f:
-                f.write(payload)
-            os.replace(tmp_path, path)
-        except BaseException:
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                logger.debug("Could not remove partial write %s", tmp_path, exc_info=True)
-            raise
 
     def _write_cache_files(self, key: str, meta_path: str, data_path: str, metadata: dict, serialized_value: bytes) -> None:
         """Write serialized data and metadata to disk, updating size tracking.
@@ -453,8 +334,10 @@ class FileBackend(CacheBackend):
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
+        opener = gzip.open if self.compress else open
         try:
-            self._atomic_write(data_path, serialized_value, use_gzip=self.compress)
+            with opener(data_path, 'wb') as f:
+                f.write(serialized_value)
         except FileNotFoundError:
             # The cache dir vanished under a live process. The README suggests
             # deleting ./.cash to wipe the cache, and doing that with the kernel
@@ -462,7 +345,8 @@ class FileBackend(CacheBackend):
             # instead of simply recreating the directory. Recreate + retry once;
             # costs nothing on the normal path.
             os.makedirs(self.cache_dir, exist_ok=True)
-            self._atomic_write(data_path, serialized_value, use_gzip=self.compress)
+            with opener(data_path, 'wb') as f:
+                f.write(serialized_value)
 
         try:
             actual_data_size = os.path.getsize(data_path)
@@ -472,10 +356,8 @@ class FileBackend(CacheBackend):
             metadata['size'] = len(serialized_value)
             logger.debug("Could not stat data file %s; using serialized length", data_path, exc_info=True)
 
-        # Data lands before metadata, and each lands atomically. get() requires
-        # BOTH files, so the worst a concurrent reader can observe is
-        # data-without-metadata — which it reports as a clean miss.
-        self._atomic_write(meta_path, pickle.dumps(metadata), use_gzip=False)
+        with open(meta_path, 'wb') as f:
+            pickle.dump(metadata, f)
 
         try:
             actual_meta_size = os.path.getsize(meta_path)
