@@ -473,11 +473,51 @@ def mock_pipeline(monkeypatch):
     yield
 
 
+class _FakeEstimator:
+    """Minimal picklable stand-in for a scikit-learn estimator.
+
+    Module-level on purpose — see ``mock_sklearn`` below. The doc pages cache a
+    fitted model, so this has to survive a pickle round-trip.
+    """
+
+    def __init__(self, **kwargs):
+        pass
+
+    def fit(self, X, y):
+        return self
+
+    def predict(self, X):
+        try:
+            n = len(X)
+        except TypeError:
+            n = 1
+        return [0] * n
+
+
+class _FakeRFC(_FakeEstimator):
+    """Stands in for sklearn.ensemble.RandomForestClassifier."""
+
+
+class _FakeLogReg(_FakeEstimator):
+    """Stands in for sklearn.linear_model.LogisticRegression."""
+
+
 @pytest.fixture(autouse=True)
 def mock_sklearn(monkeypatch):
     """Stub sklearn submodules used by data-science.md when sklearn is missing.
 
     If the real package is installed, this no-ops so its behavior wins.
+
+    The estimator stubs live at module scope (``_FakeRFC`` / ``_FakeLogReg``
+    above) rather than inside this fixture, and that placement is load-bearing:
+    the doc pages CACHE a fitted model, so cash pickles it. ``pickle`` resolves a
+    class by ``__module__`` + ``__qualname__``, and a class defined inside a
+    function has ``<locals>`` in its qualname and cannot be looked up at all —
+    it fails with ``AttributeError: Can't get local object``.
+
+    That failure is invisible on any machine with real scikit-learn installed,
+    because this fixture no-ops there and the picklable real estimator is used
+    instead. It appears only where sklearn is absent, i.e. CI.
     """
     import sys
     if "sklearn" in sys.modules:
@@ -491,34 +531,6 @@ def mock_sklearn(monkeypatch):
     fake_model_selection = types.ModuleType("sklearn.model_selection")
     fake_metrics = types.ModuleType("sklearn.metrics")
     fake_linear_model = types.ModuleType("sklearn.linear_model")
-
-    class _FakeRFC:
-        def __init__(self, **kwargs):
-            pass
-
-        def fit(self, X, y):
-            return self
-
-        def predict(self, X):
-            try:
-                n = len(X)
-            except TypeError:
-                n = 1
-            return [0] * n
-
-    class _FakeLogReg:
-        def __init__(self, **kwargs):
-            pass
-
-        def fit(self, X, y):
-            return self
-
-        def predict(self, X):
-            try:
-                n = len(X)
-            except TypeError:
-                n = 1
-            return [0] * n
 
     def _fake_train_test_split(*arrays, **kwargs):
         result = []

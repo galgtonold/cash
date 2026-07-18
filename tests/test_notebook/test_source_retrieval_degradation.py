@@ -29,7 +29,26 @@ from cash.exceptions import SOURCE_RETRIEVAL_ERRORS
 from cash.notebook.analysis import CodeAnalyzer
 
 
-NON_PYTHON_SOURCE = "Cash doesn't tokenize this line as Python.\nMore prose.\n"
+# Prose that fails to tokenize on EVERY supported Python.
+#
+# Choosing this content is not incidental. A bare apostrophe ("doesn't") opens
+# an unterminated single-quoted string, which the C tokenizer added in 3.12
+# reports as an error — but the pure-Python tokenizer of 3.10/3.11 emits an
+# ERRORTOKEN and keeps going, so `getsource` there quietly returns the prose
+# line instead of raising. Verified on 3.11.15:
+#
+#     apostrophe           NO RAISE -> "Cash doesn't tokenize this line...\n"
+#     unterminated_triple  RAISES TokenError
+#
+# An unterminated TRIPLE quote raises `TokenError: EOF in multi-line string` on
+# both tokenizers, so it is what actually pins the behaviour across the matrix.
+# Both forms are present below: the apostrophe because it is what real markdown
+# prose looks like, the triple quote because it is what makes the test honest
+# on 3.10 and 3.11.
+NON_PYTHON_SOURCE = (
+    "Cash doesn't tokenize this line as Python.\n"
+    "Nor this one: ''' opens a string literal that never closes.\n"
+)
 
 
 def _func_from_non_python_file(tmp_path: Path, name: str = "page.md"):
