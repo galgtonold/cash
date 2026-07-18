@@ -493,7 +493,7 @@ class StatementProcessor:
         self.executed_input_lineages = state.executed_input_lineages
         self.mutation_verdicts = state.mutation_verdicts
 
-    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False, force_outputs: set[str] | None = None) -> ProcessResult:
+    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False, force_outputs: set[str] | None = None, is_last: bool = True) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
 
@@ -682,7 +682,7 @@ class StatementProcessor:
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = self._execute_and_drain(
-            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent,
+            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, is_last,
         )
         if error_metrics is not None:
             return error_metrics
@@ -712,7 +712,7 @@ class StatementProcessor:
 
         return metrics
 
-    async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False) -> ProcessResult:
+    async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False, is_last: bool = True) -> ProcessResult:
         """Async twin of :meth:`process_statement` for top-level-await cells.
 
         Line-for-line the same pipeline — analysis, cache lookup, cache-hit
@@ -852,7 +852,7 @@ class StatementProcessor:
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = await self._execute_and_drain_async(
-            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent,
+            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, is_last,
         )
         if error_metrics is not None:
             return error_metrics
@@ -1132,6 +1132,7 @@ class StatementProcessor:
         metrics: ProcessResult,
         process_start: float,
         silent: bool,
+        is_last: bool = True,
     ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
         """Execute the statement, drain decorator calls, populate stdout/stderr in metrics.
 
@@ -1143,7 +1144,7 @@ class StatementProcessor:
 
         result, captured, execution_time, accessed_files = self._execute_statement(
             code, stream_output=stream_output, tree=tree,
-            skip_capture=(skip_cache and stream_output),
+            skip_capture=(skip_cache and stream_output), is_last=is_last,
         )
 
         decorator_calls: list = []
@@ -1186,6 +1187,7 @@ class StatementProcessor:
         metrics: ProcessResult,
         process_start: float,
         silent: bool,
+        is_last: bool = True,
     ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
         """Async twin of :meth:`_execute_and_drain`.
 
@@ -1200,7 +1202,7 @@ class StatementProcessor:
 
         result, captured, execution_time, accessed_files = await self._execute_statement_async(
             code, stream_output=stream_output, tree=tree,
-            skip_capture=(skip_cache and stream_output),
+            skip_capture=(skip_cache and stream_output), is_last=is_last,
         )
 
         decorator_calls: list = []
@@ -1831,7 +1833,7 @@ class StatementProcessor:
             return _tee_output()
         return capture_output(stdout=True, stderr=True, display=True)
 
-    def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False) -> tuple[Any, Any, float, set[str]]:
+    def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True) -> tuple[Any, Any, float, set[str]]:
         """Execute statement with output capture and file tracking.
 
         Args:
@@ -1881,11 +1883,22 @@ class StatementProcessor:
                          c_expr = compile(mod_expr, cash_file, 'eval')
                          result_val = eval(c_expr, self.shell.user_ns, self.shell.user_ns)
 
+                         # IPython echoes only the LAST expression of a CELL. Cash
+                         # splits the cell into statements and executes each as its
+                         # own unit, so without ``is_last`` every bare expression
+                         # got displayed and cash silently changed notebook
+                         # semantics -- `a+1 / a+2 / a+3` printed 2,3,4 where a
+                         # plain kernel prints 4 (CAS-174). Gating the DISPLAY (not
+                         # the cache-keyed source) is deliberate: the reverted
+                         # attempt appended ';' to the keyed source in the runtime
+                         # only, desyncing it from the simulator's unparse and
+                         # blanking a chart.
                          # A trailing ``;`` suppresses the repr in IPython. The
                          # cell splitter re-attaches it after ``ast.unparse``
                          # (CAS-96); honour it so no repr is displayed OR captured
                          # (an empty capture then also restores cleanly).
-                         if result_val is not None and not code.rstrip().endswith(';'):
+                         if (is_last and result_val is not None
+                                 and not code.rstrip().endswith(';')):
                              from IPython.display import display
                              display(result_val)
                     else:
@@ -1909,7 +1922,7 @@ class StatementProcessor:
         execution_time = time.time() - start_time
         return result, captured, execution_time, accessed_files
 
-    async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False) -> tuple[Any, Any, float, set[str]]:
+    async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True) -> tuple[Any, Any, float, set[str]]:
         """Async twin of :meth:`_execute_statement` for top-level-await cells.
 
         Byte-for-byte the same output-capture / file-tracking / last-expr
@@ -1963,7 +1976,9 @@ class StatementProcessor:
                         if c_expr.co_flags & inspect.CO_COROUTINE:
                             result_val = await result_val
 
-                        if result_val is not None and not code.rstrip().endswith(';'):
+                        # Same last-expression-only rule as the sync path (CAS-174).
+                        if (is_last and result_val is not None
+                                and not code.rstrip().endswith(';')):
                             from IPython.display import display
                             display(result_val)
                     else:

@@ -814,6 +814,10 @@ class CellExecutor:
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
             occurrence_index=occurrence_index,
+            # IPython echoes only the CELL's last expression; cash executes each
+            # statement as its own unit, so it must be told which one that is
+            # (CAS-174).
+            is_last=is_last_statement,
         )
         return self._handle_regular_stmt_metrics(
             metrics, is_last_statement, all_metrics, buffered_result_outputs,
@@ -840,6 +844,7 @@ class CellExecutor:
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
             occurrence_index=occurrence_index,
+            is_last=is_last_statement,   # CAS-174, as in the sync path
         )
         return self._handle_regular_stmt_metrics(
             metrics, is_last_statement, all_metrics, buffered_result_outputs,
