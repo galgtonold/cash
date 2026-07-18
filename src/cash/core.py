@@ -35,6 +35,7 @@ from .config import CashConfig, get_config
 from .data_source import DataSource
 from .dependency_state import DependencyStateHasher, SysModulesHelperResolver
 from .exceptions import (
+    SOURCE_RETRIEVAL_ERRORS,
     CacheExpiredError,
     CashCacheIneffectiveWarning,
     CashCacheStoreFailedWarning,
@@ -687,7 +688,7 @@ class Cash:
         try:
             src = inspect.getsource(fn)
             return hashlib.sha256(src.encode("utf-8")).hexdigest()
-        except (OSError, TypeError):
+        except SOURCE_RETRIEVAL_ERRORS:
             pass
         code = getattr(fn, "__code__", None)
         if code is None:
@@ -2111,7 +2112,7 @@ class Cash:
         freevars = set(code.co_freevars or ())
         try:
             tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
-        except (OSError, TypeError, SyntaxError, IndentationError):
+        except SOURCE_RETRIEVAL_ERRORS:
             result = frozenset(freevars)
         else:
             result = Cash._unsafe_uses_of(tree, freevars)
@@ -2485,7 +2486,7 @@ class Cash:
             try:
                 tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
                 candidates -= Cash._unsafe_uses_of(tree, candidates)
-            except (OSError, TypeError, SyntaxError, IndentationError):
+            except SOURCE_RETRIEVAL_ERRORS:
                 candidates = set()
         names = tuple(sorted(candidates))
         if len(self._global_read_cache) < 4096:
@@ -3167,7 +3168,7 @@ class Cash:
 
         try:
             src_lines, first_lineno = inspect.getsourcelines(func)
-        except (OSError, TypeError):
+        except SOURCE_RETRIEVAL_ERRORS:
             # No retrievable source (exec'd, REPL, C function). Staying silent
             # is the conservative choice: we cannot see a draw, so we cannot
             # honestly claim there is one.

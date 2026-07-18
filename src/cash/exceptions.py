@@ -7,7 +7,10 @@ while still distinguishing between error categories when needed.
 
 from __future__ import annotations
 
+from tokenize import TokenError
+
 __all__ = [
+    "SOURCE_RETRIEVAL_ERRORS",
     "CashError",
     "CacheBackendError",
     "CacheSerializationError",
@@ -23,6 +26,39 @@ __all__ = [
     "CashImpurityWarning",
     "CashUpstreamSyntaxWarning",
 ]
+
+# ---------------------------------------------------------------------------
+# Source-retrieval failure modes
+# ---------------------------------------------------------------------------
+
+#: Every way ``inspect.getsource``/``getsourcelines`` can fail to hand back a
+#: function's source.
+#:
+#: Wider than the documented ``OSError``/``TypeError`` because ``inspect`` does
+#: not just read the file — it runs ``tokenize`` over it to find where the
+#: function's block ends. So a file that is *not valid Python end-to-end* raises
+#: ``tokenize.TokenError``, which derives straight from ``Exception`` and is
+#: therefore caught by neither an ``OSError`` nor a ``SyntaxError`` handler.
+#:
+#: That is not exotic: it is any function whose ``co_filename`` names something
+#: only partly parseable as Python — a docs page exec'd under its own path, a
+#: Jupytext/Quarto literate source, a saved REPL transcript. Cash reaches for
+#: source at decoration time, so an uncaught raise here aborts ``@cash.cache``
+#: itself rather than degrading.
+#:
+#: Every call site guarded by this tuple already has a fallback (bytecode hash,
+#: opaque identity, or a conservative "assume impure"), so widening it only
+#: converts a crash into the degradation those sites were written to perform.
+SOURCE_RETRIEVAL_ERRORS: tuple[type[BaseException], ...] = (
+    OSError,            # file missing / not on disk (builtins, C extensions)
+    TypeError,          # object has no source to speak of
+    TokenError,         # file does not tokenize as Python (see above)
+    SyntaxError,        # file tokenizes but does not parse
+    IndentationError,   # SyntaxError subclass; listed for the reader
+    UnicodeDecodeError, # ValueError subclass; file is not decodable text
+    ValueError,         # e.g. inspect given a built-in with a bogus lineno
+)
+
 
 class CashError(Exception):
     """Base exception for all Cash errors."""

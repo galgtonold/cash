@@ -18,6 +18,8 @@ import uuid
 from collections.abc import Callable
 from typing import Any
 
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+
 __all__ = ["CodeAnalyzer"]
 
 logger = logging.getLogger(__name__)
@@ -414,8 +416,10 @@ class CodeAnalyzer:
         try:
             source = inspect.getsource(func)
             return hashlib.sha256(source.encode('utf-8')).hexdigest()
-        except (OSError, TypeError):
-            pass  # Expected: source unavailable for builtins/C extensions; fall through to bytecode hash
+        except SOURCE_RETRIEVAL_ERRORS:
+            pass  # Expected: source unavailable for builtins/C extensions, or a
+                  # co_filename that doesn't tokenize as Python; fall through to
+                  # the bytecode hash.
 
         code_obj = getattr(func, '__code__', None)
         if code_obj is None and hasattr(func, '__wrapped__'):
@@ -448,7 +452,7 @@ class CodeAnalyzer:
         try:
             source = textwrap.dedent(inspect.getsource(func))
             tree = ast.parse(source)
-        except (OSError, TypeError, SyntaxError):
+        except SOURCE_RETRIEVAL_ERRORS:
             return set()
 
         visitor = _CallVisitor()

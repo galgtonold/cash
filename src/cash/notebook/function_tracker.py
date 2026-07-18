@@ -15,6 +15,8 @@ import textwrap
 import types
 from typing import Any
 
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+
 __all__ = ["FunctionTracker", "is_local_module"]
 
 logger = logging.getLogger(__name__)
@@ -251,7 +253,7 @@ class FunctionTracker:
             self._source_cache[cache_key] = (source_hash, source)
             return source_hash
 
-        except (OSError, TypeError, IndentationError):
+        except SOURCE_RETRIEVAL_ERRORS:
             # Can't get source - try bytecode fallback (works for IPython-defined
             # functions when %cash_on intercepts execution)
             source_hash = _compute_bytecode_hash(func)

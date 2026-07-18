@@ -8,6 +8,8 @@ import logging
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+
 try:
     import pandas as pd
     HAS_PANDAS = True
@@ -69,7 +71,7 @@ class CacheExplorer:
                 import inspect
                 try:
                     entry['source_code'] = inspect.getsource(self.app.functions[func_name])
-                except (TypeError, OSError):
+                except SOURCE_RETRIEVAL_ERRORS:
                     entry['source_code'] = "Source not available"
             else:
                 entry['source_code'] = "Function not loaded"

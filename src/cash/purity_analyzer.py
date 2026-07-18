@@ -43,6 +43,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from .exceptions import SOURCE_RETRIEVAL_ERRORS
 from .notebook.cacheability import (
     PANDAS_INPLACE_METHODS,
     _get_base_name,
@@ -665,7 +666,7 @@ class PurityAnalyzer:
             # Read source. Failure -> opaque leaf.
             try:
                 src = inspect.getsource(func)
-            except (OSError, TypeError):
+            except SOURCE_RETRIEVAL_ERRORS:
                 opaque.append(qualname)
                 continue
             src = textwrap.dedent(src)
@@ -1005,7 +1006,7 @@ def _module_modified_globals(module: Any) -> frozenset[str]:
         return cached
     try:
         tree = ast.parse(textwrap.dedent(inspect.getsource(module)))
-    except (OSError, TypeError, SyntaxError, ValueError):
+    except SOURCE_RETRIEVAL_ERRORS:
         _MODULE_MOD_GLOBALS_CACHE[name] = frozenset()
         return frozenset()
     try:
@@ -1028,7 +1029,7 @@ def _qualname_of(func: Callable[..., Any]) -> str:
 def _try_source_hash(func: Callable[..., Any]) -> str | None:
     try:
         src = inspect.getsource(func)
-    except (OSError, TypeError):
+    except SOURCE_RETRIEVAL_ERRORS:
         return None
     return hashlib.sha256(src.encode("utf-8")).hexdigest()
 

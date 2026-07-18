@@ -7,6 +7,8 @@ import threading
 from collections.abc import Callable
 from typing import Any, TypeVar
 
+from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+
 __all__ = ["pure", "stateful", "is_pure", "is_stateful", "is_known_pure", "KNOWN_PURE_BUILTINS", "analyze_function_purity", "clear_purity_cache"]
 
 F = TypeVar('F', bound=Callable[..., Any])
@@ -201,7 +203,7 @@ def analyze_function_purity(func: Any, user_ns: dict[str, Any] | None = None) ->
     # Only analyze user-defined functions (not builtins, C extensions, etc.)
     try:
         source = inspect.getsource(func)
-    except (TypeError, OSError):
+    except SOURCE_RETRIEVAL_ERRORS:
         return False  # Can't get source → conservatively impure
 
     # Check cache
