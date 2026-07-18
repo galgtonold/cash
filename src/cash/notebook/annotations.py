@@ -6,7 +6,7 @@ import ast
 import re
 from dataclasses import dataclass
 
-__all__ = ["CacheAnnotation", "ANNOTATION_PATTERN", "parse_annotation_line", "parse_annotations_in_range", "get_statement_annotations", "extract_annotations_for_statements"]
+__all__ = ["CacheAnnotation", "ANNOTATION_PATTERN", "leading_cell_annotation", "parse_annotation_line", "parse_annotations_in_range", "get_statement_annotations", "extract_annotations_for_statements"]
 
 @dataclass
 class CacheAnnotation:
@@ -113,6 +113,43 @@ def parse_annotations_in_range(
 
     return result
 
+def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
+    """The cell-scoped directives from the cell's LEADING comment block.
+
+    Only ``no-cache`` propagates from the header to the whole cell. That
+    asymmetry is deliberate, and it is about which way each directive is safe to
+    be wrong:
+
+    * ``no-cache`` is a SAFETY opt-out. A user writes it because caching this
+      cell would be *incorrect* — timestamps, side effects, live values. Applying
+      it to only the first statement silently cached statements 2..n of a cell
+      explicitly marked do-not-cache (CAS-189), producing exactly the stale
+      values the user was trying to prevent. Over-applying it merely costs speed,
+      so it fails safe cell-wide.
+    * ``persist`` / ``ttl`` are PERFORMANCE hints, and over-applying them is the
+      expensive direction: a header ``persist`` spread across a loop that grows a
+      frame snapshots every intermediate width — measured at 13x cache
+      amplification (CAS-160). They stay statement-scoped, which is also how a
+      header ``persist`` above a single statement already reads.
+
+    Only the header block counts: scanning stops at the first line of real code,
+    so a directive further down stays statement-scoped and mid-cell targeting
+    keeps working.
+    """
+    header = CacheAnnotation()
+    for line in source_lines:
+        stripped = line.strip()
+        if not stripped:
+            continue                      # blank lines don't close the header
+        if not stripped.startswith('#'):
+            break                         # first real code closes the header
+        ann = parse_annotation_line(line)
+        if ann:
+            header = header.merge(ann)
+    # Propagate the safety opt-out only.
+    return CacheAnnotation(no_cache=header.no_cache)
+
+
 def get_statement_annotations(
     full_source: str,
     node: ast.AST
@@ -120,7 +157,10 @@ def get_statement_annotations(
     """
     Get cache annotations that apply to an AST node.
 
-    Handles compound statements by checking all lines within the block.
+    Handles compound statements by checking all lines within the block, and
+    layers the cell's leading-block directives underneath (see
+    :func:`leading_cell_annotation`) so a cell-level directive reaches every
+    statement, not just the first.
 
     Args:
         full_source: The complete source code
@@ -137,7 +177,21 @@ def get_statement_annotations(
     start_line = node.lineno
     end_line = node.end_lineno or start_line
 
-    return parse_annotations_in_range(source_lines, start_line, end_line)
+    statement_level = parse_annotations_in_range(source_lines, start_line, end_line)
+
+    # Cell-level directives reach TOP-LEVEL statements only (``col_offset == 0``).
+    # A statement nested in a control body must NOT pick them up implicitly: the
+    # control-structure processor decides deliberately what a body inherits and
+    # merges it explicitly (resolve_header_annotation -> resolve_statement_
+    # annotation). Letting the header leak in here would re-create CAS-135, where
+    # a whole-range annotation disabled caching for every sibling in the body.
+    if getattr(node, 'col_offset', 0) != 0:
+        return statement_level
+
+    # Cell-level first, statement-level layered on top, so a statement-specific
+    # directive can still refine (and ``no-cache`` still wins over ``persist``
+    # via CacheAnnotation.merge).
+    return leading_cell_annotation(source_lines).merge(statement_level)
 
 def extract_annotations_for_statements(
     full_source: str
@@ -155,12 +209,18 @@ def extract_annotations_for_statements(
 
     annotations = {}
     source_lines = full_source.splitlines()
+    # Same cell-level layering as get_statement_annotations (CAS-189) — these
+    # two must agree, or a directive would apply on one lookup path and not the
+    # other.
+    cell_level = leading_cell_annotation(source_lines)
 
     for node in tree.body:
         if hasattr(node, 'lineno'):
             start_line = node.lineno
             end_line = getattr(node, 'end_lineno', start_line) or start_line
-            ann = parse_annotations_in_range(source_lines, start_line, end_line)
+            ann = cell_level.merge(
+                parse_annotations_in_range(source_lines, start_line, end_line)
+            )
 
             if ann.has_directives():
                 annotations[start_line] = ann
