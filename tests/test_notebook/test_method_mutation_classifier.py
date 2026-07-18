@@ -23,6 +23,21 @@ from cash.backends import InMemoryBackend
 from cash.notebook.ipython.magics import CashMagics
 
 
+@pytest.fixture(autouse=True)
+def _force_agg_backend():
+    """Pin matplotlib to the headless Agg backend for this module's tests.
+
+    The two ``plt.subplots()`` tests below don't set a backend, so under ``-n16``
+    matplotlib defaults to the interactive Tk backend, which cannot create a
+    canvas in a parallel worker with no display and raises. Whether an earlier
+    test in the same worker had already switched to Agg was pure worksteal-order
+    luck; force it so the tests are isolation-robust regardless of ordering.
+    """
+    mpl = pytest.importorskip("matplotlib")
+    mpl.use("Agg", force=True)
+    yield
+
+
 class MockShell(Configurable):
     def __init__(self):
         super().__init__()
