@@ -188,8 +188,51 @@ class PendingWrites:
         for f in futures:
             try:
                 f.result()
-            except Exception:  # noqa: BLE001 — surfaced separately via wait(key)
-                pass
+            except Exception as exc:  # noqa: BLE001 — re-raising would punish the wrong caller
+                # Still not raised here: wait_all's callers are bulk reads, and
+                # one bad entry must not fail a listing. But it is no longer
+                # invisible — the previous bare ``pass`` is how a failed write
+                # could vanish without appearing in any log at any level.
+                logger.debug("Pending write failed (surfaced via wait(key)): %s", exc)
+
+    def failed_writes(self) -> list[tuple[str, BaseException]]:
+        """Keys whose write raised and was never observed by a ``wait(key)``.
+
+        A write failure is only surfaced when someone asks for that key again.
+        Nothing does so at process exit, so a cache write could fail and leave
+        no trace anywhere — the entry was simply, permanently, not there.
+        """
+        with self._lock:
+            items = list(self._pending.items())
+        failed = []
+        for key, future in items:
+            if not future.done():
+                continue
+            try:
+                exc = future.exception(timeout=0)
+            except Exception:  # noqa: BLE001 — cancelled/never-ran future
+                continue
+            if exc is not None:
+                failed.append((key, exc))
+        return failed
+
+    def _report_failed_writes(self) -> None:
+        """Log any write failure nobody observed. Never raises.
+
+        Called from shutdown, which usually runs from an ``atexit`` handler —
+        raising there is worse than useless. But staying silent means a user
+        whose disk filled up sees only unexplained cache misses forever.
+        """
+        failed = self.failed_writes()
+        if not failed:
+            return
+        logger.warning(
+            "Cash: %d cache write(s) failed and were discarded; those entries "
+            "are absent, so the work will be recomputed. First failure: %s: %s",
+            len(failed), type(failed[0][1]).__name__, failed[0][1],
+        )
+        for key, exc in failed:
+            logger.debug("  failed write key=%r: %s: %s", key, type(exc).__name__, exc)
 
     def shutdown(self, wait: bool = True) -> None:
         """Block (when ``wait=True``) until every in-flight write finishes."""
@@ -198,6 +241,8 @@ class PendingWrites:
                 return
             self._shutdown = True
         self._executor.shutdown(wait=wait)
+        if wait:
+            self._report_failed_writes()
 
 
 @dataclass(frozen=True)
