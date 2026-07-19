@@ -14,7 +14,14 @@ def test_default_ttl_applies_without_explicit_ttl(temp_cache_dir):
     now omits ``None`` fields, so an unset ttl falls through to the backend
     default and the entry expires.
     """
-    backend = FileBackend(cache_dir=temp_cache_dir, default_ttl=0.1)
+    # 2s, not 0.1s. The "cache hit" assertion below has to land inside the TTL
+    # window, and between the two calls sits an async write plus the get() that
+    # waits for it. 100ms is comfortable on an idle dev box and marginal on a
+    # contended 2-vCPU CI runner, where this failed as `assert 2 == 1` — the
+    # entry expired before it could be hit. The window only has to be long
+    # enough that expiry cannot happen by accident; the sleep below still
+    # exercises real expiry.
+    backend = FileBackend(cache_dir=temp_cache_dir, default_ttl=2.0)
     cash = Cash(backend=backend, register_magic=False)
     side_effect = {'count': 0}
 
@@ -28,7 +35,7 @@ def test_default_ttl_applies_without_explicit_ttl(temp_cache_dir):
     assert compute(10) == 20  # cache hit — no recompute
     assert side_effect['count'] == 1
 
-    time.sleep(0.15)
+    time.sleep(2.1)  # past default_ttl
 
     assert compute(10) == 20  # default_ttl expired — recompute
     assert side_effect['count'] == 2
@@ -40,7 +47,11 @@ def test_ttl_expiration(cash_instance):
     '''Test that cached values expire after TTL.'''
     side_effect = {'count': 0}
     
-    @cash_instance.cache(ttl=0.1)
+    # 2s for the same reason as test_default_ttl_applies_without_explicit_ttl:
+    # the "from cache" assertion below must land inside the TTL window, and an
+    # async write plus the get() that waits for it sit in between. A 100ms
+    # budget is marginal on a contended CI runner.
+    @cash_instance.cache(ttl=2.0)
     def func_with_ttl(x):
         side_effect['count'] += 1
         return x * 2
@@ -56,8 +67,8 @@ def test_ttl_expiration(cash_instance):
     assert side_effect['count'] == 1, 'Should use cached value'
     
     # Wait for expiration
-    time.sleep(0.15)
-    
+    time.sleep(2.1)
+
     # Third call - recompute after expiration
     result3 = func_with_ttl(10)
     assert result3 == 20
