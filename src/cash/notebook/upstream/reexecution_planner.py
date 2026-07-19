@@ -750,7 +750,7 @@ class ReexecutionPlanner:
             return []
         runtime_lineage = getattr(tracking, 'variable_lineage', None) or {}
 
-        from ..cacheability import statement_writes_files
+        from ..cacheability import statement_appends_to_files, statement_writes_files
 
         def _input_lineage_drifted(name: str) -> bool:
             # The writer's payload changed even though nothing in the variable
@@ -779,6 +779,25 @@ class ReexecutionPlanner:
                     logger.debug(
                         "[UPSTREAM] File-writer output read by no relevant "
                         "consumer; not scheduling (scope): %s", stmt_code[:60],
+                    )
+                continue
+            # Repeatability gate (CAS-210). The scope gate above keys on
+            # RELEVANCE -- "does a relevant consumer read this file?" -- not on
+            # whether repeating the write is safe. Those coincide in the cases
+            # it was built for, which is why it reads as a correctness
+            # guarantee; they come apart for an APPEND whose file is also read.
+            # There the gate steps aside and the re-fire silently duplicates the
+            # payload on disk, damage a kernel restart cannot undo.
+            #
+            # Not re-firing is also what the user's own kernel does: the write
+            # runs when they run its own cell, and they did not run it here.
+            # Only a provable append is refused -- a truncating write is
+            # idempotent and still re-fires, which chart-coherence relies on.
+            if statement_appends_to_files(stmt_code):
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM] File-writer is a non-idempotent append; not "
+                        "re-firing (repeatability): %s", stmt_code[:60],
                     )
                 continue
             changed = stmt_code not in executed_writes

@@ -174,6 +174,35 @@ def _extract_base_name(node: ast.AST) -> str | None:
     return None
 
 
+def _extract_receiver_base_name(node: ast.AST) -> str | None:
+    """Root variable of a METHOD-CALL RECEIVER, or ``None`` if it has no variable.
+
+    Differs from :func:`_extract_base_name` in exactly one case: a receiver that
+    is a constructor/factory call spelled as a bare name — ``open(p, 'a')`` in
+    ``open(p, 'a').write(x)``, or ``Path(p)`` in ``Path(p).write_text(x)``.
+    :func:`_extract_base_name` walks the Call and returns the CALLEE (``open``),
+    but the callee is not the receiver: the call builds a NEW object that no
+    variable is bound to, so there is no receiver lineage to bump. Booking that
+    as a mutation of ``open`` made the writer statement re-execute during
+    upstream reconstruction, and because the write is a ``mode='a'`` append,
+    re-execution DUPLICATED the line on disk (CAS-210).
+
+    A chained call on a real variable — the documented
+    ``groups.setdefault(k, []).append(v)`` intent — still resolves to ``groups``:
+    it descends through the Attribute branch, which is retained.
+
+    Used only by the method-mutation receiver helpers, so the broader
+    :func:`_extract_base_name` behaviour its other callers rely on is unchanged.
+    """
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, (ast.Subscript, ast.Attribute)):
+        return _extract_receiver_base_name(node.value)
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+        return _extract_receiver_base_name(node.func.value)
+    return None
+
+
 def _iter_store_targets(target: ast.expr):
     """Yield the leaf store targets of an assignment target, flattening tuple/list
     unpacking and starred elements.
@@ -211,7 +240,7 @@ class _MutationVisitor(ast.NodeVisitor):
         if not isinstance(call.func, ast.Attribute):
             return
         method_name = call.func.attr
-        base = _extract_base_name(call.func.value)
+        base = _extract_receiver_base_name(call.func.value)
         if not base:
             return
         if method_name in MUTATING_METHODS:
@@ -400,6 +429,54 @@ def statement_writes_files(code: str, tree: 'ast.Module | None' = None) -> bool:
     except (SyntaxError, ValueError, TypeError):
         return False
     return any(e.kind == 'file_write' for e in analysis.side_effects)
+
+
+def _is_append_mode_call(call: ast.Call) -> bool:
+    """True when *call* carries a statically-visible APPEND mode string.
+
+    Covers ``open(p, 'a')`` (mode is positional arg 1) and any writer taking a
+    ``mode=`` keyword (``open(p, mode='a')``, ``df.to_csv(p, mode='a')``). A
+    non-literal mode (``open(p, m)``) is NOT provable and returns False.
+    """
+    if isinstance(call.func, ast.Name) and call.func.id == 'open' and len(call.args) >= 2:
+        mode_arg = call.args[1]
+        if isinstance(mode_arg, ast.Constant) and isinstance(mode_arg.value, str):
+            if 'a' in mode_arg.value:
+                return True
+    for kw in call.keywords:
+        if (kw.arg == 'mode'
+                and isinstance(kw.value, ast.Constant)
+                and isinstance(kw.value.value, str)
+                and 'a' in kw.value.value):
+            return True
+    return False
+
+
+def statement_appends_to_files(code: str, tree: 'ast.Module | None' = None) -> bool:
+    """True when *code* provably APPENDS to a file — an ACCUMULATING write.
+
+    The repeatability question the write-detection helpers above do not answer:
+    :data:`_WRITE_MODES` pools ``'a'`` with ``'w'``, so every consumer sees only
+    "this writes a file", never "repeating this write duplicates data".
+
+    Used by the re-execution planner to refuse re-firing a non-idempotent write
+    during upstream reconstruction (CAS-210). Deliberately narrow: it reports
+    True only for a statically-visible append mode. A truncating write is
+    idempotent and must keep re-firing (chart-coherence re-derivation depends on
+    it), and an unresolvable mode stays False so no existing path changes.
+    """
+    if 'mode' not in code and "'a" not in code and '"a' not in code:
+        return False
+    if tree is None:
+        try:
+            tree = ast.parse(code)
+        except (SyntaxError, ValueError, TypeError):
+            return False
+    return any(
+        _is_append_mode_call(node)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+    )
 
 
 # Write-call method forms whose FIRST positional argument (or a common path
@@ -2874,7 +2951,7 @@ def standalone_method_mutation_receivers(tree: ast.Module | None) -> frozenset[s
         if not isinstance(call.func, ast.Attribute):
             continue
         method_name = call.func.attr
-        base = _extract_base_name(call.func.value)
+        base = _extract_receiver_base_name(call.func.value)
         if not base:
             continue
         if method_name in MUTATING_METHODS or (
@@ -2909,7 +2986,7 @@ def standalone_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple
             calls.add((out_base, 'out='))
         if not isinstance(call.func, ast.Attribute):
             continue
-        base = _extract_base_name(call.func.value)
+        base = _extract_receiver_base_name(call.func.value)
         if base:
             calls.add((base, call.func.attr))
     return frozenset(calls)
@@ -2951,7 +3028,7 @@ def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[s
         for sub in ast.walk(value):
             if not isinstance(sub, ast.Call) or not isinstance(sub.func, ast.Attribute):
                 continue
-            base = _extract_base_name(sub.func.value)
+            base = _extract_receiver_base_name(sub.func.value)
             if base:
                 calls.add((base, sub.func.attr))
     return frozenset(calls)

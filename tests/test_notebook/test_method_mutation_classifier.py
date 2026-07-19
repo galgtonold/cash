@@ -145,3 +145,38 @@ def test_captured_return_draw_routes_on_identity_coupled_receiver_only(classifie
     assert 'df' not in _routes_mutation(proc, shell, "top = df.head()")
 
     plt.close(fig)
+
+
+def test_call_expression_receiver_is_not_attributed_to_the_callee(classifiers):
+    """CAS-210: ``open(p, 'a').write(x)`` must not record a mutation of ``open``.
+
+    The receiver of ``.write`` is a Call, not a name. Resolving it walked through
+    the Call to the CALLEE and returned ``open`` -- but the callee is not the
+    receiver: the call builds a NEW object that no variable is bound to, so there
+    is no receiver lineage to bump. Booking it as a mutation of ``open`` made the
+    writer statement re-execute during upstream reconstruction, and because the
+    write is a ``mode='a'`` append, re-execution DUPLICATED the line on disk.
+
+    This pins the misattribution only. Whether a non-idempotent write may be
+    re-fired at all is the separate defence-in-depth half of CAS-210.
+    """
+    proc, shell = classifiers
+    shell.user_ns.update({
+        'p': 'audit.log',
+        'payload': 42,
+        'groups': {},
+        'key': 'k',
+        'val': 1,
+    })
+
+    # A constructor/factory call as the receiver has NO variable to mutate.
+    assert 'open' not in _routes_mutation(proc, shell, "open(p, 'a').write('x\\n')")
+    assert 'open' not in _routes_mutation(proc, shell, "open(p, 'w').writelines(['x'])")
+    assert 'Path' not in _routes_mutation(proc, shell, "Path(p).write_text('x')")
+
+    # The documented chained-call intent still resolves to the real variable:
+    # this descends through the Attribute branch, not the callee branch.
+    assert 'groups' in _routes_mutation(proc, shell, "groups.setdefault(key, []).append(val)")
+
+    # And an ordinary named receiver is untouched by the guard.
+    assert 'groups' in _routes_mutation(proc, shell, "groups.update({'a': 1})")

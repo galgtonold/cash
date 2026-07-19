@@ -490,6 +490,28 @@ class TestSideEffects:
         assert not statement_writes_files("x = 1 + 2")
         assert not statement_writes_files("with open('f.txt') as f:\n    body = f.read()")
 
+    def test_statement_appends_to_files_helper(self):
+        # CAS-210: the repeatability seam. `statement_writes_files` answers
+        # "does this write?"; the planner also needs "is repeating it safe?",
+        # because re-firing a mode='a' append DUPLICATES the payload on disk.
+        from cash.notebook.cacheability import statement_appends_to_files
+
+        # Accumulating -> never safe to re-fire.
+        assert statement_appends_to_files("open(p, 'a').write('x\\n')")
+        assert statement_appends_to_files("with open('f.txt', 'ab') as f:\n    f.write(b'x')")
+        assert statement_appends_to_files("open(p, mode='a+').write('x')")
+        assert statement_appends_to_files("df.to_csv('log.csv', mode='a', header=False)")
+
+        # Truncating -> idempotent, must STILL re-fire (chart coherence).
+        assert not statement_appends_to_files("open(p, 'w').write('x')")
+        assert not statement_appends_to_files("df.to_csv('out.csv', index=False)")
+        assert not statement_appends_to_files("fig.savefig('chart.png')")
+        assert not statement_appends_to_files("p.write_text('x')")
+
+        # Not provable -> stays False, so no existing path changes behaviour.
+        assert not statement_appends_to_files("open(p, m).write('x')")
+        assert not statement_appends_to_files("x = 1 + 2")
+
     def test_os_remove(self):
         a = _analyze("import os; os.remove('file.txt')")
         assert any(e.kind == 'file_write' for e in a.side_effects)
