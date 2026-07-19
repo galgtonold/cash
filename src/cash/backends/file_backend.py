@@ -7,6 +7,7 @@ import gzip
 import logging
 import os
 import pickle
+import tempfile
 import threading
 import time
 import weakref
@@ -379,13 +380,12 @@ class FileBackend(CacheBackend):
             # unrestorable here - report it absent so callers recompute
             # instead of crashing the user's cell.
             #
-            # EOFError: an empty or truncated file. Writes are not atomic (see
-            # _write_cache_files), so a concurrent reader can open a data file
-            # between creation and the bytes landing. EOFError subclasses
-            # Exception directly - not OSError, not ValueError - so it escaped
-            # this handler and surfaced to the user as "Ran out of input"
-            # instead of a recompute. Degrading to a miss is correct either
-            # way: an unreadable entry is an absent entry.
+            # EOFError: a truncated file. ``_atomic_write`` now prevents cash
+            # from producing one, but a cache directory can still hold a
+            # partial file written by an older version, a killed process, or a
+            # full disk. EOFError subclasses Exception directly - not OSError,
+            # not ValueError - so it used to escape this handler and crash the
+            # caller with "Ran out of input" instead of degrading to a miss.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 
@@ -414,16 +414,47 @@ class FileBackend(CacheBackend):
             except Exception:  # noqa: BLE001 — see docstring
                 logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
+    def _atomic_write(self, path: str, payload: bytes, *, use_gzip: bool) -> None:
+        """Write *payload* to *path* so no reader can observe a partial file.
+
+        A plain ``open(path, 'wb')`` makes the file visible the instant it is
+        created — while it still holds zero or half its bytes. Any concurrent
+        reader (a second Cash instance, or another process sharing the cache
+        directory) can pass ``get()``'s ``os.path.exists`` check and then
+        unpickle a truncated file. That is what surfaced on the macOS CI
+        runners as ``EOFError: Ran out of input``.
+
+        Writing to a temp file in the SAME directory and renaming makes the
+        entry appear all at once: a reader sees either the previous contents or
+        the complete new ones, never a torn mixture. ``os.replace`` is atomic on
+        POSIX and on Windows, and same-directory keeps it a rename rather than a
+        cross-filesystem copy.
+        """
+        directory = os.path.dirname(path) or '.'
+        # mkstemp in the target directory; the leading dot keeps the partial out
+        # of the ``*.data`` / ``*.meta`` globs the backend scans.
+        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.tmp-', suffix='.part')
+        os.close(fd)
+        try:
+            opener = gzip.open if use_gzip else open
+            with opener(tmp_path, 'wb') as f:
+                f.write(payload)
+            os.replace(tmp_path, path)
+        except BaseException:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                logger.debug("Could not remove partial write %s", tmp_path, exc_info=True)
+            raise
+
     def _write_cache_files(self, key: str, meta_path: str, data_path: str, metadata: dict, serialized_value: bytes) -> None:
         """Write serialized data and metadata to disk, updating size tracking.
 
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
-        opener = gzip.open if self.compress else open
         try:
-            with opener(data_path, 'wb') as f:
-                f.write(serialized_value)
+            self._atomic_write(data_path, serialized_value, use_gzip=self.compress)
         except FileNotFoundError:
             # The cache dir vanished under a live process. The README suggests
             # deleting ./.cash to wipe the cache, and doing that with the kernel
@@ -431,8 +462,7 @@ class FileBackend(CacheBackend):
             # instead of simply recreating the directory. Recreate + retry once;
             # costs nothing on the normal path.
             os.makedirs(self.cache_dir, exist_ok=True)
-            with opener(data_path, 'wb') as f:
-                f.write(serialized_value)
+            self._atomic_write(data_path, serialized_value, use_gzip=self.compress)
 
         try:
             actual_data_size = os.path.getsize(data_path)
@@ -442,16 +472,10 @@ class FileBackend(CacheBackend):
             metadata['size'] = len(serialized_value)
             logger.debug("Could not stat data file %s; using serialized length", data_path, exc_info=True)
 
-        # NOTE: this write is NOT atomic, so a concurrent reader can still
-        # observe a partial file (see get()'s EOFError exposure). Replacing it
-        # with a temp-file + os.replace DOES fix that, but it also breaks
-        # test_decorator_chain_restores_on_first_call_after_restart on Windows,
-        # deterministically: 6/6 passes without it, 0/6 with it. Whatever the
-        # notebook restore path depends on here, it is not just the bytes.
-        # Left as-is until that is understood rather than traded for a
-        # regression in a headline path.
-        with open(meta_path, 'wb') as f:
-            pickle.dump(metadata, f)
+        # Data lands before metadata, and each lands atomically. get() requires
+        # BOTH files, so the worst a concurrent reader can observe is
+        # data-without-metadata — which it reports as a clean miss.
+        self._atomic_write(meta_path, pickle.dumps(metadata), use_gzip=False)
 
         try:
             actual_meta_size = os.path.getsize(meta_path)

@@ -307,6 +307,25 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 except (KeyError, AttributeError):
                     pass
 
+        # Durability checkpoint (CAS-209). Registered on IPython's own event
+        # rather than inside CellExecutor: the pipeline has several exit paths
+        # and a drain placed after its last phase turned out to run for only
+        # one cell in three, missing precisely the cells that do the caching.
+        # post_run_cell fires for every cell however it finished.
+        if isinstance(prior, dict) and prior.get('flush_pending_writes') is not None:
+            try:
+                shell.events.unregister('post_run_cell', prior['flush_pending_writes'])
+            except (ValueError, KeyError, AttributeError, TypeError):
+                pass
+        try:
+            shell.events.register('post_run_cell', self._flush_pending_writes)
+        except (AttributeError, TypeError) as e:
+            logger.warning(
+                "Could not register post_run_cell handler: %s. Cached results "
+                "will still be written, but a kernel killed (rather than shut "
+                "down) may lose writes that were still queued.", e,
+            )
+
         # Register event handler to capture cell_id before execution
         try:
             shell.events.register('pre_run_cell', self._capture_cell_id)
@@ -355,6 +374,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             shell._cash_hooks = {
                 'original_run_cell': self._original_run_cell,
                 'capture_cell_id': self._capture_cell_id,
+                'flush_pending_writes': self._flush_pending_writes,
             }
             if self._original_run_cell_async is not None:
                 shell._cash_hooks['original_run_cell_async'] = self._original_run_cell_async
@@ -793,6 +813,37 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         nb_path = extract_notebook_path_from_vscode_cell_id(cell_id)
         if nb_path:
             set_notebook_path(nb_path)
+
+    def _flush_pending_writes(self, result: Any = None) -> None:
+        """Make this cell's cached results durable, on ``post_run_cell``.
+
+        Cache writes are asynchronous. Nothing drains the queue when the kernel
+        is *killed* rather than shut down — a crash, an OOM, a force-quit, or a
+        tool that terminates the process instead of asking it to exit. Anything
+        still queued at that moment is lost: the badge reported the result as
+        cached, and after the restart it is not there. A graceful shutdown does
+        drain (measured), so this closes the violent paths only.
+
+        Drains every live queue in the process, not just this instance's
+        backend: a notebook routinely has more than one Cash — the ``%cash_on``
+        instance plus any ``Cash(...)`` built in a cell — and decorator writes
+        go to the latter.
+
+        Hooked to IPython's event rather than to the end of ``CellExecutor``'s
+        pipeline. The pipeline has several exit paths, and a drain placed after
+        its final phase fired for only one cell in three, missing exactly the
+        cells that do the caching.
+
+        Never raises: a failed write is already reported by the backend, and a
+        durability best-effort must not turn a working cell into an error.
+        """
+        try:
+            from ...backends._base import all_pending_writes
+
+            for queue in all_pending_writes():
+                queue.wait_all()
+        except Exception:  # noqa: BLE001 — best-effort, must not break the cell
+            logger.debug("Flushing pending cache writes failed", exc_info=True)
 
     def _capture_cell_id(self, info: Any) -> None:
         """Capture cell_id from IPython's pre_run_cell event.

@@ -6,6 +6,7 @@ import concurrent.futures
 import contextlib
 import logging
 import threading
+import weakref
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -29,6 +30,21 @@ _KEY_LOCK_BOOTSTRAP = threading.Lock()
 # write queue. Without it, two backends over one cache directory could each
 # have their worker waiting on the other's future and deadlock.
 _WORKER_THREAD = threading.local()
+
+# Every live write queue in the process, whatever backend or Cash instance owns
+# it. A notebook routinely has more than one: the ``%cash_on`` instance plus any
+# ``Cash(...)`` the user builds in a cell, each with its own queue — and
+# decorator writes go to the latter. Durability is a property of the kernel, not
+# of one instance, so anything flushing "the pending writes" must reach all of
+# them. Flushing only the magic's own backend drains nothing that matters.
+#
+# WeakSet: a backend going out of scope must not be kept alive by this.
+_LIVE_WRITE_QUEUES: weakref.WeakSet = weakref.WeakSet()
+
+
+def all_pending_writes() -> list[PendingWrites]:
+    """Every write queue still accepting work, across all backends."""
+    return [q for q in _LIVE_WRITE_QUEUES if not q.is_shutdown()]
 
 # The metadata channel backends actually see: an opaque dict they round-trip
 # without inspecting (the channel is polymorphic — both CacheMetadata and the
@@ -79,6 +95,12 @@ class PendingWrites:
         # can detect "I'd be waiting on myself" and skip the block
         # instead of deadlocking.
         self._tls = threading.local()
+        _LIVE_WRITE_QUEUES.add(self)
+
+    def is_shutdown(self) -> bool:
+        """True once ``shutdown()`` has been called; no further work accepted."""
+        with self._lock:
+            return self._shutdown
 
     def _run_task(self, key: str, fn: Callable[..., Any], args: tuple, kwargs: dict) -> Any:
         """Worker-side wrapper: marks ``current_key`` so re-entrant
