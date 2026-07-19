@@ -16,6 +16,16 @@ a result matching **no possible execution of the notebook**:
 Both assert against a GROUND TRUTH rendered outside cash, because both bugs are
 invisible from inside the notebook: the RNG returns a plausible float, and the
 chart corruption is only observable by reading the PNG from outside the kernel.
+
+Note on scope. Carrier-history completion only ever fires for a write the plan
+ALREADY schedules, and reconstruction is scoped to files a relevant consumer
+reads (CAS-193/196/200) -- a writer whose output nothing reads is a terminal
+side effect and is never re-fired. So the chart tests below come in a pair: one
+drives the redraw through a genuine reader of the PNG, the other pins that an
+unrelated cell leaves the artifact alone even after an upstream edit. Demanding
+a redraw from an unrelated cell would contradict that scoping directly, and the
+contradiction is not academic -- lifting the gate duplicates a line in a
+``mode='a'`` audit log, corrupting a file rather than staling one.
 """
 import hashlib
 
@@ -169,20 +179,31 @@ def test_builder_chart_on_disk_survives_an_unrelated_cell(nb_runner, tmp_path):
     )
 
 
-def test_builder_edit_redraws_the_chart_coherently(nb_runner, tmp_path):
-    """The repair must RE-DRAW, not merely refuse: editing the data updates the PNG.
+def test_builder_edit_redraws_coherently_when_the_chart_is_consumed(nb_runner, tmp_path):
+    """The repair must RE-DRAW, not merely refuse -- wherever the write is in scope.
 
-    The complement to the guard above. Re-executing the carrier's whole history
-    has to produce the NEW chart -- a fix that simply declined to re-run the
-    builder would leave the stale [3, 5, 2] bars on disk and still pass a
-    "not blank" check.
+    The complement to the guard above, and the ticket's second acceptance
+    bullet: *if* the sim re-executes a write-performing statement, it must also
+    re-execute every statement that contributed to the written object's state.
+    A fix that simply declined to re-run the builder would leave the stale
+    [3, 5, 2] bars on disk and still pass a "not blank" check.
+
+    The consuming cell READS the chart, which is what puts the write in scope.
+    Reconstruction is scoped to files a relevant consumer actually reads
+    (CAS-193/196/200): a writer whose output nothing reads is a terminal side
+    effect and is deliberately never re-fired, so an *unrelated* cell cannot
+    reach this path at all -- see the companion test below, which pins that.
+    Asserting the redraw through a genuine reader is therefore the only way to
+    exercise carrier-history completion without demanding the very re-fire the
+    scope gate exists to prevent.
     """
     pytest.importorskip("matplotlib")
 
     chart = tmp_path / "chart.png"
     truth_new = _render_truth(tmp_path / "truth_new.png", [3, 5, 9])
     truth_old = _render_truth(tmp_path / "truth_old.png", [3, 5, 2])
-    assert truth_new != truth_old
+    truth_blank = _render_truth(tmp_path / "truth_blank.png", [3, 5, 2], with_bars=False)
+    assert truth_new != truth_old != truth_blank
 
     nb_runner.create_notebook([
         "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
@@ -190,15 +211,69 @@ def test_builder_edit_redraws_the_chart_coherently(nb_runner, tmp_path):
         "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
         f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"
         f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
-        "grand_total = sum(totals)",
+        # A report cell that quotes the total AND embeds the chart, so the
+        # savefig's output is read by a consumer this reconstruction needs.
+        f"grand_total = sum(totals)\n"
+        f"chart_size = len(open(r'{chart.as_posix()}', 'rb').read())",
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert hashlib.md5(chart.read_bytes()).hexdigest() == truth_old
 
     nb_runner.set_cell_source(2, "names = ['a', 'b', 'c']\ntotals = [3, 5, 9]")
-    nb_runner.run_cell(4)   # unrelated cell, but its sim re-derives the chart
-    assert hashlib.md5(chart.read_bytes()).hexdigest() == truth_new, (
+    nb_runner.run_cell(4)
+    redrawn = hashlib.md5(chart.read_bytes()).hexdigest()
+    assert redrawn != truth_blank, (
+        "the re-derived chart is BLANK: fig.savefig was re-executed without the "
+        "ax.bar/ax.set_title that fill the figure (CAS-175)"
+    )
+    assert redrawn == truth_new, (
         "the re-derived chart does not reflect the edited data -- the carrier's "
         "history was re-executed incoherently"
+    )
+
+
+def test_unrelated_cell_leaves_the_chart_alone_even_after_an_edit(nb_runner, tmp_path):
+    """An upstream edit does not license re-firing a write no consumer reads.
+
+    Pins the boundary the test above stops at. Editing ``totals`` and running a
+    cell that merely sums it must leave the chart byte-identical: cell 3 is a
+    SIBLING consumer of ``totals``, not an ancestor of cell 4, and a live kernel
+    would not re-run it either. The PNG is then stale in exactly the ordinary
+    notebook sense -- the user re-runs the plot cell -- rather than silently
+    rewritten behind their back.
+
+    This is the direction CAS-193/196/200 settled, and it is not merely
+    stylistic: re-firing out-of-scope writers duplicates a line in a
+    ``mode='a'`` audit log, which corrupts a file rather than staling one.
+    """
+    pytest.importorskip("matplotlib")
+
+    chart = tmp_path / "chart.png"
+    nb_runner.create_notebook([
+        "import matplotlib\nmatplotlib.use('Agg')\nimport matplotlib.pyplot as plt\n"
+        "import cash\n%cash_on\n%cash_badge print",
+        "names = ['a', 'b', 'c']\ntotals = [3, 5, 2]",
+        f"fig, ax = plt.subplots()\nax.bar(names, totals)\n"
+        f"ax.set_title('Totals')\nfig.savefig(r'{chart.as_posix()}')",
+        "# @cash:no-cache\ngrand_total = sum(totals)\nprint('TOTAL', grand_total)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    before = chart.read_bytes()
+    assert "TOTAL 10" in nb_runner.get_output(4)
+
+    nb_runner.set_cell_source(2, "names = ['a', 'b', 'c']\ntotals = [3, 5, 9]")
+    nb_runner.run_cell(4)
+
+    assert chart.read_bytes() == before, (
+        "running an unrelated cell rewrote the user's chart after an upstream "
+        "edit; reconstruction must not re-fire a write no consumer reads "
+        "(CAS-193/196/200)"
+    )
+    # Suppressing the out-of-scope WRITE must not suppress the value the cell
+    # genuinely depends on: the edit still has to reach grand_total.
+    assert "TOTAL 17" in nb_runner.get_output(4), (
+        "the upstream edit did not reach the cell that consumes it: "
+        f"{nb_runner.get_output(4)!r}"
     )
