@@ -33,6 +33,69 @@ import sys
 # paying the ~1.8s boot cost every time. See _WarmKernel below.
 _REUSE_KERNEL = os.environ.get("CASH_TEST_REUSE_KERNEL") == "1"
 
+DEFAULT_KERNEL_NAME = 'python3'
+
+
+@pytest.fixture(scope="session", autouse=True)
+def assert_kernelspec_is_this_interpreter():
+    """Fail loudly if the kernelspec is not the interpreter under test (CAS-147).
+
+    Every runner here boots ``kernel_name='python3'``, which
+    :class:`KernelSpecManager` resolves from the user/system Jupyter search
+    paths -- NOT from ``sys.executable``. So a stray ``ipykernel install --user``
+    run from any other environment silently repoints the whole integration
+    suite at a different interpreter. The suite then grades code that is not
+    the editable install under test and still reports green, which makes every
+    result quietly worthless. That failure is invisible by construction: there
+    is no assertion anywhere that the kernel is us.
+
+    Session-scoped and static (it reads the spec, boots nothing), so it costs
+    one file read per worker and reports the problem before any test runs.
+
+    Conservative: only a PROVABLE mismatch fails. A missing spec, a bare
+    ``python``/``python3`` argv[0] with no path, or any resolution error leaves
+    the suite alone -- this guard exists to catch a specific silent
+    misconfiguration, not to become a new source of flakiness.
+    """
+    try:
+        from jupyter_client.kernelspec import KernelSpecManager
+        argv = KernelSpecManager().get_kernel_spec(DEFAULT_KERNEL_NAME).argv
+    except Exception:  # noqa: BLE001 - no spec / unreadable -> stay out of the way
+        return
+    problem = kernelspec_mismatch(argv, sys.executable)
+    if problem:
+        raise RuntimeError(problem)
+
+
+def kernelspec_mismatch(argv, executable) -> str | None:
+    """The CAS-147 comparison, split out so it is directly testable.
+
+    Returns an explanatory message when *argv* provably launches an interpreter
+    other than *executable*, else ``None``. Split from the fixture because a
+    guard whose negative branch never runs is not a guard -- see
+    ``test_kernelspec_guard.py``.
+    """
+    if not argv or not os.path.isabs(argv[0]):
+        return None  # bare `python` -> resolved via PATH at boot; nothing to compare
+
+    def _canon(p):
+        return os.path.normcase(os.path.realpath(p))
+
+    if _canon(argv[0]) == _canon(executable):
+        return None
+    return (
+        f"The '{DEFAULT_KERNEL_NAME}' kernelspec points at a DIFFERENT "
+        f"interpreter than the one running pytest, so this suite would grade "
+        f"code that is not the package under test.\n"
+        f"  kernelspec argv[0]: {argv[0]}\n"
+        f"  sys.executable:     {executable}\n"
+        f"This usually means `ipykernel install --user` was run from another "
+        f"environment and overwrote the shared 'python3' spec. Re-run it from "
+        f"THIS environment to repoint it:\n"
+        f"  {executable} -m ipykernel install --user"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Cross-process kernel-boot throttle.
 #
