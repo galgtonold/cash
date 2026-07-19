@@ -137,6 +137,58 @@ class TestWorkerThreadMarker:
         assert done.wait(timeout=30), "cross-instance read deadlocked"
 
 
+class TestAtomicWrites:
+    """An entry is never half-written: the payload goes to a temp file and the
+    target appears only at the rename.
+
+    A plain ``open(path,'wb')`` is visible the instant it is created, while it
+    still holds zero or half its bytes, so a concurrent reader can pass
+    ``get()``'s ``exists`` check and unpickle a truncated file — the macOS
+    ``EOFError: Ran out of input`` failures.
+    """
+
+    def test_target_is_untouched_when_the_rename_fails(self, tmp_path, monkeypatch):
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend._ensure_initialized()
+        target = os.path.join(backend.cache_dir, "probe.data")
+
+        monkeypatch.setattr(os, "replace",
+                            lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+        with pytest.raises(OSError):
+            backend._atomic_write(target, b"x" * 4096, use_gzip=False)
+
+        assert not os.path.exists(target), "payload was streamed into the live path"
+        leftovers = [p for p in os.listdir(backend.cache_dir) if p.endswith(".part")]
+        assert leftovers == [], f"partial write left behind: {leftovers}"
+
+    def test_existing_entry_survives_a_failed_rewrite(self, tmp_path, monkeypatch):
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend._ensure_initialized()
+        target = os.path.join(backend.cache_dir, "probe.data")
+        backend._atomic_write(target, b"original", use_gzip=False)
+
+        monkeypatch.setattr(os, "replace",
+                            lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
+        with pytest.raises(OSError):
+            backend._atomic_write(target, b"replacement", use_gzip=False)
+
+        with open(target, "rb") as f:
+            assert f.read() == b"original"
+
+    def test_temp_files_are_invisible_to_the_entry_globs(self, tmp_path):
+        """A stray ``.part`` must never be mistaken for a cache entry."""
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend.set("k", "v")
+        assert backend.get("k")[1] == "v"
+        import glob as _glob
+        stray = os.path.join(backend.cache_dir, ".tmp-orphan.part")
+        with open(stray, "wb") as f:
+            f.write(b"junk")
+        for ext in ("*.meta", "*.data"):
+            assert stray not in _glob.glob(os.path.join(backend.cache_dir, ext))
+        assert backend.get("k")[1] == "v"
+
+
 class TestUnreadableEntryDegradesToMiss:
     """An entry that cannot be read is an entry that is absent.
 
