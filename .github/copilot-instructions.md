@@ -344,13 +344,23 @@ clean it out before going near an upload — do not "just skip" the extra files.
   `python -c "import cash; print(cash.__version__)"` prints `X.Y.Z`
 
 ### 5. Commit & tag
+
+The version's single source of truth is `src/cash/__init__.py` (`__version__`);
+`pyproject.toml` reads it via `dynamic = ["version"]` and must NOT be edited.
+
 ```bash
-git add pyproject.toml CHANGELOG.md
+git add src/cash/__init__.py CHANGELOG.md
 git commit -m "release: X.Y.Z"
 git tag vX.Y.Z
 ```
 
-Push only after the user explicitly confirms — pushing the tag triggers the PyPI publish workflow.
+Push only after the user explicitly confirms.
+
+**Pushing the tag does NOT publish.** `.github/workflows/publish.yml` triggers on
+`release: types: [published]` (or a manual `workflow_dispatch`), not on a tag
+push — so a tag alone leaves you with no release and nothing on PyPI. Publishing
+requires creating a GitHub Release from the tag, which is the deliberate
+irreversible-action gate: see step 6.
 
 ### 6. Publish
 
