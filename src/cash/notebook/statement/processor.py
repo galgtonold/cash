@@ -597,11 +597,14 @@ class StatementProcessor:
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
             est_fit: set[str] = set()
+            # ...with ONE exception: a draw on a live Figure/Axes (CAS-220).
+            draw_only = self._identity_coupled_call_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
+            draw_only = set()
         # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
@@ -644,6 +647,16 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
+            )
+        # CAS-220: a draw inside a loop/branch body. Skip the CACHE without
+        # touching ``outputs`` -- the statement must re-execute so the artists
+        # actually land on the Axes, but bumping its lineage from a per-statement
+        # source is precisely what the control-body skip above exists to avoid.
+        if draw_only:
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"Draws on: {', '.join(sorted(draw_only))} "
+                "(live Figure/Axes; statement re-executes)"
             )
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -765,11 +778,14 @@ class StatementProcessor:
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
             est_fit: set[str] = set()
+            # ...with ONE exception: a draw on a live Figure/Axes (CAS-220).
+            draw_only = self._identity_coupled_call_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
                 _parsed_tree, source_hash, outputs,
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
+            draw_only = set()
         # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
@@ -812,6 +828,16 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
+            )
+        # CAS-220: a draw inside a loop/branch body. Skip the CACHE without
+        # touching ``outputs`` -- the statement must re-execute so the artists
+        # actually land on the Axes, but bumping its lineage from a per-statement
+        # source is precisely what the control-body skip above exists to avoid.
+        if draw_only:
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"Draws on: {', '.join(sorted(draw_only))} "
+                "(live Figure/Axes; statement re-executes)"
             )
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
@@ -1449,6 +1475,43 @@ class StatementProcessor:
                 )
         except (OSError, TypeError, ValueError, AttributeError):
             logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
+
+    def _identity_coupled_call_receivers(self, tree: ast.Module | None) -> set[str]:
+        """Receiver names in *tree* that are live matplotlib Figures/Axes (CAS-220).
+
+        The narrow companion to :meth:`_classify_method_mutations`, for the one
+        case that must survive the control-body skip. A body statement carries an
+        injected marker comment and its method-mutation classification is skipped
+        wholesale, because bumping a receiver with a per-statement source the
+        upstream simulation never reproduces desyncs the loop. That is right for
+        ordinary receivers and wrong for a live Axes: ``ax.bar(...)`` in a loop
+        body has NO outputs, so it is cached as an ordinary no-output call and
+        restored as a no-op, while the sibling ``fig.savefig(...)`` still
+        executes because it writes a file. The draw is skipped, the write is
+        not, and the deliverable PNG is blank.
+
+        Identity-coupling is the same single discriminator CAS-194 used to tell
+        ``ax.hist()`` (draws on an Axes) from ``df.hist()`` (receiver-pure), and
+        CAS-199 used to widen scope to captured-return draws without
+        over-invalidating. It imports no matplotlib and is False for everything
+        that is not a Figure/Axes, so no loop that caches today stops caching.
+
+        Callers use this to skip the CACHE only. It deliberately does NOT feed
+        ``outputs``: the lineage bump is the part the control-body skip exists to
+        prevent, and re-executing a draw needs none of it.
+        """
+        if tree is None:
+            return set()
+        receivers: set[str] = set()
+        for base, _method in (
+            standalone_method_call_receivers(tree) | assigned_method_call_receivers(tree)
+        ):
+            value = self.shell.user_ns.get(base)
+            if isinstance(value, types.ModuleType):
+                continue  # ``plt.savefig()`` is a module call, not a receiver draw
+            if receiver_is_identity_coupled(value):
+                receivers.add(base)
+        return receivers
 
     def _classify_method_mutations(
         self,
