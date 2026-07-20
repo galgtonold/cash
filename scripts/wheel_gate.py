@@ -7,10 +7,13 @@ The fast test suite (`tests/test_notebook_integration/`) is structurally BLIND
 to two whole classes of bug, proven four times this release (CAS-185, CAS-196,
 CAS-202, the packaging P0):
 
-  1. KERNEL-RESTART behaviour. `nb_runner` boots a fresh kernel per test and has
-     NO restart method (`grep 'def restart' conftest.py` -> nothing). Every
-     restart-path bug is invisible: CAS-196's restart re-fire and CAS-202's
-     restart-retrain both shipped green.
+  1. KERNEL-RESTART behaviour. CAS-196's restart re-fire and CAS-202's
+     restart-retrain both shipped green past the fast suite. `nb_runner` has
+     since gained a `restart()` (added for CAS-190), so the suite is no longer
+     blind to restarts by construction -- but it drives cells through
+     `NotebookClient`, not a real Jupyter server, and CAS-213 proved that gap is
+     still real: a faithful in-suite reproduction passed even against the
+     UNFIXED source, while this harness reproduced it deterministically.
   2. WHEEL-VENV install layout. The suite runs the EDITABLE dev install against
      C:\Python314; testers run a FRESH WHEEL VENV. `importlib.metadata` phantom
      file-dep probes (81 in a venv vs 0 in dev) only exist in the venv. Every
@@ -43,28 +46,40 @@ WHAT IT DOES
 
 THE SCENARIOS (each a separate assertion; RED = invariant violated = bug present)
   S1  restart survival of @cash.cache on the sklearn pipeline (CAS-202) -> GREEN
-  S2  to_csv audit-log not re-fired by a downstream reader     (CAS-196) -> RED
+  S2  to_csv audit-log not re-fired by a downstream reader     (CAS-196) -> GREEN
   S3  same sklearn pipeline warm-re-runs WITHIN a session       (CAS-185) -> GREEN
   S4  a plain @cash.cache int fn survives a restart (control)             -> GREEN
+  S5  plot writer not re-fired by an unrelated cell post-restart (CAS-200/193) -> GREEN
   S6  top-level await inside a for-loop body caches, no SyntaxError (CAS-198) -> GREEN
+  S7  a LOOP-drawn figure is rebuilt before it is re-saved      (CAS-213) -> GREEN
 
-S1 was RED until CAS-202 was fixed (the decorator arg-hash keyed a DataFrame
-argument on its per-session _cash_lineage_hash instead of its stable content,
-so the persisted entry was never found after a restart). S2 (CAS-196) is still
-RED, so the harness is still non-vacuous -- a harness that passed everything
-would be the exact CAS-190 blindness it is meant to cure.
+Every scenario here was RED when the bug it names was open: S1/S3 until CAS-202,
+S2 until CAS-196, S5 until CAS-200/193, S7 until CAS-213. All are GREEN as of
+2026-07-20.
+
+An all-green matrix raises the obvious question -- is this harness still
+testing anything? Non-vacuity is NOT established by leaving a bug open. It is
+established per scenario, by reverting the fix and confirming the scenario goes
+RED. S7 was added that way (fixed: 6806 coloured px; fix reverted: 0), and that
+check is what any new scenario owes the matrix.
+
+The counter-example is already in this file: S5 asserts "plot writer not
+re-fired by an unrelated cell" and was GREEN throughout CAS-213 -- because it
+draws with FLAT pyplot calls, and the flat form was never broken. Its assertion
+was true and useless at the same time. S7 exists because of that gap, and it
+draws inside a `for` loop deliberately.
 
 RUN IT
 ------
     python scripts/wheel_gate.py                 # build wheel, full run
-    python scripts/wheel_gate.py --wheel dist/cash_lib-0.5.0b1-py3-none-any.whl
+    python scripts/wheel_gate.py --wheel dist/cash_lib-0.1.0-py3-none-any.whl
     python scripts/wheel_gate.py --scenarios S1,S4     # subset
     python scripts/wheel_gate.py --reuse-venv          # skip venv rebuild
 
-Exit code 0 iff the observed RED/GREEN matrix matches the recorded baseline
-(S1 GREEN since CAS-202 fixed, S2 RED, S3 GREEN, S4 GREEN). A mismatch (a green
-invariant regressed, or a known bug got fixed and the baseline needs updating)
-exits 1. Takes roughly
+Exit code 0 iff the observed RED/GREEN matrix matches the baseline recorded in
+SCENARIOS below -- currently all seven GREEN. A mismatch exits 1, whichever way
+it went: a shipped fix regressing to RED, or a scenario changing state so the
+baseline is stale. Takes roughly
 6-12 min cold (wheel build + venv install dominate) and ~2-4 min with
 --reuse-venv. Kept OUT of the default pytest collection because it is slow; see
 tests/test_wheel_gate/ for the CI shim (skipped unless CASH_WHEEL_GATE=1).
@@ -281,9 +296,15 @@ class Driver:
         return self._send({"action": "restart"}, 180)
 
     def quit(self) -> None:
+        # SystemExit, not Exception: `_send` raises SystemExit when the driver
+        # dies or times out, and SystemExit derives from BaseException. Catching
+        # only Exception let a driver death DURING CLEANUP escape the scenario's
+        # own error handling and kill the whole run before the summary printed --
+        # so a transient kernel-boot flake looked like a harness crash with no
+        # matrix to read. Cleanup must never be able to abort the report.
         try:
             self._send({"action": "quit"}, 30)
-        except Exception:
+        except (Exception, SystemExit):
             pass
 
     def close(self) -> None:
@@ -351,6 +372,34 @@ def _lines(path: Path) -> int:
     except OSError:
         return 0
     return len([ln for ln in txt.splitlines() if ln.strip()])
+
+
+def _coloured_pixels(path: Path) -> int:
+    """External signal: how many pixels of a PNG are NOT grey.
+
+    Decoded in THIS process, never in the kernel: a badge, a print or even the
+    cell's own inline image are restored on a cache hit and so cannot witness a
+    figure that was silently redrawn empty. Greyscale (R==G==B) covers the axes,
+    ticks, frame and text, which survive an empty redraw -- only the coloured
+    data lines vanish, so this count is the pixel-level ground truth (0 = blank
+    chart with its furniture intact).
+    """
+    import numpy as np
+    from PIL import Image
+    try:
+        with Image.open(path) as im:
+            arr = np.asarray(im.convert("RGB")).astype(int)
+    except (OSError, ValueError):
+        return -1
+    return int(((arr.max(axis=2) - arr.min(axis=2)) > 12).sum())
+
+
+def _sha(path: Path) -> str:
+    import hashlib
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()[:8]
+    except OSError:
+        return "missing"
 
 
 # ----- shared sklearn-pipeline cells (S1 + S3) -----------------------------
@@ -905,6 +954,207 @@ def scenario_s6(py: Path, port: int) -> Result:
     return r
 
 
+# ---------------------------------------------------------------------------
+# S7 -- a LOOP-drawn figure must be rebuilt before it is re-saved (CAS-213)
+#
+# S5 already covers "an unrelated cell must not re-fire the plot writer", but it
+# draws FLAT (``ax.pie(itm, ...)``) -- and the flat form was never broken, so its
+# assertion was true and useless for this bug. The break needs the LOOP form:
+#
+#     for c in summary.columns:
+#         ax.plot(range(len(summary)), summary[c].values, label=c)
+#
+# The simulation treats a loop as ONE trace entry whose outputs never mention
+# ``ax``, and ``_complete_stateful_carrier_history`` keys on exactly those
+# outputs. So reconstruction scheduled ``fig, ax = plt.subplots()`` and
+# ``fig.savefig(...)`` but OMITTED the loop that fills the figure: a downstream
+# cell READING the audit file rebuilt the figure EMPTY and wrote the blank PNG
+# over the good chart. No error, no badge change, output indistinguishable from
+# a correct run -- you would email the blank chart to someone.
+#
+# External signal: the PNG's COLOURED (non-greyscale) pixel count, decoded from
+# OUTSIDE the kernel. Correct = thousands; bug = 0, with the grey axes/ticks
+# still present (which is exactly why nothing else notices).
+# ---------------------------------------------------------------------------
+
+def _write_s7_data(work: Path, n: int = 4000) -> None:
+    """Deterministic mini sales/products CSVs for the S7 attribution pipeline.
+
+    A shrunk copy of the field reproducer's dataset. The failure is
+    size-independent (it is a planning bug, not a data bug), so this stays small
+    enough to keep the scenario at a few seconds.
+    """
+    import numpy as np
+    import pandas as pd
+    rng = np.random.default_rng(20260720)
+    cats = ["Electronics", "Grocery", "Apparel", "Home"]
+    n_prod = 60
+    pd.DataFrame({
+        "product_id": np.arange(1, n_prod + 1),
+        "category": [cats[i % len(cats)] for i in range(n_prod)],
+    }).to_csv(work / "products.csv", index=False)
+    month = rng.integers(0, 12, size=n)
+    order_date = pd.to_datetime(dict(year=np.full(n, 2024), month=month + 1,
+                                     day=rng.integers(1, 29, size=n)))
+    unit_price = np.round(rng.uniform(5, 200, size=n), 2)
+    # A month-indexed cost drift so the per-category margin curves actually move
+    # (a flat line would still be coloured, but a moving one makes an empty
+    # redraw unmistakable).
+    cost_frac = np.clip(0.55 + 0.012 * month + rng.normal(0, 0.02, size=n), 0.3, 0.95)
+    pd.DataFrame({
+        "order_id": np.arange(1, n + 1),
+        "product_id": rng.integers(1, n_prod + 1, size=n),
+        "order_date": order_date.dt.strftime("%Y-%m-%d"),
+        "units": rng.integers(1, 20, size=n),
+        "unit_price": unit_price,
+        "unit_cost": np.round(unit_price * cost_frac, 2),
+        "discount": np.round(rng.uniform(0, 0.2, size=n), 3),
+    }).to_csv(work / "sales.csv", index=False)
+
+
+_S7_CELLS = [
+    _CELL_ON,                                                                    # 0
+    ("import pandas as pd, numpy as np, os\n"
+     "SALES, PRODUCTS = 'sales.csv', 'products.csv'\n"
+     "def load_sales(path):\n"
+     "    open('s7_load.log', 'a').write('L')   # external counter\n"
+     "    df = pd.read_csv(path)\n"
+     "    df['order_date'] = pd.to_datetime(df['order_date'], format='%Y-%m-%d')\n"
+     "    return df\n"
+     "def add_margin(df):\n"
+     "    open('s7_derive.log', 'a').write('D')   # external counter\n"
+     "    return df.assign(\n"
+     "        revenue=df['units'] * df['unit_price'] * (1 - df['discount']),\n"
+     "        cogs=df['units'] * df['unit_cost'],\n"
+     "    ).assign(margin=lambda d: d['revenue'] - d['cogs'])\n"
+     "def build_monthly(df):\n"
+     "    open('s7_agg.log', 'a').write('G')   # external counter\n"
+     "    m = (df.groupby(['category', 'month'])\n"
+     "           .agg(revenue=('revenue', 'sum'), margin=('margin', 'sum'))\n"
+     "           .reset_index())\n"
+     "    return m.assign(margin_pct=lambda d: d['margin'] / d['revenue'] * 100)\n"
+     "print('DEFS ok', round(os.path.getsize(SALES) / 1e3, 1), 'kB')"),          # 1
+    ("raw = load_sales(SALES)\n"
+     "prod = pd.read_csv(PRODUCTS)\n"
+     "raw = raw.merge(prod, on='product_id', how='left')\n"
+     "raw = raw.assign(month=raw['order_date'].dt.to_period('M').astype(str))\n"
+     "print('RAW', raw.shape)"),                                                 # 2
+    ("priced = add_margin(raw)\n"
+     "print('PRICED', round(float(priced['margin'].sum()), 2))"),                # 3
+    ("monthly = build_monthly(priced)\n"
+     "print('MONTHLY', monthly.shape)"),                                         # 4
+    # A SECOND for-loop, on an unrelated object. The fix must NOT promote this
+    # one (``g.sort_values(...)`` touches no figure carrier) -- it is the
+    # over-scheduling control that rides along inside the same notebook.
+    ("open('s7_trend.log', 'a').write('T')   # external counter\n"
+     "slopes = {}\n"
+     "for cat, g in monthly.groupby('category'):\n"
+     "    g = g.sort_values('month')\n"
+     "    x = np.arange(len(g))\n"
+     "    slopes[cat] = float(np.polyfit(x, g['margin_pct'].values, 1)[0])\n"
+     "trend = pd.Series(slopes).sort_values()\n"
+     "print('FASTEST_DECLINE', trend.index[0], round(float(trend.iloc[0]), 4))"),  # 5
+    ("line = (str(trend.index[0]) + ',' + format(float(trend.iloc[0]), '.6f')\n"
+     "        + ',' + str(len(monthly)) + '\\n')\n"
+     "with open('audit.log', 'a') as f:\n"
+     "    f.write(line)\n"
+     "print('AUDIT_APPENDED', line.strip())"),                                   # 6  WRITER
+    ("summary = monthly.pivot(index='month', columns='category',\n"
+     "                        values='margin_pct').round(6)\n"
+     "summary.to_csv('summary.csv')\n"
+     "print('SUMMARY', summary.shape)"),                                         # 7
+    ("import matplotlib\n"
+     "matplotlib.use('Agg')\n"
+     "import matplotlib.pyplot as plt\n"
+     "fig, ax = plt.subplots(figsize=(9, 5))\n"
+     "for c in summary.columns:\n"                    # <- THE loop that fills it
+     "    ax.plot(range(len(summary)), summary[c].values, label=c)\n"
+     "ax.set_title('Margin pct by category')\n"
+     "ax.set_xlabel('month index')\n"
+     "ax.legend()\n"
+     "fig.savefig('chart.png', dpi=90)\n"             # <- the plot writer
+     "print('CHART_WRITTEN')"),                                                  # 8  PLOT
+    ("audit_lines = open('audit.log').read().strip().split('\\n')\n"
+     "print('AUDIT_LINES', len(audit_lines))\n"
+     "print('AUDIT_LAST', audit_lines[-1])"),                                    # 9  READER
+]
+_S7_READER = 9
+
+
+def scenario_s7(py: Path, port: int) -> Result:
+    r = Result(
+        "S7",
+        "loop-drawn figure rebuilt before it is re-saved; reader cannot blank the chart (CAS-213)",
+        "GREEN",
+    )
+    work = _fresh_work("s7")
+    _write_s7_data(work)
+    chart = work / "chart.png"
+    audit = work / "audit.log"
+    audit.unlink(missing_ok=True)
+    chart.unlink(missing_ok=True)
+    drv = Driver(py, work, port)
+    try:
+        drv.start()
+        _guard_venv(drv, VENV_DIR)               # guard reuses cell 0 slot...
+        for i, src in enumerate(_S7_CELLS):      # ...then S7 overwrites with %cash_on
+            drv.set(i, src)
+        # Run everything UP TO but not including the reader: the chart written
+        # here is the oracle (the loop demonstrably ran, in-line, this session).
+        for i in range(_S7_READER):
+            drv.run(i)
+        col_runall = _coloured_pixels(chart)
+        sha_runall = _sha(chart)
+        audit_runall = _lines(audit)
+        # Now the downstream READER of the written audit file. It reconstructs
+        # upstream and re-fires fig.savefig -- which is allowed (CAS-193/196/200
+        # is the separate question of whether an in-scope writer re-fires at
+        # all). What is NOT allowed is re-saving a figure rebuilt from a SUBSET
+        # of its history.
+        reader_out = drv.run(_S7_READER).get("out", "")
+        col_reader = _coloured_pixels(chart)
+        r.evidence = {
+            "coloured_px_after_runall": col_runall,
+            "coloured_px_after_reader": col_reader,
+            "chart_sha_after_runall": sha_runall,
+            "chart_sha_after_reader": _sha(chart),
+            "audit_lines_after_runall": audit_runall,
+            "audit_lines_after_reader": _lines(audit),
+            "reader_ok": "AUDIT_LINES 1" in reader_out,
+            "counters": {name: _count(work / name) for name in
+                         ("s7_load.log", "s7_derive.log", "s7_agg.log", "s7_trend.log")},
+        }
+        if col_runall < 500:
+            r.status, r.detail = "ERROR", (
+                f"run-all chart is not a drawn chart: {col_runall} coloured px "
+                f"(expected thousands) -- the plot cell never drew")
+        elif audit_runall != 1:
+            r.status, r.detail = "ERROR", (
+                f"audit.log should hold 1 line after run-all, got {audit_runall}")
+        elif col_reader <= 0:
+            r.status = "RED"
+            r.detail = ("the downstream reader re-saved an EMPTY figure over the "
+                        f"chart: {col_runall} -> {col_reader} coloured px (grey "
+                        "axes survive, so nothing else notices)")
+        elif col_reader < col_runall * 0.9:
+            r.status = "RED"
+            r.detail = (f"the reader re-saved a partially-drawn figure: "
+                        f"{col_runall} -> {col_reader} coloured px")
+        elif "AUDIT_LINES 1" not in reader_out:
+            r.status, r.detail = "ERROR", f"reader produced wrong output: {reader_out[:200]!r}"
+        else:
+            r.status = "GREEN"
+            r.detail = (f"loop-drawn figure was rebuilt before re-saving: chart kept "
+                        f"{col_reader} coloured px (run-all {col_runall})")
+    except SystemExit as e:
+        r.status, r.detail = "ERROR", str(e)
+    except Exception:
+        r.status, r.detail = "ERROR", traceback.format_exc()
+    finally:
+        drv.close()
+    return r
+
+
 SCENARIOS = {
     "S1": scenario_s1,
     "S2": scenario_s2,
@@ -912,6 +1162,7 @@ SCENARIOS = {
     "S4": scenario_s4,
     "S5": scenario_s5,
     "S6": scenario_s6,
+    "S7": scenario_s7,
 }
 
 
@@ -924,7 +1175,7 @@ def main() -> int:
     ap.add_argument("--wheel", help="use a prebuilt wheel instead of building")
     ap.add_argument("--reuse-venv", action="store_true",
                     help="reuse an already-provisioned venv (skip rebuild/install)")
-    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5,S6",
+    ap.add_argument("--scenarios", default="S1,S2,S3,S4,S5,S6,S7",
                     help="comma list of scenarios to run (default all)")
     ap.add_argument("--port-base", type=int, default=8921)
     args = ap.parse_args()

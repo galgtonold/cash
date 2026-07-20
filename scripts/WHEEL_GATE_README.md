@@ -23,7 +23,7 @@ CAS-202, the packaging P0):
    reproduces on the first real kernel is itself the defect (that is CAS-190).
 
 The manual gate catches these but needs five human-like agents ~30 min. This
-harness encodes that methodology as four assertion-driven scenarios, each proven
+harness encodes that methodology as seven assertion-driven scenarios, each proven
 by an **external signal** — a counter written from *inside* a function/cell to a
 file and read from *outside* the kernel. Never a badge or a `print`; those are
 restored on a cache hit and so cannot witness a silent re-run.
@@ -58,6 +58,8 @@ restored on a cache hit and so cannot witness a silent re-run.
 | **S3** | the **single-cell** version of the same sklearn `@cash.cache` work survives a restart (fit counter unchanged) | CAS-202 control | **GREEN** |
 | **S4** | a plain `@cash.cache` int fn survives a restart (call counter unchanged) | control | **GREEN** |
 | **S5** | after a restart, a cell **below** a plot cell (sharing no variable with it) does **not** re-fire the plot's `fig.savefig(...)` — a deleted `chart.png` is not re-created — nor `UpstreamStateError` on the plot's evicted RAM-only intermediate | CAS-200/193 | **GREEN** (was RED until CAS-200 fixed) |
+| **S6** | `await` inside a **`for`-loop body** caches under `%cash_on` without `SyntaxError`, and the async body runs exactly 5× (fetch counter) | CAS-198 | **GREEN** (was RED until CAS-198 fixed) |
+| **S7** | a figure drawn **inside a `for` loop** is rebuilt before `fig.savefig(...)` is re-fired: a downstream cell reading the written `audit.log` cannot leave a **blank** chart — coloured (non-greyscale) pixel count, decoded outside the kernel, is unchanged | CAS-213 | **GREEN** (was RED until CAS-213 fixed) |
 
 `RED` = the invariant is violated = the bug is present. S1 was **RED** until
 CAS-202 was fixed (the decorator arg-hash keyed a DataFrame argument on its
@@ -70,10 +72,23 @@ no sklearn import poisons the file-dep set. When these bugs were open,
 **S1/S2/S5 going RED was the proof of non-vacuity** — the exact CAS-190
 blindness the harness cures; the fast suite reported all of them green.
 
+**S7 exists because S5 was not enough.** S5 draws its figure with a *flat*
+`ax.pie(itm, ...)` call, and the flat form was never broken — the carrier-history
+pass keys on each statement's recorded outputs, and a flat `ax.…` call *does*
+surface `ax`. A `for` loop is a single trace entry whose outputs never mention
+the carrier, so the loop that fills the figure was omitted while `plt.subplots()`
+and `fig.savefig(...)` were both scheduled: the chart came back **blank, with its
+grey axes and legend frame intact and no error anywhere**. S7 therefore uses the
+loop form and asserts on **coloured pixels**, not on the file's existence —
+existence, mtime, size and even the notebook's inline image all looked fine while
+the data lines were gone. Verified non-vacuous by swapping `reexecution_planner.py`
+for its `3433814~1` version in the harness venv: S7 goes **RED at 0 coloured px**
+(the greyscale furniture still measures) and the gate exits 1.
+
 ## How to run
 
 ```bash
-# full run: build the wheel, provision a fresh venv, all four scenarios
+# full run: build the wheel, provision a fresh venv, all seven scenarios
 python scripts/wheel_gate.py
 
 # accept a prebuilt wheel (skips the ~1-2 min build)
@@ -87,9 +102,9 @@ python scripts/wheel_gate.py --scenarios S1,S2
 ```
 
 **Exit code 0** iff the observed RED/GREEN matrix matches the recorded baseline
-(S2 RED, S1/S3/S4 GREEN — S1 flipped to GREEN when CAS-202 was fixed). A
-mismatch exits 1 — either a green invariant regressed, or a known-open bug got
-fixed and the baseline needs updating.
+(currently **all of S1–S7 GREEN**; S1/S2/S5/S7 each flipped RED→GREEN as their
+issue was fixed). A mismatch exits 1 — either a green invariant regressed, or a
+known-open bug got fixed and the baseline needs updating.
 
 ### From pytest / CI
 
@@ -111,8 +126,8 @@ The default fast suite collects the shim and **skips it in ~0.02 s**.
 |------|------|---------------------|
 | wheel build | ~1–2 min | n/a (`--wheel`) |
 | venv create + `pip install [all]` + sklearn/jupyter | ~2–3 min | skipped |
-| four scenarios (each: real server boot + restart) | ~2–3 min | ~2–3 min |
-| **total** | **~6–8 min** | **~2–3 min** |
+| seven scenarios (each: real server boot, most with a restart) | ~4–6 min | ~4–6 min |
+| **total** | **~8–11 min** | **~4–6 min** |
 
 ## Proof output (against `57a9823`, wheel `cash_lib-0.5.0b1`)
 
@@ -138,6 +153,25 @@ GREEN (invariant held): ['S3', 'S4']
 S2's `no-cash=1 vs cash=2` exactly reproduces CAS-196's measured signature (and
 goes to 3 after the downstream reader). S1's fit counter going 1→2 across the
 restart is CAS-202. Both are invisible to the fast suite.
+
+### S7's two arms (CAS-213, wheel built from `fd76763`)
+
+Both arms share the same venv, the same wheel and the same cells; the *only*
+difference is which `reexecution_planner.py` sits in the venv's site-packages.
+The run-all chart is byte-identical in both (`sha b33ec70b`, 6806 coloured px),
+so the comparison is clean:
+
+```
+fixed (3433814)     S7  GREEN  6806 -> 6806 coloured px   sha b33ec70b -> b33ec70b   exit 0
+reverted (3433814~1) S7 RED    6806 ->    0 coloured px   sha b33ec70b -> 1369fc2b   exit 1
+```
+
+The reverted arm's blank `chart.png` is still a *valid, plausible PNG* — 11772
+bytes, correct dimensions, grey axes, ticks and legend frame all present. Only
+the four coloured data lines are gone. Every other counter is identical across
+the arms (`s7_load/derive/agg/trend` all 1, `audit.log` 1 line before and after
+the reader), which is why nothing except a pixel-level check outside the kernel
+catches it.
 
 ## Files
 
