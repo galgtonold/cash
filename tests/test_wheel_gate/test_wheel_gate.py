@@ -13,17 +13,24 @@ Run it explicitly::
 
     # reuse an already-provisioned venv to iterate fast
     $env:CASH_WHEEL_GATE = "1"
-    $env:CASH_WHEEL_GATE_ARGS = "--reuse-venv --wheel dist/cash_lib-0.5.0b1-py3-none-any.whl"
+    $env:CASH_WHEEL_GATE_ARGS = "--reuse-venv --wheel dist/cash_lib-0.1.0-py3-none-any.whl"
     pytest -m wheel_gate tests/test_wheel_gate
 
-The harness exits 0 iff the observed RED/GREEN matrix matches the recorded
-baseline: S1/S2 RED (CAS-202 restart-retrain + CAS-196 to_csv re-fire still
-reproduce) and S3/S4 GREEN (single-cell sklearn + plain int @cash.cache survive
-a restart). This test asserts that exit code, so:
+The harness exits 0 iff the observed RED/GREEN matrix matches the baseline
+recorded in ``scripts/wheel_gate.py``. As of 2026-07-20 that baseline is
+**all six scenarios GREEN** (S1-S6), confirmed on the ``0.1.0`` wheel: the bugs
+S1/S2/S5 were written to catch (CAS-202 restart-retrain, CAS-196 to_csv
+re-fire, CAS-200/193 unrelated-cell plot re-fire) are all fixed, and S3/S4/S6
+are controls.
 
-  * a green invariant regressing to RED (S3/S4) fails CI, and
-  * a known-open bug getting FIXED (S1/S2 flip to GREEN) also fails CI -- a
-    prompt to update the baseline and close the issue.
+This test asserts that exit code, so a scenario flipping either way fails CI:
+
+  * an invariant regressing to RED means a shipped fix broke, and
+  * a scenario unexpectedly changing state means the baseline is stale and the
+    matrix in ``scripts/wheel_gate.py`` needs updating alongside the issue.
+
+The direction matters less than the mismatch -- the point is that this file and
+the harness's baseline must never disagree about what is currently true.
 """
 import os
 import shlex
@@ -47,6 +54,8 @@ def test_wheel_gate_matrix():
     args = shlex.split(os.environ.get("CASH_WHEEL_GATE_ARGS", ""))
     cp = subprocess.run([sys.executable, str(SCRIPT), *args], cwd=str(REPO), text=True)
     assert cp.returncode == 0, (
-        "wheel-gate baseline mismatch: an invariant regressed (S3/S4 went RED) or "
-        "a known-open bug was fixed (S1/S2 went GREEN). See harness output above."
+        "wheel-gate baseline mismatch: an observed scenario no longer matches the "
+        "matrix recorded in scripts/wheel_gate.py -- either a shipped fix "
+        "regressed to RED, or a scenario changed state and the baseline is stale. "
+        "See harness output above for which one."
     )

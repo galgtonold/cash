@@ -980,7 +980,15 @@ def main() -> int:
         print(f"BASELINE MISMATCH on {[r.name for r in mism]} -- "
               "a green invariant regressed OR a known bug was fixed (update baseline).")
         return 1
-    print("baseline matched: known-open bugs still RED, controls still GREEN.")
+    # Describe what was actually observed. The old wording ("known-open bugs
+    # still RED, controls still GREEN") was hardcoded from a baseline where
+    # S1/S2 were expected RED; once those were fixed it printed a flat
+    # contradiction of the matrix immediately above it.
+    if reds:
+        print(f"baseline matched: {len(greens)} GREEN, {len(reds)} RED "
+              f"(still-open: {', '.join(reds)}).")
+    else:
+        print(f"baseline matched: all {len(greens)} scenarios GREEN.")
     return 0
 
 
