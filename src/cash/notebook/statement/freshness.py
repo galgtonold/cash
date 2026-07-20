@@ -84,7 +84,10 @@ class CacheFreshnessChecker:
         cache_check_time = time.time() - t3
 
         if cached_data and metadata:
-            if ttl:
+            # `is not None`, not truthiness: ttl=0 is a REQUEST ("expire
+            # immediately"), not an absence. Reading it as falsy skipped the
+            # check and made the entry immortal — the inverse of the ask.
+            if ttl is not None:
                 cached_data = self._invalidate_if_ttl_expired(metadata, cached_data, ttl)
             if cached_data:
                 cached_data = self._invalidate_if_direct_file_changed(metadata, cached_data)
@@ -105,7 +108,10 @@ class CacheFreshnessChecker:
         """Return None if the cache entry has exceeded *ttl* seconds, else return *cached_data*."""
         timestamp = metadata.timestamp or 0
         age = time.time() - timestamp
-        if age > ttl:
+        # ttl<=0 means "never fresh", decided without consulting the clock: a
+        # same-tick re-read can measure age == 0.0 on a coarse timer, and
+        # `0.0 > 0` would hand back the entry ttl=0 exists to reject.
+        if ttl <= 0 or age > ttl:
             self.last_miss_reason = f"cache TTL expired ({age:.0f}s old, limit {ttl}s)"
             if self.debug:
                 logger.debug("[CACHE DEBUG] Cache expired (TTL)")

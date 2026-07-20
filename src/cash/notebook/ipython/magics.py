@@ -447,7 +447,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         self._auto_cache_enabled = True
         self._global_ttl = ttl
-        ttl_msg = f" (TTL: {ttl}s)" if ttl else ""
+        ttl_msg = f" (TTL: {ttl}s)" if ttl is not None else ""
         print(safe_text(f"✅ Cash enabled.{ttl_msg} Your computations will be cached automatically."))
         print("   Run %cash_help for available commands.")
         # Report existing cache state if available
@@ -466,7 +466,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             print("   Save (Ctrl+S) after editing upstream cells, or enable auto-save:")
             print('   Settings -> "files.autoSave": "afterDelay"')
         if self._debug:
-            print(f"TTL: {ttl or 'None'}")
+            print(f"TTL: {ttl if ttl is not None else 'None'}")
 
     @line_magic
     def cash_off(self, line: str) -> None:
