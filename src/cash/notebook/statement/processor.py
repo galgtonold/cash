@@ -689,6 +689,7 @@ class StatementProcessor:
             if not cacheable:
                 metrics['uncacheable_reasons'].extend(reasons)
                 skip_cache = True
+        effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
         self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data)
 
@@ -870,6 +871,7 @@ class StatementProcessor:
             if not cacheable:
                 metrics['uncacheable_reasons'].extend(reasons)
                 skip_cache = True
+        effective_ttl = self._ttl_floor_from_called_functions(inputs, effective_ttl)
         metadata, cached_data, cache_check_time = self._do_cache_lookup(skip_cache, cache_key, effective_ttl, inputs)
         self._observe_miss_guard(skip_cache, code, source_hash, cache_key, cached_data)
 
@@ -944,6 +946,34 @@ class StatementProcessor:
             allow_random = annotation.allow_random
             cache_fit = annotation.cache_fit
         return effective_ttl, force_persist, skip_cache, allow_random, cache_fit
+
+    def _ttl_floor_from_called_functions(self, inputs: set[str], effective_ttl: int | None) -> int | None:
+        """Lower *effective_ttl* to the TTL of any ``@cash.cache`` function called here.
+
+        A statement ``x = f()`` where ``f`` is decorated ``@cash.cache(ttl=0)`` was
+        cached with no TTL under %cash_on, so the statement restore froze ``x`` at
+        the first result — silently overriding the freshness the decorator
+        promised (CAS-224). The call target appears in ``inputs`` (the analyzer
+        lists ``f`` for ``x = f()``); if it is a cash wrapper with a smaller
+        declared TTL, the statement must expire at least as often. ``ttl=0`` then
+        rides the existing immediate-expiry path (CAS-221), so every run is a miss
+        and the decorated body runs every time, as ``ttl=0`` asks.
+
+        Only LOWERS the TTL and only for a wrapper carrying an explicit TTL, so a
+        plain ``@cash.cache`` (ttl=None) call is completely unaffected — the
+        statement caches exactly as before.
+        """
+        user_ns = self.shell.user_ns
+        floor = effective_ttl
+        for name in inputs:
+            fn = user_ns.get(name)
+            if fn is None or not getattr(fn, '_cash_cached', False):
+                continue
+            declared = getattr(fn, '_cash_declared_ttl', None)
+            if declared is None:
+                continue
+            floor = declared if floor is None else min(floor, declared)
+        return floor
 
     @staticmethod
     def _strip_control_markers(code: str) -> str:

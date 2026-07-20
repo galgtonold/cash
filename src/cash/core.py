@@ -1905,6 +1905,11 @@ class Cash:
         # machinery (finding #9). functools.wraps copies __module__, which would
         # otherwise make the wrapper look like same-package user code.
         stats_wrapper._cash_cached = True
+        # Declared TTL, exposed so the notebook statement cache can see it. A
+        # ``ttl=0`` function must recompute every call; without this the
+        # statement ``x = f()`` gets cached with no TTL under %cash_on and
+        # freezes the value the decorator promised to refresh (CAS-224).
+        stats_wrapper._cash_declared_ttl = ttl
         self._wrapped_funcs[func_name] = stats_wrapper
         return stats_wrapper
 
