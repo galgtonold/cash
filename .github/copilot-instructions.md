@@ -9,7 +9,7 @@ Cash is a smart caching library for Python with two primary use cases:
 1. **Decorator-based caching** (`@cash.cache`) for functions with automatic dependency tracking
 2. **Jupyter notebook caching** via IPython magics (`%cash_on`) with statement-level granularity
 
-**Current Status:** Public Beta (v0.5.0b1). The single source of truth for all planning is the **Linear** workspace (team `Cash`, issue prefix `CAS`) — see the *Project Management* section below.
+**Current Status:** Preparing the first public release, `v0.1.0` (nothing has been published to PyPI yet). The single source of truth for all planning is the **Linear** workspace (team `Cash`, issue prefix `CAS`) — see the *Project Management* section below.
 
 **Development Priority:** Work the `v0.5.0 Release` project in Linear (milestones: *Beta hardening*, *Launch readiness*). New features default to the `Post-Beta (0.6+)` project unless they unblock the release.
 
@@ -291,10 +291,21 @@ When returning from `process_statement()` in `statement/processor.py`, include:
 When the user asks to **cut a release** / **bump the version** / **prepare release X.Y.Z**:
 
 ### 1. Pick the version
-- Beta: `0.5.0b1` → `0.5.0b2` → `0.5.0rc1` → `0.5.0`
-- Bug-fix: `0.5.0` → `0.5.1`
-- New feature, no breaks: `0.5.0` → `0.6.0`
-- Breaking change: `0.5.0` → `1.0.0` (only after we've earned `1.0`)
+The first public release is `0.1.0`. Development ran through internally-numbered
+versions up to `0.5.0b2`, none of which were ever published; versioning restarted
+at `0.1.0` so the public series begins where users actually join it. Do **not**
+resurrect the old numbers — `0.2.0`, `0.3.0` and `0.5.0*` are historical only and
+are recorded under *Pre-release development history* in `CHANGELOG.md`.
+
+- Bug-fix: `0.1.0` → `0.1.1`
+- New feature, no breaks: `0.1.0` → `0.2.0`
+- Breaking change: while `0.x`, a break goes in a minor bump (`0.1.0` → `0.2.0`)
+  and MUST be called out under **Breaking**; the API is not yet stable
+- `1.0.0` only once the API is one we're willing to freeze
+
+Prefer plain final versions over pre-release suffixes. `pip install cash-lib`
+ignores pre-releases unless the user passes `--pre`, so a `bN`/`rcN` release is
+invisible to most people — that is a deliberate choice, not a default.
 
 ### 2. Auto-generate the CHANGELOG entry from `git log`
 **Do not write the changelog by hand.** Derive it from commits since the previous tag.
@@ -318,7 +329,7 @@ Then group the commits by their Conventional-Commits prefix into Keep-a-Changelo
 
 Rewrite each line so it reads as a user-facing change, not a commit subject. Strip the prefix, expand abbreviations, write in past tense or imperative as is consistent with the rest of the file. Add a *why* clause when the commit subject doesn't explain it.
 
-Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`. Keep the prior `[0.5.0b1]`, `[0.3.0]`, ... sections intact.
+Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, above `## [0.1.0]`. Leave the *Pre-release development history* block and everything under it untouched — those entries are a frozen record, not a running log.
 
 ### 3. Bump the version
 Edit the single `__version__ = "..."` line in `src/cash/__init__.py`. That is the **single source of truth** — `pyproject.toml` declares `dynamic = ["version"]` and hatchling reads it from there at build time (`[tool.hatch.version]`), so the wheel metadata, `cash.__version__`, and `cash version` can never disagree. Do **not** add a `version =` line back to `pyproject.toml`.

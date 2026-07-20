@@ -375,11 +375,10 @@ Directives merge from the outside in: an enclosing structure's directive is
 combined with the statement's own using the rules under
 [Merging](#merging-multiple-annotations).
 
-!!! warning "Before Cash 0.5.0b2, directives inside control structures did nothing"
-    `@cash:` annotations were resolved only for top-level statements and were
-    **silently dropped** for anything nested in a loop or branch — no error, no
-    warning. If you worked around it by hoisting code out of a loop or reaching
-    for `%cash_off`, you can put it back.
+!!! note "Directives work at any nesting depth"
+    An annotation on a statement inside a loop, an `if`, a `with` or a `try` is
+    honoured exactly as it would be at the top level — there is no need to hoist
+    code out of a block to annotate it.
 
 ### Trailing annotations
 

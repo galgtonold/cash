@@ -532,13 +532,13 @@ roundtrip is the "side effect"), `assume_safe=True` silences the
 warning. If it isn't, refactor: separate the pure compute from the
 side effect, and only cache the pure part.
 
-### Helper changed but cache didn't invalidate (legacy behavior — fixed)
+### Editing a helper invalidates the caller's cache
 
-Editing a plain helper called from a cached function used to leave the
-parent's cache stale. As of v0.5.0b2, the analyzer captures helper
-source hashes and folds them into the cache key — both cross-process
-edits and in-process redefinitions (notebook cell rerun, REPL) are
-picked up automatically. Per-call overhead is ~5-30μs.
+Editing a plain helper called from a cached function invalidates that
+function's cache. The analyzer captures helper source hashes and folds
+them into the cache key, so both cross-process edits and in-process
+redefinitions (notebook cell rerun, REPL) are picked up automatically.
+Per-call overhead is ~5-30μs.
 
 ### `@cash.cache` on a generator
 

@@ -5,7 +5,72 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0b2] - Unreleased
+## [0.1.0] - 2026-07-20
+
+First public release.
+
+Cash caches expensive work in Jupyter notebooks and Python functions, and
+figures out on its own when a cached result is still valid. In a notebook it
+works at **statement** level: edit one line, and only what actually depends on
+that line recomputes — across kernel restarts, with no manual pickling.
+
+### Added
+
+**Decorator caching**
+- `@cash.cache` with automatic dependency tracking — a cached function is
+  invalidated when its own source, a helper it calls, or a file it reads
+  changes.
+- `async def` support: awaited results are cached, including under concurrent
+  `asyncio.gather`.
+- `cache_if=` predicate to skip storing selected results (e.g. negatives).
+- `cash.register_hasher` for arguments that are not hashable by default.
+
+**Notebook caching**
+- `%cash_on` enables statement-level caching for the session; `%%cash` caches a
+  single cell.
+- Upstream simulation works out which earlier statements a cell really needs and
+  restores the rest from cache instead of re-running them.
+- An interactive badge per cell shows what was restored, what recomputed, and
+  **why**.
+- Per-statement annotations: `# @cash:no-cache`, `# @cash:persist`,
+  `# @cash:cache-fit`.
+
+**Backends**
+- InMemory, File, Redis, S3, and a Tiered backend (the default) with a
+  cost-model-driven persistence policy that decides what is worth writing to
+  disk.
+
+**File dependency tracking**
+- Reads through pandas, numpy and builtins are tracked automatically by content
+  hash; `file_depends_on` declares dependencies explicitly.
+
+**Tooling**
+- `cash` command-line interface.
+- Magics: `%cash_help`, `%cash_status`, `%cash_stats`, `%cash_audit`,
+  `%cash_benchmark`, `%cash_persist`, `%cash_debug`, `%cash_badge`,
+  `%cash_off`, `%cash_feedback`.
+- `cash.CashWarning` and subclasses are exposed at the top level, so a project
+  can turn cache-ineffectiveness into a CI failure via
+  `warnings.filterwarnings`.
+
+### Notes
+
+- **Versioning restarts here.** Development ran through internally-numbered
+  versions up to `0.5.0b2`; none of them were ever published. Rather than open
+  to the public at a number implying four prior releases nobody could install,
+  the first release anyone can `pip install` is `0.1.0`. The earlier entries are
+  kept below as a development record.
+- This is a `0.x` release: the API may still change between minor versions.
+
+---
+
+## Pre-release development history
+
+**Nothing below this line was ever published to PyPI.** These entries are the
+internal development record that led to `0.1.0`, kept for provenance. The
+version numbers are historical and do not correspond to anything installable.
+
+### [0.5.0b2] - Unreleased
 
 ### Added
 - `@cash.cache` now supports `async def` functions. Awaited results are
@@ -233,7 +298,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `notebook_caching_api.md`, `cost-model.md`, `index.md`) gained
   cross-references to the new tutorials where appropriate.
 
-## [0.5.0b1] - Beta Release
+### [0.5.0b1] - Beta Release
 
 ### Added
 - **Bug-report button** in the badge header with a budget-aware URL builder that auto-fills a GitHub issue with the failing cell, environment info, and the most recent metrics (without exceeding GitHub's URL length cap).
@@ -269,7 +334,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`%cash_benchmark --compare` dropped the `Speedup` line on coarse timers.** Same Windows resolution issue caused `mean_uncached` to round to 0; switched to `perf_counter`, and now print `Speedup: n/a (timings below timer resolution)` instead of silently omitting the line.
 - **File-dep cache invalidation missed same-mtime rewrites.** On filesystems with coarse mtime granularity (HFS+/APFS, some ext4 configs) two back-to-back rewrites of the same file produce identical mtimes and the cache stayed valid. `file_dependencies` metadata now records both mtime and size, and all five validation paths check both. Existing on-disk caches load fine — they just lose the size check until they're re-written.
 
-## [0.3.0] - Decorator–Notebook Bridge
+### [0.3.0] - Decorator–Notebook Bridge
 
 ### Added
 
@@ -312,7 +377,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default backend is now `TieredBackend` (InMemory L1 + FileBackend L2) with smart persistence policy
 - `_analyzed.discard()` called when function source hash changes, forcing dependency graph rebuild
 
-## [0.2.0] - 2025-02-06
+### [0.2.0] - 2025-02-06
 
 ### Added
 - **Configuration System** (`cash.config`):
@@ -466,7 +531,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `__all__` bug in `cash/__init__.py`
 - IPython mock test isolation issues
 
-## [0.1.0] - Initial Release
+### [0.1.0-dev] - Initial internal release
+
+> Renamed from `0.1.0` when versioning restarted: `0.1.0` is now the first
+> public release above. This entry is the project's original first cut.
 
 ### Added
 - Core `Cash` class with decorator-based caching
