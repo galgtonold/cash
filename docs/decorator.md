@@ -335,6 +335,30 @@ Keys:
   after the fact even when `warnings.simplefilter` swallowed the
   stderr emission.
 
+!!! warning "In a notebook, `cache_info()` reads 0 / 0 — use `explain()` instead"
+    The counters live on the **wrapper object**, and they count only since
+    that wrapper was created. In a notebook, cash may rebuild the cell that
+    defines your function, which re-runs the decorator and produces a fresh
+    wrapper with fresh counters. So `cache_info()` can report
+    `{'hits': 0, 'misses': 0}` **forever**, even while caching is working
+    perfectly and saving you minutes.
+
+    It is not telling you caching is broken — it is telling you *this
+    wrapper* has not served a call yet. To check whether caching is actually
+    working in a notebook, use either:
+
+    ```python
+    f.explain(1)      # -> [HIT] ... execution_time_saved: 23.54
+    ```
+
+    ```python
+    %cash_stats       # session-wide hits, misses and net time saved
+    ```
+
+    Both read through to the real cache rather than a per-wrapper counter.
+    `cache_info()` is reliable in scripts and long-lived processes, where
+    the wrapper is created once.
+
 ### `func.cache_clear()`
 
 Wipe backend entries whose key starts with this function's name. Also

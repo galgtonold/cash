@@ -140,6 +140,13 @@ expensive.explain(1_000_000)
 expensive.cache_clear()
 ```
 
+> **In a notebook, use `explain()` rather than `cache_info()`.** The
+> `cache_info()` counters live on the wrapper object, and cash may rebuild the
+> cell that defines your function — producing a fresh wrapper with fresh
+> counters. It can therefore read `{'hits': 0, 'misses': 0}` even while caching
+> is working and saving you minutes. `explain()` and `%cash_stats` read through
+> to the real cache, so they tell you the truth in either environment.
+
 Decorate impure functions (LLM calls, HTTP fetches, file writes) and
 Cash warns by default that the side effect will only run on the first
 call. Pass `assume_safe=True` to silence after auditing, or
