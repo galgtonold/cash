@@ -32,6 +32,52 @@ _PYPLOT_FIGURE_MAKER = re.compile(
 )
 
 
+_CONTROL_NODES = (
+    ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try,
+)
+
+
+def _control_body_touches(code: str, sibling_names: set[str]) -> bool:
+    """True when a CONTROL STRUCTURE's body calls a method on one of *sibling_names*.
+
+    The simulation treats a loop / ``if`` / ``with`` as ONE trace entry and does
+    not surface the mutations performed inside its body, so the statement's
+    recorded outputs never mention ``ax`` for::
+
+        for c in summary.columns:
+            ax.plot(range(len(summary)), summary[c].values, label=c)
+
+    :meth:`ReexecutionPlanner._complete_stateful_carrier_history` keys on exactly
+    those outputs, so the loop was left out of the plan while
+    ``fig, ax = plt.subplots()`` and ``fig.savefig(path)`` were scheduled -- the
+    figure was rebuilt EMPTY and the blank PNG was written over the good chart
+    (CAS-213). That method's docstring already describes this failure for the
+    flat ``ax.bar(...)`` form; only the loop shape escaped, because the flat one
+    IS visible in the outputs.
+
+    Deliberately restricted to control structures: the flat form is already
+    covered by the outputs check, and widening this to plain statements would
+    also promote pure reads (``ax.get_title()``), risking exactly the
+    over-scheduling regressions that method is documented to be narrow about.
+    """
+    if not sibling_names:
+        return False
+    try:
+        tree = ast.parse(textwrap.dedent(code))
+    except (SyntaxError, ValueError, TypeError):
+        return False
+    for node in ast.walk(tree):
+        if not isinstance(node, _CONTROL_NODES):
+            continue
+        for sub in ast.walk(node):
+            if (isinstance(sub, ast.Call)
+                    and isinstance(sub.func, ast.Attribute)
+                    and isinstance(sub.func.value, ast.Name)
+                    and sub.func.value.id in sibling_names):
+                return True
+    return False
+
+
 class ReexecutionPlanner:
     """Phase 3 of NotebookSimulator: build the re-execution plan.
 
@@ -441,7 +487,14 @@ class ReexecutionPlanner:
                     for j in range(p + 1, i):
                         if j in scheduled or j in pending:
                             continue
-                        if set(simulation_trace[j][1]) & sibling_names:
+                        # Outputs catch the FLAT fill (``ax.bar(...)``). A loop
+                        # is one trace entry whose outputs never mention the
+                        # carrier, so the body has to be inspected directly or
+                        # the figure is rebuilt from a subset of its history
+                        # (CAS-213).
+                        if (set(simulation_trace[j][1]) & sibling_names
+                                or _control_body_touches(
+                                    simulation_trace[j][0], sibling_names)):
                             pending.add(j)
                     if not pending:
                         continue
