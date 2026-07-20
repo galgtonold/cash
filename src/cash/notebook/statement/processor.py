@@ -326,11 +326,17 @@ from ..randomness import (
     RandomnessDetector,
     capture_object_rng_states,
     capture_rng_state,
+    get_drawing_rng_modules,
+    get_seeding_rng_modules,
+    rng_epoch_fingerprint,
     check_and_warn_randomness,
     warn_stale_estimator_fit,
     warn_stale_randomness,
     warn_unseeded_estimator_fit,
 )
+
+
+
 
 
 class StatementProcessor:
@@ -387,6 +393,8 @@ class StatementProcessor:
 
         # Document: function_tracker must be explicitly passed to UpstreamChecker
         self.function_tracker = FunctionTracker()
+        # module -> cache key of the seeding statement in force (CAS-223).
+        self._rng_seed_epochs: dict[str, str] = {}
 
         self.set_tracking_state(tracking_state or TrackingState())
 
@@ -426,6 +434,7 @@ class StatementProcessor:
             file_deps=self._file_deps,
             compute_hash=compute_hash_fn,
             debug=debug,
+            rng_seed_epochs=self._rng_seed_epochs,
         )
 
         # Used to prevent the "redundant import" optimization from skipping
@@ -2597,6 +2606,10 @@ class StatementProcessor:
             # concepts; keep them on different keys here too.
             'rich_outputs': captured_output.outputs,
             'rng_state': capture_rng_state(),
+            # The seeding regime this state was captured under, so a later
+            # restore can tell whether replaying it would clobber a re-seed
+            # rather than continue the stream (CAS-223).
+            'rng_epochs': dict(self._rng_seed_epochs),
         }
 
         # CAS-90: the module-global RNG post-state above misses generators the
@@ -2679,11 +2692,24 @@ class StatementProcessor:
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
+                rng_fingerprint=rng_epoch_fingerprint(
+                    get_drawing_rng_modules(code), self._rng_seed_epochs,
+                ),
             )
         except Exception as exc:
             raise CacheKeyComputationError(
                 f"Failed to compute cache key for: {code[:80]!r}"
             ) from exc
+
+        # A statement that seeds opens a new epoch for its module, identified by
+        # this statement's own cache key -- which folds in both its source and
+        # its input lineage, so `seed(0)` -> `seed(1)` and `seed(cfg.seed)` are
+        # both caught. Set AFTER the key above so a statement that seeds and
+        # draws at once is keyed on the epoch it INHERITS, not the one it opens
+        # (its own draw consumes the state its seed call just established, and
+        # that dependency is already carried by its source). CAS-223.
+        for module in get_seeding_rng_modules(code):
+            self._rng_seed_epochs[module] = cache_key
 
         hash_time = time.time() - t2
         return inputs, outputs, source_hash, cache_key, analysis_time, hash_time

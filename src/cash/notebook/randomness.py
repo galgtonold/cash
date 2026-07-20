@@ -3,17 +3,18 @@ from __future__ import annotations
 """Detection of unseeded random calls that compromise cache reproducibility."""
 
 import ast
+import hashlib
 import inspect
 import logging
 import types
 import warnings
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "rng_epoch_fingerprint"]
 
 logger = logging.getLogger(__name__)
 
@@ -1534,4 +1535,74 @@ def get_used_rng_modules(code: str) -> set[str]:
         modules.add(_CARRIER_MODULES.get(kind, kind))
 
     return modules
+
+
+def get_drawing_rng_modules(code: str) -> set[str]:
+    """Modules *code* DRAWS from, ignoring modules it merely seeds (CAS-223).
+
+    The narrower companion to :func:`get_used_rng_modules`, which also reports
+    the target of a bare ``np.random.seed(0)``. Only a draw's result depends on
+    the RNG state, so only a draw's cache key should.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    visitor = RandomnessVisitor()
+    visitor.visit(tree)
+    return {call.module for call in visitor.random_calls}
+
+
+def get_seeding_rng_modules(code: str) -> set[str]:
+    """Modules *code* SEEDS (``np.random.seed(0)``, ``random.seed(0)``) — CAS-223.
+
+    The counterpart to :func:`get_drawing_rng_modules`. A statement that seeds
+    opens a new "seed epoch" for its module; every later draw from that module
+    is keyed on the epoch, so re-seeding invalidates the draws that follow it.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    visitor = RandomnessVisitor()
+    visitor.visit(tree)
+    return {module for module, _lineno in visitor.seed_calls}
+
+
+def rng_epoch_fingerprint(modules: set[str], epochs: Mapping[str, str]) -> str | None:
+    """Key material identifying which seeding is in force for *modules* (CAS-223).
+
+    Mixed into the cache key of a statement that draws, so that re-seeding
+    invalidates the draw. Without it, ``a = np.random.rand(3)`` has a stable
+    source and no tracked inputs, so editing ``np.random.seed(0)`` to
+    ``seed(1)`` leaves the key identical and cash replays the previous seed's
+    numbers — the documented reproducibility escape hatch handing back provably
+    wrong values.
+
+    **The live RNG state cannot be used for this**, which is not obvious and
+    cost a full implementation to learn. Restoring any cached statement replays
+    that statement's post-execution RNG state (``restore_rng_state``), so by the
+    time a draw's key is computed the live state has been rewound to whatever
+    the COLD run left behind. It is a function of the cache, not of the current
+    seed, and fingerprinting it yields a byte-identical digest under ``seed(0)``
+    and ``seed(1)`` alike. Measured, not assumed.
+
+    So the epoch is the seeding STATEMENT's own cache key. That key already
+    folds in the statement's source and its input lineage, which makes both
+    spellings work: ``seed(0)`` -> ``seed(1)`` changes the source, and
+    ``seed(cfg.seed)`` changes its input lineage though the source is identical.
+
+    It is also deterministic rather than session-scoped, so a fresh kernel that
+    re-runs the notebook top to bottom reconstructs the same epoch and the warm
+    draws still HIT. Running a draw cell alone after a restart, with no seeding
+    statement executed, simply yields no epoch — the key differs, the draw
+    recomputes, and recomputing is the safe direction.
+
+    Returns None when no epoch applies, leaving the cache key byte-identical to
+    its pre-CAS-223 value, so no existing entry is invalidated by this change.
+    """
+    if not modules:
+        return None
+    parts = [f"{module}={epochs[module]}" for module in sorted(modules) if module in epochs]
+    return ":".join(parts) if parts else None
 

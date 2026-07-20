@@ -282,6 +282,7 @@ def compute_cache_key(
     ctx: CacheKeyContext,
     outputs: set[str] | None = None,
     occurrence_index: int = 0,
+    rng_fingerprint: str | None = None,
 ) -> CacheKeyResult:
     """Compute the cache key for a statement.
 
@@ -370,8 +371,17 @@ def compute_cache_key(
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
 
+    # A draw's result is determined by the RNG state it consumes, which no
+    # other component sees: the source is stable and the RNG module is not a
+    # tracked input. Without this, re-seeding upstream leaves the key identical
+    # and cash replays the previous seed's numbers (CAS-223). Omitted entirely
+    # when absent, so keys for non-drawing statements are byte-identical to
+    # their pre-CAS-223 values and no existing entry is invalidated.
+    rng_component = f":rng{rng_fingerprint}" if rng_fingerprint else ""
+
     combined_hash_str = (
-        f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}{occurrence_component}"
+        f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
+        f"{occurrence_component}{rng_component}"
     )
     combined_hash = hashlib.sha256(combined_hash_str.encode('utf-8')).hexdigest()
     cache_key = f"stmt:{combined_hash}"
