@@ -240,10 +240,47 @@ def _search_servers_for_notebook(kernel_id: str) -> str | None:
                 sessions = json.loads(response.read().decode())
                 for session in sessions:
                     if session['kernel']['id'] == kernel_id:
-                        notebook_path = session['notebook']['path']
-                        return os.path.join(server['notebook_dir'], notebook_path)
-        except (OSError, KeyError, ValueError, urllib.error.URLError, json.JSONDecodeError):
-            logger.debug("[UTILS] Failed to query sessions from server: %s", server.get('url', '?'))
+                        # ``notebook_dir`` is the CLASSIC notebook server's key.
+                        # ``jupyter_server`` (i.e. every current JupyterLab) calls
+                        # it ``root_dir``, so indexing ``notebook_dir`` raised a
+                        # KeyError that this except tuple swallowed -- AFTER a
+                        # perfectly successful 200 response. Discovery then
+                        # returned None, upstream dependency tracking went off for
+                        # the whole session, and an edited-but-not-re-run cell fed
+                        # a stale value downstream with no error. Prefer the modern
+                        # key and keep the legacy one as a fallback. Same for the
+                        # session path: ``session['path']`` is current, the nested
+                        # ``notebook`` dict is deprecated and may disappear.
+                        notebook_path = (
+                            session.get('path')
+                            or session.get('notebook', {}).get('path')
+                        )
+                        root_dir = (
+                            server.get('root_dir')
+                            or server.get('notebook_dir')
+                            or ''
+                        )
+                        if not notebook_path:
+                            logger.debug(
+                                "[UTILS] Session for kernel %s carries no path", kernel_id,
+                            )
+                            continue
+                        return os.path.join(root_dir, notebook_path)
+        except (OSError, ValueError, urllib.error.URLError, json.JSONDecodeError) as exc:
+            # Deliberately no longer catches KeyError blind. A missing key is a
+            # SCHEMA mismatch, not a transport failure, and reporting it as
+            # "failed to query" sent two independent testers hunting the network
+            # while the request had actually returned 200.
+            logger.debug(
+                "[UTILS] Failed to query sessions from server %s: %s",
+                server.get('url', '?'), exc,
+            )
+        except KeyError as exc:
+            logger.debug(
+                "[UTILS] Session payload from %s is missing key %s -- "
+                "unrecognised Jupyter server schema",
+                server.get('url', '?'), exc,
+            )
     return None
 
 
