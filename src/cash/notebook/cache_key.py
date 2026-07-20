@@ -89,8 +89,47 @@ class CacheKeyResult(NamedTuple):
     module_source_hashes: list[str]
     """``['var:hash', ...]`` for tracked module dependencies."""
 
-def _is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> bool:
-    """Return True if the value should be treated as a module (skipped from input_hashes)."""
+def is_cash_instrumentation(val: object) -> bool:
+    """True when *val* is one of cash's own I/O-tracking wrappers.
+
+    ``FileAccessTracker._patch_user_ns`` replaces ``user_ns['open']`` with a
+    dispatcher wrapper so file reads can be tracked. That wrapper is a closure,
+    so it cannot be pickled, so ``compute_hash`` falls back to
+    ``sha256(str(id(obj)))`` -- a memory address that is different in every
+    kernel.
+
+    Any statement mentioning ``open`` therefore got a per-session cache key, its
+    output lineage inherited that volatility, and every downstream key drifted
+    with it: nothing restored after a restart and ``.cash`` grew a duplicate
+    copy each time (CAS-214).
+
+    Skipping is not merely a workaround, it restores the truth: with cash NOT
+    installed, ``user_ns.get('open')`` is ``None`` (builtins do not live in
+    ``user_ns``) and contributes nothing to the key. Cash's own instrumentation
+    must be invisible to the key it computes.
+
+    Tested with ``is True``, not truthiness: any object with a permissive
+    ``__getattr__`` (``MagicMock``, RPC/ORM proxies) auto-creates a truthy
+    attribute for ANY name, and treating those as instrumentation would drop a
+    real input from the key -- trading this over-invalidation bug for an
+    under-invalidation one, which is far worse. The wrapper sets the marker to
+    literal ``True`` (``file_tracker.py`` ``_patch_user_ns``), so an identity
+    test is both sufficient and safe.
+    """
+    return getattr(val, '_is_file_tracker_patch', False) is True
+
+
+def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> bool:
+    """Return True if the value should be treated as a module (skipped from input_hashes).
+
+    PUBLIC because the lineage WRITE path and the upstream simulation must apply
+    the identical test. They previously did not, and the asymmetry was CAS-214:
+    this read path skips a module, while the write path fell through to
+    ``compute_hash(module)``, which cannot pickle a module and returns
+    ``sha256(str(id(module)))`` -- a memory address, fresh on every kernel start.
+    That poisoned the output lineage of the defining statement, which is an input
+    hash for every downstream key, so nothing restored after a restart.
+    """
     if var_name in virtual_modules:
         return True
     if val is None:
@@ -124,7 +163,12 @@ def _process_input_var(
     """Process one input variable, appending to input_hashes / func_source_hashes / module_source_hashes."""
     val = user_ns.get(var_name)
 
-    if _is_module_like(var_name, val, virtual_modules):
+    if is_cash_instrumentation(val):
+        # cash's own shim over a builtin. Contribute nothing -- exactly as this
+        # name would if cash were not installed (CAS-214).
+        return
+
+    if is_module_like(var_name, val, virtual_modules):
         if var_name in variable_lineage:
             module_source_hashes.append(f"{var_name}:{variable_lineage[var_name]}")
             if debug:

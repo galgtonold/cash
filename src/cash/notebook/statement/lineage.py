@@ -33,6 +33,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
+from ..cache_key import is_cash_instrumentation, is_module_like
 from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,
@@ -179,7 +180,17 @@ class StatementLineageBuilder:
     def _build_input_lineages(
         self, tracking_state: 'TrackingState', inputs: set[str], user_ns: dict,
     ) -> tuple[list[str], dict[str, str]]:
-        """Build input lineage hashes list and map for a set of input variables."""
+        """Build input lineage hashes list and map for a set of input variables.
+
+        Mirrors the cache-key READ path (:func:`cache_key.is_module_like`): an
+        untracked module contributes NOTHING. It previously fell through to
+        ``compute_hash(module)``, which cannot pickle a module and so returns
+        ``sha256(str(id(module)))`` -- a memory address, therefore a different
+        value in every kernel. That volatile hash was folded into this
+        statement's OUTPUT lineage, which is an input hash for every downstream
+        statement's cache key, so after a restart the whole chain re-keyed,
+        missed, recomputed, and wrote a duplicate entry (CAS-214).
+        """
         input_lineage_hashes: list[str] = []
         input_lineage_map: dict[str, str] = {}
         for input_var in inputs:
@@ -188,8 +199,19 @@ class StatementLineageBuilder:
                 input_lineage_hashes.append(lineage)
                 input_lineage_map[input_var] = lineage
             elif input_var in user_ns:
+                val = user_ns[input_var]
+                if is_cash_instrumentation(val):
+                    # cash's own I/O shim (e.g. the patched ``open``). Its
+                    # identity is per-session, and without cash it would not be
+                    # in user_ns at all (CAS-214).
+                    continue
+                if is_module_like(input_var, val, frozenset()):
+                    # No tracked lineage for this module: contribute nothing,
+                    # exactly as the read path does. Hashing it here would bake
+                    # a memory address into a persisted key.
+                    continue
                 try:
-                    lineage = self.compute_hash(user_ns[input_var])
+                    lineage = self.compute_hash(val)
                     input_lineage_hashes.append(lineage)
                     input_lineage_map[input_var] = lineage
                 except (TypeError, ValueError, AttributeError, pickle.PicklingError) as e:

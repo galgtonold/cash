@@ -31,7 +31,12 @@ from ..cacheability import (
 )
 from ..cacheability_decision import receiver_is_identity_coupled
 from ..file_dep_snapshot import file_dep_is_fresh
-from ..cache_key import CacheKeyContext, compute_cache_key
+from ..cache_key import (
+    CacheKeyContext,
+    compute_cache_key,
+    is_cash_instrumentation,
+    is_module_like,
+)
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
 from ..statement.derivation_edges import bump_derived_lineages
@@ -1293,6 +1298,15 @@ class VirtualLineage:
 
         val = self.shell.user_ns.get(inp)
         if val is None:
+            return None
+
+        # An untracked module contributes NOTHING, matching the cache-key read
+        # path and the runtime lineage writer. ``virtual_modules`` was accepted
+        # here but never consulted, so the simulation fell through to
+        # ``compute_hash(module)`` -> ``sha256(str(id(module)))``, a per-session
+        # memory address (CAS-214). Runtime and simulation must agree byte for
+        # byte, so this guard has to exist on both sides.
+        if is_cash_instrumentation(val) or is_module_like(inp, val, virtual_modules):
             return None
 
         try:
