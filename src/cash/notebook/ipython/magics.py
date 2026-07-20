@@ -130,7 +130,8 @@ class CashSession:
     independently addressable.
     """
 
-    __slots__ = ('stats', 'provenance', 'audit', 'measured_compute')
+    __slots__ = ('stats', 'provenance', 'audit', 'measured_compute',
+                 'measured_decorator_compute')
 
     def __init__(self) -> None:
         self.stats: dict[str, Any] = new_session_stats()
@@ -139,6 +140,10 @@ class CashSession:
         # source -> execution_time measured in THIS session. Bounded by the
         # notebook's statement count; pure in-memory floats, no I/O (CAS-149).
         self.measured_compute: dict[str, float] = {}
+        # decorator cache_key -> compute time measured in THIS session (a miss).
+        # The @cash.cache sibling of measured_compute: it lets a later decorator
+        # HIT be credited as VERIFIED under the same CAS-157 rule (CAS-222).
+        self.measured_decorator_compute: dict[str, float] = {}
 
 
 _OP_MAP = {
@@ -1387,10 +1392,60 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                     stats['total_verified_saved'] += min(saved, today)
             elif status == CacheStatus.SKIPPED:
                 stats['statements_skipped'] += 1
+            # A ``@cash.cache`` HIT inside this statement saved real compute that
+            # is invisible to the counting above: the value came from the
+            # decorator, so the statement itself only did a fast lookup and reads
+            # as cheap COMPUTED work (CAS-222). Credit it here, from the same
+            # drained call log the badge uses. No double-count risk: a decorator
+            # is only invoked when the statement EXECUTES, so a RESTORED statement
+            # (whose ``saved_time`` already covers the whole compute) carries no
+            # decorator_calls to add.
+            self._credit_decorator_calls(m.get('decorator_calls'), stats, floor)
         # Overhead = cell wall time minus the user compute that ran this cell.
         # Floor at 0: the wall time always covers the compute it contains, but
         # clamp defensively against clock skew / partial timing.
         stats['total_overhead'] += max(0.0, cell_total_time - cell_compute_time)
+
+    def _credit_decorator_calls(
+        self, decorator_calls: 'list[dict[str, Any]] | None',
+        stats: dict[str, Any], floor: float,
+    ) -> None:
+        """Fold ``@cash.cache`` call metrics into the session totals (CAS-222).
+
+        Without this, a session whose expensive work sits behind the decorator —
+        the docs' own recommendation for training — reported the exact inverse of
+        cash's value: ``%cash_stats`` counted only statement restores, so a warm
+        pass that avoided a 30s fit via a decorator hit read as a net *cost*.
+
+        A **miss** records this session's measured compute for that key, so a
+        later hit can be credited as VERIFIED rather than merely gross. It is NOT
+        added to compute totals: the enclosing statement's ``execution_time``
+        already contains it, and adding it here would double-count.
+
+        A **hit** credits ``time_saved`` to gross, mirrors CacheStatus.RESTORED:
+        gross always, verified only under the CAS-157 min-rule when this session
+        measured the same key's compute, and the cacheable-hit denominator when
+        the saving cleared the floor.
+        """
+        if not decorator_calls:
+            return
+        measured = self._session.measured_decorator_compute
+        for call in decorator_calls:
+            key = call.get('cache_key')
+            if call.get('cache_hit'):
+                saved = call.get('time_saved', 0.0) or 0.0
+                stats['total_time_saved'] += saved
+                if saved >= floor:
+                    stats['statements_cacheable_hit'] += 1
+                today = measured.get(key)
+                if today is not None:
+                    stats['total_verified_saved'] += min(saved, today)
+            else:
+                # A miss's execution_time IS the measured compute for this key.
+                if key is not None:
+                    measured[key] = call.get('execution_time', 0.0) or 0.0
+                if (call.get('execution_time', 0.0) or 0.0) >= floor:
+                    stats['statements_cacheable_miss'] += 1
 
     def _record_observability(self, all_metrics: list[ProcessResult]) -> None:
         """Record provenance + audit entries for each statement in *all_metrics*.

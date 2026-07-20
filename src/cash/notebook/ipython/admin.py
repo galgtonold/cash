@@ -301,6 +301,10 @@ class CashAdminMagicsMixin:
             # cache: a reset must drop them too or savings would be credited
             # against measurements the reset claims to have forgotten.
             self._session.measured_compute.clear()
+            # Same rule for the decorator baselines (CAS-222): a reset that keeps
+            # them would credit a post-reset hit as "verified" against a compute
+            # the reset claims to have forgotten.
+            self._session.measured_decorator_compute.clear()
             print("[OK] Session statistics reset.")
             return
 
