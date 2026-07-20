@@ -39,20 +39,34 @@ Cash warns the first time this happens:
 !!! warning "`allow-random` does not change caching"
     `# @cash:allow-random` suppresses the *warning* only. The statement is still cached and still replayed. If you want a fresh draw, you need `no-cache`.
 
-### `np.random.Generator` state is not tracked
+### Editing a bare `seed()` cell without re-running it
 
-Cash tracks seeding of the legacy global RNG. It does **not** track the internal state of a `Generator` object, so a generator created in one cell and drawn from in others hands out draws from the wrong point in its stream after a re-run:
+Cash tracks a global re-seed when the seeding statement itself **executes** — in the same cell as the draw, or when you re-run the seed cell. Editing a bare `np.random.seed(...)` (or `random.seed(...)`) cell and running **only** a downstream draw is the one case it cannot reconstruct:
 
-<!-- test:skip reason="illustrative: cross-cell Generator state, needs a real kernel" -->
+<!-- test:skip reason="illustrative: cross-cell bare-seed edit, needs a real kernel" -->
+```python
+np.random.seed(0)         # cell 1 — edit to seed(1) but do NOT re-run this cell
+x = np.random.rand(10**6) # cell 2 — run this alone
+```
+
+`x` does not reflect `seed(1)`: a bare `seed()` produces no variable, so cash has no dependency edge from the draw back to the seed cell, and its upstream reconstruction — which rebuilds ordinary *variables* from an edited-but-not-rerun cell correctly — has nothing to rebuild here. The draw is served stale, or recomputed against whatever global state the kernel is in. This matches what you'd get with caching off, but it does **not** match a clean top-to-bottom run.
+
+**What to do:** re-run the seed cell after editing it (then the draw refreshes correctly), or seed in the same cell as the draw, or use a named generator (below).
+
+### A named `Generator`'s seed **is** tracked; its stream position is not
+
+Because `rng = np.random.default_rng(SEED)` binds a **variable**, editing `SEED` and re-running the draw refreshes correctly — the ordinary variable-lineage path carries the dependency. What cash does **not** track is a generator's internal *stream position* across several cells that each draw from it:
+
+<!-- test:skip reason="illustrative: cross-cell Generator stream position, needs a real kernel" -->
 ```python
 rng = np.random.default_rng(0)   # cell 1
-a = rng.normal(size=3)           # cell 2
+a = rng.normal(size=3)           # cell 2 — advances the stream
 b = rng.normal(size=3)           # cell 3 — edit and re-run this alone
 ```
 
-`b` is drawn from whatever state the generator happens to be in, not the state a clean top-to-bottom run would produce. The numbers are silently wrong rather than merely stale.
+Re-running cell 3 alone draws `b` from whatever position the generator happens to be in, not the position a clean top-to-bottom run would produce — silently wrong rather than merely stale.
 
-**What to do:** construct the generator in the same cell that draws from it, or mark the drawing cell `# @cash:no-cache`.
+**What to do:** construct and draw from the generator in the same cell, or mark the drawing cell `# @cash:no-cache`.
 
 ---
 
@@ -236,7 +250,7 @@ To keep hashing cheap, cash samples large values rather than reading them whole:
 | list / tuple (> 200) | length, first 5, last 5 |
 | dict (> 200) | length, first 10 keys — **values are not hashed** |
 
-Two large objects that differ only outside the sampled region therefore hash identically. In normal use cash tracks provenance and does not rely on the hash alone, so this is latent; it becomes reachable only after provenance is lost (for example following `reset_cash_state()`), where a change to row 700 of a 1000-row frame can go unnoticed.
+Two large objects that differ only outside the sampled region therefore hash identically. In normal use cash tracks provenance and does not rely on the hash alone, so this is latent; it becomes reachable only after provenance is lost (for example following `cash.reset_session()`), where a change to row 700 of a 1000-row frame can go unnoticed.
 
 **What to do:** if you reset cash state mid-session and then mutate deep inside a large object, restart the kernel rather than relying on invalidation.
 
