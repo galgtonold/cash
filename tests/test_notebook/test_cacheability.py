@@ -490,27 +490,66 @@ class TestSideEffects:
         assert not statement_writes_files("x = 1 + 2")
         assert not statement_writes_files("with open('f.txt') as f:\n    body = f.read()")
 
-    def test_statement_appends_to_files_helper(self):
-        # CAS-210: the repeatability seam. `statement_writes_files` answers
-        # "does this write?"; the planner also needs "is repeating it safe?",
-        # because re-firing a mode='a' append DUPLICATES the payload on disk.
-        from cash.notebook.cacheability import statement_appends_to_files
+    def test_statement_write_repeatability_classifies_all_three(self):
+        # CAS-210: `statement_writes_files` answers "does this write?"; the
+        # planner also needs "is repeating it safe?", because re-firing a
+        # mode='a' append DUPLICATES the payload on disk.
+        from cash.notebook.cacheability import statement_write_repeatability as verdict
 
-        # Accumulating -> never safe to re-fire.
-        assert statement_appends_to_files("open(p, 'a').write('x\\n')")
-        assert statement_appends_to_files("with open('f.txt', 'ab') as f:\n    f.write(b'x')")
-        assert statement_appends_to_files("open(p, mode='a+').write('x')")
-        assert statement_appends_to_files("df.to_csv('log.csv', mode='a', header=False)")
+        # ACCUMULATING -- re-firing duplicates data.
+        assert verdict("open(p, 'a').write(x)") == 'accumulating'
+        assert verdict("with open(p, 'ab') as f:\n    f.write(b'x')") == 'accumulating'
+        assert verdict("df.to_csv('log.csv', mode='a', header=False)") == 'accumulating'
 
-        # Truncating -> idempotent, must STILL re-fire (chart coherence).
-        assert not statement_appends_to_files("open(p, 'w').write('x')")
-        assert not statement_appends_to_files("df.to_csv('out.csv', index=False)")
-        assert not statement_appends_to_files("fig.savefig('chart.png')")
-        assert not statement_appends_to_files("p.write_text('x')")
+        # REPLACING -- idempotent, must keep re-firing (chart coherence).
+        assert verdict("open(p, 'w').write(x)") == 'replacing'
+        assert verdict("with open(p, 'w') as f:\n    f.write(x)") == 'replacing'
+        assert verdict("df.to_csv('out.csv', index=False)") == 'replacing'
+        assert verdict("fig.savefig('chart.png')") == 'replacing'
+        assert verdict("p.write_text('x')") == 'replacing'
+        assert verdict("np.save('a.npy', arr)") == 'replacing'
+        assert verdict("x = 1 + 2") == 'replacing'          # no write at all
+        assert verdict("data = open(p).read()") == 'replacing'  # read mode
 
-        # Not provable -> stays False, so no existing path changes behaviour.
-        assert not statement_appends_to_files("open(p, m).write('x')")
-        assert not statement_appends_to_files("x = 1 + 2")
+        # UNKNOWN -- cannot prove either way.
+        assert verdict("f.write(x)") == 'unknown'           # handle from another cell
+        assert verdict("os.rename(a, b)") == 'unknown'      # second run has no source
+        assert verdict("shutil.move(a, b)") == 'unknown'
+
+    def test_variable_open_mode_is_not_mistaken_for_truncating(self):
+        """`open(p, m)` proves nothing -- m could be 'a' at runtime.
+
+        `_is_open_write_mode` reports False for a computed mode, which the
+        write-DETECTION path reads as "not a write". But a `.write` on the
+        handle still makes the statement a writer, so collapsing those two
+        would silently classify a possible append as safe to repeat.
+        """
+        from cash.notebook.cacheability import statement_write_repeatability as verdict
+        assert verdict("open(p, m).write(x)") == 'unknown'
+        assert verdict("open(p, mode=m).write(x)") == 'unknown'
+
+    def test_to_hdf_is_not_treated_as_truncating(self):
+        """pandas defaults `to_hdf` to mode='a', unlike its `to_*` siblings."""
+        from cash.notebook.cacheability import statement_write_repeatability as verdict
+        assert verdict("df.to_hdf('store.h5', key='k')") != 'replacing'
+
+    def test_dump_into_a_locally_opened_handle_defers_to_that_open(self):
+        """`pickle.dump(obj, f)` carries no mode -- the `open()` that made `f` does.
+
+        Measured, not assumed: classifying the dump as UNKNOWN in its own right
+        let it outrank the provable `open(p,'wb')` beside it, so a plain
+        truncating write read as unsafe to repeat. Under a strict gate that
+        refused to re-fire it, the edited payload never reached the file and the
+        reader served stale data -- breaking two CAS-82 tests.
+        """
+        from cash.notebook.cacheability import statement_write_repeatability as verdict
+
+        assert verdict("import pickle\nwith open(p, 'wb') as f:\n    pickle.dump(o, f)") == 'replacing'
+        assert verdict("import json\nwith open(p, 'w') as f:\n    json.dump(o, f)") == 'replacing'
+        assert verdict("pickle.dump(o, open(p, 'wb'))") == 'replacing'
+        # An append handle still wins, and a handle from elsewhere stays unknown.
+        assert verdict("import pickle\nwith open(p, 'ab') as f:\n    pickle.dump(o, f)") == 'accumulating'
+        assert verdict("pickle.dump(o, fh)") == 'unknown'
 
     def test_os_remove(self):
         a = _analyze("import os; os.remove('file.txt')")

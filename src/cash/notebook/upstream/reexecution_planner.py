@@ -750,7 +750,11 @@ class ReexecutionPlanner:
             return []
         runtime_lineage = getattr(tracking, 'variable_lineage', None) or {}
 
-        from ..cacheability import statement_appends_to_files, statement_writes_files
+        from ..cacheability import (
+            REPEATABILITY_ACCUMULATING,
+            statement_write_repeatability,
+            statement_writes_files,
+        )
 
         def _input_lineage_drifted(name: str) -> bool:
             # The writer's payload changed even though nothing in the variable
@@ -791,9 +795,16 @@ class ReexecutionPlanner:
             #
             # Not re-firing is also what the user's own kernel does: the write
             # runs when they run its own cell, and they did not run it here.
-            # Only a provable append is refused -- a truncating write is
-            # idempotent and still re-fires, which chart-coherence relies on.
-            if statement_appends_to_files(stmt_code):
+            #
+            # ONLY a PROVABLE append is refused. CAS-210 also suggests refusing
+            # UNKNOWN repeatability, and that was measured rather than reasoned
+            # about: the two failure modes are not symmetric. Refusing a write
+            # that SHOULD re-fire leaves the reader on stale data every time,
+            # silently, on a common path -- the measurement broke two CAS-82
+            # tests exactly that way. Leaving an unprovable append re-firing
+            # costs a duplicated line in an uncommon shape. Narrow is the right
+            # side of that trade; see the measurement recorded on CAS-210.
+            if statement_write_repeatability(stmt_code) == REPEATABILITY_ACCUMULATING:
                 if self.debug:
                     logger.debug(
                         "[UPSTREAM] File-writer is a non-idempotent append; not "
