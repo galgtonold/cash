@@ -187,6 +187,7 @@ Three conditions must hold together before the switch happens, which is why many
 
 So the trigger is driven by the *number of statements* cash would have to track, not by how slow the loop is. A one-line append loop over a slow function is one of the shapes that generally keeps caching:
 
+<!-- test:skip reason="illustrative: contrasts two loop shapes; entities/fetch are the reader's own" -->
 ```python
 out = []
 for e in entities:          # one-line body: keeps per-iteration caching
@@ -203,6 +204,7 @@ When it does happen the badge says so (`Storage uncacheable · Reason: In-place 
 
 **What to do:** assign the result instead of appending to it. A comprehension is cached as a single value at any length, and sidesteps the question entirely:
 
+<!-- test:skip reason="illustrative: the comprehension rewrite of the loop above" -->
 ```python
 out = [fetch(e) for e in entities]      # cached regardless of length
 ```
