@@ -117,6 +117,7 @@ def kernelspec_mismatch(argv, executable) -> str | None:
 import time
 import json
 import tempfile
+import warnings
 from contextlib import contextmanager
 
 _BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
@@ -125,13 +126,40 @@ _BOOT_STATE = os.path.join(_BOOT_DIR, "active.json")
 _BOOT_LOCK = os.path.join(_BOOT_DIR, "lock.d")
 _BOOT_ENTRY_TTL = 90.0  # a boot never takes this long; older entry = dead worker
 _BOOT_LOCK_TTL = 15.0   # lock is held only for a quick RMW; older = dead holder
+# Hard deadlines so neither wait here can spin forever. Both are far above any
+# legitimate wait (the lock is held for milliseconds; a slot frees within a
+# kernel boot), so hitting one means something is wrong -- and proceeding
+# degrades throttling, whereas spinning hangs the suite with no output.
+_BOOT_LOCK_WAIT_MAX = 60.0
+_BOOT_SLOT_WAIT_MAX = 180.0
 
 
-def _boot_lock_acquire():
+def _boot_lock_acquire() -> bool:
+    """Take the boot-throttle lock, giving up rather than spinning forever.
+
+    Returns True when the lock is HELD and must be released, False when the
+    deadline passed and the caller is proceeding without it. Callers must pass
+    that result to :func:`_boot_lock_release` -- releasing a lock we do not own
+    would delete the holder's lock and hand it to two processes at once.
+
+    Both loops in this module were unbounded ``while True``. The lock guards a
+    few-millisecond read-modify-write on a small JSON file, and the state lives
+    in the SYSTEM temp dir, so it is shared across runs and survives a killed
+    session. Every failure path here (an undeletable lock dir, a handle held by
+    an AV scanner, a crashed holder) therefore spun silently and forever, with
+    no timeout and no diagnostic -- one of the few places in the harness that
+    could hang with no output at all, which is the observed symptom.
+
+    On deadline we proceed WITHOUT the lock. The worst case is a lost update to
+    the slot table -- one kernel too many or too few boots concurrently, a
+    throttling hiccup. That is strictly better than hanging the suite, because
+    the throttle is a performance guard, not a correctness device.
+    """
+    deadline = time.time() + _BOOT_LOCK_WAIT_MAX
     while True:
         try:
             os.mkdir(_BOOT_LOCK)
-            return
+            return True
         except FileExistsError:
             try:
                 if time.time() - os.path.getmtime(_BOOT_LOCK) > _BOOT_LOCK_TTL:
@@ -147,9 +175,21 @@ def _boot_lock_acquire():
             # FileExistsError was caught before; the denser worksteal scheduling
             # surfaced this race as spurious PermissionError test failures.)
             time.sleep(0.02)
+        if time.time() > deadline:
+            warnings.warn(
+                f"cash test harness: boot-throttle lock not acquired in "
+                f"{_BOOT_LOCK_WAIT_MAX:.0f}s ({_BOOT_LOCK}); proceeding without "
+                f"it. Throttling may be briefly inaccurate. This is a guard "
+                f"against an unbounded spin, not a test failure.",
+                RuntimeWarning, stacklevel=2,
+            )
+            return False
 
 
-def _boot_lock_release():
+def _boot_lock_release(held: bool = True):
+    """Release the lock, but ONLY if this process actually acquired it."""
+    if not held:
+        return
     try:
         os.rmdir(_BOOT_LOCK)
     except OSError:
@@ -180,8 +220,9 @@ def _boot_throttle():
         return
     os.makedirs(_BOOT_DIR, exist_ok=True)
     token = f"{os.getpid()}-{time.time_ns()}"
+    deadline = time.time() + _BOOT_SLOT_WAIT_MAX
     while True:
-        _boot_lock_acquire()
+        held = _boot_lock_acquire()
         try:
             now = time.time()
             active = {k: v for k, v in _boot_state_read().items()
@@ -192,18 +233,29 @@ def _boot_throttle():
                 break
             _boot_state_write(active)  # persist the TTL pruning
         finally:
-            _boot_lock_release()
+            _boot_lock_release(held)
+        if time.time() > deadline:
+            # Every slot has looked busy for the whole deadline even though
+            # entries expire by TTL. Boot anyway: an over-subscribed boot is a
+            # slow test, a permanent wait is a dead suite.
+            warnings.warn(
+                f"cash test harness: no kernel-boot slot for "
+                f"{_BOOT_SLOT_WAIT_MAX:.0f}s (cap {_BOOT_CAP}); booting anyway. "
+                f"Guard against an unbounded wait, not a test failure.",
+                RuntimeWarning, stacklevel=2,
+            )
+            break
         time.sleep(0.2)
     try:
         yield
     finally:
-        _boot_lock_acquire()
+        held = _boot_lock_acquire()
         try:
             active = _boot_state_read()
             active.pop(token, None)
             _boot_state_write(active)
         finally:
-            _boot_lock_release()
+            _boot_lock_release(held)
 
 
 # ---------------------------------------------------------------------------
