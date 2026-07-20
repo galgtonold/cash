@@ -175,27 +175,41 @@ The one worth planning around. If you have N cells that each read a file, modify
 
 **What to do:** where possible, write to distinct outputs rather than round-tripping one file through a chain of cells.
 
-### A `for`-append loop stops caching above ~50 iterations
+### A long `for`-append loop can stop caching
 
-Counter-intuitive, because it gets *worse* as the loop gets more expensive.
+Cash normally caches a loop **per iteration**, so a warm re-run restores every one. A *long* loop can instead be cached as a **single unit** — per-statement bookkeeping stops paying for itself. That switch is reasonable on its own, but a loop that appends into a list is an in-place mutation, which cash will not cache as a whole unit, so the two combine and you get no caching at all.
 
-Below ~50 iterations cash caches a loop **per iteration**, so a warm re-run restores every one. Above it, the loop becomes eligible to be cached as a **single unit** instead — the per-statement overhead stops paying for itself on long loops. That switch is fine on its own, but a loop that appends into a list is an in-place mutation, which cash will not cache as a whole unit. The two combine into a cliff:
+Three conditions must hold together before the switch happens, which is why many append loops never hit it:
+
+- **more than ~50 iterations**, and
+- **estimated bookkeeping above ~1 second** — roughly `iterations × statements-in-body × 8ms`, so a multi-statement body can qualify just past the 50 mark while a **one-line body does not until ~125 iterations** — and
+- **no file I/O written directly in the loop body** (a call to a function that does the I/O internally does not count — only I/O written in the body itself).
+
+So the trigger is driven by the *number of statements* cash would have to track, not by how slow the loop is. A one-line append loop over a slow function is one of the shapes that generally keeps caching:
 
 ```python
 out = []
-for e in entities:          # 50 entities -> restored from cache
-    out.append(fetch(e))    # 64 entities -> recomputed in full, every run
+for e in entities:          # one-line body: keeps per-iteration caching
+    out.append(fetch(e))    # well past 100 iterations
+
+out = []
+for e in entities:          # several statements per iteration, >50 of them,
+    rec = fetch(e)          # no I/O written here -> may switch to single-unit
+    rec["seen"] = True      # and then cache nothing, because `out` is
+    out.append(rec)         # mutated in place
 ```
 
-The badge tells you when this happens (`Storage uncacheable · Reason: In-place mutation on: out`) and gives the fix, so you are not misled about *whether* it cached — but nothing warns you that crossing 50 is what changed.
+When it does happen the badge says so (`Storage uncacheable · Reason: In-place mutation on: out`) and gives the fix, so you are not misled about *whether* it cached — but nothing tells you which threshold you crossed.
 
-**What to do:** assign the result instead of appending to it. A comprehension is cached as a single value at any length:
+**What to do:** assign the result instead of appending to it. A comprehension is cached as a single value at any length, and sidesteps the question entirely:
 
 ```python
 out = [fetch(e) for e in entities]      # cached regardless of length
 ```
 
-The same applies to `while` loops that accumulate, and to `for` loops that build a dict or frame by mutation. If you need the loop body's statements cached individually, keeping the loop under ~50 iterations (batching, chunking) restores per-iteration caching.
+The same applies to `while` loops that accumulate, and to `for` loops that build a dict or frame by mutation.
+
+If you are unsure which side of the line a particular loop is on, do not infer it from the iteration count — check `%cash_stats` or the badge, which report what actually happened.
 
 ### Editing without saving
 
