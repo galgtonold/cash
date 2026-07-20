@@ -50,6 +50,8 @@ https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c
 | Big-frame pandas ETL, written the way people naturally write pandas | **~1.2x** |
 | The same ETL, restructured cache-friendly | **~1.4–1.6x** |
 
+**The loop number depends on how the loop is written.** Assign the result (`out = [f(e) for e in items]`) and it caches at any length. Append into a list inside the loop and caching stops above ~50 iterations — so the bigger the batch, the less you get. The badge says when this happens; [known-limitations](docs/known-limitations.md#a-for-append-loop-stops-caching-above-50-iterations) explains why and what to change.
+
 **Run #1 is slower** — around 1.3x on a big-frame ETL. Cash pays to fill the cache before it can pay you back; the win is on iteration and restart, not the first execution.
 
 The pattern: Cash wins big when a statement is **expensive to compute and cheap to store** (a long fit, a slow API call, a heavy loop). It wins little, or loses, when the result is a multi-hundred-MB frame that is nearly as slow to load from disk as to recompute — Cash's cost model tries to detect this and decline to persist, and testers who overrode it with `# @cash:persist` measured it was right to.

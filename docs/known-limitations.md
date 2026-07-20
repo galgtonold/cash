@@ -175,6 +175,28 @@ The one worth planning around. If you have N cells that each read a file, modify
 
 **What to do:** where possible, write to distinct outputs rather than round-tripping one file through a chain of cells.
 
+### A `for`-append loop stops caching above ~50 iterations
+
+Counter-intuitive, because it gets *worse* as the loop gets more expensive.
+
+Below ~50 iterations cash caches a loop **per iteration**, so a warm re-run restores every one. Above it, the loop becomes eligible to be cached as a **single unit** instead — the per-statement overhead stops paying for itself on long loops. That switch is fine on its own, but a loop that appends into a list is an in-place mutation, which cash will not cache as a whole unit. The two combine into a cliff:
+
+```python
+out = []
+for e in entities:          # 50 entities -> restored from cache
+    out.append(fetch(e))    # 64 entities -> recomputed in full, every run
+```
+
+The badge tells you when this happens (`Storage uncacheable · Reason: In-place mutation on: out`) and gives the fix, so you are not misled about *whether* it cached — but nothing warns you that crossing 50 is what changed.
+
+**What to do:** assign the result instead of appending to it. A comprehension is cached as a single value at any length:
+
+```python
+out = [fetch(e) for e in entities]      # cached regardless of length
+```
+
+The same applies to `while` loops that accumulate, and to `for` loops that build a dict or frame by mutation. If you need the loop body's statements cached individually, keeping the loop under ~50 iterations (batching, chunking) restores per-iteration caching.
+
 ### Editing without saving
 
 Editing a cell in VS Code without saving the notebook file can make the cell-ID match fail, which skips the upstream check and misses the cache for statements that did not change. Values stay correct. **What to do:** save the notebook.
