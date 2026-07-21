@@ -314,6 +314,12 @@ def _change_affects_active_backend(c: Cash, changed: set[str]) -> bool:
     return False
 
 
+# The coding-agent guide entry point: ``cash.help()`` prints/returns the compact
+# reference (see ``_agent_guide.py``). Deliberately shadows the builtin at the
+# ``cash.help`` path only; user code's bare ``help()`` is unaffected.
+from ._agent_guide import help  # noqa: A004,E402
+
+
 def __getattr__(name):
     """Proxy module-level attribute access to the global ``Cash`` singleton.
 
@@ -335,6 +341,7 @@ __all__ = [
     "cache",
     "show_stats",
     "register_hasher",
+    "help",
     "reset_session",
     "configure",
     "cleanup",

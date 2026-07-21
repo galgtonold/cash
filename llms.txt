@@ -1,0 +1,27 @@
+# cash
+
+> Statement-level caching for Jupyter notebooks and Python scripts. cash restores
+> expensive results instead of recomputing them, so notebook and pipeline
+> iteration is fast. Two front-ends, one engine: `%cash_on` caches every notebook
+> statement by its code + inputs; `@cash.cache` caches a function by its source +
+> arguments and persists across processes.
+
+## If you are a coding agent
+
+Read this one page first — it is the minimal correct path, and the same text is
+returned by `cash.help()` in a running kernel:
+
+- [Using cash — a guide for coding agents](docs/for-coding-agents.md)
+
+Key habit for headless/agent runs: make `%cash_badge print` your second line, or
+you cannot see what cash cached (the default badge is an HTML widget stripped by
+headless kernels).
+
+## Reference
+
+- [Quick Start](docs/getting-started/quickstart.md): zero to caching.
+- [Decorator (`@cash.cache`)](docs/decorator.md): caching a function; params.
+- [Annotations](docs/annotations.md): the `# @cash:` per-statement directives.
+- [Reading the badge](docs/badges.md): statuses, the randomness pills, "why did this re-run?".
+- [Known limitations (writing cache-safe cells)](docs/known-limitations.md): the patterns that slip past cash and how to avoid them.
+- [Cost model](docs/cost-model.md): what gets cached, and the ~0.1s cross-process persistence floor.

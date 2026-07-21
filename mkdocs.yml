@@ -112,6 +112,7 @@ markdown_extensions:
 nav:
   - Home: index.md
   - "Why Cash?": why-cash.md
+  - For Coding Agents: for-coding-agents.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
