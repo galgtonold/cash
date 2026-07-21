@@ -111,3 +111,25 @@ def test_combined_edit_seed_with_intervening_draw(nb_runner):
     assert got == pytest.approx(0.7203244934421581, abs=1e-9), (
         f"combined case: got {got}, want seed(1) position-1 0.720324"
     )
+
+
+@pytest.mark.timeout(180)
+def test_indirect_draw_inside_a_function(nb_runner):
+    """A draw INSIDE a called function is invisible to static analysis; the
+    runtime observer (before/after state diff) catches it, so editing the seed
+    and re-running the caller refreshes correctly."""
+    nb_runner.create_notebook([
+        C_ON,
+        C_SEED0,
+        "def f():\n    return float(np.random.rand(1)[0])",
+        "x = f()\nprint('X', x)",   # indirect draw — no np.random in the cell source
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()                       # observes: cell 4 changed the RNG
+    assert _v(nb_runner, 4, "X") == pytest.approx(SEED0_P0, abs=1e-9)
+    nb_runner.set_cell_source(2, C_SEED1)     # edit the seed, do NOT re-run it
+    nb_runner.run_cell(4)                      # re-run the caller
+    got = _v(nb_runner, 4, "X")
+    assert got == pytest.approx(0.417022004702574, abs=1e-9), (
+        f"indirect draw not refreshed on seed edit: got {got}, want seed(1) first 0.417022"
+    )

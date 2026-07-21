@@ -154,6 +154,13 @@ class TrackingState:
     # stale post-state is never matched.
     rng_post_states: dict[str, Any] = field(default_factory=dict)
 
+    # sha256(cell source) -> set of RNG modules whose global state that cell
+    # CHANGED at runtime (observed by a before/after state diff). Catches draws
+    # that static analysis cannot see because they happen INSIDE a called
+    # function (``model.fit()``, a helper) — the ADR-018 runtime observer. Only
+    # known after the cell has run once, exactly like a file dependency.
+    observed_rng_cells: dict[str, set[str]] = field(default_factory=dict)
+
     # Written by StatementProcessor; read by CashMagics for badge display.
     # Accumulates all content hashes seen for a variable across executions.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

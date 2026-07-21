@@ -59,7 +59,7 @@ from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
-from ..randomness import capture_rng_state, get_drawing_rng_modules, get_seeding_rng_modules
+from ..randomness import capture_rng_state, rng_modules_changed
 from ..statement import ProcessResult
 
 if TYPE_CHECKING:
@@ -205,7 +205,9 @@ class CellExecutor:
         if self._debug:
             print("[TIMING_PROXY] Start executing statements...")
 
-        # 7. Statement execution
+        # 7. Statement execution (snapshot the RNG first, so a before/after diff
+        # can observe a draw even when it happens inside a called function).
+        pre_rng = capture_rng_state()
         result = self._execute_cell_statements(
             raw_cell, tree, all_metrics, badge_display_id,
             hook_start, timing_breakdown,
@@ -215,7 +217,7 @@ class CellExecutor:
 
         all_metrics, buffered_result_outputs, badge_render_time = result
         timing_breakdown['badge_progress'] = badge_render_time
-        self._record_executed_cell_hash(raw_cell)
+        self._record_executed_cell_hash(raw_cell, pre_rng)
 
         return _PipelineCompleted(
             all_metrics=all_metrics,
@@ -226,18 +228,24 @@ class CellExecutor:
             badge_render_time=badge_render_time,
         )
 
-    def _record_executed_cell_hash(self, raw_cell: str) -> None:
+    def _record_executed_cell_hash(self, raw_cell: str, pre_rng: dict | None = None) -> None:
         """Remember that this exact cell source ran, so the upstream checker can
         tell an edited-but-not-rerun seed() cell from one that actually ran
-        (ADR-017 / CAS-225). Also snapshot the RNG state after a random cell so a
-        downstream draw can be restored to its position-correct state (ADR-018 /
-        CAS-226 / CAS-227)."""
+        (ADR-017 / CAS-225). Also snapshot the RNG state after a cell that TOUCHED
+        the global RNG so a downstream draw can be restored to its position-correct
+        state (ADR-018 / CAS-226 / CAS-227), and record which modules it changed —
+        detected by a before/after diff, which catches draws inside called
+        functions that static analysis cannot see."""
         try:
             state = self._statement_processor._tracking_state
             digest = hashlib.sha256(raw_cell.encode('utf-8')).hexdigest()
             state.executed_cell_source_hashes.add(digest)
-            if get_seeding_rng_modules(raw_cell) or get_drawing_rng_modules(raw_cell):
-                state.rng_post_states[digest] = capture_rng_state()
+            if pre_rng is not None:
+                post = capture_rng_state()
+                changed = rng_modules_changed(pre_rng, post)
+                if changed:
+                    state.rng_post_states[digest] = post
+                    state.observed_rng_cells[digest] = changed
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             pass
 
@@ -298,7 +306,8 @@ class CellExecutor:
         if self._debug:
             print("[TIMING_PROXY] Start executing statements (async)...")
 
-        # 7. Statement execution (awaited)
+        # 7. Statement execution (awaited); snapshot the RNG first for the diff.
+        pre_rng = capture_rng_state()
         result = await self._execute_cell_statements_async(
             raw_cell, tree, all_metrics, badge_display_id,
             hook_start, timing_breakdown,
@@ -308,7 +317,7 @@ class CellExecutor:
 
         all_metrics, buffered_result_outputs, badge_render_time = result
         timing_breakdown['badge_progress'] = badge_render_time
-        self._record_executed_cell_hash(raw_cell)
+        self._record_executed_cell_hash(raw_cell, pre_rng)
 
         return _PipelineCompleted(
             all_metrics=all_metrics,

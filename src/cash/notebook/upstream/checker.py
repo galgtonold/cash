@@ -1464,7 +1464,7 @@ class UpstreamChecker:
         path are untouched. Only cells strictly BEFORE the current one count.
         """
         try:
-            drawing = get_drawing_rng_modules(cell_code)
+            drawing = self._current_cell_drawing_modules(cell_code)
             if not drawing:
                 return statements
             # Restrict to genuine upstream cells; a None index means "treat all
@@ -1481,7 +1481,7 @@ class UpstreamChecker:
             prepend: list[str] = []
             for idx in range(earliest, len(upstream)):
                 src = upstream[idx]
-                if not (get_seeding_rng_modules(src) or get_drawing_rng_modules(src)):
+                if not self._cell_touches_rng(src):
                     continue
                 if src not in already and src not in prepend:
                     prepend.append(src)
@@ -1490,6 +1490,25 @@ class UpstreamChecker:
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
+
+    def _current_cell_drawing_modules(self, cell_code: str) -> set[str]:
+        """RNG modules this cell draws from — statically OR by prior observation.
+
+        Static analysis sees ``np.random.rand()`` in the cell; the observed set
+        (ADR-018) adds modules a call like ``model.fit()`` changed at runtime, so
+        an indirect draw is treated like a direct one on re-run.
+        """
+        modules = set(get_drawing_rng_modules(cell_code))
+        digest = hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
+        modules |= self._tracking_state.observed_rng_cells.get(digest, set())
+        return modules
+
+    def _cell_touches_rng(self, src: str) -> bool:
+        """True if *src* seeds or draws — statically or by prior observation."""
+        if get_seeding_rng_modules(src) or get_drawing_rng_modules(src):
+            return True
+        digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
+        return bool(self._tracking_state.observed_rng_cells.get(digest))
 
     def _restore_position_rng_state(
         self, cell_code: str, notebook_cells: list[str], current_cell_idx: int | None,
@@ -1504,23 +1523,21 @@ class UpstreamChecker:
         statement restores its own post-state afterwards, so this is harmless.
         """
         try:
-            drawing = get_drawing_rng_modules(cell_code)
+            drawing = self._current_cell_drawing_modules(cell_code)
             if not drawing:
                 return
             end = len(notebook_cells) if current_cell_idx is None else current_cell_idx
             # If an upstream seed is stale (edited-not-rerun), the whole chain of
             # recorded post-states below it is stale too — restoring one would
             # apply the OLD seed's position. Defer to the reseed path
-            # (_prepend_stale_seed_cells) instead of using a stale snapshot. This
-            # is the boundary of the post-state table; the full virtual-variable
-            # model (ADR-018) reconstructs the chain and removes it.
+            # (_prepend_stale_seed_cells) instead of using a stale snapshot.
             upstream = notebook_cells[:end]
             if seed_cells_not_yet_run(drawing, upstream, self._tracking_state.executed_cell_source_hashes):
                 return
             post_states = self._tracking_state.rng_post_states
             for idx in range(end - 1, -1, -1):
                 src = notebook_cells[idx]
-                if not (get_seeding_rng_modules(src) or get_drawing_rng_modules(src)):
+                if not self._cell_touches_rng(src):
                     continue
                 digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
                 state = post_states.get(digest)

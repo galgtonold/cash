@@ -14,7 +14,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_epoch_fingerprint"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_epoch_fingerprint"]
 
 logger = logging.getLogger(__name__)
 
@@ -1613,6 +1613,43 @@ def seed_cells_not_yet_run(
         for module in sorted(seeded):
             out.append((module, idx))
     return out
+
+
+def rng_modules_changed(before: dict, after: dict) -> set[str]:
+    """Modules whose captured RNG state differs between *before* and *after* (ADR-018).
+
+    Used to observe a draw that static analysis cannot see because it happens
+    inside a called function. Compares the per-module states from two
+    :func:`capture_rng_state` snapshots. A module present in only one snapshot
+    (e.g. numpy imported mid-cell) counts as changed. Arrays are compared by
+    bytes, never ``repr``, so display options cannot mask a difference.
+    """
+    changed: set[str] = set()
+    for module in set(before) | set(after):
+        b, a = before.get(module), after.get(module)
+        if b is None or a is None:
+            changed.add(module)
+        elif _digest_rng_state(b) != _digest_rng_state(a):
+            changed.add(module)
+    return changed
+
+
+def _digest_rng_state(value: object) -> str:
+    """Byte-digest of one module's RNG state (arrays by bytes, not repr)."""
+    h = hashlib.sha256()
+
+    def feed(item: object) -> None:
+        tobytes = getattr(item, 'tobytes', None)
+        if callable(tobytes):
+            h.update(tobytes())
+        elif isinstance(item, (tuple, list)):
+            for sub in item:
+                feed(sub)
+        else:
+            h.update(repr(item).encode('utf-8'))
+
+    feed(value)
+    return h.hexdigest()
 
 
 def rng_epoch_fingerprint(modules: set[str], epochs: Mapping[str, str]) -> str | None:
