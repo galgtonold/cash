@@ -603,7 +603,7 @@ Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hol
 
 ## ADR-018: Model the Global RNG as a Position-Aware Virtual Variable
 
-**Status:** Proposed (spike pending)
+**Status:** Accepted — first increment implemented (`66e32dc`); full virtual-variable model still to do
 **Date:** 2026-07-21
 **Context:** CAS-226 (a draw above a later seed keys on that later seed) and CAS-227 (re-executing an edited draw uses the current stream position, not the position it holds top-to-bottom) are both symptoms of one thing: the global RNG state — *seed epoch and stream position* — is tracked by **runtime side-channels** instead of cash's position-aware reconstruction.
 
@@ -650,3 +650,11 @@ Reuses the position-aware reconstruction cash already trusts for variables, inst
 ### Spike (before committing to the refactor)
 
 Prove the core claim: restoring the position-correct RNG state before a *recomputing* draw makes CAS-227 green **without** disturbing the CAS-223 or CAS-225 suites. Cheapest proof — record each random cell's POST state in memory (keyed by cell source) and, before a drawing cell re-executes, restore the POST state of the immediately-preceding upstream random cell. If that holds, build the real virtual-variable wiring; if it breaks the CAS-223 suite, the model needs rework before any refactor.
+
+### First increment implemented (`66e32dc`)
+
+The spike held and shipped as the first increment: `TrackingState.rng_post_states` (cell executor snapshots the RNG after each random cell), and `checker._restore_position_rng_state` restores the nearest upstream random cell's post-state before a drawing cell re-executes. **Fixes CAS-226 and CAS-227.** Verified with nb_runner + the same-content-no-cash oracle; notebook+core 2509 passed; full deterministic integration clean (only the pre-existing zzprobe records).
+
+The spike also **found its own limitation**, exactly as the "store the PRE state" alternative predicted: the post-state table cannot reconstruct across a *seed change*. So the combined case — edit a seed **and** have intervening draws before the re-run draw — can't be fully corrected by a snapshot (the intervening draws' post-states are stale under the old seed). A guard makes `_restore_position_rng_state` **defer to the CAS-225 reseed path when an upstream seed is stale**, so that case falls back to the new seed's stream and is never made *worse*, but it is not yet fully correct (it lands on the new seed's position 0, not the position the intervening draws would have advanced it to).
+
+**Still to do (the actual virtual variable):** make each draw depend on the per-module RNG variable in the *lineage graph*, so a seed edit invalidates the whole downstream chain and reconstruction re-runs the intervening draws in order. That closes the combined case, makes CAS-226's key position-aware (turning its spurious miss into a hit), and — via the runtime state-diff detector — extends coverage to draws inside called functions. The `66e32dc` increment is the position-aware *restore*; the remaining work is the position-aware *invalidation + chain reconstruction*.
