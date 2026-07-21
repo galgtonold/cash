@@ -52,6 +52,17 @@ That's it. The default `Cash()` singleton writes a tiered RAM + disk
 cache under `./.cash/`. The next call with the same `n` (this run or
 next month) returns the stored value.
 
+!!! note "Cross-process persistence has a compute floor"
+    Only results whose computation took **longer than ~0.1 s** are promoted to
+    the disk tier. A cheaper result is still cached in RAM (so a repeat call
+    *in the same process* is instant), but it is **not** written to `./.cash/`,
+    so a fresh process — a kernel restart or a new `python script.py` run —
+    recomputes it. "Returns the stored value next month" therefore holds for the
+    genuinely expensive calls that are worth caching, but a sub-0.1 s function
+    shows no cross-process speedup. Force disk persistence with
+    `# @cash:persist` (or a single-tier `FileBackend`) when a fast result must
+    survive a restart. See [cost model and smart persistence](cost-model.md).
+
 If you want a custom configuration (different backend, custom
 directory, debug logging), instantiate `Cash(...)` explicitly:
 

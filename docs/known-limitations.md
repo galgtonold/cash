@@ -254,6 +254,13 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 **What to do:** if you reset cash state mid-session and then mutate deep inside a large object, restart the kernel rather than relying on invalidation.
 
+!!! note "This sampling is the notebook lineage path, not `@cash.cache` arguments"
+    The table above describes how the **notebook** path fingerprints a *tracked
+    variable* for lineage. The `@cash.cache` **decorator** hashes its arguments
+    by pickling their full content, so a deep mutation to a large DataFrame
+    argument (e.g. row 700 of 1000) *is* detected and produces a fresh cache
+    entry. The sampling blind spot does not reach the decorator's argument hash.
+
 ---
 
 ## Reporting something not on this page
