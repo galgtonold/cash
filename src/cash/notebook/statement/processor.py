@@ -328,7 +328,7 @@ from ..randomness import (
     capture_rng_state,
     get_drawing_rng_modules,
     get_seeding_rng_modules,
-    rng_virtual_var,
+    rng_epoch_fingerprint,
     check_and_warn_randomness,
     warn_stale_estimator_fit,
     warn_stale_randomness,
@@ -2708,22 +2708,10 @@ class StatementProcessor:
 
         t2 = time.time()
 
-        # ADR-018: model each RNG module's global state as a virtual lineage
-        # variable. A draw READS its module's variable, so folding that
-        # variable's lineage into the key makes an upstream re-seed invalidate the
-        # draw -- the exact dependency the retired ``rng_epoch_fingerprint``
-        # side-channel carried (CAS-223), now expressed through the ordinary
-        # input-lineage channel. The variable is added only to this LOCAL key-input
-        # set, never to the returned ``inputs``, so cacheability, mutation and
-        # capture never see a phantom variable (that separation is what avoids the
-        # blast radius a general inputs/outputs injection would have).
-        drawing_modules = get_drawing_rng_modules(code)
-        key_inputs = inputs | {rng_virtual_var(m) for m in drawing_modules}
-
         try:
             cache_key, source_hash, _, _, _ = compute_cache_key(
                 code,
-                key_inputs,
+                inputs,
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
@@ -2734,28 +2722,23 @@ class StatementProcessor:
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
+                rng_fingerprint=rng_epoch_fingerprint(
+                    get_drawing_rng_modules(code), self._rng_seed_epochs,
+                ),
             )
         except Exception as exc:
             raise CacheKeyComputationError(
                 f"Failed to compute cache key for: {code[:80]!r}"
             ) from exc
 
-        # A statement that seeds advances its module's virtual RNG variable to a
-        # new lineage, identified by this statement's own cache key -- which folds
-        # in both its source and its input lineage, so `seed(0)` -> `seed(1)` and
-        # `seed(cfg.seed)` are both caught. Set AFTER the key above so a statement
-        # that seeds and draws at once keys on the state it INHERITS, not the one
-        # it opens (its own draw consumes the state its seed call just
-        # established, and that dependency is already carried by its source). The
-        # ``_rng_seed_epochs`` ledger is kept in lockstep because the restore-time
-        # replay guard (restore.py ``_rng_replay_is_current``) still consults it;
-        # unifying that half onto the variable is the follow-up step. CAS-223.
+        # A statement that seeds opens a new epoch for its module, identified by
+        # this statement's own cache key -- which folds in both its source and
+        # its input lineage, so `seed(0)` -> `seed(1)` and `seed(cfg.seed)` are
+        # both caught. Set AFTER the key above so a statement that seeds and
+        # draws at once is keyed on the epoch it INHERITS, not the one it opens
+        # (its own draw consumes the state its seed call just established, and
+        # that dependency is already carried by its source). CAS-223.
         for module in get_seeding_rng_modules(code):
-            var = rng_virtual_var(module)
-            prev = self.variable_lineage.get(var, "")
-            self.variable_lineage[var] = hashlib.sha256(
-                f"{prev}:{cache_key}".encode('utf-8')
-            ).hexdigest()
             self._rng_seed_epochs[module] = cache_key
 
         hash_time = time.time() - t2
