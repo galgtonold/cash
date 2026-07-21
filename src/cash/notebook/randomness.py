@@ -14,7 +14,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_epoch_fingerprint"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_epoch_fingerprint", "rng_virtual_var"]
 
 logger = logging.getLogger(__name__)
 
@@ -1535,6 +1535,23 @@ def get_used_rng_modules(code: str) -> set[str]:
         modules.add(_CARRIER_MODULES.get(kind, kind))
 
     return modules
+
+
+def rng_virtual_var(module: str) -> str:
+    """Name of the virtual lineage variable modelling *module*'s global RNG (ADR-018).
+
+    The RNG refactor models each module's global generator as an ordinary
+    lineage variable: a seed DEFINES it, a draw READS (and, once the simulator
+    reconstructs it, MODIFIES) it. Folding this variable's lineage into a draw's
+    cache key expresses "the draw depends on the seed in force" through the same
+    input-lineage channel every other dependency uses, instead of the
+    ``_rng_seed_epochs`` side-channel it replaces.
+
+    The name is deliberately not a valid attribute path and never reaches
+    ``user_ns`` -- it exists only as a key in ``variable_lineage``, so it cannot
+    collide with a user variable or be mistaken for one.
+    """
+    return f"__cash_rng__{module}"
 
 
 def get_drawing_rng_modules(code: str) -> set[str]:
