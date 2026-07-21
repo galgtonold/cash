@@ -1304,6 +1304,13 @@ class UpstreamChecker:
                 cell_code, notebook_cells, statements_to_reexecute, current_cell_idx,
             )
 
+            # A draw re-executed because an ORDINARY input changed (not the seed)
+            # must still run from its top-to-bottom stream position; re-establish
+            # its upstream RNG chain when the seed itself isn't being re-run.
+            statements_to_reexecute = self._prepend_rng_chain_for_reexecuted_draws(
+                notebook_cells, statements_to_reexecute, current_cell_idx,
+            )
+
             executed_metrics = []
             if statements_to_reexecute:
                 executed_metrics = self._reexecute_statements(
@@ -1487,6 +1494,90 @@ class UpstreamChecker:
                     prepend.append(src)
             if prepend and self.debug:
                 logger.debug("[UPSTREAM] Rebuilding RNG chain (%d cells) before draw", len(prepend))
+            return prepend + statements
+        except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
+            return statements
+
+    def _prepend_rng_chain_for_reexecuted_draws(
+        self, notebook_cells: list[str], statements: list[str], current_cell_idx: int | None,
+    ) -> list[str]:
+        """Re-establish the RNG stream before a *re-executed* upstream draw (ADR-017).
+
+        The RNG state is a side-effect dependency a draw consumes, but it binds no
+        variable, so the lineage graph carries no edge from a draw back to its
+        seed. When reconstruction re-executes a draw because one of its ORDINARY
+        inputs changed (e.g. ``arr = np.random.rand(3) * MULT`` after editing
+        ``MULT``), the unchanged upstream ``seed()`` is not scheduled, so the draw
+        re-runs from wherever the live stream was left. The result matches neither
+        a cache-off run nor a clean top-to-bottom run -- a silently wrong value.
+
+        Fix: re-run the RNG chain that PRECEDES the earliest re-executed draw --
+        the seed plus any draws ahead of it in source order that aren't already
+        scheduled -- so that re-executed draw lands at the stream position it
+        holds top-to-bottom. Statements AT or AFTER the earliest re-executed draw
+        stay in the plan (the re-executed draws run there, in order; an unchanged
+        later draw keeps its cached value, whose position is unaffected when the
+        edit does not change how many values the re-executed draws consume).
+
+        Statement-granular sibling of :meth:`_prepend_stale_seed_cells`, triggered
+        by a re-executed DRAW rather than a stale seed. A no-op on the warm path
+        (nothing re-executes), when the seed is already scheduled, and when no
+        upstream RNG statement precedes the earliest re-executed draw.
+        """
+        try:
+            drawn: set[str] = set()
+            seeded_in_plan: set[str] = set()
+            for stmt in statements:
+                drawn |= get_drawing_rng_modules(stmt)
+                seeded_in_plan |= get_seeding_rng_modules(stmt)
+            # Only modules whose draw re-executes but whose seed is NOT already
+            # being re-run need their chain re-established.
+            missing = drawn - seeded_in_plan
+            if not missing:
+                return statements
+            upstream = notebook_cells if current_cell_idx is None else notebook_cells[:current_cell_idx]
+            already = set(statements)
+
+            # Every upstream RNG statement touching a missing module, in source
+            # order, tagged with whether it draws.
+            ordered: list[tuple[str, bool]] = []
+            for cell in upstream:
+                try:
+                    tree = ast.parse(cell)
+                except SyntaxError:
+                    continue
+                for node in tree.body:
+                    try:
+                        stmt = ast.unparse(node)
+                    except (ValueError, TypeError):
+                        continue
+                    draws = get_drawing_rng_modules(stmt) & missing
+                    seeds = get_seeding_rng_modules(stmt) & missing
+                    if draws or seeds:
+                        ordered.append((stmt, bool(draws)))
+
+            # The earliest re-executed draw is the boundary: everything strictly
+            # before it re-runs to advance the stream; it and everything after
+            # stay in the plan.
+            boundary = next(
+                (i for i, (stmt, is_draw) in enumerate(ordered)
+                 if is_draw and stmt in already),
+                None,
+            )
+            if boundary is None:
+                return statements
+
+            prepend: list[str] = []
+            for stmt, _is_draw in ordered[:boundary]:
+                if stmt not in already and stmt not in prepend:
+                    prepend.append(stmt)
+            if not prepend:
+                return statements
+            if self.debug:
+                logger.debug(
+                    "[UPSTREAM] Re-establishing RNG chain (%d stmts) before a re-executed draw",
+                    len(prepend),
+                )
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
