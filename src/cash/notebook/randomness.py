@@ -14,7 +14,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "rng_epoch_fingerprint"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_epoch_fingerprint"]
 
 logger = logging.getLogger(__name__)
 
@@ -1567,6 +1567,52 @@ def get_seeding_rng_modules(code: str) -> set[str]:
     visitor = RandomnessVisitor()
     visitor.visit(tree)
     return {module for module, _lineno in visitor.seed_calls}
+
+
+def seed_cells_not_yet_run(
+    drawing_modules: set[str],
+    notebook_cells: 'list[str]',
+    executed_cell_hashes: set[str],
+) -> 'list[tuple[str, int]]':
+    """Notebook cells that SEED a drawn module but whose source has not run (ADR-017).
+
+    The detection core for the bare-``seed()`` edit-without-rerun defect (CAS-225).
+    Editing an ``np.random.seed(N)`` cell and running only a downstream draw
+    leaves the draw on the *old* seed's state, silently — because a bare seed
+    binds no variable, so nothing links the draw back to the seed cell.
+
+    This finds the mismatch from the one place it is visible: the notebook. A
+    cell whose source SEEDS a module that some draw consumes, but whose exact
+    source hash is NOT among the cells that have executed this session, is an
+    edited-but-not-rerun (or never-run) seed the draw will ignore.
+
+    Pure and cell-granular — it matches the checker's view of the notebook and
+    takes the executed-hash set as an argument, so it carries no state and is
+    trivially testable. Callers decide what to do with the result (warn now;
+    schedule a re-execution once ADR-017 half 2 lands).
+
+    Parameters
+    ----------
+    drawing_modules : the RNG modules the current cell draws from.
+    notebook_cells  : the notebook's cell sources, in order.
+    executed_cell_hashes : ``sha256(source).hexdigest()`` for every cell source
+        that has actually executed this session.
+
+    Returns ``[(module, cell_index)]``, sorted, one per (unrun seed cell, module).
+    """
+    if not drawing_modules:
+        return []
+    out: list[tuple[str, int]] = []
+    for idx, src in enumerate(notebook_cells):
+        seeded = get_seeding_rng_modules(src) & drawing_modules
+        if not seeded:
+            continue
+        digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
+        if digest in executed_cell_hashes:
+            continue  # this exact seed cell source has run — not stale
+        for module in sorted(seeded):
+            out.append((module, idx))
+    return out
 
 
 def rng_epoch_fingerprint(modules: set[str], epochs: Mapping[str, str]) -> str | None:
