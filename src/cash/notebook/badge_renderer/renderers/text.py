@@ -90,11 +90,11 @@ def _rng_suffix(row: StatementRow) -> str:
     codepage would mangle an emoji.
     """
     if row.random_effect == "seed":
-        return "  [seeds RNG]"
+        return "  [seed]"
     if row.random_effect == "draw" and row.random_unseeded:
-        return "  [random: UNSEEDED - cached value is a frozen replay]"
+        return "  [random: unseeded]"
     if row.random_effect == "draw":
-        return "  [random: seeded]"
+        return "  [random]"
     return ""
 
 

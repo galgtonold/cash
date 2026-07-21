@@ -525,6 +525,30 @@ label.c3-row {{ cursor: pointer; }}
   border-radius: 3px;
 }}
 
+/* Randomness role pill — same vocabulary as the notification pill. Neutral
+   (grey) for a seed or a seeded/reproducible draw; the warn-red family for an
+   unseeded draw, whose cached value is a frozen replay. */
+.c3-rng-pill {{
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: {theme.INK_4};
+  padding: 1px 5px;
+  margin: 0 4px;
+  background: {theme.BG_PANEL};
+  border: 1px solid {theme.RULE};
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}}
+.c3-rng-pill.c3-rng-warn {{
+  color: {theme.CHIP_FG_WARN};
+  background: {theme.CHIP_BG_WARN};
+  border-color: #f1c8c1;
+}}
+
 /* Loop heading line */
 .c3-loop-head .c3-code {{ font-weight: 500; }}
 .c3-loop-meta {{
@@ -995,24 +1019,25 @@ def _notif_chip(label: str) -> str:
     )
 
 
-def _random_glyph(row: StatementRow) -> str:
-    """Inline 🎲 marker for a statement with an RNG effect (empty otherwise).
+def _rng_pill(row: StatementRow) -> str:
+    """Inline text pill for a statement's RNG role (empty otherwise).
 
-    The at-a-glance companion to the drawer's "Random" line and the header's
-    warn count: a seed/draw is neutral, an unseeded draw carries a ⚠ because its
-    cached value is a frozen replay. Uses a native ``title`` tooltip so it needs
-    no extra CSS.
+    Matches the notification-pill vocabulary — a terse uppercase tag, no emoji —
+    so it reads as part of the badge rather than pasted on. Neutral grey for a
+    seed or a seeded (reproducible) draw; the warn-red family for an unseeded
+    draw, whose cached value is a frozen replay. A native ``title`` carries the
+    detail on hover.
     """
     if row.random_effect == "seed":
-        return '<span class="c3-rng" title="Sets the RNG seed">🎲</span>'
+        return '<span class="c3-rng-pill" title="Sets the RNG seed">seed</span>'
     if row.random_effect == "draw" and row.random_unseeded:
         return (
-            '<span class="c3-rng c3-rng-warn" title="Unseeded randomness — the '
+            '<span class="c3-rng-pill c3-rng-warn" title="Unseeded randomness — the '
             'cached value is a frozen replay, not a fresh draw. Seed the RNG or '
-            'use @cash:no-cache to redraw.">🎲⚠</span>'
+            'use @cash:no-cache to redraw.">unseeded</span>'
         )
     if row.random_effect == "draw":
-        return '<span class="c3-rng" title="Random draw (seeded, reproducible)">🎲</span>'
+        return '<span class="c3-rng-pill" title="Random draw (seeded, reproducible)">random</span>'
     return ""
 
 
@@ -1097,7 +1122,7 @@ def _rowtip_html(row: StatementRow) -> str:
         dl_parts.append("<dt>Random</dt><dd>sets the RNG seed</dd>")
     elif row.random_effect == "draw" and row.random_unseeded:
         dl_parts.append(
-            "<dt>Random</dt><dd>⚠ unseeded — the cached value is a frozen replay, "
+            "<dt>Random</dt><dd>unseeded — the cached value is a frozen replay, "
             "not a fresh draw. Seed the RNG for reproducibility, or use "
             "<code>@cash:no-cache</code> to redraw every run.</dd>"
         )
@@ -1163,7 +1188,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
     )
-    rng_glyph = _random_glyph(row)
+    rng_pill = _rng_pill(row)
     drawer = _rowtip_html(row)
 
     rid = _uid("rx")
@@ -1173,7 +1198,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f"{code_html}"
-        f"{rng_glyph}"
+        f"{rng_pill}"
         f"{dots}"
         f"{bar}"
         f"{chip}"

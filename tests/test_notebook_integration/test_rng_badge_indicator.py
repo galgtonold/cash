@@ -1,15 +1,15 @@
 """The badge marks statements with an RNG effect (Stage 1 of the randomness UX).
 
-A seed/draw statement carries a 🎲 chip and a "Random" drawer line; an *unseeded*
-draw additionally flags that its cached value is a frozen replay and bumps the
-badge's header warning count. Behaviour is unchanged — this is advisory only.
+A seed/draw statement carries a text pill (seed / random) and a "Random" drawer
+line; an *unseeded* draw's pill uses the warn-red family, flags that its cached
+value is a frozen replay, and bumps the badge's header warning count. Behaviour
+is unchanged — this is advisory only.
 """
 import pytest
 
 pytestmark = pytest.mark.libraries
 
 C_ON = "import cash\n%cash_on"
-DIE = chr(0x1F3B2)
 
 
 def _badge_html(nb_runner, cell_num):
@@ -30,8 +30,9 @@ def test_unseeded_draw_flagged(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     html = _badge_html(nb_runner, 2)
-    assert DIE in html, "unseeded draw missing the random chip"
-    assert "c3-rng-warn" in html, "unseeded draw not styled as a warning"
+    # Target the span USAGE, not the class name (which also appears in the <style>).
+    assert 'class="c3-rng-pill c3-rng-warn"' in html, "unseeded draw not styled as a warning pill"
+    assert ">unseeded<" in html, "unseeded draw pill should read 'unseeded'"
     assert "frozen replay" in html, "unseeded draw drawer missing the frozen-replay note"
 
 
@@ -41,9 +42,9 @@ def test_seeded_draw_marked_but_not_warned(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     html = _badge_html(nb_runner, 2)
-    assert DIE in html, "seeded draw missing the random chip"
+    assert ">random<" in html, "seeded draw pill should read 'random'"
     assert "reproducible" in html, "seeded draw drawer should say reproducible"
-    assert "c3-rng-warn" not in html, "a seeded draw must not be flagged as unseeded"
+    assert 'c3-rng-warn"' not in html, "a seeded draw must not use the warn pill"
 
 
 @pytest.mark.timeout(180)
@@ -53,4 +54,4 @@ def test_non_random_statement_has_no_chip(nb_runner):
     nb_runner.run_all()
     html = _badge_html(nb_runner, 2)
     assert html, "expected a badge for the cell"
-    assert DIE not in html and "c3-rng" not in html, "non-random statement should carry no random chip"
+    assert 'class="c3-rng-pill' not in html, "non-random statement should carry no random pill"
