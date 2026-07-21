@@ -597,3 +597,56 @@ Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hol
 - **Implemented (`5c5fdf2`).** The correctness fix landed directly (not the warn-only interim). The cell executor records `sha256(raw_cell)` into `TrackingState.executed_cell_source_hashes`; the checker's `_prepend_stale_seed_cells` runs after `simulate_upstream`, and when the current cell draws and an **upstream** seed cell's source is absent from that set, it prepends the seed cell to `statements_to_reexecute` so the seed's side effect is re-established before the draw.
 - **Correction to the assumption above:** nb_runner is **not** blind to this bug class. It writes a real `.ipynb` and `set_cell_source` persists an edit without running the cell, so the reconstruction path is reachable — only the *discovery* bugs (CAS-218) are invisible to nb_runner (it injects the path). So verification is plain pytest with an in-process oracle (the same cell sources run without cash), not the real driver. That correction is what made the fix landable with confidence.
 - **Not done:** the general runtime *observer* (patching `seed()`, state-diff draw detection) for draws **inside called functions** is still future work — the current fix uses the existing static draw/seed detection, which covers the reported cases. And CAS-226 (position-unaware epoch) is a related follow-up.
+- **Superseded by ADR-018** for the general position-awareness problem. ADR-017's seed-replay (`5c5fdf2`) stays as a working point fix, but CAS-226 and CAS-227 showed the side-channel model is the root issue; ADR-018 replaces it with a position-aware virtual variable.
+
+---
+
+## ADR-018: Model the Global RNG as a Position-Aware Virtual Variable
+
+**Status:** Proposed (spike pending)
+**Date:** 2026-07-21
+**Context:** CAS-226 (a draw above a later seed keys on that later seed) and CAS-227 (re-executing an edited draw uses the current stream position, not the position it holds top-to-bottom) are both symptoms of one thing: the global RNG state — *seed epoch and stream position* — is tracked by **runtime side-channels** instead of cash's position-aware reconstruction.
+
+* `_rng_seed_epochs` (CAS-223) records the *last-executed* seed — time-ordered, not position-ordered.
+* `capture_rng_state`/`restore_rng_state` (CAS-90) store each statement's POST state and replay it on a cache *hit*. On a full in-order Run All that keeps the stream coherent; on a partial/out-of-order re-execution the live state is whatever was last left.
+
+Ordinary variables never have this problem, because they flow through the lineage graph: the simulator, before re-executing a statement, reconstructs each input to the value it holds *at that position*. The RNG was bolted on beside that machinery instead of into it.
+
+### Decision
+
+Model the global RNG state, per module, as a **virtual variable** that rides the existing variable machinery.
+
+* A **seed** statement *defines* it (output only): `__cash_rng_<module>__ = <fresh state>`.
+* A **draw** statement *reads and modifies* it (input **and** output): consumes the state, advances it.
+* Its **value is the RNG state**; its accessor is `capture_rng_state` and its mutator is `restore_rng_state` — **not** a `user_ns` slot. This is the one place the virtual variable differs from a real one, and the one real wiring gap (below).
+* **Detection:** static for direct calls (`RandomnessVisitor` already sees `np.random.rand()` / `.seed()` in the cell); **runtime state-diff** for draws inside called functions (`model.fit()`), observed once and recorded like a file dependency. This is why the dependency "is only known after it executes at least once" for the indirect case — exactly the file-tracker pattern.
+
+Then the position-aware machinery does the rest for free:
+
+* The virtual variable's **lineage chains in notebook order**, so a draw keys on the RNG state governing *its* position — **CAS-226 dissolves**.
+* Reconstruction **restores the virtual variable to its at-position value before re-executing a consumer**, so an edited draw re-runs from the correct stream position — **CAS-227 dissolves**.
+* CAS-225's seed-replay becomes the ordinary "reconstruct the producer of the virtual variable."
+
+### The one confirmed gap
+
+The upstream reconstruction path (`virtual_lineage._restore_vars_from_cache`) restores `user_ns` variables; it does **not** apply `rng_state` when restoring a *producer* as an upstream dependency (RNG state is restored only on a statement's own hit today). So the make-or-break work is teaching the restore path that the virtual RNG variable's "restore" means `restore_rng_state(value)`, not a namespace write. Once that exists, the variable rides lineage + reconstruct-inputs-before-executing unchanged, and CAS-223's global epoch + CAS-90's on-hit-only replay both fold into this one model.
+
+### Consequences
+
+* Subsumes CAS-223 and CAS-90 into a single model; the epoch dict and the on-hit replay become special cases of "restore the virtual variable at its position."
+* A long draw chain (draw3←draw2←draw1←seed) is a linear dependency, but each restore is O(1) (the preceding state is cached, never recomputed) — no performance cliff.
+* The virtual variable must never surface in user-visible state (`%who`, saved vars).
+* Unseeded draws still track the variable but remain non-reproducible across kernels (matches today's warning).
+
+### Rationale
+
+Reuses the position-aware reconstruction cash already trusts for variables, instead of a parallel RNG code path. Fixes CAS-226 and CAS-227 uniformly rather than as separate patches, and the indirect-draw coverage hole (ADR-017 half 1) is closed by the same runtime state-diff.
+
+### Alternatives considered
+
+* **Keep the side-channels, patch each symptom** — rejected: whack-a-mole, and the stream-position case (CAS-227) needs a position-aware restore regardless, which is 90% of this work.
+* **Store each draw's PRE state and restore it on re-execution** — rejected as the model: a cache *miss* doesn't load the old entry, so the pre-state isn't available; and a stale pre-state (upstream changed) would be wrong. Reconstructing from the producer is the correct source of the pre-state. (Usable only as a spike shortcut, see below.)
+
+### Spike (before committing to the refactor)
+
+Prove the core claim: restoring the position-correct RNG state before a *recomputing* draw makes CAS-227 green **without** disturbing the CAS-223 or CAS-225 suites. Cheapest proof — record each random cell's POST state in memory (keyed by cell source) and, before a drawing cell re-executes, restore the POST state of the immediately-preceding upstream random cell. If that holds, build the real virtual-variable wiring; if it breaks the CAS-223 suite, the model needs rework before any refactor.
