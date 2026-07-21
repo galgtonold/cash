@@ -145,6 +145,15 @@ class TrackingState:
     # notebook view the checker compares against.
     executed_cell_source_hashes: set[str] = field(default_factory=set)
 
+    # sha256(cell source) -> the global RNG state captured AFTER that cell ran.
+    # Lets the checker restore the position-correct RNG state before a downstream
+    # draw re-executes, instead of drawing from the last-left (wrong) live state
+    # (CAS-226 / CAS-227). This is the concrete first step of ADR-018's
+    # position-aware-RNG model; the full model folds it into a virtual variable
+    # in the lineage graph. Keyed by CURRENT source, so an edited predecessor's
+    # stale post-state is never matched.
+    rng_post_states: dict[str, Any] = field(default_factory=dict)
+
     # Written by StatementProcessor; read by CashMagics for badge display.
     # Accumulates all content hashes seen for a variable across executions.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

@@ -14,7 +14,12 @@ from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements
-from ..randomness import get_drawing_rng_modules, seed_cells_not_yet_run
+from ..randomness import (
+    get_drawing_rng_modules,
+    get_seeding_rng_modules,
+    restore_rng_state,
+    seed_cells_not_yet_run,
+)
 from ..cacheability import (
     alias_mutation_sources,
     aliased_sources,
@@ -1309,6 +1314,14 @@ class UpstreamChecker:
                 )
             total_execution_time = self._sum_execution_times(executed_metrics)
 
+            # CAS-226 / CAS-227 (ADR-018): restore the position-correct RNG state
+            # right before the current draw runs, so a re-executed draw continues
+            # from the stream position (and under the seed) it holds top-to-bottom
+            # rather than wherever the live state was last left. Runs after any
+            # upstream re-execution above, so it is the last thing to touch the
+            # RNG before the cell.
+            self._restore_position_rng_state(cell_code, notebook_cells, current_cell_idx)
+
             # CRITICAL: Sync simulation cache with actual runtime lineages.
             # After upstream statements execute (or skip/restore), variable_lineage
             # holds the authoritative lineage for each variable.  The simulation
@@ -1466,6 +1479,45 @@ class UpstreamChecker:
             return prepend + statements
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
             return statements
+
+    def _restore_position_rng_state(
+        self, cell_code: str, notebook_cells: list[str], current_cell_idx: int | None,
+    ) -> None:
+        """Restore the RNG to the state it holds just before this cell (ADR-018).
+
+        If the current cell draws, find the nearest UPSTREAM cell that touched the
+        RNG (seed or draw) and whose post-state we recorded this session, and
+        restore that state. A re-executed draw then continues from the correct
+        stream position instead of the last-left live state (CAS-227). A no-op
+        unless the cell draws and such a predecessor exists; on a cache HIT the
+        statement restores its own post-state afterwards, so this is harmless.
+        """
+        try:
+            drawing = get_drawing_rng_modules(cell_code)
+            if not drawing:
+                return
+            end = len(notebook_cells) if current_cell_idx is None else current_cell_idx
+            # If an upstream seed is stale (edited-not-rerun), the whole chain of
+            # recorded post-states below it is stale too — restoring one would
+            # apply the OLD seed's position. Defer to the reseed path
+            # (_prepend_stale_seed_cells) instead of using a stale snapshot. This
+            # is the boundary of the post-state table; the full virtual-variable
+            # model (ADR-018) reconstructs the chain and removes it.
+            upstream = notebook_cells[:end]
+            if seed_cells_not_yet_run(drawing, upstream, self._tracking_state.executed_cell_source_hashes):
+                return
+            post_states = self._tracking_state.rng_post_states
+            for idx in range(end - 1, -1, -1):
+                src = notebook_cells[idx]
+                if not (get_seeding_rng_modules(src) or get_drawing_rng_modules(src)):
+                    continue
+                digest = hashlib.sha256(src.encode('utf-8')).hexdigest()
+                state = post_states.get(digest)
+                if state is not None:
+                    restore_rng_state(state)
+                return  # nearest predecessor only, whether or not it was recorded
+        except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
+            return
 
     def _reexecute_statements(
         self,

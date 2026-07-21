@@ -59,6 +59,7 @@ from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
+from ..randomness import capture_rng_state, get_drawing_rng_modules, get_seeding_rng_modules
 from ..statement import ProcessResult
 
 if TYPE_CHECKING:
@@ -228,10 +229,15 @@ class CellExecutor:
     def _record_executed_cell_hash(self, raw_cell: str) -> None:
         """Remember that this exact cell source ran, so the upstream checker can
         tell an edited-but-not-rerun seed() cell from one that actually ran
-        (ADR-017 / CAS-225)."""
+        (ADR-017 / CAS-225). Also snapshot the RNG state after a random cell so a
+        downstream draw can be restored to its position-correct state (ADR-018 /
+        CAS-226 / CAS-227)."""
         try:
+            state = self._statement_processor._tracking_state
             digest = hashlib.sha256(raw_cell.encode('utf-8')).hexdigest()
-            self._statement_processor._tracking_state.executed_cell_source_hashes.add(digest)
+            state.executed_cell_source_hashes.add(digest)
+            if get_seeding_rng_modules(raw_cell) or get_drawing_rng_modules(raw_cell):
+                state.rng_post_states[digest] = capture_rng_state()
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             pass
 
