@@ -1225,6 +1225,10 @@ class StatementProcessor:
         same warning the named-receiver path uses — the compute-time "detected"
         claim on a miss, the "frozen replay" claim on a hit.
         """
+        # Cheap guard on the hot path: no ``fit`` token, no AST walk. A ``.fit`` /
+        # ``.partial_fit`` call always spells "fit", so this cannot false-negate.
+        if not outputs or 'fit' not in code:
+            return
         fits = self._inline_unseeded_fit_outputs(tree, outputs)
         if not fits:
             return
