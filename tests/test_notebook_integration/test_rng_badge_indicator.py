@@ -48,6 +48,55 @@ def test_seeded_draw_marked_but_not_warned(nb_runner):
 
 
 @pytest.mark.timeout(180)
+def test_reexecuted_seed_explains_why(nb_runner):
+    """A seed re-run only to re-establish the stream is labeled on the badge (Stage 2)."""
+    data = "import numpy as np\nnp.random.seed(42)\nMULT = 100.0\narr = np.random.rand(3) * MULT"
+    nb_runner.create_notebook([C_ON, data, "total = float(arr.sum())\nprint('T', total)"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.set_cell_source(2, data.replace("MULT = 100.0", "MULT = 200.0"))
+    nb_runner.run_cell(3)  # downstream-only re-run forces the seed to re-run
+    html = _badge_html(nb_runner, 3)
+    assert "re-run to restore the random stream" in html, (
+        "the re-executed seed should explain why it re-ran"
+    )
+
+
+_SK_SETUP = (
+    "from sklearn.ensemble import RandomForestClassifier\n"
+    "from sklearn.datasets import make_classification\n"
+    "X, y = make_classification(n_samples=300, random_state=0)"
+)
+
+
+@pytest.mark.timeout(240)
+def test_inline_unseeded_fit_flagged(nb_runner):
+    """An inline/anonymous unseeded estimator fit is flagged on the badge (Stage 3)."""
+    nb_runner.create_notebook([
+        C_ON, _SK_SETUP,
+        "clf = RandomForestClassifier(n_estimators=40).fit(X, y)\nprint('S', round(clf.score(X, y), 3))",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    html = _badge_html(nb_runner, 3)
+    assert ">unseeded<" in html, "inline unseeded fit should show the unseeded pill"
+    assert "frozen replay" in html, "inline unseeded fit drawer missing the frozen-replay note"
+
+
+@pytest.mark.timeout(240)
+def test_inline_seeded_fit_not_flagged(nb_runner):
+    """A seeded inline fit must not be flagged as unseeded (Stage 3)."""
+    nb_runner.create_notebook([
+        C_ON, _SK_SETUP,
+        "clf = RandomForestClassifier(n_estimators=40, random_state=1).fit(X, y)\nprint('S', round(clf.score(X, y), 3))",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    html = _badge_html(nb_runner, 3)
+    assert 'c3-rng-warn"' not in html, "a seeded inline fit must not use the warn pill"
+
+
+@pytest.mark.timeout(180)
 def test_non_random_statement_has_no_chip(nb_runner):
     nb_runner.create_notebook([C_ON, "a = 1 + 1\nb = a * 2"])
     nb_runner.start_kernel()

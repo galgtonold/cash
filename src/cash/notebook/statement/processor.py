@@ -709,6 +709,9 @@ class StatementProcessor:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
                 self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
+                self._flag_inline_unseeded_fit(
+                    hit_result, code, _parsed_tree, outputs, allow_random, is_hit=True,
+                )
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = self._execute_and_drain(
@@ -717,6 +720,9 @@ class StatementProcessor:
         if error_metrics is not None:
             return error_metrics
 
+        self._flag_inline_unseeded_fit(
+            metrics, code, _parsed_tree, outputs, allow_random, is_hit=False,
+        )
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
         # Surface input variable names so downstream consumers (provenance,
@@ -895,6 +901,9 @@ class StatementProcessor:
                 # The restore SUCCEEDED, so the value handed back is a replay.
                 self._warn_stale_randomness(code, unseeded_calls, allow_random)
                 self._warn_stale_estimator_fit(code, unseeded_fits, allow_random)
+                self._flag_inline_unseeded_fit(
+                    hit_result, code, _parsed_tree, outputs, allow_random, is_hit=True,
+                )
                 return hit_result
 
         error_metrics, result, captured, execution_time, accessed_files = await self._execute_and_drain_async(
@@ -903,6 +912,9 @@ class StatementProcessor:
         if error_metrics is not None:
             return error_metrics
 
+        self._flag_inline_unseeded_fit(
+            metrics, code, _parsed_tree, outputs, allow_random, is_hit=False,
+        )
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
         metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
@@ -1158,6 +1170,69 @@ class StatementProcessor:
         except (ValueError, AttributeError, RecursionError):
             logger.debug("%s Estimator-fit randomness warning failed", _LOG_PROCESSOR)
         return unseeded
+
+    @staticmethod
+    def _statement_calls_fit(tree: ast.Module | None) -> bool:
+        """True if the statement calls ``.fit(...)`` / ``.partial_fit(...)``."""
+        if tree is None:
+            return False
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                    and node.func.attr in ('fit', 'partial_fit')):
+                return True
+        return False
+
+    def _inline_unseeded_fit_outputs(
+        self, tree: ast.Module | None, outputs: set[str],
+    ) -> list[str]:
+        """Output vars that are UNSEEDED fitted estimators (CAS-167 gap).
+
+        Closes the anonymous/assignment-form fit hole the receiver-name path
+        (:meth:`_estimator_fit_receivers`) cannot reach: ``clf =
+        RandomForestClassifier(...).fit(X, y)`` caches ``clf`` as an ordinary
+        output, but the estimator is constructed inline (no named receiver) and
+        the randomness lives inside compiled ``.fit()``, so nothing warns. Detect
+        it from the OUTPUT value instead — a statement that calls ``.fit()`` whose
+        output duck-types as an sklearn estimator with ``random_state is None``.
+        Advisory and never fatal; the value must already exist (post-execute or
+        post-restore).
+        """
+        if not outputs or not self._statement_calls_fit(tree):
+            return []
+        found: list[str] = []
+        for var in outputs:
+            try:
+                est = self.shell.user_ns.get(var)
+                if est is None:
+                    continue
+                if not (callable(getattr(est, 'fit', None))
+                        and callable(getattr(est, 'get_params', None))):
+                    continue
+                params = est.get_params()
+                if 'random_state' in params and params['random_state'] is None:
+                    found.append(var)
+            except (AttributeError, TypeError, ValueError, KeyError):
+                continue
+        return sorted(found)
+
+    def _flag_inline_unseeded_fit(
+        self, metrics: 'ProcessResult', code: str, tree: ast.Module | None,
+        outputs: set[str], allow_random: bool, *, is_hit: bool,
+    ) -> None:
+        """Badge + warn for an inline/assignment-form unseeded fit (CAS-167 gap).
+
+        Stamps the metric so the badge shows the unseeded pill, and routes the
+        same warning the named-receiver path uses — the compute-time "detected"
+        claim on a miss, the "frozen replay" claim on a hit.
+        """
+        fits = self._inline_unseeded_fit_outputs(tree, outputs)
+        if not fits:
+            return
+        self._stamp_random_effect(metrics, code, [], fits)
+        if is_hit:
+            self._warn_stale_estimator_fit(code, fits, allow_random)
+        else:
+            self._warn_unseeded_estimator_fit(code, fits, allow_random)
 
     def _warn_stale_estimator_fit(
         self, code: str, unseeded_fits: list[str], allow_random: bool,

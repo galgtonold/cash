@@ -1300,6 +1300,10 @@ class UpstreamChecker:
             # seed) must be in place before the draw, and re-running a seed is
             # idempotent. The unrun guard keeps warm draws untouched (an
             # unchanged seed cell's source is already in the executed set).
+            # Snapshot before the RNG prepends so we can tell which statements
+            # were pulled in solely to re-establish the random stream, and label
+            # them for the badge (Stage 2 of the randomness UX).
+            _before_rng_prepend = set(statements_to_reexecute)
             statements_to_reexecute = self._prepend_stale_seed_cells(
                 cell_code, notebook_cells, statements_to_reexecute, current_cell_idx,
             )
@@ -1310,6 +1314,10 @@ class UpstreamChecker:
             statements_to_reexecute = self._prepend_rng_chain_for_reexecuted_draws(
                 notebook_cells, statements_to_reexecute, current_cell_idx,
             )
+            rng_rerun = {
+                s for s in statements_to_reexecute
+                if s not in _before_rng_prepend and self._cell_touches_rng(s)
+            }
 
             executed_metrics = []
             if statements_to_reexecute:
@@ -1319,6 +1327,7 @@ class UpstreamChecker:
                     restored_info=restored_info,
                     control_structure_callback=control_structure_callback,
                 )
+            self._label_rng_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self._sum_execution_times(executed_metrics)
 
             # CAS-226 / CAS-227 (ADR-018): restore the position-correct RNG state
@@ -1581,6 +1590,26 @@ class UpstreamChecker:
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
+
+    @staticmethod
+    def _label_rng_rerun_metrics(executed_metrics: list, rng_rerun: set[str]) -> None:
+        """Explain, on the badge, why an RNG statement was re-executed (Stage 2 UX).
+
+        A seed/draw pulled into the plan only to re-establish the random stream
+        would otherwise render as a bare COMPUTED row in the UPSTREAM section
+        with no attribution. Stamp its ``miss_reason`` — the badge's "why did
+        this re-run?" field — so the reason reads alongside the Stage-1 random
+        pill the row already carries. Matched on stripped source; never fatal.
+        """
+        if not rng_rerun:
+            return
+        wanted = {s.strip() for s in rng_rerun}
+        for m in executed_metrics:
+            try:
+                if m.get('code', '').strip() in wanted:
+                    m['miss_reason'] = "re-run to restore the random stream"
+            except (AttributeError, TypeError):  # pragma: no cover - defensive
+                continue
 
     def _current_cell_drawing_modules(self, cell_code: str) -> set[str]:
         """RNG modules this cell draws from — statically OR by prior observation.
