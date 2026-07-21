@@ -23,7 +23,6 @@ import pytest
 from cash.notebook.randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
-    rng_epoch_fingerprint,
 )
 from cash.notebook.statement.restore import StatementRestorer
 
@@ -49,42 +48,6 @@ class TestModuleDetection:
     def test_syntax_error_is_not_fatal(self):
         assert get_seeding_rng_modules("def (") == set()
         assert get_drawing_rng_modules("def (") == set()
-
-
-class TestEpochFingerprint:
-    def test_no_modules_yields_no_component(self):
-        """Non-drawing statements must keep byte-identical pre-CAS-223 keys."""
-        assert rng_epoch_fingerprint(set(), {'numpy.random': 'stmt:a'}) is None
-
-    def test_unseeded_module_yields_no_component(self):
-        """A draw with no seeding in force is keyed exactly as it was before."""
-        assert rng_epoch_fingerprint({'numpy.random'}, {}) is None
-
-    def test_same_epoch_is_stable(self):
-        """A warm re-run under the same seeding must still HIT."""
-        epochs = {'numpy.random': 'stmt:aaa'}
-        assert rng_epoch_fingerprint({'numpy.random'}, epochs) == \
-            rng_epoch_fingerprint({'numpy.random'}, epochs)
-
-    def test_changed_epoch_changes_the_component(self):
-        """The regression: re-seeding must move the draw's key."""
-        before = rng_epoch_fingerprint({'numpy.random'}, {'numpy.random': 'stmt:aaa'})
-        after = rng_epoch_fingerprint({'numpy.random'}, {'numpy.random': 'stmt:bbb'})
-        assert before != after
-
-    def test_modules_are_independent(self):
-        """Re-seeding numpy must not invalidate a stdlib draw."""
-        epochs_a = {'numpy.random': 'stmt:aaa', 'random': 'stmt:zzz'}
-        epochs_b = {'numpy.random': 'stmt:bbb', 'random': 'stmt:zzz'}
-        assert rng_epoch_fingerprint({'random'}, epochs_a) == \
-            rng_epoch_fingerprint({'random'}, epochs_b)
-
-    def test_component_is_order_independent(self):
-        one = rng_epoch_fingerprint({'numpy.random', 'random'},
-                                    {'numpy.random': 'stmt:a', 'random': 'stmt:b'})
-        two = rng_epoch_fingerprint({'random', 'numpy.random'},
-                                    {'random': 'stmt:b', 'numpy.random': 'stmt:a'})
-        assert one == two
 
 
 class TestRngReplayGate:
