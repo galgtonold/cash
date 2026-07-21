@@ -513,3 +513,79 @@ Keep an explicit **derivation edge store** on `TrackingState` (`derivation_edges
 - **Content-hash views/ref-holders on every access**: rejected — it would pay a hash on every statement to catch a rare case, and for a large base array the hash is sampled anyway, so it is not even reliably correct.
 - **Treat any non-`None` `.base` as an alias**: rejected — over-classifies fresh arrays with anonymous internal buffers (`np.linspace`, ufunc results) and breaks legitimate caching. This was tried and reverted in `93979b7`.
 - **Make views uncacheable wholesale**: rejected — far too broad; most views are created and read without anyone mutating the base.
+
+---
+
+## ADR-017: Track Global-RNG Dependencies by Runtime Observation, Not Static Analysis
+
+**Status:** Proposed
+**Date:** 2026-07-21
+**Context:** How should cash know which cells depend on a global random seed, so that editing a `np.random.seed(...)` / `random.seed(...)` cell invalidates and correctly refreshes the draws that depend on it?
+
+This ADR is the chosen direction for CAS-225. It is a design, not yet implemented.
+
+### The problem
+
+Two independent round-11 testers hit the same defect. Given:
+
+<!-- test:skip reason="illustrative: two-cell notebook fragment, not runnable as one block" -->
+```python
+np.random.seed(0)          # cell 1 — edit to seed(1), do NOT re-run it
+x = np.random.rand(10**6)  # cell 2 — run this alone
+```
+
+editing cell 1 and running only cell 2 returns a value matching **no** clean run (seed-1's *second* draw, or a stale seed-0 value), silently. A clean top-to-bottom run with `seed(1)` would give seed-1's *first* draw.
+
+This is worse than running with caching off, and the "worse" is cash-specific. Cash's core pitch is *"you don't need to re-run upstream cells — just run the one you care about."* That pitch trains the user into exactly the workflow that breaks here; a caching-off user has no such pitch and habitually re-runs the edited seed cell, getting the right answer. So cash's promise makes the wrong outcome **more likely**.
+
+### Why the current design cannot fix it
+
+Randomness is handled by **static AST analysis** (`RandomnessVisitor` / `get_drawing_rng_modules` scan the cell source for `np.random.*` calls) plus post-hoc **state capture** (`capture_rng_state` snapshots the global RNG after a statement, for replay on a cache hit — CAS-90). CAS-223 additionally keys a draw on the *seed epoch* — the cache key of the last-executed seeding statement.
+
+Static analysis has a coverage hole that no amount of more analysis closes: it only sees `np.random.rand()` written **directly in the cell**. It is blind to draws **inside called functions** — `model.fit(X, y)` (sklearn draws internally), or any helper `def simulate(): return np.random.rand(...)`. The calling cell's AST shows `fit(...)` / `simulate()` and no RNG, so cash does not even know the cell consumes randomness.
+
+Two fixes were considered and rejected by experiment:
+- **CAS-223's seed epoch** keys the draw on the *last-executed* seed statement. When the seed cell is edited but **not** re-run, the epoch is unchanged, so the draw is not invalidated.
+- **Injecting a variable edge** (making a bare `seed()` behave like it binds a variable the draw reads) was prototyped with a *real, visible* variable edge — the draw literally read a variable set in the seed cell. It still failed: editing the seed and running only the draw returned seed-1's second draw (`0.7203244934421581`). cash re-executed the **downstream draw** but not the **seed cell**, so the global RNG was never re-seeded. This proves the missing piece is not the edge but the **replay of the seed's side effect**.
+
+This is inconsistent with how cash handles **files**, which are runtime-instrumented: `file_tracker` patches `open`/`read_csv`/etc., and records path + content-hash as a dependency when the cell actually reads the file. Files get an observer; randomness does not.
+
+### Decision
+
+Adopt a **runtime-observer** model for global-RNG dependency tracking, mirroring the file tracker, in two halves. Both are required — the probe above proves half 1 alone is inert.
+
+**Half 1 — observe the seed → draw dependency at runtime.**
+- **Patch only `seed()`** (`numpy.random.seed`, `random.seed` — two functions, same lifecycle as `tracked_open`, installed on `%cash_on` and removed on `%cash_off`). On call, record the *active seed per module*: `(module, seed_value, seeding_cell_key)`.
+- **Detect draws by state-diff, not by patching every draw function.** cash already snapshots the global RNG state *after* each statement; add a *before* snapshot. `before != after` ⇒ the statement consumed randomness, wherever the draw physically happened — direct **or inside a called function**. This is what closes the coverage hole.
+- **Record a new dependency kind** on the drawing statement's metadata: a reference to the active seed `(seed_value, seeding_cell_key)`, stored the way a file dependency stores path + content-hash. Editing the seed cell changes the seeding statement's source, hence its key, so the stored dependency no longer matches → the draw is invalidated. This is the "hidden variable, observed at runtime" idea.
+
+**Half 2 — replay the seed's side effect during reconstruction.**
+- When the reconstruction planner schedules a draw whose seed dependency is stale, it must re-establish the seed *before* the draw. The seeding statement is a pure side effect (it binds nothing to restore), so it must be **re-executed**, not restored. The observed `(seeding_cell_key)` gives the planner the exact producer statement to replay in order.
+- Storing the *observed* seed value does not shortcut this: the observed value is the **old** seed; the user edited it to a new one, which only re-running the edited seed statement produces.
+
+### Rationale
+
+- **Closes the coverage hole.** Runtime observation catches draws inside `fit()` and user helpers that static analysis structurally cannot see. This is a correctness win independent of the edit-seed bug.
+- **Consistent with files.** Same observer pattern, same patch lifecycle, same "record what actually happened at runtime" philosophy (ADR-002's spirit: observe reality, don't predict it from source).
+- **Precise.** Only cells that *actually* drew become consumers; only the cell that *actually* set the active seed becomes the producer. No over-approximation from "any cell mentioning np.random."
+- **Cheap.** The extra work is one ~2.5 KB state memcpy per statement (the "before" snapshot) and a two-function patch. Draw functions are not wrapped.
+
+### Consequences
+
+- **Statement metadata gains a new dependency kind** (`rng_seed_dep` or similar) alongside `file_dependencies`. Freshness checking (`statement/freshness.py`) grows a branch that compares the stored seed reference against the currently-active one, exactly parallel to the file-dep branch.
+- **The reconstruction planner (`upstream/reexecution_planner.py`) gains a "replay this statement for its side effect, in order" capability.** This is the load-bearing, fragile half — the same subsystem whose reset-lineage branch is load-bearing for 500+ integration tests. It must be built baseline-first with the real-driver oracle and a full before/after integration run.
+- **Interacts with, and largely subsumes, CAS-223's seed epoch.** The runtime dependency is a superset of the static epoch; CAS-223 should be kept as the same-cell / re-run fast path and reconciled so the two do not double-invalidate.
+- **Global RNG only.** Named `np.random.default_rng(SEED)` generators already work through ordinary variable lineage (verified round 11) and are out of scope. So is a generator's **stream position across multiple drawing cells**, which remains the documented Generator limitation — this ADR fixes seed *changes*, not stream bookkeeping.
+- **Patching risk** is the same class cash already accepts for files: thread-safety of the global singleton, correct un-patching on `%cash_off`, and not disturbing user code that introspects `np.random.seed`.
+
+### Interim behaviour until implemented
+
+Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hold: re-run the seed cell after editing it (correct via CAS-223), seed in the same cell as the draw, or use a named `default_rng(SEED)`. A cheaper partial step, if the full replay proves too risky, is to use half 1's precise dependency to at least **warn** ("a draw depends on a seed cell you edited but did not re-run") instead of silently serving a wrong value — strictly better than today even without half 2.
+
+### Alternatives Considered
+
+- **Keep static analysis, extend the AST walker**: rejected — cannot see draws inside called functions, which is the dominant real case (sklearn, helpers). No amount of static work closes it.
+- **CAS-223 seed epoch alone**: rejected — keys on the *last-executed* seed, so edit-without-re-running is invisible. Kept as a fast path, not the whole answer.
+- **Inject a synthetic variable edge and rely on existing reconstruction**: rejected by experiment — even a real variable edge did not make reconstruction re-run the seed; the draw recomputed on stale global state.
+- **Patch every draw function** instead of state-diffing: rejected — numpy exposes dozens of draw entry points; state-diff observes the same fact (the stream advanced) with a two-line snapshot and no per-function wrapping.
+- **Warn-only, never reconstruct**: rejected as the *final* design (it leaves the value wrong), but accepted as a legitimate **interim** step because a precise runtime dependency makes the warning reliable, and a loud wrong-value beats a silent one.
