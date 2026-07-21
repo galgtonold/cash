@@ -518,7 +518,7 @@ Keep an explicit **derivation edge store** on `TrackingState` (`derivation_edges
 
 ## ADR-017: Track Global-RNG Dependencies by Runtime Observation, Not Static Analysis
 
-**Status:** Proposed
+**Status:** Accepted — implemented (`5c5fdf2`)
 **Date:** 2026-07-21
 **Context:** How should cash know which cells depend on a global random seed, so that editing a `np.random.seed(...)` / `random.seed(...)` cell invalidates and correctly refreshes the draws that depend on it?
 
@@ -594,4 +594,6 @@ Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hol
 
 - **Detection core landed** (`aeeabdc`): `randomness.seed_cells_not_yet_run(drawing_modules, notebook_cells, executed_cell_hashes)` — pure, cell-granular, 11 unit tests, zero integration surface. This is the testable heart of half 1.
 - **Feasibility settled two things by experiment.** (1) Correctness genuinely needs half 2: an expensive cached draw *with a real variable edge* to the seed cell still returned a third wrong value (`0.848…`) on edit-without-rerun — reconstruction replays the draw, not the seed. (2) The wiring must cross a **granularity seam**: the processor hashes per *statement*, the notebook/checker sees whole *cells*. `executed_cell_hashes` must therefore be a set of whole-cell source hashes recorded by the cell executor — cash does not track that yet (only per-statement and per-variable hashes exist). Adding it is the first wiring step.
-- **Remaining stages:** (1b) cell-executor records executed cell-source hashes → checker calls the detection core → emit the warning; (2) reconstruction re-executes the flagged seed cell before the dependent draw. Each needs real-driver verification (nb_runner is blind to this class), so they are landed separately, not bundled.
+- **Implemented (`5c5fdf2`).** The correctness fix landed directly (not the warn-only interim). The cell executor records `sha256(raw_cell)` into `TrackingState.executed_cell_source_hashes`; the checker's `_prepend_stale_seed_cells` runs after `simulate_upstream`, and when the current cell draws and an **upstream** seed cell's source is absent from that set, it prepends the seed cell to `statements_to_reexecute` so the seed's side effect is re-established before the draw.
+- **Correction to the assumption above:** nb_runner is **not** blind to this bug class. It writes a real `.ipynb` and `set_cell_source` persists an edit without running the cell, so the reconstruction path is reachable — only the *discovery* bugs (CAS-218) are invisible to nb_runner (it injects the path). So verification is plain pytest with an in-process oracle (the same cell sources run without cash), not the real driver. That correction is what made the fix landable with confidence.
+- **Not done:** the general runtime *observer* (patching `seed()`, state-diff draw detection) for draws **inside called functions** is still future work — the current fix uses the existing static draw/seed detection, which covers the reported cases. And CAS-226 (position-unaware epoch) is a related follow-up.
