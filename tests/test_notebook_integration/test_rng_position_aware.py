@@ -90,3 +90,24 @@ def test_non_random_cell_rerun_is_untouched(nb_runner):
     s1 = _v(nb_runner, 4, "S")
     nb_runner.run_cell(4)
     assert _v(nb_runner, 4, "S") == pytest.approx(s1, abs=1e-9)
+
+
+@pytest.mark.timeout(180)
+def test_combined_edit_seed_with_intervening_draw(nb_runner):
+    """Edit an upstream seed AND have a draw between it and the re-run draw.
+
+    The intervening draw advanced the stream under the old seed, so re-seeding
+    alone would leave the current draw at the new seed's position 0. The whole
+    RNG chain from the stale seed is rebuilt in order, so the current draw lands
+    on the position it holds top-to-bottom: seed(1) then two draws -> position 1.
+    """
+    # seed(1): pos0=0.417022, pos1=0.720324
+    nb_runner.create_notebook([C_ON, C_SEED0, C_DRAW_A, C_DRAW_B])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    nb_runner.set_cell_source(2, C_SEED1)   # edit the seed, do NOT re-run it
+    nb_runner.run_cell(4)                    # run only the 2nd draw
+    got = _v(nb_runner, 4, "B")
+    assert got == pytest.approx(0.7203244934421581, abs=1e-9), (
+        f"combined case: got {got}, want seed(1) position-1 0.720324"
+    )

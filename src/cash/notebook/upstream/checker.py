@@ -1447,15 +1447,21 @@ class UpstreamChecker:
         """Schedule an edited-but-not-rerun seed cell ahead of a draw (ADR-017).
 
         When the current cell draws from a global RNG and an UPSTREAM cell seeds
-        that module with source that has not executed this session, that seed's
-        side effect must be re-established before the draw or the draw runs on a
-        stale seed (CAS-225). Returns *statements* with the missing seed cells
-        prepended, in notebook order, de-duplicated against what is already
-        scheduled. A no-op when the cell does not draw or no seed is stale, so
-        warm draws and the re-run path are untouched.
+        that module with source that has not executed this session (an edited or
+        never-run seed), that seed's side effect must be re-established before the
+        draw (CAS-225). But re-seeding alone is not enough when draws sit between
+        the seed and the current cell: those intervening draws advanced the stream
+        under the OLD seed, so the current draw would run from the new seed's
+        position 0 instead of the position the chain holds top-to-bottom
+        (CAS-226/227 combined case). So when a seed is stale, re-run the whole RNG
+        chain from the earliest stale seed to the current cell, in order: the
+        re-seed updates the global epoch, which makes each intervening draw miss
+        and recompute under the new seed, advancing the stream correctly.
 
-        Only cells strictly BEFORE the current one count — a seed placed after
-        the draw is not its upstream and must never be pulled in.
+        Returns *statements* with those cells prepended in notebook order,
+        de-duplicated against what is already scheduled. A no-op when the cell
+        does not draw or no seed is stale, so warm draws and the plain re-run
+        path are untouched. Only cells strictly BEFORE the current one count.
         """
         try:
             drawing = get_drawing_rng_modules(cell_code)
@@ -1468,16 +1474,21 @@ class UpstreamChecker:
             stale = seed_cells_not_yet_run(drawing, upstream, executed)
             if not stale:
                 return statements
+            # Rebuild the RNG chain from the earliest stale seed forward: every
+            # random cell (seed or draw) from there to the current cell, in order.
+            earliest = min(idx for _module, idx in stale)
             already = set(statements)
             prepend: list[str] = []
-            for _module, idx in stale:
+            for idx in range(earliest, len(upstream)):
                 src = upstream[idx]
+                if not (get_seeding_rng_modules(src) or get_drawing_rng_modules(src)):
+                    continue
                 if src not in already and src not in prepend:
                     prepend.append(src)
             if prepend and self.debug:
-                logger.debug("[UPSTREAM] Re-seeding %d edited seed cell(s) before draw", len(prepend))
+                logger.debug("[UPSTREAM] Rebuilding RNG chain (%d cells) before draw", len(prepend))
             return prepend + statements
-        except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
+        except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
 
     def _restore_position_rng_state(
