@@ -53,20 +53,35 @@ x = np.random.rand(10**6) # cell 2 — run this alone
 
 **What to do:** re-run the seed cell after editing it (then the draw refreshes correctly), or seed in the same cell as the draw, or use a named generator (below).
 
-### A named `Generator`'s seed **is** tracked; its stream position is not
+### Per-object generators (`np.random.default_rng`) are only partially tracked
 
-Because `rng = np.random.default_rng(SEED)` binds a **variable**, editing `SEED` and re-running the draw refreshes correctly — the ordinary variable-lineage path carries the dependency. What cash does **not** track is a generator's internal *stream position* across several cells that each draw from it:
+The **module-global** RNG channels — `np.random.*`, `random.*`, `torch.*` — are fully tracked: a draw is flagged on the badge (a `random` / `unseeded` pill), an unseeded draw's cached value is announced as a frozen replay, editing a `seed()` invalidates everything cached downstream, and a re-run reflects the position a clean top-to-bottom run would produce.
+
+A **per-object generator** created with `np.random.default_rng()` (or `Generator(...)` / `RandomState(...)`) is a different, narrower story. Its **seed is tracked** — `rng = np.random.default_rng(SEED)` binds a variable, so editing `SEED` and re-running refreshes through the ordinary variable-lineage path, and an *unseeded* named generator (`rng = np.random.default_rng()`) drawn from by name is flagged. But three things about a per-object generator are **not** tracked:
+
+**1. Stream position across cells.** cash does not follow a generator's internal position as several cells draw from it:
 
 <!-- test:skip reason="illustrative: cross-cell Generator stream position, needs a real kernel" -->
 ```python
 rng = np.random.default_rng(0)   # cell 1
-a = rng.normal(size=3)           # cell 2 — advances the stream
-b = rng.normal(size=3)           # cell 3 — edit and re-run this alone
+a = rng.normal(size=3)           # cell 2 — draws positions 0–2
+b = rng.normal(size=3)           # cell 3 — draws positions 3–5
 ```
 
-Re-running cell 3 alone draws `b` from whatever position the generator happens to be in, not the position a clean top-to-bottom run would produce — silently wrong rather than merely stale.
+Re-running cell 2 (or cell 3) *alone* draws from wherever the live generator happens to be, not the position a top-to-bottom run would produce — the value matches a plain kernel re-run, not cash's usual top-to-bottom contract. (A full `Run All` is correct; the gap is isolated re-runs.) This is the one place cash's per-object handling differs from the global channel, which *is* position-aware.
 
-**What to do:** construct and draw from the generator in the same cell, or mark the drawing cell `# @cash:no-cache`.
+**2. Anonymous inline draws** get no signal at all. Constructing and drawing in one expression binds no name:
+
+<!-- test:skip reason="illustrative: anonymous inline generator draw" -->
+```python
+z = np.random.default_rng().standard_normal(3)   # no pill, no warning
+```
+
+Because the generator has no name to track and draws from OS entropy (it never touches the module-global state the runtime observer watches), cash sees nothing: no `unseeded` pill, no warning, and the value is cached and frozen like any other unseeded draw — silently.
+
+**3. Draws reached indirectly.** A generator drawn from inside a called function (`arr = make_data()` where `make_data` does `np.random.default_rng().normal(...)`), or via an attribute (`self.rng.normal()`), or handed back from a helper (`g = make_rng(); g.normal()`), is invisible for the same reasons — static analysis can't see the receiver and the module-global observer sees no change.
+
+**What to do:** for reproducibility, **seed the generator** (`np.random.default_rng(42)`) — a seeded generator's cached value is the correct frozen value, and its seed *is* tracked. For a value that must be fresh, mark the cell `# @cash:no-cache`. If you need cash's full position-aware tracking and flagging, use the **module-global** functions (`np.random.seed(42)` + `np.random.rand(...)`) rather than a per-object generator. Constructing and drawing in the same cell also keeps a `Run All` correct.
 
 ---
 
