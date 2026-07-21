@@ -84,7 +84,7 @@ y = df['churned']
 
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
-@cash.cache
+@cash.cache(assume_safe=True)   # see the note below on assume_safe
 def train_model(X_train, y_train, n_estimators):
     model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X_train, y_train)
@@ -92,6 +92,9 @@ def train_model(X_train, y_train, n_estimators):
 
 model = train_model(X_train, y_train, n_estimators=100)
 ```
+
+!!! note "Why `assume_safe=True` on a training function"
+    `model.fit(X, y)` mutates `model` in place and its return value is discarded, so cash's purity check flags the function with a `CashImpurityWarning` — even though caching is perfectly correct here (the fitted `model` is the return value). `assume_safe=True` acknowledges you've audited it and silences the warning. Add it to any *train-and-return-the-model* function. (Plain `@cash.cache` still caches correctly; it just prints the warning.)
 
 The decorator caches on the arguments you **pass** and on the function's **body**, so the fitted model comes back from cache when they're unchanged — including after a kernel restart — and re-trains when either differs. The value is a plain return value, so there's no ambiguity about what got cached or which name it lands on.
 

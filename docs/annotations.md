@@ -193,7 +193,7 @@ the recommended ML path:
 
 <!-- test:skip reason="illustrative: needs a real sklearn estimator and training data" -->
 ```python
-@cash.cache
+@cash.cache(assume_safe=True)   # fit()'s discarded return trips the purity check; safe here
 def train_model(X, y, n_estimators=100):
     model = RandomForestClassifier(n_estimators=n_estimators, random_state=42)
     model.fit(X, y)

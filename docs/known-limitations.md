@@ -1,6 +1,8 @@
-# Known limitations
+# Known limitations (writing cache-safe cells)
 
 Cash restores a cell's inputs by re-deriving the state its upstream cells produced. That works because it can see what each statement reads and writes. Where it *cannot* see a change — because the change happened through a channel it does not track — it will hand you a value that looks plausible and is wrong.
+
+In practice this page doubles as the checklist for **writing cache-safe cells**: every item below is a pattern that can slip past cash, paired with the one-line habit that avoids it (rebind instead of mutate, seed the RNG, keep state in variables). If you read one page before writing cached notebooks, read this one.
 
 This page lists every such case we know about, what you actually see, and what to do instead. If you hit something here, it is a known limitation rather than a broken install. If you hit something **not** here, please [open an issue](https://github.com/galgtonold/cash/issues) — that is exactly the report we want.
 

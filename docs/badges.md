@@ -51,6 +51,20 @@ Individual examples:
 
 <iframe class="cash-badge" src="/_badges/status_error.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
+### Randomness markers
+
+A statement that touches a random-number generator carries a small text pill on its row, so you can see at a glance which cells control reproducibility and which produce randomness:
+
+| Pill | Meaning |
+| --- | --- |
+| `seed` | The statement sets a global RNG seed (`np.random.seed(0)`, `random.seed(0)`). Neutral — informational. |
+| `random` | A **seeded** draw (`np.random.rand()` after a seed). Neutral — its cached value is reproducible. |
+| `unseeded` | A draw or estimator `.fit()` with **no frozen seed**. Warn-coloured: cash still caches it, but the cached value is a **frozen replay**, not a fresh draw — re-running won't change it. An unseeded row also bumps the header's warning count. Seed the RNG to make it reproducible, or use `# @cash:no-cache` to redraw every run. |
+
+A seed that cash re-ran to re-establish the random stream (after you edited an upstream input) shows the row-detail reason **"re-run to restore the random stream"**, so an unchanged seed cell re-executing is explained rather than mysterious.
+
+These markers render in the **text badge** too (`%cash_badge print`) as `[seed]` / `[random]` / `[random: unseeded]` — which matters when you're driving the notebook headlessly (papermill, nbconvert, an agent), where the HTML badge above isn't visible. Per-object generators (`np.random.default_rng()`) are only partially covered here — see [Known limitations](known-limitations.md).
+
 ## 3. Why did this re-run?
 
 Five common causes, each with the badge you'll see and the one-line fix.
