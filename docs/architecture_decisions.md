@@ -603,7 +603,7 @@ Docs corrected (`81eb312`) to describe the gap accurately. Three workarounds hol
 
 ## ADR-018: Model the Global RNG as a Position-Aware Virtual Variable
 
-**Status:** Accepted — first increment implemented (`66e32dc`); full virtual-variable model still to do
+**Status:** Accepted — correctness implemented across `66e32dc` / `c27d44f` / observer; literal virtual-variable refactor deferred as a perf/cleanliness optimization
 **Date:** 2026-07-21
 **Context:** CAS-226 (a draw above a later seed keys on that later seed) and CAS-227 (re-executing an edited draw uses the current stream position, not the position it holds top-to-bottom) are both symptoms of one thing: the global RNG state — *seed epoch and stream position* — is tracked by **runtime side-channels** instead of cash's position-aware reconstruction.
 
@@ -657,4 +657,12 @@ The spike held and shipped as the first increment: `TrackingState.rng_post_state
 
 The spike also **found its own limitation**, exactly as the "store the PRE state" alternative predicted: the post-state table cannot reconstruct across a *seed change*. So the combined case — edit a seed **and** have intervening draws before the re-run draw — can't be fully corrected by a snapshot (the intervening draws' post-states are stale under the old seed). A guard makes `_restore_position_rng_state` **defer to the CAS-225 reseed path when an upstream seed is stale**, so that case falls back to the new seed's stream and is never made *worse*, but it is not yet fully correct (it lands on the new seed's position 0, not the position the intervening draws would have advanced it to).
 
-**Still to do (the actual virtual variable):** make each draw depend on the per-module RNG variable in the *lineage graph*, so a seed edit invalidates the whole downstream chain and reconstruction re-runs the intervening draws in order. That closes the combined case, makes CAS-226's key position-aware (turning its spurious miss into a hit), and — via the runtime state-diff detector — extends coverage to draws inside called functions. The `66e32dc` increment is the position-aware *restore*; the remaining work is the position-aware *invalidation + chain reconstruction*.
+**Correctness completed across three further increments** — achieved via the position-aware *restore* plus checker-driven chain reconstruction and a runtime observer, rather than a literal variable in the lineage graph:
+
+* **`66e32dc`** — position-aware restore (CAS-226, CAS-227).
+* **`c27d44f`** — chain rebuild: when an upstream seed is stale, re-run the whole RNG chain (seed + intervening draws) in order, so the re-seed's epoch update makes each intervening draw miss and recompute under the new seed. Closes the combined case.
+* **`<observer>`** — runtime state-diff: snapshot the RNG before/after each cell and record which modules it changed, so a draw INSIDE a called function (`model.fit()`, a helper) is observed once and treated like a direct draw on re-run. Closes the indirect-draw coverage hole.
+
+Every reported/known-broken scenario — bare seed edit-without-rerun, edited-draw stream position, draw-above-a-later-seed, edit-seed-with-intervening-draws, and indirect draws — is now correct, verified by nb_runner + no-cash oracle, with the CAS-223/225 suites and the full deterministic integration green.
+
+**Remaining is performance/cleanliness, not correctness.** CAS-226's draw still *recomputes* (spurious miss) where it could *hit*, because the CAS-223 epoch key is still the global-last seed rather than the position-governing one; the value is correct, only a cache miss is wasted. The literal virtual-variable-in-the-lineage-graph refactor would (a) make that key position-aware, turning the miss into a hit, and (b) subsume the post-state table + chain-rebuild + observer into one uniform mechanism. It is deferred as an optimization/consolidation, no longer a correctness need. One edge the chain-rebuild does not cover (a draw whose *args* derive from an earlier draw through a non-random cell) is likewise a correctness corner the full variable would close, but was not among the reported cases.
