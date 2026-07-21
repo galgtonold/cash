@@ -14,7 +14,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_epoch_fingerprint"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_epoch_fingerprint", "rng_virtual_var", "hidden_lineage_reads", "hidden_lineage_writes", "hidden_write_lineage"]
 
 logger = logging.getLogger(__name__)
 
@@ -1567,6 +1567,62 @@ def get_seeding_rng_modules(code: str) -> set[str]:
     visitor = RandomnessVisitor()
     visitor.visit(tree)
     return {module for module, _lineno in visitor.seed_calls}
+
+
+# -----------------------------------------------------------------------------
+# Hidden lineage dependencies (RNG state as a lineage-tracked virtual variable)
+# -----------------------------------------------------------------------------
+#
+# A *hidden dependency* is global mutable state a statement reads or writes
+# without binding a user-visible name -- the RNG generator's state is the first
+# instance (``os.environ``, ``plt.rcParams`` are the same shape). Modelled as a
+# virtual variable that rides the ORDINARY variable-lineage machinery: a
+# producer (a ``seed()``) writes its lineage, a consumer (a draw) reads it, and
+# every downstream consumer folds that lineage into its own output lineage
+# through the same input-lineage code every real variable uses. This is what
+# makes a seed change propagate to a cached downstream statement -- the half the
+# CAS-223 epoch (a key-only side channel) never did.
+#
+# The engines (runtime ``StatementProcessor`` and the ``VirtualLineage``
+# simulator) integrate at a single seam each via these three helpers; there is
+# no RNG-specific branching elsewhere. Adding a second hidden dependency later
+# means teaching these three functions about it, nothing more.
+
+def rng_virtual_var(module: str) -> str:
+    """Name of the virtual lineage variable modelling *module*'s global RNG state.
+
+    Deliberately not a valid attribute path and never written to ``user_ns`` --
+    it exists only as a key in the lineage dict, so it cannot collide with a
+    user variable or be mistaken for one.
+    """
+    return f"__cash_rng__{module}"
+
+
+def hidden_lineage_reads(code: str) -> set[str]:
+    """Virtual variables a statement READS: the RNG state a draw consumes.
+
+    Folded into the statement's cache key AND its output lineage, so a re-seed
+    upstream both re-keys the draw and propagates to everything cached
+    downstream of it.
+    """
+    return {rng_virtual_var(m) for m in get_drawing_rng_modules(code)}
+
+
+def hidden_lineage_writes(code: str) -> set[str]:
+    """Virtual variables a statement PRODUCES: a ``seed()`` defines its RNG state."""
+    return {rng_virtual_var(m) for m in get_seeding_rng_modules(code)}
+
+
+def hidden_write_lineage(producing_key: str) -> str:
+    """Lineage a hidden variable takes when a statement produces it.
+
+    A ``seed()`` RESETS the generator, so the new lineage depends only on the
+    seeding statement's own cache key (which already folds in its source and its
+    input lineage -- so ``seed(0)`` -> ``seed(1)`` and ``seed(cfg.seed)`` are
+    both caught). Overwrite, not chain: editing an *earlier* seed must not
+    invalidate a draw governed by a *later* one.
+    """
+    return hashlib.sha256(producing_key.encode('utf-8')).hexdigest()
 
 
 def seed_cells_not_yet_run(

@@ -39,6 +39,11 @@ from ..cache_key import (
 )
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
+from ..randomness import (
+    hidden_lineage_reads,
+    hidden_lineage_writes,
+    hidden_write_lineage,
+)
 from ..statement.derivation_edges import bump_derived_lineages
 from ._types import (
     IncrementalStartResult as _IncrementalStartResult,
@@ -1703,20 +1708,51 @@ class VirtualLineage:
             if is_import:
                 virtual_modules.update(outputs)
 
+            # ADR-018: RNG state is a hidden lineage variable. A draw READS it
+            # (fold into the key + the output-lineage inputs, so a re-seed both
+            # re-keys the draw and propagates to everything cached downstream); a
+            # seed PRODUCES it. Kept out of the plain ``inputs`` set that feeds the
+            # trace/cacheability. Mirrors the runtime seam byte-for-byte.
+            hidden_reads = hidden_lineage_reads(stmt_code)
+            hidden_writes = hidden_lineage_writes(stmt_code)
+
+            # A bare ``seed()`` carries no output, so it would return below before
+            # recording its hidden variable. Compute its key (a seed is not a
+            # draw, so no hidden read) and write the variable first.
+            if hidden_writes and not outputs:
+                seed_key, _, _, _, _ = compute_cache_key(
+                    stmt_code,
+                    inputs,
+                    ctx=CacheKeyContext(
+                        variable_lineage=self.variable_lineage,
+                        user_ns=self.shell.user_ns,
+                        function_tracker=self.function_tracker if hasattr(self, 'function_tracker') else None,
+                        virtual_lineage=virtual_lineage,
+                        virtual_modules=virtual_modules,
+                        compute_hash_fn=self.compute_hash_fn,
+                    ),
+                    outputs=outputs,
+                    occurrence_index=occurrence_index,
+                )
+                for var in hidden_writes:
+                    virtual_lineage[var] = hidden_write_lineage(seed_key)
+
             if not outputs:
                 return set(), 0.0, False, {}
 
             source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
 
+            key_lineage_inputs = inputs | hidden_reads
+
             # Resolve input lineages (includes ALL inputs for output lineage computation)
             input_lineages_all = self._resolve_virtual_input_lineages(
-                stmt_code, inputs, virtual_lineage, virtual_modules
+                stmt_code, key_lineage_inputs, virtual_lineage, virtual_modules
             )
 
             # Compute cache key using the unified function
             cache_key, _, _, _, _ = compute_cache_key(
                 stmt_code,
-                inputs,
+                key_lineage_inputs,
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
@@ -1730,6 +1766,11 @@ class VirtualLineage:
                 outputs=outputs,
                 occurrence_index=occurrence_index,
             )
+
+            # Combined seed+draw statement (has an output): record its hidden
+            # write AFTER its key, matching the runtime's ordering.
+            for var in hidden_writes:
+                virtual_lineage[var] = hidden_write_lineage(cache_key)
 
             # Collect file deps from current session
             file_deps_to_check = self._collect_session_file_deps(outputs)

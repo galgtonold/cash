@@ -34,6 +34,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from ..cache_key import is_cash_instrumentation, is_module_like
+from ..randomness import hidden_lineage_reads
 from .derivation_edges import (
     bump_derived_lineages,
     clear_edges_for,
@@ -98,13 +99,20 @@ class StatementLineageBuilder:
         if accessed_files:
             file_hash_component = compute_file_hash_component(accessed_files)
 
+        # A draw READS its module's hidden RNG variable (ADR-018): fold that
+        # variable's lineage into every output's lineage so a re-seed upstream
+        # propagates to everything cached downstream. Kept OUT of the plain
+        # ``inputs`` set so cacheability / derivation-edge / function-source logic
+        # never sees a phantom variable -- it only augments the lineage build.
+        lineage_inputs = inputs | hidden_lineage_reads(code)
+
         for var_name in outputs:
             if var_name not in user_ns:
                 continue
             value = user_ns[var_name]
             captured_vars[var_name] = value
 
-            input_lineage_hashes, input_lineage_map = self._build_input_lineages(tracking_state, inputs, user_ns)
+            input_lineage_hashes, input_lineage_map = self._build_input_lineages(tracking_state, lineage_inputs, user_ns)
             tracking_state.executed_input_lineages[var_name] = input_lineage_map
 
             func_lineage_component = ""

@@ -333,7 +333,9 @@ from ..randomness import (
     capture_rng_state,
     get_drawing_rng_modules,
     get_seeding_rng_modules,
-    rng_epoch_fingerprint,
+    hidden_lineage_reads,
+    hidden_lineage_writes,
+    hidden_write_lineage,
     check_and_warn_randomness,
     warn_stale_estimator_fit,
     warn_stale_randomness,
@@ -2827,10 +2829,18 @@ class StatementProcessor:
 
         t2 = time.time()
 
+        # A draw READS its module's hidden RNG variable; fold it into the key so a
+        # re-seed re-keys the draw (CAS-223). Only the LOCAL key-input set gets it
+        # -- the returned ``inputs`` stays clean, so cacheability/mutation never
+        # see a phantom variable. Its lineage ALSO reaches the draw's OUTPUT
+        # lineage (via capture_and_track_variables, which reads the same helper),
+        # so a seed change propagates to everything cached downstream.
+        key_inputs = inputs | hidden_lineage_reads(code)
+
         try:
             cache_key, source_hash, _, _, _ = compute_cache_key(
                 code,
-                inputs,
+                key_inputs,
                 ctx=CacheKeyContext(
                     variable_lineage=self.variable_lineage,
                     user_ns=self.shell.user_ns,
@@ -2841,22 +2851,20 @@ class StatementProcessor:
                 ),
                 outputs=outputs,
                 occurrence_index=occurrence_index,
-                rng_fingerprint=rng_epoch_fingerprint(
-                    get_drawing_rng_modules(code), self._rng_seed_epochs,
-                ),
             )
         except Exception as exc:
             raise CacheKeyComputationError(
                 f"Failed to compute cache key for: {code[:80]!r}"
             ) from exc
 
-        # A statement that seeds opens a new epoch for its module, identified by
-        # this statement's own cache key -- which folds in both its source and
-        # its input lineage, so `seed(0)` -> `seed(1)` and `seed(cfg.seed)` are
-        # both caught. Set AFTER the key above so a statement that seeds and
-        # draws at once is keyed on the epoch it INHERITS, not the one it opens
-        # (its own draw consumes the state its seed call just established, and
-        # that dependency is already carried by its source). CAS-223.
+        # A seed PRODUCES its module's hidden RNG variable: record its lineage
+        # (the seed statement's own key) into variable_lineage so downstream draws
+        # read it as an input. Set AFTER the key so a statement that seeds and
+        # draws at once keys on the state it INHERITS, not the one it opens. The
+        # ``_rng_seed_epochs`` ledger is still maintained for restore.py's
+        # value-side replay guard (the RNG STATE axis, separate from lineage).
+        for var in hidden_lineage_writes(code):
+            self.variable_lineage[var] = hidden_write_lineage(cache_key)
         for module in get_seeding_rng_modules(code):
             self._rng_seed_epochs[module] = cache_key
 
