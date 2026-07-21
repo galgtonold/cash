@@ -142,6 +142,11 @@ class ProcessResult(_ProcessResultRequired, total=False):
     branch_label: str
     changed_functions: list[str]
     changed_modules: dict[str, str]
+    # A statement's RNG role, surfaced on the badge: 'seed' sets a global seed,
+    # 'draw' consumes randomness. ``random_unseeded`` marks a draw/fit with no
+    # frozen seed, whose cached value is a frozen replay (advisory, still cached).
+    random_effect: str
+    random_unseeded: bool
     cost_model_size_bytes: int
     cost_model_restore_seconds: float
     cost_model_type_name: str
@@ -549,6 +554,7 @@ class StatementProcessor:
             'code': code.strip(),
             'uncacheable_reasons': []
         }
+        self._stamp_random_effect(metrics, code, unseeded_calls)
         if self.debug:
             logger.debug("%s Processing statement: %s...", _LOG_DEBUG, code[:50])
 
@@ -672,6 +678,7 @@ class StatementProcessor:
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
         # the restore-time warning on a cache hit below (CAS-167).
         unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
+        self._stamp_random_effect(metrics, code, unseeded_calls, unseeded_fits)
 
         if not skip_cache:
             cacheable, reasons = decide_cacheability(
@@ -764,6 +771,7 @@ class StatementProcessor:
             'code': code.strip(),
             'uncacheable_reasons': []
         }
+        self._stamp_random_effect(metrics, code, unseeded_calls)
         if self.debug:
             logger.debug("%s Processing statement (async): %s...", _LOG_DEBUG, code[:50])
 
@@ -854,6 +862,7 @@ class StatementProcessor:
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
         # the restore-time warning on a cache hit below (CAS-167).
         unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
+        self._stamp_random_effect(metrics, code, unseeded_calls, unseeded_fits)
 
         if not skip_cache:
             cacheable, reasons = decide_cacheability(
@@ -1021,6 +1030,37 @@ class StatementProcessor:
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Randomness detection failed for statement", _LOG_PROCESSOR)
             return []
+
+    def _stamp_random_effect(
+        self, metrics: 'ProcessResult', code: str,
+        unseeded_calls: list, unseeded_fits: 'list | tuple' = (),
+    ) -> None:
+        """Record a statement's RNG role on its metric so the badge can show it.
+
+        Purely advisory and never fatal: a draw statement is deliberately still
+        cached (a frozen replay), so this only annotates. ``draw`` wins over
+        ``seed`` when a statement does both (the draw is the notable effect), and
+        an unseeded draw/fit sets ``random_unseeded`` so the badge can flag that
+        the cached value is frozen, not freshly drawn.
+        """
+        try:
+            stripped = self._strip_control_markers(code)
+            draws = (
+                bool(get_drawing_rng_modules(stripped))
+                or bool(unseeded_calls)
+                or bool(unseeded_fits)
+            )
+            seeds = bool(get_seeding_rng_modules(stripped))
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        if draws:
+            metrics['random_effect'] = 'draw'
+        elif seeds:
+            metrics['random_effect'] = 'seed'
+        else:
+            return
+        if unseeded_calls or unseeded_fits:
+            metrics['random_unseeded'] = True
 
     def _warn_stale_randomness(
         self, code: str, unseeded_calls: list, allow_random: bool,

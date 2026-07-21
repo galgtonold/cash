@@ -675,6 +675,8 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         body_statements=_tup_str(m.get("body_statements")),
         cache_key_short=cache_key_short,
         miss_reason=m.get("miss_reason") or None,
+        random_effect=m.get("random_effect") or None,
+        random_unseeded=bool(m.get("random_unseeded", False)),
     )
 
 
@@ -1016,6 +1018,9 @@ def build_interactive_badge(
         1 for m in metrics
         if str(m.get("status")) in _NOTIFICATION_STATUSES
         or str(m.get("status")) == str(CacheStatus.ERROR)
+        # Unseeded randomness is advisory but user-visible: its cached value is a
+        # frozen replay, so it belongs in the header's warning tally.
+        or bool(m.get("random_unseeded", False))
     )
     summary_time = cell_total_time if cell_total_time is not None else total_exec
     # Honest header saving (CAS-143): never advertise more than the cell's NET

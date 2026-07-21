@@ -108,6 +108,11 @@ class StatementRow:
     # Populated by the runtime (statement_processor._diagnose_miss / the
     # invalidator helpers) so the badge can answer "why did this re-run?"
     miss_reason: str | None = None
+    # RNG role, surfaced as a chip: 'seed' sets a global seed, 'draw' consumes
+    # randomness, None for an ordinary statement. ``random_unseeded`` marks a
+    # draw/fit with no frozen seed — its cached value is a frozen replay.
+    random_effect: str | None = None
+    random_unseeded: bool = False
 
 
 @dataclass(frozen=True)

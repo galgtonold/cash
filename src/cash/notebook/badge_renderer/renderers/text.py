@@ -83,8 +83,24 @@ def _status_label(status: BadgeStatus, row: StatementRow) -> str:
     return status.value.upper()
 
 
+def _rng_suffix(row: StatementRow) -> str:
+    """ASCII RNG marker for the text renderer (empty when no random effect).
+
+    ASCII only: this lands in a kernel's stderr, where a Windows console
+    codepage would mangle an emoji.
+    """
+    if row.random_effect == "seed":
+        return "  [seeds RNG]"
+    if row.random_effect == "draw" and row.random_unseeded:
+        return "  [random: UNSEEDED - cached value is a frozen replay]"
+    if row.random_effect == "draw":
+        return "  [random: seeded]"
+    return ""
+
+
 def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     code = row.code.splitlines()[0][:theme.HEADER_MAX_LEN] if row.code else ""
+    code = code + _rng_suffix(row)
     tag = _row_tag(row, is_upstream=is_upstream)
     if row.status is BadgeStatus.RESTORED:
         return f"  {tag}: {code}  (saved {row.time_s:.2f}s)"

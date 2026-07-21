@@ -995,6 +995,27 @@ def _notif_chip(label: str) -> str:
     )
 
 
+def _random_glyph(row: StatementRow) -> str:
+    """Inline 🎲 marker for a statement with an RNG effect (empty otherwise).
+
+    The at-a-glance companion to the drawer's "Random" line and the header's
+    warn count: a seed/draw is neutral, an unseeded draw carries a ⚠ because its
+    cached value is a frozen replay. Uses a native ``title`` tooltip so it needs
+    no extra CSS.
+    """
+    if row.random_effect == "seed":
+        return '<span class="c3-rng" title="Sets the RNG seed">🎲</span>'
+    if row.random_effect == "draw" and row.random_unseeded:
+        return (
+            '<span class="c3-rng c3-rng-warn" title="Unseeded randomness — the '
+            'cached value is a frozen replay, not a fresh draw. Seed the RNG or '
+            'use @cash:no-cache to redraw.">🎲⚠</span>'
+        )
+    if row.random_effect == "draw":
+        return '<span class="c3-rng" title="Random draw (seeded, reproducible)">🎲</span>'
+    return ""
+
+
 # ---------------------------------------------------------------------------
 # Statement row
 # ---------------------------------------------------------------------------
@@ -1072,6 +1093,16 @@ def _rowtip_html(row: StatementRow) -> str:
         # miss path; only shown on COMPUTED rows (a RESTORED row doesn't
         # have a "miss").
         dl_parts.append(f"<dt>Miss</dt><dd>{_esc(row.miss_reason)}</dd>")
+    if row.random_effect == "seed":
+        dl_parts.append("<dt>Random</dt><dd>sets the RNG seed</dd>")
+    elif row.random_effect == "draw" and row.random_unseeded:
+        dl_parts.append(
+            "<dt>Random</dt><dd>⚠ unseeded — the cached value is a frozen replay, "
+            "not a fresh draw. Seed the RNG for reproducibility, or use "
+            "<code>@cash:no-cache</code> to redraw every run.</dd>"
+        )
+    elif row.random_effect == "draw":
+        dl_parts.append("<dt>Random</dt><dd>random draw (seeded, reproducible)</dd>")
 
     dl = f'<dl class="c3-rt-dl">{"".join(dl_parts)}</dl>' if dl_parts else ""
 
@@ -1132,6 +1163,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         source=row.source,
         uncacheable_reasons=row.uncacheable_reasons,
     )
+    rng_glyph = _random_glyph(row)
     drawer = _rowtip_html(row)
 
     rid = _uid("rx")
@@ -1141,6 +1173,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f"{code_html}"
+        f"{rng_glyph}"
         f"{dots}"
         f"{bar}"
         f"{chip}"
