@@ -138,6 +138,13 @@ class TrackingState:
     # ran in this session.
     executed_write_stmt_codes: set[str] = field(default_factory=set)
 
+    # sha256 of every whole-CELL source that has executed this session. Written
+    # by the cell executor after a cell runs; read by the upstream checker to
+    # tell an edited-but-not-rerun seed() cell from one whose current source has
+    # actually run (ADR-017 / CAS-225). Cell-granular on purpose — it matches the
+    # notebook view the checker compares against.
+    executed_cell_source_hashes: set[str] = field(default_factory=set)
+
     # Written by StatementProcessor; read by CashMagics for badge display.
     # Accumulates all content hashes seen for a variable across executions.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

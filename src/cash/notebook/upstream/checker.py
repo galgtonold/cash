@@ -14,6 +14,7 @@ from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements
+from ..randomness import get_drawing_rng_modules, seed_cells_not_yet_run
 from ..cacheability import (
     alias_mutation_sources,
     aliased_sources,
@@ -1287,6 +1288,17 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
                       len(statements_to_reexecute), len(restored_info))
 
+            # ADR-017 / CAS-225: a bare ``np.random.seed(N)`` binds no variable,
+            # so the simulator never links it to a downstream draw. If the
+            # current cell draws and an upstream seed cell was edited but not
+            # re-run, re-execute that seed cell first — its side effect (the new
+            # seed) must be in place before the draw, and re-running a seed is
+            # idempotent. The unrun guard keeps warm draws untouched (an
+            # unchanged seed cell's source is already in the executed set).
+            statements_to_reexecute = self._prepend_stale_seed_cells(
+                cell_code, notebook_cells, statements_to_reexecute, current_cell_idx,
+            )
+
             executed_metrics = []
             if statements_to_reexecute:
                 executed_metrics = self._reexecute_statements(
@@ -1414,6 +1426,46 @@ class UpstreamChecker:
 
         if updated and self.debug:
             logger.debug("[UPSTREAM_DEBUG] Synced simulation cache lineages with runtime state (scoped to producing code)")
+
+    def _prepend_stale_seed_cells(
+        self, cell_code: str, notebook_cells: list[str], statements: list[str],
+        current_cell_idx: int | None,
+    ) -> list[str]:
+        """Schedule an edited-but-not-rerun seed cell ahead of a draw (ADR-017).
+
+        When the current cell draws from a global RNG and an UPSTREAM cell seeds
+        that module with source that has not executed this session, that seed's
+        side effect must be re-established before the draw or the draw runs on a
+        stale seed (CAS-225). Returns *statements* with the missing seed cells
+        prepended, in notebook order, de-duplicated against what is already
+        scheduled. A no-op when the cell does not draw or no seed is stale, so
+        warm draws and the re-run path are untouched.
+
+        Only cells strictly BEFORE the current one count — a seed placed after
+        the draw is not its upstream and must never be pulled in.
+        """
+        try:
+            drawing = get_drawing_rng_modules(cell_code)
+            if not drawing:
+                return statements
+            # Restrict to genuine upstream cells; a None index means "treat all
+            # as upstream" (the checker's own fallback), so scan everything then.
+            upstream = notebook_cells if current_cell_idx is None else notebook_cells[:current_cell_idx]
+            executed = self._tracking_state.executed_cell_source_hashes
+            stale = seed_cells_not_yet_run(drawing, upstream, executed)
+            if not stale:
+                return statements
+            already = set(statements)
+            prepend: list[str] = []
+            for _module, idx in stale:
+                src = upstream[idx]
+                if src not in already and src not in prepend:
+                    prepend.append(src)
+            if prepend and self.debug:
+                logger.debug("[UPSTREAM] Re-seeding %d edited seed cell(s) before draw", len(prepend))
+            return prepend + statements
+        except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
+            return statements
 
     def _reexecute_statements(
         self,

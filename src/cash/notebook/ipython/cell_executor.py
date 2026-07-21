@@ -42,6 +42,7 @@ magic-error path instead.
 from __future__ import annotations
 
 import ast
+import hashlib
 import sys
 import time
 import uuid
@@ -213,6 +214,7 @@ class CellExecutor:
 
         all_metrics, buffered_result_outputs, badge_render_time = result
         timing_breakdown['badge_progress'] = badge_render_time
+        self._record_executed_cell_hash(raw_cell)
 
         return _PipelineCompleted(
             all_metrics=all_metrics,
@@ -222,6 +224,16 @@ class CellExecutor:
             timing_breakdown=timing_breakdown,
             badge_render_time=badge_render_time,
         )
+
+    def _record_executed_cell_hash(self, raw_cell: str) -> None:
+        """Remember that this exact cell source ran, so the upstream checker can
+        tell an edited-but-not-rerun seed() cell from one that actually ran
+        (ADR-017 / CAS-225)."""
+        try:
+            digest = hashlib.sha256(raw_cell.encode('utf-8')).hexdigest()
+            self._statement_processor._tracking_state.executed_cell_source_hashes.add(digest)
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            pass
 
     async def execute_cell_async(
         self,
@@ -290,6 +302,7 @@ class CellExecutor:
 
         all_metrics, buffered_result_outputs, badge_render_time = result
         timing_breakdown['badge_progress'] = badge_render_time
+        self._record_executed_cell_hash(raw_cell)
 
         return _PipelineCompleted(
             all_metrics=all_metrics,
