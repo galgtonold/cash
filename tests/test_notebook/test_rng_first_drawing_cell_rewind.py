@@ -23,7 +23,11 @@ import random
 from unittest.mock import MagicMock
 
 from cash.notebook._protocols import TrackingState
-from cash.notebook.randomness import capture_rng_state
+from cash.notebook.randomness import (
+    capture_rng_state,
+    rng_lineage_fingerprint,
+    rng_virtual_var,
+)
 from cash.notebook.upstream import UpstreamChecker
 
 CELLS = ["import random", "rv = random.random()"]
@@ -43,12 +47,19 @@ def _digest(src: str) -> str:
     return hashlib.sha256(src.encode("utf-8")).hexdigest()
 
 
+def _record_pre(state, cell: str, modules=("random",)) -> None:
+    """Store a start position the way the cell executor does."""
+    state.rng_pre_states[_digest(cell)] = (
+        capture_rng_state(),
+        rng_lineage_fingerprint(state.variable_lineage, set(modules)),
+    )
+
+
 def test_rewinds_to_own_pre_state_when_no_upstream_anchor():
     checker, state = _checker()
 
-    # Record the drawing cell's start position, as the cell executor does.
     random.seed(1234)
-    state.rng_pre_states[_digest(DRAW)] = capture_rng_state()
+    _record_pre(state, DRAW)
     expected = random.random()  # the value a draw from that position yields
 
     # Leave the live stream somewhere else entirely.
@@ -65,26 +76,70 @@ def test_rewinds_to_own_pre_state_when_no_upstream_anchor():
     )
 
 
-def test_upstream_anchor_still_wins_when_present():
-    """The pre-state is a FALLBACK; a recorded predecessor keeps priority."""
+def test_own_pre_state_wins_over_upstream_anchor():
+    """The cell's own start is exact; the upstream anchor only approximates it."""
     checker, state = _checker()
 
-    # An upstream cell that touched RNG, with a recorded post-state.
     random.seed(99)
     state.observed_rng_cells[_digest(CELLS[0])] = {"random"}
     state.rng_post_states[_digest(CELLS[0])] = capture_rng_state()
     from_anchor = random.random()
 
-    # A DIFFERENT own-pre-state, which must not be the one used.
     random.seed(4321)
-    state.rng_pre_states[_digest(DRAW)] = capture_rng_state()
+    _record_pre(state, DRAW)
     from_own = random.random()
     assert from_anchor != from_own, "test setup must distinguish the two sources"
 
     random.random()  # move the live stream off both
     checker._restore_position_rng_state(DRAW, CELLS, 1)
+    assert random.random() == from_own, (
+        "the cell's own recorded start must take priority over the upstream anchor"
+    )
+
+
+def test_stale_pre_state_is_rejected_when_the_seed_changed():
+    """A position recorded under a different seed must not be reused."""
+    checker, state = _checker()
+
+    # Upstream anchor available as the fallback.
+    random.seed(99)
+    state.observed_rng_cells[_digest(CELLS[0])] = {"random"}
+    state.rng_post_states[_digest(CELLS[0])] = capture_rng_state()
+    from_anchor = random.random()
+
+    # Own position recorded while seed lineage was "seed-v1"...
+    state.variable_lineage[rng_virtual_var("random")] = "seed-v1"
+    random.seed(4321)
+    _record_pre(state, DRAW)
+
+    # ...but the seed has since changed. The saved position belongs to the old
+    # seed, so it must be discarded in favour of the upstream anchor.
+    state.variable_lineage[rng_virtual_var("random")] = "seed-v2"
+
+    random.random()
+    checker._restore_position_rng_state(DRAW, CELLS, 1)
     assert random.random() == from_anchor, (
-        "an upstream cell with a recorded post-state must remain the rewind anchor"
+        "a pre-state recorded under a superseded seed must not be restored"
+    )
+
+
+def test_unseeded_pre_state_stays_valid():
+    """No seed anywhere -> the frozen position keeps applying across runs."""
+    checker, state = _checker()
+
+    random.seed(2024)
+    _record_pre(state, DRAW)
+    expected = random.random()
+
+    random.random()
+    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    first = random.random()
+    random.random()
+    checker._restore_position_rng_state(DRAW, CELLS, 1)
+    second = random.random()
+
+    assert first == expected == second, (
+        "an unseeded stream's frozen position must survive repeated rewinds"
     )
 
 

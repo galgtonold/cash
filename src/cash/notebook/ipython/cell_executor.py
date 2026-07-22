@@ -59,7 +59,12 @@ from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
-from ..randomness import capture_rng_state, rng_modules_changed
+from ..randomness import (
+    capture_rng_state,
+    get_drawing_rng_modules,
+    rng_lineage_fingerprint,
+    rng_modules_changed,
+)
 from ..statement import ProcessResult
 
 if TYPE_CHECKING:
@@ -246,11 +251,19 @@ class CellExecutor:
                 if changed:
                     state.rng_post_states[digest] = post
                     state.observed_rng_cells[digest] = changed
-                    # Where this cell's randomness STARTED. Re-executing a draw
-                    # reproduces its value only by rewinding to this, and it is
-                    # recorded against the drawing cell itself rather than hoping
-                    # some upstream cell was recorded (CAS-229).
-                    state.rng_pre_states[digest] = pre_rng
+                    # Where this cell's randomness STARTED, plus the seeds in
+                    # force for it. Re-executing a draw reproduces its value only
+                    # by rewinding to this, recorded against the drawing cell
+                    # itself rather than hoping some upstream cell happens to
+                    # have been recorded (CAS-229). The fingerprint is what makes
+                    # it safe to prefer: it expires the position when the seed
+                    # behind it changes, using the same lineage check that
+                    # invalidates any other value.
+                    drawing = set(get_drawing_rng_modules(raw_cell)) | changed
+                    state.rng_pre_states[digest] = (
+                        pre_rng,
+                        rng_lineage_fingerprint(state.variable_lineage, drawing),
+                    )
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             pass
 

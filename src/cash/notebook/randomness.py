@@ -14,7 +14,7 @@ from typing import NamedTuple
 
 from ..exceptions import CashWarning
 
-__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_virtual_var", "hidden_lineage_reads", "hidden_lineage_writes", "hidden_write_lineage"]
+__all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_lineage_fingerprint", "rng_virtual_var", "hidden_lineage_reads", "hidden_lineage_writes", "hidden_write_lineage"]
 
 logger = logging.getLogger(__name__)
 
@@ -1669,6 +1669,28 @@ def seed_cells_not_yet_run(
         for module in sorted(seeded):
             out.append((module, idx))
     return out
+
+
+def rng_lineage_fingerprint(
+    variable_lineage: Mapping[str, str], modules: Iterable[str],
+) -> tuple:
+    """The seeds in force for *modules* — an invalidation key for a saved position.
+
+    A recorded RNG start position stays valid only while the seed that
+    determines it is unchanged. Rather than invent a staleness rule for that,
+    reuse the one every real variable already uses: the RNG state is modelled as
+    a hidden lineage variable per module (``__cash_rng__<module>``), written by a
+    seeding statement and read by a draw, so comparing that lineage now against
+    the lineage recorded alongside the position IS the standard check.
+
+    An UNSEEDED module contributes ``None`` on both sides and therefore stays
+    valid forever. That is deliberate: an unseeded stream has no semantically
+    correct position, so cash freezes the one it first saw — the same
+    "non-determinism frozen, not blocked" rule the rest of the system follows.
+    """
+    return tuple(sorted(
+        (m, variable_lineage.get(rng_virtual_var(m))) for m in modules
+    ))
 
 
 def rng_modules_changed(before: dict, after: dict) -> set[str]:
