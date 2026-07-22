@@ -260,7 +260,7 @@ comment is also honoured inside a decorated function's body.
 !!! note
     `allow_random` suppresses a *warning*. It does **not** stop the
     caching — the value is still frozen. Use
-    [`cache_if=`](#cache_if--skip-caching-by-result) or drop the
+    [`cache_if=`](#cache_if-skip-caching-by-result) or drop the
     decorator if you want a fresh draw every call.
 
 Detection is source-based and runs **once per function at decoration
@@ -399,7 +399,7 @@ f.explain(5)
 `reason` is one of `hit`, `key_uncomputable` (unhashable arg),
 `no_entry` (first call / cache cleared / source changed),
 `ttl_expired`, `file_changed`. `details` carries reason-specific
-extras — see [`CacheExplanation`](api/cash.md#cacheexplanation).
+extras — see [`CacheExplanation`](api/cash.md#cash.CacheExplanation).
 
 Does NOT call your function, mutate stats, or write to the backend.
 Safe to call from sync code even on async-wrapped functions.
