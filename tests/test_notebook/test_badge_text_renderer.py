@@ -25,8 +25,12 @@ def test_upstream_section_label_and_indent() -> None:
     ]
     text = render_text(build_interactive_badge(metrics))
     assert "Upstream:" in text
-    assert "⬆️" in text
+    assert "^RESTORED" in text  # ASCII upstream marker; see below for why
     assert "COMPUTED" in text
+    # The text badge feeds headless/agent runs, so it is read by a different
+    # process than wrote it. Any character a cp1252 console cannot encode
+    # crashes that reader instead of showing it the badge.
+    text.encode("cp1252")
 
 
 def test_iteration_context_stripped() -> None:
@@ -51,3 +55,39 @@ def test_decorator_summary_section() -> None:
     text = render_text(build_interactive_badge(metrics))
     assert "@cash.cache:" in text
     assert "myf(): 1/2 cached" in text
+
+
+def test_text_badge_is_ascii_across_every_status():
+    """No status may emit a character a legacy-codepage reader cannot decode.
+
+    ``%cash_badge print`` is documented as required for headless / agent runs,
+    so its output is consumed by a DIFFERENT process than the kernel that wrote
+    it -- nbconvert, a log scraper, an agent parsing the .ipynb. The kernel's
+    stdout is always UTF-8, so an emoji is written happily and then raises
+    UnicodeEncodeError in the reader: a traceback instead of the badge, for
+    precisely the audience the mode exists for.
+
+    Shipped 0.1.0 emitted U+2192, U+2699, U+2705 and U+FE0F here.
+    """
+    from cash.notebook.badge_renderer.view import BadgeStatus
+
+    metrics = []
+    for i, status in enumerate(BadgeStatus):
+        metrics.append({
+            "code": f"stmt_{i}()",
+            "status": str(status.value),
+            "total_time": 0.25,
+            "time_saved": 0.5,
+            "storage_tiers": ["RAM", "DISK"],
+        })
+    text = render_text(build_interactive_badge(metrics))
+    assert text, "expected badge output"
+    try:
+        text.encode("cp1252")
+    except UnicodeEncodeError as exc:
+        bad = text[exc.start:exc.end]
+        raise AssertionError(
+            f"text badge emitted {bad!r} (U+{ord(bad[0]):04X}), which crashes a "
+            f"cp1252 reader. The text renderer must stay ASCII -- put the glyph "
+            f"in the HTML renderer instead."
+        ) from None

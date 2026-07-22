@@ -31,36 +31,51 @@ from ..view import (
 )
 
 
+# This renderer is ASCII-ONLY, deliberately. ``%cash_badge print`` exists for
+# headless / agent runs, so its output is read by a DIFFERENT process than the
+# one that wrote it: nbconvert, a log scraper, an agent parsing the .ipynb. The
+# writing kernel always has a UTF-8 stdout, so an emoji is encoded happily into
+# the notebook and then crashes the reader with UnicodeEncodeError on a cp1252
+# console -- a traceback instead of the badge, for exactly the audience the mode
+# was built for. `safe_text` cannot help: it degrades on the WRITER's encoding,
+# which is never the one that fails.
+#
+# ``_rng_suffix`` below already stated this rule for the RNG marker; the status
+# icons simply predated it. The label ("RESTORED", "COMPUTED", ...) already
+# carries the meaning, so dropping the glyph loses no information -- and matches
+# the plain-text format the docs advertise.
+
+
 def _header_line(h: BadgeHeader) -> str:
     if h.computed_count == 0 and h.restored_count > 0:
-        return f"⚡ CACHED (saved {h.total_saved_s:.2f}s)"
+        return f"CACHED (saved {h.total_saved_s:.2f}s)"
     if h.computed_count == 0 and h.skipped_count > 0:
-        return "⏩ SKIPPED (already computed)"
+        return "SKIPPED (already computed)"
     if h.total_saved_s > 0:
-        return (f"⚙️ EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
-                if h.total_exec_s else f"⚙️ EXECUTED (saved {h.total_saved_s:.2f}s)")
-    return (f"⚙️ EXECUTED ({h.total_exec_s:.2f}s)"
-            if h.total_exec_s else "⚙️ EXECUTED")
+        return (f"EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
+                if h.total_exec_s else f"EXECUTED (saved {h.total_saved_s:.2f}s)")
+    return (f"EXECUTED ({h.total_exec_s:.2f}s)"
+            if h.total_exec_s else "EXECUTED")
 
 
 def _row_tag(row: StatementRow, *, is_upstream: bool) -> str:
-    prefix = "⬆️" if is_upstream else _status_icon(row.status)
+    prefix = _status_icon(row.status)
     label = _status_label(row.status, row)
-    return f"{prefix} {label}"
+    # "^" marks a statement pulled in from an upstream cell -- real information,
+    # so it survives the de-emoji as an ASCII marker rather than being dropped.
+    tag = f"{prefix} {label}" if prefix else label
+    return f"^{tag}" if is_upstream else tag
 
 
 def _status_icon(status: BadgeStatus) -> str:
-    if status is BadgeStatus.RESTORED:
-        return "⚡"
-    if status is BadgeStatus.SKIPPED:
-        return "⏩"
-    if status is BadgeStatus.COMPUTED:
-        return "⚙️"
+    """ASCII marker, or "" where the label alone already says it."""
     if status in (BadgeStatus.FUNCTION_CHANGED, BadgeStatus.MODULE_RELOADED):
-        return "🔄"
+        return "~"
     if status is BadgeStatus.WARNING:
-        return "⚠️"
-    return "•"
+        return "!"
+    if status in (BadgeStatus.RESTORED, BadgeStatus.SKIPPED, BadgeStatus.COMPUTED):
+        return ""
+    return "-"
 
 
 def _status_label(status: BadgeStatus, row: StatementRow) -> str:
@@ -109,15 +124,15 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     if row.status is BadgeStatus.COMPUTED:
         if row.uncacheable_reasons:
             reasons = ", ".join(row.uncacheable_reasons)
-            return f"  {tag}: {code}  ({row.time_s:.2f}s) — {reasons}"
+            return f"  {tag}: {code}  ({row.time_s:.2f}s) - {reasons}"
         if row.skipped_reason:
             # Shortened, not dropped: the row still says it wasn't cached and
             # why. The guard's full paragraph is emitted once per cell by
             # ``_guard_summary_lines`` instead of once per statement (CAS-182).
-            return (f"  {tag}: {code}  ({row.time_s:.2f}s) — "
+            return (f"  {tag}: {code}  ({row.time_s:.2f}s) - "
                     f"{shorten_skipped_reason(row.skipped_reason)}")
         if row.storage_tiers:
-            return f"  {tag}: {code}  ({row.time_s:.2f}s) → {'+'.join(row.storage_tiers)}"
+            return f"  {tag}: {code}  ({row.time_s:.2f}s) -> {'+'.join(row.storage_tiers)}"
         return f"  {tag}: {code}  ({row.time_s:.2f}s)"
     return f"  {tag}: {code}  ({row.time_s:.2f}s)"
 

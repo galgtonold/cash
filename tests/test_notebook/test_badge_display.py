@@ -245,7 +245,10 @@ class TestTextBadge:
         magics._print_text_badge(metrics)
         out = capsys.readouterr().out
         assert 'Upstream' in out
-        assert '⬆️' in out
+        assert '^RESTORED' in out  # ASCII upstream marker
+        # Must survive a legacy-codepage reader: this mode exists to be parsed
+        # by a headless agent / nbconvert, not by the kernel that wrote it.
+        out.encode('cp1252')
 
 
 # ----------------------------------------------------------------------------

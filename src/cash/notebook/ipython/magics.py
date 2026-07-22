@@ -453,7 +453,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._auto_cache_enabled = True
         self._global_ttl = ttl
         ttl_msg = f" (TTL: {ttl}s)" if ttl is not None else ""
-        print(safe_text(f"✅ Cash enabled.{ttl_msg} Your computations will be cached automatically."))
+        # ASCII, like the text badge: this line lands in the .ipynb and is read
+        # back by nbconvert / a headless agent, whose console may be cp1252.
+        print(safe_text(f"Cash enabled.{ttl_msg} Your computations will be cached automatically."))
         print("   Run %cash_help for available commands.")
         # Report existing cache state if available
         try:
