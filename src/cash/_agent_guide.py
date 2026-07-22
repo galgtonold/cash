@@ -7,6 +7,8 @@ identical, so editing one without the other fails CI. Ships inside the package s
 """
 from __future__ import annotations
 
+import sys
+
 AGENT_GUIDE = """# Using cash — a guide for coding agents
 
 cash caches expensive Python results so slow notebooks and scripts iterate fast.
@@ -106,6 +108,18 @@ def help() -> str:  # noqa: A001 - deliberately shadows builtin at the cash.help
 
     Reachable as ``cash.help()`` — the REPL entry point an agent hits when
     caching "looks broken" and it introspects the module instead of opening docs.
+
+    The guide contains ``→`` and ``—``, which a legacy-codepage stdout (cp1252 on
+    a default Windows console, ascii under some CI capture) cannot encode. Printing
+    it there raised ``UnicodeEncodeError`` -- crashing the single call this library
+    tells coding agents to make first. Degrade the *display* to whatever the console
+    can render; the return value is always the exact guide, so a caller that
+    captures it still gets the real text.
     """
-    print(AGENT_GUIDE)
+    try:
+        print(AGENT_GUIDE)
+    except UnicodeEncodeError:
+        encoding = getattr(sys.stdout, "encoding", None) or "ascii"
+        sys.stdout.write(AGENT_GUIDE.encode(encoding, "replace").decode(encoding, "replace"))
+        sys.stdout.write("\n")
     return AGENT_GUIDE
