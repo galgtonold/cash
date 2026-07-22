@@ -439,8 +439,12 @@ class CashAdminMagicsMixin:
         tracked = len(self._tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")
         print()
+        # Points at the CLI, not at "%cash_admin": that magic has never
+        # existed. Sending a user who is looking at a multi-hundred-MB .cash
+        # to a UsageError is worse than saying nothing, and inspecting the
+        # backend is exactly what they came here to do.
         print("  Cache size / entries are not shown here to keep this command")
-        print("  cheap; use %cash_admin to inspect the backend.")
+        print("  cheap; run `cash info` (or `cash clear`) in a terminal.")
 
     # ------------------------------------------------------------------
     # Export / import / diff

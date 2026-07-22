@@ -99,7 +99,7 @@ differ each run.
 - **Write cache-safe cells:** rebind, don't mutate an object from an *earlier* cell
   (`df = df.assign(c=...)`, not `df['c'] = ...`); seed RNG in the same cell as the
   draw; pass state in and out of functions instead of mutating globals. Full list:
-  [Known limitations](known-limitations.md).
+  [Known limitations](https://cash-lib.readthedocs.io/en/latest/known-limitations/).
 """
 
 
