@@ -197,9 +197,15 @@ class CashConfig:
     smart_persistence: bool = True
     """When True (default), the tiered backend decides per-entry
     whether to persist past RAM based on compute time vs storage
-    cost. Set False to persist everything unconditionally — useful
-    for deterministic benchmarks, wasteful for cheap-to-compute
-    values."""
+    cost, using the serialization-aware cost model with a 0.1 s
+    compute floor.
+
+    Setting it False does **not** persist everything: it drops to
+    ``TieredBackend``'s own ``_default_promotion_policy``, which applies
+    the same cost-model rule at the more conservative 1.0 s floor. So the
+    practical effect is *less* persistence for mid-cost values, not more.
+    Use ``persist_all=True`` (or ``%cash_persist on``) if you actually want
+    everything written to disk."""
 
     smart_persistence_threshold: float = 1.0
     """Legacy compute-time threshold (seconds). **Superseded by the

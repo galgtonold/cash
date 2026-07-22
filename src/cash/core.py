@@ -3279,8 +3279,13 @@ class Cash:
 
         Returns:
             List of call event dicts, each with keys:
-            ``func_name``, ``cache_hit``, ``execution_time``, ``args_hash``,
-            ``cache_key``, ``timestamp``.
+            ``func_name``, ``cache_hit``, ``execution_time``, ``time_saved``,
+            ``args_hash``, ``cache_key``, ``timestamp``.
+
+            ``execution_time`` is what this call cost; ``time_saved`` is the
+            recorded cost of the original computation a hit avoided, so it is
+            an estimate carried forward from the write, not a measurement of
+            this call.
         """
         with self._decorator_call_log_lock:
             calls = list(self._decorator_call_log)

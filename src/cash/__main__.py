@@ -39,7 +39,16 @@ def cmd_info(args: argparse.Namespace) -> None:
         print("  Max size:   auto (scaled to disk/RAM per tier)")
     else:
         print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB")
-    print(f"  Threshold:  {config.smart_persistence_threshold}s")
+    # `smart_persistence_threshold` is legacy and no longer consulted by the
+    # promotion policy (CAS-141 replaced it with the serialization-aware cost
+    # model). Printing it bare as "Threshold" invited users to tune a dead
+    # number, so report what actually decides persistence instead.
+    if config.smart_persistence:
+        print("  Persist:    cost model (0.1s compute floor, "
+              f"{config.min_cache_savings_pct:.0%} savings required)")
+    else:
+        print("  Persist:    cost model, conservative (1.0s compute floor)")
+    print(f"  Threshold:  {config.smart_persistence_threshold}s (legacy, not consulted)")
     if config.tiers:
         print(f"  Tiers:      {', '.join(t.type for t in config.tiers)}")
     print(f"  Source:     {config._source}")
