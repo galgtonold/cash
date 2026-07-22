@@ -246,6 +246,11 @@ class CellExecutor:
                 if changed:
                     state.rng_post_states[digest] = post
                     state.observed_rng_cells[digest] = changed
+                    # Where this cell's randomness STARTED. Re-executing a draw
+                    # reproduces its value only by rewinding to this, and it is
+                    # recorded against the drawing cell itself rather than hoping
+                    # some upstream cell was recorded (CAS-229).
+                    state.rng_pre_states[digest] = pre_rng
         except (AttributeError, TypeError):  # pragma: no cover - defensive
             pass
 

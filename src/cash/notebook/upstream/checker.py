@@ -1664,6 +1664,19 @@ class UpstreamChecker:
                 if state is not None:
                     restore_rng_state(state)
                 return  # nearest predecessor only, whether or not it was recorded
+            # No upstream RNG cell to rewind to — this cell is the first to touch
+            # the stream. Fall back to the position IT started from last time,
+            # which is the state a re-executed draw actually needs (CAS-229).
+            # Without this the draw continues from the live stream and returns a
+            # different value, because a cheap draw is under the persistence floor
+            # and so is re-executed rather than served from cache. Previously this
+            # case was masked: any upstream cell that merely caused cash to import
+            # numpy got recorded as RNG-touching and became the rewind anchor.
+            own = self._tracking_state.rng_pre_states.get(
+                hashlib.sha256(cell_code.encode('utf-8')).hexdigest()
+            )
+            if own is not None:
+                restore_rng_state(own)
         except (AttributeError, IndexError, TypeError):  # pragma: no cover - defensive
             return
 

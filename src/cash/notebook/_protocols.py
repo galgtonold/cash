@@ -154,6 +154,17 @@ class TrackingState:
     # stale post-state is never matched.
     rng_post_states: dict[str, Any] = field(default_factory=dict)
 
+    # sha256(cell source) -> RNG state as it stood JUST BEFORE that cell ran.
+    # The mirror of ``rng_post_states``, and what a re-executed draw actually
+    # needs: reproducing a draw means rewinding to where it STARTED, not where
+    # it finished. Without this, the restore path could only rewind to some
+    # upstream cell's post-state, which works when such a cell happens to have
+    # been recorded and silently does nothing when none has been -- leaving a
+    # re-executed draw to continue from the live stream and return a different
+    # value (a cheap draw is under the persistence floor, so it is re-executed,
+    # not served from cache). Only kept for cells that actually touched RNG.
+    rng_pre_states: dict[str, Any] = field(default_factory=dict)
+
     # sha256(cell source) -> set of RNG modules whose global state that cell
     # CHANGED at runtime (observed by a before/after state diff). Catches draws
     # that static analysis cannot see because they happen INSIDE a called
