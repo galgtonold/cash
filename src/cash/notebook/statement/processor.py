@@ -333,6 +333,7 @@ from ..randomness import (
     capture_rng_state,
     get_drawing_rng_modules,
     get_seeding_rng_modules,
+    rng_modules_changed,
     hidden_lineage_reads,
     hidden_lineage_writes,
     hidden_write_lineage,
@@ -402,6 +403,9 @@ class StatementProcessor:
         self.function_tracker = FunctionTracker()
         # module -> cache key of the seeding statement in force (CAS-223).
         self._rng_seed_epochs: dict[str, str] = {}
+        # What the LAST statement drew, per the statement-level RNG observer
+        # (see _observe_statement_rng); read by _flag_observed_hidden_draw.
+        self._observed_rng_draw: set[str] = set()
 
         self.set_tracking_state(tracking_state or TrackingState())
 
@@ -725,6 +729,7 @@ class StatementProcessor:
         self._flag_inline_unseeded_fit(
             metrics, code, _parsed_tree, outputs, allow_random, is_hit=False,
         )
+        self._flag_observed_hidden_draw(metrics, code, outputs, skip_cache=skip_cache)
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
         # Surface input variable names so downstream consumers (provenance,
@@ -917,6 +922,7 @@ class StatementProcessor:
         self._flag_inline_unseeded_fit(
             metrics, code, _parsed_tree, outputs, allow_random, is_hit=False,
         )
+        self._flag_observed_hidden_draw(metrics, code, outputs, skip_cache=skip_cache)
         metrics['status'] = CacheStatus.COMPUTED
         metrics['evaluated_vars'] = list(outputs) if outputs else []
         metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
@@ -1239,6 +1245,82 @@ class StatementProcessor:
             self._warn_stale_estimator_fit(code, fits, allow_random)
         else:
             self._warn_unseeded_estimator_fit(code, fits, allow_random)
+
+    def _observe_statement_rng(self, pre_rng: dict) -> None:
+        """Record what this statement DREW from the global RNG streams.
+
+        A module merely *imported* by the statement is newly present in the
+        post-snapshot, and ``rng_modules_changed`` reports that as changed (the
+        replay side wants to know), but an import is not a draw -- so it is
+        filtered out here.
+
+        Deliberately scoped to the statement's own execution, which is why this
+        does NOT yet replace the cell-level observer in ``cell_executor`` even
+        though it is strictly finer-grained. That one diffs the whole cell, so
+        its window also spans cash's OWN machinery: importing ``random`` in a
+        user cell gets recorded as that cell changing ``numpy.random``, because
+        cash happened to import numpy while handling the cell. The replay ledger
+        currently depends on those incidental entries -- dropping them (by
+        deriving the ledger from this observer instead) makes an
+        ``@cash:allow-random`` draw stop being served from cache, because the
+        position-restore path loses the upstream post-state it was relying on.
+        Merging the two observers therefore has to wait until replay no longer
+        depends on measuring cash's own work.
+
+        Never allowed to break execution: a capture failure just means this
+        statement reports no randomness.
+        """
+        try:
+            changed = rng_modules_changed(pre_rng, capture_rng_state())
+            self._observed_rng_draw = {m for m in changed if m in pre_rng}
+        except (TypeError, AttributeError):  # pragma: no cover - defensive
+            self._observed_rng_draw = set()
+
+    def _flag_observed_hidden_draw(
+        self, metrics: 'ProcessResult', code: str, outputs: set[str],
+        *, skip_cache: bool,
+    ) -> None:
+        """Stamp the unseeded pill for a draw only the runtime observer saw.
+
+        The AST detector (:meth:`_stamp_random_effect`) sees ``np.random.rand()``
+        spelled in the cell; object-introspection
+        (:meth:`_flag_inline_unseeded_fit`) sees a fitted estimator bound as an
+        output. Neither sees a draw hidden inside a called function --
+        ``x = make_data()`` where ``make_data`` does ``np.random.rand()``. The
+        before/after global-RNG diff captured in :meth:`_execute_statement`
+        does: the stream advanced with no name and no syntax to give it away.
+
+        Three gates keep this from mislabeling anything the other paths handle:
+
+        * Only when the value is FROZEN. A ``skip_cache`` statement recomputes
+          fresh every run, and a statement that binds no output caches nothing --
+          either way there is no frozen replay to warn about. That is exactly why
+          a bare, uncached ``model.fit()`` (mutates its receiver, binds nothing)
+          correctly shows no pill.
+        * Only draws the AST could NOT see. A draw the AST spelled out is already
+          classified -- seeded or not -- by :meth:`_stamp_random_effect` through
+          the session seed ledger, so overriding it here would mislabel a draw
+          from a module seeded in an *earlier* statement.
+        * Only genuinely unseeded modules. A hidden draw from a module already
+          seeded this session (the ``_rng_seed_epochs`` ledger) is reproducible.
+          A seeded estimator fit never touches the global stream at all, so it
+          never even reaches here.
+        """
+        if skip_cache or not outputs:
+            return
+        changed = getattr(self, '_observed_rng_draw', None)
+        if not changed:
+            return
+        try:
+            ast_draws = get_drawing_rng_modules(self._strip_control_markers(code))
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        seeded = set(self._rng_seed_epochs)
+        hidden_unseeded = changed - ast_draws - seeded
+        if not hidden_unseeded:
+            return
+        metrics['random_effect'] = 'draw'
+        metrics['random_unseeded'] = True
 
     def _warn_stale_estimator_fit(
         self, code: str, unseeded_fits: list[str], allow_random: bool,
@@ -2072,6 +2154,14 @@ class StatementProcessor:
         """
         start_time = time.time()
         accessed_files = set()
+        # Observe randomness the way we observe file access: snapshot the global
+        # RNG streams around execution so a before/after diff catches a draw that
+        # static analysis and object-introspection both miss -- one hidden inside
+        # a called function (``x = make_data()`` where make_data draws). Cleared
+        # up front so a statement that RAISES cannot leave the previous
+        # statement's draw attributed to it.
+        self._observed_rng_draw = set()
+        pre_rng = capture_rng_state()
 
         try:
             ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
@@ -2130,6 +2220,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
+                self._observe_statement_rng(pre_rng)
 
                 result = ExecutionResult(success=True)
 
@@ -2165,6 +2256,9 @@ class StatementProcessor:
         start_time = time.time()
         accessed_files = set()
         _FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
+        # Per-statement RNG observation, same as the sync path.
+        self._observed_rng_draw = set()
+        pre_rng = capture_rng_state()
 
         try:
             ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
@@ -2212,6 +2306,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
+                self._observe_statement_rng(pre_rng)
 
                 result = ExecutionResult(success=True)
 

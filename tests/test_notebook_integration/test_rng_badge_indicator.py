@@ -96,6 +96,51 @@ def test_inline_seeded_fit_not_flagged(nb_runner):
     assert 'c3-rng-warn"' not in html, "a seeded inline fit must not use the warn pill"
 
 
+_HELPER_UNSEEDED = (
+    "import numpy as np\n"
+    "def make_data():\n"
+    "    return np.random.rand(3)  # unseeded draw, hidden from the AST"
+)
+
+
+@pytest.mark.timeout(180)
+def test_helper_internal_unseeded_draw_flagged(nb_runner):
+    """A draw hidden inside a called function is caught by the runtime observer.
+
+    ``x = make_data()`` spells no ``np.random`` and binds a plain array (nothing
+    to introspect), so both static analysis and object-introspection are blind.
+    The before/after global-RNG diff sees the stream advance and flags the frozen
+    replay.
+    """
+    nb_runner.create_notebook([C_ON, _HELPER_UNSEEDED, "x = make_data()"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    html = _badge_html(nb_runner, 3)
+    assert ">unseeded<" in html, "helper-internal unseeded draw should show the unseeded pill"
+    assert "frozen replay" in html, "helper-internal draw drawer missing the frozen-replay note"
+
+
+@pytest.mark.timeout(180)
+def test_bare_uncached_fit_still_no_pill(nb_runner):
+    """A bare ``model.fit()`` is skip-cache (recomputes fresh) so nothing is frozen.
+
+    The observer sees the global stream advance, but the ``skip_cache`` gate keeps
+    the pill off: there is no frozen replay to warn about. This is the F2 case —
+    absence of the pill is correct, not a miss.
+    """
+    setup = (
+        "from sklearn.ensemble import RandomForestClassifier\n"
+        "from sklearn.datasets import make_classification\n"
+        "X, y = make_classification(n_samples=200, random_state=0)\n"
+        "clf = RandomForestClassifier(n_estimators=20)"
+    )
+    nb_runner.create_notebook([C_ON, setup, "clf.fit(X, y)"])  # bare, no @cash:cache-fit
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    html = _badge_html(nb_runner, 3)
+    assert 'class="c3-rng-pill' not in html, "an uncached bare fit must carry no random pill"
+
+
 @pytest.mark.timeout(180)
 def test_non_random_statement_has_no_chip(nb_runner):
     nb_runner.create_notebook([C_ON, "a = 1 + 1\nb = a * 2"])
