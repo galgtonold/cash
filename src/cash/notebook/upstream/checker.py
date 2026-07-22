@@ -13,7 +13,7 @@ from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, Upstrea
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
-from ..annotations import extract_annotations_for_statements
+from ..annotations import extract_annotations_for_statements, parse_annotation_line
 from ..randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
@@ -1624,6 +1624,29 @@ class UpstreamChecker:
         modules |= self._tracking_state.observed_rng_cells.get(digest, set())
         return modules
 
+    @staticmethod
+    def _opts_out_of_rng_rewind(cell_code: str) -> bool:
+        """True if *cell_code* carries ``# @cash:no-cache``.
+
+        The rewind is what freezes an unseeded value: the statement re-executes
+        but lands on the same stream position, so it redraws the same number.
+        Caching is not involved -- a cheap draw is under the persistence floor
+        and is never stored in the first place.
+
+        ``no-cache`` is the documented way to say "run this for real every
+        time", and the warning cash prints on a frozen draw names it directly.
+        So it has to switch the REWIND off, not just caching; otherwise the
+        statement dutifully re-executes, redraws the identical value, and the
+        one escape hatch users are told to reach for silently does nothing.
+        """
+        for line in cell_code.splitlines():
+            if not line.strip().startswith('#'):
+                continue
+            ann = parse_annotation_line(line)
+            if ann is not None and ann.no_cache:
+                return True
+        return False
+
     def _cell_touches_rng(self, src: str) -> bool:
         """True if *src* seeds or draws — statically or by prior observation."""
         if get_seeding_rng_modules(src) or get_drawing_rng_modules(src):
@@ -1646,6 +1669,8 @@ class UpstreamChecker:
         try:
             drawing = self._current_cell_drawing_modules(cell_code)
             if not drawing:
+                return
+            if self._opts_out_of_rng_rewind(cell_code):
                 return
             end = len(notebook_cells) if current_cell_idx is None else current_cell_idx
             # If an upstream seed is stale (edited-not-rerun), the whole chain of

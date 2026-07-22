@@ -229,6 +229,20 @@ The second is the one that catches a frozen Monte Carlo. On a restore, the value
 on screen is not what your code would produce if it ran — so re-running to "see
 how much it varies" measures nothing.
 
+!!! warning "A value can be frozen without being cached"
+
+    Caching is not the only thing that freezes a draw. To keep a re-executed
+    draw position-correct, cash rewinds the RNG to where the cell started — so
+    the statement genuinely re-runs and still returns the same number. A *cheap*
+    draw (`r = random.random()`) is under the [persistence
+    floor](cost-model.md) and is never cached at all, so it is frozen by the
+    rewind alone and only ever raises the first warning, never the "restored
+    from cache" one.
+
+    So don't read "no restore warning" as "this varies". If you want a draw to
+    genuinely redraw on every run, say so — `# @cash:no-cache` switches off the
+    rewind as well as caching, and is the only thing that does.
+
 Both fire **once per statement per session**, not once per run: re-running an
 unchanged cell a third time stays quiet, and editing the statement makes it warn
 again. A random draw inside a loop body warns once, not once per iteration.
