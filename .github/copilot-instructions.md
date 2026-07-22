@@ -260,6 +260,37 @@ When returning from `process_statement()` in `statement/processor.py`, include:
 - **Kernel pooling**: DISABLED - caused hanging and zombie processes. Each test gets a fresh kernel
 - **Quick feedback loop**: Run subset of tests during development, full suite before completion
 
+## Prove a new test can fail
+
+A test written alongside a fix must be shown to fail **without** it:
+
+```bash
+python scripts/fails_first.py tests/test_core/test_my_new_guard.py
+```
+
+It stashes `src/`, runs the tests, restores, and exits non-zero if they all
+passed — i.e. if they never exercised the fix. This is not ceremony; vacuously
+green tests have shipped here repeatedly, in four recurring shapes:
+
+1. **The mechanism never engages.** Cross-process persistence has a ~0.1 s
+   compute floor, so a cached function cheaper than that is never written to
+   disk — a staleness test over two processes then passes whether or not the
+   bug exists. Use `tests.conftest.ABOVE_PERSISTENCE_FLOOR_S` for the sleep, and
+   assert the body ran exactly once across runs so you *know* it cached.
+2. **Empty input trivially satisfies the assertion.** "Is this output
+   encodable / valid / clean?" is true of an empty string, so a harness that
+   silently executed nothing looks green. Assert the input is non-empty first.
+3. **A different gate is substituted for the real one.** `mkdocs build
+   --strict` checks links and nav and never executes a python fence; only
+   `pytest tests/docs/` does. Passing one says nothing about the other.
+4. **State is checked instead of behaviour.** Asserting a policy object exists
+   passes even when nothing calls it. Drive the behaviour across the boundary
+   you care about.
+
+For an exclusion or filter, add a **positive control** in the same test (assert
+the thing that must survive is still there), or the assertion passes when
+everything is excluded.
+
 ## Common Pitfalls
 - **File paths**: Always normalize paths (`path.replace('\\', '/')`) for cross-platform cache key consistency
 - **Windows file locking**: Use retry loops when deleting temp directories in tests

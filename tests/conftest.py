@@ -513,3 +513,21 @@ def pytest_runtest_logreport(report):
     if report.when == "teardown":
         # Back to the default limit; the next test declares its own.
         _STALL_WATCHDOG.set_allowance(None)
+
+
+# ---------------------------------------------------------------------------
+# Persistence-floor constants for tests.
+#
+# Cross-process persistence has a ~0.1 s compute floor (see
+# ``cash.backends.factory._SMART_PERSIST_COMPUTE_FLOOR_S``): a result cheaper
+# than that is never written past RAM. A test that spawns a second process and
+# asserts something about a *cached* value therefore proves nothing unless the
+# work exceeds the floor -- the second process simply recomputes, and the
+# assertion holds whether or not the bug under test exists. Two brand-new tests
+# passed against unfixed source exactly this way.
+#
+# Use ABOVE_PERSISTENCE_FLOOR_S for the sleep, and assert the body ran once
+# across the runs so the test also proves the value was genuinely cached.
+# ---------------------------------------------------------------------------
+PERSISTENCE_FLOOR_S = 0.1
+ABOVE_PERSISTENCE_FLOOR_S = 0.2
