@@ -328,6 +328,7 @@ from ..cacheability_decision import (
 )
 from ..purity import analyze_function_purity
 from ..randomness import (
+    publish_seed_epochs,
     observed_rng_reads,
     entropy_write_lineage,
     get_entropy_reseed_modules,
@@ -407,6 +408,10 @@ class StatementProcessor:
         self.function_tracker = FunctionTracker()
         # module -> cache key of the seeding statement in force (CAS-223).
         self._rng_seed_epochs: dict[str, str] = {}
+        # Publish by reference so `@cash.cache` can see a seed change too:
+        # the decorator consumes the same global stream but had no view of
+        # this ledger, and served a model trained under the previous seed.
+        publish_seed_epochs(self._rng_seed_epochs)
         # Outputs of the statement-level RNG observer (see
         # _observe_statement_rng): what the LAST statement drew, read by
         # _flag_observed_hidden_draw; and the current cell's accumulation,

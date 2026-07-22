@@ -523,6 +523,9 @@ class Cash:
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (CAS-107 global folding)
         self._global_read_cache: dict = {}
+        # func_name -> RNG modules that function was OBSERVED drawing from.
+        # Learned on a miss; only these functions get a seed-epoch in their key.
+        self._rng_drawing_funcs: dict[str, set[str]] = {}
         # (module_global, attribute) read pairs per code object; see
         # _read_module_attr_pairs.
         self._module_attr_cache: dict = {}
@@ -947,6 +950,116 @@ class Cash:
             self._own_pins[id(func)] = pin
         return pin
 
+    def _fold_rng_epoch(self, func_name: str, state_hash: str) -> str:
+        """Fold the current seed epoch into the key, for RNG-drawing functions.
+
+        A function that draws from the global stream has an input the key never
+        saw. Change ``np.random.seed(12345)`` to ``seed(999)``, re-run, and the
+        model trained under the old seed came straight back, silently, with a
+        green badge -- on the exact idiom ``cash.help()`` rule 4 recommends.
+
+        Deliberately narrow on three axes:
+
+        * Only functions OBSERVED to draw (``_rng_drawing_funcs``), so every
+          other key is byte-identical to before.
+        * Only the *epoch*, never the raw RNG state -- the state advances on
+          every draw, so keying on it would miss forever.
+        * Empty when the module is unseeded, so an unseeded sample keeps being
+          replayed. That is the freeze contract, and it is what makes caching an
+          expensive unseeded draw still worth it.
+
+        The verdict is learned on a miss, so the call that first reveals the
+        draw has already been stored under an epoch-free key; the next call
+        recomputes once and is stable from then on.
+        """
+        modules = self._rng_drawing_funcs.get(func_name)
+        if modules is None:
+            modules = self._load_rng_draw_marker(func_name)
+        if not modules:
+            return state_hash
+        try:
+            from cash.notebook.randomness import seed_epoch_component
+            component = seed_epoch_component(modules)
+        except ImportError:  # pragma: no cover - notebook extra absent
+            return state_hash
+        if not component:
+            return state_hash
+        return hashlib.sha256(f"{state_hash}{component}".encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _rng_marker_key(func_name: str) -> str:
+        """Backend key for the "this function draws" verdict."""
+        return f"cash:rngdraw:{func_name}"
+
+    def _load_rng_draw_marker(self, func_name: str) -> set[str]:
+        """Read the persisted draw verdict, caching the answer for this process.
+
+        The verdict is learned by OBSERVING a call, so it lives in memory -- and
+        a kernel restart or a fresh `python run.py` throws it away. That is fatal
+        for the case this exists to fix: restart-and-run-all gets exactly one
+        call per function, so an in-memory-only verdict is never applied and the
+        stale value comes straight back.
+
+        A tiny per-function marker survives the process and can be read BEFORE
+        the real key is built, which the entry's own metadata cannot (that would
+        need the key it is supposed to inform). One backend read per function per
+        process; misses are remembered as empty so it is not retried.
+        """
+        cached = self._rng_drawing_funcs.get(func_name)
+        if cached is not None:
+            return cached
+        modules: set[str] = set()
+        try:
+            stored = self.backend.get(self._rng_marker_key(func_name))
+            # Backends answer with ``(metadata, value)``; unwrap before reading.
+            # Treating the pair itself as the payload silently yielded an empty
+            # set, so every restart re-learned nothing and the stale value came
+            # back -- the whole point of persisting the marker.
+            if (isinstance(stored, tuple) and len(stored) == 2
+                    and isinstance(stored[0], dict)):
+                stored = stored[1]
+            if isinstance(stored, (set, frozenset, list, tuple)):
+                modules = {m for m in stored if isinstance(m, str)}
+        except Exception:  # noqa: BLE001 - a marker miss must never break a call
+            modules = set()
+        self._rng_drawing_funcs[func_name] = modules
+        return modules
+
+    def _store_rng_draw_marker(self, func_name: str, modules: set[str]) -> None:
+        """Persist the verdict so the next process applies it on its first call."""
+        try:
+            self.backend.set(self._rng_marker_key(func_name), set(modules))
+        except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
+            logger.debug("could not persist RNG draw marker for %s", func_name)
+
+    def _note_rng_draw(self, func_name: str, pre_state: dict | None) -> None:
+        """Record which global RNG modules *func_name* just advanced."""
+        if pre_state is None:
+            return
+        try:
+            from cash.notebook.randomness import capture_rng_state, rng_modules_changed
+            changed = rng_modules_changed(pre_state, capture_rng_state())
+        except (ImportError, TypeError, AttributeError):  # pragma: no cover
+            return
+        # A module merely imported by the call is newly present rather than
+        # advanced; only count streams that already existed.
+        drew = {m for m in changed if m in pre_state}
+        if not drew:
+            return
+        known = self._rng_drawing_funcs.setdefault(func_name, set())
+        if drew - known:
+            known.update(drew)
+            self._store_rng_draw_marker(func_name, known)
+
+    @staticmethod
+    def _capture_rng_pre_state() -> dict | None:
+        """Snapshot the global RNG streams, or None if unavailable."""
+        try:
+            from cash.notebook.randomness import capture_rng_state
+            return capture_rng_state()
+        except (ImportError, TypeError, AttributeError):  # pragma: no cover
+            return None
+
     def _resolve_cache_key(
         self,
         func: Callable,
@@ -981,6 +1094,7 @@ class Cash:
             current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
+            current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
@@ -1483,8 +1597,12 @@ class Cash:
                 from cash.notebook.file_tracker import FileAccessTracker
                 from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                # Watch the global RNG across the call: a draw inside the body is
+                # an input the key cannot see statically (CAS-234).
+                rng_pre = self._capture_rng_pre_state()
                 with tracker:
                     res = func(*args, **kwargs)
+                    self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
                     if is_iter:
                         # A generator is lazy: its file reads happen while it is
@@ -1674,8 +1792,10 @@ class Cash:
                 from cash.notebook.file_tracker import FileAccessTracker
                 from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                rng_pre = self._capture_rng_pre_state()
                 with tracker:
                     res = await func(*args, **kwargs)
+                    self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
                     if is_iter:
                         # A returned sync generator is lazy - materialize its chunks

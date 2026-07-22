@@ -1648,6 +1648,47 @@ def rng_virtual_var(module: str) -> str:
     return f"__cash_rng__{module}"
 
 
+# ---------------------------------------------------------------------------
+# Seed-epoch registry.
+#
+# The statement engine owns the ledger (a seed opens a new epoch for its module,
+# valued by the seeding statement's cache key). It was reachable only from
+# ``StatementProcessor``, so ``@cash.cache`` -- which consumes the same global
+# stream -- had no way to see that the seed had changed, and served a model
+# trained under the previous one.
+#
+# The processor PUBLISHES its dict here by reference, so this is a view onto the
+# live ledger rather than a second copy that could drift. A fresh processor
+# replaces the pointer, which also keeps tests isolated.
+# ---------------------------------------------------------------------------
+_ACTIVE_SEED_EPOCHS: dict[str, str] | None = None
+
+
+def publish_seed_epochs(epochs: dict[str, str] | None) -> None:
+    """Expose the statement engine's live seed ledger to other front-ends."""
+    global _ACTIVE_SEED_EPOCHS
+    _ACTIVE_SEED_EPOCHS = epochs
+
+
+def seed_epochs() -> dict[str, str]:
+    """Snapshot of the current seed epoch per RNG module (may be empty)."""
+    return dict(_ACTIVE_SEED_EPOCHS or {})
+
+
+def seed_epoch_component(modules: set[str]) -> str:
+    """Cache-key fragment for *modules*, or "" when none of them is seeded.
+
+    Empty when unseeded, so a function that draws from an unseeded stream keeps
+    the key it has today: the freeze contract still applies and the value is
+    replayed. Only an actual seed -- or a change to one -- moves the key.
+    """
+    if not modules:
+        return ""
+    epochs = _ACTIVE_SEED_EPOCHS or {}
+    parts = [f"{m}:{epochs[m]}" for m in sorted(modules) if m in epochs]
+    return ":rng:" + ":".join(parts) if parts else ""
+
+
 def observed_rng_reads(tracking_state, code: str) -> set[str]:
     """Virtual RNG variables *code* reads by prior runtime OBSERVATION.
 
