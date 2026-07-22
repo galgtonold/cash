@@ -106,7 +106,7 @@ def mark_stateful(func: Any) -> Any:
         pass
     return func
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 # Lazy-initialized global instance (created on first access)
 _global_cash = None

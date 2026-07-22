@@ -5,9 +5,74 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-07-23
+
+The first public release. `0.1.0` was published to Test PyPI only; an
+adversarial testing round against that build found the correctness and
+packaging bugs fixed below, so the first release anyone installs from PyPI
+is `0.1.1`.
+
+### Fixed
+
+**Randomness correctness**
+- **A seed change now invalidates a cached result that depends on it.**
+  Editing `np.random.seed(12345)` to `seed(999)` and re-running used to serve
+  the value computed under the old seed — silently, with a "restored" badge —
+  because a draw hidden inside a called function (an sklearn `fit()` with no
+  `random_state`) is only discovered while the statement runs, after its cache
+  key was built. That key carried no seed information, so every later run
+  rebuilt it and matched the stale entry, and a kernel restart made it certain.
+  Cash now declines to store the entry on the run that first discovers the
+  draw; the next run keys it correctly. Unseeded draws are unaffected — they
+  are still frozen and replayed from the first call.
+- Draws hidden inside a called function are now visible to the cache key in
+  every engine (runtime and the upstream simulation), so a re-seed above such a
+  statement reaches it.
+- `np.random.seed(None)` (and bare `seed()`) now warns that cached values below
+  it cannot be both fresh and reproducible, and names the two ways out
+  (`# @cash:no-cache`, or a fixed-integer seed). Cash cannot make a
+  re-randomised stream and a cached value agree, so it says so rather than
+  silently serving a value that describes a stream that no longer exists.
+
+**Dependency tracking**
+- A `@cash.cache` function that reads a constant through an imported module
+  (`import conf; conf.RATE`) now invalidates when that constant changes.
+  Previously only `from conf import RATE` was tracked, so the same dependency
+  was followed or not depending on the import spelling. One level of recursion
+  also covers `conf.get_rate()` whose source is unchanged but whose returned
+  constant is not. Standard-library and site-packages modules are excluded.
+
+**Packaging and tooling**
+- `cash.help()` no longer crashes on a default Windows console: the guide's
+  arrows and dashes are degraded to what a legacy code page can render. This is
+  the first call the docs tell coding agents to make.
+- The text badge (`%cash_badge print`, the mode meant for headless and agent
+  runs) is now ASCII-only. Its emoji were written into the notebook by the
+  kernel and then crashed whatever read the notebook back on a legacy code
+  page — a traceback instead of a badge, for exactly its intended audience.
+- The source distribution no longer bundles stray local virtualenvs (they were
+  25 MB of a 36 MB archive; a nested `.gitignore` hid them from `git` but not
+  from the build).
+- `cash.help()` and `%cash_stats` no longer point at a docs page and a magic
+  (`%cash_admin`) that do not exist; both now point at what does.
+
+**Persistence policy**
+- Corrected `smart_persistence=False` and the `cash info` output, which
+  described a compute-time threshold the cost model stopped consulting; the
+  0.1 s smart-persistence floor the default backend actually uses is now
+  covered by a test.
+
+### Added
+
+- `cash.help()` gains a coding-agent guide, surfaced through `llms.txt`; the
+  "How Cash Works" documentation section; and a warning when `seed(None)` is
+  used with downstream caching (see above).
+
+---
+
 ## [0.1.0] - 2026-07-22
 
-First public release.
+Test PyPI only — never released to PyPI. See `0.1.1`.
 
 Cash caches expensive work in Jupyter notebooks and Python functions, and
 figures out on its own when a cached result is still valid. In a notebook it

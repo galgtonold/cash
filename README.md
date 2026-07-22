@@ -205,7 +205,7 @@ To wipe the cache: delete `.cash/` or run `%cash_repair --full`.
 
 ## Status
 
-**Pre-release / work in progress.** Cash has not been published to PyPI yet; `0.1.0` will be the first release anyone can install. The public API is stabilizing, but anything — including the cache format — may break before then; assume `%cash_repair --full` after upgrading.
+**Pre-release / work in progress.** Cash has not been published to PyPI yet; `0.1.1` will be the first release anyone can install (`0.1.0` reached Test PyPI only). The public API is stabilizing, but anything — including the cache format — may break before then; assume `%cash_repair --full` after upgrading.
 
 We want bug reports. The badge has a "Report a bug" button; or run `%cash_feedback`; or open an issue on [GitHub](https://github.com/galgtonold/cash/issues).
 
