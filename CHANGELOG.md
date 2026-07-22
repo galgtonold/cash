@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-07-20
+## [0.1.0] - 2026-07-22
 
 First public release.
 
@@ -35,6 +35,22 @@ that line recomputes — across kernel restarts, with no manual pickling.
 - Per-statement annotations: `# @cash:no-cache`, `# @cash:persist`,
   `# @cash:cache-fit`.
 
+**Randomness**
+- Random draws are tracked. Editing a `seed(...)` invalidates the draws below
+  it — including downstream statements that would otherwise have been served
+  from cache — and a draw that has to re-run has its seed re-established first,
+  so it reproduces the value it had before.
+- Draws hidden inside a called function are caught too: cash compares the global
+  RNG state across each statement, so a helper that draws internally is seen
+  even though the statement spells no `random` call.
+- The badge carries a per-statement pill — `seed`, `random`, or `unseeded` —
+  and explains a re-run it had to do to restore the stream.
+- An **unseeded** draw is flagged, because its cached value is a frozen replay:
+  re-running the cell returns the first value again rather than a new one. This
+  is by design — it is what makes a notebook reproducible — but it is surfaced
+  loudly rather than left implicit. `# @cash:no-cache` opts a statement out and
+  makes it draw fresh each time.
+
 **Backends**
 - InMemory, File, Redis, S3, and a Tiered backend (the default) with a
   cost-model-driven persistence policy that decides what is worth writing to
@@ -52,6 +68,9 @@ that line recomputes — across kernel restarts, with no manual pickling.
 - `cash.CashWarning` and subclasses are exposed at the top level, so a project
   can turn cache-ineffectiveness into a CI failure via
   `warnings.filterwarnings`.
+- `cash.help()` prints an orientation summary, and `docs/for-coding-agents.md`
+  (surfaced through `llms.txt`) is a single-page reference written for coding
+  agents, which do not see the badge a human reads.
 
 ### Notes
 

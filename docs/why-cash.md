@@ -224,11 +224,12 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 
 ### Production readiness
 
-??? question "Is beta safe for real work?"
-    Yes for notebook use; the public beta has comprehensive unit + integration
-    test coverage (the test suite is hundreds of integration tests, many
+??? question "Is a 0.x release safe for real work?"
+    Yes for notebook use; `0.1.0` ships with comprehensive unit + integration
+    test coverage (the test suite is thousands of integration tests, many
     derived from real-world bug reports). Treat it like any other library
-    you'd pin a version of. The [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
+    you'd pin a version of — this is a `0.x` release, so the API may change
+    between minor versions. The [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
     documents breaking changes between releases.
 
 ??? question "How do I force a fresh run?"
