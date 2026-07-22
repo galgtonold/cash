@@ -399,6 +399,9 @@ class StatementProcessor:
         # warned about so a 1000-iteration loop warns once, not 1000 times.
         self._persist_bytes_by_stmt: dict[str, int] = {}
         self._warned_persist_amplification: set[str] = set()
+        # Source hashes of entropy-reseed statements already warned about, so the
+        # "seed(None) does not make everything below it fresh" note fires once.
+        self._warned_entropy_reseed: set[str] = set()
 
         self.analytics_manager = AnalyticsManager()
 
@@ -567,6 +570,7 @@ class StatementProcessor:
         """
         effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
+        self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -791,6 +795,7 @@ class StatementProcessor:
         """
         effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
+        self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
             'status': CacheStatus.UNKNOWN,
             'execution_time': 0.0,
@@ -1067,6 +1072,45 @@ class StatementProcessor:
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Randomness detection failed for statement", _LOG_PROCESSOR)
             return []
+
+    def _warn_entropy_reseed(self, code: str) -> None:
+        """Warn that ``seed(None)`` cannot make cached values below it fresh.
+
+        An entropy reseed (``np.random.seed(None)`` / bare ``seed()``) asks for a
+        different stream every run. But cash caches downstream results, and a
+        value whose lineage is source-derived rather than stream-derived -- a
+        model from an in-place ``fit()``, and every statement that reads it -- is
+        frozen from the run that first computed it. So the user gets a genuinely
+        new stream AND a stale cached value describing the previous one, and the
+        two silently disagree. No cache key can resolve that: making the value
+        fresh-per-run stops it converging (a restore would re-run the producer
+        and mint yet another result). The honest fix is to say so.
+
+        Once per reseed statement, and never fatal -- advisory only.
+        """
+        try:
+            stripped = self._strip_control_markers(code)
+            if not get_entropy_reseed_modules(stripped):
+                return
+            digest = hashlib.sha256(stripped.encode('utf-8')).hexdigest()
+            if digest in self._warned_entropy_reseed:
+                return
+            self._warned_entropy_reseed.add(digest)
+            import warnings
+
+            from cash.notebook.randomness import CashRandomnessWarning
+            warnings.warn(
+                "Cash: seed(None) asks for a different random stream each run, but "
+                "cash caches downstream results -- a cached value below it is "
+                "frozen from the run that computed it, not redrawn, so what you see "
+                "may describe a stream that no longer exists. Put `# @cash:no-cache` "
+                "on values that must reflect the fresh stream, or seed with a fixed "
+                "integer if you want them reproducible.",
+                CashRandomnessWarning,
+                stacklevel=2,
+            )
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            logger.debug("%s Entropy-reseed warning failed for statement", _LOG_PROCESSOR)
 
     def _stamp_random_effect(
         self, metrics: 'ProcessResult', code: str,
