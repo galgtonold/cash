@@ -328,6 +328,10 @@ from ..cacheability_decision import (
 )
 from ..purity import analyze_function_purity
 from ..randomness import (
+    observed_rng_reads,
+    entropy_write_lineage,
+    get_entropy_reseed_modules,
+    rng_virtual_var,
     RandomnessDetector,
     capture_object_rng_states,
     capture_rng_state,
@@ -1251,7 +1255,7 @@ class StatementProcessor:
         else:
             self._warn_unseeded_estimator_fit(code, fits, allow_random)
 
-    def _observe_statement_rng(self, pre_rng: dict) -> None:
+    def _observe_statement_rng(self, pre_rng: dict, code: str | None = None) -> None:
         """Record what this statement did to the global RNG streams.
 
         THE RNG observer: one before/after diff per statement, serving both
@@ -1282,8 +1286,39 @@ class StatementProcessor:
                 self._cell_rng_pre = pre_rng
             self._cell_rng_changed |= changed
             self._cell_rng_post = post
+            self._record_hidden_statement_draws(code, self._observed_rng_draw)
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             self._observed_rng_draw = set()
+
+    def _record_hidden_statement_draws(self, code: str | None, drew: set[str]) -> None:
+        """Remember that *code* drew from RNG modules its AST does not mention.
+
+        ``rf4.fit(X, y)`` spells no ``np.random`` yet consumes the global stream.
+        Until this ledger existed the observation fed only the badge, so the
+        statement never read its module's virtual RNG variable and a re-seed
+        above it could not reach it -- its consumers kept hitting across a
+        stream that no longer existed (CAS-233).
+
+        Recorded for EVERY statement, including skip-cache ones: a bare
+        ``model.fit()`` is not cached itself, but it is exactly the statement
+        whose consumers must be invalidated.
+        """
+        if not code or not drew:
+            return
+        try:
+            visible = get_drawing_rng_modules(self._strip_control_markers(code))
+        except (SyntaxError, ValueError, AttributeError, RecursionError):
+            return
+        hidden = set(drew) - set(visible)
+        if not hidden:
+            return
+        digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
+        ledger = self._tracking_state.observed_rng_statement_draws
+        ledger[digest] = ledger.get(digest, set()) | hidden
+
+    def _observed_rng_reads(self, code: str) -> set[str]:
+        """Delegates to the shared helper so all engines agree exactly."""
+        return observed_rng_reads(self._tracking_state, code)
 
     def begin_cell_rng_observation(self) -> None:
         """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
@@ -2243,7 +2278,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
-                self._observe_statement_rng(pre_rng)
+                self._observe_statement_rng(pre_rng, code)
 
                 result = ExecutionResult(success=True)
 
@@ -2329,7 +2364,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
-                self._observe_statement_rng(pre_rng)
+                self._observe_statement_rng(pre_rng, code)
 
                 result = ExecutionResult(success=True)
 
@@ -2953,7 +2988,11 @@ class StatementProcessor:
         # see a phantom variable. Its lineage ALSO reaches the draw's OUTPUT
         # lineage (via capture_and_track_variables, which reads the same helper),
         # so a seed change propagates to everything cached downstream.
-        key_inputs = inputs | hidden_lineage_reads(code)
+        # ...plus the modules a PRIOR run observed this statement drawing from
+        # without saying so in its AST (``model.fit()``). Without this the
+        # virtual RNG variable has no reader here, so an upstream re-seed cannot
+        # propagate and the statement's consumers keep hitting (CAS-233).
+        key_inputs = inputs | hidden_lineage_reads(code) | self._observed_rng_reads(code)
 
         try:
             cache_key, source_hash, _, _, _ = compute_cache_key(
@@ -2981,10 +3020,25 @@ class StatementProcessor:
         # draws at once keys on the state it INHERITS, not the one it opens. The
         # ``_rng_seed_epochs`` ledger is still maintained for restore.py's
         # value-side replay guard (the RNG STATE axis, separate from lineage).
+        # An ENTROPY reseed (``seed(None)`` / ``seed()``) is the one case where a
+        # key-derived lineage is wrong. The user is asking for a different stream
+        # on every run, so the values computed after it are NOT replayable: the
+        # statement's key is identical run to run, so downstream consumers kept
+        # hitting and reported numbers describing a stream that no longer existed
+        # (CAS-233 -- a re-fit model whose cached accuracy described the previous
+        # one). Give the virtual variable a value that is fresh per execution so
+        # everything downstream of the reseed recomputes.
+        entropy_modules = get_entropy_reseed_modules(code)
+        entropy_vars = {rng_virtual_var(m) for m in entropy_modules}
         for var in hidden_lineage_writes(code):
-            self.variable_lineage[var] = hidden_write_lineage(cache_key)
+            self.variable_lineage[var] = (
+                entropy_write_lineage() if var in entropy_vars
+                else hidden_write_lineage(cache_key)
+            )
         for module in get_seeding_rng_modules(code):
-            self._rng_seed_epochs[module] = cache_key
+            self._rng_seed_epochs[module] = (
+                entropy_write_lineage() if module in entropy_modules else cache_key
+            )
 
         hash_time = time.time() - t2
         return inputs, outputs, source_hash, cache_key, analysis_time, hash_time

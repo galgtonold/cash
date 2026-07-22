@@ -3,6 +3,7 @@ from __future__ import annotations
 """Detection of unseeded random calls that compromise cache reproducibility."""
 
 import ast
+import secrets
 import hashlib
 import inspect
 import logging
@@ -225,6 +226,11 @@ class RandomnessVisitor(ast.NodeVisitor):
     def __init__(self):
         self.random_calls: list[RandomnessCallInfo] = []
         self.seed_calls: list[tuple[str, int]] = []  # (module, lineno)
+        # Seeds that RE-SEED FROM ENTROPY -- ``seed()`` / ``seed(None)``.
+        # The opposite of a reproducibility request: the user is asking for a
+        # different stream on every run, so the values below such a call must
+        # not be replayed from cache.
+        self.entropy_seed_calls: list[tuple[str, int]] = []  # (module, lineno)
         self.imports: dict = {}  # name -> module mapping
         # RNG carriers bound in THIS source: name -> (kind, seeded).
         self.carrier_assigns: dict[str, tuple[str, bool]] = {}
@@ -594,6 +600,8 @@ class RandomnessVisitor(ast.NodeVisitor):
                 # Exact match: module.seed
                 if resolved_full_name == f"{module}.{func_name}" and func_name in seed_funcs:
                     self.seed_calls.append((module, node.lineno))
+                    if _is_entropy_seed(node):
+                        self.entropy_seed_calls.append((module, node.lineno))
                     return
 
                 # Check if it matches a known full path seed like 'numpy.random.seed'
@@ -601,6 +609,8 @@ class RandomnessVisitor(ast.NodeVisitor):
                 for seed_func_signature in seed_funcs:
                      if resolved_full_name == f"{module}.{seed_func_signature}":
                          self.seed_calls.append((module, node.lineno))
+                         if _is_entropy_seed(node):
+                             self.entropy_seed_calls.append((module, node.lineno))
                          return
 
         # 2. Handle direct function imports
@@ -610,6 +620,8 @@ class RandomnessVisitor(ast.NodeVisitor):
                 for module, _seed_funcs in SEED_FUNCTIONS.items():
                     if imported_from == f"{module}.{func_name}":
                         self.seed_calls.append((module, node.lineno))
+                        if _is_entropy_seed(node):
+                            self.entropy_seed_calls.append((module, node.lineno))
                         return
 
 class _ScanResult(NamedTuple):
@@ -1553,6 +1565,44 @@ def get_drawing_rng_modules(code: str) -> set[str]:
     return {call.module for call in visitor.random_calls}
 
 
+def _is_entropy_seed(node: ast.Call) -> bool:
+    """True for ``seed()`` / ``seed(None)`` — a reseed from OS entropy.
+
+    ``seed(42)`` asks for reproducibility; ``seed(None)`` asks for the opposite,
+    explicitly. A variable argument (``seed(s)``) is treated as deterministic:
+    its value rides the statement's input lineage, which is what already makes
+    an edited ``SEED = 999`` invalidate.
+    """
+    if node.keywords:
+        for kw in node.keywords:
+            if kw.arg in (None, "seed", "a") and isinstance(kw.value, ast.Constant):
+                return kw.value.value is None
+    if not node.args:
+        return True
+    first = node.args[0]
+    return isinstance(first, ast.Constant) and first.value is None
+
+
+def get_entropy_reseed_modules(code: str) -> set[str]:
+    """Modules *code* re-seeds FROM ENTROPY (``np.random.seed(None)``).
+
+    Such a statement is a declaration that this run should differ from the last.
+    Cash's freeze contract covers draws with *no* seed at all; it must not
+    extend to a stream the user has explicitly re-randomised, or every value
+    computed after the reseed is replayed from a run whose stream no longer
+    exists. That is the CAS-233 failure: a re-fit model whose accuracy was
+    served from cache, so the printed metric described a model that had already
+    been replaced in the kernel.
+    """
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return set()
+    visitor = RandomnessVisitor()
+    visitor.visit(tree)
+    return {module for module, _lineno in visitor.entropy_seed_calls}
+
+
 def get_seeding_rng_modules(code: str) -> set[str]:
     """Modules *code* SEEDS (``np.random.seed(0)``, ``random.seed(0)``) — CAS-223.
 
@@ -1598,6 +1648,29 @@ def rng_virtual_var(module: str) -> str:
     return f"__cash_rng__{module}"
 
 
+def observed_rng_reads(tracking_state, code: str) -> set[str]:
+    """Virtual RNG variables *code* reads by prior runtime OBSERVATION.
+
+    ``model.fit()`` consumes the global stream while its AST says nothing, so
+    the runtime records what it saw and every engine reads that one ledger.
+
+    Deliberately shared by all three seams -- the runtime cache key, the runtime
+    output lineage, and the simulation. They must agree byte-for-byte (the
+    cache-key unification rule); when only the first one had it, the simulation
+    computed different keys and 65 integration tests failed. One function, so
+    they cannot drift apart again.
+    """
+    ledger = getattr(tracking_state, "observed_rng_statement_draws", None)
+    if not ledger or not code:
+        return set()
+    try:
+        digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
+    except (AttributeError, UnicodeEncodeError):
+        return set()
+    modules = ledger.get(digest)
+    return {rng_virtual_var(m) for m in modules} if modules else set()
+
+
 def hidden_lineage_reads(code: str) -> set[str]:
     """Virtual variables a statement READS: the RNG state a draw consumes.
 
@@ -1611,6 +1684,21 @@ def hidden_lineage_reads(code: str) -> set[str]:
 def hidden_lineage_writes(code: str) -> set[str]:
     """Virtual variables a statement PRODUCES: a ``seed()`` defines its RNG state."""
     return {rng_virtual_var(m) for m in get_seeding_rng_modules(code)}
+
+
+def entropy_write_lineage() -> str:
+    """Lineage for a stream the user explicitly re-randomised.
+
+    ``seed(None)`` states that this run should differ from the last, so the
+    virtual variable must NOT take a value derived from the statement's cache
+    key -- that key is byte-identical run to run, which is exactly what let
+    downstream consumers keep hitting across a genuinely new stream.
+
+    Fresh per call, so every consumer below the reseed recomputes. The
+    simulation cannot predict this value, and that is the correct outcome: it
+    sees a changed input and re-runs, which is the safe direction.
+    """
+    return "entropy:" + secrets.token_hex(16)
 
 
 def hidden_write_lineage(producing_key: str) -> str:

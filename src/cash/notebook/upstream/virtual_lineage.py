@@ -40,6 +40,7 @@ from ..cache_key import (
 from ..cache_status import CacheStatus
 from ..control_structures import extract_target_names, get_control_structure_type, is_control_structure
 from ..randomness import (
+    observed_rng_reads,
     hidden_lineage_reads,
     hidden_lineage_writes,
     hidden_write_lineage,
@@ -134,6 +135,15 @@ class VirtualLineage:
         self.vars_with_mutation_lineage = state.vars_with_mutation_lineage
         self.executed_input_lineages = state.executed_input_lineages
         self.mutation_verdicts = state.mutation_verdicts
+        # Runtime-observed hidden RNG draws, keyed by statement source hash.
+        # Read here for the same reason mutation_verdicts is: the simulation
+        # must reproduce the runtime's key inputs EXACTLY, or the two disagree
+        # and every affected statement looks changed.
+        self.observed_rng_statement_draws = state.observed_rng_statement_draws
+
+    def _observed_rng_reads(self, code: str) -> set[str]:
+        """Delegates to the shared helper so all engines agree exactly."""
+        return observed_rng_reads(self, code)
 
     def _mutation_receivers(self, stmt_code: str, tree: ast.Module) -> set[str]:
         """Receivers of standalone method calls in *tree* that mutate, per the
@@ -1713,7 +1723,7 @@ class VirtualLineage:
             # re-keys the draw and propagates to everything cached downstream); a
             # seed PRODUCES it. Kept out of the plain ``inputs`` set that feeds the
             # trace/cacheability. Mirrors the runtime seam byte-for-byte.
-            hidden_reads = hidden_lineage_reads(stmt_code)
+            hidden_reads = hidden_lineage_reads(stmt_code) | self._observed_rng_reads(stmt_code)
             hidden_writes = hidden_lineage_writes(stmt_code)
 
             # A bare ``seed()`` carries no output, so it would return below before

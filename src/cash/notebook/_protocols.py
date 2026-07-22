@@ -172,6 +172,16 @@ class TrackingState:
     # known after the cell has run once, exactly like a file dependency.
     observed_rng_cells: dict[str, set[str]] = field(default_factory=dict)
 
+    # sha256(STATEMENT source) -> RNG modules that statement drew from at runtime
+    # WITHOUT the draw being visible in its AST (``rf4.fit(X, y)``). The
+    # cell-level twin above drives the RNG rewind; this one drives the cache KEY:
+    # a hidden draw must read its module's virtual RNG variable, or a re-seed
+    # above it cannot reach it and its consumers keep hitting across a stream
+    # that no longer exists (CAS-233). Keyed by statement source hash, like
+    # ``mutation_verdicts``, so the simulation reproduces the runtime's decision.
+    # Only known after the statement has run once.
+    observed_rng_statement_draws: dict[str, set[str]] = field(default_factory=dict)
+
     # Written by StatementProcessor; read by CashMagics for badge display.
     # Accumulates all content hashes seen for a variable across executions.
     variable_hashes: dict[str, set[str]] = field(default_factory=dict)

@@ -104,6 +104,12 @@ class StatementLineageBuilder:
         # propagates to everything cached downstream. Kept OUT of the plain
         # ``inputs`` set so cacheability / derivation-edge / function-source logic
         # never sees a phantom variable -- it only augments the lineage build.
+        # NOTE: observed (AST-invisible) draws are deliberately NOT folded in
+        # here, though they ARE folded into the cache key. Making a mutated
+        # receiver's lineage fresh-per-run does not converge: the changed
+        # lineage makes the reconstruction re-run the producing fit, which mints
+        # yet another model, so a consumer never agrees with the value recorded
+        # beside it -- measured, it broke even the first clean run.
         lineage_inputs = inputs | hidden_lineage_reads(code)
 
         for var_name in outputs:
