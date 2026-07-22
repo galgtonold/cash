@@ -176,6 +176,29 @@ w = Widget()                     # cell 2 — re-run: count climbs past 2
 
 Note this needs the counter to be advanced from *both* cells. A class variable only appended to from one cell is handled correctly.
 
+### A function that calls one defined in a later cell
+
+cash follows dependencies *upward*. A function whose body calls a name bound in a
+**later** cell has a dependency pointing down the notebook, and editing that
+later function does not refresh the call site:
+
+```python
+def a(n): return b(n) * 2      # cell 1 — b doesn't exist yet
+def b(n): return n + 1         # cell 2
+r = a(3)                       # cell 3 -> 8
+
+# edit cell 2 to `return n + 10`, re-run cell 3 only -> still 8, not 26
+```
+
+Order is the whole story — write `b` **above** `a` and the same edit propagates
+correctly, because `def a` then names `b` as an ordinary input. This is not about
+recursion, though mutual recursion always trips it, since each function
+references the other before it exists.
+
+**What to do:** define a function above the ones that call it — the order Python
+readers expect anyway. If you must keep the order, re-run the defining cell (or
+`Run All`) after editing it rather than the call site alone.
+
 ### Background threads
 
 A thread that mutates data after the cell that created it has finished is outside cash's view entirely. Re-running an earlier cell can observe the mutated state instead of the state at that point in the notebook.

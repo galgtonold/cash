@@ -2802,6 +2802,16 @@ def _cell_alias_map(tree: ast.Module) -> dict[str, str]:
         if (isinstance(target, ast.Name) and isinstance(value, ast.Name)
                 and target.id != value.id):
             alias_map[target.id] = value.id
+        elif (isinstance(target, (ast.Tuple, ast.List))
+                and isinstance(value, (ast.Tuple, ast.List))
+                and len(target.elts) == len(value.elts)):
+            # NESTED 1:1 literal unpack -- ``(p, (q,)) = (x, (y,))``. Nesting
+            # changes the shape of the unpack, not the aliasing: every leaf still
+            # shares its partner's object. Binding only the outer level left
+            # ``q`` unmapped, so a mutation through it (``q.append(9)``) was not
+            # attributed to ``y`` and an idempotent re-run appended twice.
+            for elt_target, elt_value in zip(target.elts, value.elts):
+                _bind(elt_target, elt_value)
 
     for node in _module_level_stmts(tree.body):
         # Walrus binding in this statement's own expressions. (Nested control
@@ -2912,17 +2922,43 @@ def bare_alias_targets(tree: ast.Module | None) -> frozenset[str]:
         # every binding is its own pointer copy. Requires equal arity and bare
         # ``Name``\\ s on both sides (no ``*rest``, no computed element).
         if isinstance(value, (ast.Tuple, ast.List)) and len(node.targets) == 1:
-            target = node.targets[0]
-            if (isinstance(target, (ast.Tuple, ast.List))
-                    and len(target.elts) == len(value.elts)
-                    and all(isinstance(e, ast.Name) for e in target.elts)
-                    and all(isinstance(e, ast.Name) for e in value.elts)):
-                out.update(
-                    t.id for t, v in zip(target.elts, value.elts)
-                    if isinstance(t, ast.Name) and isinstance(v, ast.Name)
-                    and t.id != v.id
-                )
+            aliases = _literal_unpack_aliases(node.targets[0], value)
+            if aliases:
+                out.update(aliases)
     return frozenset(out)
+
+
+def _literal_unpack_aliases(target: ast.expr, value: ast.expr) -> set[str] | None:
+    """Names pointer-copied by a 1:1 literal unpack, recursing through nesting.
+
+    ``b, c = a, d`` binds every name to the very same object the matching RHS
+    name holds — and so does ``(p, (q,)) = (x, (y,))``. Nesting changes the shape
+    of the unpack, not the fact that each leaf is a pointer copy.
+
+    Handling only the FLAT form left the nested one looking like ordinary work,
+    so it kept its cache. A later mutation through the nested alias
+    (``q.append(9)``) was then recorded against a name cash did not know aliased
+    ``y``, and an idempotent re-run appended a second time — ``[3, 4, 9, 9]``.
+
+    Returns ``None`` when the shape is not a pure 1:1 literal unpack, which keeps
+    the all-or-nothing rule this generalises: one ``*rest`` or computed element
+    anywhere opts the whole statement out, exactly as before, so a genuinely
+    expensive element (``b, c = a, f()``) keeps its cache rather than being
+    refused because a sibling happened to be an alias.
+    """
+    if isinstance(target, ast.Name) and isinstance(value, ast.Name):
+        return {target.id} if target.id != value.id else set()
+    if (isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)):
+        found: set[str] = set()
+        for elt_target, elt_value in zip(target.elts, value.elts):
+            nested = _literal_unpack_aliases(elt_target, elt_value)
+            if nested is None:
+                return None
+            found |= nested
+        return found
+    return None
 
 
 def _is_free_reference_expr(node: ast.expr) -> bool:

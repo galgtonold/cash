@@ -176,7 +176,6 @@ def test_file_dependency_invalidation_integrated(statement_processor_fixture):
             os.remove(temp_path)
 
 
-@pytest.mark.xfail(reason="Known flaky: file dependency detection timing issue", strict=False)
 def test_file_dependency_quick_modification(statement_processor_fixture):
     """
     Regression test: File dependency invalidation should work even with quick modifications.
