@@ -591,3 +591,355 @@
 .md-typeset .note > summary::after {
   color: var(--cash-info);
 }
+
+/* ─── How Cash Works: core-loop step strip (Overview) ────────────────── */
+.cash-coreloop {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 1em 0 1.5em;
+}
+.cash-coreloop-step {
+  font-family: var(--cash-font-mono);
+  font-size: 13px;
+  padding: 4px 10px;
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg-section);
+  color: var(--cash-ink-2);
+  border: 1px solid var(--cash-rule-strong);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cash-coreloop-step {
+    animation: cash-coreloop-pulse 6s ease-in-out infinite;
+  }
+  .cash-coreloop-step:nth-child(1) { animation-delay: 0s; }
+  .cash-coreloop-step:nth-child(2) { animation-delay: 1.2s; }
+  .cash-coreloop-step:nth-child(3) { animation-delay: 2.4s; }
+  .cash-coreloop-step:nth-child(4) { animation-delay: 3.6s; }
+  .cash-coreloop-step:nth-child(5) { animation-delay: 4.8s; }
+  @keyframes cash-coreloop-pulse {
+    0%, 80%, 100% { background: var(--cash-bg-section); color: var(--cash-ink-2); border-color: var(--cash-rule-strong); }
+    10%, 20%      { background: var(--cash-green-bg);  color: var(--cash-green);  border-color: var(--cash-green); }
+  }
+}
+
+/* ─── How Cash Works: architecture flow diagram (Overview) ───────────── *
+ * Hand-built in HTML/CSS instead of an auto-laid-out Mermaid graph so the
+ * whole picture stays legible in the text column and reflows to a single
+ * column on small screens — no horizontal scroll, no zoom. All colours come
+ * from --cash-* tokens. */
+.cash-arch {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  margin: 1.5em 0;
+}
+.cash-arch-node {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 16px;
+  background: var(--cash-bg-section);
+  border: 1px solid var(--cash-rule-strong);
+  border-left: 3px solid var(--cash-ochre);
+  border-radius: var(--cash-radius-sm);
+  text-align: left;
+}
+.cash-arch-title {
+  font-weight: 700;
+  color: var(--cash-ink);
+  font-size: 15px;
+}
+.cash-arch-sub {
+  font-size: 13.5px;
+  color: var(--cash-ink-2);
+  line-height: 1.45;
+}
+.cash-arch-node code { font-size: 0.9em; }
+
+/* Entry sits muted; the coordinator and backend carry the green brand accent
+   to mark the start and end of the pipeline. */
+.cash-arch-entry { border-left-color: var(--cash-ink-4); }
+.cash-arch-hub,
+.cash-arch-backend {
+  background: var(--cash-green-bg);
+  border-left-color: var(--cash-green);
+}
+.cash-arch-hub .cash-arch-title,
+.cash-arch-backend .cash-arch-title { color: var(--cash-green); }
+
+/* The four coordinated jobs: 4-up on desktop, 2-up on tablets, stacked on phones. */
+.cash-arch-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+@media (max-width: 800px) {
+  .cash-arch-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .cash-arch-grid { grid-template-columns: 1fr; }
+}
+
+/* Vertical connector between stacked rows — a short line plus a chevron,
+   drawn in CSS so there's no image to load and nothing to scroll. */
+.cash-arch-arrow {
+  align-self: center;
+  width: 0;
+  height: 20px;
+  margin: 7px 0;
+  border-left: 2px solid var(--cash-rule-strong);
+  position: relative;
+}
+.cash-arch-arrow::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid var(--cash-rule-strong);
+  border-bottom: 2px solid var(--cash-rule-strong);
+  transform: translate(-50%, 1px) rotate(45deg);
+}
+
+/* ─── How Cash Works: cache-key segment breakdown (Decorator path) ───── *
+ * Replaces an ASCII-labelled code block. Each colon-separated segment of the
+ * decorator cache key gets its own cell so the label sits exactly under the
+ * value it names; the row stacks to a vertical list on narrow screens. */
+.cash-keybreak {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 6px;
+  margin: 1.5em 0;
+}
+.cash-keybreak-seg {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1 1 0;
+  min-width: 0;
+  padding: 8px 12px;
+  background: var(--cash-bg-section);
+  border: 1px solid var(--cash-rule-strong);
+  border-bottom: 3px solid var(--cash-ochre);
+  border-radius: var(--cash-radius-sm);
+  text-align: center;
+}
+.cash-keybreak-val {
+  font-family: var(--cash-font-mono);
+  font-size: 14px;
+  color: var(--cash-ink);
+  white-space: nowrap;
+}
+.cash-keybreak-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--cash-ochre);
+}
+.cash-keybreak-colon {
+  align-self: center;
+  font-family: var(--cash-font-mono);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--cash-ink-4);
+}
+@media (max-width: 600px) {
+  .cash-keybreak { flex-direction: column; }
+  .cash-keybreak-seg { text-align: left; }
+  .cash-keybreak-colon { display: none; }
+}
+
+/* ─── How Cash Works: invalidation playground (page 3) ───────────────── */
+.cash-ip-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 1em 0;
+}
+.cash-ip-trigger {
+  font-family: var(--cash-font-sans);
+  font-size: 13px;
+  padding: 6px 12px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg);
+  color: var(--cash-ink);
+  cursor: pointer;
+}
+.cash-ip-trigger:hover { border-color: var(--cash-ochre); }
+.cash-ip-trigger.active {
+  background: var(--cash-ochre-bg);
+  border-color: var(--cash-ochre);
+  color: var(--cash-ochre);
+  font-weight: 600;
+}
+.cash-ip-chain { display: flex; flex-direction: column; align-items: stretch; gap: 2px; margin: 1em 0; }
+.cash-ip-cell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+.cash-ip-cell code { background: transparent; padding: 0; }
+.cash-ip-cell.fresh { background: var(--cash-green-bg); border-color: var(--cash-green); }
+.cash-ip-cell.stale { background: var(--cash-changed-bg); border-color: var(--cash-changed); }
+.cash-ip-tag {
+  font-family: var(--cash-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.cash-ip-cell.fresh .cash-ip-tag { color: var(--cash-green); }
+.cash-ip-cell.stale .cash-ip-tag { color: var(--cash-changed); }
+.cash-ip-arrow { text-align: center; color: var(--cash-ink-4); font-size: 14px; line-height: 1; }
+.cash-ip-status {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cash-ink-2);
+  margin-top: 0.5em;
+  padding-top: 0.5em;
+  border-top: 1px solid var(--cash-rule);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .cash-ip-cell.stale { animation: cash-ip-ripple 0.5s ease; }
+  @keyframes cash-ip-ripple {
+    0%   { box-shadow: 0 0 0 0 rgba(230, 81, 0, 0.4); }
+    100% { box-shadow: 0 0 0 8px rgba(230, 81, 0, 0); }
+  }
+}
+
+/* ─── How Cash Works: cacheability checker (page 4) ──────────────────── */
+.cash-cacheability-checker {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 16px;
+  margin: 1.25em 0;
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .cash-cacheability-checker { grid-template-columns: 1fr; }
+}
+.cash-cc-list { display: flex; flex-direction: column; gap: 6px; }
+.cash-cc-snippet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 12px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg);
+  cursor: pointer;
+}
+.cash-cc-snippet code { background: transparent; padding: 0; font-size: 13px; }
+.cash-cc-snippet:hover { border-color: var(--cash-ochre); }
+.cash-cc-snippet.active { border-color: var(--cash-ink-2); box-shadow: inset 3px 0 0 0 var(--cash-ink-2); }
+.cash-cc-dot { width: 10px; height: 10px; border-radius: 50%; flex: 0 0 auto; }
+.cash-cc-dot.ok { background: var(--cash-green); }
+.cash-cc-dot.warn { background: var(--cash-ochre); }
+.cash-cc-dot.no { background: var(--cash-danger); }
+.cash-cc-panel {
+  padding: 14px 16px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+  background: var(--cash-bg-section);
+}
+.cash-cc-panel.ok { background: var(--cash-green-bg); border-color: var(--cash-green); }
+.cash-cc-panel.warn { background: var(--cash-ochre-bg); border-color: var(--cash-ochre); }
+.cash-cc-panel.no { background: var(--cash-changed-bg); border-color: var(--cash-danger); }
+.cash-cc-verdict { display: flex; align-items: baseline; gap: 4px; }
+.cash-cc-pill {
+  font-family: var(--cash-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: var(--cash-radius-sm);
+  color: #fff;
+}
+.cash-cc-panel.ok .cash-cc-pill { background: var(--cash-green); }
+.cash-cc-panel.warn .cash-cc-pill { background: var(--cash-ochre); }
+.cash-cc-panel.no .cash-cc-pill { background: var(--cash-danger); }
+.cash-cc-why { margin: 0.6em 0 0; font-size: 14px; line-height: 1.5; color: var(--cash-ink-2); }
+
+/* ─── How Cash Works: statement-pipeline strip (page 5, Tier-1) ──────── */
+.cash-stmt-flow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 1.25em 0;
+  padding: 12px 14px;
+  border: 1px solid var(--cash-rule);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg-section);
+}
+.cash-stmt-step {
+  font-family: var(--cash-font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-green);
+  background: var(--cash-green-bg);
+  color: var(--cash-green);
+}
+.cash-stmt-arrow { color: var(--cash-ink-4); font-size: 14px; }
+@media (prefers-reduced-motion: no-preference) {
+  .cash-stmt-step { animation: cash-stmt-pulse 5s ease-in-out infinite; }
+  .cash-stmt-step[data-step="1"] { animation-delay: 0s; }
+  .cash-stmt-step[data-step="2"] { animation-delay: 0.4s; }
+  .cash-stmt-step[data-step="3"] { animation-delay: 0.8s; }
+  .cash-stmt-step[data-step="4"] { animation-delay: 1.2s; }
+  .cash-stmt-step[data-step="5"] { animation-delay: 1.6s; }
+  @keyframes cash-stmt-pulse {
+    0%, 40%, 100% { background: var(--cash-green-bg); color: var(--cash-green); transform: translateY(0); }
+    8% { background: var(--cash-green); color: #fff; transform: translateY(-2px); }
+  }
+}
+
+/* ─── How Cash Works: promotion explorer (page 7) ────────────────────── */
+.cash-promotion-explorer {
+  margin: 1.25em 0;
+  padding: 16px;
+  border: 1px solid var(--cash-rule-strong);
+  border-radius: var(--cash-radius-sm);
+  background: var(--cash-bg-section);
+}
+.cash-pe-controls { display: flex; flex-wrap: wrap; gap: 18px; }
+.cash-pe-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 220px; }
+.cash-pe-cap { font-size: 13px; font-weight: 600; color: var(--cash-ink-2); }
+.cash-pe-cap output { font-family: var(--cash-font-mono); color: var(--cash-ink); }
+.cash-pe-field input[type="range"] { width: 100%; accent-color: var(--cash-green); }
+.cash-pe-panel {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--cash-radius-sm);
+  border: 1px solid var(--cash-rule-strong);
+  background: var(--cash-bg);
+}
+.cash-pe-panel.persist { background: var(--cash-green-bg); border-color: var(--cash-green); }
+.cash-pe-panel.ram { background: var(--cash-ochre-bg); border-color: var(--cash-ochre); }
+.cash-pe-pill {
+  display: inline-block;
+  font-family: var(--cash-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 8px;
+  border-radius: var(--cash-radius-sm);
+  color: #fff;
+}
+.cash-pe-panel.persist .cash-pe-pill { background: var(--cash-green); }
+.cash-pe-panel.ram .cash-pe-pill { background: var(--cash-ochre); }
+.cash-pe-why { margin: 0.6em 0 0; font-size: 14px; line-height: 1.5; color: var(--cash-ink-2); }

@@ -2,9 +2,9 @@
 
 The Python-side API for working with cash inside notebooks. For the
 user-facing magics (`%cash_on`, `%cash_stats`, etc.) see
-[Magic Commands](../magics.md); for the architectural deep-dive see
-[Notebook caching](../notebook_caching_api.md) and
-[Architecture](../notebook_caching_technical.md).
+[Magic Commands](../magics.md); for the user-guide API surface see
+[Notebook Caching](../notebook_caching_api.md); for the architectural
+deep-dive see [How Cash Works](../how-it-works/overview.md).
 
 This page covers programmatic entry points — useful when you're
 writing tooling around cash (custom dashboards, CI checks, notebook

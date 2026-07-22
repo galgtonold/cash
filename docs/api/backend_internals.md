@@ -68,7 +68,7 @@ The typed `CacheMetadata` dataclass (and the notebook layer's
 backends ever receive. Producers build one and call `.to_dict()` just
 before `set()`; consumers call `from_dict()` on what `get()` returns. The
 channel is polymorphic — both dataclass shapes plus backend-private keys
-flow through the same dict. See [ADR-014](../architecture_decisions.md)
+flow through the same dict. See [Where your cache lives](../how-it-works/storage.md)
 for the full rationale.
 
 Two wire-contract rules follow from this and matter to backend authors:

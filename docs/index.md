@@ -98,6 +98,6 @@ lineage(result) = hash(code + sorted(input_lineages) + file_deps)
 - [Tutorials — Feature Guides](tutorials/feature-guides/purity-decorators.md) — Deep dives on individual features (purity, backends, hashers, async, iterators, …)
 - [Tutorials — Use Cases](tutorials/use-cases/data-science.md) — End-to-end recipes for data science, LLM API calls, data engineering, scientific computing
 - [API Reference](api/index.md) — autodoc reference for every public symbol
-- [Architecture](notebook_caching_technical.md) — Technical deep dive
+- [How Cash Works](how-it-works/overview.md) — Technical deep dive
 - [Migration Guide](migration_guide.md) — Moving from lru_cache, joblib, etc.
 - [Contributing](contributing.md) — Development setup, testing, and code style

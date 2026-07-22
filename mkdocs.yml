@@ -39,6 +39,9 @@ extra_javascript:
   - javascripts/badge-iframe-resize.js
   - javascripts/why-cash-calculator.js
   - javascripts/why-cash-matrix.js
+  - javascripts/invalidation-playground.js
+  - javascripts/cacheability-checker.js
+  - javascripts/promotion-explorer.js
 
 plugins:
   - search
@@ -158,9 +161,15 @@ nav:
     - Exceptions & warnings: api/exceptions.md
     - Notebook integration: api/notebook.md
     - Experimental: api/experimental.md
-  - Technical Reference:
-    - Architecture: notebook_caching_technical.md
-    - Architecture Decisions: architecture_decisions.md
+  - How Cash Works:
+    - Overview: how-it-works/overview.md
+    - Cache keys, lineage & hashing: how-it-works/cache-keys-and-lineage.md
+    - Knowing when to recompute: how-it-works/invalidation.md
+    - Knowing when not to cache: how-it-works/safety.md
+    - The notebook path: how-it-works/notebook-path.md
+    - The decorator path: how-it-works/decorator-path.md
+    - Where your cache lives: how-it-works/storage.md
+    - Seeing what Cash did: how-it-works/inspecting.md
   - Contributing: contributing.md
 
 extra:

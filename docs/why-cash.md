@@ -187,7 +187,7 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     changes *or* any of its inputs change. Inputs are tracked by lineage
     hash, so a change three cells upstream still propagates. If a cell
     reads a file, cash hashes the file and invalidates if it changes.
-    See [Notebook caching — architecture](notebook_caching_technical.md).
+    See [Knowing when to recompute](how-it-works/invalidation.md).
 
 ??? question "What about in-place mutations like `df['x'] = 0`?"
     Cash uses AST-based mutation detection to flag in-place mutations
@@ -272,7 +272,7 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
   <div class="cash-cta-card secondary">
     <h3>Go deeper →</h3>
     <p>Read how lineage tracking, upstream simulation, and the cache key work under the hood.</p>
-    <p><a href="notebook_caching_technical.md"><strong>Architecture</strong></a> · <a href="architecture_decisions.md"><strong>ADRs</strong></a> · <a href="cost-model.md"><strong>Cost model</strong></a></p>
+    <p><a href="how-it-works/overview.md"><strong>How Cash Works</strong></a> · <a href="cost-model.md"><strong>Cost model</strong></a></p>
   </div>
 </div>
 
