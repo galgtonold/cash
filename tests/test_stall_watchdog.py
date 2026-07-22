@@ -86,3 +86,37 @@ def test_banner_names_the_stall_and_the_escape_hatch():
 ])
 def test_poll_interval_scales_with_timeout(timeout, expected):
     assert _StallWatchdog(timeout=timeout).poll_interval == pytest.approx(expected)
+
+
+def test_a_long_declared_timeout_raises_the_limit():
+    """A test declaring a long ``timeout`` mark buys that much silence.
+
+    The wheel gate is one test that legitimately runs ~13 minutes (wheel build,
+    venv provisioning, a real Jupyter server) and declares
+    ``@pytest.mark.timeout(1800)``. Against the flat 300s stall limit it was
+    killed at 300s on every run, so `pytest -m wheel_gate` could never pass --
+    it exited 3 with no output at all, which reads as a broken release gate
+    rather than a watchdog kill.
+    """
+    w, fired = _watchdog(0.3)
+    w.set_allowance(30.0)
+    w.start()
+    time.sleep(0.9)  # 3x the base limit, well inside the allowance
+    assert not fired, "watchdog killed a test that declared a longer timeout"
+
+    # Once the allowance is cleared the base limit applies again.
+    w.set_allowance(None)
+    time.sleep(0.9)
+    assert fired, "watchdog stopped firing after the allowance was cleared"
+
+
+def test_allowance_never_shortens_the_limit():
+    """A short per-test timeout must not lower the watchdog.
+
+    Most tests declare timeouts well under the stall limit (the suite-wide
+    default is 30s vs 300s). If those lowered the limit, an ordinary slow phase
+    would start getting killed.
+    """
+    w, _ = _watchdog(300.0)
+    w.set_allowance(30.0)
+    assert w.effective_timeout() == 300.0

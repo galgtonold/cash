@@ -74,12 +74,33 @@ class _StallWatchdog:
         self._last = time.monotonic()
         self._current = "<none yet>"
         self._started = False
+        self._allowance: float | None = None
 
     def poke(self, what: str | None = None) -> None:
         with self._lock:
             self._last = time.monotonic()
             if what is not None:
                 self._current = what
+
+    def set_allowance(self, seconds: float | None) -> None:
+        """Let the running test raise the silence limit for its own duration.
+
+        A test that declares ``@pytest.mark.timeout(N)`` with N above the stall
+        limit is asserting that N seconds of silence is legitimate for it. The
+        wheel gate is the real case: one test that builds a wheel, provisions a
+        venv and drives a real Jupyter server for ~13 minutes, declaring 1800s.
+        Against a flat 300s limit it was killed at 300s on every single run, so
+        the release gate could never pass through pytest at all.
+
+        Only ever raises, never lowers -- a short per-test timeout must not
+        shorten the watchdog and turn a slow-but-healthy phase into a kill.
+        """
+        with self._lock:
+            self._allowance = seconds if (seconds and seconds > self.timeout) else None
+
+    def effective_timeout(self) -> float:
+        with self._lock:
+            return self._allowance or self.timeout
 
     def start(self) -> None:
         import threading
@@ -105,16 +126,20 @@ class _StallWatchdog:
             with self._lock:
                 idle = time.monotonic() - self._last
                 current = self._current
-            if idle >= self.timeout:
+                limit = self._allowance or self.timeout
+            if idle >= limit:
                 self._fire(idle, current)
                 return
 
     def banner(self, idle: float, current: str) -> str:
         worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+        # Report the limit that actually applied, which a long-running test
+        # may have raised for its own duration.
+        limit = self.effective_timeout()
         return (
             f"\n{'=' * 72}\n"
             f"CASH STALL WATCHDOG: no test progress for {idle:.0f}s "
-            f"(limit {self.timeout:.0f}s)\n"
+            f"(limit {limit:.0f}s)\n"
             f"  process : {worker} (pid {os.getpid()})\n"
             f"  last    : {current}\n"
             f"  Dumping all thread stacks, then killing this process.\n"
@@ -462,5 +487,29 @@ def pytest_runtest_logstart(nodeid, location):
     _STALL_WATCHDOG.poke(f"started {nodeid}")
 
 
+def pytest_runtest_setup(item):
+    """Give a test that declares a long ``timeout`` mark that much silence.
+
+    Without this the flat 300s stall limit overrides every longer per-test
+    budget in the suite. The wheel gate (``@pytest.mark.timeout(1800)``, ~13
+    minutes of wheel build + venv provisioning + a real Jupyter server) was
+    killed at 300s on every run, so ``pytest -m wheel_gate`` could not succeed
+    -- it exited 3 with no output, which reads like a broken gate rather than a
+    watchdog kill.
+    """
+    seconds = None
+    mark = item.get_closest_marker("timeout")
+    if mark is not None:
+        raw = mark.args[0] if mark.args else mark.kwargs.get("timeout")
+        try:
+            seconds = float(raw)
+        except (TypeError, ValueError):
+            seconds = None
+    _STALL_WATCHDOG.set_allowance(seconds)
+
+
 def pytest_runtest_logreport(report):
     _STALL_WATCHDOG.poke(f"{report.when}:{report.outcome} {report.nodeid}")
+    if report.when == "teardown":
+        # Back to the default limit; the next test declares its own.
+        _STALL_WATCHDOG.set_allowance(None)
