@@ -1047,11 +1047,21 @@ class Cash:
         if not drew:
             return False
         known = self._rng_drawing_funcs.setdefault(func_name, set())
-        if not (drew - known):
+        newly = bool(drew - known)
+        if newly:
+            known.update(drew)
+            self._store_rng_draw_marker(func_name, known)
+        if not newly:
             return False
-        known.update(drew)
-        self._store_rng_draw_marker(func_name, known)
-        return True
+        # Only report "newly seen" -- which suppresses this call's write -- when a
+        # drawn module is actually SEEDED. An unseeded draw has no epoch that can
+        # change, so its frozen value is correct from the first call; skipping the
+        # write there would redraw and break the freeze-from-first-call contract.
+        try:
+            from cash.notebook.randomness import seed_epochs
+            return bool(drew & set(seed_epochs()))
+        except ImportError:  # pragma: no cover - notebook extra absent
+            return False
 
     @staticmethod
     def _capture_rng_pre_state() -> dict | None:

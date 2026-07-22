@@ -1325,9 +1325,15 @@ class StatementProcessor:
         known = ledger.get(digest, set())
         if hidden - known:
             # First time we have learned this statement draws. Its key was built
-            # BEFORE we knew, so it carries no RNG variable -- see
-            # ``_rng_draw_newly_seen`` for why that entry must not be written.
-            self._rng_draw_newly_seen = True
+            # BEFORE we knew, so it carries no RNG variable. That only leaves a
+            # STALE-SEED trap when one of the drawn modules is actually SEEDED:
+            # then a later seed change rebuilds the epoch-free key and matches
+            # the old value. For a purely UNSEEDED draw there is no epoch to
+            # change, so the frozen value is correct and must be kept from the
+            # first call -- skipping the write there would redraw and break the
+            # freeze-from-first-call contract (CAS-158).
+            if hidden & set(self._rng_seed_epochs):
+                self._rng_draw_newly_seen = True
         ledger[digest] = known | hidden
 
     def _observed_rng_reads(self, code: str) -> set[str]:

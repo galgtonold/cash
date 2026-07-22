@@ -35,10 +35,25 @@ def _isolated_epochs():
     publish_seed_epochs(None)
 
 
-def _drawing_fn():
+@pytest.fixture
+def inst(tmp_path):
+    """An isolated Cash, not the process-wide ``cash.cache`` singleton.
+
+    The singleton persists ``_rng_drawing_funcs`` and its backend across every
+    test in the worker, so under xdist another test's markers and cached entries
+    leak in -- exactly the cross-test contamination that made this file pass
+    alone and fail at ``-n 16``. A private backend keeps each test's RNG state
+    to itself.
+    """
+    from cash import Cash
+    from cash.backends import FileBackend
+    return Cash(backend=FileBackend(cache_dir=str(tmp_path / "c")), register_magic=False)
+
+
+def _drawing_fn(inst):
     calls = []
 
-    @cash.cache
+    @inst.cache
     def draw(n):
         calls.append(n)
         return float(np.random.rand(n).sum())
@@ -46,8 +61,8 @@ def _drawing_fn():
     return draw, calls
 
 
-def test_seed_change_invalidates_a_drawing_function(_isolated_epochs):
-    draw, calls = _drawing_fn()
+def test_seed_change_invalidates_a_drawing_function(_isolated_epochs, inst):
+    draw, calls = _drawing_fn(inst)
 
     np.random.seed(12345)
     _isolated_epochs["numpy.random"] = "epoch-of-seed-12345"
@@ -79,14 +94,14 @@ def test_seed_change_invalidates_a_drawing_function(_isolated_epochs):
     )
 
 
-def test_unseeded_draw_is_still_cached_and_replayed(_isolated_epochs):
+def test_unseeded_draw_is_still_cached_and_replayed(_isolated_epochs, inst):
     """The freeze contract: no seed anywhere means the value is replayed.
 
     This is the over-invalidation guard. Folding RNG state (rather than the
     epoch) into the key would make an unseeded draw miss forever, which would
     defeat the point of caching an expensive sample.
     """
-    draw, calls = _drawing_fn()
+    draw, calls = _drawing_fn(inst)
 
     first = draw(4)
     assert draw(4) == first
@@ -94,11 +109,11 @@ def test_unseeded_draw_is_still_cached_and_replayed(_isolated_epochs):
     assert len(calls) <= 2, "an unseeded draw should settle into hits, not recompute"
 
 
-def test_non_drawing_function_key_is_unchanged(_isolated_epochs):
+def test_non_drawing_function_key_is_unchanged(_isolated_epochs, inst):
     """Regression guard: a function that never draws must not gain key churn."""
     calls = []
 
-    @cash.cache
+    @inst.cache
     def pure(x):
         calls.append(x)
         return x * 2
@@ -124,7 +139,7 @@ def test_epoch_component_is_empty_without_a_seed():
         publish_seed_epochs(None)
 
 
-def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs):
+def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs, inst):
     """The call that DISCOVERS a draw must not leave a cacheable entry.
 
     This is the trap the fix closes, and it only shows up across a restart.
@@ -137,8 +152,7 @@ def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs):
     does. Without the fix the second phase HITS the epoch-free entry and
     returns the old seed's value.
     """
-    inst = cash.cache.__self__
-    draw, calls = _drawing_fn()
+    draw, calls = _drawing_fn(inst)
 
     np.random.seed(4242)
     _isolated_epochs["numpy.random"] = "epoch-A"
