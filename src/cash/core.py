@@ -1032,24 +1032,26 @@ class Cash:
         except Exception:  # noqa: BLE001 - best effort; correctness degrades to today's
             logger.debug("could not persist RNG draw marker for %s", func_name)
 
-    def _note_rng_draw(self, func_name: str, pre_state: dict | None) -> None:
+    def _note_rng_draw(self, func_name: str, pre_state: dict | None) -> bool:
         """Record which global RNG modules *func_name* just advanced."""
         if pre_state is None:
-            return
+            return False
         try:
             from cash.notebook.randomness import capture_rng_state, rng_modules_changed
             changed = rng_modules_changed(pre_state, capture_rng_state())
         except (ImportError, TypeError, AttributeError):  # pragma: no cover
-            return
+            return False
         # A module merely imported by the call is newly present rather than
         # advanced; only count streams that already existed.
         drew = {m for m in changed if m in pre_state}
         if not drew:
-            return
+            return False
         known = self._rng_drawing_funcs.setdefault(func_name, set())
-        if drew - known:
-            known.update(drew)
-            self._store_rng_draw_marker(func_name, known)
+        if not (drew - known):
+            return False
+        known.update(drew)
+        self._store_rng_draw_marker(func_name, known)
+        return True
 
     @staticmethod
     def _capture_rng_pre_state() -> dict | None:
@@ -1602,7 +1604,7 @@ class Cash:
                 rng_pre = self._capture_rng_pre_state()
                 with tracker:
                     res = func(*args, **kwargs)
-                    self._note_rng_draw(func_name, rng_pre)
+                    rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
                     if is_iter:
                         # A generator is lazy: its file reads happen while it is
@@ -1624,7 +1626,11 @@ class Cash:
 
                     if single_chunk_buffer is not None:
                         # Single-chunk path. Apply cache_if before writing.
-                        should_cache = True
+                        # Skip the write exactly once when THIS call revealed that the function draws:
+                        # its key was built before we knew, so an entry stored now carries no seed
+                        # epoch and would be rebuilt and matched forever -- serving a result computed
+                        # under a seed the user has since changed. Next call keys it correctly.
+                        should_cache = not rng_new
                         if cache_if is not None:
                             try:
                                 should_cache = bool(cache_if(single_chunk_buffer))
@@ -1673,7 +1679,11 @@ class Cash:
                 # Non-iterator return: existing single-blob path.
                 execution_time = time.perf_counter() - call_start
 
-                should_cache = True
+                # Skip the write exactly once when THIS call revealed that the function draws:
+                # its key was built before we knew, so an entry stored now carries no seed
+                # epoch and would be rebuilt and matched forever -- serving a result computed
+                # under a seed the user has since changed. Next call keys it correctly.
+                should_cache = not rng_new
                 if cache_if is not None:
                     try:
                         should_cache = bool(cache_if(res))
@@ -1795,7 +1805,7 @@ class Cash:
                 rng_pre = self._capture_rng_pre_state()
                 with tracker:
                     res = await func(*args, **kwargs)
-                    self._note_rng_draw(func_name, rng_pre)
+                    rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
                     if is_iter:
                         # A returned sync generator is lazy - materialize its chunks
@@ -1814,7 +1824,11 @@ class Cash:
                     execution_time = time.perf_counter() - call_start
 
                     if single_chunk_buffer is not None:
-                        should_cache = True
+                        # Skip the write exactly once when THIS call revealed that the function draws:
+                        # its key was built before we knew, so an entry stored now carries no seed
+                        # epoch and would be rebuilt and matched forever -- serving a result computed
+                        # under a seed the user has since changed. Next call keys it correctly.
+                        should_cache = not rng_new
                         if cache_if is not None:
                             try:
                                 should_cache = bool(cache_if(single_chunk_buffer))
@@ -1859,7 +1873,11 @@ class Cash:
                 # Non-iterator return: single-blob path (unchanged).
                 execution_time = time.perf_counter() - call_start
 
-                should_cache = True
+                # Skip the write exactly once when THIS call revealed that the function draws:
+                # its key was built before we knew, so an entry stored now carries no seed
+                # epoch and would be rebuilt and matched forever -- serving a result computed
+                # under a seed the user has since changed. Next call keys it correctly.
+                should_cache = not rng_new
                 if cache_if is not None:
                     try:
                         should_cache = bool(cache_if(res))

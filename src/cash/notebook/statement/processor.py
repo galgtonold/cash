@@ -417,6 +417,9 @@ class StatementProcessor:
         # _flag_observed_hidden_draw; and the current cell's accumulation,
         # harvested by the cell executor for the replay ledger.
         self._observed_rng_draw: set[str] = set()
+        # True when THIS statement's execution revealed a hidden RNG draw for
+        # the first time, meaning its cache key predates that knowledge.
+        self._rng_draw_newly_seen: bool = False
         self._cell_rng_changed: set[str] = set()
         self._cell_rng_pre: dict | None = None
         self._cell_rng_post: dict | None = None
@@ -1319,7 +1322,13 @@ class StatementProcessor:
             return
         digest = hashlib.sha256(code.encode('utf-8')).hexdigest()
         ledger = self._tracking_state.observed_rng_statement_draws
-        ledger[digest] = ledger.get(digest, set()) | hidden
+        known = ledger.get(digest, set())
+        if hidden - known:
+            # First time we have learned this statement draws. Its key was built
+            # BEFORE we knew, so it carries no RNG variable -- see
+            # ``_rng_draw_newly_seen`` for why that entry must not be written.
+            self._rng_draw_newly_seen = True
+        ledger[digest] = known | hidden
 
     def _observed_rng_reads(self, code: str) -> set[str]:
         """Delegates to the shared helper so all engines agree exactly."""
@@ -1702,6 +1711,26 @@ class StatementProcessor:
             and not force_persist
             and not self._miss_guard.should_serialise(source_hash)
         )
+
+        # A statement whose hidden draw we only just discovered has a key built
+        # without its RNG variable. Writing it creates an entry that a later
+        # run rebuilds and matches forever: after a kernel restart the ledger is
+        # empty, the same epoch-free key comes back, and the value computed
+        # under the OLD seed is restored -- silently, with a green badge. That
+        # was the whole of CAS-234, and persisting the ledger cannot fix it
+        # because the key is consulted before any metadata is read.
+        #
+        # So skip the write exactly once. The value is correct for this run and
+        # is used normally; the next run builds the RNG-aware key, misses, and
+        # stores under it. Self-healing, one extra recompute per statement.
+        if self._rng_draw_newly_seen and not skip_cache:
+            skip_cache = True
+            if self.debug:
+                logger.debug(
+                    "%s Not storing %s: hidden RNG draw discovered after its key "
+                    "was built; next run keys it correctly",
+                    _LOG_ANNOTATION, source_hash[:12],
+                )
 
         saved_metadata = None
         if not skip_cache:
@@ -2224,6 +2253,7 @@ class StatementProcessor:
         # up front so a statement that RAISES cannot leave the previous
         # statement's draw attributed to it.
         self._observed_rng_draw = set()
+        self._rng_draw_newly_seen = False
         pre_rng = capture_rng_state()
 
         try:
@@ -2321,6 +2351,7 @@ class StatementProcessor:
         _FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
         # Per-statement RNG observation, same as the sync path.
         self._observed_rng_draw = set()
+        self._rng_draw_newly_seen = False
         pre_rng = capture_rng_state()
 
         try:
