@@ -26,20 +26,31 @@ its inputs, and how long it took. Ask for the dependency graph of any variable:
 ```
 
 ```
-df
-├── raw_data (via: raw_data = pd.read_csv('data.csv'))
-│   └── [file: data.csv]
-├── clean_data (via: clean_data = raw_data.dropna())
-│   └── raw_data
-└── df (via: df = clean_data.merge(other))
-    ├── clean_data
-    └── other
+📋 Provenance for 'df':
+  Last computed: 12:34:57
+  Status: restored
+  Code: df = clean_data.merge(other)
+  Inputs: clean_data, other
+  File deps: data.csv
+  Duration: 2.3ms
+  History: 1 records
+
+  Dependency Graph:
+    ├─ clean_data ← clean_data = raw_data.dropna()
+    │  └─ raw_data ← raw_data = pd.read_csv('data.csv')
+    └─ other (external)
 ```
 
-The graph is a transitive closure — it follows inputs recursively, so you see
-the full chain back to the source files. Add `--time` to view a variable's
-history chronologically, with timing and whether each step **computed** or
-**restored**:
+The graph follows inputs recursively (to a depth of 5), walking the *union* of
+inputs across every history record rather than only the latest — so a `df`
+created in one cell and mutated in three others still shows its creation chain.
+Names with no provenance record of their own — imported modules, built-ins,
+anything the AST picked up but Cash never produced — render as `(external)`
+leaves instead of being expanded. Files appear on the `File deps:` line, not in
+the tree.
+
+Add `--time` (or `--timeline`) for the last ten records chronologically, with
+timing and whether each step **computed**, **restored**, or was **skipped**:
 
 <!-- test:skip reason="IPython magic command — requires kernel context" -->
 ```python
@@ -47,13 +58,15 @@ history chronologically, with timing and whether each step **computed** or
 ```
 
 ```
-[12:34:56] COMPUTED  raw_data    (45.2ms)  raw_data = pd.read_csv('data.csv')
-[12:34:57] COMPUTED  clean_data  (12.1ms)  clean_data = raw_data.dropna()
-[12:34:57] RESTORED  df          (2.3ms)   df = clean_data.merge(other)
+  Timeline:
+    12:34:56 🔧 computed (45.2ms)
+    12:34:57 📦 restored (2.3ms)
 ```
 
-That `RESTORED ... (2.3ms)` line is the payoff made visible: a step that would
-have taken seconds, served from cache in milliseconds.
+That `restored (2.3ms)` line is the payoff made visible: a step that would have
+taken seconds, served from cache in milliseconds. `--json` gives the same
+records machine-readably, `%cash_provenance --all` lists every tracked variable,
+and `%cash_provenance --clear` drops the history.
 
 ## Going deeper: debug and log
 
@@ -81,6 +94,101 @@ recent events by default, a custom count, or the whole thing as JSON:
 ```
 
 Both magics are documented in full under [Magic Commands](../magics.md).
+
+## Asking a decorated function directly
+
+For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
+with these arguments hit, and why?" without calling the function, mutating
+stats, or writing anything:
+
+```python
+import cash
+
+@cash.cache
+def load(n):
+    return list(range(n))
+
+load(1000)
+print(load.explain(1000))
+```
+
+```
+[HIT] __main__.load - hit
+  cache_key: __main__.load:ca32787f...::0bba688a...
+  cached_at: 1784739785.759226
+  cache_age_seconds: 0.0006113052368164062
+  execution_time_saved: 0.0020235000120010227
+```
+
+`reason` is a short stable string: `hit`, or one of the four ways a call misses —
+`no_entry`, `ttl_expired`, `file_changed`, `key_uncomputable` — each carrying its
+own `details` (which files changed, which argument type couldn't be hashed). The
+full shape is in the [`CacheExplanation`](../api/cash.md) reference.
+
+!!! warning "`cache_info()` is not the surface to trust in a notebook"
+    The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
+    live on the **wrapper object** and count only since that wrapper was
+    created. Re-running the cell that defines your function re-runs the
+    decorator and produces a fresh wrapper with zeroed counters — so
+    `cache_info()` can read `{'hits': 0, 'misses': 0}` forever while caching is
+    working perfectly. Even in the transcript above it reports one miss and zero
+    hits, because the `explain()` call is not a call.
+
+    `total_time_saved` is weaker still: it sums the execution time recorded when
+    each entry was *first written*, so it is an estimate of the original compute
+    cost, not a measurement of what recomputing would cost now. On a workload
+    with warm imports and a warm page cache it can report a large saving on a
+    session that measurably lost time. Treat it as an upper bound.
+
+    `explain()` and `%cash_stats` both read through to the real cache. Prefer
+    them. `cache_info()` is reliable in scripts and long-lived processes, where
+    the wrapper is built once. See [The decorator](../decorator.md) for the
+    full API.
+
+## Session-wide: `%cash_stats`
+
+`%cash_stats` reports the whole session: cells executed, statements computed /
+restored / skipped, hit rate, and the time ledger. It is deliberately careful
+about what it claims:
+
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
+```python
+%cash_stats           # human-readable
+%cash_stats json      # same numbers as JSON
+%cash_stats reset     # zero the session counters
+```
+
+Two details worth knowing. First, the hit rate is reported **over statements
+that were worth caching**, with the all-statements rate shown beside it — a
+notebook of `print()` calls should not be scored as if Cash missed on every one
+of them, and when nothing cleared the floor it says `n/a` rather than `0%`.
+Second, "Net time saved" is gross savings minus Cash's own measured overhead,
+and it will print a **loss** when there is one. When only the overhead half was
+actually measured it reports a range ("at least … at best …") rather than
+passing off an unverified estimate as a fact.
+
+`%cash_stats` deliberately does not walk the backend — on a disk cache with
+thousands of entries that is an O(N) scan that opens every metadata file, and
+paying it every time you want a hit rate is not a trade worth making.
+
+## From a terminal: the `cash` CLI
+
+Anything that requires touching the cache directory itself lives in the CLI, not
+in a magic:
+
+```bash
+cash version            # installed version
+cash info               # resolved config + where it came from
+cash inspect [path]     # entry count, total size, file breakdown
+cash clear [path]       # drop a notebook's cache (--all for the directory)
+cash autoload on|off    # load cash in every new kernel via an IPython startup hook
+```
+
+One trap in `cash info`: the `Threshold:` line reports
+`smart_persistence_threshold`, which is **legacy** — the promotion decision has
+been made by the cost model since CAS-141 and no longer consults it. See
+[Where your cache lives](storage.md) for the thresholds that are actually
+applied.
 
 ## Programmatic inspection
 

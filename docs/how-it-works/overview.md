@@ -10,7 +10,9 @@ the tools that let you verify what Cash did.
 
 Every computation Cash touches — a notebook statement or a decorated function call — passes through the same five steps. Cash **analyzes** which variables and files the code reads and writes, **keys** the computation by fingerprinting the code together with its current inputs, **checks** the backend to see whether that exact fingerprint is already stored, then either **executes** the code fresh or **restores** the saved result, and finally **tracks** lineage so that anything downstream knows what it depends on.
 
-The trust thesis is simple: Cash recomputes whenever something relevant changed, and refuses to cache when caching would be unsound. If your code reads a file that was modified, calls a function whose source changed, or produces a result that is non-deterministic, Cash will not serve you a stale answer.
+The trust thesis is simple: Cash recomputes whenever something relevant changed, and refuses to cache when replaying a snapshot would be wrong. If your code reads a file that was modified or calls a function whose source changed, Cash will not serve you the old answer.
+
+Non-determinism is the one case where "recompute" is not the safe answer, and Cash treats it separately: an unseeded random draw is **frozen**, not blocked. The first value you drew is the value you keep, so the notebook stays reproducible — see [knowing when to recompute](invalidation.md#randomness-re-seeding-invalidates-the-draws-below-it). Change the seed and every draw below it does recompute.
 
 <div class="cash-coreloop" aria-hidden="true">
   <span class="cash-coreloop-step">analyze</span>
@@ -38,7 +40,7 @@ The trust thesis is simple: Cash recomputes whenever something relevant changed,
     </div>
     <div class="cash-arch-node">
       <span class="cash-arch-title">Safety checks</span>
-      <span class="cash-arch-sub">Mutation, side-effect, randomness and purity detectors veto anything unsound to cache.</span>
+      <span class="cash-arch-sub">Mutation, side-effect and purity detectors veto anything unsound to cache; the randomness detector warns and freezes.</span>
     </div>
     <div class="cash-arch-node">
       <span class="cash-arch-title">Key &amp; look up</span>
@@ -68,8 +70,12 @@ The next pages explain the shared foundation first, then each path's specifics. 
     still restore from cache; a one-line edit never throws away a cell full of
     expensive work; and individual loop iterations can be cached separately. The
     cost is a more involved implementation (per-statement AST parsing and lineage)
-    and ~5 ms of per-cell overhead — a trade Cash makes deliberately, because
-    real notebooks pile several operations into one cell.
+    and a per-statement rather than per-cell overhead — a trade Cash makes
+    deliberately, because real notebooks pile several operations into one cell.
+    You do not have to take the trade on faith: the badge breaks the cell's
+    wall time down into Cash's own overhead (badge init, upstream check, and the
+    rest) versus the statements themselves — see
+    [seeing what Cash did](inspecting.md).
 
 ## Where to go next
 

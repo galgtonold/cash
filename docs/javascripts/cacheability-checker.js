@@ -19,28 +19,40 @@
       why: "A pure transformation: no mutation, no side effect, no randomness. Cash caches the result keyed on the inputs' lineage."
     },
     {
+      code: "total += 1",
+      verdict: "ok",
+      title: "Cached",
+      why: "An augmented assignment mutates total, but total is also the statement's own output — so the mutation is just a new version of the variable. Its lineage advances and the new value is cached."
+    },
+    {
       code: "data.append(4)",
       verdict: "no",
       title: "Not cached",
-      why: "append() mutates data in place. Cash marks the variable mutated and re-runs the statement every time, so the live object never drifts from a stale snapshot."
+      why: "append() mutates data in place, and this statement doesn't produce data — there is no output to hang the new version on. Cash bumps data's lineage (so downstream cells see the change) and re-runs the statement every time, rather than restoring a deserialised copy and breaking every other reference to the list."
     },
     {
-      code: "total += 1",
+      code: "del lookup['stale']",
       verdict: "no",
       title: "Not cached",
-      why: "An augmented assignment (ast.AugAssign) is treated as a mutation. The statement always re-executes."
+      why: "A subscript delete mutates lookup, and unlike lookup['k'] = v it leaves no store target the analyzer can read as an output. Nothing can attribute the new version to this statement, so it always re-executes."
     },
     {
       code: "x = np.random.randn(100)",
       verdict: "warn",
       title: "Cached + warning",
-      why: "Unseeded randomness. Cash still caches (the first draw is frozen) but warns you. Seed the module first — np.random.seed(0) — or annotate with @cash:allow-random to silence it."
+      why: "Unseeded randomness. Cash still caches — and the badge marks the row 'unseeded', because the value is a frozen replay rather than a fresh draw. Seed the module first (np.random.seed(0)) for real reproducibility, use @cash:no-cache to redraw every run, or @cash:allow-random to silence the warning."
+    },
+    {
+      code: "model.fit(X, y)",
+      verdict: "no",
+      title: "Not cached by default",
+      why: "A bare fit mutates its receiver in place, so it takes the ordinary mutation path: re-executed every run, never serialised. Opt in with the # @cash:cache-fit annotation, which caches the fitted state and restores it in place. For reliable ML caching, wrap training in a function that returns the model and decorate it with @cash.cache."
     },
     {
       code: "df.to_parquet('out.pq')",
       verdict: "no",
       title: "Not cached",
-      why: "A file write is a side effect. Replaying it from cache would skip writing the file, so Cash flags the statement uncacheable and always runs it."
+      why: "A file write is a side effect. Replaying it from cache would skip writing the file, so Cash flags the statement uncacheable and always runs it. It does NOT count as a mutation of df: to_parquet reads the frame, so df's lineage is left alone."
     },
     {
       code: "r = requests.post(url, json=payload)",

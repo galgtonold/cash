@@ -21,16 +21,19 @@ The shape of every statement's journey is the same:
 
 ## What happens when you run a cell
 
+`CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
+`CellExecutor.execute_cell()`, which runs a seven-phase pipeline:
+
 ```mermaid
 flowchart TD
-    S1["<b>1. User executes cell</b>"]
-    S2["<b>2.</b> <code>CashMagics._execute_cell()</code> intercepts"]
-    S3["<b>3.</b> <code>CodeAnalyzer.analyze_code_block()</code><br/>→ determine inputs & outputs"]
-    S4["<b>4.</b> <code>CellExecutor._ensure_state_for_inputs()</code><br/>For each missing input: try <code>Restorer.restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, try virtual restore, re-execute if needed"]
-    S5["<b>5.</b> Parse cell into statements"]
-    S6["<b>6. For each statement:</b><br/>mutation, side-effect &amp; randomness pre-checks<br/>If control structure → ControlStructureProcessor.process()<br/>Else → StatementProcessor.process_statement():<br/>compute cache key · check skip optimization · check cache (HIT? return cached) · execute · drain decorator calls · capture outputs · compute output lineages · store in cache"]
-    S7["<b>7. Update tracking dictionaries</b>"]
-    S8["<b>8. Render execution badge</b><br/>(timing, cache status, decorator metrics)"]
+    S1["<b>1. User executes cell</b><br/><code>CashMagics._execute_cell()</code> intercepts"]
+    S2["<b>2.</b> Cell id + notebook path; badge and timing init"]
+    S3["<b>3.</b> Module change detection<br/>(must precede the upstream check)"]
+    S4["<b>4. Upstream resolution</b><br/><code>CellExecutor._ensure_state_for_inputs()</code><br/><code>CodeAnalyzer.analyze_code_block()</code> → inputs &amp; outputs<br/>For each missing input: <code>Restorer.restore_variable()</code><br/><code>UpstreamChecker.check_and_reexecute()</code>: simulate upstream cells (virtual lineage), detect lineage mismatches, re-execute if needed"]
+    S5["<b>5.</b> Parse the cell into statements"]
+    S6["<b>6.</b> Pre-execution notifications<br/>(changed functions, reloaded modules)"]
+    S7["<b>7. For each statement:</b><br/>compute cache key · classify method mutations · <code>decide_cacheability()</code><br/>· look up cache (HIT → restore and return) · execute · drain decorator calls<br/>· observe receiver mutations · capture outputs + output lineages · store in cache<br/>If control structure → <code>ControlStructureProcessor.process()</code><br/>Else → <code>StatementProcessor.process_statement()</code>"]
+    S8["<b>8. Render execution badge</b><br/>(timing, per-statement status, decorator metrics)"]
     S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8
 ```
 
@@ -44,19 +47,38 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-- **Step 6 — the per-statement decision.** Each statement first passes the
-  three detector pre-checks from [Safety](safety.md). If it's safe, Cash
-  computes the [cache key](cache-keys-and-lineage.md), checks the skip optimization, then
-  the cache. A hit short-circuits; a miss executes and stores.
+- **Step 7 — the per-statement decision.** Each statement passes the detector
+  pre-checks from [Safety](safety.md) — merged into one verdict by
+  `decide_cacheability` — before the cache is consulted at all. If the verdict
+  is "cacheable", Cash computes the [cache key](cache-keys-and-lineage.md) and
+  looks it up: a hit short-circuits, a miss executes and stores. If the verdict
+  is "not cacheable", the lookup is skipped entirely and the statement simply
+  runs.
 - **Step 8 — the badge.** Every run paints an execution badge so you can see,
   at a glance, what was reused and what recomputed (see
   [Inspecting what Cash did](inspecting.md)).
 
+Each statement row on the badge carries one status:
+
+| Status | Meaning |
+|--------|---------|
+| `RESTORED` | Served from cache; the row shows the time saved |
+| `COMPUTED` | Executed and stored |
+| `NOT CACHED` | Executed, deliberately not stored — the row names the reason |
+| `SKIPPED` | Not re-run at all (a redundant import, or already covered) |
+| `FUNC CHANGED` / `MODULE RELOADED` | A notification row, not a statement |
+
+The plain-text badge (`%cash_badge print`) is ASCII-only on purpose: its output
+is read by a *different* process than the one that wrote it — nbconvert, a log
+scraper, an agent parsing the `.ipynb` — and an emoji encoded by a UTF-8 kernel
+crashes a `cp1252` console with `UnicodeEncodeError`. The status label already
+carries the meaning, so no glyph is lost.
+
 ## Fine-grained caching: loops and branches
 
 Caching a whole loop as one blob is brittle — change one iteration and you lose
-them all. Cash instead caches **each iteration separately**, keyed on the loop
-variable's value plus an *iteration-context hash*:
+them all. For a `for` loop, Cash instead caches **each iteration separately**,
+keyed on the loop variable's value:
 
 ```mermaid
 flowchart TD
@@ -75,19 +97,45 @@ flowchart TD
     I3 --> K3
 ```
 
-The iteration-context hash makes each key unique:
+The mechanism is deliberately plain: the context hash is prepended to the body
+statement as a *comment*, so it flows into the ordinary statement cache key
+through the source hash — no special key format is needed.
 
-```
-context_hash  = SHA256([("ticker", "AAPL")])          # → "4f2ca162…"
-statement_key = SHA256("stmt:" + source_hash + ":" +
-                       input_lineages + ":" +
-                       "__iteration_context__:" + context_hash)
+```python
+import hashlib
+
+# What ControlStructureProcessor.compute_context_hash does:
+context = {"ticker": "AAPL"}
+context_hash = hashlib.sha256(str(sorted(context.items())).encode("utf-8")).hexdigest()[:16]
+
+body = "stats[ticker] = compute(ticker)"
+statement_source = f"# __iteration_context__: {context_hash}\n{body}"
+
+assert statement_source.startswith("# __iteration_context__: ")
+# ...and the statement key is then the usual
+# "stmt:" + sha256(source_hash + input lineages + occurrence index + ...).
 ```
 
 The payoff is **partial cache hits**: edit the `AAPL` case and only that
-iteration recomputes; `MSFT` and `GOOGL` still hit. Conditionals work the same
-way — only the branch that actually ran is cached, keyed on which branch
-executed (`if` vs `else`), so unused branches never pollute the key space.
+iteration recomputes; `MSFT` and `GOOGL` still hit.
+
+Conditionals work the same way with a different marker: `if`/`elif`/`else` and
+`try`/`except` bodies are decomposed per statement and tagged with a
+`# control_context:` branch hash, so only the branch that actually ran is
+cached and unused branches never pollute the key space.
+
+`while` and `with` are the exception — they are executed as a **single cacheable
+unit** through the statement processor rather than decomposed, because neither
+has an enumerable iteration space to key on.
+
+!!! note "Mutations inside a loop body"
+    A body statement that mutates an outside variable (`results.append(row)`,
+    `d[k] = v`) is handled by the ordinary safety rules from
+    [Safety](safety.md), with one deliberate difference: the per-statement
+    method-mutation classifier is switched off inside a control body. The
+    upstream simulation treats a loop or branch as one unit, so bumping a body
+    statement's receiver lineage from a per-statement source would desync the
+    two. The control structure owns its body's mutation lineage instead.
 
 ## Picking up after a kernel restart
 
