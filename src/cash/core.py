@@ -13,6 +13,7 @@ import functools
 import hashlib
 import inspect
 import logging
+import os
 import pickle
 import sys
 import textwrap
@@ -522,6 +523,9 @@ class Cash:
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (CAS-107 global folding)
         self._global_read_cache: dict = {}
+        # (module_global, attribute) read pairs per code object; see
+        # _read_module_attr_pairs.
+        self._module_attr_cache: dict = {}
         # func_name -> (function the signature was read from, inspect.Signature
         # or None if introspection failed). Used to bind call arguments to a
         # canonical form so that logically-identical calls written differently
@@ -2532,9 +2536,13 @@ class Cash:
         data globals warn once and are skipped.
         """
         names = self._read_global_data_names(func)
-        if not names:
+        g = getattr(func, "__globals__", None)
+        if not isinstance(g, dict):
             return state_hash
-        g = func.__globals__
+        # NOTE: no early return on an empty ``names``. A body whose only global
+        # reads are module attributes (``return conf.RATE``) has NO plain data
+        # globals, so bailing here skipped the module-attribute channel in
+        # exactly the case it exists for.
         parts: list[tuple[str, str]] = []
         for name in names:
             if name not in g:
@@ -2561,10 +2569,146 @@ class Cash:
                     stacklevel=6,
                 )
                 continue
+        parts.extend(self._module_attr_parts(func, func_name, g))
         if not parts:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def _is_user_module(mod: Any) -> bool:
+        """True for a module the user is plausibly editing between runs.
+
+        Third-party and stdlib modules are excluded deliberately: their
+        contents are expected to be fixed for a given environment, and folding
+        e.g. ``os.environ`` or numpy's internals would churn the key on every
+        call. Editing your venv is not a case worth keying on.
+        """
+        path = getattr(mod, "__file__", None)
+        if not path:
+            return False  # builtin / namespace package - nothing to edit
+        try:
+            p = os.path.normcase(os.path.abspath(path))
+        except (TypeError, ValueError):
+            return False
+        if "site-packages" in p or "dist-packages" in p:
+            return False
+        try:
+            import sysconfig
+            for key in ("stdlib", "platstdlib"):
+                std = sysconfig.get_paths().get(key)
+                if std and p.startswith(os.path.normcase(os.path.abspath(std))):
+                    return False
+        except (KeyError, OSError):
+            pass
+        return not p.startswith(os.path.normcase(os.path.dirname(os.path.abspath(__file__))))
+
+    def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
+        """``(module_global, attribute)`` pairs the body reads, from bytecode.
+
+        ``import conf; conf.RATE`` compiles to ``LOAD_GLOBAL conf`` followed by
+        ``LOAD_ATTR RATE``. Only the *module* reaches ``_read_global_data_names``,
+        and modules are filtered out at fold time, so the attribute was never
+        keyed on: ``conf.RATE`` went permanently stale while the equivalent
+        ``from conf import RATE`` invalidated correctly. Two spellings of one
+        dependency, one of them silently wrong.
+
+        Walks nested scopes for the same reason the sibling channel does
+        (CAS-128): a read that happens only inside a genexp still counts.
+        """
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return ()
+        cached = self._module_attr_cache.get(code)
+        if cached is not None:
+            return cached
+        import dis
+        pairs: set[tuple[str, str]] = set()
+        for scope in Cash._iter_code_scopes(code):
+            instrs = list(dis.get_instructions(scope))
+            for prev, nxt in zip(instrs, instrs[1:]):
+                if prev.opname != "LOAD_GLOBAL":
+                    continue
+                if nxt.opname not in ("LOAD_ATTR", "LOAD_METHOD"):
+                    continue
+                name, attr = prev.argval, nxt.argval
+                if not isinstance(name, str) or not isinstance(attr, str):
+                    continue
+                if attr.startswith("__"):
+                    continue
+                pairs.add((name, attr))
+        result = tuple(sorted(pairs))
+        if len(self._module_attr_cache) < 4096:
+            self._module_attr_cache[code] = result
+        return result
+
+    def _module_attr_parts(
+        self, func: Callable, func_name: str, g: dict,
+    ) -> list[tuple[str, str]]:
+        """Key parts for ``module.ATTR`` data reads, one level of recursion deep.
+
+        Two shapes are covered:
+
+        * ``conf.RATE`` - fold the attribute's content.
+        * ``conf.get_rate()`` - the callable itself is already tracked by the
+          helper-source channel, but that only sees its *source*. A helper whose
+          source never changes while the constant it returns does was stale, so
+          fold the data globals the callee reads from its own module too.
+
+        Callables, classes and nested modules are skipped as data (the first is
+        handled by the helper channel, the others carry no editable value).
+        """
+        parts: list[tuple[str, str]] = []
+        for mod_name, attr in self._read_module_attr_pairs(func):
+            mod = g.get(mod_name)
+            if not isinstance(mod, types.ModuleType) or not self._is_user_module(mod):
+                continue
+            try:
+                value = getattr(mod, attr)
+            except AttributeError:
+                continue
+            label = f"{mod_name}.{attr}"
+            if isinstance(value, types.ModuleType) or isinstance(value, type):
+                continue
+            if callable(value) and not isinstance(value, (dict, list, tuple, set)):
+                # One level only: fold the constants the helper itself reads.
+                # Deeper recursion would drag in whole transitive namespaces for
+                # a diminishing chance of catching a real edit.
+                helper_globals = getattr(value, "__globals__", None)
+                if not isinstance(helper_globals, dict):
+                    continue
+                for inner in self._read_global_data_names(value):
+                    if inner not in helper_globals:
+                        continue
+                    iv = helper_globals[inner]
+                    if isinstance(iv, types.ModuleType) or isinstance(iv, type):
+                        continue
+                    if callable(iv) and not isinstance(iv, (dict, list, tuple, set)):
+                        continue
+                    h = self._safe_global_hash(iv, func_name, f"{label}.{inner}")
+                    if h is not None:
+                        parts.append((f"{label}.{inner}", h))
+                continue
+            h = self._safe_global_hash(value, func_name, label)
+            if h is not None:
+                parts.append((label, h))
+        return parts
+
+    def _safe_global_hash(self, value: Any, func_name: str, label: str) -> str | None:
+        """Hash *value* for the key, warning once and skipping if it cannot be."""
+        try:
+            stabilized = self._stabilize_for_global_hash(value, self._hash_callable_source)
+            return self._hash_arg_payload((stabilized,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            self._warn_once(
+                CashImpurityWarning,
+                func_name,
+                label,
+                f"@cash.cache on {func_name}: reads '{label}' whose value could not "
+                f"be hashed; changes to it will NOT invalidate the cache.",
+                stacklevel=6,
+            )
+            return None
 
     def _normalize_call_args(
         self, func_name: str, args: tuple, kwargs: dict,
