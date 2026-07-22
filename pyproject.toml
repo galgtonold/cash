@@ -13,12 +13,27 @@ packages = ["src/cash"]
 # so it was silently swept into every sdist.
 # This is an exclude list, not an include list, on purpose: an include list would
 # quietly drop newly added package files and break the sdist build.
+#
+# Note on why the generated directories below need naming EXPLICITLY: tools like
+# venv and coverage drop a self-ignoring `.gitignore` (`*`) inside their own
+# output directory. `git status` therefore shows a clean tree and
+# `git check-ignore` reports them ignored -- but hatchling's sdist walk does not
+# honour those nested files, so it sweeps the directory in anyway. Checking git
+# is not a valid test for what lands in the sdist; only building one is.
+# That is how four stray local venvs (25 MB, 1908 files, including the whole of
+# pip's site-packages) got into a 36 MB sdist while every signal looked clean.
 [tool.hatch.build.targets.sdist]
 exclude = [
     "/coverage_html",
     "/uv.lock",
     "/Dockerfile",
     "/CLAUDE.md",
+    # Local throwaway venvs. The `Tempcash*` names are a Windows path-mangling
+    # artifact (a `C:/Temp/cash/...` path losing its separators), so match the
+    # prefix rather than just `*.venv` -- one of them has no dot at all.
+    "/Tempcash*",
+    "*.venv",
+    "/.venv",
 ]
 
 # Single source of truth for the version: src/cash/__init__.py's __version__.
