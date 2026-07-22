@@ -59,12 +59,7 @@ from ..annotations import get_statement_annotations
 from ..cache_status import CacheStatus
 from ..consumables import consumable_state, is_consumable_unrestorable
 from ..control_structures import contains_top_level_await, is_control_structure
-from ..randomness import (
-    capture_rng_state,
-    get_drawing_rng_modules,
-    rng_lineage_fingerprint,
-    rng_modules_changed,
-)
+from ..randomness import get_drawing_rng_modules, rng_lineage_fingerprint
 from ..statement import ProcessResult
 
 if TYPE_CHECKING:
@@ -210,9 +205,9 @@ class CellExecutor:
         if self._debug:
             print("[TIMING_PROXY] Start executing statements...")
 
-        # 7. Statement execution (snapshot the RNG first, so a before/after diff
-        # can observe a draw even when it happens inside a called function).
-        pre_rng = capture_rng_state()
+        # 7. Statement execution. The per-statement RNG observer does the
+        # measuring; this only opens a fresh accumulation for the cell.
+        self._statement_processor.begin_cell_rng_observation()
         result = self._execute_cell_statements(
             raw_cell, tree, all_metrics, badge_display_id,
             hook_start, timing_breakdown,
@@ -222,7 +217,7 @@ class CellExecutor:
 
         all_metrics, buffered_result_outputs, badge_render_time = result
         timing_breakdown['badge_progress'] = badge_render_time
-        self._record_executed_cell_hash(raw_cell, pre_rng)
+        self._record_executed_cell_hash(raw_cell)
 
         return _PipelineCompleted(
             all_metrics=all_metrics,
@@ -233,35 +228,47 @@ class CellExecutor:
             badge_render_time=badge_render_time,
         )
 
-    def _record_executed_cell_hash(self, raw_cell: str, pre_rng: dict | None = None) -> None:
+    def _record_executed_cell_hash(self, raw_cell: str) -> None:
         """Remember that this exact cell source ran, so the upstream checker can
         tell an edited-but-not-rerun seed() cell from one that actually ran
-        (ADR-017 / CAS-225). Also snapshot the RNG state after a cell that TOUCHED
-        the global RNG so a downstream draw can be restored to its position-correct
-        state (ADR-018 / CAS-226 / CAS-227), and record which modules it changed —
-        detected by a before/after diff, which catches draws inside called
-        functions that static analysis cannot see."""
+        (ADR-017 / CAS-225). Also snapshot the RNG state around a cell that
+        TOUCHED the global RNG so a downstream draw can be restored to its
+        position-correct state (ADR-018 / CAS-226 / CAS-227), and record which
+        modules it changed — which catches draws inside called functions that
+        static analysis cannot see.
+
+        The RNG half is HARVESTED from the statement-level observer rather than
+        re-measured here. There used to be two observers snapshotting the same
+        streams to answer the same question at different granularities; the
+        statement one is finer and can reconstruct this one (union of what its
+        statements changed), so it is now the single source of truth.
+
+        That also narrows the recorded window to the user's statements. The old
+        cell-wide diff spanned cash's OWN machinery, so a cell containing only
+        ``import random`` was recorded as having changed ``numpy.random``
+        because cash imported numpy while handling it. Those incidental entries
+        used to be load-bearing — they were the only thing giving a first
+        drawing cell something to rewind to — until CAS-229 recorded each
+        cell's own start position instead."""
         try:
             state = self._statement_processor._tracking_state
             digest = hashlib.sha256(raw_cell.encode('utf-8')).hexdigest()
             state.executed_cell_source_hashes.add(digest)
-            if pre_rng is not None:
-                post = capture_rng_state()
-                changed = rng_modules_changed(pre_rng, post)
-                if changed:
-                    state.rng_post_states[digest] = post
-                    state.observed_rng_cells[digest] = changed
+            changed, pre, post = self._statement_processor.cell_rng_observation()
+            if changed and post is not None:
+                state.rng_post_states[digest] = post
+                state.observed_rng_cells[digest] = changed
+                if pre is not None:
                     # Where this cell's randomness STARTED, plus the seeds in
                     # force for it. Re-executing a draw reproduces its value only
-                    # by rewinding to this, recorded against the drawing cell
-                    # itself rather than hoping some upstream cell happens to
-                    # have been recorded (CAS-229). The fingerprint is what makes
-                    # it safe to prefer: it expires the position when the seed
-                    # behind it changes, using the same lineage check that
-                    # invalidates any other value.
+                    # by rewinding to this (CAS-229). The fingerprint is what
+                    # makes it safe to prefer over the upstream-anchor scan: it
+                    # expires the position when the seed behind it changes,
+                    # using the same lineage check that invalidates any other
+                    # value.
                     drawing = set(get_drawing_rng_modules(raw_cell)) | changed
                     state.rng_pre_states[digest] = (
-                        pre_rng,
+                        pre,
                         rng_lineage_fingerprint(state.variable_lineage, drawing),
                     )
         except (AttributeError, TypeError):  # pragma: no cover - defensive
@@ -324,8 +331,8 @@ class CellExecutor:
         if self._debug:
             print("[TIMING_PROXY] Start executing statements (async)...")
 
-        # 7. Statement execution (awaited); snapshot the RNG first for the diff.
-        pre_rng = capture_rng_state()
+        # 7. Statement execution (awaited). Same single observer as the sync path.
+        self._statement_processor.begin_cell_rng_observation()
         result = await self._execute_cell_statements_async(
             raw_cell, tree, all_metrics, badge_display_id,
             hook_start, timing_breakdown,
@@ -335,7 +342,7 @@ class CellExecutor:
 
         all_metrics, buffered_result_outputs, badge_render_time = result
         timing_breakdown['badge_progress'] = badge_render_time
-        self._record_executed_cell_hash(raw_cell, pre_rng)
+        self._record_executed_cell_hash(raw_cell)
 
         return _PipelineCompleted(
             all_metrics=all_metrics,

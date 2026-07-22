@@ -403,9 +403,14 @@ class StatementProcessor:
         self.function_tracker = FunctionTracker()
         # module -> cache key of the seeding statement in force (CAS-223).
         self._rng_seed_epochs: dict[str, str] = {}
-        # What the LAST statement drew, per the statement-level RNG observer
-        # (see _observe_statement_rng); read by _flag_observed_hidden_draw.
+        # Outputs of the statement-level RNG observer (see
+        # _observe_statement_rng): what the LAST statement drew, read by
+        # _flag_observed_hidden_draw; and the current cell's accumulation,
+        # harvested by the cell executor for the replay ledger.
         self._observed_rng_draw: set[str] = set()
+        self._cell_rng_changed: set[str] = set()
+        self._cell_rng_pre: dict | None = None
+        self._cell_rng_post: dict | None = None
 
         self.set_tracking_state(tracking_state or TrackingState())
 
@@ -1247,34 +1252,52 @@ class StatementProcessor:
             self._warn_unseeded_estimator_fit(code, fits, allow_random)
 
     def _observe_statement_rng(self, pre_rng: dict) -> None:
-        """Record what this statement DREW from the global RNG streams.
+        """Record what this statement did to the global RNG streams.
 
-        A module merely *imported* by the statement is newly present in the
-        post-snapshot, and ``rng_modules_changed`` reports that as changed (the
-        replay side wants to know), but an import is not a draw -- so it is
-        filtered out here.
+        THE RNG observer: one before/after diff per statement, serving both
+        consumers, at the same granularity the file tracker already works at.
 
-        Deliberately scoped to the statement's own execution, which is why this
-        does NOT yet replace the cell-level observer in ``cell_executor`` even
-        though it is strictly finer-grained. That one diffs the whole cell, so
-        its window also spans cash's OWN machinery: importing ``random`` in a
-        user cell gets recorded as that cell changing ``numpy.random``, because
-        cash happened to import numpy while handling the cell. The replay ledger
-        currently depends on those incidental entries -- dropping them (by
-        deriving the ledger from this observer instead) makes an
-        ``@cash:allow-random`` draw stop being served from cache, because the
-        position-restore path loses the upstream post-state it was relying on.
-        Merging the two observers therefore has to wait until replay no longer
-        depends on measuring cash's own work.
+        * ``_observed_rng_draw`` -- what this statement DREW, for the badge's
+          unseeded pill. A module merely *imported* by the statement is newly
+          present in the post-snapshot and ``rng_modules_changed`` reports that
+          as changed (the replay side wants to know), but an import is not a
+          draw, so it is filtered out here.
+        * the per-cell accumulation harvested by :meth:`cell_rng_observation`
+          for the replay ledger, which is still keyed by cell. Left UNFILTERED
+          so that ledger keeps the semantics it was built on.
+
+        The cell's start position is the FIRST executed statement's pre-state.
+        That is deliberately narrower than the cell-wide snapshot this replaced,
+        which also spanned cash's own machinery and so recorded a position that
+        included cash's work rather than the user's.
 
         Never allowed to break execution: a capture failure just means this
         statement reports no randomness.
         """
         try:
-            changed = rng_modules_changed(pre_rng, capture_rng_state())
+            post = capture_rng_state()
+            changed = rng_modules_changed(pre_rng, post)
             self._observed_rng_draw = {m for m in changed if m in pre_rng}
+            if self._cell_rng_pre is None:
+                self._cell_rng_pre = pre_rng
+            self._cell_rng_changed |= changed
+            self._cell_rng_post = post
         except (TypeError, AttributeError):  # pragma: no cover - defensive
             self._observed_rng_draw = set()
+
+    def begin_cell_rng_observation(self) -> None:
+        """Open a fresh per-cell RNG accumulation, before the cell's statements run."""
+        self._cell_rng_changed = set()
+        self._cell_rng_pre = None
+        self._cell_rng_post = None
+
+    def cell_rng_observation(self) -> tuple[set[str], dict | None, dict | None]:
+        """What this cell's statements changed, and the positions either side.
+
+        Harvested by the cell executor in place of its own before/after diff, so
+        a single observer feeds both the badge and the replay ledger.
+        """
+        return set(self._cell_rng_changed), self._cell_rng_pre, self._cell_rng_post
 
     def _flag_observed_hidden_draw(
         self, metrics: 'ProcessResult', code: str, outputs: set[str],
