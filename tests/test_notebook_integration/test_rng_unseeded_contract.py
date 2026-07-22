@@ -1,4 +1,4 @@
-"""The full contract for an UNSEEDED draw across re-runs (CAS-230).
+"""The full contract for an UNSEEDED draw across re-runs (CAS-229).
 
 Re-running an unseeded draw reprints the SAME number. That is deliberate — the
 documented "non-determinism is frozen, not blocked" rule — because unseeded

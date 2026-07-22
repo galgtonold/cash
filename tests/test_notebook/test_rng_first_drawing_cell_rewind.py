@@ -1,4 +1,4 @@
-"""A drawing cell with no upstream RNG cell rewinds to its OWN start (CAS-229).
+"""A drawing cell with no upstream RNG cell rewinds to its OWN start (CAS-227).
 
 Reproducing a re-executed draw means rewinding the stream to where the draw
 STARTED. cash records each RNG-touching cell's *post*-state, so

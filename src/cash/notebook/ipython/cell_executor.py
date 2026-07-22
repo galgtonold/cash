@@ -248,7 +248,7 @@ class CellExecutor:
         ``import random`` was recorded as having changed ``numpy.random``
         because cash imported numpy while handling it. Those incidental entries
         used to be load-bearing — they were the only thing giving a first
-        drawing cell something to rewind to — until CAS-229 recorded each
+        drawing cell something to rewind to — until CAS-227 recorded each
         cell's own start position instead."""
         try:
             state = self._statement_processor._tracking_state
@@ -261,7 +261,7 @@ class CellExecutor:
                 if pre is not None:
                     # Where this cell's randomness STARTED, plus the seeds in
                     # force for it. Re-executing a draw reproduces its value only
-                    # by rewinding to this (CAS-229). The fingerprint is what
+                    # by rewinding to this (CAS-227). The fingerprint is what
                     # makes it safe to prefer over the upstream-anchor scan: it
                     # expires the position when the seed behind it changes,
                     # using the same lineage check that invalidates any other

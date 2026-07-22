@@ -158,7 +158,7 @@ def called_function_dependencies(
     time, so ``r = a(3)`` genuinely depends on every global ``a`` reads — and the
     ordinary input-lineage path cannot supply them, because it is built when
     ``def a`` executes and only sees names bound ABOVE it. A callee defined BELOW
-    the caller is therefore invisible to the call site (CAS-232).
+    the caller is therefore invisible to the call site (CAS-95).
 
     Walks ``__code__.co_names`` transitively, with a ``seen`` guard so mutual
     recursion terminates. ``co_names`` also carries attribute names (``.sqrt``);
@@ -434,7 +434,7 @@ def compute_cache_key(
     # Globals the called functions reach for at CALL time, including any bound
     # BELOW this statement — which the input-lineage path structurally cannot
     # see, because it is built when the ``def`` runs and only looks upward
-    # (CAS-232). Same omit-when-empty rule as the RNG component above: a
+    # (CAS-95). Same omit-when-empty rule as the RNG component above: a
     # statement that calls no user-defined function keeps a byte-identical key.
     callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""

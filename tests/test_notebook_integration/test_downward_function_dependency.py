@@ -1,4 +1,4 @@
-"""A call site does not depend on functions defined BELOW it (CAS-232).
+"""A call site does not depend on functions defined BELOW it (CAS-95).
 
 cash reconstructs dependencies upward. A function whose body calls a name bound
 in a LATER cell therefore has a dependency pointing down the notebook, and the
@@ -82,7 +82,7 @@ def test_callee_below_caller_propagates_an_edit_on_run_all(nb_runner):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "OPEN, the remaining half of CAS-232. The call site's KEY now carries the "
+        "OPEN, the remaining half of CAS-95. The call site's KEY now carries the "
         "callee's lineage, which is enough whenever the callee cell actually runs "
         "(Run All, or a restart). Re-running ONLY the call site does not re-execute "
         "the edited callee, so user_ns and variable_lineage still hold the OLD b "

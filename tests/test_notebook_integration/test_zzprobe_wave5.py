@@ -1,7 +1,7 @@
 """Adversarial probes, wave 5 (2026-07-02): randomness, annotations, cell
 magics, stdlib accumulators, cycles, decorator persistence across restart.
 
- 1. test_unseeded_random_not_served_stale    — ADJUDICATED (CAS-230): freezing
+ 1. test_unseeded_random_not_served_stale    — ADJUDICATED (CAS-229): freezing
         is intended; asserts the # @cash:no-cache opt-out redraws instead.
  2. test_seeded_random_reproducible          — seeded cell: identical output
         across run_alls (cached or re-executed, both deterministic).
@@ -40,7 +40,7 @@ def _val(out, tag):
 
 
 def test_unseeded_random_not_served_stale(nb_runner):
-    """ADJUDICATED (CAS-230): freezing is intended; the opt-out is the contract.
+    """ADJUDICATED (CAS-229): freezing is intended; the opt-out is the contract.
 
     This probe asserted plain-kernel semantics — a fresh draw each run. That is
     NOT what cash does, and deliberately so: unseeded randomness is pervasive in

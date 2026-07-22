@@ -87,7 +87,7 @@ def test_upstream_reexec_nameerror_swallowed_serves_stale(nb_runner):
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "OPEN, cache-effectiveness only (CAS-231). After a restart a chain rooted "
+        "OPEN, cache-effectiveness only (CAS-228). After a restart a chain rooted "
         "in `from math import pi` RE-EXECUTES instead of restoring from disk, "
         "while the `import math` chain beside it restores correctly. The VALUE is "
         "right either way -- this costs time, not correctness -- but from-imports "
