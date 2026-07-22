@@ -195,6 +195,11 @@ correctly, because `def a` then names `b` as an ordinary input. This is not abou
 recursion, though mutual recursion always trips it, since each function
 references the other before it exists.
 
+It is not only staleness. Because the call site never learns it depends on `b`,
+cash can serve a cached value for code that **no longer runs at all**: delete
+cell 2, restart, and `Run All` reprints `r=8` where a plain kernel raises
+`NameError`. With `b` defined *above* `a`, the same deletion correctly raises.
+
 **What to do:** define a function above the ones that call it — the order Python
 readers expect anyway. If you must keep the order, re-run the defining cell (or
 `Run All`) after editing it rather than the call site alone.
