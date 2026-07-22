@@ -65,15 +65,47 @@ def test_callee_above_caller_surfaces_its_removal(nb_runner):
         nb_runner.run_all()
 
 
+def test_callee_below_caller_propagates_an_edit_on_run_all(nb_runner):
+    """Callee BELOW: editing it and re-running the notebook refreshes the call site."""
+    nb_runner.create_notebook([C_ON, CALLER, CALLEE, CALLSITE])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "r=8" in nb_runner.get_output(4)
+
+    nb_runner.set_cell_source(3, "def b(n):\n    return n + 10")
+    nb_runner.run_all()
+    assert "r=26" in nb_runner.get_output(4), (
+        f"callee below the caller must propagate on Run All: {nb_runner.get_output(4)!r}"
+    )
+
+
 @pytest.mark.xfail(
     strict=True,
     reason=(
-        "OPEN (CAS-232): a call site does not depend on a function defined BELOW "
-        "it, so cash serves a cached value for code that would now raise "
-        "NameError. strict=True deliberately — the repo's global xfail_strict is "
-        "OFF, so without it a fix would land as a silent XPASS."
+        "OPEN, the remaining half of CAS-232. The call site's KEY now carries the "
+        "callee's lineage, which is enough whenever the callee cell actually runs "
+        "(Run All, or a restart). Re-running ONLY the call site does not re-execute "
+        "the edited callee, so user_ns and variable_lineage still hold the OLD b "
+        "and the key legitimately does not change. Closing it means putting the "
+        "callee into the statement's INPUTS so upstream reconstruction re-executes "
+        "its cell — inputs also drive cacheability and mutation analysis, which is "
+        "why it is not a one-line follow-on. strict=True: global xfail_strict is OFF."
     ),
 )
+def test_callee_below_caller_propagates_an_edit_on_isolated_rerun(nb_runner):
+    """Callee BELOW: editing it and re-running ONLY the call site."""
+    nb_runner.create_notebook([C_ON, CALLER, CALLEE, CALLSITE])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "r=8" in nb_runner.get_output(4)
+
+    nb_runner.set_cell_source(3, "def b(n):\n    return n + 10")
+    nb_runner.run_cell(4)
+    assert "r=26" in nb_runner.get_output(4), (
+        f"callee below the caller must propagate: {nb_runner.get_output(4)!r}"
+    )
+
+
 def test_callee_below_caller_surfaces_its_removal(nb_runner):
     """Same deletion, callee BELOW: a fresh run raises, so cash must not serve."""
     nb_runner.create_notebook([C_ON, CALLER, CALLEE, CALLSITE])

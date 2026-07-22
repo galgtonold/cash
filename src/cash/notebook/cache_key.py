@@ -8,13 +8,14 @@ See ``copilot-instructions.md`` for the full architectural invariant.
 """
 
 import ast
+import builtins
 import hashlib
 import logging
 import types
 from dataclasses import dataclass, field
 
 logger = logging.getLogger(__name__)
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from typing import Any, NamedTuple, Protocol, runtime_checkable
 
 from cash.notebook.lineage_store import LineageStore
@@ -143,6 +144,57 @@ def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> boo
     except (AttributeError, TypeError) as exc:
         logger.debug("[CACHE_KEY] Failed to check module/callable type for '%s': %s", var_name, exc)
     return False
+
+
+def called_function_dependencies(
+    inputs: Iterable[str],
+    user_ns: Mapping[str, Any],
+    variable_lineage: Mapping[str, str],
+) -> list[str]:
+    """``"name:lineage"`` components for the globals a called function reaches for.
+
+    A statement's inputs name the functions it CALLS; they do not name what those
+    functions touch when they run. Python resolves a function's globals at CALL
+    time, so ``r = a(3)`` genuinely depends on every global ``a`` reads — and the
+    ordinary input-lineage path cannot supply them, because it is built when
+    ``def a`` executes and only sees names bound ABOVE it. A callee defined BELOW
+    the caller is therefore invisible to the call site (CAS-232).
+
+    Walks ``__code__.co_names`` transitively, with a ``seen`` guard so mutual
+    recursion terminates. ``co_names`` also carries attribute names (``.sqrt``);
+    those simply resolve to nothing and contribute a constant, so they add noise
+    to the key but never spurious invalidation.
+
+    A missing name is recorded as ``ABSENT`` rather than skipped, and that is the
+    load-bearing half: it is what makes DELETING a callee change the key. Without
+    it the call site keeps its entry and cash serves a cached value for code that
+    would now raise ``NameError`` — a masked error rather than a stale value.
+    """
+    seen: set[str] = set()
+    stack = [name for name in inputs]
+    referenced: set[str] = set()
+
+    while stack:
+        name = stack.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        code_obj = getattr(user_ns.get(name), '__code__', None)
+        if code_obj is None:
+            continue
+        for ref in code_obj.co_names:
+            if ref in seen or ref in ('get_ipython', '__builtins__'):
+                continue
+            value = user_ns.get(ref)
+            # Modules carry their own key component; builtins are constant.
+            if not isinstance(value, types.ModuleType) and not hasattr(builtins, ref):
+                referenced.add(ref)
+            stack.append(ref)
+
+    referenced -= set(inputs)
+    return sorted(
+        f"{ref}:{variable_lineage.get(ref, 'ABSENT')}" for ref in referenced
+    )
 
 
 def _process_input_var(
@@ -379,9 +431,17 @@ def compute_cache_key(
     # their pre-CAS-223 values and no existing entry is invalidated.
     rng_component = f":rng{rng_fingerprint}" if rng_fingerprint else ""
 
+    # Globals the called functions reach for at CALL time, including any bound
+    # BELOW this statement — which the input-lineage path structurally cannot
+    # see, because it is built when the ``def`` runs and only looks upward
+    # (CAS-232). Same omit-when-empty rule as the RNG component above: a
+    # statement that calls no user-defined function keeps a byte-identical key.
+    callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage)
+    callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
+
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
-        f"{occurrence_component}{rng_component}"
+        f"{occurrence_component}{rng_component}{callee_component}"
     )
     combined_hash = hashlib.sha256(combined_hash_str.encode('utf-8')).hexdigest()
     cache_key = f"stmt:{combined_hash}"
