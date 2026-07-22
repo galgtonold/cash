@@ -462,6 +462,30 @@ label.c3-row { cursor: pointer; }
   border-radius: 3px;
 }
 
+/* Randomness role pill — same vocabulary as the notification pill. Neutral
+   (grey) for a seed or a seeded/reproducible draw; the warn-red family for an
+   unseeded draw, whose cached value is a frozen replay. */
+.c3-rng-pill {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #888;
+  padding: 1px 5px;
+  margin: 0 4px;
+  background: #fdfdfc;
+  border: 1px solid #e6e6e6;
+  border-radius: 3px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.c3-rng-pill.c3-rng-warn {
+  color: #8a2916;
+  background: #fbeae5;
+  border-color: #f1c8c1;
+}
+
 /* Loop heading line */
 .c3-loop-head .c3-code { font-weight: 500; }
 .c3-loop-meta {
