@@ -138,7 +138,7 @@ nav:
       - Production Transition: tutorials/feature-guides/production-transition.md
       - Choosing a Backend: tutorials/feature-guides/choosing-a-backend.md
       - Controlling Cache Behavior: tutorials/feature-guides/controlling-cache-behavior.md
-      - Debugging and Monitoring: tutorials/feature-guides/debugging-and-monitoring.md
+      - Troubleshooting & Debugging: tutorials/feature-guides/debugging-and-monitoring.md
       - Custom File Sources: tutorials/feature-guides/custom-file-sources.md
       - Custom Hashers: tutorials/feature-guides/custom-hashers.md
       - Dynamic Dependencies: tutorials/feature-guides/dynamic-dependencies.md
