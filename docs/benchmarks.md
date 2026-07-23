@@ -1,46 +1,50 @@
 # Benchmarks
 
-How much cash speeds things up depends almost entirely on **the ratio of compute
-cost to result size**. A statement that is expensive to compute and cheap to
-store is where cash wins big; a statement whose result is nearly as slow to load
+Cash does **not** speed up the first run — it pays a small cost to fill the
+cache. What it speeds up is every **re-run** afterwards: restoring a result that
+hasn't changed instead of recomputing it. So these numbers are all *reuse*
+speedups — how much faster the **second** run of an unchanged statement is.
+
+How big the saving is depends almost entirely on **the ratio of compute cost to
+result size**. A statement that was expensive to compute and is cheap to store
+is where a restore wins big; a statement whose result is nearly as slow to load
 from disk as to recompute is where it wins little — or loses, in which case the
 [cost model](cost-model.md) tries to decline to persist it.
 
 The numbers below are measured by independent testers on real workloads, not
-projections. They are the same figures shown in the project README; this page
-adds the methodology and how to reproduce them.
+projections. This page adds the methodology and how to reproduce them.
 
-## Measured speedups
+## How much a re-run saves
 
-<div class="cash-bench" role="img" aria-label="Measured speedups by workload on a log scale: expensive loop body about 190 times, model training 9 to 11 times, Monte Carlo 4 to 5.5 times, cache-friendly ETL 1.4 to 1.6 times, naive big-frame ETL 1.2 times.">
+<div class="cash-bench" role="img" aria-label="Re-run (reuse) speedups by workload on a log scale: re-running an expensive loop about 190 times faster, a cached model fit 9 to 11 times, a restarted Monte Carlo 4 to 5.5 times, a cache-friendly ETL 1.4 to 1.6 times, a naive big-frame ETL 1.2 times.">
   <div class="cash-bench-row">
-    <span class="cash-bench-label">Expensive loop body<br><span class="cash-bench-note">backtest windows, per-entity API calls</span></span>
+    <span class="cash-bench-label">Re-run an expensive loop<br><span class="cash-bench-note">backtest windows, per-entity API calls</span></span>
     <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-hi" style="width:99%"></span></span>
     <span class="cash-bench-val">~190×</span>
   </div>
   <div class="cash-bench-row">
-    <span class="cash-bench-label">Model training via <code>@cash.cache</code></span>
+    <span class="cash-bench-label">Re-run a cached model fit <span class="cash-bench-note">(<code>@cash.cache</code>)</span></span>
     <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-hi" style="width:44%"></span></span>
     <span class="cash-bench-val">~9–11×</span>
   </div>
   <div class="cash-bench-row">
-    <span class="cash-bench-label">Monte Carlo / restart-and-re-run</span>
+    <span class="cash-bench-label">Restart, then re-run a Monte Carlo</span>
     <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-hi" style="width:30%"></span></span>
     <span class="cash-bench-val">~4–5.5×</span>
   </div>
   <div class="cash-bench-row">
-    <span class="cash-bench-label">Big-frame pandas ETL, restructured cache-friendly</span>
+    <span class="cash-bench-label">Re-run a cache-friendly big-frame ETL</span>
     <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-lo" style="width:8%"></span></span>
     <span class="cash-bench-val">~1.4–1.6×</span>
   </div>
   <div class="cash-bench-row">
-    <span class="cash-bench-label">The same ETL, written the way people naturally write pandas</span>
+    <span class="cash-bench-label">Re-run the same ETL, written naturally</span>
     <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-lo" style="width:3.5%"></span></span>
     <span class="cash-bench-val">~1.2×</span>
   </div>
 </div>
 
-<p class="cash-bench-note">Bars are on a <strong>log scale</strong> — a ~190× win and a ~1.2× win are both shown honestly. Green = a big win (expensive to compute, cheap to store); ochre = marginal (the result is nearly as slow to reload as to recompute).</p>
+<p class="cash-bench-note">Each bar is how much faster the <strong>re-run</strong> is, on a <strong>log scale</strong> — a ~190× win and a ~1.2× win are both shown honestly. Green = a big win (was expensive to compute, cheap to store); ochre = marginal (the result is nearly as slow to reload as to recompute).</p>
 
 Two honest caveats that the table can't show on its own:
 
