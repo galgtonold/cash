@@ -403,6 +403,15 @@ fetch_user.cache_info()["warnings"]
 # [{'category': 'CashImpurityWarning', 'message': '...', 'timestamp': ...}]
 ```
 
+!!! warning "Untrackable dependencies *raise*, they don't warn"
+    Warn-and-cache is for ordinary side effects (I/O, mutations, discarded
+    returns). A different class — a dependency resolved from a **runtime value**
+    that cash can't track: `eval`/`exec`/`compile`, dynamic dispatch via
+    `getattr(obj, name)()`, or `importlib.import_module` — **raises
+    `CashImpureFunctionError` on the first call even in default mode**, because a
+    cached result could go silently stale. Pass `assume_safe=True` to cache it
+    anyway, or refactor to a statically-named call.
+
 ### `assume_safe=True` — silence after auditing
 
 Use when caching the function is fine (e.g. the side effect is
@@ -524,7 +533,7 @@ notebook cell), and the parent's cache invalidates automatically.
 | `KNOWN_PURE_BUILTINS` | `from cash.notebook.purity import KNOWN_PURE_BUILTINS` | `frozenset[str]` | The stdlib allow-list. |
 | `clear_purity_cache()` | `from cash.notebook.purity import clear_purity_cache` | `None` | Clears the SHA-256 result cache. Testing/debug use. |
 | `CashImpurityWarning` | `from cash import CashImpurityWarning` | warning class | Emitted by `@cash.cache` (default mode) when the analyzer finds issues. Subclasses `CashCacheIneffectiveWarning`. |
-| `CashImpureFunctionError` | `from cash import CashImpureFunctionError` | exception class | Raised by `@cash.cache(strict=True)` instead of warning. |
+| `CashImpureFunctionError` | `from cash import CashImpureFunctionError` | exception class | Raised by `@cash.cache(strict=True)` on any purity issue, **and by a plain `@cash.cache` on untrackable-dependency patterns** (`eval`/`exec`, dynamic `getattr(...)()`, `importlib`). `assume_safe=True` suppresses it. |
 
 ## Related
 

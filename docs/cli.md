@@ -135,7 +135,7 @@ Print the installed cash version.
 
 ```bash
 cash version
-# cash 0.1.0
+# cash 0.1.1
 ```
 
 **Behaviour notes:**
@@ -156,10 +156,14 @@ Print the effective merged configuration.
 - `Cache dir` — the on-disk cache directory the file backend will use.
 - `Debug` — whether debug logging is enabled.
 - `Compress` — whether cache entries are compressed on disk.
-- `Max size` — the maximum cache size in GiB.
-- `Threshold` — the smart-persistence threshold in seconds (statements that
-  take longer than this get persisted to disk; faster ones may stay
-  in-memory).
+- `Max size` — the maximum cache size, or `auto (scaled to disk/RAM per tier)`
+  when unset (the default).
+- `Persist` — what actually decides disk persistence: the cost model
+  (`0.1s compute floor, N% savings required`), or a conservative fallback when
+  smart persistence is off.
+- `Threshold` — the legacy `smart_persistence_threshold`, printed as
+  `(legacy, not consulted)`; the cost model replaced it (CAS-141), so it's shown
+  for visibility only.
 - `Tiers` — present when the active config declares an explicit tier
   list; lists each tier's type in order.
 - `Source` — which layers contributed to the resolved config (e.g.
@@ -169,13 +173,14 @@ Print the effective merged configuration.
 
 ```bash
 cash info
-# Cash v0.1.0
+# Cash v0.1.1
 #   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
 #   Debug:      False
 #   Compress:   True
-#   Max size:   10.0 GB
-#   Threshold:  1.0s
+#   Max size:   auto (scaled to disk/RAM per tier)
+#   Persist:    cost model (0.1s compute floor, 20% savings required)
+#   Threshold:  1.0s (legacy, not consulted)
 #   Source:     project:/home/me/project/pyproject.toml,env
 ```
 

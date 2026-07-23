@@ -117,7 +117,10 @@ Nested unpacking has the same hole one level down — `(p, (q,)) = (x, (y,))` th
 
 ### Mutating global state inside a function
 
-Cash analyses what a *statement* reads and writes. It cannot see inside a function you call:
+Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
+a called function mutates — including imported helpers and bare calls (`proc(df)`
+that mutates `df`). What it still cannot see is a function mutating a **global**
+(non-argument) it wasn't handed:
 
 <!-- test:skip reason="illustrative: hidden global mutation, needs an isolated cell re-run" -->
 ```python

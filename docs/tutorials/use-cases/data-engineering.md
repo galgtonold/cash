@@ -114,7 +114,7 @@ In a pipeline run, you want to know which steps hit and which missed:
 print(extract.cache_info())
 print(normalize.cache_info())
 print(aggregate.cache_info())
-# CacheInfo(hits=1, misses=0, ...)
+# {'hits': 1, 'misses': 0, 'hit_rate': 1.0, 'total_time_saved': 0.5, 'warnings': []}
 ```
 
 In a notebook, `%cash_stats` prints a summary across every tracked function. On the CLI, `cash inspect` reads the cache directory and lists entries with sizes and timestamps. See [Debugging and Monitoring](../feature-guides/debugging-and-monitoring.md) for the full surface — `f.explain()` is especially useful in CI when you want to know *why* a step missed.

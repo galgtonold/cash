@@ -80,7 +80,9 @@ Several independent signals can cause a miss. The first four feed the [cache key
     hash**. On every lookup the size is compared first, and when it matches, the
     content hash decides — so a bare `touch` no longer invalidates, and a same-size
     edit within the same second no longer slips through. Files over 8 MiB are hashed
-    by sampling three size-derived regions rather than in full. The check runs
+    by sampling three size-derived regions rather than in full; since that partial
+    hash can't see an edit *outside* those regions, sampled files additionally
+    require the mtime to match, so a real in-place edit is still caught. The check runs
     against the file deps of the statement itself *and* those inherited from its
     input variables, so a changed CSV invalidates the whole chain that read it.
 

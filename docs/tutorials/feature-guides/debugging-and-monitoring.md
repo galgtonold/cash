@@ -61,7 +61,7 @@ The return value is a `CacheExplanation` dataclass (`src/cash/core.py:65-117`) w
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 
-Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>` — see `src/cash/notebook/magics.py:312`).
+Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>` — see `src/cash/notebook/ipython/magics.py:312`).
 
 The five log prefixes you'll see most:
 
@@ -196,7 +196,7 @@ When diagnosis is done and you need to *act*, four notebook magics and one CLI c
 %cash_export lineage.json --json                       # lineage graph as JSON
 ```
 
-Definitions at `src/cash/notebook/magic_admin.py:314`. The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
+Definitions at `src/cash/notebook/ipython/admin.py:314`. The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
 
 ### Import
 
@@ -205,11 +205,11 @@ Definitions at `src/cash/notebook/magic_admin.py:314`. The `.cache` file is a po
 %cash_import teammate_cache.cache --merge     # merge with the current cache instead of replacing
 ```
 
-Definitions at `src/cash/notebook/magic_admin.py:404`. Use `--merge` when pulling in a teammate's cache without losing your own entries.
+Definitions at `src/cash/notebook/ipython/admin.py:404`. Use `--merge` when pulling in a teammate's cache without losing your own entries.
 
 ### Clear
 
-From inside a notebook, `%cash_repair` covers the two flavors of reset (`src/cash/notebook/magic_admin.py:182`):
+From inside a notebook, `%cash_repair` covers the two flavors of reset (`src/cash/notebook/ipython/admin.py:182`):
 
 ```python { .nb-cell }
 %cash_repair             # remove corrupted entries, keep healthy ones

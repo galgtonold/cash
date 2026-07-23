@@ -77,7 +77,7 @@ The check itself is at `src/cash/core.py:1731-1735`: on a lookup hit, `_validate
 
 ### `@cash:persist` — force it onto disk
 
-Cash's default tiered backend (`InMemoryBackend` over `FileBackend`) uses a promotion policy that only writes through to disk when the execution-time-times-savings math works out. The default cut-off is one second of execution time *and* re-execution slower than re-reading. See [Smart Persistence](smart-persistence.md) for the full policy.
+Cash's default tiered backend (`InMemoryBackend` over `FileBackend`) uses a promotion policy that only writes through to disk when the execution-time-times-savings math works out. The default cut-off is a **0.1 s** compute floor *and* re-execution slower than re-reading (a conservative 1.0 s floor applies only when smart persistence is turned off). See [Smart Persistence](smart-persistence.md) for the full policy.
 
 When you know better — anything that takes more than a few seconds to recompute and you can't afford to lose to a kernel crash — `@cash:persist` overrides the policy:
 
@@ -166,7 +166,7 @@ Two ways to set a default TTL for every cached statement in scope:
 result = compute_something()
 ```
 
-`%cash_on ttl=N` sets `self._global_ttl` on the magic (`src/cash/notebook/magics.py:277`). `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell (`src/cash/notebook/magics.py:1033-1052`), so the cell-scoped value doesn't leak out.
+`%cash_on ttl=N` sets `self._global_ttl` on the magic (`src/cash/notebook/ipython/magics.py:277`). `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell (`src/cash/notebook/ipython/magics.py:1033-1052`), so the cell-scoped value doesn't leak out.
 
 A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set (`src/cash/notebook/statement/processor.py:591-592`).
 

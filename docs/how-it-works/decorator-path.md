@@ -50,7 +50,7 @@ extended to the call graph. (The purity analyzer is the same machinery behind
 the function purity markers in [Safety](safety.md).)
 
 Source alone isn't enough, though, because a function can read inputs that never
-appear in `args` and never change its bytes. So Cash folds four more things into
+appear in `args` and never change its bytes. So Cash folds several more things into
 `state` on every call, each one closing a hole that produced a silent wrong
 answer:
 
@@ -60,6 +60,9 @@ answer:
 | Parameter defaults | Editing `n_estimators=300` to `400` lives on the function object, not in the code object — the key stayed byte-identical and returned the 300-tree model |
 | A bound method's `__self__` | With `cash.cache(obj.method)`, `self` never reaches `args`, so two instances shared a key |
 | Module-level **data** globals the body reads | A config constant or dispatch dict changing left every cached result stale, silently |
+| Class-level code a cached **method** reaches, transitively | Editing a method or class-body helper the cached method calls left its result stale |
+| Class constants read via `ClassName.ATTR` / `type(self).ATTR` | Changing a class-level constant the body reads didn't move the key |
+| A helper reached through a **value**, not a bare name (`fn = mod.f; fn(x)`) | A value-indirected call used to slip past the plain-helper source hash |
 
 Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is

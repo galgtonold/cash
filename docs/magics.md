@@ -2,9 +2,9 @@
 
 Cash registers a suite of IPython magic commands that control caching, inspect
 session state, and move cache data between sessions. This page is the canonical
-reference for all **19** magics — each entry lists the exact signature, every
+reference for all **20** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
-`src/cash/notebook/magics.py` and `src/cash/notebook/magic_admin.py`.
+`src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
 ## At a glance
 
@@ -12,6 +12,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 |-------|---------|
 | [`%cash_on`](#cash_on) | Enable automatic caching for subsequent cells. |
 | [`%cash_off`](#cash_off) | Disable automatic caching. |
+| [`%cash_persist`](#cash_persist) | Cache *every* statement, bypassing the cost-aware floors. |
 | [`%cash_help`](#cash_help) | Print a quick-reference card (optionally per topic). |
 | [`%cash_feedback`](#cash_feedback) | Show bug-report and feedback URLs. |
 | [`%cash_status`](#cash_status) | Inspect the last cell + session as dict / JSON. |
@@ -78,6 +79,29 @@ Disable automatic caching. Subsequent cells run uncached until you call
 
 ```python
 %cash_off
+```
+
+### `%cash_persist`
+
+Cache *every* statement regardless of how cheap it was to compute — equivalent
+to putting `# @cash:persist` on every statement. It bypasses the cost-aware
+floors (the 10 ms "too cheap to cache" floor and the size-aware skip). Useful
+for reproducibility, benchmarks, and debugging cache behaviour; wasteful for
+trivial statements in normal use.
+
+**Signature:** `%cash_persist [on|off]`
+
+**Arguments:**
+
+- `on` — cache every statement.
+- `off` — restore the default cost-aware policy.
+- *(no argument)* — toggle the current state.
+
+**Example:**
+
+```python
+%cash_persist on     # every statement is now cached
+%cash_persist off    # back to the cost-aware default
 ```
 
 ### `%cash_help`

@@ -147,7 +147,7 @@ Cash tracks hits and misses per function:
 
 ```python
 chat.cache_info()
-# CacheInfo(hits=42, misses=8, ...)
+# {'hits': 42, 'misses': 8, 'hit_rate': 0.84, 'total_time_saved': 12.4, 'warnings': []}
 ```
 
 Multiply hits by your per-call cost for a quick spend-avoided estimate. For a Sonnet call at ~$0.05/request, 42 hits ≈ $2.10 saved on that function in this session.

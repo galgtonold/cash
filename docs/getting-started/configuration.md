@@ -35,7 +35,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 #   export CASH_DEBUG=true
 
 # Or change at runtime on the default singleton:
-configure(debug=True, smart_persistence_threshold=0.5)
+configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
 ## All `CashConfig` fields
@@ -59,6 +59,7 @@ the `CASH_*` binding; the TOML key matches the field name.
 |---|---|---|---|
 | `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
 | `smart_persistence_threshold` | `CASH_SMART_PERSISTENCE_THRESHOLD` | `1.0` (seconds) | **Legacy / no longer consulted (CAS-141).** Superseded by the cost-model comparison; kept for compatibility. |
+| `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | "Too cheap to cache at all" floor — statements faster than this never get a cache entry. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
@@ -220,7 +221,7 @@ import cash
 
 # Hot fields — just update the dataclass, no rebuild.
 cash.configure(debug=True)
-cash.configure(smart_persistence_threshold=0.5)
+cash.configure(persist_all=True)
 
 # Backend-affecting fields — drain pending writes on the current
 # backend, build a fresh one from the updated config, swap it in.

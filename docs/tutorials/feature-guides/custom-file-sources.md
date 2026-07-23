@@ -37,7 +37,7 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | Module | Functions |
 |---|---|
 | `builtins` | `open()` (any read mode — `'r'`, `'r+'`, `'rb'`, `'r+b'`, …) |
-| `io` | `open()` (the pathlib-backed variant) |
+| `io` | `open()` (alias of the built-in `open`) |
 | `pandas` | `read_*` — every reader: `read_csv`, `read_parquet`, `read_excel`, `read_json`, `read_pickle`, `read_feather`, `read_hdf`, `read_orc`, `read_sas`, `read_spss`, `read_stata`, `read_table`, `read_xml`, `read_html`, `read_fwf`, `read_clipboard`, `read_sql*` |
 | `polars` | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, plus the lazy variants `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
 | `numpy` | `load`, `loadtxt`, `genfromtxt`, `fromfile` |

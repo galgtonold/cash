@@ -164,6 +164,7 @@ Two override mechanisms exist, and they apply to different paths:
 
 - **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata (`src/cash/notebook/annotations.py:33-60`, `src/cash/notebook/statement/processor.py:586-595`). The notebook filter then bypasses its skip checks (`statement/processor.py:1127`), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (`tiered_backend.py:105-109`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
+- **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
 
 There is **no** `@cash.cache(persist=True)` decorator parameter. To force persistence of a specific function's results, the available options are: switch to a non-tiered backend (`Cash(backend=FileBackend(...))` writes everything), or lower `min_cache_savings_pct` toward `0` so almost any hit clears the promotion bar. See [Controlling Cache Behavior](controlling-cache-behavior.md) for the full list of decorator knobs.
 

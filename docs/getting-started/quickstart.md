@@ -168,7 +168,7 @@ Supported file operations:
 - `pd.read_csv()`, `pd.read_excel()`, `pd.read_parquet()`, and all `pd.read_*()` functions
 - `np.load()`, `np.loadtxt()`, `np.genfromtxt()`, `np.fromfile()`
 - `polars.read_csv()`, `polars.read_parquet()`, `polars.scan_csv()`, and more
-- `open()` (built-in), `io.open()` (pathlib)
+- `open()` and `io.open()` (the built-in file open)
 - `joblib.load()`, `pickle.load()`, `json.load()`
 
 ## Statement-Level Annotations

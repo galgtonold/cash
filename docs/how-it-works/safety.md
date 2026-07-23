@@ -272,3 +272,11 @@ side effect → always re-run; unseeded randomness → cache but say so; otherwi
 Cash also exposes these verdicts at runtime: `@cash:no-cache` forces a
 statement to never cache, and the decorator path has matching **purity
 markers** for functions — see [The decorator path](decorator-path.md).
+
+The decorator takes one verdict further than the notebook path: a `@cash.cache`
+function whose body resolves a dependency from a **runtime value** cash can't
+track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`, or
+`importlib.import_module` — **raises `CashImpureFunctionError` by default**
+(caching correctness can't be guaranteed), rather than merely warning. Pass
+`@cash.cache(assume_safe=True)` to accept the risk. See
+[the decorator's purity gates](../decorator.md).

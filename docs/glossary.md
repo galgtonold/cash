@@ -116,7 +116,7 @@ database. These are not safe to silently cache, so cash warns or declines. See
 ## Skip / Uncacheable
 
 A statement cash decides *not* to cache — because it is too cheap to be worth
-caching (under the ~100 ms floor), too large to store economically (the [cost
+caching (under the ~10 ms floor), too large to store economically (the [cost
 model](#cost-model) declines), or has side effects. The [badge](#badge) reports
 it as skipped. See [Knowing when not to cache](how-it-works/safety.md).
 

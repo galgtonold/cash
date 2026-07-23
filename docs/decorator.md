@@ -200,25 +200,34 @@ is bypassed (warning fires) — see the iterator section below.
 ### `strict=` and `assume_safe=` — purity gates
 
 By default, `@cash.cache` runs a static analyzer on the function body
-(and module-bounded helpers) on first call. If it finds known-impure
-calls, scope mutations, dynamic dispatch, or discarded-return calls,
-it emits a `CashImpurityWarning`. The function still gets cached.
+(and module-bounded helpers) on first call. What it does depends on what it finds:
+
+- **Impure calls, scope mutations, discarded-return calls** (`requests.get`,
+  `datetime.now`, `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
+  function is **still cached**.
+- **Untrackable dependencies** — a call resolved from a *runtime value*, so cash
+  can't tell when it changes: `eval`/`exec`/`compile`, dynamic dispatch via
+  `getattr(obj, name)()`, or `importlib.import_module` — **raise
+  `CashImpureFunctionError` by default**, because a cached result could go
+  silently stale. Pass `assume_safe=True` to cache anyway, or refactor to a
+  statically-named call.
 
 ```python
 @cash.cache
 def fetch_user(uid):
     return requests.get(f"https://api/{uid}").json()
-# First call: CashImpurityWarning fires because requests.get is impure.
+# First call: CashImpurityWarning fires (requests.get is impure) — still cached.
 ```
 
 Three modes:
 
-- **default** (warn) — visible warning, cached anyway
-- **`strict=True`** — raise `CashImpureFunctionError` instead. Good for
+- **default** (warn) — impure calls warn and cache; **untrackable dependencies raise**.
+- **`strict=True`** — raise `CashImpureFunctionError` on *any* purity issue. Good for
   CI: fail the build if anyone introduces caching of side-effecting code.
-- **`assume_safe=True`** — silence the warning. Use after you've
-  audited and know caching is correct (e.g., a memoized API call where
-  the side effect is idempotent / harmless on hit).
+- **`assume_safe=True`** — silence every purity warning **and** the
+  untrackable-dependency raise, caching regardless. Use after you've audited and
+  know caching is correct (e.g., a memoized API call whose side effect is
+  idempotent / harmless on hit).
 
 See [Purity tutorial](tutorials/feature-guides/purity-decorators.md) for the full story including
 `@pure`, `@stateful`, and `mark_pure`/`mark_stateful` for third-party
@@ -309,10 +318,10 @@ async def fetch_user(user_id):
 users = await asyncio.gather(*(fetch_user(i) for i in range(100)))
 ```
 
-Concurrent `asyncio.gather` is safe: each unique key computes once,
-duplicates wait on the first computation (when `use_locking=True` is
-set on the `Cash` instance — for async this currently logs a warning
-and proceeds unlocked; see the [API reference](api/cash.md)).
+Concurrent `asyncio.gather` is safe: with `use_locking=True` on the `Cash`
+instance, each unique key computes once and duplicate awaits coalesce — the
+leader computes and stores, the followers wait and read the stored result. See
+the [API reference](api/cash.md).
 
 Async generators (`async def gen(): yield ...`) are **not** cached
 yet — they emit a `CashCacheIneffectiveWarning` and are returned

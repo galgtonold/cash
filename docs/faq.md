@@ -39,6 +39,14 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
     drawn value by design. Opt in with `@cash:allow-random`, or seed the RNG for
     normal caching. See [Known limitations](known-limitations.md).
 
+??? question "Why did `@cash.cache` raise `CashImpureFunctionError`?"
+    The function resolves a dependency from a runtime value cash can't track —
+    `eval`/`exec`, dynamic dispatch via `getattr(obj, name)()`, or
+    `importlib.import_module` — so a cached result could go silently stale, and
+    cash refuses to cache it by default. Pass `@cash.cache(assume_safe=True)` to
+    cache anyway, or refactor to a statically-named call. See
+    [the decorator guide](decorator.md).
+
 ## Coverage
 
 ??? question "Does it work with pandas / numpy / polars / torch / duckdb?"
@@ -65,7 +73,7 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
 
 ??? question "A cell isn't caching — how do I find out why?"
     Read the [badge](glossary.md#badge): it says *skipped* and why. The usual
-    reasons are (1) the statement is under the ~100 ms floor (too cheap to be
+    reasons are (1) the statement is under the ~10 ms floor (too cheap to be
     worth caching), (2) the result is too large for the [cost
     model](glossary.md#cost-model) to persist economically, or (3) a side effect
     or unseeded draw made it unsafe. A long `for`-loop that appends into a list
