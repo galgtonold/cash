@@ -39,7 +39,6 @@ class TestCashConfigStructure:
         assert c.max_cache_size is None
         # Cost-aware policy unchanged.
         assert c.smart_persistence is True
-        assert c.smart_persistence_threshold == 1.0
         assert c.min_execution_time_to_cache_seconds == 0.01
         # Backend selection — defaults to the auto-built tiered stack.
         assert c.backend == "tiered"
@@ -105,7 +104,6 @@ class TestEnvVarLoading:
         monkeypatch.setenv("CASH_DEBUG", "true")
         monkeypatch.setenv("CASH_COMPRESS", "1")
         monkeypatch.setenv("CASH_MAX_CACHE_SIZE", "5000000000")
-        monkeypatch.setenv("CASH_SMART_PERSISTENCE_THRESHOLD", "0.5")
         monkeypatch.setenv("CASH_BACKEND", "redis")
         monkeypatch.setenv("CASH_REDIS_HOST", "myredis.example.com")
         monkeypatch.setenv("CASH_REDIS_PORT", "6380")
@@ -114,7 +112,6 @@ class TestEnvVarLoading:
         assert env["debug"] is True
         assert env["compress"] is True
         assert env["max_cache_size"] == 5000000000
-        assert env["smart_persistence_threshold"] == 0.5
         assert env["backend"] == "redis"
         assert env["redis_host"] == "myredis.example.com"
         assert env["redis_port"] == 6380

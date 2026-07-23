@@ -24,8 +24,8 @@ class TestLargeFrameReachesDisk:
         """A ~48 MB array from an expensive statement is promoted to disk.
 
         Under the old inverted policy a 48 MB result computed in < 1 s was
-        refused (``execution_time < smart_persistence_threshold``) and never
-        left RAM, so no ``*.data`` file was written.
+        refused (its compute fell under the promotion floor) and never left
+        RAM, so no ``*.data`` file was written.
         """
         nb_runner.create_notebook([
             "import numpy as np\nimport time",

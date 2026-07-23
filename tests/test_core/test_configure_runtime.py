@@ -32,11 +32,6 @@ class TestHotFields:
         assert cash._get_global_cash().config.debug is True
         assert cash._get_global_cash().debug is True
 
-    def test_configure_smart_persistence_threshold(self):
-        import cash
-        cash.configure(smart_persistence_threshold=0.25)
-        assert cash._get_global_cash().config.smart_persistence_threshold == 0.25
-
     def test_configure_min_cache_savings_pct(self):
         import cash
         cash.configure(min_cache_savings_pct=0.10)
@@ -46,7 +41,7 @@ class TestHotFields:
         import cash
         # Touch backend to ensure it's built and capture identity.
         backend_before = cash._get_global_cash().backend
-        cash.configure(debug=True, smart_persistence_threshold=0.5)
+        cash.configure(debug=True, min_cache_savings_pct=0.5)
         backend_after = cash._get_global_cash().backend
         assert backend_before is backend_after, \
             "hot field reconfigure should not rebuild the backend"

@@ -207,14 +207,6 @@ class CashConfig:
     Use ``persist_all=True`` (or ``%cash_persist on``) if you actually want
     everything written to disk."""
 
-    smart_persistence_threshold: float = 1.0
-    """Compute-time threshold (seconds). Disk persistence is decided by the
-    serialization-aware cost model — a result is promoted past RAM when its
-    predicted restore time is enough below its compute time
-    (``execution_time - est_restore > min_cache_savings_pct · execution_time``,
-    above a 0.1 s floor) — so this value is not part of that decision. Use
-    ``persist_all=True`` (or ``%cash_persist on``) to force everything to disk."""
-
     min_execution_time_to_cache_seconds: float = 0.01
     """Hard floor (seconds). Compute under this duration is never
     promoted past RAM — disk I/O alone would cost more than
@@ -671,7 +663,6 @@ persist_all = false
 # Smart persistence — only promote past RAM when the compute was slow
 # enough to be worth disk/network I/O for.
 smart_persistence = true
-smart_persistence_threshold = 1.0
 
 # Backend selection. One of: tiered (default, builds [memory, file]),
 # memory, file, sqlite, redis, s3.
