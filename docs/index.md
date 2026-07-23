@@ -7,14 +7,12 @@ Cash is a transparent caching library for Python with two primary use cases —
 **Jupyter notebook caching** (add `%cash_on` and cell results cache themselves)
 and **decorator-based caching** (wrap any function with `@cash.cache`).
 
-<!-- HERO VIDEO — awaiting the Cloudflare R2 link. To enable: replace R2_MP4_URL
-     with the R2 URL and delete these comment markers.
-<video class="cash-hero-video" autoplay muted loop playsinline controls
+<video class="cash-hero-video" controls playsinline preload="none"
+       poster="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero-poster.jpg"
        style="width:100%;max-width:900px;border-radius:6px;margin:1.25em 0;display:block;">
-  <source src="R2_MP4_URL" type="video/mp4">
-  Your browser can't play this video — <a href="R2_MP4_URL">download it</a> instead.
+  <source src="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero_web.mp4" type="video/mp4">
+  Your browser can't play this video — <a href="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero_web.mp4">download it</a> instead.
 </video>
--->
 
 ## Quick Example
 

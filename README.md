@@ -24,12 +24,9 @@ That's the install. The next time you re-run the notebook, every statement that 
 
 📺 **Watch the 90-second demo** — Cash caching a real notebook, end to end:
 
-https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c
+<video src="https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c" poster="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero-poster.jpg" controls playsinline width="100%"></video>
 
-<!-- R2-hosted copy (awaiting link) — enable by replacing R2_MP4_URL and deleting these markers.
-     Renders where the GitHub-attachment player is stripped (e.g. some mirrors).
-<video src="R2_MP4_URL" controls muted loop playsinline width="100%"></video>
--->
+> Not playing? [Watch the demo here](https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero_web.mp4).
 
 > See [Reading the Cash badge](docs/badges.md) for a walkthrough of every part of the badge and the most common questions it answers.
 
