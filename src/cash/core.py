@@ -100,6 +100,25 @@ def _object_state(value: Any) -> dict:
     return state
 
 
+def _tag_subtype(value: Any, base: type, canon: Any) -> Any:
+    """Wrap *canon* with the concrete type when *value* is a SUBCLASS of *base*.
+
+    tuple/dict/list subclasses (namedtuple, OrderedDict, defaultdict, ...) were
+    canonicalised into their base type, so ``f(P(1,2))`` and ``f(Q(1,2))`` --
+    two distinct namedtuple types with equal values -- collided onto one cache
+    key and the second call was served the first's result (a silent wrong-HIT).
+    The ``__cash_obj__`` path already tags arbitrary objects with their type for
+    exactly this reason; the container branches did not.
+
+    An EXACT base instance is returned untouched, so ordinary tuple/dict/list
+    arguments keep byte-identical keys and no cache is invalidated.
+    """
+    if type(value) is base:
+        return canon
+    t = type(value)
+    return ("__cash_subtype__", f"{t.__module__}.{t.__qualname__}", canon)
+
+
 def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
     """Rewrite *value* into a form whose pickled bytes are independent of
     set/dict iteration order (which depends on PYTHONHASHSEED for str/bytes
@@ -116,16 +135,25 @@ def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
         tag = "__cash_frozenset__" if isinstance(value, frozenset) else "__cash_set__"
         return (tag, tuple(items))
     if isinstance(value, dict):
+        # A dict SUBCLASS (OrderedDict, defaultdict) may be order-significant,
+        # so preserve item order and tag the type; a plain dict is order-
+        # insensitive by ``==`` and keeps the sorted, untagged form so its key
+        # is byte-identical to before this change.
+        subclass = type(value) is not dict
         items = [
             (_stable_key_repr(k, _depth + 1), _stable_key_repr(v, _depth + 1))
             for k, v in value.items()
         ]
-        items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
-        return ("__cash_dict__", tuple(items))
+        if not subclass:
+            items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
+        canon = ("__cash_dict__", tuple(items))
+        return _tag_subtype(value, dict, canon)
     if isinstance(value, list):
-        return ("__cash_list__", tuple(_stable_key_repr(v, _depth + 1) for v in value))
+        canon = ("__cash_list__", tuple(_stable_key_repr(v, _depth + 1) for v in value))
+        return _tag_subtype(value, list, canon)
     if isinstance(value, tuple):
-        return tuple(_stable_key_repr(v, _depth + 1) for v in value)
+        canon = tuple(_stable_key_repr(v, _depth + 1) for v in value)
+        return _tag_subtype(value, tuple, canon)
     obj_state = _object_state(value)
     if obj_state:
         # Arbitrary object (dataclass, __slots__ class, ...) - canonicalise its
@@ -154,21 +182,29 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
     if _depth > 50:
         return value
     if isinstance(value, dict):
+        # A dict SUBCLASS keeps insertion order (it may be semantic) and is
+        # tagged with its type; a plain dict is sorted (order-insensitive) and
+        # untagged, so its key is byte-identical to before this change.
+        subclass = type(value) is not dict
         items = [
             (k, _canonicalize_dict_order(v, _depth + 1)) for k, v in value.items()
         ]
-        try:
-            items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
-        except Exception:  # noqa: BLE001 - unpicklable key: degrade, never crash
+        if not subclass:
             try:
-                items.sort(key=lambda kv: repr(kv[0]))
-            except Exception:  # noqa: BLE001 - unsortable even by repr: keep order
-                pass
-        return dict(items)
+                items.sort(key=lambda kv: pickle.dumps(kv[0], protocol=4))
+            except Exception:  # noqa: BLE001 - unpicklable key: degrade, never crash
+                try:
+                    items.sort(key=lambda kv: repr(kv[0]))
+                except Exception:  # noqa: BLE001 - unsortable even by repr: keep order
+                    pass
+        canon = dict(items)
+        return _tag_subtype(value, dict, canon)
     if isinstance(value, list):
-        return [_canonicalize_dict_order(v, _depth + 1) for v in value]
+        canon = [_canonicalize_dict_order(v, _depth + 1) for v in value]
+        return _tag_subtype(value, list, canon)
     if isinstance(value, tuple):
-        return tuple(_canonicalize_dict_order(v, _depth + 1) for v in value)
+        canon = tuple(_canonicalize_dict_order(v, _depth + 1) for v in value)
+        return _tag_subtype(value, tuple, canon)
     return value
 
 
