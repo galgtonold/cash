@@ -319,5 +319,6 @@ out of file-dependency tracking for that statement), use the
   decision guide for picking between RAM-only, tiered, Redis, S3, and
   custom backend stacks for your workload.
 - [Smart persistence](../tutorials/feature-guides/smart-persistence.md) —
-  how `smart_persistence_threshold` and the cost-model knobs interact, and
-  when to override them.
+  how the cost-model knobs (`min_execution_time_to_cache_seconds`,
+  `min_cache_savings_pct`, `persist_all`) decide what lands on disk, and when
+  to override them.
