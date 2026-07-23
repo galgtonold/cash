@@ -318,6 +318,8 @@ from ..cacheability import (
     StatementAnalysis,
     analyze_statement,
     assigned_method_call_receivers,
+    function_arg_mutations,
+    standalone_call_arg_targets,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -681,9 +683,10 @@ class StatementProcessor:
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE (CAS-138). Without the directive ``est_fit`` is empty and every
         # site below degrades to the pre-CAS-138 skip-cache behaviour.
+        fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
         skip_pre_route = mut_pre_route - est_fit
-        if mut_pre_route or est_fit:
-            outputs = outputs | mut_pre_route | est_fit
+        if mut_pre_route or est_fit or fam:
+            outputs = outputs | mut_pre_route | est_fit | fam
         if skip_pre_route:
             skip_cache = True
             metrics['uncacheable_reasons'].append(
@@ -873,9 +876,10 @@ class StatementProcessor:
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE (CAS-138). Without the directive ``est_fit`` is empty and every
         # site below degrades to the pre-CAS-138 skip-cache behaviour.
+        fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
         skip_pre_route = mut_pre_route - est_fit
-        if mut_pre_route or est_fit:
-            outputs = outputs | mut_pre_route | est_fit
+        if mut_pre_route or est_fit or fam:
+            outputs = outputs | mut_pre_route | est_fit | fam
         if skip_pre_route:
             skip_cache = True
             metrics['uncacheable_reasons'].append(
@@ -1985,6 +1989,32 @@ class StatementProcessor:
                 pre_route.add(base)
         record_verdict = verdict is None and bool(observe or assumed)
         return pre_route - outputs, observe, assumed, record_verdict
+
+    def _resolve_live_function_source(self, name: str) -> str | None:
+        fn = self.shell.user_ns.get(name)
+        if fn is None or not callable(fn) or isinstance(fn, type):
+            return None
+        try:
+            return inspect.getsource(fn)
+        except (OSError, TypeError):
+            return None
+
+    def _function_arg_mutation_receivers(
+        self, tree: ast.Module | None, outputs: set[str],
+    ) -> set[str]:
+        """Variables mutated in place by a bare FUNCTION call (``proc(d)``)."""
+        if tree is None:
+            return set()
+        try:
+            if not standalone_call_arg_targets(tree):
+                return set()
+            muts = function_arg_mutations(tree, self._resolve_live_function_source)
+        except (SyntaxError, ValueError, RecursionError):
+            return set()
+        return {
+            var for var in muts
+            if not isinstance(self.shell.user_ns.get(var), types.ModuleType)
+        } - outputs
 
     def _estimator_fit_receivers(
         self,

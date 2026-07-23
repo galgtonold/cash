@@ -26,6 +26,8 @@ from ..cacheability import (
     KNOWN_PURE_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
+    function_arg_mutations,
+    standalone_call_arg_targets,
     standalone_method_call_receivers,
     standalone_method_mutation_receivers,
 )
@@ -145,6 +147,29 @@ class VirtualLineage:
         """Delegates to the shared helper so all engines agree exactly."""
         return observed_rng_reads(self, code)
 
+    @staticmethod
+    def _build_function_sources(notebook_cells: list[str]) -> dict[str, str]:
+        """``{function_name: source}`` for every top-level ``def`` across cells.
+
+        Resolves from cell SOURCE (not ``inspect.getsource``, which has no
+        linecache entry under nbclient) so ``function_arg_mutations`` can analyse
+        a called function's body during the headless simulation. Later same-name
+        defs win (last definition), matching the runtime namespace.
+        """
+        sources: dict[str, str] = {}
+        for code in notebook_cells:
+            try:
+                tree = ast.parse(code.replace('\r\n', '\n'))
+            except (SyntaxError, ValueError):
+                continue
+            for node in tree.body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    try:
+                        sources[node.name] = ast.unparse(node)
+                    except (ValueError, AttributeError):
+                        continue
+        return sources
+
     def _mutation_receivers(self, stmt_code: str, tree: ast.Module) -> set[str]:
         """Receivers of standalone method calls in *tree* that mutate, per the
         runtime's broad-precise classification.
@@ -157,12 +182,29 @@ class VirtualLineage:
         decision; an unknown verdict (statement not yet executed) is treated as
         mutating (conservative).
         """
+        # Bare FUNCTION-arg mutations (``proc(d)`` whose body mutates its
+        # parameter) mirror bare method calls: no Store target, so the mutated
+        # arg must be surfaced as an output or the backward restore scan resolves
+        # the var from its constructor (pre-mutation). Detected statically from
+        # the called function's source (headless sim reads it from the notebook
+        # cells, stashed by pass 1), matching the runtime's inspect-based detect.
+        fam: set[str] = set()
+        srcs = getattr(self, '_sim_func_sources', None)
+        if srcs:
+            try:
+                if standalone_call_arg_targets(tree):
+                    fam = {
+                        v for v in function_arg_mutations(tree, srcs.get)
+                        if not isinstance(self.shell.user_ns.get(v), types.ModuleType)
+                    }
+            except (SyntaxError, ValueError, RecursionError):
+                fam = set()
         candidates = standalone_method_call_receivers(tree)
         # CAS-199: captured-return draws are assignments, absent from the
         # bare-``Expr`` candidate set; keep the guard from short-circuiting them.
         assigned = assigned_method_call_receivers(tree)
         if not candidates and not assigned:
-            return set()
+            return fam
         tier1 = standalone_method_mutation_receivers(tree)
         receivers: set[str] = set()
         source_hash = hashlib.sha256(stmt_code.encode('utf-8')).hexdigest()
@@ -202,7 +244,7 @@ class VirtualLineage:
                 continue
             if receiver_is_identity_coupled(receiver):
                 receivers.add(base)
-        return receivers
+        return receivers | fam
 
     def reset_caches(self) -> None:
         """Clear simulation and AST caches."""
@@ -1112,6 +1154,10 @@ class VirtualLineage:
         loop_target_vars: set,
     ) -> None:
         """Run pass-1 simulation for cells *first_changed_cell*..*current_cell_idx* and update caches."""
+        # Source of every top-level function across all cells, so
+        # ``_mutation_receivers`` can decide which bare ``proc(d)`` calls mutate
+        # their argument (headless: inspect.getsource has no linecache entry).
+        self._sim_func_sources = self._build_function_sources(notebook_cells)
         for i in range(first_changed_cell, current_cell_idx):
             cell_code = notebook_cells[i].replace('\r\n', '\n')
             self._simulate_one_cell(
