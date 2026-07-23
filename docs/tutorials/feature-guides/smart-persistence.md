@@ -104,11 +104,11 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-`cash.configure(smart_persistence=...)` is **not** in the BACKEND_AFFECTING set (`src/cash/__init__.py:219-224`), so changing it at runtime updates the dataclass but does not rebuild the active backend's policy closure. To make a runtime change stick, restart the process or reconstruct the `Cash` instance.
+`cash.configure(smart_persistence=...)` is **not** in the BACKEND_AFFECTING set (`src/cash/__init__.py`), so changing it at runtime updates the dataclass but does not rebuild the active backend's policy closure. To make a runtime change stick, restart the process or reconstruct the `Cash` instance.
 
 ## Inspecting where a value actually landed
 
-The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']` (`src/cash/backends/tiered_backend.py:130-136`). This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (`tiered_backend.py:72-73`).
+The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']` (`src/cash/backends/tiered_backend.py`). This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (`tiered_backend.py:72-73`).
 
 For debugging, enable verbose logging:
 
@@ -119,7 +119,7 @@ logging.basicConfig(level=logging.DEBUG)
 cash.configure(debug=True)
 ```
 
-The TieredBackend logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (`tiered_backend.py:139-140`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in (`src/cash/core.py:1470-1480`):
+The TieredBackend logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (`tiered_backend.py:139-140`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in (`src/cash/core.py`):
 
 ```python
 @cash.cache
@@ -136,7 +136,7 @@ print(slow.explain(1))
 #   cache_age_seconds: 0.012
 ```
 
-`explain` returns the `reason` string, the `cache_key`, and a `details` dict (`src/cash/core.py:65-93`). To see *which tier* a hit came from, read the metadata directly from the backend or watch the `[STORAGE]` log lines.
+`explain` returns the `reason` string, the `cache_key`, and a `details` dict (`src/cash/core.py`). To see *which tier* a hit came from, read the metadata directly from the backend or watch the `[STORAGE]` log lines.
 
 > **Note.** The decorator's `f.cache_info()` returns aggregate hit/miss/savings stats and a recent-warnings log — it does *not* expose persist/skip context per call. Inspecting promotion decisions is a debug-log job, not a `cache_info` field.
 
@@ -162,7 +162,7 @@ For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost
 
 Two override mechanisms exist, and they apply to different paths:
 
-- **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata (`src/cash/notebook/annotations.py:33-60`, `src/cash/notebook/statement/processor.py:586-595`). The notebook filter then bypasses its skip checks (`statement/processor.py:1127`), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (`tiered_backend.py:105-109`). The annotation is the only way to force a single statement past both filters.
+- **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata (`src/cash/notebook/annotations.py`, `src/cash/notebook/statement/processor.py`). The notebook filter then bypasses its skip checks (`statement/processor.py:1127`), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (`tiered_backend.py:105-109`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
 - **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
 

@@ -8,7 +8,7 @@ The notebook workflow is: load a CSV, clean it, engineer features, train, evalua
 
 Cash watches each statement. When you tweak the merge on line 4 of cell 4, the groupby on line 1 of cell 4 stays cached, the CSV loads above it stay cached, and only the merge and its downstream consumers recompute. The expensive parts — the 30s parquet read, the 10s aggregation — run once across an entire afternoon of iteration.
 
-Cash also picks the right serializer per type. For pandas DataFrames it writes Parquet automatically (`src/cash/backends/serialization.py:71-90`), so loading a 500MB frame from cache is a fast columnar read, not a pickle balloon.
+Cash also picks the right serializer per type. For pandas DataFrames it writes Parquet automatically (`src/cash/backends/serialization.py`), so loading a 500MB frame from cache is a fast columnar read, not a pickle balloon.
 
 ## Concrete walkthrough: customer churn analysis
 

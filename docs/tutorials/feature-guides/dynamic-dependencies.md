@@ -39,16 +39,16 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-The resolver lives in `_resolve_dynamic_dependencies` at `src/cash/core.py:1501-1542`. The path is:
+The resolver lives in `_resolve_dynamic_dependencies` at `src/cash/core.py`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
-2. The return value is normalised to a list: `dss = ds_result if isinstance(ds_result, list) else [ds_result]` (`src/cash/core.py:1520`).
-3. Each entry that **is a `DataSource`** contributes a state string: `str(ds._get_mtime())` if the subclass exposes one, otherwise `str(ds.has_changed())` (`src/cash/core.py:1522-1527`).
-4. The collected strings are sorted and SHA-256'd to produce a `dynamic_state_hash` that is mixed into the cache key alongside the args hash and the static dependency hash (`src/cash/core.py:1539-1541`).
+2. The return value is normalised to a list: `dss = ds_result if isinstance(ds_result, list) else [ds_result]` (`src/cash/core.py`).
+3. Each entry that **is a `DataSource`** contributes a state string: `str(ds._get_mtime())` if the subclass exposes one, otherwise `str(ds.has_changed())` (`src/cash/core.py`).
+4. The collected strings are sorted and SHA-256'd to produce a `dynamic_state_hash` that is mixed into the cache key alongside the args hash and the static dependency hash (`src/cash/core.py`).
 
 Two consequences of step 3 worth pinning down:
 
-- **Only `DataSource` instances count.** A raw string, int, or dict returned from the resolver is silently dropped — the `isinstance(ds, DataSource)` gate at `src/cash/core.py:1523` filters everything else out, and the resulting `dynamic_state_hash` is `""`. The call still caches; the dynamic dependency just doesn't contribute to the key. There's no warning for this — it's an easy way to think you've enabled a dependency that isn't actually being tracked.
+- **Only `DataSource` instances count.** A raw string, int, or dict returned from the resolver is silently dropped — the `isinstance(ds, DataSource)` gate at `src/cash/core.py` filters everything else out, and the resulting `dynamic_state_hash` is `""`. The call still caches; the dynamic dependency just doesn't contribute to the key. There's no warning for this — it's an easy way to think you've enabled a dependency that isn't actually being tracked.
 - **Sorting makes the result order-independent.** Two resolvers that return the same set of states in different orders produce the same hash.
 
 ## Returning a single source vs. a list
@@ -71,14 +71,14 @@ def load(...):
     ...
 ```
 
-The list-of-resolvers form is handled at `src/cash/core.py:1512`: each resolver is called independently and the results are pooled before sorting. Either shape is fine — pick whichever reads better at the call site.
+The list-of-resolvers form is handled at `src/cash/core.py`: each resolver is called independently and the results are pooled before sorting. Either shape is fine — pick whichever reads better at the call site.
 
 ## Combining with other invalidation triggers
 
 `dynamic_depends_on=` is *additive*. The cache key is the digest of `(function source, static deps, dynamic deps, args)`. Anything else that already invalidates continues to invalidate:
 
-- **With `file_depends_on=`** — the static file list is folded into the dependency state hash via `_register_func` (`src/cash/core.py:669-673`); the dynamic resolver is folded into the separate dynamic state hash. Both must hold for a hit; either drifting forces a miss.
-- **With `ttl=`** — TTL is checked *after* the key matches (`src/cash/core.py:862-876`). A dynamic dep change misses immediately; a TTL expiry misses on the next call after the timestamp passes. Whichever triggers first wins on any given lookup.
+- **With `file_depends_on=`** — the static file list is folded into the dependency state hash via `_register_func` (`src/cash/core.py`); the dynamic resolver is folded into the separate dynamic state hash. Both must hold for a hit; either drifting forces a miss.
+- **With `ttl=`** — TTL is checked *after* the key matches (`src/cash/core.py`). A dynamic dep change misses immediately; a TTL expiry misses on the next call after the timestamp passes. Whichever triggers first wins on any given lookup.
 - **With `depends_on=`** — the static `DataSource` and upstream-function entries contribute to `current_state_hash` (computed by `DependencyStateHasher.compute` in `src/cash/dependency_state.py`, invoked as `self._state_hasher.compute(func_name)` in `_resolve_cache_key`), which is independent of the dynamic state hash.
 
 ## What you can return from the resolver
@@ -168,20 +168,20 @@ The warning text reads:
 
 > `@cash.cache on {func_name}: dynamic_depends_on resolver raised {ErrorType} ({message}). Call will not include this dependency in the cache key — results may be stale if the underlying data changes.`
 
-See `src/cash/core.py:1528-1537`. Catching the exception silently and continuing means a transiently failing resolver (e.g. a temporary `OSError`) does not break your pipeline — it just degrades to a broader cache hit while you fix it.
+See `src/cash/core.py`. Catching the exception silently and continuing means a transiently failing resolver (e.g. a temporary `OSError`) does not break your pipeline — it just degrades to a broader cache hit while you fix it.
 
-`f.explain()` uses a different variant — `_resolve_dynamic_dependencies_silent` at `src/cash/core.py:915-939` — which re-raises instead of warning, so introspection never emits warnings as a side effect. The resulting `CacheExplanation` carries `reason='key_uncomputable'` with the error type in `details` (`src/cash/core.py:785-794`).
+`f.explain()` uses a different variant — `_resolve_dynamic_dependencies_silent` at `src/cash/core.py` — which re-raises instead of warning, so introspection never emits warnings as a side effect. The resulting `CacheExplanation` carries `reason='key_uncomputable'` with the error type in `details` (`src/cash/core.py`).
 
 ## Performance
 
 Two things to watch:
 
-- **Resolver cost.** It runs on every call, so the overhead lands on cache hits too. `FileDataSource(path)` calls `os.path.getmtime` in its constructor (`src/cash/data_source.py:30`) — one stat per source, usually sub-millisecond. Custom subclasses that do anything heavier should cache internally.
+- **Resolver cost.** It runs on every call, so the overhead lands on cache hits too. `FileDataSource(path)` calls `os.path.getmtime` in its constructor (`src/cash/data_source.py`) — one stat per source, usually sub-millisecond. Custom subclasses that do anything heavier should cache internally.
 - **`DataSource` reuse.** Returning a fresh `FileDataSource(path)` from the resolver every call means a new stat every call. That's fine for filesystem reads but if your custom `DataSource` is expensive to construct, consider memoising the resolver itself (a plain `functools.lru_cache` over `(path,)` is enough).
 
 ## Caveats
 
-- **Non-`DataSource` returns are silent.** As noted above, anything that's not a `DataSource` instance is dropped from the key without a warning. If you suspect your resolver isn't being applied, check `f.explain()` — a key that doesn't reflect your dependency tells you the resolver returned something the gate at `src/cash/core.py:1523` rejected.
+- **Non-`DataSource` returns are silent.** As noted above, anything that's not a `DataSource` instance is dropped from the key without a warning. If you suspect your resolver isn't being applied, check `f.explain()` — a key that doesn't reflect your dependency tells you the resolver returned something the gate at `src/cash/core.py` rejected.
 - **Resolver errors fail open, not closed.** A transient failure widens the cache. If correctness matters more than availability, validate the resolver's output yourself or call `f.cache_clear()` when you suspect drift.
 - **`FileDataSource.__init__` snapshots mtime eagerly.** Each call constructs a fresh source, so the snapshot is the *current* mtime at the moment the resolver runs — exactly what you want for dynamic tracking. (This is the opposite of `file_depends_on=`, where the snapshot is taken once at decoration time. See [Custom File Sources](custom-file-sources.md).)
 - **Closures over mutable state are a footgun.** See the example above — if a closure changes which `DataSource` you return without changing the function arguments, the cache may not notice. Encode anything that varies across calls into the arguments.

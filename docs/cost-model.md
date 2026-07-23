@@ -166,7 +166,7 @@ Set `smart_persistence=False` on the config (no env var). The backend constructo
 
 ## Knobs you can tune
 
-All on `CashConfig` (see [`src/cash/config.py:32-51`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py)). Environment-variable equivalents are read by `_load_env_config` at [`config.py:90`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py).
+All on `CashConfig` (see [`src/cash/config.py`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py)). Environment-variable equivalents are read by `_load_env_config` at [`config.py:90`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py).
 
 | Field | Env var | Default | Filter | Effect |
 |---|---|---|---|---|
@@ -378,7 +378,7 @@ The persistence decision uses `estimated_restore_time` (not serialize) because t
 
 ### `cash.CashConfig`
 
-The relevant fields (see [`src/cash/config.py:32-51`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py)):
+The relevant fields (see [`src/cash/config.py`](https://github.com/galgtonold/cash/blob/main/src/cash/config.py)):
 
 <!-- test:skip reason="source-code excerpt: @dataclass not imported in fence" -->
 ```python

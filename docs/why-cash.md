@@ -126,10 +126,6 @@ flowchart LR
 
 *Cash replaces ad-hoc plumbing with a single dependency-aware cache.*
 
-The same four cells, run through four lifecycle events — first run, re-run, kernel restart, upstream edit:
-
-<iframe class="cash-badge" src="/_badges/why_cash_flow.html" loading="lazy" scrolling="no" height="300" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
 ## Is this for you?
 
 <div class="cash-shines-skip-grid" markdown="0">

@@ -546,7 +546,7 @@ Because the regex is applied with `re.search`, `## @cash:persist` still binds â€
 
 For source-diving:
 
-- Grammar regex: [`src/cash/notebook/annotations.py:33`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
+- Grammar regex: [`src/cash/notebook/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
 - `parse_annotation_line`: [`annotations.py:35-60`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
 - Lookback semantics: [`annotations.py:62-105`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
 - Merge rules: [`annotations.py:19-26`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)

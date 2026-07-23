@@ -6,7 +6,7 @@ This guide walks through all four, plus the common diagnostic patterns and the c
 
 ## Why this exists
 
-Cash makes a *lot* of decisions per call: build the cache key from the function source, dependency state, and arguments; look it up in the backend; check the TTL; check file-dependency freshness; serve the cached value or recompute. When something goes wrong the symptom is usually one of "it ran when I expected a hit" or "it hit when I expected a re-run", and both have several possible causes. The diagnostics here pull back the curtain on each step so you can match the symptom to its actual cause instead of guessing.
+Cash makes a *lot* of decisions per call: build the cache key from the function source, dependency state, and arguments; look it up in the backend; check the TTL; check file-dependency freshness; serve the cached value or recompute. When something goes wrong the symptom is usually "it ran when I expected a hit" or "it hit when I expected a re-run" — each with several possible causes. The tools below let you match a symptom to its actual cause instead of guessing.
 
 ## Quick start
 
@@ -47,7 +47,7 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-The return value is a `CacheExplanation` dataclass (`src/cash/core.py:65-117`) with five fields and one of five reason codes:
+The return value is a `CacheExplanation` dataclass (`src/cash/core.py`) with five fields and one of five reason codes:
 
 | `reason` | Meaning | Key `details` |
 |---|---|---|
@@ -61,7 +61,7 @@ The return value is a `CacheExplanation` dataclass (`src/cash/core.py:65-117`) w
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 
-Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>` — see `src/cash/notebook/ipython/magics.py:312`).
+Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>` — see `src/cash/notebook/ipython/magics.py`).
 
 The five log prefixes you'll see most:
 
@@ -118,7 +118,7 @@ expensive.cache_info()
 #  'total_time_saved': 0.0021, 'warnings': []}
 ```
 
-The full shape and field meanings are at `src/cash/core.py:1418-1448`:
+The full shape and field meanings are at `src/cash/core.py`:
 
 - `hits`, `misses`, `hit_rate` — counters since the wrapper was created (not since process start).
 - `total_time_saved` — sum of execution times avoided on hits.
@@ -196,7 +196,7 @@ When diagnosis is done and you need to *act*, four notebook magics and one CLI c
 %cash_export lineage.json --json                       # lineage graph as JSON
 ```
 
-Definitions at `src/cash/notebook/ipython/admin.py:314`. The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
+Definitions at `src/cash/notebook/ipython/admin.py`. The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
 
 ### Import
 
@@ -205,11 +205,11 @@ Definitions at `src/cash/notebook/ipython/admin.py:314`. The `.cache` file is a 
 %cash_import teammate_cache.cache --merge     # merge with the current cache instead of replacing
 ```
 
-Definitions at `src/cash/notebook/ipython/admin.py:404`. Use `--merge` when pulling in a teammate's cache without losing your own entries.
+Definitions at `src/cash/notebook/ipython/admin.py`. Use `--merge` when pulling in a teammate's cache without losing your own entries.
 
 ### Clear
 
-From inside a notebook, `%cash_repair` covers the two flavors of reset (`src/cash/notebook/ipython/admin.py:182`):
+From inside a notebook, `%cash_repair` covers the two flavors of reset (`src/cash/notebook/ipython/admin.py`):
 
 ```python { .nb-cell }
 %cash_repair             # remove corrupted entries, keep healthy ones
@@ -242,7 +242,7 @@ explorer.get_preview(key)              # peek at a stored value
 explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
-`CacheExplorer` (`src/cash/ui/explorer.py:22`) is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache. `CacheDebugger` (`src/cash/ui/debugger.py:19`) is a step-through inspector for the notebook decision pipeline — drives the same machinery `%cash_on` uses but stops between phases so you can see what Cash sees.
+`CacheExplorer` (`src/cash/ui/explorer.py`) is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache. `CacheDebugger` (`src/cash/ui/debugger.py`) is a step-through inspector for the notebook decision pipeline — drives the same machinery `%cash_on` uses but stops between phases so you can see what Cash sees.
 
 Both are experimental: stick to `f.explain()` and `%cash_debug` for anything that needs to survive a version bump.
 
