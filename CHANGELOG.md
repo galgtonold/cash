@@ -41,6 +41,36 @@ is `0.1.1`.
   was followed or not depending on the import spelling. One level of recursion
   also covers `conf.get_rate()` whose source is unchanged but whose returned
   constant is not. Standard-library and site-packages modules are excluded.
+- A cached **method** now tracks the class-level code it reaches through `self` —
+  the methods, property getters, class constants, and `super()` base classes it
+  uses — and does so **transitively** (a constant reached only through a helper
+  method it calls). Editing any of them invalidates the cached result; before,
+  such an edit could be missed and a stale value served.
+- A class constant read through the class **name** (`Cfg.LIMIT`) or
+  `type(self).LIMIT` is now folded into the key, matching the already-tracked
+  `from cfg import LIMIT` spelling.
+- A cached function that reads a **pre-built module-level object** (a transformer
+  or client constructed once at import and used as data) now tracks that
+  object's **class source**, so editing one of its methods invalidates. Before,
+  only the object's data was hashed, so a method-body edit was invisible and a
+  stale result was served — found by replaying a real sklearn pipeline's git
+  history. (Objects you method-call directly or pass as a bare argument are
+  unaffected; their called methods are already tracked.)
+- A helper **referenced by name but reached through a value** (assigned to a
+  local, then called) is now tracked, not just directly-named calls.
+- Container **subclasses** (a `namedtuple`, a `dict` subclass) no longer collide
+  onto their base type in the cache key: two distinct subtypes with identical
+  contents now get distinct entries instead of one shadowing the other.
+
+**Safety defaults**
+- By default, `@cash.cache` now **raises** on dependency patterns whose edits it
+  cannot track — `getattr(obj, name)()` dynamic dispatch,
+  `importlib.import_module(...)`, and `eval`/`exec`/`compile` (including when the
+  dynamic result is stashed in a local first). Caching correctness cannot be
+  guaranteed for these, so cash refuses rather than risk a silently stale
+  result. Opt in with `@cash.cache(assume_safe=True)`, mark an audited callee
+  with `@cash.mark_pure`, or refactor to a static call. A statically-named call —
+  the common case — is unaffected.
 
 **Packaging and tooling**
 - `cash.help()` no longer crashes on a default Windows console: the guide's
