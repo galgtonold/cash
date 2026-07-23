@@ -384,7 +384,6 @@ The relevant fields (see [`src/cash/config.py`](https://github.com/galgtonold/ca
 @dataclass
 class CashConfig:
     smart_persistence: bool = True
-    smart_persistence_threshold: float = 1.0
     min_cache_savings_pct: float = 0.20
     min_cache_fixed_budget_seconds: float = 0.05
     min_execution_time_to_cache_seconds: float = 0.01

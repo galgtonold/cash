@@ -550,7 +550,7 @@ cash = Cash(
     debug=True,                 # Enable debug output
     use_locking=True,           # Thread-safe operations
     # Any other CashConfig field: backend, redis_host, redis_port,
-    # s3_bucket, smart_persistence_threshold, ...
+    # s3_bucket, cache_dir, persist_all, ...
 )
 ```
 
