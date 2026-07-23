@@ -107,7 +107,7 @@ def warn_notebook_not_found_once() -> None:
         return
     _warned_notebook_not_found = True
     msg = (
-        "Cash: notebook not found — upstream dependency tracking is disabled "
+        "Cash: notebook not found -- upstream dependency tracking is disabled "
         "for this session. Statement-level caching still works, but changes in "
         "one cell will not auto-invalidate dependent cells. This is expected "
         "under papermill / nbconvert / CI (no live Jupyter Server); in "
