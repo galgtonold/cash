@@ -82,55 +82,29 @@ Optional backends: `pip install "cash-lib[redis]"`, `[s3]`, or `[all]`. See
 
 ## Documentation
 
-<div class="grid cards" markdown>
-
--   **Getting Started**
-
-    ---
-
-    Install Cash and cache your first notebook.
-
-    [Quick Start →](getting-started/quickstart.md)
-
--   **Feature Guides**
-
-    ---
-
-    Deep dives on purity, backends, hashers, async, iterators, and more.
-
-    [Browse guides →](tutorials/feature-guides/purity-decorators.md)
-
--   **Use Cases**
-
-    ---
-
-    End-to-end recipes for data science, LLM API calls, data engineering, and
-    scientific computing.
-
-    [See use cases →](tutorials/use-cases/data-science.md)
-
--   **API Reference**
-
-    ---
-
-    Autodoc reference for every public symbol.
-
-    [Open the API →](api/index.md)
-
--   **How Cash Works**
-
-    ---
-
-    How statement-level caching and the lineage graph work under the hood.
-
-    [Read the internals →](how-it-works/overview.md)
-
--   **FAQ & Glossary**
-
-    ---
-
-    Quick answers, troubleshooting, and the vocabulary in one place.
-
-    [Open the FAQ →](faq.md)
-
+<div class="cash-doc-grid" markdown="0">
+  <a class="cash-cta-card primary" href="getting-started/quickstart/">
+    <h3>Getting Started</h3>
+    <p>Install cash and cache your first notebook.</p>
+  </a>
+  <a class="cash-cta-card" href="tutorials/feature-guides/purity-decorators/">
+    <h3>Feature Guides</h3>
+    <p>Deep dives on purity, backends, hashers, async, iterators, and more.</p>
+  </a>
+  <a class="cash-cta-card" href="tutorials/use-cases/data-science/">
+    <h3>Use Cases</h3>
+    <p>End-to-end recipes for data science, LLM calls, data engineering, and scientific computing.</p>
+  </a>
+  <a class="cash-cta-card" href="api/">
+    <h3>API Reference</h3>
+    <p>Autodoc reference for every public symbol.</p>
+  </a>
+  <a class="cash-cta-card" href="how-it-works/overview/">
+    <h3>How Cash Works</h3>
+    <p>How statement-level caching and the lineage graph work under the hood.</p>
+  </a>
+  <a class="cash-cta-card secondary" href="faq/">
+    <h3>FAQ &amp; Glossary</h3>
+    <p>Quick answers, troubleshooting, and the vocabulary in one place.</p>
+  </a>
 </div>

@@ -144,7 +144,7 @@ flowchart LR
       <li>Your notebook is a single cell with no expensive steps.</li>
       <li>You're writing a pure I/O script (API ingestion, network polling) — caching is at the wrong layer.</li>
       <li>You need hard real-time behaviour.</li>
-      <li>Your cells <em>intentionally</em> produce different output each run — though see the <a href="tutorials/feature-guides/purity-decorators.md"><code>@stateful</code> decorator</a> for the nuanced case.</li>
+      <li>Your cells <em>intentionally</em> produce different output each run — though see the <a href="../tutorials/feature-guides/purity-decorators/"><code>@stateful</code> decorator</a> for the nuanced case.</li>
     </ul>
   </div>
 </div>
@@ -281,7 +281,7 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 ## Try it / Go deeper
 
 <div class="cash-cta-split" markdown="0">
-  <a class="cash-cta-card primary" href="getting-started/quickstart.md">
+  <a class="cash-cta-card primary" href="../getting-started/quickstart/">
     <h3>Try it now →</h3>
     <p><code>pip install cash-lib</code>, then drop <code>%cash_on</code> in your first cell.</p>
     <p><strong>Quickstart →</strong></p>
@@ -289,7 +289,7 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
   <div class="cash-cta-card secondary">
     <h3>Go deeper →</h3>
     <p>Read how lineage tracking, upstream simulation, and the cache key work under the hood.</p>
-    <p><a href="how-it-works/overview.md"><strong>How Cash Works</strong></a> · <a href="cost-model.md"><strong>Cost model</strong></a></p>
+    <p><a href="../how-it-works/overview/"><strong>How Cash Works</strong></a> · <a href="../cost-model/"><strong>Cost model</strong></a></p>
   </div>
 </div>
 
