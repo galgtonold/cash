@@ -101,13 +101,22 @@ class CacheKeyComputationError(CashError):
     """Raised when a cache key cannot be computed for a statement."""
 
 class CashImpureFunctionError(CashError):
-    """Raised by ``@cash.cache(strict=True)`` on first call when the
-    decorated function (or one of its module-bounded helpers) has
-    side effects, mutates external state, or uses explicit dynamism.
+    """Raised on first call when caching cannot be guaranteed correct.
 
-    The exception body lists each detected reason with line numbers
-    so the user can fix the function or relax the analysis via
-    ``assume_safe=True`` / ``@cash.mark_pure(callee)`` / refactoring.
+    Two triggers:
+
+    * **By default** (plain ``@cash.cache``), when the function -- or a
+      module-bounded helper it calls -- resolves a dependency from a runtime
+      value that cash cannot track: ``getattr(obj, name)()`` dynamic dispatch,
+      ``importlib.import_module(...)``, ``eval`` / ``exec`` / ``compile``
+      (including a dynamic result stored in a local and then called). A cached
+      result could go silently stale, so cash refuses rather than mis-cache.
+    * **Under ``strict=True``**, additionally on any purity issue -- side
+      effects, external-state mutation, opaque callees.
+
+    The body lists each reason with line numbers. Cache it anyway (accepting the
+    staleness risk) with ``@cash.cache(assume_safe=True)``, mark an audited
+    callee with ``@cash.mark_pure(callee)``, or refactor to a static call.
     """
 
 # ---------------------------------------------------------------------------

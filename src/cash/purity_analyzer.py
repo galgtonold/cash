@@ -254,6 +254,7 @@ class _PurityVisitor(ast.NodeVisitor):
     __slots__ = (
         "issues", "called_callable_nodes", "_param_names",
         "_qualname", "_line_offset", "_local_owned", "read_names",
+        "_assign_kinds", "_name_call_nodes",
     )
 
     def __init__(self, qualname: str, param_names: frozenset[str],
@@ -264,6 +265,15 @@ class _PurityVisitor(ast.NodeVisitor):
         # Bare names read (Load context) in this body - used to detect reads of
         # mutable module globals.
         self.read_names: set[str] = set()
+        # For each simple ``name = ...`` target, the kinds of RHS it was ever
+        # assigned ({"dynamic"} / {"other"} / both). A name assigned ONLY from a
+        # dynamic source (getattr(obj,name), eval, importlib) and then CALLED is
+        # untrackable dispatch obscured by a local; requiring "dynamic only"
+        # keeps a name later reassigned to a safe value from false-positiving.
+        self._assign_kinds: dict[str, set[str]] = {}
+        # Calls whose function is a bare Name, checked against the taint set in
+        # :meth:`finalize_taint` after the whole body is walked.
+        self._name_call_nodes: list[ast.Call] = []
         self._param_names = param_names
         self._qualname = qualname
         # When source comes from inspect.getsource on a method, line
@@ -282,8 +292,55 @@ class _PurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
+        if isinstance(node.func, ast.Name):
+            self._name_call_nodes.append(node)
         self._record_call(node)
         self.generic_visit(node)
+
+    @staticmethod
+    def _is_dynamic_source(value: ast.AST) -> bool:
+        """True when *value* resolves a callable from a runtime value.
+
+        ``eval``/``exec``/``compile`` bound by name; ``getattr(obj, name)`` with
+        a non-constant name; ``importlib.import_module(...)`` / ``__import__``.
+        Assigning one of these to a local and calling it is untrackable dispatch.
+        """
+        if isinstance(value, ast.Name) and value.id in {"eval", "exec", "compile"}:
+            return True
+        if isinstance(value, ast.Call):
+            f = value.func
+            if (isinstance(f, ast.Name) and f.id == "getattr" and len(value.args) >= 2
+                    and not (isinstance(value.args[1], ast.Constant)
+                             and isinstance(value.args[1].value, str))):
+                return True
+            if isinstance(f, ast.Attribute) and f.attr == "import_module":
+                return True
+            if isinstance(f, ast.Name) and f.id == "__import__":
+                return True
+        return False
+
+    def finalize_taint(self) -> None:
+        """Flag calling a local that was bound ONLY from a dynamic source.
+
+        Run once after the whole body is walked (assignments may follow or
+        precede the call in source order). A name is untrackable only if every
+        assignment to it was dynamic -- so ``f = getattr(o,n); f()`` and
+        ``ev = eval; ev(x)`` flag, but ``f = getattr(...); f = helper; f()``
+        does not (it was rebound to a tracked value).
+        """
+        tainted = {n for n, kinds in self._assign_kinds.items() if kinds == {"dynamic"}}
+        for node in self._name_call_nodes:
+            name = node.func.id  # type: ignore[attr-defined]
+            if name in tainted:
+                self.issues.append(PurityIssue(
+                    kind=ISSUE_UNTRACKABLE_DEP,
+                    description=(
+                        f"calls {name!r}, which was bound from a runtime value "
+                        "(dynamic dispatch through a local)"
+                    ),
+                    where=self._qualname,
+                    line=getattr(node, "lineno", 0),
+                ))
 
     def _record_call(self, node: ast.Call) -> None:
         func_node = node.func
@@ -466,6 +523,11 @@ class _PurityVisitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
         for target in node.targets:
             self._maybe_flag_mutation_target(target, node.lineno)
+        # Record the RHS kind for a simple ``name = ...`` so a dynamically-bound
+        # local that is later called can be flagged (see finalize_taint).
+        if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            kind = "dynamic" if self._is_dynamic_source(node.value) else "other"
+            self._assign_kinds.setdefault(node.targets[0].id, set()).add(kind)
         self.generic_visit(node)
 
     def visit_AugAssign(self, node: ast.AugAssign) -> None:  # noqa: N802
@@ -757,6 +819,7 @@ class PurityAnalyzer:
                 qualname=qualname, param_names=param_names, local_owned=local_owned,
             )
             visitor.visit(func_def)
+            visitor.finalize_taint()
             all_issues.extend(visitor.issues)
 
             # Flag reads of module globals that are reassigned/mutated somewhere

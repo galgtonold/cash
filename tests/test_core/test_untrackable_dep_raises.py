@@ -108,3 +108,54 @@ def test_calling_a_parameter_still_only_warns(tmp_path):
     # Should not raise -- calling a parameter is advisory, not untrackable-dep.
     assert mod.f(lambda v: v + 1, 10) == 11
     _ = inst  # keep the fixture import meaningful
+
+
+def test_dynamic_dispatch_through_a_local_still_raises(tmp_path):
+    """Storing a dynamic result in a local before calling must not defeat the
+    raise: `f = getattr(o, name); f()` and `ev = eval; ev(x)` still refuse."""
+    mod = _load(tmp_path, """
+        import cash, helpers
+        NAME = "strategy"
+        @cash.cache
+        def f(x):
+            fn = getattr(helpers, NAME)
+            return fn(x)
+    """)
+    with pytest.raises(CashImpureFunctionError, match="runtime value|assume_safe"):
+        mod.f(10)
+
+    mod2 = _load(tmp_path, """
+        import cash
+        @cash.cache
+        def f(x):
+            ev = eval
+            return ev("x + 1")
+    """)
+    with pytest.raises(CashImpureFunctionError, match="runtime value|assume_safe"):
+        mod2.f(10)
+
+
+def test_local_rebound_to_a_safe_value_does_not_false_positive(tmp_path):
+    """A name assigned from getattr but then rebound to a tracked value must
+    NOT raise -- the taint rule requires EVERY assignment to be dynamic."""
+    mod = _load(tmp_path, """
+        import cash, helpers
+        NAME = "strategy"
+        @cash.cache
+        def f(x):
+            fn = getattr(helpers, NAME)   # dynamic...
+            fn = helpers.strategy          # ...then rebound to a static call
+            return fn(x)
+    """)
+    assert mod.f(10) == 11  # no raise
+
+
+def test_getattr_with_constant_name_through_a_local_does_not_raise(tmp_path):
+    mod = _load(tmp_path, """
+        import cash, helpers
+        @cash.cache
+        def f(x):
+            fn = getattr(helpers, "strategy")   # constant name -> safe
+            return fn(x)
+    """)
+    assert mod.f(10) == 11
