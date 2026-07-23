@@ -127,7 +127,7 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
 ## RNG state is replayed across cache hits
 
 A cache hit restores more than the value. If you hold your own RNG object — an
-`np.random.Generator`, a legacy `np.random.RandomState`, or a `random.Random` —
+`np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
 its internal state is captured alongside the cached statement and **replayed**
 when that statement is restored. Draws taken *after* a cached statement
 therefore match what a full re-run would have produced:

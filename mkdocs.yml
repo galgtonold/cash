@@ -26,6 +26,7 @@ theme:
 # gitignored. Skip them entirely so `mkdocs build --strict` stays clean.
 exclude_docs: |
   superpowers/
+  architecture_decisions.md
 
 # Build-time fixes. badge_paths rewrites root-absolute /_badges/ iframe srcs to
 # page-relative URLs so they resolve under Read the Docs' /en/<version>/ prefix.

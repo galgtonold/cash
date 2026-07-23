@@ -119,7 +119,7 @@ This filter only matters if you're using `TieredBackend` (the default). With a s
 
 ### The smart_persistence_policy
 
-`_build_smart_persistence_policy` at [`factory.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/factory.py) constructs the closure used as the tier-promotion policy. Since CAS-141 it applies the **same fitted cost model** as filter 1 (the notebook Gate A), so the two persistence gates agree instead of contradicting each other:
+`_build_smart_persistence_policy` at [`factory.py`](https://github.com/galgtonold/cash/blob/main/src/cash/backends/factory.py) constructs the closure used as the tier-promotion policy. It applies the **same fitted cost model** as filter 1 (the notebook Gate A), so the two persistence gates agree instead of contradicting each other:
 
 <!-- test:skip reason="source-code excerpt: references cost_model / min_savings from outer closure" -->
 ```python
@@ -171,7 +171,6 @@ All on `CashConfig` (see [`src/cash/config.py`](https://github.com/galgtonold/ca
 | Field | Env var | Default | Filter | Effect |
 |---|---|---|---|---|
 | `smart_persistence` | — | `True` | 2 | When `False`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
-| `smart_persistence_threshold` | — | `1.0` s | — | **Legacy / no longer consulted (CAS-141);** superseded by the cost-model comparison. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | 1 & 2 | Predicted savings ratio required; now used by both filter 1 and the tier policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET` | `0.05` s | 1 | Floor on the restore-time budget. Trivial cells get this much budget regardless of compute. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE` | `0.01` s | floor | Statements faster than this never cache. |
@@ -261,7 +260,7 @@ Only filter 1 emits this string. The cheap-floor and filter 2 produce only debug
 
 ### "Why isn't my big DataFrame cached?"
 
-If the frame took real time to build, it **is** promoted to disk now (that was the CAS-141 fix — the old bandwidth model wrongly refused large results). If it's still RAM-only, the frame is **cheap to recompute relative to its restore cost**:
+If the frame took real time to build, it **is** promoted to disk now (the old bandwidth model wrongly refused large results). If it's still RAM-only, the frame is **cheap to recompute relative to its restore cost**:
 
 - Filter 1 passes trivially because the primary tier is `InMemoryBackend`. A 400 MB DataFrame's `est_restore_time` on RAM is around 65 ms — well under the 50 ms fixed budget (close, but `max(0.05, 0.8 × execution_time)` will be governed by execution_time for a non-trivial cell).
 - Filter 2 (the tier policy) predicts the *disk* restore time and compares it to compute. A frame that took only, say, 0.3 s to build but would take ~1 s to reload is deliberately kept RAM-only — rehydrating it costs more than rerunning.

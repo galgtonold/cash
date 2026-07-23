@@ -58,7 +58,6 @@ the `CASH_*` binding; the TOML key matches the field name.
 | Field | Env var | Default | Description |
 |---|---|---|---|
 | `smart_persistence` | `CASH_SMART_PERSISTENCE` | `true` | Use the cost-model promotion policy. If `false`, falls back to `_default_promotion_policy` (same rule, 1.0 s floor). |
-| `smart_persistence_threshold` | `CASH_SMART_PERSISTENCE_THRESHOLD` | `1.0` (seconds) | **Legacy / no longer consulted (CAS-141).** Superseded by the cost-model comparison; kept for compatibility. |
 | `persist_all` | `CASH_PERSIST_ALL` | `false` | Cache **every** statement, bypassing the cost-aware floors (same as `%cash_persist on`). Flippable at runtime via `cash.configure(persist_all=True)`. |
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | "Too cheap to cache at all" floor — statements faster than this never get a cache entry. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
@@ -191,10 +190,8 @@ redis_host = "redis.example.com"
 
 Generate a documented template with `cash.create_default_config()`.
 
-> ⚠️ The legacy `~/.cash/config.toml` location is **no longer read** —
-> move your config to the XDG path above. (The `.cash/` directory
-> remains used for the disk cache itself, which is why having config
-> there too was confusing.)
+> The `.cash/` directory next to your notebook is the **disk cache**, not
+> config — user config lives at the XDG path above.
 
 ### Environment variables
 
@@ -294,9 +291,7 @@ This means:
   object — is your own to shut down. Call `backend.shutdown()` (or use
   a `try`/`finally`) for durable writes outside `Cash`'s atexit chain.
 
-There's nothing to configure — it's the default behaviour. The legacy
-`background_io` parameter and `AsyncBackendWrapper` class have been
-removed.
+There's nothing to configure — it's the default behaviour.
 
 ## File tracking
 

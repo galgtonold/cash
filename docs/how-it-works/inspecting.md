@@ -184,11 +184,8 @@ cash clear [path]       # drop a notebook's cache (--all for the directory)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-One trap in `cash info`: the `Threshold:` line reports
-`smart_persistence_threshold`, which is **legacy** — the promotion decision has
-been made by the cost model since CAS-141 and no longer consults it. See
-[Where your cache lives](storage.md) for the thresholds that are actually
-applied.
+For the thresholds that actually drive persistence, see
+[Where your cache lives](storage.md).
 
 ## Programmatic inspection
 

@@ -161,9 +161,6 @@ Print the effective merged configuration.
 - `Persist` — what actually decides disk persistence: the cost model
   (`0.1s compute floor, N% savings required`), or a conservative fallback when
   smart persistence is off.
-- `Threshold` — the legacy `smart_persistence_threshold`, printed as
-  `(legacy, not consulted)`; the cost model replaced it (CAS-141), so it's shown
-  for visibility only.
 - `Tiers` — present when the active config declares an explicit tier
   list; lists each tier's type in order.
 - `Source` — which layers contributed to the resolved config (e.g.
@@ -180,7 +177,6 @@ cash info
 #   Compress:   True
 #   Max size:   auto (scaled to disk/RAM per tier)
 #   Persist:    cost model (0.1s compute floor, 20% savings required)
-#   Threshold:  1.0s (legacy, not consulted)
 #   Source:     project:/home/me/project/pyproject.toml,env
 ```
 

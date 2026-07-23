@@ -55,7 +55,7 @@ def policy(execution_time: float, size_bytes: int) -> bool:
 Two things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
-2. **Restore-vs-recompute check.** Above the floor, Cash predicts how long the value would take to *restore* (`cost_model.estimated_restore_time`, the fitted serialize-write / read-deserialize model) and promotes only when recomputing would cost more, by at least `min_cache_savings_pct` of the compute time. Because the prediction is per-object-size, a **bigger** result that is **expensive** to recompute is now *more* likely to persist — the opposite of the old raw-bandwidth model, which scaled a fake `io_time` with size and left large frames RAM-only (CAS-141).
+2. **Restore-vs-recompute check.** Above the floor, Cash predicts how long the value would take to *restore* (`cost_model.estimated_restore_time`, the fitted serialize-write / read-deserialize model) and promotes only when recomputing would cost more, by at least `min_cache_savings_pct` of the compute time. Because the prediction is per-object-size, a **bigger** result that is **expensive** to recompute is now *more* likely to persist — the opposite of the old raw-bandwidth model, which scaled a fake `io_time` with size and left large frames RAM-only.
 
 This 2-argument closure carries no *type*, so it assumes the slowest (`_GENERIC`) family as a conservative floor. When the entry does know its type — every notebook-cached value records its `cost_model_family` on the metadata — `TieredBackend.set` recomputes the same decision with the *real* family, so the two persistence gates (this one and the statement processor's Gate A) agree instead of contradicting each other.
 
@@ -93,7 +93,6 @@ The policy knobs exposed via `CashConfig` (`src/cash/config.py`):
 |---|---|---|
 | `smart_persistence` | `True` | Master toggle. When `False`, the `TieredBackend` is built without the cost-model policy and falls back to `_default_promotion_policy` (still serialization-aware, but with a 1.0 s floor). |
 | `min_cache_savings_pct` | `0.20` | Required time-savings fraction. A cache hit must save at least this fraction of the compute cost to be worth promoting past RAM. |
-| `smart_persistence_threshold` | `1.0` (seconds) | **Legacy / no longer consulted (CAS-141).** The old bandwidth model gated on this compute cutoff; the cost model replaced it. Retained for compatibility and shown by `cash config`. |
 
 Set them via any layer (`pyproject.toml [tool.cash]`, `CASH_*` env vars, or kwargs):
 
@@ -142,7 +141,7 @@ print(slow.explain(1))
 
 ## The notebook path — the same cost model, one gate earlier
 
-The notebook integration (`%%cash` cells, `%cash_on` magic) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. Since CAS-141 the tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/processor.py`; the fitted coefficients live in `src/cash/notebook/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
+The notebook integration (`%%cash` cells, `%cash_on` magic) applies the **same** fitted cost model, but one step earlier: its Gate A decides whether a statement's output is worth caching *at all* before the value ever reaches the backend. The tier promotion policy uses that same model, so the two gates agree. Gate A lives in `statement/processor.py`; the fitted coefficients live in `src/cash/notebook/cost_model.py` and predict serialize / deserialize wall-time per `(type_family, backend_kind, size_bytes)`. They are re-fittable via:
 
 1. `benchmarks/measure_ser_deser.py` — runs a measurement campaign across families and sizes, writing the matrix to `benchmarks/results/ser_deser_matrix.csv`.
 2. `benchmarks/fit_cost_model.py` — fits per-(family, backend, op) `cost = a + b · size_bytes` lines and prints constants ready to paste into the module.
@@ -216,7 +215,6 @@ It applies the same restore-vs-recompute rule as the smart policy, just with a 1
 | Symbol | Surface | Effect |
 |---|---|---|
 | `smart_persistence` | `CashConfig` field / `CASH_SMART_PERSISTENCE` | Master toggle. Default `True`. False falls back to `_default_promotion_policy`. |
-| `smart_persistence_threshold` | `CashConfig` field / `CASH_SMART_PERSISTENCE_THRESHOLD` | **Legacy / no longer consulted (CAS-141).** Default `1.0`. Kept for compatibility. |
 | `min_cache_savings_pct` | `CashConfig` field | Required savings fraction for promotion — used by **both** the tier policy and the notebook Gate A. Default `0.20`. |
 | `min_execution_time_to_cache_seconds` | `CashConfig` field | **Notebook path only.** Per-statement floor. Default `0.01 s`. |
 | `min_cache_fixed_budget_seconds` | `CashConfig` field | **Notebook path only.** Flat restore-time budget floor. Default `0.05 s`. |

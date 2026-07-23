@@ -44,7 +44,7 @@ Two gates, in order:
 
 The cost model uses the value's *real type* when the entry carries one
 (`DataFrame`, `ndarray`, `dict`, …); when it doesn't — a decorator entry, an
-injected policy, legacy metadata — it falls back to a `_GENERIC` family, which
+injected policy, an untyped entry — it falls back to a `_GENERIC` family, which
 is the slowest family measured for that backend. Being conservative in the
 fallback means an unrecognised type is under-promoted rather than promoted onto
 a treadmill.

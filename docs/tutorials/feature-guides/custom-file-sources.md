@@ -8,7 +8,7 @@ Cash automatically tracks file dependencies. When you call `pd.read_csv('data.cs
 
 Without file tracking, every CSV/parquet load you make from a cached function would either *always* hit the cache (silently stale when the file changes on disk) or *always* miss (slow). Neither is acceptable. The middle ground is to record a fingerprint of every file the function reads and invalidate when that fingerprint moves. You get hits on identical inputs and re-runs on changed inputs without thinking about it.
 
-The fingerprint is `(mtime, size, hash)`, and **content is authoritative whenever the size matches** (CAS-98 / CAS-10). The cheap size check runs first — a differing size proves staleness without reading a byte of data — and only when the size is equal does Cash hash the file to decide. The mtime is recorded but no longer arbitrates: a touch that leaves the bytes alone is a **hit**, and a same-size edit under an indistinguishable mtime is still a **miss**.
+The fingerprint is `(mtime, size, hash)`, and **content is authoritative whenever the size matches**. The cheap size check runs first — a differing size proves staleness without reading a byte of data — and only when the size is equal does Cash hash the file to decide. The mtime is recorded but no longer arbitrates: a touch that leaves the bytes alone is a **hit**, and a same-size edit under an indistinguishable mtime is still a **miss**.
 
 The mechanism is a one-time monkey-patch of the popular reader functions: when a `@cash.cache` function executes, Cash installs `FileAccessTracker` around the call, intercepts reads from `builtins.open`, pandas, polars, numpy, joblib, json, and pickle, and stores the resulting file dictionary in the cache metadata. On the next lookup, Cash re-checks every recorded file and re-runs the function if the contents moved.
 
@@ -90,9 +90,9 @@ load_features.explain()
 #   changed_files: {'data/features.csv': 'content changed'}
 ```
 
-The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` in `src/cash/core.py`. The dict's values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, or — only for entries written before content hashing — `'mtime changed'`.
+The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` in `src/cash/core.py`. The dict's values are short human-readable strings: `'content changed'`, `'size changed'`, or `'file missing'`.
 
-`explain()` decides freshness through the same content-authoritative `file_dep_is_fresh` helper a real lookup uses (CAS-127), so it cannot disagree with the call: a **touch** (identical bytes, bumped mtime) explains as `hit`, exactly as it behaves. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
+`explain()` decides freshness through the same content-authoritative `file_dep_is_fresh` helper a real lookup uses, so it cannot disagree with the call: a **touch** (identical bytes, bumped mtime) explains as `hit`, exactly as it behaves. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
 
 ## What's NOT tracked
 
@@ -173,7 +173,7 @@ Cash checks freshness on every lookup, not at write time. `_auto_file_deps_fresh
 
 A matching size *and* a matching content hash is fresh, **regardless of the mtime**. Touching a file does not invalidate an auto-tracked dependency.
 
-**Why a content hash and not just mtime+size?** Because `(mtime, size)` was ambiguous in both directions, and both failure modes were real bugs. A touch-only change (identical bytes, bumped mtime) recomputed needlessly (CAS-98); a same-size edit written under an mtime the check couldn't distinguish was missed and served stale (CAS-10). Content is the signal that actually answers the question. The cost is bounded by checking size first and by sampling large files (below), so the common case is still one `stat()` and — only when the size matches — a bounded read.
+**Why a content hash and not just mtime+size?** Because `(mtime, size)` was ambiguous in both directions, and both failure modes were real bugs. A touch-only change (identical bytes, bumped mtime) recomputed needlessly; a same-size edit written under an mtime the check couldn't distinguish was missed and served stale. Content is the signal that actually answers the question. The cost is bounded by checking size first and by sampling large files (below), so the common case is still one `stat()` and — only when the size matches — a bounded read.
 
 ### Large files are sampled, not fully hashed
 
@@ -187,10 +187,6 @@ Hashing a multi-GB parquet on every lookup would defeat the point of caching, so
 If you're editing large files in place at fixed offsets — memory-mapped arrays, HDF5 datasets, a record patched at a known offset in a big binary — don't rely on auto-tracking. Use `file_depends_on=` (which keys on mtime and will see the write), or write a `DataSource` subclass whose `state_token()` returns a full hash of the file.
 
 Race condition to be aware of: if a file is rewritten *while* a cached function is running, the snapshot captures the post-write content. On the next call Cash sees a matching hash and returns the cached value — which now reflects half-old, half-new data. The window is small and rarely matters, but for high-churn pipelines wrap the write in a tempfile-then-rename so each run sees a consistent snapshot.
-
-### Legacy snapshots fall back to mtime
-
-Cache entries written **before** content hashing shipped have no `hash` key. For those, `file_dep_is_fresh` falls back to the old mtime tolerance — a drift under 10 ms counts as fresh (`src/cash/notebook/file_dep_snapshot.py`) — so pre-existing caches keep working instead of stampeding. This is a compatibility path for old entries only; anything Cash writes today records a hash and never consults it.
 
 ## Caveats
 
@@ -220,7 +216,7 @@ Stored paths are absolute and use forward slashes regardless of OS (`normalize_p
 
 ### Network-mounted filesystems
 
-NFS, SMB, and similar network mounts often have coarse mtime resolution (1-second granularity) and the timestamp source is the *server*, not the client, so two writes within the same second can produce identical mtimes. **Auto-tracking is immune to this** — it reads content, not timestamps, so a same-second in-place edit that preserves size is still caught (that was CAS-10, and it's fixed).
+NFS, SMB, and similar network mounts often have coarse mtime resolution (1-second granularity) and the timestamp source is the *server*, not the client, so two writes within the same second can produce identical mtimes. **Auto-tracking is immune to this** — it reads content, not timestamps, so a same-second in-place edit that preserves size is still caught.
 
 Two things on network mounts do still deserve care:
 
@@ -243,7 +239,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 | `file_depends_on=path` | `@cash.cache` kwarg | Wraps *path* in `FileDataSource` and adds it to the function's static dependencies. Accepts `str` or `list[str]`. |
 | `c.register_file_handler(module, func, factory)` | `Cash` method | Register a wrapper factory for an additional reader. Catches every subsequent call to `module.func` from cached code. Glob wildcard supported in *func*. |
 | `cash.FileDataSource(path)` | Public class | mtime-based change detection for a single file. Use in `depends_on=[...]` for advanced cases or subclass for content-hashing. |
-| `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, `'file missing'`, or `'mtime changed'` (legacy entries only). |
+| `f.explain(*args).reason == 'file_changed'` | Diagnostic | Explanation reason emitted when one or more recorded files changed. `details['changed_files']` maps each path to `'content changed'`, `'size changed'`, or `'file missing'`. |
 | `FileAccessTracker` | Internal | Context manager that drives the monkey-patch. Auto-installed by `_compute_and_store`; not intended for direct use. |
 | `FileDependencyRegistry` | Internal | Singleton holding the registered handler factories. Accessed through `register_file_handler`; direct use is unsupported. |
 

@@ -57,7 +57,7 @@ The return value is a `CacheExplanation` dataclass (`src/cash/core.py`) with fiv
 | `file_changed` | An auto-tracked file dependency changed. Invalidation is decided by **content**: size first, then a content hash when the size matches — a touch alone is not a change. | `changed_files: {path: reason}` |
 | `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
 
-`_explain_call` in `src/cash/core.py` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh` (CAS-127), the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are `'content changed'`, `'size changed'`, `'file missing'`, or `'mtime changed'` (legacy entries recorded before content hashing).
+`_explain_call` in `src/cash/core.py` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are `'content changed'`, `'size changed'`, or `'file missing'`.
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 

@@ -286,7 +286,7 @@ y = rng.standard_normal(1000)     # no warning
 The same applies to `np.random.Generator(...)`, `np.random.RandomState(...)` and
 `random.Random(...)`. Because a generator owns its state, **`np.random.seed()`
 does not silence a `default_rng()` draw** — the two channels are independent, and
-seeding the legacy global says nothing about your Generator. Pass the seed to the
+seeding the global RNG says nothing about your Generator. Pass the seed to the
 generator instead.
 
 !!! warning "Detection is rooted at the RNG, not at the draw"

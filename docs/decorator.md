@@ -474,7 +474,7 @@ warns once rather than failing the call.
 
 Globals read inside a nested scope count too. A generator expression,
 comprehension, or `lambda` compiles to its own code object, so detection
-recurses into them (CAS-128):
+recurses into them:
 
 ```python
 THRESHOLD = 10

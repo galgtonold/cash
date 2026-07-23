@@ -111,7 +111,7 @@ A list of backends ordered fastest-first. A `get` walks the list in order; on a 
 The default policy (`_default_promotion_policy` at `src/cash/backends/tiered_backend.py`) is a two-gate filter:
 
 1. Execution time must clear a compute floor (1.0 s for this fallback) — anything faster isn't worth persisting.
-2. Re-executing must cost more than restoring, using the fitted cost model's predicted read+deserialize time (`cost_model.estimated_restore_time`) — not a raw bandwidth guess (CAS-141).
+2. Re-executing must cost more than restoring, using the fitted cost model's predicted read+deserialize time (`cost_model.estimated_restore_time`) — not a raw bandwidth guess.
 
 So a `pd.read_csv` that takes 50 ms and produces a 10 MB frame stays in RAM; a model fit that takes 30 s and produces a 200 MB pickle goes to RAM **and** disk. See [Smart Persistence](smart-persistence.md) for the full policy and how `@cash:persist` overrides it.
 
