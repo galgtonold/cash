@@ -799,11 +799,34 @@ class Cash:
             return state_hash
 
         parts: list[str] = []
-        for attr in attrs:
+        # Transitive, not one-hop: a method reached via self may itself read a
+        # class constant or call another method, and editing THAT must also
+        # invalidate. Walk the reachable self-members, folding each once. Keyed
+        # by attribute name -- within one class hierarchy ``self.X`` always
+        # resolves to the same member -- so a ``seen`` set both dedups and stops
+        # a mutually-recursive method pair from looping. Bounded for safety.
+        seen: set[str] = set()
+        worklist: list[str] = list(attrs)
+        while worklist and len(seen) < 512:
+            attr = worklist.pop()
+            if attr in seen:
+                continue
+            seen.add(attr)
             try:
                 member = inspect.getattr_static(owner_class, attr)
             except (AttributeError, Exception):  # noqa: BLE001 - never break a call
                 continue  # instance-only attr (already in self's hash) or unresolved
+            if isinstance(member, property):
+                # Fold the getter's source, and follow what the getter reads.
+                getter = member.fget
+                if getter is not None:
+                    try:
+                        parts.append(f"p:{attr}:{self._hash_callable_source(getter)}")
+                    except (OSError, TypeError, ValueError):
+                        pass
+                    _, sub_attrs, _ = self._analyze_method_self_deps(getter)
+                    worklist.extend(a for a in sub_attrs if a not in seen)
+                continue
             if isinstance(member, (staticmethod, classmethod)):
                 member = member.__func__
             if inspect.isfunction(member) or inspect.ismethod(member):
@@ -811,6 +834,9 @@ class Cash:
                     parts.append(f"m:{attr}:{self._hash_callable_source(member)}")
                 except (OSError, TypeError, ValueError):
                     continue
+                # Recurse into what this method itself reaches through self.
+                _, sub_attrs, _ = self._analyze_method_self_deps(member)
+                worklist.extend(a for a in sub_attrs if a not in seen)
             elif not isinstance(member, (types.ModuleType, type)) and not callable(member):
                 # A class-level DATA attribute (a constant). Fold its value.
                 try:

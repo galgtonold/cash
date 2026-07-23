@@ -104,6 +104,71 @@ def test_class_level_edit_invalidates(tmp_path, template, k1, r1, k2, r2):
     )
 
 
+# --- Transitive (multi-hop) reachability: a helper's helper, a constant read
+# INSIDE a called helper, and a property getter must all invalidate too. ---
+
+CONST_BEHIND_HELPER = """import warnings; warnings.simplefilter("ignore")
+import time, cash
+class Model:
+    RATE = {k}
+    def helper(self, x):
+        return x + self.RATE          # helper reads RATE; compute does not
+    @cash.cache
+    def compute(self, x):
+        time.sleep(0.3)
+        return self.helper(x) + 4
+print("R", Model().compute(10))
+"""
+
+DEEP_CHAIN = """import warnings; warnings.simplefilter("ignore")
+import time, cash
+class Model:
+    def c(self, x):
+        return x + {k}                # 3 hops from compute
+    def b(self, x):
+        return self.c(x) * 2
+    def a(self, x):
+        return self.b(x)
+    @cash.cache
+    def compute(self, x):
+        time.sleep(0.3)
+        return self.a(x)
+print("R", Model().compute(10))
+"""
+
+PROPERTY_GETTER = """import warnings; warnings.simplefilter("ignore")
+import time, cash
+class Model:
+    def __init__(self):
+        self.x = 9
+    @property
+    def computed(self):
+        return self.x + {k}
+    @cash.cache
+    def total(self, y):
+        time.sleep(0.3)
+        return self.computed + y
+print("R", Model().total(0))
+"""
+
+
+@pytest.mark.parametrize("template,k1,r1,k2,r2", [
+    (CONST_BEHIND_HELPER, "10", "24", "100", "114"),
+    (DEEP_CHAIN, "1", "22", "99", "218"),
+    (PROPERTY_GETTER, "1", "10", "100", "109"),
+])
+def test_transitive_class_edit_invalidates(tmp_path, template, k1, r1, k2, r2):
+    main = tmp_path / "main.py"
+    main.write_text(template.format(k=k1), encoding="utf-8")
+    assert _result(_run(tmp_path)) == r1
+
+    main.write_text(template.format(k=k2), encoding="utf-8")
+    # Cache NOT cleared: a stale serve (one-hop-only tracking) returns r1.
+    assert _result(_run(tmp_path)) == r2, (
+        "a transitively-reached class dependency did not invalidate"
+    )
+
+
 import cash
 
 
