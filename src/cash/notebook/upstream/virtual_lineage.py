@@ -9,6 +9,7 @@ with :class:`NotebookSimulator` and :class:`MismatchClassifier`. Pure-phase
 invariants land in a later refactor.
 """
 
+import inspect
 import ast
 import hashlib
 import logging
@@ -170,6 +171,47 @@ class VirtualLineage:
                         continue
         return sources
 
+    def _resolve_sim_function_source(self, name: str) -> str | None:
+        """Source of function *name* for the headless mutation analysis.
+
+        Cell-defined functions have no ``linecache`` entry under nbclient, so
+        they come from ``_build_function_sources`` (cell text stashed by pass 1).
+        A function IMPORTED from a real ``.py`` file DOES resolve via ``inspect``
+        (linecache reads the file) -- cell text cannot cover it -- so without this
+        fallback an imported helper that mutates its argument stays invisible to
+        the simulation, desyncing it from the runtime (which already uses
+        ``inspect``) and reverting the mutation on a cross-cell restore.
+        """
+        srcs = getattr(self, '_sim_func_sources', None)
+        if srcs is not None:
+            s = srcs.get(name)
+            if s is not None:
+                return s
+        # Imported functions DO resolve via inspect (linecache reads the file).
+        # Search *name* bound directly, then in the __globals__ of any imported
+        # function -- so an imported ``build(ds)`` whose body calls ``clean(ds)``
+        # (``clean`` living in build's module, not the notebook) resolves too.
+        ns = self.shell.user_ns
+        fn = ns.get(name)
+        if callable(fn) and not isinstance(fn, type):
+            try:
+                return inspect.getsource(fn)
+            except (OSError, TypeError):
+                pass
+        seen: set[int] = set()
+        for value in ns.values():
+            g = getattr(value, "__globals__", None)
+            if not isinstance(g, dict) or id(g) in seen:
+                continue
+            seen.add(id(g))
+            cand = g.get(name)
+            if callable(cand) and not isinstance(cand, type):
+                try:
+                    return inspect.getsource(cand)
+                except (OSError, TypeError):
+                    continue
+        return None
+
     def _mutation_receivers(self, stmt_code: str, tree: ast.Module) -> set[str]:
         """Receivers of standalone method calls in *tree* that mutate, per the
         runtime's broad-precise classification.
@@ -186,19 +228,17 @@ class VirtualLineage:
         # parameter) mirror bare method calls: no Store target, so the mutated
         # arg must be surfaced as an output or the backward restore scan resolves
         # the var from its constructor (pre-mutation). Detected statically from
-        # the called function's source (headless sim reads it from the notebook
-        # cells, stashed by pass 1), matching the runtime's inspect-based detect.
+        # the called function's source, matching the runtime's inspect-based
+        # detect (see ``_resolve_sim_function_source`` for cell-vs-import).
         fam: set[str] = set()
-        srcs = getattr(self, '_sim_func_sources', None)
-        if srcs:
-            try:
-                if standalone_call_arg_targets(tree):
-                    fam = {
-                        v for v in function_arg_mutations(tree, srcs.get)
-                        if not isinstance(self.shell.user_ns.get(v), types.ModuleType)
-                    }
-            except (SyntaxError, ValueError, RecursionError):
-                fam = set()
+        try:
+            if standalone_call_arg_targets(tree):
+                fam = {
+                    v for v in function_arg_mutations(tree, self._resolve_sim_function_source)
+                    if not isinstance(self.shell.user_ns.get(v), types.ModuleType)
+                }
+        except (SyntaxError, ValueError, RecursionError):
+            fam = set()
         candidates = standalone_method_call_receivers(tree)
         # CAS-199: captured-return draws are assignments, absent from the
         # bare-``Expr`` candidate set; keep the guard from short-circuiting them.

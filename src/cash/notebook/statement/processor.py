@@ -1991,13 +1991,30 @@ class StatementProcessor:
         return pre_route - outputs, observe, assumed, record_verdict
 
     def _resolve_live_function_source(self, name: str) -> str | None:
-        fn = self.shell.user_ns.get(name)
-        if fn is None or not callable(fn) or isinstance(fn, type):
-            return None
-        try:
-            return inspect.getsource(fn)
-        except (OSError, TypeError):
-            return None
+        # *name* bound directly, else a module-level helper in the __globals__ of
+        # any imported function (so ``build(ds)`` calling ``clean(ds)`` -- clean
+        # in build's module, not the notebook -- resolves for interprocedural
+        # arg-mutation detection).
+        ns = self.shell.user_ns
+        fn = ns.get(name)
+        if callable(fn) and not isinstance(fn, type):
+            try:
+                return inspect.getsource(fn)
+            except (OSError, TypeError):
+                pass
+        seen: set[int] = set()
+        for value in ns.values():
+            g = getattr(value, "__globals__", None)
+            if not isinstance(g, dict) or id(g) in seen:
+                continue
+            seen.add(id(g))
+            cand = g.get(name)
+            if callable(cand) and not isinstance(cand, type):
+                try:
+                    return inspect.getsource(cand)
+                except (OSError, TypeError):
+                    continue
+        return None
 
     def _function_arg_mutation_receivers(
         self, tree: ast.Module | None, outputs: set[str],
