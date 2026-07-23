@@ -749,10 +749,10 @@ class PurityAnalyzer:
             # helpers (defined inside another function) are visible
             # for recursion.
             namespace = _build_namespace(func)
-            for call_node in visitor.called_callable_nodes:
-                callee = _resolve_callee(call_node.func, namespace)
+
+            def _queue_helper(callee: Any, line: int) -> None:
                 if callee is None or not callable(callee):
-                    continue
+                    return
                 # A call to another @cash.cache-decorated function is a
                 # dependency-graph edge, not a helper to walk: its own source
                 # hash and purity are tracked as a separate node. Recursing
@@ -760,21 +760,41 @@ class PurityAnalyzer:
                 # makes look like same-package user code) and flag cash's own
                 # internal mutations as the user's (finding #9).
                 if getattr(callee, "_cash_cached", False):
-                    continue
+                    return
                 if is_pure(callee):
-                    continue
+                    return
                 if is_stateful(callee):
-                    callee_qual = _qualname_of(callee)
                     all_issues.append(PurityIssue(
                         kind=ISSUE_IMPURE_CALL,
-                        description=f"calls @stateful {callee_qual}()",
-                        where=qualname,
-                        line=getattr(call_node, "lineno", 0),
+                        description=f"calls @stateful {_qualname_of(callee)}()",
+                        where=qualname,  # noqa: B023 - loop var, called within iteration
+                        line=line,
                     ))
-                    continue
+                    return
                 if not _is_user_code(callee, root_module):
-                    continue
-                stack.append((callee, depth + 1))
+                    return
+                stack.append((callee, depth + 1))  # noqa: B023 - same
+
+            for call_node in visitor.called_callable_nodes:
+                _queue_helper(
+                    _resolve_callee(call_node.func, namespace),
+                    getattr(call_node, "lineno", 0),
+                )
+
+            # A helper referenced by NAME but reached through a value -- not in
+            # call position -- was never walked, so an edit to it silently
+            # served a stale result: ``fn = helper; fn(x)``, ``_apply(helper,
+            # x)``, storing a function in a local then calling it. Any read name
+            # that resolves to a user FUNCTION is a source dependency; walk it
+            # too (CAS-236). Restricted to functions/methods so modules,
+            # classes, and arbitrary attribute reads are not folded in, and the
+            # existing user-code / purity / cached-node filters still apply. The
+            # direction is safe: at worst it over-invalidates (a referenced-but-
+            # unused function recomputes), never serves stale.
+            for _name in visitor.read_names:
+                _val = namespace.get(_name)
+                if inspect.isfunction(_val) or inspect.ismethod(_val):
+                    _queue_helper(_val, 0)
 
         # Stable order: by where (insertion) then line then kind.
         all_issues_sorted = tuple(sorted(
