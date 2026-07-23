@@ -26,6 +26,11 @@ That's the install. The next time you re-run the notebook, every statement that 
 
 https://github.com/user-attachments/assets/6cd99ff1-68fe-4e8f-bf60-4572569cd34c
 
+<!-- R2-hosted copy (awaiting link) — enable by replacing R2_MP4_URL and deleting these markers.
+     Renders where the GitHub-attachment player is stripped (e.g. some mirrors).
+<video src="R2_MP4_URL" controls muted loop playsinline width="100%"></video>
+-->
+
 > See [Reading the Cash badge](docs/badges.md) for a walkthrough of every part of the badge and the most common questions it answers.
 
 **Or try it live in your browser** — no install, ~30 seconds:

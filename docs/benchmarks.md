@@ -12,13 +12,35 @@ adds the methodology and how to reproduce them.
 
 ## Measured speedups
 
-| Workload | Measured |
-|---|---|
-| An expensive loop body (backtest windows, per-entity API calls) | **~190×** on the loop |
-| Model training via `@cash.cache` | **~9–11×** |
-| Monte Carlo / restart-and-re-run | **~4–5.5×** |
-| Big-frame pandas ETL, written the way people naturally write pandas | **~1.2×** |
-| The same ETL, restructured cache-friendly | **~1.4–1.6×** |
+<div class="cash-bench" role="img" aria-label="Measured speedups by workload on a log scale: expensive loop body about 190 times, model training 9 to 11 times, Monte Carlo 4 to 5.5 times, cache-friendly ETL 1.4 to 1.6 times, naive big-frame ETL 1.2 times.">
+  <div class="cash-bench-row">
+    <span class="cash-bench-label">Expensive loop body<br><span class="cash-bench-note">backtest windows, per-entity API calls</span></span>
+    <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-hi" style="width:99%"></span></span>
+    <span class="cash-bench-val">~190×</span>
+  </div>
+  <div class="cash-bench-row">
+    <span class="cash-bench-label">Model training via <code>@cash.cache</code></span>
+    <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-hi" style="width:44%"></span></span>
+    <span class="cash-bench-val">~9–11×</span>
+  </div>
+  <div class="cash-bench-row">
+    <span class="cash-bench-label">Monte Carlo / restart-and-re-run</span>
+    <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-hi" style="width:30%"></span></span>
+    <span class="cash-bench-val">~4–5.5×</span>
+  </div>
+  <div class="cash-bench-row">
+    <span class="cash-bench-label">Big-frame pandas ETL, restructured cache-friendly</span>
+    <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-lo" style="width:8%"></span></span>
+    <span class="cash-bench-val">~1.4–1.6×</span>
+  </div>
+  <div class="cash-bench-row">
+    <span class="cash-bench-label">The same ETL, written the way people naturally write pandas</span>
+    <span class="cash-bench-track"><span class="cash-bench-bar cash-bench-lo" style="width:3.5%"></span></span>
+    <span class="cash-bench-val">~1.2×</span>
+  </div>
+</div>
+
+<p class="cash-bench-note">Bars are on a <strong>log scale</strong> — a ~190× win and a ~1.2× win are both shown honestly. Green = a big win (expensive to compute, cheap to store); ochre = marginal (the result is nearly as slow to reload as to recompute).</p>
 
 Two honest caveats that the table can't show on its own:
 

@@ -4,6 +4,8 @@ Cash uses a handful of specific terms throughout the docs and in the per-cell
 badge. This page defines them in one place; each entry links to the page that
 covers it in depth.
 
+<div class="cash-glossary" markdown="1">
+
 ## Annotation
 
 A `# @cash:...` comment that overrides cash's default decision for one
@@ -146,3 +148,5 @@ Cash's dry-run analysis of the notebook that determines, before executing, which
 statements can be restored and which must recompute — including recomputing
 skipped intermediate cells to satisfy a downstream read. See
 [The notebook path](how-it-works/notebook-path.md).
+
+</div>

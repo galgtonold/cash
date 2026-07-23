@@ -943,3 +943,88 @@
 .cash-pe-panel.persist .cash-pe-pill { background: var(--cash-green); }
 .cash-pe-panel.ram .cash-pe-pill { background: var(--cash-ochre); }
 .cash-pe-why { margin: 0.6em 0 0; font-size: 14px; line-height: 1.5; color: var(--cash-ink-2); }
+
+/* ─── Benchmarks: speedup bar chart (log scale) ─────────────────────── *
+ * Widths are log10(ratio)/log10(200)·100% so a ~190x win and a ~1.2x win are
+ * BOTH visible and honestly proportioned. Green = big win, ochre = marginal —
+ * the colour itself carries "cash wins big here, little there". */
+.cash-bench {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 1.5em 0;
+}
+.cash-bench-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 240px) 1fr max-content;
+  align-items: center;
+  gap: 12px;
+}
+.cash-bench-label {
+  font-size: 14px;
+  color: var(--cash-ink);
+  line-height: 1.3;
+}
+.cash-bench-track {
+  height: 22px;
+  background: var(--cash-bg-section);
+  border: 1px solid var(--cash-rule);
+  border-radius: var(--cash-radius-sm);
+  overflow: hidden;
+}
+.cash-bench-bar {
+  display: block;
+  height: 100%;
+  min-width: 5px;
+  border-radius: var(--cash-radius-sm);
+}
+.cash-bench-hi { background: var(--cash-green); }
+.cash-bench-lo { background: var(--cash-ochre); }
+.cash-bench-val {
+  font-family: var(--cash-font-mono);
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--cash-ink);
+  text-align: right;
+  white-space: nowrap;
+}
+.cash-bench-note {
+  font-size: 12.5px;
+  color: var(--cash-ink-3);
+  margin-top: 2px;
+}
+@media (max-width: 500px) {
+  .cash-bench-row { grid-template-columns: 1fr max-content; }
+  .cash-bench-track { grid-column: 1 / -1; order: 3; }
+}
+
+/* ─── Glossary: compact, scannable term list ────────────────────────── *
+ * Each term becomes a tight green-accented entry instead of a full-height
+ * H2 + paragraph, so the whole A–Z scans in a screen or two. The headings
+ * keep their auto-generated ids, so cross-page links (glossary#lineage, …)
+ * and the table of contents still work. */
+.md-typeset .cash-glossary h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--cash-green);
+  margin: 1.05em 0 0.1em;
+  padding: 2px 0 2px 12px;
+  border-left: 3px solid var(--cash-green);
+  border-bottom: 0;          /* drop Material's full-width h2 underline */
+}
+.md-typeset .cash-glossary h2 + p {
+  margin-top: 0.15em;
+  padding-left: 12px;
+  border-left: 1px solid var(--cash-rule);
+  color: var(--cash-ink-2);
+}
+.md-typeset .cash-glossary h2 + p + p,
+.md-typeset .cash-glossary h2 ~ pre {
+  padding-left: 12px;
+}
+
+/* ─── Landing hero video (enabled once the R2 asset is wired in) ─────── */
+.cash-hero-video {
+  border: 1px solid var(--cash-rule-strong);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.06);
+}
