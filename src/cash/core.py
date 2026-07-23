@@ -568,6 +568,10 @@ class Cash:
         # (first_param, self_attrs, uses_super) per code object; see
         # _analyze_method_self_deps.
         self._method_self_dep_cache: dict = {}
+        # user class -> source hash. A class's source cannot change within a
+        # running interpreter, so it is hashed once and reused; see
+        # _user_class_source_hash / _instance_class_source_parts.
+        self._user_class_src_cache: dict = {}
         # func_name -> (function the signature was read from, inspect.Signature
         # or None if introspection failed). Used to bind call arguments to a
         # canonical form so that logically-identical calls written differently
@@ -2867,6 +2871,79 @@ class Cash:
             )
         return v
 
+    def _user_class_source_hash(self, cls: type) -> str:
+        """Memoized source hash of a USER class.
+
+        A class's source cannot change within a running interpreter: editing the
+        file and re-importing produces a NEW class object (a distinct dict key),
+        so the hash is computed once per class object and reused on every
+        subsequent call. The per-call cost of the instance channel below is then
+        a cheap object-graph walk plus dict lookups -- never source I/O.
+        """
+        cached = self._user_class_src_cache.get(cls)
+        if cached is not None:
+            return cached
+        h = self._hash_callable_source(cls)  # inspect.getsource over the class body
+        if len(self._user_class_src_cache) < 4096:
+            self._user_class_src_cache[cls] = h
+        return h
+
+    @staticmethod
+    def _iter_contained(obj: Any):
+        """Yield *obj*, or its members if it is a plain container, skipping
+        primitives outright (they can hold no user class and are common)."""
+        if isinstance(obj, (str, bytes, bytearray, int, float, bool, complex, type(None))):
+            return
+        if isinstance(obj, (list, tuple, set, frozenset)):
+            yield from obj
+        elif isinstance(obj, dict):
+            yield from obj.values()
+        else:
+            yield obj
+
+    def _instance_class_source_parts(
+        self, value: Any, _seen: set | None = None, _depth: int = 0,
+    ) -> list[tuple[str, str]]:
+        """``(qualname, source-hash)`` for the user classes behind an INSTANCE.
+
+        A cached function that reads a pre-built module-level object -- ``pre =
+        MyTransformer()`` imported and dropped into a pipeline -- had that object
+        only VALUE-hashed: its ``__dict__`` pickle carries no method source, so an
+        edit to ``MyTransformer.transform`` left the key unchanged and served a
+        stale result (found replaying a real repo's git history). Fold the source
+        of the instance's class -- and, bounded, of the user-class instances it
+        holds -- so a method-body edit invalidates.
+
+        The walk recurses only into user-class instances: a third-party object
+        (a fitted sklearn estimator, a numpy array) is not user-editable and its
+        internals must not churn the key, and stopping there also bounds the cost
+        on real pipelines. Consequence (documented limitation): a user class
+        reachable only through a third-party container is not folded here.
+        """
+        if _depth > 4:
+            return []
+        if _seen is None:
+            _seen = set()
+        if id(value) in _seen:
+            return []
+        _seen.add(id(value))
+        parts: list[tuple[str, str]] = []
+        cls = type(value)
+        if self._is_user_class(cls):
+            try:
+                parts.append((cls.__qualname__, self._user_class_source_hash(cls)))
+            except SOURCE_RETRIEVAL_ERRORS:
+                pass
+        held = getattr(value, "__dict__", None)
+        if isinstance(held, dict):
+            for attr_val in held.values():
+                for item in self._iter_contained(attr_val):
+                    if self._is_user_class(type(item)):
+                        parts.extend(
+                            self._instance_class_source_parts(item, _seen, _depth + 1)
+                        )
+        return parts
+
     def _fold_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
         """Fold module-level DATA globals the function reads into the key (CAS-107).
 
@@ -2911,6 +2988,14 @@ class Cash:
                     stacklevel=6,
                 )
                 continue
+            # A pre-built user-class INSTANCE (or a container of them) is only
+            # value-hashed above -- its class's method SOURCE is invisible to the
+            # pickle, so editing a method served stale. Fold the class-graph
+            # source too (memoized per class; see _instance_class_source_parts).
+            for item in self._iter_contained(v):
+                if self._is_user_class(type(item)):
+                    for cname, chash in self._instance_class_source_parts(item):
+                        parts.append((f"{name}#cls:{cname}", chash))
         parts.extend(self._module_attr_parts(func, func_name, g))
         if not parts:
             return state_hash

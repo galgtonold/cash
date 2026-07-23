@@ -483,6 +483,48 @@ Anything that affects the result should be in one of those. If it
 isn't, the cache will go stale silently — that's where `func.explain()`
 helps diagnose mysteries.
 
+#### Pre-built objects: the class's method source is tracked too
+
+A read global that is an **instance of one of your classes** — a transformer,
+client, or config object built once at import and used as data — folds its
+class's *source*, not just its `__dict__`. Editing a method on that class
+invalidates, even though the object's pickled state is unchanged:
+
+<!-- test:skip reason="illustrative: two-file pipeline sketch; fit()/edit-and-rerun not executable inline" -->
+```python
+# preprocessor.py
+class Scaler:
+    def apply(self, x):
+        return x / 100          # ...edit this to  x / 50
+
+SCALER = Scaler()
+
+# pipeline.py
+@cash.cache
+def run(rows):
+    steps = [("scale", SCALER)]         # SCALER used as data
+    return fit(steps, rows)             # fit() calls SCALER.apply internally
+```
+
+Editing `Scaler.apply` re-keys `run` and it recomputes. cash also follows, a few
+levels deep, into user-class instances the object *holds* (a pipeline holding a
+transformer holding another). Third-party classes (a fitted sklearn estimator,
+a numpy array) are **not** walked — their source is fixed for your environment,
+and stopping there keeps the key from churning.
+
+Two boundaries worth knowing:
+
+- **This is the *data* path.** An object you call a method on directly
+  (`obj.transform(x)`) or pass as a bare argument (`fn(obj)`) is excluded from
+  value-folding (it might mutate — see the write/mutate rule above). A directly
+  *called* method's own edit is still caught, by the helper-source channel; only
+  a method reached **solely** through such an excluded object can be missed.
+- **Source is assumed stable within a process.** cash reads a class's source
+  once per interpreter run. Editing a class's source *between two calls in the
+  same running process* is out of scope — that only happens with live
+  re-`exec`/reload tricks, not normal use. Re-run the process (the ordinary
+  edit-and-rerun loop) and the edit is seen.
+
 ---
 
 ## Common gotchas
