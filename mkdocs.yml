@@ -129,6 +129,7 @@ nav:
     - Configuration: getting-started/configuration.md
     - Command-line interface: cli.md
     - Cost model: cost-model.md
+    - Benchmarks: benchmarks.md
     - Known limitations: known-limitations.md
   - Tutorials:
     - Feature Guides:
@@ -170,6 +171,9 @@ nav:
     - The decorator path: how-it-works/decorator-path.md
     - Where your cache lives: how-it-works/storage.md
     - Seeing what Cash did: how-it-works/inspecting.md
+  - FAQ: faq.md
+  - Glossary: glossary.md
+  - Versioning & compatibility: versioning.md
   - Contributing: contributing.md
 
 extra:

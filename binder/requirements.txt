@@ -1,0 +1,4 @@
+# Binder environment for examples/try_cash.ipynb (the "Try cash live" demo).
+# Pre-release: install cash from GitHub so the notebook launches ready to run.
+# After the PyPI release, replace the line below with:  cash-lib
+git+https://github.com/galgtonold/cash.git

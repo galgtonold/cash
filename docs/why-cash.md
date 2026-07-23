@@ -163,18 +163,18 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 
 <div class="cash-matrix-table" markdown="1">
 
-| Capability | Manual pickling | `%store` | `lru_cache` | `joblib.Memory` | **cash** |
-|---|---|---|---|---|---|
-| Statement-level granularity | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Automatic invalidation on upstream change | ❌ | ❌ | ❌ | <span title="Only on direct argument change — not on transitive code edits">⚠️</span> | ✅ |
-| File-dependency tracking | <span title="Possible if you write mtime checks yourself">⚠️</span> | ❌ | ❌ | ❌ | ✅ |
-| Survives kernel restart | <span title="Yes if you remember to dump; no automatic restore">⚠️</span> | ✅ | ❌ | ✅ | ✅ |
-| Observable (badges / provenance) | ❌ | ❌ | ❌ | <span title="call_and_shelve prints when verbose; no badges">⚠️</span> | ✅ |
-| Works in plain scripts (non-notebook) | ✅ | ❌ | ✅ | ✅ | ✅ |
-| Mutation detection | ❌ | ❌ | ❌ | ❌ | ✅ |
-| Function-source change detection | ❌ | ❌ | ❌ | <span title="Hashes function source — but only the decorated function, not its callees">⚠️</span> | ✅ |
-| Native pandas / numpy / polars / PyArrow hashing | ❌ | ❌ | <span title="Numpy and pandas aren't hashable by default; you'd need a wrapper">⚠️</span> | ✅ | ✅ |
-| Zero-config to start | ✅ | ✅ | ✅ | <span title="Requires picking a Memory location and decorating each function">⚠️</span> | ✅ |
+| Capability | Manual pickling | `%store` | `lru_cache` | `joblib.Memory` | `jupyter-cache` | `diskcache` | **cash** |
+|---|---|---|---|---|---|---|---|
+| Statement-level granularity | ❌ | ❌ | ❌ | ❌ | <span title="Whole-notebook: matches on the set of code cells">❌</span> | ❌ | ✅ |
+| Automatic invalidation on upstream change | ❌ | ❌ | ❌ | <span title="Only on direct argument change — not on transitive code edits">⚠️</span> | <span title="Invalidates the whole notebook when any code cell changes — not per-statement or transitive">⚠️</span> | ❌ | ✅ |
+| File-dependency tracking | <span title="Possible if you write mtime checks yourself">⚠️</span> | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Survives kernel restart | <span title="Yes if you remember to dump; no automatic restore">⚠️</span> | ✅ | ❌ | ✅ | <span title="Persists executed outputs across runs/builds, but restores into a book build — not a live interactive kernel">⚠️</span> | ✅ | ✅ |
+| Observable (badges / provenance) | ❌ | ❌ | ❌ | <span title="call_and_shelve prints when verbose; no badges">⚠️</span> | <span title="jcache CLI lists cached notebooks and staging state; no per-cell badges">⚠️</span> | <span title="Hit/miss counts via Cache.stats(); no badges or provenance">⚠️</span> | ✅ |
+| Works in plain scripts (non-notebook) | ✅ | ❌ | ✅ | ✅ | ❌ | ✅ | ✅ |
+| Mutation detection | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+| Function-source change detection | ❌ | ❌ | ❌ | <span title="Hashes function source — but only the decorated function, not its callees">⚠️</span> | <span title="Re-executes when a code cell's source changes, but is blind to edits in imported .py modules">⚠️</span> | <span title="memoize keys on the function name + arguments (like lru_cache); editing the body does not invalidate">❌</span> | ✅ |
+| Native pandas / numpy / polars / PyArrow hashing | ❌ | ❌ | <span title="Numpy and pandas aren't hashable by default; you'd need a wrapper">⚠️</span> | ✅ | <span title="Caches serialized cell outputs; does not hash input objects">❌</span> | <span title="Stores them fine as cached values, but does not content-hash them for keys">⚠️</span> | ✅ |
+| Zero-config to start | ✅ | ✅ | ✅ | <span title="Requires picking a Memory location and decorating each function">⚠️</span> | <span title="Needs Jupyter Book / MyST-NB or the jcache CLI workflow">⚠️</span> | <span title="Pick a cache directory and wrap each function with @memoize">⚠️</span> | ✅ |
 
 </div>
 
@@ -218,18 +218,21 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     [cost model](cost-model.md) lays out the maths in detail.
 
 ??? question "What about disk usage?"
-    Cash uses a tiered backend by default (RAM → SQLite → file → optional
-    Redis / S3). Eviction rules and a size-budget cap are configurable.
+    Cash uses a tiered backend by default: RAM (L1) → file on disk (L2).
+    Other backends — SQLite, Redis, S3 — are available for custom tier
+    stacks. Eviction rules and a size-budget cap are configurable.
     See [Configuration](getting-started/configuration.md).
 
 ### Production readiness
 
 ??? question "Is a 0.x release safe for real work?"
-    Yes for notebook use; `0.1.0` ships with comprehensive unit + integration
-    test coverage (the test suite is thousands of integration tests, many
-    derived from real-world bug reports). Treat it like any other library
-    you'd pin a version of — this is a `0.x` release, so the API may change
-    between minor versions. The [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
+    Yes for notebook use; `0.1.1`, the first public release, is backed by
+    comprehensive unit + integration test coverage (the test suite is thousands
+    of integration tests, many derived from real-world bug reports). Treat it
+    like any other library you'd pin a version of — this is a `0.x` release, so
+    the API and the cache format may change between minor versions (run
+    `%cash_repair --full` after upgrading). The
+    [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
     documents breaking changes between releases.
 
 ??? question "How do I force a fresh run?"
@@ -260,6 +263,24 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     miss costs a recompute every time the process restarts. It's not in
     the same category as a persistent, dependency-aware cache.
     See [migration guide](migration_guide.md).
+
+??? question "Why not `jupyter-cache`?"
+    `jupyter-cache` (the engine behind Jupyter Book / MyST-NB) caches a
+    notebook's executed outputs so a *build* can skip re-running an unchanged
+    notebook. It matches at whole-notebook granularity — hashing the code
+    cells — so editing any one cell re-executes the entire notebook, and it
+    doesn't track data-file reads, imported-module edits, or in-place
+    mutations. It's built for reproducible book builds in CI, not the
+    interactive edit-one-line-and-re-run loop cash optimizes.
+
+??? question "Why not `diskcache`?"
+    `diskcache` is an excellent persistent key→value store — cash can even use
+    a disk backend for the same storage job. Its `@memoize` decorator keys on
+    the function's name and arguments (like `lru_cache`), so results survive a
+    restart, but editing the function body does **not** invalidate the entry,
+    and it has no notebook awareness, dependency lineage, file tracking, or
+    mutation detection. Think of it as a fast storage layer, not a
+    "know-when-to-recompute" layer.
 
 ## Try it / Go deeper
 
