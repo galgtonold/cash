@@ -198,20 +198,34 @@ def test_helper_source_hash_invalidates_cache_across_instances(tmp_path):
                 del sys.modules[mod_name]
 
 
-def test_dynamic_pattern_warns(tmp_path):
+def test_untrackable_pattern_raises_by_default(tmp_path):
+    """An untrackable-dependency pattern (eval here) RAISES by default.
+
+    Cash cannot see an edit to a dependency it resolves from a runtime value,
+    so a cached result could be silently stale. Rather than cache something it
+    cannot keep correct, cash refuses unless the user opts in with assume_safe.
+    """
+    from cash import CashImpureFunctionError
+
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
     def f(expr):
         return eval(expr)
 
-    with warnings.catch_warnings(record=True) as captured:
-        warnings.simplefilter("always")
+    with pytest.raises(CashImpureFunctionError, match="runtime value|assume_safe"):
         f("1 + 1")
 
-    impurity = [w for w in captured if issubclass(w.category, CashImpurityWarning)]
-    assert len(impurity) == 1
-    assert "eval" in str(impurity[0].message)
+
+def test_untrackable_pattern_caches_with_assume_safe(tmp_path):
+    """assume_safe=True acknowledges the staleness risk and caches anyway."""
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache(assume_safe=True)
+    def f(expr):
+        return eval(expr)
+
+    assert f("1 + 1") == 2  # no raise; the user opted in
 
 
 def test_calling_parameter_warns(tmp_path):

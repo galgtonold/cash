@@ -8,6 +8,7 @@ import pytest
 from cash.purity_analyzer import (
     ISSUE_DISCARDED_CALL,
     ISSUE_DYNAMIC_PATTERN,
+    ISSUE_UNTRACKABLE_DEP,
     ISSUE_IMPURE_CALL,
     ISSUE_SCOPE_MUTATION,
     PurityAnalyzer,
@@ -95,7 +96,7 @@ def test_eval_flagged_as_dynamic(analyzer):
         return eval(expr)
 
     r = analyzer.analyze(f)
-    assert any(i.kind == ISSUE_DYNAMIC_PATTERN and "eval" in i.description for i in r.issues)
+    assert any(i.kind == ISSUE_UNTRACKABLE_DEP and "eval" in i.description for i in r.issues)
 
 
 def test_exec_flagged_as_dynamic(analyzer):
@@ -104,7 +105,7 @@ def test_exec_flagged_as_dynamic(analyzer):
         return 1
 
     r = analyzer.analyze(f)
-    assert any(i.kind == ISSUE_DYNAMIC_PATTERN and "exec" in i.description for i in r.issues)
+    assert any(i.kind == ISSUE_UNTRACKABLE_DEP and "exec" in i.description for i in r.issues)
 
 
 def test_getattr_with_dynamic_name_flagged(analyzer):
@@ -112,7 +113,7 @@ def test_getattr_with_dynamic_name_flagged(analyzer):
         return getattr(obj, name)()
 
     r = analyzer.analyze(f)
-    assert any(i.kind == ISSUE_DYNAMIC_PATTERN and "getattr" in i.description for i in r.issues)
+    assert any(i.kind == ISSUE_UNTRACKABLE_DEP and "getattr" in i.description for i in r.issues)
 
 
 def test_getattr_with_constant_name_not_flagged(analyzer):

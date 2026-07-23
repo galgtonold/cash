@@ -4208,6 +4208,27 @@ class Cash:
             return
 
         summary = _format_issues_summary(func_name, issues)
+
+        # Untrackable-dependency patterns (eval/exec/compile, getattr(obj,name)()
+        # dynamic dispatch, importlib.import_module) RAISE by default, even in
+        # the ordinary "warn" mode: cash cannot see an edit to a dependency it
+        # resolves from a runtime value, so a cached result can go silently
+        # stale, and caching correctness can no longer be guaranteed. The user
+        # must acknowledge the risk with assume_safe=True (the ``silent`` mode
+        # handled above) to cache anyway.
+        from .purity_analyzer import ISSUE_UNTRACKABLE_DEP
+        untrackable = [i for i in issues if getattr(i, "kind", None) == ISSUE_UNTRACKABLE_DEP]
+        if untrackable and mode != "strict":
+            untrackable_summary = _format_issues_summary(func_name, untrackable)
+            raise CashImpureFunctionError(
+                f"@cash.cache on {func_name}: a dependency is resolved from a "
+                f"runtime value, so cash cannot tell when it changes and a cached "
+                f"result could be silently stale. Caching correctness cannot be "
+                f"guaranteed for this function.\nPass @cash.cache(assume_safe=True) "
+                f"to cache it anyway (you accept the staleness risk), or refactor "
+                f"to a statically-named call.\n{untrackable_summary}"
+            )
+
         if mode == "strict":
             raise CashImpureFunctionError(
                 f"@cash.cache(strict=True) on {func_name}: purity issues "

@@ -69,6 +69,7 @@ __all__ = [
     "PurityIssue",
     "ISSUE_IMPURE_CALL",
     "ISSUE_DYNAMIC_PATTERN",
+    "ISSUE_UNTRACKABLE_DEP",
     "ISSUE_DISCARDED_CALL",
     "ISSUE_SCOPE_MUTATION",
     "ISSUE_MUTABLE_GLOBAL",
@@ -76,6 +77,12 @@ __all__ = [
 
 ISSUE_IMPURE_CALL = "impure_call"
 ISSUE_DYNAMIC_PATTERN = "dynamic_pattern"
+# Patterns where a dependency is resolved from a runtime value, so cash cannot
+# see an edit to it and a cached result can go silently stale: eval/exec/compile,
+# getattr(obj, name)() dynamic dispatch, importlib.import_module. Caching
+# correctness cannot be guaranteed, so these RAISE by default (opt in with
+# assume_safe=True). Distinct from ISSUE_DYNAMIC_PATTERN, which stays advisory.
+ISSUE_UNTRACKABLE_DEP = "untrackable_dep"
 ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
 ISSUE_MUTABLE_GLOBAL = "mutable_global"
@@ -285,7 +292,7 @@ class _PurityVisitor(ast.NodeVisitor):
         # Explicit dynamism: eval / exec / compile by bare name.
         if isinstance(func_node, ast.Name) and func_node.id in {"eval", "exec", "compile"}:
             self.issues.append(PurityIssue(
-                kind=ISSUE_DYNAMIC_PATTERN,
+                kind=ISSUE_UNTRACKABLE_DEP,
                 description=f"{func_node.id}(...) - explicit dynamic execution",
                 where=self._qualname,
                 line=line,
@@ -301,8 +308,27 @@ class _PurityVisitor(ast.NodeVisitor):
             and not (isinstance(func_node.args[1], ast.Constant) and isinstance(func_node.args[1].value, str))
         ):
             self.issues.append(PurityIssue(
-                kind=ISSUE_DYNAMIC_PATTERN,
+                kind=ISSUE_UNTRACKABLE_DEP,
                 description="getattr(obj, name)(...) with non-constant name - dynamic dispatch",
+                where=self._qualname,
+                line=line,
+            ))
+            return
+
+        # Dynamic import: importlib.import_module(...) / __import__(...). The
+        # imported module's members are resolved from a runtime value, so an
+        # edit to that module is invisible to the cache key.
+        _is_import_module = (
+            isinstance(func_node, ast.Attribute) and func_node.attr == "import_module"
+        )
+        _is_dunder_import = isinstance(func_node, ast.Name) and func_node.id == "__import__"
+        if _is_import_module or _is_dunder_import:
+            self.issues.append(PurityIssue(
+                kind=ISSUE_UNTRACKABLE_DEP,
+                description=(
+                    f"{'importlib.import_module' if _is_import_module else '__import__'}"
+                    "(...) - dynamic import; the imported module's code is not tracked"
+                ),
                 where=self._qualname,
                 line=line,
             ))
