@@ -747,11 +747,17 @@ class Cash:
         attrs: set[str] = set()
         uses_super = False
         for node in ast.walk(func_def):
-            # ``self.<attr>`` in any position (read or call receiver).
-            if (isinstance(node, ast.Attribute)
-                    and isinstance(node.value, ast.Name)
-                    and node.value.id == self_name):
-                attrs.add(node.attr)
+            if isinstance(node, ast.Attribute):
+                v = node.value
+                # ``self.<attr>`` in any position (read or call receiver).
+                if isinstance(v, ast.Name) and v.id == self_name:
+                    attrs.add(node.attr)
+                # ``type(self).<attr>`` -- resolves to the same class member as
+                # self.<attr> for class-level attributes; treat it the same.
+                elif (isinstance(v, ast.Call) and isinstance(v.func, ast.Name)
+                      and v.func.id == "type" and len(v.args) == 1
+                      and isinstance(v.args[0], ast.Name) and v.args[0].id == self_name):
+                    attrs.add(node.attr)
             # ``super()`` / ``super(...)`` anywhere.
             if isinstance(node, ast.Call):
                 f = node.func
@@ -2912,6 +2918,18 @@ class Cash:
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode('utf-8')).hexdigest()
 
     @staticmethod
+    def _is_user_class(cls: Any) -> bool:
+        """True for a class defined in user code (not stdlib / third-party).
+
+        Used to fold ``ClassName.CONSTANT`` reads: editing a class-level config
+        constant should invalidate, but ``np.float64.something`` or a library
+        class's attributes should not churn the key.
+        """
+        import sys
+        mod = sys.modules.get(getattr(cls, "__module__", None) or "")
+        return mod is not None and Cash._is_user_module(mod)
+
+    @staticmethod
     def _is_user_module(mod: Any) -> bool:
         """True for a module the user is plausibly editing between runs.
 
@@ -2996,17 +3014,29 @@ class Cash:
         """
         parts: list[tuple[str, str]] = []
         for mod_name, attr in self._read_module_attr_pairs(func):
-            mod = g.get(mod_name)
-            if not isinstance(mod, types.ModuleType) or not self._is_user_module(mod):
+            obj = g.get(mod_name)
+            is_mod = isinstance(obj, types.ModuleType) and self._is_user_module(obj)
+            # ``Cfg.LIMIT`` -- a class constant read through the class NAME -- is
+            # the same bytecode shape (LOAD_GLOBAL Cfg; LOAD_ATTR LIMIT) but was
+            # skipped because ``Cfg`` is a class, not a module, so editing the
+            # constant served stale. Fold user-class attributes too.
+            is_cls = isinstance(obj, type) and self._is_user_class(obj)
+            if not (is_mod or is_cls):
                 continue
             try:
-                value = getattr(mod, attr)
-            except AttributeError:
+                value = (inspect.getattr_static(obj, attr) if is_cls
+                         else getattr(obj, attr))
+            except (AttributeError, Exception):  # noqa: BLE001 - never break a call
                 continue
             label = f"{mod_name}.{attr}"
             if isinstance(value, types.ModuleType) or isinstance(value, type):
                 continue
             if callable(value) and not isinstance(value, (dict, list, tuple, set)):
+                # A class method/staticmethod/classmethod is handled by the
+                # helper-source / self-dep channels; only recurse into a
+                # module-level helper's own constants here.
+                if not is_mod:
+                    continue
                 # One level only: fold the constants the helper itself reads.
                 # Deeper recursion would drag in whole transitive namespaces for
                 # a diminishing chance of catching a real edit.
