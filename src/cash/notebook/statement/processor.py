@@ -54,7 +54,7 @@ _LOG_OPTIMIZATION = "[OPTIMIZATION]"
 _LOG_FORBIDDEN = "[FORBIDDEN]"
 _LOG_ANNOTATION = "[ANNOTATION]"
 
-# --- Loop-persist amplification guard (CAS-160) ----------------------------
+# --- Loop-persist amplification guard ----------------------------
 # ``# @cash:persist`` inside (or on) a loop makes EVERY iteration a persist
 # target. When the loop grows one object -- the classic "add a column per
 # iteration" frame build -- each iteration snapshots the whole object at its
@@ -264,7 +264,7 @@ def _tee_output() -> Generator[Any, None, None]:
 # module MUST stay importable without IPython: base ``cash`` declares
 # ``dependencies = []`` — IPython lives in the ``[notebook]`` extra — and this
 # module sits on the ``import cash`` chain, so a module-level unguarded IPython
-# import makes a bare ``pip install cash-lib`` unimportable (CAS-129).
+# import makes a bare ``pip install cash-lib`` unimportable.
 #
 # ``display`` / ``publish_display_data`` deliberately do NOT get the same
 # treatment: there is no honest fallback for "render rich output" without
@@ -272,7 +272,7 @@ def _tee_output() -> Generator[Any, None, None]:
 # cell appears to succeed while producing nothing.  They are imported
 # function-locally at each use site instead, so a genuine display attempt
 # fails loudly with a clear ImportError.  Same rule as
-# ``StatementRestorer._replay_cached_outputs`` (CAS-129/CAS-132).
+# ``StatementRestorer._replay_cached_outputs``.
 try:
     from IPython.utils.io import capture_output
 except ImportError:
@@ -394,7 +394,7 @@ class StatementProcessor:
             self.persist_all = False
         self.compute_hash: Callable[[Any], str] | None = compute_hash_fn
 
-        # Loop-persist amplification guard (CAS-160). Cumulative value-persisted
+        # Loop-persist amplification guard. Cumulative value-persisted
         # bytes per loop-body statement (keyed on the body's real source, with
         # the per-iteration discriminator comment stripped, so all iterations of
         # one statement share a counter), plus the set of statements already
@@ -411,7 +411,7 @@ class StatementProcessor:
 
         # Document: function_tracker must be explicitly passed to UpstreamChecker
         self.function_tracker = FunctionTracker()
-        # module -> cache key of the seeding statement in force (CAS-223).
+        # module -> cache key of the seeding statement in force.
         self._rng_seed_epochs: dict[str, str] = {}
         # Publish by reference so `@cash.cache` can see a seed change too:
         # the decorator consumes the same global stream but had no view of
@@ -438,7 +438,7 @@ class StatementProcessor:
             debug=debug,
         )
 
-        # Perpetual-miss guard (CAS-172): learns which statements can never hit
+        # Perpetual-miss guard: learns which statements can never hit
         # (unstable cache key -> a new key every run -> zero hits) and stops
         # SERIALISING them, while keeping the hash + the lookup. Verdicts persist
         # to the cache dir so a restart doesn't re-pay the learning. Resolved
@@ -558,7 +558,7 @@ class StatementProcessor:
             force_outputs: Extra output variable names to capture/restore on top
                 of those AST analysis discovers, and to treat as expected writes
                 so an in-place mutation on them does NOT block caching. Used by
-                the accumulator-loop fast path (CAS-145) to route ``out = []`` +
+                the accumulator-loop fast path to route ``out = []`` +
                 ``for e in it: out.append(f(e))`` through the cache as one unit,
                 capturing the accumulator AND the leaked loop variable. Does NOT
                 affect the cache key (outputs only enter it when they are
@@ -641,7 +641,7 @@ class StatementProcessor:
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
             est_fit: set[str] = set()
-            # ...with ONE exception: a draw on a live Figure/Axes (CAS-220).
+            # ...with ONE exception: a draw on a live Figure/Axes.
             draw_only = self._identity_coupled_call_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
@@ -660,7 +660,7 @@ class StatementProcessor:
         # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
         # statement has no bearing on it either way. Do not restore that reasoning.
         #
-        # Caching a bare fit instead (CAS-138) is the OPT-IN path, kept because it
+        # Caching a bare fit instead is the OPT-IN path, kept because it
         # is a large win when it lands but demoted from the default because its
         # correctness surface exceeds what per-statement restore can guarantee:
         #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
@@ -681,7 +681,7 @@ class StatementProcessor:
         # -> execute + save). A receiver that is BOTH an estimator fit AND another
         # genuine skip receiver still skips (the skip wins for that receiver).
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
-        # PLACE (CAS-138). Without the directive ``est_fit`` is empty and every
+        # PLACE. Without the directive ``est_fit`` is empty and every
         # site below degrades to the pre-CAS-138 skip-cache behaviour.
         fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
         skip_pre_route = mut_pre_route - est_fit
@@ -706,7 +706,7 @@ class StatementProcessor:
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
-        # the restore-time warning on a cache hit below (CAS-167).
+        # the restore-time warning on a cache hit below.
         unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
         self._stamp_random_effect(metrics, code, unseeded_calls, unseeded_fits)
 
@@ -791,7 +791,7 @@ class StatementProcessor:
 
         The cache-*hit* path (``_handle_cache_hit``) returns BEFORE any
         coroutine is built, so an identical second run skips the await entirely
-        (CAS-116).  CAS-96 trailing-semicolon suppression and CAS-115/89
+       .  CAS-96 trailing-semicolon suppression and CAS-115/89
         live-alias edge-recording (in ``_post_execute``) apply unchanged because
         this method routes through the same ``_analyze_and_hash`` /
         ``_handle_cache_hit`` / ``_post_execute`` helpers.
@@ -834,7 +834,7 @@ class StatementProcessor:
         if '# __iteration_context__:' in code or '# control_context:' in code:
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
             est_fit: set[str] = set()
-            # ...with ONE exception: a draw on a live Figure/Axes (CAS-220).
+            # ...with ONE exception: a draw on a live Figure/Axes.
             draw_only = self._identity_coupled_call_receivers(_parsed_tree)
         else:
             mut_pre_route, mut_observe, mut_assumed, mut_record = self._classify_method_mutations(
@@ -853,7 +853,7 @@ class StatementProcessor:
         # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
         # statement has no bearing on it either way. Do not restore that reasoning.
         #
-        # Caching a bare fit instead (CAS-138) is the OPT-IN path, kept because it
+        # Caching a bare fit instead is the OPT-IN path, kept because it
         # is a large win when it lands but demoted from the default because its
         # correctness surface exceeds what per-statement restore can guarantee:
         #   * a cache HIT may REBIND the receiver, leaving an alias pointing at the
@@ -874,7 +874,7 @@ class StatementProcessor:
         # -> execute + save). A receiver that is BOTH an estimator fit AND another
         # genuine skip receiver still skips (the skip wins for that receiver).
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
-        # PLACE (CAS-138). Without the directive ``est_fit`` is empty and every
+        # PLACE. Without the directive ``est_fit`` is empty and every
         # site below degrades to the pre-CAS-138 skip-cache behaviour.
         fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
         skip_pre_route = mut_pre_route - est_fit
@@ -899,7 +899,7 @@ class StatementProcessor:
         # An UNSEEDED estimator fit routed to caching above is frozen on re-run
         # with no warning -- cash's AST detector cannot see the randomness inside
         # sklearn's compiled .fit(). Warn now (compute time); the same set drives
-        # the restore-time warning on a cache hit below (CAS-167).
+        # the restore-time warning on a cache hit below.
         unseeded_fits = self._warn_unseeded_estimator_fit(code, est_fit, allow_random)
         self._stamp_random_effect(metrics, code, unseeded_calls, unseeded_fits)
 
@@ -981,9 +981,9 @@ class StatementProcessor:
         cacheable by design, with or without the directive.
 
         ``cache_fit`` (``# @cash:cache-fit``) opts a bare ``estimator.fit(X, y)``
-        statement IN to the estimator-fit caching path (CAS-138).  It is off by
+        statement IN to the estimator-fit caching path.  It is off by
         default: without it a bare fit is skip-cached and simply re-executes,
-        which is net-neutral (CAS-170).  It does NOT, as this comment used to
+        which is net-neutral.  It does NOT, as this comment used to
         claim, keep aliases correct: ``backup = model`` is an ordinary assignment
         whose own restore rebinds a pre-fit copy, independently of the fit
         (CAS-184 — fixed by refusing to cache a bare alias bind).
@@ -1008,10 +1008,10 @@ class StatementProcessor:
         A statement ``x = f()`` where ``f`` is decorated ``@cash.cache(ttl=0)`` was
         cached with no TTL under %cash_on, so the statement restore froze ``x`` at
         the first result — silently overriding the freshness the decorator
-        promised (CAS-224). The call target appears in ``inputs`` (the analyzer
+        promised. The call target appears in ``inputs`` (the analyzer
         lists ``f`` for ``x = f()``); if it is a cash wrapper with a smaller
         declared TTL, the statement must expire at least as often. ``ttl=0`` then
-        rides the existing immediate-expiry path (CAS-221), so every run is a miss
+        rides the existing immediate-expiry path, so every run is a miss
         and the decorated body runs every time, as ``ttl=0`` asks.
 
         Only LOWERS the TTL and only for a wrapper carrying an explicit TTL, so a
@@ -1049,7 +1049,7 @@ class StatementProcessor:
         )
 
     def _warn_unseeded_randomness(self, code: str, allow_random: bool) -> list:
-        """Warn when *code* draws from an unseeded RNG (CAS-114).
+        """Warn when *code* draws from an unseeded RNG.
 
         Called on the common path of both ``process_statement`` twins, BEFORE the
         cache lookup, for two reasons:
@@ -1150,7 +1150,7 @@ class StatementProcessor:
     def _warn_stale_randomness(
         self, code: str, unseeded_calls: list, allow_random: bool,
     ) -> None:
-        """Announce that a cached unseeded random value was just replayed (CAS-135).
+        """Announce that a cached unseeded random value was just replayed.
 
         Called ONLY after a restore has actually succeeded, because that is the
         event being reported: not "this statement contains randomness" (true on
@@ -1186,7 +1186,7 @@ class StatementProcessor:
             logger.debug("%s Stale-randomness warning failed for statement", _LOG_PROCESSOR)
 
     def _unseeded_estimator_fits(self, est_fit: set[str]) -> list[str]:
-        """Return the sorted subset of *est_fit* receivers that are UNSEEDED (CAS-167).
+        """Return the sorted subset of *est_fit* receivers that are UNSEEDED.
 
         A bare ``estimator.fit(X, y)`` under ``# @cash:cache-fit`` caches via the
         CAS-138 path, but cash's AST
@@ -1217,7 +1217,7 @@ class StatementProcessor:
     def _warn_unseeded_estimator_fit(
         self, code: str, est_fit: set[str], allow_random: bool,
     ) -> list[str]:
-        """Warn that an UNSEEDED estimator ``.fit()`` is cached as a frozen replay (CAS-167).
+        """Warn that an UNSEEDED estimator ``.fit()`` is cached as a frozen replay.
 
         The estimator-fit analogue of :meth:`_warn_unseeded_randomness`, emitted at
         COMPUTE time on the common path (before the cache lookup) so the warning
@@ -1353,7 +1353,7 @@ class StatementProcessor:
         Until this ledger existed the observation fed only the badge, so the
         statement never read its module's virtual RNG variable and a re-seed
         above it could not reach it -- its consumers kept hitting across a
-        stream that no longer existed (CAS-233).
+        stream that no longer existed.
 
         Recorded for EVERY statement, including skip-cache ones: a bare
         ``model.fit()`` is not cached itself, but it is exactly the statement
@@ -1379,7 +1379,7 @@ class StatementProcessor:
             # the old value. For a purely UNSEEDED draw there is no epoch to
             # change, so the frozen value is correct and must be kept from the
             # first call -- skipping the write there would redraw and break the
-            # freeze-from-first-call contract (CAS-158).
+            # freeze-from-first-call contract.
             if hidden & set(self._rng_seed_epochs):
                 self._rng_draw_newly_seen = True
         ledger[digest] = known | hidden
@@ -1451,7 +1451,7 @@ class StatementProcessor:
     def _warn_stale_estimator_fit(
         self, code: str, unseeded_fits: list[str], allow_random: bool,
     ) -> None:
-        """Announce that a cached UNSEEDED estimator fit was just replayed (CAS-167).
+        """Announce that a cached UNSEEDED estimator fit was just replayed.
 
         The restore-time twin of :meth:`_warn_unseeded_estimator_fit`, mirroring
         how :meth:`_warn_stale_randomness` follows :meth:`_warn_unseeded_randomness`:
@@ -1491,7 +1491,7 @@ class StatementProcessor:
         cache_key: str,
         cached_data: Any,
     ) -> None:
-        """Feed one lookup outcome to the perpetual-miss guard (CAS-172).
+        """Feed one lookup outcome to the perpetual-miss guard.
 
         Called on every run that actually performed a lookup — a skipped lookup
         never serialises either, so it carries no evidence about whether
@@ -1659,11 +1659,11 @@ class StatementProcessor:
             newly_mutated = {b for b in mut_observe if self._receiver_mutated(b)}
             if newly_mutated:
                 # ``est_fit`` is non-empty only under ``# @cash:cache-fit``
-                # (CAS-170). Those receivers still enter ``outputs`` (source-based
+                #. Those receivers still enter ``outputs`` (source-based
                 # lineage bump + fitted value capture) and are still recorded in
                 # ``mutation_verdicts`` below (so the upstream simulation bumps
                 # downstream lineage on a data edit), but they are NOT
-                # skip-cached -- they cache + restore in place (CAS-138). Every
+                # skip-cached -- they cache + restore in place. Every
                 # other observed mutation -- including a bare fit WITHOUT the
                 # directive -- still skip-caches its receiver.
                 outputs = outputs | newly_mutated
@@ -1692,7 +1692,7 @@ class StatementProcessor:
         # groupby/rolling ref-holder) must NOT be cached: pickling and restoring
         # such an object decouples it from its live base, so a later base
         # mutation would be lost after restore. Force re-derivation from the live
-        # base instead (CAS-115 / CAS-89). ``.copy()`` produces no alias and stays
+        # base instead. ``.copy()`` produces no alias and stays
         # cacheable (over-invalidation guard).
         if not skip_cache:
             from .derivation_edges import is_uncacheable_alias
@@ -1702,7 +1702,7 @@ class StatementProcessor:
                     skip_cache = True
                     metrics.setdefault('uncacheable_reasons', []).append(
                         f"Live-alias object '{out}' (view/ref-holder); re-derived "
-                        "from live base, not cached (CAS-115/89)."
+                        "from live base, not cached."
                     )
                     break
 
@@ -1715,7 +1715,7 @@ class StatementProcessor:
         # This must run here (post-execution) rather than in decide_cacheability:
         # the object does not exist yet when that runs. Refusing BEFORE
         # _save_to_cache is what prevents the deep-copy from ever happening
-        # (CAS-144).
+        #.
         if not skip_cache:
             for out in outputs:
                 val = captured_vars.get(out)
@@ -1727,7 +1727,7 @@ class StatementProcessor:
                     metrics.setdefault('uncacheable_reasons', []).append(reason)
                     break
 
-        # Record executed file-WRITING statements by code text (CAS-81/82):
+        # Record executed file-WRITING statements by code text:
         # writes have no variable edge, so the upstream simulation needs this
         # to tell an edited/new writer from one that already ran.
         try:
@@ -1751,7 +1751,7 @@ class StatementProcessor:
             if self.debug:
                 logger.debug("%s Detected in-place mutations on: %s", _LOG_MUTATION, pure_mutations)
 
-        # Perpetual-miss guard (CAS-172): this statement's key has churned for
+        # Perpetual-miss guard: this statement's key has churned for
         # ``GUARD_AFTER_CONSECUTIVE_CHURN_MISSES`` runs with zero hits, so
         # serialising it again buys nothing. Routed through the SAME
         # metadata-only path as the size-aware skip rather than through
@@ -1821,7 +1821,7 @@ class StatementProcessor:
         inputs: set[str],
         tree: ast.Module | None,
     ) -> None:
-        """Record what file(s) a just-executed writer statement produced (CAS-153).
+        """Record what file(s) a just-executed writer statement produced.
 
         Persists ``{paths, file_deps snapshot, input lineages}`` to the backend
         under a writer-specific key derived from the statement source, so a
@@ -1865,7 +1865,7 @@ class StatementProcessor:
             logger.debug("%s write-provenance persistence failed", _LOG_PROCESSOR)
 
     def _identity_coupled_call_receivers(self, tree: ast.Module | None) -> set[str]:
-        """Receiver names in *tree* that are live matplotlib Figures/Axes (CAS-220).
+        """Receiver names in *tree* that are live matplotlib Figures/Axes.
 
         The narrow companion to :meth:`_classify_method_mutations`, for the one
         case that must survive the control-body skip. A body statement carries an
@@ -1944,7 +1944,7 @@ class StatementProcessor:
                 continue
             if method in RECEIVER_READONLY_WRITE_METHODS:
                 # ``df.to_csv(path)`` READS the frame and writes a file; it does
-                # not mutate ``df``, so it must not bump its lineage (CAS-196).
+                # not mutate ``df``, so it must not bump its lineage.
                 # The file-write side effect is scheduled elsewhere. (``savefig``
                 # is intentionally NOT here — see the identity-coupled branch.)
                 continue
@@ -1953,7 +1953,7 @@ class StatementProcessor:
                 # adds artists / sets state — whatever it returns. ``ax.hist(...)``
                 # returns a data tuple yet mutates the Axes just like ``ax.bar()``;
                 # route it to the mutation path so the figure's fill statements are
-                # rebuilt with it and never cached as an ordinary value (CAS-194).
+                # rebuilt with it and never cached as an ordinary value.
                 # ``fig.savefig(...)`` lands here too: bumping an identity-coupled
                 # Figure is idempotent + load-bearing for CAS-175 chart coherence.
                 pre_route.add(base)
@@ -2039,12 +2039,12 @@ class StatementProcessor:
         outputs: set[str],
     ) -> set[str]:
         """Receivers of a standalone ``est.fit(...)`` / ``est.partial_fit(...)``
-        whose live value is a duck-typed sklearn estimator (CAS-138).
+        whose live value is a duck-typed sklearn estimator.
 
-        Called ONLY for a statement carrying ``# @cash:cache-fit`` (CAS-170); the
+        Called ONLY for a statement carrying ``# @cash:cache-fit``; the
         default is to leave a bare fit on the skip-cache path, where it
         re-executes.  That re-execution does NOT by itself make aliases correct —
-        ``backup = model`` breaks on its own restore, not on the fit (CAS-184).
+        ``backup = model`` breaks on its own restore, not on the fit.
 
         A bare ``model.fit(X, y)`` mutates its receiver in place, so the general
         mutation classifier routes it to skip-caching. But a fit is the most
@@ -2152,7 +2152,7 @@ class StatementProcessor:
 
         *inplace_restore* names the estimator-fit receivers whose fitted state
         must be transferred onto the EXISTING object rather than rebound, so
-        every alias observes the fit (CAS-138). It is recomputed each call from
+        every alias observes the fit. It is recomputed each call from
         the live namespace (never read from ``mutation_verdicts``, which is empty
         right after a kernel restart).
         """
@@ -2366,7 +2366,7 @@ class StatementProcessor:
 
                     # One linecache-registered filename per statement, so a
                     # traceback inside a function DEFINED here shows its source
-                    # instead of "<cash>" with no line (CAS-201).
+                    # instead of "<cash>" with no line.
                     cash_file = register_cell_source(code)
 
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
@@ -2391,14 +2391,14 @@ class StatementProcessor:
                          # own unit, so without ``is_last`` every bare expression
                          # got displayed and cash silently changed notebook
                          # semantics -- `a+1 / a+2 / a+3` printed 2,3,4 where a
-                         # plain kernel prints 4 (CAS-174). Gating the DISPLAY (not
+                         # plain kernel prints 4. Gating the DISPLAY (not
                          # the cache-keyed source) is deliberate: the reverted
                          # attempt appended ';' to the keyed source in the runtime
                          # only, desyncing it from the simulator's unparse and
                          # blanking a chart.
                          # A trailing ``;`` suppresses the repr in IPython. The
                          # cell splitter re-attaches it after ``ast.unparse``
-                         # (CAS-96); honour it so no repr is displayed OR captured
+                         #; honour it so no repr is displayed OR captured
                          # (an empty capture then also restores cleanly).
                          if (is_last and result_val is not None
                                  and not code.rstrip().endswith(';')):
@@ -2462,7 +2462,7 @@ class StatementProcessor:
                             tree = None
 
                     # Same per-statement linecache registration as the sync path
-                    # so an await-bearing cell's tracebacks resolve too (CAS-201).
+                    # so an await-bearing cell's tracebacks resolve too.
                     cash_file = register_cell_source(code)
 
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
@@ -2484,7 +2484,7 @@ class StatementProcessor:
                         if c_expr.co_flags & inspect.CO_COROUTINE:
                             result_val = await result_val
 
-                        # Same last-expression-only rule as the sync path (CAS-174).
+                        # Same last-expression-only rule as the sync path.
                         if (is_last and result_val is not None
                                 and not code.rstrip().endswith(';')):
                             from IPython.display import display
@@ -2820,7 +2820,7 @@ class StatementProcessor:
         prediction: dict[str, Any] | None,
         wire: dict[str, Any],
     ) -> None:
-        """Add a completed write to its statement's running total (CAS-160).
+        """Add a completed write to its statement's running total.
 
         Counts a write only when it reached a **persistent** tier. The backend
         reports the resolved destinations back on the metadata dict, so this is
@@ -2939,7 +2939,7 @@ class StatementProcessor:
         )
 
         # Statements whose outputs include a __main__-defined function or
-        # class are never VALUE-cached (CAS-93): those values pickle BY
+        # class are never VALUE-cached: those values pickle BY
         # REFERENCE to a binding that won't exist in the next session, so a
         # value entry would either crash the lookup (dangling find_class ->
         # AttributeError) or "restore" nothing and wrongly skip the defining
@@ -2960,7 +2960,7 @@ class StatementProcessor:
                     f"{', '.join(_unrestorable)} are unrestorable by value; "
                     f"statement re-executes (lineage persists)"
                 )
-        # Perpetual-miss guard (CAS-172). Placed LAST so it can override the
+        # Perpetual-miss guard. Placed LAST so it can override the
         # exemptions above: ``has_file_dependencies`` waives the whole size-aware
         # cost model, and that waiver is precisely how CAS-165/171 shipped — a fit
         # on a CSV-derived frame inherits the read's file deps, so the cost model
@@ -2972,7 +2972,7 @@ class StatementProcessor:
             should_skip = True
             skip_reason = GUARD_SKIP_REASON
 
-        # Loop-persist amplification guard (CAS-160). Placed after every other
+        # Loop-persist amplification guard. Placed after every other
         # gate so it only accounts writes that would ACTUALLY have happened, and
         # so it can override ``force_persist`` -- which is the whole point: a
         # user asking to persist one value must not silently get every
@@ -3045,7 +3045,7 @@ class StatementProcessor:
             'rng_state': capture_rng_state(),
             # The seeding regime this state was captured under, so a later
             # restore can tell whether replaying it would clobber a re-seed
-            # rather than continue the stream (CAS-223).
+            # rather than continue the stream.
             'rng_epochs': dict(self._rng_seed_epochs),
         }
 
@@ -3075,7 +3075,7 @@ class StatementProcessor:
         else:
             # Charge this write to its statement's amplification budget, now
             # that the backend has reported which tiers actually took it
-            # (CAS-160). Only durable destinations count.
+            #. Only durable destinations count.
             self._account_persisted_bytes(code, prediction, wire)
 
         try:
@@ -3116,7 +3116,7 @@ class StatementProcessor:
         t2 = time.time()
 
         # A draw READS its module's hidden RNG variable; fold it into the key so a
-        # re-seed re-keys the draw (CAS-223). Only the LOCAL key-input set gets it
+        # re-seed re-keys the draw. Only the LOCAL key-input set gets it
         # -- the returned ``inputs`` stays clean, so cacheability/mutation never
         # see a phantom variable. Its lineage ALSO reaches the draw's OUTPUT
         # lineage (via capture_and_track_variables, which reads the same helper),
@@ -3124,7 +3124,7 @@ class StatementProcessor:
         # ...plus the modules a PRIOR run observed this statement drawing from
         # without saying so in its AST (``model.fit()``). Without this the
         # virtual RNG variable has no reader here, so an upstream re-seed cannot
-        # propagate and the statement's consumers keep hitting (CAS-233).
+        # propagate and the statement's consumers keep hitting.
         key_inputs = inputs | hidden_lineage_reads(code) | self._observed_rng_reads(code)
 
         try:

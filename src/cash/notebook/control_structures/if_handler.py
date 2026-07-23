@@ -84,7 +84,7 @@ class IfHandler:
             branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
 
             # A directive on the ``if``/``elif`` header scopes to the branch, so
-            # it flows down into every statement in it (CAS-135).
+            # it flows down into every statement in it.
             branch_annotation = _helpers.resolve_header_annotation(
                 raw_cell, node, inherited_annotation,
             )
@@ -150,7 +150,7 @@ class IfHandler:
         """Execute one statement from an if-branch; return True if computed (not cached).
 
         Each branch statement is its own cache entry, so its ``@cash:`` directive
-        is resolved per statement and must not leak onto its siblings (CAS-135).
+        is resolved per statement and must not leak onto its siblings.
         """
         from .processor import is_control_structure
 

@@ -150,7 +150,7 @@ class CashUpstreamSyntaxWarning(CashWarning):
     it keep caching, but a cell that DID depend on it can no longer have its
     dependency tracked. Emitted by the notebook upstream checker naming the
     offending cell (1-based), so caching never silently stops mid-edit without
-    telling the user why (CAS-173).
+    telling the user why.
     """
 
 class CashCacheStoreFailedWarning(CashWarning):

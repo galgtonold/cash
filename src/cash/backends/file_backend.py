@@ -112,7 +112,7 @@ class FileBackend(CacheBackend):
         self._max_size_bytes = max_size_bytes
         self._default_ttl = default_ttl
         self._current_size_bytes = 0
-        # Evict-after-write detection (CAS-142): a monotonic write counter and
+        # Evict-after-write detection: a monotonic write counter and
         # the seq at which each key was last written, so eviction can tell when
         # it is discarding something written only a couple of ops ago — the
         # signature of a cache too small to retain the working set. Warned

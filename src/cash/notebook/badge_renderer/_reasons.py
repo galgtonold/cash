@@ -1,4 +1,4 @@
-"""Short forms for the badge's ``skipped_reason`` text (CAS-182).
+"""Short forms for the badge's ``skipped_reason`` text.
 
 The CAS-172 miss guard explains itself in ~46 words. That reads well once, in a
 drawer. Printed inline, per statement, it put a paragraph on the badge SEVEN

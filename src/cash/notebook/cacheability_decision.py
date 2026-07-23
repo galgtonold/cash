@@ -50,7 +50,7 @@ __all__ = [
     "receiver_is_identity_coupled",
 ]
 
-# --- Identity-coupled library objects (CAS-144) ---------------------------
+# --- Identity-coupled library objects ---------------------------
 #
 # Some objects are only *correct* while they ARE the object a library global
 # points at.  pyplot keeps a process-wide registry of the "current figure"
@@ -147,7 +147,7 @@ def _coupled_kind_in_container(value: Any, _depth: int = 0) -> str | None:
     an Axes, and checking ``dtype`` first keeps big numeric arrays off this path
     entirely.  Recurses so ``rows = list(axes)`` (a list of ndarrays of Axes)
     and other nestings are caught; the depth cap also keeps a pathological
-    self-referential container from looping (CAS-155).
+    self-referential container from looping.
     """
     if _depth >= _CONTAINER_SCAN_MAX_DEPTH:
         return None
@@ -173,7 +173,7 @@ def identity_coupled_reason(var_name: str, value: Any) -> str | None:
     """Return an ``uncacheable_reasons`` string if *value* must never be cached.
 
     ``None`` means "no objection".  See ``_IDENTITY_COUPLED_BASES`` for why
-    these objects are refused (CAS-144).  This is a *value* check, so it runs
+    these objects are refused.  This is a *value* check, so it runs
     after execution — the object does not exist yet when
     :func:`decide_cacheability` runs on a first run.
     """
@@ -183,7 +183,7 @@ def identity_coupled_reason(var_name: str, value: Any) -> str | None:
     return (
         f"Identity-coupled object '{var_name}' ({kind}); caching it would "
         "detach pyplot's current figure from yours and make plt.savefig() "
-        "write a blank image (CAS-144)."
+        "write a blank image."
     )
 
 

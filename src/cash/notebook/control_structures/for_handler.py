@@ -103,7 +103,7 @@ class ForLoopHandler:
         2. Build an iteration context (target values + iterable lineage).
         3. Process each body statement through the statement processor with
            an ``# __iteration_context__: <hash>`` comment prepended, and with
-           its own ``@cash:`` annotation resolved from *raw_cell* (CAS-135).
+           its own ``@cash:`` annotation resolved from *raw_cell*.
 
         The statement processor's mutation detection (which runs before any
         cache lookup) will automatically set ``skip_cache=True`` for
@@ -262,7 +262,7 @@ class ForLoopHandler:
                 # The loop variable's hash IS the per-iteration cache-key
                 # discriminator: a sampled hash keyed two iterations over
                 # arrays that agreed in the sample onto ONE entry - wrong
-                # result on the first run (CAS-86). Hash full content here.
+                # result on the first run. Hash full content here.
                 from cash.notebook.object_hashing import compute_hash_full
                 h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else compute_hash_full(val)
                 self.statement_processor.variable_lineage[name] = h
@@ -339,7 +339,7 @@ class ForLoopHandler:
         *annotation* is the body statement's own ``@cash:`` directives, resolved
         by the caller against the original cell source. It cannot be recovered
         from *code*: ``ast.unparse`` drops comments, so by the time a body
-        statement gets here its directive is already gone from the text (CAS-135).
+        statement gets here its directive is already gone from the text.
         """
         from .processor import compute_context_hash
 
@@ -428,7 +428,7 @@ class ForLoopHandler:
         statements are separate cache entries, so a ``# @cash:no-cache`` on one
         must not leak onto its siblings — resolving per statement rather than
         applying the loop's whole-range scan is what keeps the sibling cached
-        (CAS-135).
+       .
 
         Returns True if the statement was freshly computed (status == 'COMPUTED').
         """

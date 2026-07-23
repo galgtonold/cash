@@ -5,7 +5,7 @@ hands ``%cash_repair --full  # comment`` to the magic as ``"--full  # comment"``
 Every magic here used to reach for ``line.strip().lower()`` and compare the
 result against a literal flag, so a trailing comment silently defeated the
 match and the magic fell through to its default branch — usually a *different*
-operation, reported as a success (CAS-181).
+operation, reported as a success.
 
 That is a parsing bug with a blast radius: ``%cash_repair --full`` is the only
 documented recovery from a poisoned cache entry, so a comment turned "clear the
@@ -71,7 +71,7 @@ def parse_mode(line: str | None, known: tuple[str, ...]) -> str | None:
     understand". It is deliberately distinct from ``""`` (the user asked for
     the default), because collapsing the two is exactly how a typo'd or
     junk-suffixed flag silently becomes a different operation that then reports
-    success (CAS-181). Callers must refuse on ``None`` rather than fall
+    success. Callers must refuse on ``None`` rather than fall
     through to a default.
     """
     mode = strip_inline_comment(line).lower()

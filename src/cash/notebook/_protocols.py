@@ -132,7 +132,7 @@ class TrackingState:
     executed_file_deps: dict[str, set[str]] = field(default_factory=dict)
 
     # Written by StatementProcessor after executing a statement with a
-    # file-WRITE side effect; read by ReexecutionPlanner (CAS-81/82).
+    # file-WRITE side effect; read by ReexecutionPlanner.
     # File writes have no variable edge, so this code-text record is how the
     # simulation tells an edited/new writer statement from one that already
     # ran in this session.
@@ -148,7 +148,7 @@ class TrackingState:
     # sha256(cell source) -> the global RNG state captured AFTER that cell ran.
     # Lets the checker restore the position-correct RNG state before a downstream
     # draw re-executes, instead of drawing from the last-left (wrong) live state
-    # (CAS-226 / CAS-227). This is the concrete first step of ADR-018's
+    #. This is the concrete first step of ADR-018's
     # position-aware-RNG model; the full model folds it into a virtual variable
     # in the lineage graph. Keyed by CURRENT source, so an edited predecessor's
     # stale post-state is never matched.
@@ -177,7 +177,7 @@ class TrackingState:
     # cell-level twin above drives the RNG rewind; this one drives the cache KEY:
     # a hidden draw must read its module's virtual RNG variable, or a re-seed
     # above it cannot reach it and its consumers keep hitting across a stream
-    # that no longer exists (CAS-233). Keyed by statement source hash, like
+    # that no longer exists. Keyed by statement source hash, like
     # ``mutation_verdicts``, so the simulation reproduces the runtime's decision.
     # Only known after the statement has run once.
     observed_rng_statement_draws: dict[str, set[str]] = field(default_factory=dict)

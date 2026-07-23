@@ -88,7 +88,7 @@ _NOTEBOOK_PATH_CACHE_TTL: float = 300.0  # seconds (5 minutes)
 _negative_cache_time: float = 0.0  # monotonic time of last failed probe (0 = none)
 _NOTEBOOK_PATH_NEGATIVE_TTL: float = 2.0  # seconds
 
-# One-shot session flag for the "notebook not found" advisory (CAS-150).  Set the
+# One-shot session flag for the "notebook not found" advisory.  Set the
 # first time discovery fails during an upstream check; keeps the warning to once
 # per session instead of once per cell.
 _warned_notebook_not_found: bool = False
@@ -135,7 +135,7 @@ def invalidate_notebook_path_cache() -> None:
     _cached_notebook_path_time = 0.0
     # Drop the negative (not-found) cache too, so a server that came up after
     # cash loaded is re-probed immediately on the next lookup instead of being
-    # shadowed by a stale negative for the rest of its TTL (CAS-150).
+    # shadowed by a stale negative for the rest of its TTL.
     _negative_cache_time = 0.0
     # A notebook switch invalidates any cached cell parse for the old path too.
     invalidate_notebook_cells_cache()
@@ -294,7 +294,7 @@ def _kernel_id_from_connection_file(connection_file: str | None) -> str | None:
     except tuple. It escaped ``get_notebook_path``, disabled caching for the whole
     run, and printed "Cash auto-caching failed: list index out of range" on EVERY
     cell instead of cash's intended one-time "notebook not found" disclosure
-    (CAS-205).
+   .
 
     Semantics are otherwise identical to the original expression: split on the
     FIRST ``-`` (so a UUID's own dashes are preserved) and drop at the first ``.``.
@@ -322,7 +322,7 @@ def get_notebook_path() -> str | None:
         return _cached_notebook_path
     # Negative cache: a recent failed probe short-circuits to None without
     # re-paying the (possibly multi-second) discovery timeout.  Checked AFTER the
-    # success cache so a resolved path always wins (CAS-150).
+    # success cache so a resolved path always wins.
     if _negative_cache_time and (now - _negative_cache_time) < _NOTEBOOK_PATH_NEGATIVE_TTL:
         return None
 

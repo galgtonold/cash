@@ -4,7 +4,7 @@ Cash compiles every statement under a synthetic filename. Reusing one literal
 ``<cash>`` for all of them meant a traceback frame inside a function *defined in
 a cell* could never resolve its source: Python printed ``File "<cash>", line N``
 with no source line (and ``inspect.getsource`` reported "Could not get source"),
-so every debug loop lost the failing line (CAS-201).
+so every debug loop lost the failing line.
 
 Each statement now gets a name derived from its source hash — stable across
 re-runs of identical source, so the linecache entry is reused rather than grown

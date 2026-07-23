@@ -29,7 +29,7 @@ __all__ = [
 
 
 def write_provenance_key(code: str) -> str:
-    """Backend key for a file-writer's output-provenance record (CAS-153).
+    """Backend key for a file-writer's output-provenance record.
 
     Derived from the writer statement's source ALONE (not its input lineages),
     so an edited writer maps to a different key and never matches a stale
@@ -102,7 +102,7 @@ def is_cash_instrumentation(val: object) -> bool:
     Any statement mentioning ``open`` therefore got a per-session cache key, its
     output lineage inherited that volatility, and every downstream key drifted
     with it: nothing restored after a restart and ``.cash`` grew a duplicate
-    copy each time (CAS-214).
+    copy each time.
 
     Skipping is not merely a workaround, it restores the truth: with cash NOT
     installed, ``user_ns.get('open')`` is ``None`` (builtins do not live in
@@ -158,7 +158,7 @@ def called_function_dependencies(
     time, so ``r = a(3)`` genuinely depends on every global ``a`` reads — and the
     ordinary input-lineage path cannot supply them, because it is built when
     ``def a`` executes and only sees names bound ABOVE it. A callee defined BELOW
-    the caller is therefore invisible to the call site (CAS-95).
+    the caller is therefore invisible to the call site.
 
     Walks ``__code__.co_names`` transitively, with a ``seen`` guard so mutual
     recursion terminates. ``co_names`` also carries attribute names (``.sqrt``);
@@ -217,7 +217,7 @@ def _process_input_var(
 
     if is_cash_instrumentation(val):
         # cash's own shim over a builtin. Contribute nothing -- exactly as this
-        # name would if cash were not installed (CAS-214).
+        # name would if cash were not installed.
         return
 
     if is_module_like(var_name, val, virtual_modules):
@@ -426,7 +426,7 @@ def compute_cache_key(
     # A draw's result is determined by the RNG state it consumes, which no
     # other component sees: the source is stable and the RNG module is not a
     # tracked input. Without this, re-seeding upstream leaves the key identical
-    # and cash replays the previous seed's numbers (CAS-223). Omitted entirely
+    # and cash replays the previous seed's numbers. Omitted entirely
     # when absent, so keys for non-drawing statements are byte-identical to
     # their pre-CAS-223 values and no existing entry is invalidated.
     rng_component = f":rng{rng_fingerprint}" if rng_fingerprint else ""
@@ -434,7 +434,7 @@ def compute_cache_key(
     # Globals the called functions reach for at CALL time, including any bound
     # BELOW this statement — which the input-lineage path structurally cannot
     # see, because it is built when the ``def`` runs and only looks upward
-    # (CAS-95). Same omit-when-empty rule as the RNG component above: a
+    #. Same omit-when-empty rule as the RNG component above: a
     # statement that calls no user-defined function keeps a byte-identical key.
     callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""

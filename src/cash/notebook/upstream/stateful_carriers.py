@@ -1,4 +1,4 @@
-"""Classification of *stateful carriers* for re-execution coherence (CAS-175/178).
+"""Classification of *stateful carriers* for re-execution coherence.
 
 A **stateful carrier** is an object whose observable result depends on hidden
 internal state that *using* it advances or accumulates, with **no value-level
@@ -26,7 +26,7 @@ stay disjoint: ``consumables`` owns the drain-position carriers, this table owns
 the ones nothing else classifies.
 
 Classification is by MRO ``module.qualname`` STRING match, mirroring
-``cacheability_decision._IDENTITY_COUPLED_BASES`` (CAS-144): it imports nothing,
+``cacheability_decision._IDENTITY_COUPLED_BASES``: it imports nothing,
 so a notebook without numpy/matplotlib installed pays nothing and cannot break.
 We match BASE classes, not leaves, so subclasses and projections (``Axes3D``,
 a user's ``class MyFig(Figure)``) are covered.
@@ -37,7 +37,7 @@ rather than assumed:
 * ``plt.savefig()`` (as opposed to ``fig.savefig()``) depends on the current
   figure through pyplot's process-global ``Gcf`` registry, so the consuming
   statement's only input is the MODULE ``plt`` and there is no variable edge for
-  the planner to follow at all. Not reachable from here (CAS-187).
+  the planner to follow at all. Not reachable from here.
 * A generic accumulate-then-flush builder (``wb.save``, ``csv.writer``) was
   probed and does NOT exhibit the defect: being cacheable, its producer is
   RESTORED rather than re-derived, so its history never goes incoherent. That is
@@ -52,7 +52,7 @@ from typing import Any, Mapping
 __all__ = ["stateful_carrier_kind"]
 
 _CARRIER_BASES: Mapping[str, str] = {
-    # Seeded RNGs: each draw advances the bit stream (CAS-178). ``default_rng``
+    # Seeded RNGs: each draw advances the bit stream. ``default_rng``
     # has been numpy's recommended API since 1.17.
     'numpy.random._generator.Generator': 'numpy Generator',
     'numpy.random.mtrand.RandomState': 'numpy RandomState',
@@ -60,7 +60,7 @@ _CARRIER_BASES: Mapping[str, str] = {
     'random.Random': 'random.Random',
     # Accumulate-then-flush builders: content is added by mutation and only
     # later written out, so a re-derived-but-unfilled builder writes a blank
-    # artifact over a good one (CAS-175). These two are here rather than in a
+    # artifact over a good one. These two are here rather than in a
     # longer list of plausible builders because they are the ones that PROVABLY
     # break: CAS-144 refuses to cache them (they are identity-coupled to
     # pyplot's globals), so the plan RE-EXECUTES the ``plt.subplots()`` that

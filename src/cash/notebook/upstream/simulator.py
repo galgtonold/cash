@@ -247,7 +247,7 @@ class NotebookSimulator:
         upstream_inplace_mutated: set[str] | None = None
         for var_name in required_inputs:
             # A user variable shadowing a builtin name is tracked in
-            # variable_lineage; only skip genuine (untracked) builtins (CAS-63).
+            # variable_lineage; only skip genuine (untracked) builtins.
             if var_name in _BUILTIN_NAMES and var_name not in self.variable_lineage:
                 continue
             if var_name not in self_written:
@@ -581,7 +581,7 @@ class NotebookSimulator:
                 # top-level only: a cell that merely DEFINES a function whose body
                 # mutates ``g`` (``def bump(): global g; g += 1``) does not itself
                 # accumulate ``g`` across cells, so it must not suppress the
-                # content-base reset for a later cell that CALLS it (CAS-68).
+                # content-base reset for a later cell that CALLS it.
                 muts |= set(analyze_statement(code, None).top_level_mutated_vars)
             except (SyntaxError, ValueError, TypeError):
                 continue
@@ -594,7 +594,7 @@ class NotebookSimulator:
         notebook_cells: list[str] | None,
         current_cell_idx: int | None,
     ) -> tuple[set[str], bool]:
-        """File paths this cell's reconstruction actually READS (CAS-193/196/200).
+        """File paths this cell's reconstruction actually READS.
 
         A file-writer is only worth re-firing during reconstruction when a
         consumer relevant to the current cell reads the file it writes. This
@@ -781,7 +781,7 @@ class NotebookSimulator:
                 trace_event("broken_drop_nocache", dropped=removed, broken=broken_vars)
 
         # Scope the writer-scheduling to files THIS cell's reconstruction reads
-        # (CAS-193/196/200): a writer whose output no relevant consumer reads is
+        #: a writer whose output no relevant consumer reads is
         # an unrelated / terminal side-effect that must never be re-fired here.
         relevant_read_paths, relevant_read_paths_known = self._compute_relevant_read_paths(
             required_inputs, simulation_trace, notebook_cells, current_cell_idx,
@@ -789,7 +789,7 @@ class NotebookSimulator:
 
         # File writes have no variable edge, so an edited/new upstream writer
         # statement leaves broken_vars empty while the on-disk state a reader
-        # depends on is stale (CAS-81/82). The plan must still be built so
+        # depends on is stale. The plan must still be built so
         # the planner can schedule the writer.
         has_stale_file_writers = bool(
             self._planner._find_stale_file_writer_indices(

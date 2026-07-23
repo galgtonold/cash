@@ -46,7 +46,7 @@ from .exceptions import (
 from .graph import DependencyGraph
 from .notebook.analysis import CodeAnalyzer
 # The decorator path reuses the notebook path's randomness detector verbatim
-# (CAS-158) so the two cannot diverge on what counts as an unseeded draw.
+# so the two cannot diverge on what counts as an unseeded draw.
 # Imported from the submodule directly, like CodeAnalyzer above, to sidestep
 # ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
 # depends on ``..exceptions``, so there is no cycle.
@@ -166,7 +166,7 @@ def _stable_key_repr(value: Any, _depth: int = 0) -> Any:
 def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
     """Rebuild every ``dict`` in *value* in canonical (sorted-key) order so that
     two dicts that are equal but for insertion order pickle to identical bytes
-    (CAS-108). Recurses through ``dict``/``list``/``tuple``; other types pass
+   . Recurses through ``dict``/``list``/``tuple``; other types pass
     through unchanged. ``list``/``tuple`` order is preserved (semantic), and the
     dict TYPE is kept, so a payload whose dicts are already sorted (e.g. the
     top-level kwargs canonicalised by ``_normalize_call_args``) is byte-identical
@@ -551,11 +551,11 @@ class Cash:
         self._effective_ttl_cache: dict[str, int | None] = {}
         self._deref_writes: dict = {}  # code object -> frozenset of reassigned freevars
         self._func_key_cache: dict[int, str] = {}  # id(func) -> module-qualified key
-        # id(func) -> decoration-pinned own-source identity (CAS-109). The
+        # id(func) -> decoration-pinned own-source identity. The
         # wrapper closure keeps *func* alive, so the id stays valid for the
         # wrapper's lifetime (same contract as _func_key_cache).
         self._own_pins: dict[int, str] = {}
-        # code object -> frozenset of free vars with capture-unsafe uses (CAS-104)
+        # code object -> frozenset of free vars with capture-unsafe uses
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (CAS-107 global folding)
         self._global_read_cache: dict = {}
@@ -582,10 +582,10 @@ class Cash:
         # the name is REBOUND to a new function object (a notebook cell re-run).
         # Keying by name alone pinned the first signature forever, so
         # `apply_defaults()` kept folding a default the callee no longer has
-        # (CAS-183).
+        #.
         self._signatures: dict[str, tuple[Callable | None, inspect.Signature | None]] = {}
         # function object -> digest of its parameter defaults, for defaults that
-        # are immutable and therefore cannot drift between calls (CAS-183).
+        # are immutable and therefore cannot drift between calls.
         # Weak so the memo dies with the function instead of pinning it (and so
         # a later function object can never inherit a dead one's entry by
         # id-reuse). Mutable defaults are deliberately absent: they must be
@@ -641,7 +641,7 @@ class Cash:
         # Declared plain-callable dependencies (``depends_on=[proxy_fn]`` where
         # proxy_fn is NOT a decorated cached function). Snapshot source hash at
         # registration + a ``(module, attr_chain)`` path for live re-resolution,
-        # so editing the dep on disk + reload invalidates the parent key (CAS-110).
+        # so editing the dep on disk + reload invalidates the parent key.
         self._declared_dep_snapshots: dict[str, str] = {}
         self._declared_dep_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
 
@@ -702,7 +702,7 @@ class Cash:
 
         Opaque callables such as ``functools.partial`` lack both ``__qualname__``
         and ``__name__``; fall back to ``repr`` so keying them never crashes
-        (CAS-113).
+       .
         """
         module = getattr(func, '__module__', None) or '__unknown__'
         qualname = (
@@ -776,7 +776,7 @@ class Cash:
         return result
 
     def _fold_method_class_deps(self, func: Callable, args: tuple, state_hash: str) -> str:
-        """Fold class-level code a cached method reaches into its key (CAS-237).
+        """Fold class-level code a cached method reaches into its key.
 
         At call time the real class IS known (``args[0]`` is the instance, or the
         class for a ``classmethod``), so ``self.helper`` resolves to
@@ -1066,7 +1066,7 @@ class Cash:
             )
             return func
 
-        # Unseeded-randomness check (CAS-158). Deliberately here and not in the
+        # Unseeded-randomness check. Deliberately here and not in the
         # wrapper: it is a pure function of the source, so it runs ONCE per
         # decorated function and adds nothing to the per-call path. Placed after
         # the async-generator early return because that path is not cached at
@@ -1113,7 +1113,7 @@ class Cash:
         return func_name
 
     def _pin_own_source(self, func: Callable) -> str:
-        """Identity of *func* itself, pinned per function object (CAS-109).
+        """Identity of *func* itself, pinned per function object.
 
         The state hash's root component must describe the function the
         wrapper EXECUTES, not the live ``source_hashes[qualname]`` registry
@@ -1296,7 +1296,7 @@ class Cash:
             folded_defaults = self._fold_defaults(func, func_name, current_state_hash)
             if folded_defaults is None:
                 # An unhashable default: we cannot tell whether it changed, so
-                # caching at all risks a stale result. Run uncached (CAS-183).
+                # caching at all risks a stale result. Run uncached.
                 result = func(*args, **kwargs)
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
                 return (_CACHE_MISS, result, 'unhashable')
@@ -1523,7 +1523,7 @@ class Cash:
                 )
 
         # Auto-tracked file deps freshness. Routed through the SAME
-        # content-authoritative helper a real lookup uses (CAS-127) - comparing
+        # content-authoritative helper a real lookup uses - comparing
         # raw mtime/size here made explain() report file_changed / 'mtime
         # changed' after a touch while the actual call hit. A diagnostic that
         # contradicts the behavior it describes is worse than none.
@@ -1722,9 +1722,9 @@ class Cash:
 
         Freshness is decided by the shared
         :func:`cash.notebook.file_dep_snapshot.file_dep_is_fresh` - the same
-        content-authoritative check the notebook path uses (CAS-98/CAS-10), so
+        content-authoritative check the notebook path uses, so
         the two subsystems can't drift. ``(mtime, size)`` alone was ambiguous in
-        both directions (CAS-119): a touch (identical content, bumped mtime)
+        both directions: a touch (identical content, bumped mtime)
         recomputed needlessly, and a same-size edit under an indistinguishable
         mtime was missed and served stale. The helper checks the cheap size
         first and only hashes when the size matches.
@@ -1808,7 +1808,7 @@ class Cash:
                 from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 # Watch the global RNG across the call: a draw inside the body is
-                # an input the key cannot see statically (CAS-234).
+                # an input the key cannot see statically.
                 rng_pre = self._capture_rng_pre_state()
                 with tracker:
                     res = func(*args, **kwargs)
@@ -2258,7 +2258,7 @@ class Cash:
         # Declared TTL, exposed so the notebook statement cache can see it. A
         # ``ttl=0`` function must recompute every call; without this the
         # statement ``x = f()`` gets cached with no TTL under %cash_on and
-        # freezes the value the decorator promised to refresh (CAS-224).
+        # freezes the value the decorator promised to refresh.
         stats_wrapper._cash_declared_ttl = ttl
         self._wrapped_funcs[func_name] = stats_wrapper
         return stats_wrapper
@@ -2311,7 +2311,7 @@ class Cash:
                 # A declared callable dep that is NOT a decorated cached function
                 # would contribute nothing to the state hash (the hasher only
                 # folds functions/data-sources), silently breaking the documented
-                # ``depends_on`` promise (CAS-110). Snapshot its source + a live
+                # ``depends_on`` promise. Snapshot its source + a live
                 # resolution path so edits/reloads invalidate the parent key.
                 if dep_key not in self.functions:
                     self._register_declared_callable_dep(dep, dep_key, func_name)
@@ -2446,7 +2446,7 @@ class Cash:
 
     def _capture_unsafe_uses(self, func: Callable) -> frozenset:
         """Free-variable names whose captured object *may be mutated* by the
-        function body (CAS-104).
+        function body.
 
         A capture is only content-foldable into the cache key when the body
         provably just READS it. Disqualifying uses of a free variable ``n``:
@@ -2477,13 +2477,13 @@ class Cash:
 
     @staticmethod
     def _unsafe_uses_of(tree: ast.AST, names: set[str]) -> frozenset:
-        """Return the subset of *names* the AST body *may mutate* (CAS-104).
+        """Return the subset of *names* the AST body *may mutate*.
 
         Disqualifying uses of a name ``n``: method calls on it (``n.append(...)``
         — any method, since we can't prove purity), passing it as a bare argument
         (the callee may mutate), subscript/attribute stores or aug-assigns rooted
         at it, and ``del``. Iteration, subscript reads, and arithmetic stay safe.
-        Shared by the closure-capture (CAS-104) and module-global (CAS-107) folds.
+        Shared by the closure-capture and module-global folds.
         """
         unsafe: set[str] = set()
         for node in ast.walk(tree):
@@ -2523,7 +2523,7 @@ class Cash:
 
         Immutable captures are folded by value. Mutable captures (lists,
         dicts, arrays — e.g. a weights vector) are folded by CONTENT HASH,
-        but only when the body provably just reads them (CAS-104): captures
+        but only when the body provably just reads them: captures
         the function reassigns (``nonlocal`` counters) or may mutate in place
         (accumulators) are skipped, so their keys don't drift call-to-call.
         A side effect of per-call content hashing: externally mutating a
@@ -2549,7 +2549,7 @@ class Cash:
             if self._is_immutable_capture(v):
                 captures.append((name, v))
             elif name not in unsafe:
-                # Read-only mutable capture: fold its content hash (CAS-104).
+                # Read-only mutable capture: fold its content hash.
                 # Unhashable content keeps the old skip behavior.
                 try:
                     captures.append((name, self._hash_arg_payload((v,), {})))
@@ -2564,7 +2564,7 @@ class Cash:
 
     @staticmethod
     def _defaults_of(func: Callable) -> tuple[tuple, dict]:
-        """The parameter defaults that decide what *func* computes (CAS-183).
+        """The parameter defaults that decide what *func* computes.
 
         ``__defaults__`` (positional/keyword params) and ``__kwdefaults__``
         (keyword-only params) are separate containers; both are collected.
@@ -2599,7 +2599,7 @@ class Cash:
     def _fold_defaults(
         self, func: Callable, func_name: str, state_hash: str, warn: bool = True,
     ) -> str | None:
-        """Mix the callee's parameter defaults into the state hash (CAS-183).
+        """Mix the callee's parameter defaults into the state hash.
 
         A default is an input to the result exactly like a passed argument, but
         it lives on the FUNCTION OBJECT, not in the code object — so the bytecode
@@ -2735,7 +2735,7 @@ class Cash:
     def _fold_bound_self(
         self, func: Callable, func_name: str, state_hash: str, warn: bool = True,
     ) -> str:
-        """Mix a bound method's instance state into the key (CAS-105).
+        """Mix a bound method's instance state into the key.
 
         ``c.cache(obj.method)`` wraps an already-bound method: ``self`` never
         appears in ``args``, so two instances with different state shared one
@@ -2781,7 +2781,7 @@ class Cash:
         A generator expression, comprehension, or ``lambda`` compiles to its
         OWN code object hung off the enclosing ``co_consts``, so anything it
         references is invisible in the outer ``co_names`` / instruction stream
-        (CAS-128). Walking the const tree is the same trick the CAS-93
+       . Walking the const tree is the same trick the CAS-93
         bytecode hash uses (``notebook/function_tracker.py``
         ``_update_code_object_hash``) for exactly this reason.
 
@@ -2806,7 +2806,7 @@ class Cash:
         Modules / callables / classes are filtered per-call at fold time (a
         name's bound value can change). Cached per code object.
 
-        Both bytecode-derived channels walk the NESTED scopes too (CAS-128):
+        Both bytecode-derived channels walk the NESTED scopes too:
         a global read only inside a genexp/lambda otherwise never invalidated
         (silent stale results), and — the reason the two must move together —
         the ``STORE_GLOBAL`` of a walrus accumulator inside a genexp lives in
@@ -2945,7 +2945,7 @@ class Cash:
         return parts
 
     def _fold_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
-        """Fold module-level DATA globals the function reads into the key (CAS-107).
+        """Fold module-level DATA globals the function reads into the key.
 
         A cached function reading a mutable module global (a config constant, a
         dispatch dict of callables) returned stale results when that global
@@ -3053,7 +3053,7 @@ class Cash:
         dependency, one of them silently wrong.
 
         Walks nested scopes for the same reason the sibling channel does
-        (CAS-128): a read that happens only inside a genexp still counts.
+       : a read that happens only inside a genexp still counts.
         """
         code = getattr(func, "__code__", None)
         if code is None:
@@ -3179,7 +3179,7 @@ class Cash:
         cached = self._signatures.get(func_name)
         # Re-read the signature when the name has been rebound to a different
         # function object: a notebook cell re-run with an edited default keeps
-        # the qualname but changes what `apply_defaults()` must fold (CAS-183).
+        # the qualname but changes what `apply_defaults()` must fold.
         if cached is not None and cached[0] is func:
             sig = cached[1]
         else:
@@ -3221,7 +3221,7 @@ class Cash:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form."""
         def get_arg_hash(arg):
-            # Content-authoritative builtin hashers FIRST (CAS-202). pandas /
+            # Content-authoritative builtin hashers FIRST. pandas /
             # numpy / polars / pyarrow / modin / dask hash the argument's
             # *content*, which is byte-stable across processes and kernel
             # restarts. The notebook's in-memory ``_cash_lineage_hash`` (checked
@@ -3265,7 +3265,7 @@ class Cash:
         # byte-identical keys. _stable_key_repr also canonicalises dict order.
         #
         # When there's no set, still canonicalise dict *ordering* so two dict
-        # args equal but for insertion order share a key (CAS-108). This is
+        # args equal but for insertion order share a key. This is
         # byte-identical for already-sorted dicts (the normalised top-level
         # kwargs), so only out-of-order dict values change their key.
         if _contains_set(payload):
@@ -3304,7 +3304,7 @@ class Cash:
         schema labels: column names, ``Series.name``, and index name(s) are
         invisible to it, so ``df.rename(columns=...)`` (or an empty frame of
         any shape) collided with the original and returned its cached result
-        (CAS-106). Fold the labels in as a digest prefix.
+       . Fold the labels in as a digest prefix.
         """
         try:
             import pandas as pd
@@ -3338,7 +3338,7 @@ class Cash:
                 # not content, so tobytes() hashes memory addresses - identical
                 # content in fresh objects never collides (permanent misses,
                 # cross-process-unstable) and address reuse could alias distinct
-                # content onto one key (CAS-111). Hash the elements' stable
+                # content onto one key. Hash the elements' stable
                 # representation instead (canonicalising nested sets/dicts so the
                 # key is order- and PYTHONHASHSEED-independent).
                 payload = _stable_key_repr(value.tolist())
@@ -3534,13 +3534,13 @@ class Cash:
         gives a changed file a distinct lineage. No deps -> unchanged key.
 
         The fingerprint is built from the recorded content ``hash`` plus the
-        size, NOT the mtime (CAS-119). Content is the authoritative freshness
+        size, NOT the mtime. Content is the authoritative freshness
         signal everywhere else, and mtime is the untrustworthy one: keying
         lineage on it would hand a touched-but-identical file a new lineage and
         needlessly recompute every downstream consumer, while a same-size edit
         under an indistinguishable mtime would reuse the old lineage and serve
-        stale. Legacy snapshots with no ``hash`` fall back to the mtime so
-        pre-existing entries keep a stable lineage.
+        stale. A snapshot with no ``hash`` falls back to the mtime so the
+        entry still keeps a stable lineage.
         """
         if not auto_file_deps:
             return cache_key
@@ -3731,7 +3731,7 @@ class Cash:
         func_name: str,
         allow_random: bool,
     ) -> None:
-        """Warn once if *func*'s source draws from an unseeded RNG (CAS-158).
+        """Warn once if *func*'s source draws from an unseeded RNG.
 
         The decorator used to be completely silent here while the notebook path
         warned, so ``@cash.cache`` would freeze a non-deterministic result

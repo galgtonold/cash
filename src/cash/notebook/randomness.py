@@ -656,7 +656,7 @@ class RandomnessDetector:
       ``seeded_modules``.
     * **Carriers** — ``rng = np.random.default_rng(); rng.standard_normal()``.
       Reproducibility is a property of the *object*, decided by its
-      constructor and tracked per variable in ``rng_carriers`` (CAS-135).
+      constructor and tracked per variable in ``rng_carriers``.
 
     Both are session-scoped: seeding (or minting a generator) in one cell
     applies to the cells after it.
@@ -843,7 +843,7 @@ class RandomnessDetector:
             try:
                 from IPython import get_ipython
                 shell = get_ipython()
-            except ImportError:  # IPython is an optional dependency (CAS-129)
+            except ImportError:  # IPython is an optional dependency
                 return None
         try:
             return shell.user_ns[callee]
@@ -1048,7 +1048,7 @@ def describe_random_call(call: RandomnessCallInfo) -> str:
 
 
 def format_stale_randomness_message(call: RandomnessCallInfo) -> str:
-    """The message for a cached unseeded value being replayed (CAS-135).
+    """The message for a cached unseeded value being replayed.
 
     Deliberately a *different claim* from the compute-time warning, not a
     re-wording of it. On the cold run the value is fresh and correct and the
@@ -1160,7 +1160,7 @@ def check_and_warn_randomness(
 
 
 # -----------------------------------------------------------------------------
-# Unseeded estimator fits (CAS-167)
+# Unseeded estimator fits
 # -----------------------------------------------------------------------------
 #
 # CAS-138 made a bare ``estimator.fit(X, y)`` cacheable. But the AST channels
@@ -1180,7 +1180,7 @@ def check_and_warn_randomness(
 # one source line), so ``0`` is used.
 
 def format_unseeded_estimator_fit_message(receiver: str) -> str:
-    """Compute-time message for caching an unseeded estimator fit (CAS-167).
+    """Compute-time message for caching an unseeded estimator fit.
 
     The estimator-fit twin of the inline "detected" warning: advice about the
     source, framed for the cold run where the fitted model is fresh and correct
@@ -1196,7 +1196,7 @@ def format_unseeded_estimator_fit_message(receiver: str) -> str:
 
 
 def format_stale_estimator_fit_message(receiver: str) -> str:
-    """Restore-time message for a replayed unseeded estimator fit (CAS-167).
+    """Restore-time message for a replayed unseeded estimator fit.
 
     Mirrors :func:`format_stale_randomness_message`: a *different claim* from the
     compute-time one, earned only by a successful restore. The fitted model on
@@ -1220,7 +1220,7 @@ def warn_unseeded_estimator_fit(
     detector: RandomnessDetector,
     suppress_warning: bool = False,
 ) -> None:
-    """Warn that an unseeded estimator ``.fit()`` is cached as a frozen replay (CAS-167).
+    """Warn that an unseeded estimator ``.fit()`` is cached as a frozen replay.
 
     The estimator-fit analogue of :func:`check_and_warn_randomness`. ``receivers``
     are the unseeded estimator variable names, decided by the caller against the
@@ -1254,7 +1254,7 @@ def warn_stale_estimator_fit(
     detector: RandomnessDetector,
     suppress_warning: bool = False,
 ) -> None:
-    """Announce that a cached unseeded estimator fit was replayed (CAS-167).
+    """Announce that a cached unseeded estimator fit was replayed.
 
     Restore-time twin of :func:`warn_unseeded_estimator_fit`, matching how
     :func:`warn_stale_randomness` follows :func:`check_and_warn_randomness`:
@@ -1365,7 +1365,7 @@ def restore_rng_state(state: dict) -> None:
 # a user holds in a variable — ``rng = np.random.default_rng(42)`` — because
 # that object has no module-level home.
 #
-# The asymmetry that motivates this (CAS-90): a statement drawing from the
+# The asymmetry that motivates this: a statement drawing from the
 # global channel (``np.random.randint``) replays correctly across a cache hit,
 # because the post-state is captured and re-injected.  A statement drawing from
 # an object-held generator (``rng.integers``) HITS and restores its output, but
@@ -1550,7 +1550,7 @@ def get_used_rng_modules(code: str) -> set[str]:
 
 
 def get_drawing_rng_modules(code: str) -> set[str]:
-    """Modules *code* DRAWS from, ignoring modules it merely seeds (CAS-223).
+    """Modules *code* DRAWS from, ignoring modules it merely seeds.
 
     The narrower companion to :func:`get_used_rng_modules`, which also reports
     the target of a bare ``np.random.seed(0)``. Only a draw's result depends on
@@ -1761,7 +1761,7 @@ def seed_cells_not_yet_run(
 ) -> 'list[tuple[str, int]]':
     """Notebook cells that SEED a drawn module but whose source has not run (ADR-017).
 
-    The detection core for the bare-``seed()`` edit-without-rerun defect (CAS-225).
+    The detection core for the bare-``seed()`` edit-without-rerun defect.
     Editing an ``np.random.seed(N)`` cell and running only a downstream draw
     leaves the draw on the *old* seed's state, silently — because a bare seed
     binds no variable, so nothing links the draw back to the seed cell.

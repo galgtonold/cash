@@ -261,7 +261,7 @@ class CellExecutor:
                 if pre is not None:
                     # Where this cell's randomness STARTED, plus the seeds in
                     # force for it. Re-executing a draw reproduces its value only
-                    # by rewinding to this (CAS-227). The fingerprint is what
+                    # by rewinding to this. The fingerprint is what
                     # makes it safe to prefer over the upstream-anchor scan: it
                     # expires the position when the seed behind it changes,
                     # using the same lineage check that invalidates any other
@@ -620,7 +620,7 @@ class CellExecutor:
             # surfacing the user's error would then be implicitly chained onto it
             # via __context__, leaking cash's own frames plus a spurious "During
             # handling of the above exception, another exception occurred" banner
-            # into the user's traceback (CAS-156).  Capture here and dispatch
+            # into the user's traceback.  Capture here and dispatch
             # AFTER the block exits, when sys.exc_info() is clear.
             caught = e
 
@@ -657,7 +657,7 @@ class CellExecutor:
 
         Deliberately called AFTER :meth:`_resolve_upstream_state`'s try/except
         has fully exited, so ``sys.exc_info()`` is already clear.  That timing is
-        load-bearing (CAS-156): dispatching ``original_run_cell`` from *inside*
+        load-bearing: dispatching ``original_run_cell`` from *inside*
         the live ``except`` block made Python implicitly chain the fresh (or
         IPython-raised) exception onto cash's internal one via ``__context__``,
         and IPython's ultratb then rendered cash's own frames
@@ -869,7 +869,7 @@ class CellExecutor:
             occurrence_index=occurrence_index,
             # IPython echoes only the CELL's last expression; cash executes each
             # statement as its own unit, so it must be told which one that is
-            # (CAS-174).
+            #.
             is_last=is_last_statement,
         )
         return self._handle_regular_stmt_metrics(
@@ -985,7 +985,7 @@ class CellExecutor:
             # suppression (``df.head();`` shows no repr). Re-attach it so the
             # suppression rides through the cache key AND the execution path
             # (``_execute_statement`` skips the display), so a cached re-run
-            # doesn't emit a phantom repr (CAS-96).
+            # doesn't emit a phantom repr.
             if self._expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
 
@@ -1015,7 +1015,7 @@ class CellExecutor:
                     # ``annotation`` computed above is the node's WHOLE-range
                     # merge, which cannot tell a directive on the loop from one on
                     # a single body statement — passing it would disable caching
-                    # for every sibling in the body (CAS-135).
+                    # for every sibling in the body.
                     ctrl_result = self._control_structure_processor.process(
                         node, ttl=self._magics._global_ttl, silent=True,
                         raw_cell=raw_cell,
@@ -1112,7 +1112,7 @@ class CellExecutor:
                         # fetch(x)``) cannot be compiled by the sync
                         # ControlStructureProcessor — its unflagged compile()
                         # raises ``SyntaxError: 'await' outside function``
-                        # (CAS-198). Run the whole structure as one awaited unit
+                        #. Run the whole structure as one awaited unit
                         # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
                         if self._debug:
                             print("[CONTROL] Await inside control body, running as awaited single unit")
@@ -1130,7 +1130,7 @@ class CellExecutor:
                         # ``annotation`` computed above is the node's WHOLE-range
                         # merge, which cannot tell a directive on the loop from one on
                         # a single body statement — passing it would disable caching
-                        # for every sibling in the body (CAS-135).
+                        # for every sibling in the body.
                         ctrl_result = self._control_structure_processor.process(
                             node, ttl=self._magics._global_ttl, silent=True,
                             raw_cell=raw_cell,

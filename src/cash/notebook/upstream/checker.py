@@ -59,7 +59,7 @@ __all__ = ["UpstreamChecker", "UpstreamResult"]
 
 def _is_live_ndarray(val: Any) -> bool:
     """True if *val* is a numpy ndarray (so ``v = val[slice]`` is a view, not a
-    copy). Duck-typed by type module/name to avoid importing numpy here (CAS-74)."""
+    copy). Duck-typed by type module/name to avoid importing numpy here."""
     t = type(val)
     return t.__name__ == 'ndarray' and t.__module__.split('.')[0] == 'numpy'
 
@@ -158,7 +158,7 @@ class UpstreamChecker:
         from interfering with the current one.
         """
         self.simulator.reset_caches()
-        # Re-arm the broken-upstream-cell warning for the new notebook (CAS-173):
+        # Re-arm the broken-upstream-cell warning for the new notebook:
         # its cell indices/hashes are meaningless across a notebook switch.
         self._warned_broken_cells.clear()
 
@@ -277,7 +277,7 @@ class UpstreamChecker:
         # latest reference.
         self.simulator._virtual_lineage.function_tracker = self.function_tracker
 
-        # Resolve the notebook path ONCE for the whole cell check (CAS-150) and
+        # Resolve the notebook path ONCE for the whole cell check and
         # thread it through the analysis helpers + Phase 2, instead of each site
         # re-running discovery. The negative cache in server_discovery bounds a
         # failed probe, and this collapses the success case to a single resolve.
@@ -315,16 +315,16 @@ class UpstreamChecker:
             # lineage-carrying receiver accumulates on an isolated re-run unless it
             # is restored to its cell-entry base. Scoped to METHOD receivers (NOT
             # subscript/attr writes) so ``df['col']=..`` keeps its per-statement
-            # cache (CAS-42). Same no-cache opt-out as the other self-write sets.
+            # cache. Same no-cache opt-out as the other self-write sets.
             current_cell_method_receivers = set(
                 standalone_method_mutation_receivers(ast.parse(cell_code))
             ) - nocache_vars
             # Self-referential in-place subscript/attr writes (``df['a']=df['a']*2``,
             # ``df['a']+=1``, ``df.iloc[i,j]+=x``) are non-idempotent: re-running
             # applies the op again, so a lineage-carrying receiver (DataFrame) must
-            # be reset to its cell-entry base or the value accumulates (CAS-54).
+            # be reset to its cell-entry base or the value accumulates.
             # New-column writes read from OTHER columns (``df['VolAdj']=...``) are
-            # NOT self-referential and keep their per-statement cache (CAS-42). Same
+            # NOT self-referential and keep their per-statement cache. Same
             # no-cache opt-out (a no-cache self-write must advance, not reset -- CAS-51).
             current_cell_selfref_vars = set(
                 selfref_inplace_write_vars(ast.parse(cell_code))
@@ -334,7 +334,7 @@ class UpstreamChecker:
             # ``add(data)``) is mutated even though the cell never names the
             # mutation — static one-level body analysis attributes it back to the
             # argument so it resets on isolated re-run instead of accumulating
-            # (CAS-58). Treated like a method receiver (force-reset + self-write).
+            #. Treated like a method receiver (force-reset + self-write).
             # Only resolve the (notebook-wide) function sources when the current
             # cell actually has a bare-Expr call candidate, so the common case
             # pays nothing.
@@ -394,7 +394,7 @@ class UpstreamChecker:
                 # or the target's free var) or a function passed to functools.reduce
                 # — the higher-order caller invokes it, so the mutation happens but
                 # the cell text doesn't name it. Attribute it back and add to the
-                # cell's inputs so its producer's base is restored (CAS-72).
+                # cell's inputs so its producer's base is restored.
                 partial_bindings = self._notebook_partial_bindings(cell_code, notebook_path)
                 hidden_muts = (
                     partial_arg_mutations(
@@ -406,13 +406,13 @@ class UpstreamChecker:
                 required_inputs = required_inputs | hidden_muts
                 # A partial that binds a MUTATED arg captured the arg's OBJECT, so
                 # resetting the arg name is not enough — force-reset the partial
-                # too so its producer re-binds it to the fresh arg (CAS-72).
+                # too so its producer re-binds it to the fresh arg.
                 current_cell_stateful_funcs |= set(
                     mutating_partials(
                         ast.parse(cell_code), partial_bindings.get, func_sources_all.get
                     )
                 ) - nocache_vars
-            # Object-protocol hidden state (CAS-69/70/71/73): a with-statement, a
+            # Object-protocol hidden state: a with-statement, a
             # custom-dunder op (``s[k]=v`` / ``del s[k]`` / ``v=s[k]`` / ``a(x)``),
             # a constructor, a decorated call, or an instance / class method whose
             # body mutates hidden state. Resolve the class / wrapper / context
@@ -433,7 +433,7 @@ class UpstreamChecker:
             # A top-level ``class Sub(Base):`` defining a subclass triggers the
             # base's ``__init_subclass__`` hook during CLASS CREATION — a hidden
             # mutation with no Call/Subscript/etc. node of its own — so gate the
-            # object-protocol scan on a based class def too (CAS-103).
+            # object-protocol scan on a based class def too.
             has_op_trigger = has_op_trigger or any(
                 isinstance(n, ast.ClassDef) and n.bases
                 for n in op_tree.body
@@ -444,7 +444,7 @@ class UpstreamChecker:
                 op_var_factories = self._notebook_var_factories(cell_code, notebook_path)
                 # ``@ClassName def task`` binds ``task`` to a ClassName INSTANCE
                 # (a class-based decorator), and ``h = g`` aliases one name to
-                # another; both feed the object-protocol resolvers (CAS-80).
+                # another; both feed the object-protocol resolvers.
                 op_decorated_instances = self._notebook_decorated_instances(cell_code, notebook_path)
                 op_name_aliases = self._notebook_name_aliases(cell_code, notebook_path)
 
@@ -505,7 +505,7 @@ class UpstreamChecker:
                 # once (no cross-cell in-place build) and are unaffected. [CAS-75]
                 op_receivers = op_resets.receivers - nocache_vars
                 op_class_defs = op_resets.class_defs - nocache_vars
-                # A base ``__init_subclass__`` free-var registry (CAS-103) hides
+                # A base ``__init_subclass__`` free-var registry hides
                 # its mutation behind class creation, so — unlike an ordinary
                 # CAS-68 free var — the simulator's content-base guard cannot see
                 # that a SIBLING subclass cell also appends to it. Guard it with
@@ -545,13 +545,13 @@ class UpstreamChecker:
             # A bare ``y = x`` alias shares x's object, so an in-place mutation
             # through y (``y.append``/``y[0]+=1``) also mutates the upstream
             # holder x. Attribute it back to x so x resets on isolated re-run
-            # instead of accumulating (CAS-60). For a no-lineage source the
+            # instead of accumulating. For a no-lineage source the
             # content-base guard restores it via ``current_cell_mutated``; for a
             # lineage-carrying aliased DataFrame the source must also join the
             # selfref / method-receiver sets so the CAS-54/57 force-reset fires
             # (``df2 = df; df2['a'] = df2['a']*2`` doubled). The selfref set is
             # column-key-scoped, so an aliased NEW-column write (``df2['b'] =
-            # df2['a']*2``) is still excluded and keeps its cache (CAS-42).
+            # df2['a']*2``) is still excluded and keeps its cache.
             alias_tree = ast.parse(cell_code)
             current_cell_mutated |= alias_mutation_sources(alias_tree) - nocache_vars
             current_cell_selfref_vars |= aliased_sources(
@@ -564,7 +564,7 @@ class UpstreamChecker:
             # mutating v (``v += 1``, ``v[i] = x``) mutates arr in place. A list
             # slice is a COPY, so this is gated on arr being a live ndarray at
             # runtime. When the view is mutated, attribute it back to arr so arr
-            # resets on isolated re-run instead of accumulating (CAS-74).
+            # resets on isolated re-run instead of accumulating.
             view_bindings = subscript_view_bindings(alias_tree)
             if view_bindings:
                 user_ns = self.shell.user_ns
@@ -577,7 +577,7 @@ class UpstreamChecker:
             # (``a, b = b, a`` swap / rotate / temp-swap) read their pre-cell base
             # but on isolated re-run hold the swapped OUTPUT, whose content equals
             # the recorded output hash -- lineage-invisible, so no reset signal
-            # fires. Force these to reset to their producers' base (CAS-65).
+            # fires. Force these to reset to their producers' base.
             current_cell_crossref_reassigned = crossref_reassigned_vars(alias_tree) - nocache_vars
             nocache_vars = set(nocache_vars)
         except (SyntaxError, ValueError):
@@ -665,7 +665,7 @@ class UpstreamChecker:
     def _resolve_notebook_path(self) -> str | None:
         """Resolve the current notebook path once per cell's upstream check.
 
-        Single choke point for path discovery (CAS-150): the per-statement /
+        Single choke point for path discovery: the per-statement /
         per-upstream-cell analysis helpers used to each call ``get_notebook_path``
         independently, so one cell re-probed discovery 5-15 times — catastrophic
         when a stale Jupyter runtime makes each probe block on a network timeout.
@@ -705,7 +705,7 @@ class UpstreamChecker:
         Resolves from cell SOURCE (the source of truth) rather than
         ``inspect.getsource`` — the latter fails for cell-defined functions under
         nbclient (no linecache entry). Used by :func:`function_arg_mutations`
-        (CAS-58). The current cell is included so a helper defined and used in the
+       . The current cell is included so a helper defined and used in the
         same cell still resolves; later same-name defs win (last definition).
         """
         sources: dict[str, str] = {}
@@ -727,7 +727,7 @@ class UpstreamChecker:
         """The notebook's cell sources (which already include the current cell;
         the caller skips its first occurrence of *cell_code*). Used to detect a
         class variable mutated by more than one cell — a cross-cell accumulator
-        whose class-def reset must be suppressed (CAS-73 / CAS-75)."""
+        whose class-def reset must be suppressed."""
         return self._notebook_cells_for(notebook_path)
 
     def _notebook_class_sources(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
@@ -738,7 +738,7 @@ class UpstreamChecker:
         class defined in a cell resolves under nbclient, where
         ``inspect.getsource`` has no linecache entry. Used by
         :func:`object_protocol_mutations` to analyse a receiver's method /
-        dunder bodies (CAS-69/70/71/73). Later same-name defs win.
+        dunder bodies. Later same-name defs win.
         """
         sources: dict[str, str] = {}
         cells = self._notebook_cells_for(notebook_path)
@@ -757,7 +757,7 @@ class UpstreamChecker:
 
     def _notebook_decorated_instances(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{func_name: decorator_name}`` for every top-level ``@Deco def f``
-        across the notebook (CAS-80). When the decorator is a class, ``f`` is an
+        across the notebook. When the decorator is a class, ``f`` is an
         INSTANCE of it (a class-based decorator: ``@Counter def task`` → ``task``
         is a ``Counter``). The caller filters to decorators that resolve to a
         class. Only bare-``Name`` decorators are captured. Last definition wins."""
@@ -779,7 +779,7 @@ class UpstreamChecker:
     def _notebook_name_aliases(self, cell_code: str, notebook_path: str | None) -> dict[str, str]:
         """Map ``{alias: source}`` for every top-level ``alias = source`` bare-Name
         binding across the notebook (``h = g``), so a called alias resolves to the
-        decorator/factory of the name it aliases (CAS-80). Last binding wins."""
+        decorator/factory of the name it aliases. Last binding wins."""
         aliases: dict[str, str] = {}
         cells = self._notebook_cells_for(notebook_path)
         for code in (*cells, cell_code):
@@ -820,7 +820,7 @@ class UpstreamChecker:
     def _notebook_partial_bindings(self, cell_code: str, notebook_path: str | None) -> dict[str, tuple[str, list]]:
         """Map ``{var: (target_func, [bound_arg_vars])}`` for every top-level
         ``var = partial(f, x, ...)`` / ``functools.partial(...)`` across the
-        notebook (CAS-72). Bound args are Name ids (or ``None`` for non-Name),
+        notebook. Bound args are Name ids (or ``None`` for non-Name),
         aligned to ``f``'s positional params. Last assignment wins.
         """
         bindings: dict[str, tuple[str, list]] = {}
@@ -1027,7 +1027,7 @@ class UpstreamChecker:
         """Load the notebook and resolve the current cell index.
 
         ``notebook_path`` is the path resolved once at the start of the cell's
-        upstream check (CAS-150) and threaded here, so Phase 2 does not re-run
+        upstream check and threaded here, so Phase 2 does not re-run
         discovery.  Returns ``(notebook_cells, current_cell_idx)``.  If the
         notebook cannot be found or the cell index cannot be resolved,
         ``current_cell_idx`` may be ``None``, which the caller should treat as
@@ -1036,7 +1036,7 @@ class UpstreamChecker:
         """
         # Pass the (possibly None) resolved path straight through: when it is
         # None, get_notebook_cells re-resolves internally, but that lookup is
-        # bounded by the negative cache (CAS-150), so it stays cheap while
+        # bounded by the negative cache, so it stays cheap while
         # preserving the get_notebook_cells seam that callers/tests patch.
         notebook_cells = get_notebook_cells(notebook_path)
 
@@ -1086,7 +1086,7 @@ class UpstreamChecker:
         return current_cell_idx
 
     def _evict_orphaned_definitions(self, notebook_cells: list[str], cell_code: str) -> None:
-        """Evict variables whose producing definition no longer exists (CAS-62).
+        """Evict variables whose producing definition no longer exists.
 
         A variable cash previously produced but that NO current cell statically
         produces is orphaned — its definition was removed, commented out, or
@@ -1466,7 +1466,7 @@ class UpstreamChecker:
         When the current cell draws from a global RNG and an UPSTREAM cell seeds
         that module with source that has not executed this session (an edited or
         never-run seed), that seed's side effect must be re-established before the
-        draw (CAS-225). But re-seeding alone is not enough when draws sit between
+        draw. But re-seeding alone is not enough when draws sit between
         the seed and the current cell: those intervening draws advanced the stream
         under the OLD seed, so the current draw would run from the new seed's
         position 0 instead of the position the chain holds top-to-bottom
@@ -1662,7 +1662,7 @@ class UpstreamChecker:
         If the current cell draws, find the nearest UPSTREAM cell that touched the
         RNG (seed or draw) and whose post-state we recorded this session, and
         restore that state. A re-executed draw then continues from the correct
-        stream position instead of the last-left live state (CAS-227). A no-op
+        stream position instead of the last-left live state. A no-op
         unless the cell draws and such a predecessor exists; on a cache HIT the
         statement restores its own post-state afterwards, so this is harmless.
         """
@@ -1766,7 +1766,7 @@ class UpstreamChecker:
                         executed_metrics.append(result)
                         # The processor reports statement failures via the
                         # 'error' field instead of raising - surface those
-                        # through the same loud path below (CAS-87).
+                        # through the same loud path below.
                         if result.get('error'):
                             raise UpstreamStateError(
                                 self._format_upstream_failure(
@@ -1777,7 +1777,7 @@ class UpstreamChecker:
                 raise
             except (RuntimeError, NameError, KeyError, TypeError, ValueError) as e:
                 # Swallowing here served the downstream cell a STALE value
-                # while the upstream producer was silently broken (CAS-87) -
+                # while the upstream producer was silently broken -
                 # the worst failure mode for a caching layer. Fail the user's
                 # cell with the upstream failure instead, like a plain
                 # top-to-bottom run would.

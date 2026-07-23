@@ -445,7 +445,7 @@ class CacheBackend(ABC):
         The default is the static class-level :attr:`max_size_bytes` hint
         (Redis 10 MB, SQLite 100 MB, unbounded elsewhere). Backends whose
         cap is *dynamic* — notably the file tier, whose LRU cap is scaled to
-        free disk (CAS-142) — override this to derive a per-object refusal
+        free disk — override this to derive a per-object refusal
         threshold from their own instance cap, so an object too big to hold
         without thrashing is skipped rather than written-then-evicted.
 

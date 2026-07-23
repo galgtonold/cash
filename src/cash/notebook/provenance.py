@@ -273,7 +273,7 @@ class ProvenanceTracker:
             lines.append(f"  Inputs: {', '.join(latest.inputs)}")
         # Only REAL files, and never an unreadable wall of them: the tracked set
         # is a superset that includes importlib.metadata probes for files that
-        # never existed (CAS-185), which used to render as 100+ phantom venv
+        # never existed, which used to render as 100+ phantom venv
         # entry_points.txt paths — as if the variable depended on site-packages.
         real_deps = existing_file_deps(latest.file_deps)
         if real_deps:

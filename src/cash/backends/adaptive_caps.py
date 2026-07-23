@@ -1,4 +1,4 @@
-"""Machine-scaled cache-size caps (CAS-142).
+"""Machine-scaled cache-size caps.
 
 A single 1 GiB ``max_cache_size`` used to cap *every* tier, including the
 disk tier — whose whole job is to hold big frames persistently. Persisting
@@ -143,7 +143,7 @@ def _free_bytes_on_volume(path: str) -> int:
 def _total_system_ram() -> int | None:
     """Total physical RAM in bytes, or ``None`` when psutil is unavailable.
 
-    Guarded import: psutil is optional (CAS-129). A bare install falls back
+    Guarded import: psutil is optional. A bare install falls back
     to the fixed RAM cap rather than crashing on the missing dependency.
     """
     try:

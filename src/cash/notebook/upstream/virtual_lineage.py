@@ -124,7 +124,7 @@ class VirtualLineage:
         self._restores = RestoreCollector()
 
         # Derivation-alias vars bumped during the most recent cache-hit
-        # propagation (CAS-115 / CAS-89); read back by _update_virtual_lineage.
+        # propagation; read back by _update_virtual_lineage.
         self._last_hit_bumped: set[str] = set()
 
     def set_tracking_state(self, state: TrackingState) -> None:
@@ -259,9 +259,9 @@ class VirtualLineage:
             # Mirror the runtime classifier (``_classify_method_mutations``) so the
             # simulation reproduces its decision exactly (unified-key rule).
             if method in RECEIVER_READONLY_WRITE_METHODS:
-                continue  # df.to_csv reads the frame, writes a file (CAS-196)
+                continue  # df.to_csv reads the frame, writes a file
             if receiver_is_identity_coupled(receiver):
-                receivers.add(base)  # Axes/Figure draw method mutates it (CAS-194)
+                receivers.add(base)  # Axes/Figure draw method mutates it
                 continue
             if method in KNOWN_PURE_METHODS:
                 continue
@@ -1062,7 +1062,7 @@ class VirtualLineage:
             # No-output statements normally stay out of the trace, but a bare
             # file-writing expression (``df.to_csv(p)``) IS upstream state a
             # reader depends on: without a trace entry the planner can never
-            # schedule an edited/stale writer (CAS-81/82). Empty outputs keep
+            # schedule an edited/stale writer. Empty outputs keep
             # the backward scan indifferent to the entry.
             from ..cacheability import statement_writes_files
             if statement_writes_files(stmt_code):
@@ -1097,7 +1097,7 @@ class VirtualLineage:
         # position-scoping (the simulator only replays cells 0..current) means a
         # reset ABOVE the target wipes the virtual state so an above-the-reset
         # consumer's inputs are reconstructed, while a reset BELOW is never
-        # simulated. Without this the liveness gate (CAS-94) would resurrect a
+        # simulated. Without this the liveness gate would resurrect a
         # reset variable as a phantom restore (test_reset_magic_no_phantom_restore).
         for line in cell_code.split('\n'):
             if line.strip().startswith('%reset'):
@@ -1130,7 +1130,7 @@ class VirtualLineage:
                 # from-start execution. Stop here so the simulation does not
                 # register a post-raise assignment (``z = 1; raise; z = 2``) as
                 # the variable's producer and later reconstruct that dead value
-                # (CAS-64).
+                #.
                 if isinstance(node, ast.Raise):
                     break
                 self._simulate_one_node(
@@ -1161,7 +1161,7 @@ class VirtualLineage:
             # poisoned every downstream cell silently — CAS-173.)
             logger.debug(
                 "[UPSTREAM] Syntax error in cell %d; skipping it and continuing "
-                "simulation so unrelated downstream cells keep caching (CAS-173).",
+                "simulation so unrelated downstream cells keep caching.",
                 i,
             )
         except (KeyError, TypeError, ValueError, OSError, AttributeError) as e:
@@ -1242,7 +1242,7 @@ class VirtualLineage:
         place inside an ``if`` / ``with`` / ``try`` body (``if cond:
         items.append(x)``) is not reported as a static output by
         ``CodeAnalyzer``, so without this its virtual lineage would stay stale and
-        a downstream cell reading it would serve a pre-mutation value (CAS-66).
+        a downstream cell reading it would serve a pre-mutation value.
         Treated like a loop mutation so it is trusted in memory and its lineage is
         bumped, matching the runtime's ``update_lineage_after_execution``.
         """
@@ -1373,7 +1373,7 @@ class VirtualLineage:
                 if debug:
                     logger.debug("[UPSTREAM] Forward prop failed: Miss file %s", fpath)
                 return False
-            # Content-authoritative freshness when the size matches (CAS-98/CAS-10).
+            # Content-authoritative freshness when the size matches.
             is_fresh, reason = file_dep_is_fresh(resolved, stored)
             if not is_fresh:
                 if debug:
@@ -1405,7 +1405,7 @@ class VirtualLineage:
         # path and the runtime lineage writer. ``virtual_modules`` was accepted
         # here but never consulted, so the simulation fell through to
         # ``compute_hash(module)`` -> ``sha256(str(id(module)))``, a per-session
-        # memory address (CAS-214). Runtime and simulation must agree byte for
+        # memory address. Runtime and simulation must agree byte for
         # byte, so this guard has to exist on both sides.
         if is_cash_instrumentation(val) or is_module_like(inp, val, virtual_modules):
             return None
@@ -1549,7 +1549,7 @@ class VirtualLineage:
             virtual_lineage[var] = h
         # Even on a cache hit, replay the derivation-alias bump so a mutation of
         # a base/frame (its own lineage restored from cache here) still bumps its
-        # live-alias derivatives (CAS-115 / CAS-89). Same skip-inputs rule and
+        # live-alias derivatives. Same skip-inputs rule and
         # deterministic formula as the runtime and the miss path. Bumped vars are
         # threaded back so the caller can union them into ``outputs``.
         self._last_hit_bumped = bump_derived_lineages(
@@ -1787,7 +1787,7 @@ class VirtualLineage:
 
                 # Model bare-name ``del x`` as a namespace removal so the
                 # position-scoped liveness check downstream reconstructs an
-                # above-the-del consumer's inputs (CAS-94). Only ``ast.Name``
+                # above-the-del consumer's inputs. Only ``ast.Name``
                 # targets remove a lineage entry; ``del d[k]`` / ``del obj.attr``
                 # are container mutations handled at cacheability.py:233, so they
                 # must NOT pop the base's lineage here.
@@ -1905,7 +1905,7 @@ class VirtualLineage:
             for out in outputs:
                 virtual_lineage[out] = lineage_hash
 
-            # Mirror the runtime derivation-alias bump (CAS-115 / CAS-89): when
+            # Mirror the runtime derivation-alias bump: when
             # a base/frame is mutated in place, bump its live-alias derivatives.
             # The simulator cannot observe ``.base`` / ``.obj`` identity, so it
             # only REPLAYS the runtime-recorded edge map with the SAME
@@ -1951,7 +1951,7 @@ class VirtualLineage:
                 if self.debug:
                     print(f"[UPSTREAM] Restore failed: Miss file {fpath}")
                 return set(), time_module.time() - start_time, 0.0
-            # Content is authoritative when the size matches (CAS-98/CAS-10).
+            # Content is authoritative when the size matches.
             is_fresh, reason = file_dep_is_fresh(resolved, stored)
             if not is_fresh:
                 if self.debug:
@@ -1988,7 +1988,7 @@ class VirtualLineage:
         """Vars whose cached lineage was positively matched against the expected one.
 
         Only these may have an EMPTY cached value restored over a non-empty
-        in-memory one (CAS-101). A confirmed lineage means the empty value is
+        in-memory one. A confirmed lineage means the empty value is
         the correct current result — a filter that legitimately matched nothing
         — rather than a corrupt or truncated entry.
 
@@ -2027,7 +2027,7 @@ class VirtualLineage:
                 # overwriting 1000 rows with 0 is the more expensive mistake.
                 # With it, blocking the restore is what costs correctness: the
                 # statement re-executes forever and a legitimately-empty result
-                # can never be served from cache (CAS-101).
+                # can never be served from cache.
                 existing = self.shell.user_ns[var]
                 try:
                     if len(existing) > 0 and len(val) == 0:

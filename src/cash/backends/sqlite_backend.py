@@ -311,4 +311,4 @@ class SQLiteBackend(CacheBackend):
     # NOTE: no ``lock()`` override. The internal ``self._lock`` RLock guards
     # storage integrity (concurrent DB writes), which is a distinct concern
     # from compute single-flight. We inherit ``CacheBackend.lock()`` so that
-    # ``use_locking=True`` gets a real in-process per-key lock (CAS-112).
+    # ``use_locking=True`` gets a real in-process per-key lock.

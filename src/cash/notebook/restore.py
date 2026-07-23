@@ -134,7 +134,7 @@ class Restorer:
                 if self._debug:
                     print(f"[STATE] Cannot restore '{var_name}': file dependency missing: {fpath}")
                 raise NameError(f"name '{var_name}' is not defined (file dependency missing)")
-            # Content-authoritative freshness (CAS-98/CAS-10): a touch keeps the
+            # Content-authoritative freshness: a touch keeps the
             # restore valid, a same-size sub-resolution edit invalidates it.
             is_fresh, reason = file_dep_is_fresh(resolved, stored)
             if not is_fresh:

@@ -55,7 +55,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         self.promotion_policy = promotion_policy or self._default_promotion_policy
         self._min_persist_compute_s = min_persist_compute_s
         self._min_persist_savings_pct = min_persist_savings_pct
-        # Once-per-session dedup for the oversize-refusal warning (CAS-142).
+        # Once-per-session dedup for the oversize-refusal warning.
         self._warned_oversize = False
 
     def _promotion_backend_kind(self) -> str:
@@ -239,7 +239,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # every persistent tier refused it as too big for its cap — it will
             # live in RAM only and vanish on the next kernel restart. A clean
             # no-op beats a treadmill, but the user should know why nothing
-            # durable was written and how to fix it (CAS-142).
+            # durable was written and how to fix it.
             if size_refused and not any(d != "RAM" for d in stored_destinations):
                 self._warn_oversize_not_persisted(key, cap_size)
 

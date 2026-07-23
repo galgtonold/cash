@@ -51,7 +51,7 @@ def _control_body_touches(code: str, sibling_names: set[str]) -> bool:
     those outputs, so the loop was left out of the plan while
     ``fig, ax = plt.subplots()`` and ``fig.savefig(path)`` were scheduled -- the
     figure was rebuilt EMPTY and the blank PNG was written over the good chart
-    (CAS-213). That method's docstring already describes this failure for the
+   . That method's docstring already describes this failure for the
     flat ``ax.bar(...)`` form; only the loop shape escaped, because the flat one
     IS visible in the outputs.
 
@@ -418,7 +418,7 @@ class ReexecutionPlanner:
         simulation_trace: list,
         restored_statements_info: list[dict],
     ) -> tuple[list[int], list[dict]]:
-        """Never re-execute a SUBSET of a stateful carrier's history (CAS-175/178).
+        """Never re-execute a SUBSET of a stateful carrier's history.
 
         The backward scan resolves a scheduled statement's inputs by *value
         lineage*. A **stateful carrier** (see ``stateful_carriers``) breaks that
@@ -491,7 +491,7 @@ class ReexecutionPlanner:
                         # is one trace entry whose outputs never mention the
                         # carrier, so the body has to be inspected directly or
                         # the figure is rebuilt from a subset of its history
-                        # (CAS-213).
+                        #.
                         if (set(simulation_trace[j][1]) & sibling_names
                                 or _control_body_touches(
                                     simulation_trace[j][0], sibling_names)):
@@ -556,7 +556,7 @@ class ReexecutionPlanner:
         simulation_trace: list,
         restored_statements_info: list[dict],
     ) -> tuple[list[int], list[dict]]:
-        """Refuse to re-run a ``plt.savefig()`` orphaned from its figure (CAS-187).
+        """Refuse to re-run a ``plt.savefig()`` orphaned from its figure.
 
         ``plt.savefig(path)`` writes pyplot's CURRENT figure through the
         process-global ``Gcf`` registry; its only variable input is the module
@@ -646,14 +646,14 @@ class ReexecutionPlanner:
         relevant_read_paths: set[str] | None = None,
         relevant_read_paths_known: bool = True,
     ) -> tuple[list[int], list[dict]]:
-        """Schedule upstream file-WRITING statements whose effect is stale (CAS-81/82).
+        """Schedule upstream file-WRITING statements whose effect is stale.
 
         File writes have no variable edge, so the backward scan never
         schedules them: editing a writer cell and re-running only the reader
-        served the stale pre-edit file (CAS-81); and when a writer cell's
+        served the stale pre-edit file; and when a writer cell's
         sibling statements DID re-run, the side-effect-only write statement
         was still skipped and the reader's freshness stayed decided against
-        the pre-run file state (CAS-82).
+        the pre-run file state.
 
         A writer statement is scheduled when
 
@@ -687,7 +687,7 @@ class ReexecutionPlanner:
         # lineage comparison below reads absent-as-unchanged and never schedules
         # the input's producer. That left ``df.to_csv(path)`` scheduled WITHOUT
         # its producer, so it ran against a missing ``df`` and raised NameError
-        # post-restart, poisoning the whole notebook (CAS-153).
+        # post-restart, poisoning the whole notebook.
         user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
 
         def _input_changed(name: str) -> bool:
@@ -788,7 +788,7 @@ class ReexecutionPlanner:
         path stays cheap: a textual marker pre-filter runs before any AST
         analysis.
 
-        Scoped to the current cell (CAS-193/196/200): a writer whose resolvable
+        Scoped to the current cell: a writer whose resolvable
         output path is read by NO consumer relevant to this reconstruction
         (``relevant_read_paths``) is an unrelated / terminal side-effect and is
         never scheduled — re-firing it can only repeat an external write (a
@@ -827,7 +827,7 @@ class ReexecutionPlanner:
             if not statement_writes_files(stmt_code):
                 continue
             # Scope gate: skip a writer whose output file no relevant consumer
-            # reads (CAS-193/196/200). Its write runs when the user runs its own
+            # reads. Its write runs when the user runs its own
             # cell; reconstruction of an unrelated cell must never re-fire it.
             if self._writer_output_unread(
                 stmt_code, relevant_read_paths, relevant_read_paths_known,
@@ -838,7 +838,7 @@ class ReexecutionPlanner:
                         "consumer; not scheduling (scope): %s", stmt_code[:60],
                     )
                 continue
-            # Repeatability gate (CAS-210). The scope gate above keys on
+            # Repeatability gate. The scope gate above keys on
             # RELEVANCE -- "does a relevant consumer read this file?" -- not on
             # whether repeating the write is safe. Those coincide in the cases
             # it was built for, which is why it reads as a correctness

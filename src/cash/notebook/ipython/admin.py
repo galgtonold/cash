@@ -46,7 +46,7 @@ def _fmt_signed_time(seconds: float) -> str:
     ``_fmt_time`` assumes a non-negative value (its ``< 0.001`` branch would
     turn -2.3 into ``-2300000us``), so the NET saving — which is deliberately
     allowed to go negative when cash cost more than it saved — is formatted
-    here as ``-<magnitude>`` (CAS-143).
+    here as ``-<magnitude>``.
     """
     if seconds < 0:
         return f"-{_fmt_time(-seconds)}"
@@ -203,7 +203,7 @@ class CashAdminMagicsMixin:
         # An unrecognised argument must NEVER fall through to the default
         # repair: this magic is the documented recovery from a poisoned cache,
         # so quietly running a lesser repair and reporting success turns a
-        # recoverable state into a confidently wrong one (CAS-181).
+        # recoverable state into a confidently wrong one.
         mode = parse_mode(line, ('', '--full', '--state'))
         if mode is None:
             print(f"[Error] %cash_repair: unrecognised argument: {strip_inline_comment(line)!r}")
@@ -274,7 +274,7 @@ class CashAdminMagicsMixin:
             # Name the repair that ran. A bare "Repair complete." reads as "your
             # cache is clean now" — which is what the user reaching for this
             # command after a bad value actually wants to hear, and is not what
-            # this branch did (CAS-181).
+            # this branch did.
             print("\n[OK] Repair complete (default mode): corrupted entries removed.")
             print("   Cached values were kept. To clear the cache: %cash_repair --full")
 
@@ -294,7 +294,7 @@ class CashAdminMagicsMixin:
         """
         # ``reset`` mutates state, so an unrecognised argument must not fall
         # through to "print the stats" — that reports success (stats appear) for
-        # a reset that never happened (CAS-181).
+        # a reset that never happened.
         mode = parse_mode(line, ('', 'json', 'reset'))
         if mode is None:
             print(f"[Error] %cash_stats: unrecognised argument: {strip_inline_comment(line)!r}")
@@ -311,7 +311,7 @@ class CashAdminMagicsMixin:
             # cache: a reset must drop them too or savings would be credited
             # against measurements the reset claims to have forgotten.
             self._session.measured_compute.clear()
-            # Same rule for the decorator baselines (CAS-222): a reset that keeps
+            # Same rule for the decorator baselines: a reset that keeps
             # them would credit a post-reset hit as "verified" against a compute
             # the reset claims to have forgotten.
             self._session.measured_decorator_compute.clear()
@@ -326,7 +326,7 @@ class CashAdminMagicsMixin:
         # denominator is dominated by prints, imports and cheap assignments that
         # cash deliberately never tried to cache. Counting cash's own correct
         # "not worth caching" decisions as misses reported 14.9% for a session
-        # in which 100% of the expensive statements hit (CAS-177). CAS-157 fixed
+        # in which 100% of the expensive statements hit. CAS-157 fixed
         # an OVERstatement of savings; that is the same failure inverted, so the
         # same rule binds: the number must not imply a conclusion the data does
         # not support, in EITHER direction.
@@ -335,7 +335,7 @@ class CashAdminMagicsMixin:
         cacheable_total = cacheable_hit + cacheable_miss
         cacheable_rate = (cacheable_hit / cacheable_total * 100) if cacheable_total else None
 
-        # Two nets, because two different qualities of evidence (CAS-157).
+        # Two nets, because two different qualities of evidence.
         #
         # ``gross_saved`` is a counterfactual: each restore is credited with the
         # compute time recorded when the value was FIRST cached. Nothing
@@ -377,7 +377,7 @@ class CashAdminMagicsMixin:
                 # Hits over the statements caching was ever on the table for.
                 # ``None`` (not 0.0) when nothing this session cleared the
                 # floor: a rate with an empty denominator is undefined, and
-                # emitting 0.0 would read as "cash missed everything" (CAS-177).
+                # emitting 0.0 would read as "cash missed everything".
                 'hit_rate_cacheable_percent': (
                     round(cacheable_rate, 1) if cacheable_rate is not None else None
                 ),
@@ -902,7 +902,7 @@ class CashAdminMagicsMixin:
             # result on the first iteration and then RESTORES it from cache on
             # every later one. That measured cache-hit-vs-cache-hit and reported
             # a meaningless ~1x "speedup" on a workload that was really ~170x
-            # faster to restore than recompute (CAS-168).
+            # faster to restore than recompute.
             #
             # ``self._original_run_cell`` is the real, unpatched IPython
             # ``run_cell`` captured *before* cash installed its hook, so it

@@ -28,7 +28,7 @@ ever needs a non-IPython restore path, the right move is to factor
 *that* out as a non-replay sibling, not to spread the IPython imports
 further.
 
-That import is **function-local, not module-level** (CAS-129).  Base
+That import is **function-local, not module-level**.  Base
 ``cash`` declares ``dependencies = []`` — IPython lives in the
 ``[notebook]`` extra — but this module sits on the ``import cash``
 chain (``core`` → ``notebook`` → ``upstream`` → ``statement``), so a
@@ -39,7 +39,7 @@ module-level ``from IPython.display import ...`` made a bare
 **Do not "fix" this into a module-level try/except with no-op stubs.**
 That shape keeps the module importable but makes a real display call
 silently render nothing.  ``processor.py`` had exactly that and was
-brought in line with this module (CAS-132): import locally, let a
+brought in line with this module: import locally, let a
 genuine display attempt without IPython raise.  Both are pinned by
 ``tests/test_notebook/test_display_without_ipython.py``.
 """
@@ -95,11 +95,11 @@ class StatementRestorer:
         self.compute_hash = compute_hash
         self.debug = debug
         # SHARED with the processor's ledger (same dict object), so a seed
-        # statement executed after construction is visible here (CAS-223).
+        # statement executed after construction is visible here.
         self._rng_seed_epochs = rng_seed_epochs if rng_seed_epochs is not None else {}
 
     def _rng_replay_is_current(self, payload: dict[str, Any]) -> bool:
-        """Whether this entry's RNG state may still be replayed (CAS-223).
+        """Whether this entry's RNG state may still be replayed.
 
         Replaying a cached statement's post-execution RNG state keeps the random
         stream coherent when a restore stands in for an execution: the next draw
@@ -155,7 +155,7 @@ class StatementRestorer:
     ) -> None:
         """Restore a cached statement's outputs into ``user_ns`` and replay display.
 
-        *inplace_restore* names estimator-fit receivers (CAS-138) whose fitted
+        *inplace_restore* names estimator-fit receivers whose fitted
         state must be transferred onto the EXISTING object rather than rebinding
         the name, so every alias sees the fit. Empty/None for every other
         statement, which keeps the plain-rebind behaviour.
@@ -269,7 +269,7 @@ class StatementRestorer:
         inplace_restore: 'set[str] | frozenset[str]',
     ) -> None:
         """Land a restored *value* into ``user_ns`` -- in place for an
-        estimator-fit receiver (CAS-138), else a plain rebind.
+        estimator-fit receiver, else a plain rebind.
 
         An in-place transfer mutates the EXISTING receiver object so every alias
         (``backup = clf``) observes the restored (fitted) state, matching what
@@ -354,7 +354,7 @@ class StatementRestorer:
         if rich_outputs:
             # Imported lazily so `import cash` works without IPython, which is
             # an optional ([notebook] extra) dependency — see the module
-            # docstring (CAS-129).  Deliberately NOT wrapped in a try/except
+            # docstring.  Deliberately NOT wrapped in a try/except
             # no-op: a notebook user replaying rich output expects it to
             # actually render, so failing loudly beats silently dropping it.
             # Guarded by `if rich_outputs` so the common no-rich-output restore

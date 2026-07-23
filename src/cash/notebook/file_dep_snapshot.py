@@ -18,11 +18,11 @@ was formed (ADR-011) so callers outside the statement subsystem don't end up
 reaching into ``cash.notebook.statement.freshness`` for what is really a
 pure utility.
 
-**Content-hash freshness (CAS-98, CAS-10).** ``(mtime, size)`` alone is an
+**Content-hash freshness.** ``(mtime, size)`` alone is an
 ambiguous freshness signal and fails two opposite ways: a touch-only change
 (identical content + size, only the mtime bumped) spuriously invalidates
-(CAS-98), and a same-size edit under a mtime the coarse check can't tell apart
-(sub-resolution / same-second write) is missed (CAS-10). We therefore record a
+, and a same-size edit under a mtime the coarse check can't tell apart
+(sub-resolution / same-second write) is missed. We therefore record a
 content hash at snapshot time and treat CONTENT as authoritative whenever the
 size matches: the cheap size check runs first (and never hashes on the
 size-differs path), and only when the size is equal do we hash to decide.
@@ -121,7 +121,7 @@ def existing_file_deps(paths: Iterable[str]) -> list[str]:
     tracker records an access *attempt*, so ``importlib.metadata``'s probes for
     optional metadata that legitimately does not exist (``entry_points.txt``,
     ``direct_url.json``, ``pythonXY.zip`` on ``sys.path``) land in it. Those are
-    already correctly ignored for freshness (CAS-185/202), but they leaked into
+    already correctly ignored for freshness, but they leaked into
     the ``%cash_provenance`` display as 100+ phantom venv paths, making a
     variable look like it depended on all of site-packages.
 
@@ -183,7 +183,7 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
         cur_hash = file_content_hash(resolved_path, st.st_size)
         if cur_hash != stored_hash:
             return False, "content"
-        # Full-hashed file: content is authoritative, mtime ignored (CAS-98).
+        # Full-hashed file: content is authoritative, mtime ignored.
         if st.st_size <= _HASH_FULL_MAX_BYTES:
             return True, None
         # Sampled file: the hash only covers head/middle/tail, so trust it only

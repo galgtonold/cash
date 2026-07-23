@@ -1,4 +1,4 @@
-"""Derivation-edge detection and lineage-bump replay (CAS-115 / CAS-89).
+"""Derivation-edge detection and lineage-bump replay.
 
 Some objects hold a *live* reference to another object that lineage tracking
 never models:

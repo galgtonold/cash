@@ -875,7 +875,7 @@ class PurityAnalyzer:
             # served a stale result: ``fn = helper; fn(x)``, ``_apply(helper,
             # x)``, storing a function in a local then calling it. Any read name
             # that resolves to a user FUNCTION is a source dependency; walk it
-            # too (CAS-236). Restricted to functions/methods so modules,
+            # too. Restricted to functions/methods so modules,
             # classes, and arbitrary attribute reads are not folded in, and the
             # existing user-code / purity / cached-node filters still apply. The
             # direction is safe: at worst it over-invalidates (a referenced-but-

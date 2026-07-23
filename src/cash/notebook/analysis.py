@@ -383,7 +383,7 @@ class CodeAnalyzer:
 
     @staticmethod
     def opaque_identity(func: Callable) -> str:
-        """Return a stable identity string for an OPAQUE callable (CAS-113).
+        """Return a stable identity string for an OPAQUE callable.
 
         Builtins, C-extension functions, ufuncs, ``functools.partial`` objects,
         and other callables without retrievable source/``__code__`` cannot be
@@ -411,7 +411,7 @@ class CodeAnalyzer:
         Last resort: for OPAQUE callables (builtins, C extensions, ufuncs,
         ``functools.partial``) that have neither retrievable source nor a usable
         ``__code__``, hash a stable identity string instead of raising, so they
-        can be cached without crashing (CAS-113).
+        can be cached without crashing.
         """
         try:
             source = inspect.getsource(func)
@@ -437,7 +437,7 @@ class CodeAnalyzer:
                 logger.debug("[ANALYSIS] Failed to compute bytecode hash for function: %s", exc)
 
         # Opaque callable (builtin / C-extension / ufunc / partial): key on a
-        # stable identity rather than crashing (CAS-113).
+        # stable identity rather than crashing.
         identity = CodeAnalyzer.opaque_identity(func)
         return hashlib.sha256(f"__cash_opaque__:{identity}".encode('utf-8')).hexdigest()
 
@@ -460,7 +460,7 @@ class CodeAnalyzer:
 
         # An opaque callable (builtin / C-extension / ufunc / partial) may have
         # source available via ``__wrapped__`` yet lack ``__globals__``; without
-        # it, names can't be resolved, so skip dependency analysis (CAS-113).
+        # it, names can't be resolved, so skip dependency analysis.
         globals_dict = getattr(func, '__globals__', None)
         if globals_dict is None:
             return set()
@@ -503,7 +503,7 @@ class CodeAnalyzer:
         (``%time`` / ``!ls`` at the *start* of a statement) from a ``%`` or
         ``!`` that merely begins a *continuation* line of a multi-line
         statement (``print("...%.4f"\\n      % (a, b))``) — the latter is
-        ordinary Python and must not be deleted (CAS-163).
+        ordinary Python and must not be deleted.
         """
         lines = code.split('\n')
         flags: list[bool] = []
@@ -594,12 +594,12 @@ class CodeAnalyzer:
                   % (a, b))
 
         would be mangled into unparseable code, making the simulator raise a
-        *fictional* SyntaxError that silently disables cache restore (CAS-163).
+        *fictional* SyntaxError that silently disables cache restore.
         """
         # Fast path: a cell that already parses contains no magics to strip
         # (a statement-leading ``%``/``!`` is never valid top-level Python), so
         # return it untouched and avoid any line surgery on multi-line code.
-        # Await-tolerant so an async cell takes this path too (CAS-164).
+        # Await-tolerant so an async cell takes this path too.
         try:
             CodeAnalyzer._parse_cell(code)
             return code
@@ -619,7 +619,7 @@ class CodeAnalyzer:
 
         Plain ``ast.parse`` raises ``SyntaxError`` on a module-level ``await``
         (it needs ``PyCF_ALLOW_TOP_LEVEL_AWAIT``), so a legitimate top-level-await
-        cell used to be seen as a syntax error and silently skipped (CAS-164).
+        cell used to be seen as a syntax error and silently skipped.
         This mirrors the flag IPython itself uses to compile async cells. A
         genuine syntax error still raises, so callers' error handling is
         unchanged.
@@ -643,7 +643,7 @@ class CodeAnalyzer:
         """
         if tree is None:
             clean_code = CodeAnalyzer.strip_magics(code)
-            tree = CodeAnalyzer._parse_cell(clean_code)  # tolerate top-level await (CAS-164)
+            tree = CodeAnalyzer._parse_cell(clean_code)  # tolerate top-level await
 
         visitor = _FlowVisitor()
         visitor.visit(tree)

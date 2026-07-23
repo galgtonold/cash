@@ -172,7 +172,7 @@ _WRITE_METHODS = frozenset({
     'update', 'add', 'discard',
     'to_csv', 'to_excel', 'to_parquet', 'to_json', 'to_pickle',
     'savefig', 'save',
-    'write_text', 'write_bytes',  # pathlib.Path (CAS-83)
+    'write_text', 'write_bytes',  # pathlib.Path
 })
 
 def analyze_function_purity(func: Any, user_ns: dict[str, Any] | None = None) -> bool:

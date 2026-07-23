@@ -224,7 +224,7 @@ class FileDependencyRegistry:
         # Json
         self.register('json', 'load', self._create_path_arg_handler)
 
-        # Directory listing (CAS-85): a cell that enumerates a directory and
+        # Directory listing: a cell that enumerates a directory and
         # reads the matches gets file-deps only for the files READ on the first
         # run, so a NEW matching file is invisible. Track the enumerated
         # directory itself as a dependency - adding/removing an entry bumps the
@@ -310,7 +310,7 @@ class FileDependencyRegistry:
 
     @staticmethod
     def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Track the directory a ``glob`` pattern enumerates (CAS-85)."""
+        """Track the directory a ``glob`` pattern enumerates."""
         def tracked_glob(pathname, *args, **kwargs):
             _tracker = _active_tracker.get()
             if _tracker is not None:
@@ -322,7 +322,7 @@ class FileDependencyRegistry:
 
     @staticmethod
     def _create_listdir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
-        """Track the directory passed to ``os.listdir`` / ``os.scandir`` (CAS-85)."""
+        """Track the directory passed to ``os.listdir`` / ``os.scandir``."""
         def tracked_listdir(path='.', *args, **kwargs):
             if isinstance(path, (str, bytes, os.PathLike)):
                 _tracker = _active_tracker.get()

@@ -1,4 +1,4 @@
-"""Perpetual-miss guard: stop serialising a statement that can never hit (CAS-172).
+"""Perpetual-miss guard: stop serialising a statement that can never hit.
 
 **The shape this bounds.** Five independent user-testing rounds each surfaced a
 new instance of one recurring failure: some input hashes *unstably* across runs,
@@ -94,7 +94,7 @@ GUARD_SKIP_REASON = (
     "this statement produced a different cache key and never hit, so serialising it "
     "can never pay back. Value not saved (lineage still tracked); cash keeps looking "
     f"it up and re-probes every {REPROBE_EVERY_N_RUNS} runs in case the key "
-    "stabilises (CAS-172)."
+    "stabilises."
 )
 
 

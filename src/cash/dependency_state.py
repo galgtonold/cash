@@ -109,7 +109,7 @@ class DependencyStateHasher:
         self._purity_reports = purity_reports
         self._graph = graph
         self._helper_resolver = helper_resolver
-        # Declared plain-callable deps (CAS-110): snapshot map + live resolver.
+        # Declared plain-callable deps: snapshot map + live resolver.
         # Keep the passed dict BY REFERENCE (it is empty at construction and
         # filled by later registrations) - ``or {}`` would swap in a fresh dict
         # because an empty dict is falsy, severing the shared reference.
@@ -132,7 +132,7 @@ class DependencyStateHasher:
         seeded internally and threaded through the recursion.
 
         ``own_source_override`` replaces the ROOT node's own-source
-        component (CAS-109): a wrapper must key on the function object it
+        component: a wrapper must key on the function object it
         actually executes, not on whatever the live registry currently
         holds under the shared ``module.qualname`` slot — otherwise a
         stale wrapper plants its results under a redefined function's
@@ -164,7 +164,7 @@ class DependencyStateHasher:
             )
             hashes.append(str(token))
         elif node in self._declared_dep_snapshots:
-            # A declared plain-callable dep (CAS-110): re-resolve its live
+            # A declared plain-callable dep: re-resolve its live
             # source hash so a disk edit + reload is seen; fall back to the
             # registration-time snapshot when resolution fails.
             live = (

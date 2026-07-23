@@ -36,7 +36,7 @@ _MAX_DB_BYTES = 64 * 1024 * 1024  # 64 MiB
 # ``StatementProcessor`` across a long-running session (e.g. the test suite,
 # which builds thousands of them).
 #
-# Best-effort by design (CAS-149): ``atexit`` runs on a *clean* exit, so the
+# Best-effort by design: ``atexit`` runs on a *clean* exit, so the
 # buffered analytics events survive a normal kernel shutdown. On a *hard* kill
 # (kernel crash, SIGKILL, power loss) ``atexit`` does not run and the last
 # ``< _flush_threshold`` buffered events are lost. That is acceptable because
@@ -85,7 +85,7 @@ class AnalyticsManager:
         self._flush_threshold = 50  # Flush every 50 events
         # Set True only if the db cannot be created even after a recreate
         # (read-only dir, disk full). Analytics then no-ops for the session
-        # rather than retrying a doomed connect on every event (CAS-203).
+        # rather than retrying a doomed connect on every event.
         self._disabled = False
         self._init_db()
         # Register for the clean-shutdown drain (see ``_live_managers`` above).
@@ -102,7 +102,7 @@ class AnalyticsManager:
     def _init_db(self) -> None:
         """Create the schema, self-healing an unreadable or runaway db.
 
-        Analytics is best-effort observability (CAS-149), never correctness, so
+        Analytics is best-effort observability, never correctness, so
         a pre-existing db that cannot be opened — corrupt pages, a truncated
         write, a non-sqlite or oversized file — must NEVER surface a raw sqlite
         error to the user on every ``import cash`` (CAS-203, which saw a 2.8 GB
@@ -145,7 +145,7 @@ class AnalyticsManager:
         The connection is CLOSED even on failure (``contextlib.closing``): a
         ``sqlite3.connect`` context manager only manages the transaction, not the
         handle, and on Windows a still-open handle to the corrupt file would
-        block :meth:`_init_db`'s ``unlink`` recovery (CAS-203)."""
+        block :meth:`_init_db`'s ``unlink`` recovery."""
         with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             cursor = conn.cursor()
             cursor.execute("""
@@ -187,7 +187,7 @@ class AnalyticsManager:
             code_hash: Optional hash of the code executed
         """
         if self._disabled:
-            # No writable db this session (CAS-203); drop telemetry instead of
+            # No writable db this session; drop telemetry instead of
             # growing an in-memory buffer that can never flush.
             return
         self._event_buffer.append((

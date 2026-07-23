@@ -98,7 +98,7 @@ def contains_top_level_await(node: ast.AST) -> bool:
     ``ast.walk`` is scope-blind, so this recurses manually and prunes function
     bodies. Used to detect a control structure whose body awaits (``for x in xs:
     r = await fetch(x)``) — the one shape the per-iteration / sync single-unit
-    path cannot compile (CAS-198), which must instead run as ONE awaited unit.
+    path cannot compile, which must instead run as ONE awaited unit.
     """
     for child in ast.iter_child_nodes(node):
         if isinstance(child, (ast.Await, ast.AsyncFor, ast.AsyncWith)):
@@ -169,7 +169,7 @@ def build_iteration_context(
             except TypeError:
                 # repr() TRUNCATES large numpy/pandas objects, so two
                 # iterations differing outside the repr window collided
-                # into one context hash (CAS-86). Hash the full content.
+                # into one context hash. Hash the full content.
                 from cash.notebook.object_hashing import compute_hash_full
                 context[name] = compute_hash_full(value)
 
@@ -243,14 +243,14 @@ class ControlStructureProcessor:
             raw_cell: The cell's original source. Required to honour ``@cash:``
                 directives inside the structure — ``ast.unparse`` drops comments,
                 so a body statement's directive can only be recovered from the
-                original text (CAS-135). ``None`` disables annotation handling,
+                original text. ``None`` disables annotation handling,
                 which is the pre-CAS-135 behaviour and keeps direct callers
                 (tests constructing handlers with mock deps) working unchanged.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
             prev_node: The immediately-preceding top-level statement in the same
                 cell, or ``None``. Used ONLY to detect the accumulator-loop fast
-                path (CAS-145), which needs the ``out = []`` seed that sits right
+                path, which needs the ``out = []`` seed that sits right
                 before the loop. Additive and default-``None`` so nested / direct
                 callers (which have no notion of a preceding sibling) are
                 unchanged.
@@ -266,7 +266,7 @@ class ControlStructureProcessor:
                 return self._execute_as_single_unit(
                     node, ttl, silent, raw_cell, inherited_annotation,
                 )
-            # Accumulator-loop fast path (CAS-145): a pure ``out = []`` +
+            # Accumulator-loop fast path: a pure ``out = []`` +
             # ``for e in it: out.append(f(e))`` is byte-identical to a
             # comprehension yet is refused caching today because the append reads
             # as an in-place mutation. When the narrow shape matches, route the
@@ -329,7 +329,7 @@ class ControlStructureProcessor:
         The unit is ONE cache entry, so a ``@cash:`` directive anywhere inside
         it scopes to the whole thing — there is no finer entry for it to attach
         to. That is why this resolves the node's whole range rather than a
-        per-statement annotation (CAS-135).
+        per-statement annotation.
 
         *force_outputs* names extra variables the statement processor must
         capture/restore and treat as expected writes — the accumulator + leaked
@@ -372,11 +372,11 @@ class ControlStructureProcessor:
 
         The per-iteration and sync single-unit paths compile body statements
         with an unflagged ``compile()``, which raises ``SyntaxError: 'await'
-        outside function`` (CAS-198).  This routes the whole structure through
+        outside function``.  This routes the whole structure through
         :meth:`StatementProcessor.process_statement_async`, whose compile carries
         ``PyCF_ALLOW_TOP_LEVEL_AWAIT`` and awaits the resulting coroutine on
         IPython's live loop — the same primitive the regular top-level-await
-        statement path already uses (CAS-164/116).
+        statement path already uses.
 
         A whole-structure unit (never per-iteration) is the correct granularity
         here: an ``await`` is I/O, so per-iteration caching is inappropriate

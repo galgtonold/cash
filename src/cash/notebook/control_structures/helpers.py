@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Annotation resolution (CAS-135)
+# Annotation resolution
 # ---------------------------------------------------------------------------
 #
 # ``@cash:`` directives were computed in ``cell_executor`` for each TOP-LEVEL
@@ -152,7 +152,7 @@ def extract_cash_frame_lineno(exc: Exception) -> int | None:
 
     Returns None if no cash frame is found. Matches on the ``<cash`` prefix, not
     a bare ``<cash>``: each statement now compiles under its own
-    ``<cash-{digest}>`` name so its source resolves in linecache (CAS-201).
+    ``<cash-{digest}>`` name so its source resolves in linecache.
     """
     tb = getattr(exc, '__traceback__', None)
     while tb is not None:

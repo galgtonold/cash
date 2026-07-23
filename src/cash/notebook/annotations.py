@@ -123,13 +123,13 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
     * ``no-cache`` is a SAFETY opt-out. A user writes it because caching this
       cell would be *incorrect* — timestamps, side effects, live values. Applying
       it to only the first statement silently cached statements 2..n of a cell
-      explicitly marked do-not-cache (CAS-189), producing exactly the stale
+      explicitly marked do-not-cache, producing exactly the stale
       values the user was trying to prevent. Over-applying it merely costs speed,
       so it fails safe cell-wide.
     * ``persist`` / ``ttl`` are PERFORMANCE hints, and over-applying them is the
       expensive direction: a header ``persist`` spread across a loop that grows a
       frame snapshots every intermediate width — measured at 13x cache
-      amplification (CAS-160). They stay statement-scoped, which is also how a
+      amplification. They stay statement-scoped, which is also how a
       header ``persist`` above a single statement already reads.
 
     Only the header block counts: scanning stops at the first line of real code,
@@ -209,7 +209,7 @@ def extract_annotations_for_statements(
 
     annotations = {}
     source_lines = full_source.splitlines()
-    # Same cell-level layering as get_statement_annotations (CAS-189) — these
+    # Same cell-level layering as get_statement_annotations — these
     # two must agree, or a directive would apply on one lookup path and not the
     # other.
     cell_level = leading_cell_annotation(source_lines)

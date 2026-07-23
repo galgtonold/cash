@@ -367,7 +367,7 @@ class MismatchClassifier:
                 logger.debug(
                     "[UPSTREAM_DEBUG]   -> '%s' is a bare estimator .fit() receiver "
                     "(self-referential CAS-138 key). Resetting lineage from %s to "
-                    "virtual %s for a stable warm-re-run cache hit (CAS-165/166).",
+                    "virtual %s for a stable warm-re-run cache hit.",
                     var_name, actual_lineage[:8], final_virtual_hash[:8],
                 )
             self._restores.record_lineage_reset(var_name=var_name, lineage_hash=final_virtual_hash)
@@ -443,7 +443,7 @@ class MismatchClassifier:
         or a walrus in the condition (``while (n := n + 1) <= 5``) — AND the live
         value carries no ``_cash_lineage_hash``. Lineage-carrying receivers
         (DataFrame / Series) are excluded — they reset correctly through the
-        value-lineage path (CAS-57) and must keep it.
+        value-lineage path and must keep it.
 
         The caller only reaches this for a var that is already both a required
         input and a current-cell output, so for a single-unit loop the var is
@@ -474,7 +474,7 @@ class MismatchClassifier:
 
     def _is_estimator_fit_selfref(self, var_name: str) -> bool:
         """True if *var_name* was last produced by a bare ``var_name.fit(...)`` on
-        a live sklearn-style estimator (CAS-165/166).
+        a live sklearn-style estimator.
 
         A bare ``clf.fit(X, y)`` is routed to CACHING with a self-referential key:
         CAS-138 adds ``clf`` to the statement's outputs (so the fit bumps its
@@ -717,7 +717,7 @@ class MismatchClassifier:
                 return False
             # Skip genuine builtins, but NOT a user variable that shadows a
             # builtin name (``sum = 10``) — such a name IS tracked in
-            # variable_lineage and must have its freshness checked (CAS-63).
+            # variable_lineage and must have its freshness checked.
             if inp in _BUILTIN_NAMES and inp not in self.variable_lineage:
                 continue
             if inp not in self.shell.user_ns:
@@ -820,7 +820,7 @@ class MismatchClassifier:
         # A user variable shadowing a builtin name (``sum = 10``) is tracked in
         # variable_lineage — fall through to the real freshness checks so its
         # producer is scheduled when stale, instead of assuming it is a builtin
-        # that is always available (CAS-63).
+        # that is always available.
         if inp in _BUILTIN_NAMES and inp not in self.variable_lineage:
             return False
         if self._check_inp_lineage_skip(inp, virtual_lineage, upstream_has_modifications, simulation_trace_codes):
@@ -994,7 +994,7 @@ class MismatchClassifier:
             # ``%reset``) removes ``x`` from ``user_ns`` but leaves
             # ``variable_lineage['x']`` behind; the old ``in self.variable_lineage``
             # short-circuit therefore hid the missing input and never scheduled the
-            # producer to rebuild it (CAS-94). ``virtual_lineage`` is already
+            # producer to rebuild it. ``virtual_lineage`` is already
             # position-scoped by the simulator (a del/%reset ABOVE the target pops
             # the name; one BELOW is never simulated), so an input that survives to
             # here yet is absent from memory must be reconstructed.

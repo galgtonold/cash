@@ -169,7 +169,7 @@ class CashConfig:
 
     Historically this defaulted to a flat 1 GiB applied to *every*
     tier, which capped the disk tier at one medium DataFrame and put
-    persist-heavy workloads into a write-and-evict treadmill (CAS-142).
+    persist-heavy workloads into a write-and-evict treadmill.
     When the file backend exceeds the resolved cap it evicts
     least-recently-accessed entries until it fits."""
 
@@ -208,15 +208,12 @@ class CashConfig:
     everything written to disk."""
 
     smart_persistence_threshold: float = 1.0
-    """Legacy compute-time threshold (seconds). **Superseded by the
-    serialization-aware cost model (CAS-141):** whether a result persists
-    past RAM is now decided by comparing its *predicted restore time*
-    against its compute time — promote when
-    ``execution_time - est_restore > min_cache_savings_pct · execution_time``
-    (a 0.1 s compute floor still applies). Bigger results are therefore
-    *more* likely to persist when they are expensive to recompute, not
-    less. Retained for backward compatibility and surfaced by
-    ``cash config``; no longer consulted by the promotion policy."""
+    """Compute-time threshold (seconds). Disk persistence is decided by the
+    serialization-aware cost model — a result is promoted past RAM when its
+    predicted restore time is enough below its compute time
+    (``execution_time - est_restore > min_cache_savings_pct · execution_time``,
+    above a 0.1 s floor) — so this value is not part of that decision. Use
+    ``persist_all=True`` (or ``%cash_persist on``) to force everything to disk."""
 
     min_execution_time_to_cache_seconds: float = 0.01
     """Hard floor (seconds). Compute under this duration is never

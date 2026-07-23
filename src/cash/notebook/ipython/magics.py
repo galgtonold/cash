@@ -40,7 +40,7 @@ from ..statement import ProcessResult, StatementProcessor
 # The SAME floor reader the cache-write decision uses. The cacheable/trivial
 # split in %cash_stats is only honest if "worth caching" means exactly what the
 # cache meant by it, so this deliberately shares the reader rather than
-# re-deriving the threshold here (CAS-177).
+# re-deriving the threshold here.
 from ..statement.processor import _config_float
 from ..upstream import UpstreamChecker
 
@@ -83,7 +83,7 @@ def new_session_stats() -> dict[str, Any]:
     resetting one cannot disagree. ``%cash_stats reset`` used to re-list the
     keys by hand, which silently left any later-added counter carrying over the
     reset -- the reset would report success while the next session inherited
-    the last one's numbers. Same rule as ``measured_compute`` (CAS-157): a
+    the last one's numbers. Same rule as ``measured_compute``: a
     reset must forget everything the stats claim to summarise.
     """
     return {
@@ -97,23 +97,23 @@ def new_session_stats() -> dict[str, Any]:
             # copied off cache metadata — i.e. how long the statement took when
             # it was FIRST computed, on a possibly colder machine. It is an
             # estimate of a counterfactual, never a measurement of this
-            # session, and it may overstate without bound (CAS-157).
+            # session, and it may overstate without bound.
             'total_time_saved': 0.0,
             # The subset of ``total_time_saved`` whose baseline this session
             # measured itself: the statement was COMPUTED here before it was
             # RESTORED here, so the recompute cost is known under today's
-            # conditions rather than assumed from the cache (CAS-157).
+            # conditions rather than assumed from the cache.
             'total_verified_saved': 0.0,
             # Cash's OWN added wall-time this session (restore + simulation +
             # hashing + badge machinery), accumulated per cell. Subtracted from
             # the gross ``total_time_saved`` to report an honest NET saving so a
             # session whose overhead outweighs its cache hits reads as a cost,
-            # not a phantom win (CAS-143).
+            # not a phantom win.
             'total_overhead': 0.0,
             # The hit rate over ALL statements is dominated by print/import
             # trivia that cash deliberately never tried to cache, so it made a
             # session where every expensive statement hit read as 14.9% —
-            # arithmetically true, practically meaningless (CAS-177). These two
+            # arithmetically true, practically meaningless. These two
             # count only statements whose compute cost cleared cash's OWN
             # caching floor (``min_execution_time_to_cache_seconds``), i.e. the
             # statements caching was ever on the table for.
@@ -138,11 +138,11 @@ class CashSession:
         self.provenance: ProvenanceTracker = ProvenanceTracker()
         self.audit: AuditLogger = AuditLogger()
         # source -> execution_time measured in THIS session. Bounded by the
-        # notebook's statement count; pure in-memory floats, no I/O (CAS-149).
+        # notebook's statement count; pure in-memory floats, no I/O.
         self.measured_compute: dict[str, float] = {}
         # decorator cache_key -> compute time measured in THIS session (a miss).
         # The @cash.cache sibling of measured_compute: it lets a later decorator
-        # HIT be credited as VERIFIED under the same CAS-157 rule (CAS-222).
+        # HIT be credited as VERIFIED under the same CAS-157 rule.
         self.measured_decorator_compute: dict[str, float] = {}
 
 
@@ -312,7 +312,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 except (KeyError, AttributeError):
                     pass
 
-        # Durability checkpoint (CAS-209). Registered on IPython's own event
+        # Durability checkpoint. Registered on IPython's own event
         # rather than inside CellExecutor: the pipeline has several exit paths
         # and a drain placed after its last phase turned out to run for only
         # one cell in three, missing precisely the cells that do the caching.
@@ -357,7 +357,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # ``functools.wraps`` sets ``__wrapped__``, which ``inspect.signature``
         # follows, so introspection sees the *original's* signature and every
         # verdict about us is identical to the verdict about the shell we
-        # replaced (CAS-134).
+        # replaced.
         self._original_run_cell = shell.run_cell
         shell.run_cell = self._signature_preserving_proxy(
             self._original_run_cell, '_execute_cell',
@@ -397,7 +397,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         these hooks to decide what to pass — ipykernel does exactly this for
         ``cell_id`` — therefore get the same answer they would have got from the
         unpatched shell, so we can never be handed an argument the real callee
-        rejects (CAS-134).
+        rejects.
 
         The handler is resolved by name **at call time** rather than captured, so
         tests (and ``%cash_benchmark``) can swap ``self._execute_cell`` out and
@@ -424,7 +424,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         # Parse optional TTL. Comment-stripped first, or `%cash_on ttl=3600  #
         # one hour` would parse "3600  # one hour" as an int, fail, and silently
-        # leave caching OFF on the `return` below (CAS-181).
+        # leave caching OFF on the `return` below.
         ttl = None
         arg = strip_inline_comment(line)
         if arg:
@@ -598,7 +598,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         """
         # A bare %cash_persist toggles, so an unparsed argument doesn't merely
         # get ignored here — it inverts the request. ``%cash_persist on  #
-        # comment`` used to turn persistence OFF if it was already on (CAS-181).
+        # comment`` used to turn persistence OFF if it was already on.
         mode = strip_inline_comment(line).lower()
         if mode in ('on', 'true', '1', 'enable'):
             self._persist_all = True
@@ -1006,7 +1006,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         unit under ``ast.PyCF_ALLOW_TOP_LEVEL_AWAIT`` and awaits the coroutine
         on IPython's live loop when the statement contains a top-level
         ``await``.  A cache *hit* returns before any coroutine is built, so an
-        identical second run skips the await entirely (CAS-116).
+        identical second run skips the await entirely.
 
         Because cash runs the statements itself, it must NOT also delegate the
         whole cell to ``_original_run_cell_async(raw_cell)`` — that would
@@ -1215,7 +1215,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # every ~50 events, on any stats query, and via an atexit hook on a
         # clean shutdown.  Forcing a SQLite connect+commit on *every* cell
         # fsync'd the DB per cell and dominated per-cell wall time (~12 ms/cell,
-        # measured), defeating the very batch buffer it was draining (CAS-149).
+        # measured), defeating the very batch buffer it was draining.
         # Trade-off: on a hard kernel kill the last < 50 buffered analytics
         # events may be lost — acceptable because analytics is best-effort
         # observability, not correctness.
@@ -1332,7 +1332,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         statements). What remains — cache restores, upstream simulation,
         hashing, badge machinery — is time cash *added*, so it is accumulated
         into ``total_overhead`` and later subtracted from the gross
-        ``total_time_saved`` to report an honest NET figure (CAS-143). This is
+        ``total_time_saved`` to report an honest NET figure. This is
         a single float subtraction per cell, no I/O — it must never
         reintroduce the per-cell fsync that CAS-149 removed.
 
@@ -1341,7 +1341,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         state the user would have had to rebuild by hand (that is the restart
         pain cash exists to absorb). Booking them as cash's overhead would make
         cash understate itself by the size of the user's own ETL on exactly the
-        sessions where it helps most — a mirror-image lie (CAS-157).
+        sessions where it helps most — a mirror-image lie.
 
         The gross saving is credited from ``saved_time``, which is a *stale*
         baseline (see ``total_time_saved``). Restores whose baseline this
@@ -1355,7 +1355,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         cell_compute_time = 0.0
         # Cash's own "too cheap to cache" floor, so the cacheable/trivial split
         # below matches the decision the cache actually made rather than a
-        # second opinion invented here (CAS-177).
+        # second opinion invented here.
         floor = _config_float(
             getattr(self._cash_instance, 'config', None),
             'min_execution_time_to_cache_seconds', 0.01,
@@ -1379,7 +1379,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 stats['total_restored_time'] += saved
                 stats['total_time_saved'] += saved
                 # ``saved`` is the cache's stale baseline, so it is NOT trusted
-                # for time (CAS-157) — it is used only to answer "was this the
+                # for time — it is used only to answer "was this the
                 # kind of statement caching was for?". A hit is a fact either
                 # way; only the denominator's membership rests on the baseline.
                 if saved >= floor:
@@ -1397,7 +1397,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # A ``@cash.cache`` HIT inside this statement saved real compute that
             # is invisible to the counting above: the value came from the
             # decorator, so the statement itself only did a fast lookup and reads
-            # as cheap COMPUTED work (CAS-222). Credit it here, from the same
+            # as cheap COMPUTED work. Credit it here, from the same
             # drained call log the badge uses. No double-count risk: a decorator
             # is only invoked when the statement EXECUTES, so a RESTORED statement
             # (whose ``saved_time`` already covers the whole compute) carries no
@@ -1412,7 +1412,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self, decorator_calls: 'list[dict[str, Any]] | None',
         stats: dict[str, Any], floor: float,
     ) -> None:
-        """Fold ``@cash.cache`` call metrics into the session totals (CAS-222).
+        """Fold ``@cash.cache`` call metrics into the session totals.
 
         Without this, a session whose expensive work sits behind the decorator —
         the docs' own recommendation for training — reported the exact inverse of

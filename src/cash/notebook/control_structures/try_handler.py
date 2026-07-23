@@ -83,7 +83,7 @@ class TryHandler:
         try:
             branch_hash = hashlib.sha256(branch_label.encode()).hexdigest()[:16]
             # A directive on the ``try`` header scopes to the whole construct and
-            # flows down into every branch within it (CAS-135).
+            # flows down into every branch within it.
             try_annotation = _helpers.resolve_header_annotation(
                 raw_cell, node, inherited_annotation,
             )

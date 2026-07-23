@@ -48,7 +48,7 @@ def build_backend_from_config(config: "CashConfig") -> CacheBackend:
 
 
 # ---------------------------------------------------------------------------
-# Cap resolution (CAS-142) — a single ``max_cache_size`` no longer caps every
+# Cap resolution — a single ``max_cache_size`` no longer caps every
 # tier at a flat 1 GiB. The disk tier scales to free disk, the RAM tier to
 # system memory; an explicit ``max_cache_size`` pins the DISK tier only, and
 # the RAM tier keeps its own modest auto cap either way.

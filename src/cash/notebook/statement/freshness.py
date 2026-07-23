@@ -131,8 +131,8 @@ class CacheFreshnessChecker:
                     logger.debug("[CACHE DEBUG] File dependency missing: %s", fpath)
                 return None
             # Content is authoritative when the size matches; a bare size/mtime
-            # check both over-invalidates on a touch (CAS-98) and misses a
-            # same-size sub-resolution edit (CAS-10). See file_dep_is_fresh.
+            # check both over-invalidates on a touch and misses a
+            # same-size sub-resolution edit. See file_dep_is_fresh.
             is_fresh, reason = file_dep_is_fresh(resolved, stored)
             if not is_fresh:
                 if reason == "unreadable":
@@ -151,7 +151,7 @@ class CacheFreshnessChecker:
 
         The producer's PERSISTED snapshot is the authority on what actually
         counts as a dependency, and it must be consulted before *fpath* is
-        judged missing (CAS-185). ``tracking_state.executed_file_deps`` is a
+        judged missing. ``tracking_state.executed_file_deps`` is a
         strict superset of that snapshot: it records every path the tracker saw
         an access *attempt* for, including reads that raised (``tracked_open``
         records before it calls through), while ``snapshot_file_deps`` silently

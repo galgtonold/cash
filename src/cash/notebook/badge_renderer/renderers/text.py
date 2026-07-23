@@ -128,7 +128,7 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
         if row.skipped_reason:
             # Shortened, not dropped: the row still says it wasn't cached and
             # why. The guard's full paragraph is emitted once per cell by
-            # ``_guard_summary_lines`` instead of once per statement (CAS-182).
+            # ``_guard_summary_lines`` instead of once per statement.
             return (f"  {tag}: {code}  ({row.time_s:.2f}s) - "
                     f"{shorten_skipped_reason(row.skipped_reason)}")
         if row.storage_tiers:
@@ -149,7 +149,7 @@ def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
 
 #: Leaf item types that render as exactly one line at their parent's level.
 #: Anything else is a *group* and gets one extra indent step when it appears
-#: inside a control body or a loop body (CAS-195).
+#: inside a control body or a loop body.
 _LEAF_ITEMS = (StatementRow, ControlGroupSingle)
 
 #: One indent step, matching the two-space lead-in ``_row_line`` already emits.
@@ -175,7 +175,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     ``StatementRow``s (``view_builder`` builds ``ControlGroup.rows`` by the
     same recursive dispatch used at the top level). Dispatch on type at every
     level; feeding a group to ``_row_line`` raised ``AttributeError``, which
-    escaped into the kernel's message handler and hung the client (CAS-195).
+    escaped into the kernel's message handler and hung the client.
     """
     pad = _INDENT * indent
     if isinstance(item, StatementRow):
@@ -237,7 +237,7 @@ def _iter_rows(item: SectionItem):
 
     Recurses through nested groups: ``ControlGroup.rows`` may hold further
     groups rather than bare ``StatementRow``s, and the callers below read
-    ``.skipped_reason`` off whatever this yields (CAS-195).
+    ``.skipped_reason`` off whatever this yields.
     """
     if isinstance(item, StatementRow):
         yield item

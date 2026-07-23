@@ -140,7 +140,7 @@ class StatementLineageBuilder:
             # are written together and cannot drift.
             tracking_state.lineage.record(var_name, output_lineage_hash, value=value)
 
-            # Derivation-alias edges (CAS-115 / CAS-89). A fresh rebind
+            # Derivation-alias edges. A fresh rebind
             # (``g = ...`` — output not also read as an input) drops the var's
             # stale edges before we re-detect; an in-place mutation
             # (``df.iloc[...] = ...`` — output IS an input) keeps them.
@@ -167,7 +167,7 @@ class StatementLineageBuilder:
 
         # After all outputs' lineages are recorded, replay derivation bumps:
         # a mutation of a base/frame bumps its live-alias derivatives
-        # (CAS-115 / CAS-89). Skip-inputs rule keeps view *creation* from
+        #. Skip-inputs rule keeps view *creation* from
         # invalidating its base. Runtime attaches the live value so the bumped
         # var's ``_cash_lineage_hash`` stays paired with its dict entry.
         bump_derived_lineages(
@@ -203,7 +203,7 @@ class StatementLineageBuilder:
         value in every kernel. That volatile hash was folded into this
         statement's OUTPUT lineage, which is an input hash for every downstream
         statement's cache key, so after a restart the whole chain re-keyed,
-        missed, recomputed, and wrote a duplicate entry (CAS-214).
+        missed, recomputed, and wrote a duplicate entry.
         """
         input_lineage_hashes: list[str] = []
         input_lineage_map: dict[str, str] = {}
@@ -217,7 +217,7 @@ class StatementLineageBuilder:
                 if is_cash_instrumentation(val):
                     # cash's own I/O shim (e.g. the patched ``open``). Its
                     # identity is per-session, and without cash it would not be
-                    # in user_ns at all (CAS-214).
+                    # in user_ns at all.
                     continue
                 if is_module_like(input_var, val, frozenset()):
                     # No tracked lineage for this module: contribute nothing,

@@ -1023,7 +1023,7 @@ def build_interactive_badge(
         or bool(m.get("random_unseeded", False))
     )
     summary_time = cell_total_time if cell_total_time is not None else total_exec
-    # Honest header saving (CAS-143): never advertise more than the cell's NET
+    # Honest header saving: never advertise more than the cell's NET
     # win. When we know the cell's wall time we subtract cash's own overhead
     # (wall time minus the user compute that ran) from the gross saving, so the
     # collapsed badge can't claim a 7s saving when the cell's own overhead ate

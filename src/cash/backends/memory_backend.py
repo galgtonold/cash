@@ -40,7 +40,7 @@ class InMemoryBackend(CacheBackend):
             check_interval: Number of 'set' operations between memory checks.
             max_entries: Maximum number of cache entries. When exceeded, LRU eviction is triggered.
                          None means unlimited entries (eviction only via memory pressure).
-            max_size_bytes: Soft byte cap for the RAM tier (CAS-142). When the tracked
+            max_size_bytes: Soft byte cap for the RAM tier. When the tracked
                          total exceeds it, least-recently-used entries are evicted down to
                          ~90% of the cap. ``None`` (default) means unbounded — eviction is
                          driven only by ``max_entries`` and psutil memory pressure, exactly

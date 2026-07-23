@@ -91,7 +91,7 @@ def compute_hash(obj: Any) -> str:
 
 
 def compute_hash_full(obj: Any) -> str:
-    """Full-content hash for cache-KEY discrimination (CAS-86).
+    """Full-content hash for cache-KEY discrimination.
 
     ``compute_hash`` SAMPLES large objects (ndarray: first 100 elements,
     DataFrame: first 5 rows, collections >200: head/tail). That is fine for
