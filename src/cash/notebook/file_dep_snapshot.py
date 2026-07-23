@@ -155,8 +155,20 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     before content hashing (no ``hash`` key) fall back to the old mtime
     tolerance so pre-existing cache entries keep working.
 
+    **Sampled-file backstop.** For files larger than ``_HASH_FULL_MAX_BYTES``
+    the content hash only covers three fixed head/middle/tail regions (see
+    :func:`file_content_hash`), so a same-size edit *outside* those regions
+    produces an identical hash and would silently pass as FRESH — serving stale
+    data. For that regime only, mtime is re-instated as an additional signal:
+    a matching sampled hash is trusted only when the mtime also matches. Any
+    real in-place edit bumps mtime, so the stale read is caught; the sole cost
+    is that merely *touching* a large file forces a (safe) spurious recompute.
+    CAS-98's "ignore mtime" reasoning holds only when the hash is authoritative,
+    i.e. for fully-hashed (<= cap) files, which keep the touch-tolerant path.
+
     ``stale_reason`` is ``None`` when fresh, else one of
-    ``'unreadable' | 'size' | 'content' | 'mtime'`` for debug attribution.
+    ``'unreadable' | 'size' | 'content' | 'mtime' | 'mtime-sampled'`` for debug
+    attribution.
     """
     stored_mtime, stored_size = split_file_dep_value(stored)
     stored_hash = stored.get("hash") if isinstance(stored, dict) else None
@@ -168,11 +180,18 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     if stored_size is not None and st.st_size != stored_size:
         return False, "size"
     if stored_hash is not None:
-        # Size matches: content is the authoritative signal (mtime ignored).
         cur_hash = file_content_hash(resolved_path, st.st_size)
-        if cur_hash == stored_hash:
+        if cur_hash != stored_hash:
+            return False, "content"
+        # Full-hashed file: content is authoritative, mtime ignored (CAS-98).
+        if st.st_size <= _HASH_FULL_MAX_BYTES:
             return True, None
-        return False, "content"
+        # Sampled file: the hash only covers head/middle/tail, so trust it only
+        # when the mtime also matches — otherwise a same-size edit outside the
+        # sampled regions would be served stale. A real edit bumps mtime.
+        if abs(st.st_mtime - stored_mtime) > 0.01:
+            return False, "mtime-sampled"
+        return True, None
     # Legacy snapshot with no content hash: fall back to the mtime tolerance.
     if abs(st.st_mtime - stored_mtime) > 0.01:
         return False, "mtime"
