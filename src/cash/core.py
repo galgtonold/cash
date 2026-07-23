@@ -565,6 +565,9 @@ class Cash:
         # (module_global, attribute) read pairs per code object; see
         # _read_module_attr_pairs.
         self._module_attr_cache: dict = {}
+        # (first_param, self_attrs, uses_super) per code object; see
+        # _analyze_method_self_deps.
+        self._method_self_dep_cache: dict = {}
         # func_name -> (function the signature was read from, inspect.Signature
         # or None if introspection failed). Used to bind call arguments to a
         # canonical form so that logically-identical calls written differently
@@ -704,6 +707,128 @@ class Cash:
             or repr(func)
         )
         return f"{module}.{qualname}"
+
+    def _analyze_method_self_deps(self, func: Callable) -> tuple[str | None, tuple[str, ...], bool]:
+        """Attributes a method reads on its first parameter, and whether it calls super().
+
+        A ``@cash.cache`` method reaching class-level code -- ``self.helper()``,
+        ``self.RATE``, ``super().m()`` -- had none of that in its key, because at
+        decoration time the class does not exist yet and the analyzer sees only
+        an attribute access on a parameter. Recorded here (source-derived,
+        cached per code object) and resolved against the real class at call time
+        by :meth:`_fold_method_class_deps`.
+
+        Returns ``(first_param_name, attr_names_accessed_on_it, uses_super)``.
+        ``first_param_name`` is ``None`` when there is no source / no parameters.
+        """
+        code = getattr(func, "__code__", None)
+        if code is not None:
+            cached = self._method_self_dep_cache.get(code)
+            if cached is not None:
+                return cached
+        result: tuple[str | None, tuple[str, ...], bool] = (None, (), False)
+        try:
+            src = textwrap.dedent(inspect.getsource(func))
+            tree = ast.parse(src)
+        except SOURCE_RETRIEVAL_ERRORS + (SyntaxError,):
+            if code is not None and len(self._method_self_dep_cache) < 4096:
+                self._method_self_dep_cache[code] = result
+            return result
+        func_def = None
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                func_def = node
+                break
+        if func_def is None or not func_def.args.args:
+            if code is not None and len(self._method_self_dep_cache) < 4096:
+                self._method_self_dep_cache[code] = result
+            return result
+        self_name = func_def.args.args[0].arg
+        attrs: set[str] = set()
+        uses_super = False
+        for node in ast.walk(func_def):
+            # ``self.<attr>`` in any position (read or call receiver).
+            if (isinstance(node, ast.Attribute)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id == self_name):
+                attrs.add(node.attr)
+            # ``super()`` / ``super(...)`` anywhere.
+            if isinstance(node, ast.Call):
+                f = node.func
+                if isinstance(f, ast.Name) and f.id == "super":
+                    uses_super = True
+                elif (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Call)
+                      and isinstance(f.value.func, ast.Name) and f.value.func.id == "super"):
+                    uses_super = True
+        result = (self_name, tuple(sorted(attrs)), uses_super)
+        if code is not None and len(self._method_self_dep_cache) < 4096:
+            self._method_self_dep_cache[code] = result
+        return result
+
+    def _fold_method_class_deps(self, func: Callable, args: tuple, state_hash: str) -> str:
+        """Fold class-level code a cached method reaches into its key (CAS-237).
+
+        At call time the real class IS known (``args[0]`` is the instance, or the
+        class for a ``classmethod``), so ``self.helper`` resolves to
+        ``type(self).helper`` and its source can be folded; ``self.RATE`` folds
+        the class constant's value; ``super()`` folds the user base classes.
+
+        Only CLASS-level members are folded. An instance attribute (in
+        ``self.__dict__``) is already covered by hashing ``self`` itself, so it
+        is skipped here -- ``getattr(class, attr)`` simply misses it.
+        """
+        self_name, attrs, uses_super = self._analyze_method_self_deps(func)
+        if self_name is None or (not attrs and not uses_super):
+            return state_hash
+        if not args:
+            return state_hash
+        owner = args[0]
+        # Resolve the class this method was called against, and confirm ``owner``
+        # really is its ``self``/``cls`` (guard against a plain function whose
+        # first parameter merely happens to be named ``self``). ``owner`` is the
+        # class itself for a classmethod, else an instance.
+        owner_class = owner if isinstance(owner, type) else type(owner)
+        try:
+            raw = inspect.getattr_static(owner_class, getattr(func, "__name__", ""))
+        except (AttributeError, Exception):  # noqa: BLE001 - never break a call
+            return state_hash
+        target = raw.__func__ if isinstance(raw, (classmethod, staticmethod)) else raw
+        target = getattr(target, "__wrapped__", target)
+        if target is not func:
+            # Not this class's method (unbound call, or a look-alike param).
+            return state_hash
+
+        parts: list[str] = []
+        for attr in attrs:
+            try:
+                member = inspect.getattr_static(owner_class, attr)
+            except (AttributeError, Exception):  # noqa: BLE001 - never break a call
+                continue  # instance-only attr (already in self's hash) or unresolved
+            if isinstance(member, (staticmethod, classmethod)):
+                member = member.__func__
+            if inspect.isfunction(member) or inspect.ismethod(member):
+                try:
+                    parts.append(f"m:{attr}:{self._hash_callable_source(member)}")
+                except (OSError, TypeError, ValueError):
+                    continue
+            elif not isinstance(member, (types.ModuleType, type)) and not callable(member):
+                # A class-level DATA attribute (a constant). Fold its value.
+                try:
+                    parts.append(f"c:{attr}:{self._hash_arg_payload((member,), {})}")
+                except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                    continue
+        if uses_super:
+            for base in owner_class.__mro__[1:]:
+                if base is object:
+                    continue
+                try:
+                    parts.append(f"b:{base.__qualname__}:{self._hash_callable_source(base)}")
+                except (OSError, TypeError, ValueError):
+                    continue
+        if not parts:
+            return state_hash
+        payload = ":".join(sorted(parts))
+        return hashlib.sha256(f"{state_hash}:selfdeps:{payload}".encode('utf-8')).hexdigest()
 
     @staticmethod
     def _hash_callable_source(fn: Callable) -> str:
@@ -1143,6 +1268,7 @@ class Cash:
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
+            current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
