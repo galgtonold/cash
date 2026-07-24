@@ -52,8 +52,16 @@ def _write_main(tmp_path, body):
 
 
 def _run(tmp_path):
+    # ``-B`` (no bytecode) is load-bearing for determinism, not a speed choice.
+    # These tests rewrite ``conf.py`` with SAME-SIZE edits (``RATE = 2.0`` ->
+    # ``3.0`` -> ``7.0``) and immediately re-run. CPython's .pyc invalidation is
+    # (mtime, size)-based, so a same-size rewrite landing within the filesystem's
+    # mtime resolution leaves a STALE ``conf`` .pyc — the next process imports the
+    # OLD constant, cash faithfully caches what Python loaded, and the assertion
+    # sees a stale hit. Observed as an intermittent CI failure across OS/versions.
+    # ``-B`` writes no .pyc, so ``conf.py`` is always compiled fresh from source.
     cp = subprocess.run(
-        [sys.executable, "main.py"], cwd=str(tmp_path),
+        [sys.executable, "-B", "main.py"], cwd=str(tmp_path),
         capture_output=True, text=True,
     )
     assert cp.returncode == 0, "script failed:\n" + cp.stdout + "\n" + cp.stderr
