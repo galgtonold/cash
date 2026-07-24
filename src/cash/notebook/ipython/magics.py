@@ -1501,7 +1501,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         Delegates to :func:`badge_renderer.print_text_badge`.
         """
-        _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
+        # As with the HTML badge: a failure to render this diagnostic summary
+        # must never abort the cell or swallow the user's output.
+        try:
+            _badge.print_text_badge(metrics_list, cell_total_time=cell_total_time)
+        except Exception as e:  # noqa: BLE001 — the badge is never worth breaking a cell
+            if self._debug:
+                import traceback
+                print(f"[BADGE RENDER ERROR] {e}")
+                traceback.print_exc()
 
     def _get_bug_report_context(self) -> dict:
         """Collect runtime environment info for the pre-filled bug report URL."""
@@ -1569,22 +1577,29 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Delegates HTML generation to :func:`badge_renderer.render_interactive_badge`
         and handles the IPython display / publish lifecycle.
         """
-        html = _badge.render_interactive_badge(
-            metrics_list=metrics_list,
-            badge_mode=self._badge_mode,
-            status=status,
-            current_step=current_step,
-            total_steps=total_steps,
-            current_code=current_code,
-            cell_total_time=cell_total_time,
-            timing_breakdown=timing_breakdown,
-            bug_report_context=self._get_bug_report_context(),
-            configured_tiers=self._configured_tier_labels(),
-        )
-        if not html:
-            return
-
+        # The badge is a diagnostic overlay drawn AROUND the user's cell — it is
+        # rendered before each statement runs (see CellExecutor) and again at the
+        # end. So a failure to BUILD or DISPLAY it must never propagate: if it
+        # did, it would abort the statement loop before the user's code ran and
+        # swallow the cell's output entirely. Degrade to "no badge" instead.
+        # (A broken renderer once shipped that raised at import on Python 3.11,
+        # which is exactly how this manifested: every cell went blank.)
         try:
+            html = _badge.render_interactive_badge(
+                metrics_list=metrics_list,
+                badge_mode=self._badge_mode,
+                status=status,
+                current_step=current_step,
+                total_steps=total_steps,
+                current_code=current_code,
+                cell_total_time=cell_total_time,
+                timing_breakdown=timing_breakdown,
+                bug_report_context=self._get_bug_report_context(),
+                configured_tiers=self._configured_tier_labels(),
+            )
+            if not html:
+                return
+
             if _from_thread and display_id:
                 # From a background thread, use publish_display_data directly
                 # with update=True to send an ``update_display_data`` message.
@@ -1599,9 +1614,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:
                 display(HTML(html))
-        except (TypeError, ValueError, AttributeError, OSError) as e:
+        except Exception as e:  # noqa: BLE001 — intentionally broad; see comment above
             if self._debug:
+                import traceback
                 print(f"[BADGE RENDER ERROR] {e}")
+                traceback.print_exc()
 
     @staticmethod
     def _cash_parse_ttl(line: str) -> int | None:
