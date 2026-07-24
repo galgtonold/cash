@@ -338,8 +338,11 @@ Prefer plain final versions over pre-release suffixes. `pip install cash-lib`
 ignores pre-releases unless the user passes `--pre`, so a `bN`/`rcN` release is
 invisible to most people — that is a deliberate choice, not a default.
 
-### 2. Auto-generate the CHANGELOG entry from `git log`
-**Do not write the changelog by hand.** Derive it from commits since the previous tag.
+### 2. Write the CHANGELOG entry FROM the `git log` (curate, don't transcribe)
+
+The `git log` is the **source of truth, not the output**. Read the whole range,
+then write release notes a user would actually want — do **not** mechanically
+emit one line per commit.
 
 ```bash
 PREV=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
@@ -347,7 +350,21 @@ RANGE=${PREV:+$PREV..HEAD}
 git log --no-merges --pretty=format:"%h %s" $RANGE
 ```
 
-Then group the commits by their Conventional-Commits prefix into Keep-a-Changelog sections:
+- **Ground every entry in the log.** If a commit's subject doesn't make the
+  user-facing effect clear, read its diff. Never describe a change that isn't in
+  the range and never invent one — anchoring to the log is the whole point, and
+  it is what keeps the notes honest. (This is what "don't write it by hand" always
+  meant: don't write from memory — write from the log.)
+- **Synthesize, don't transcribe.** A single change that landed as five commits
+  (implementation + three follow-up fixes + a test) is **one** entry. Group
+  related work by theme, not by commit boundary.
+- **Omit internal churn.** Test-only, CI, refactor and build-plumbing commits
+  with no user-visible effect don't belong in the notes.
+- **Lead with impact.** Say what changed for the user and *why* it matters, in
+  plain language — not the commit subject.
+
+Sort the surviving entries into Keep-a-Changelog sections. Use the commit
+prefixes as a **hint**, not a rule:
 
 | Commit prefix | CHANGELOG section |
 |---|---|
@@ -358,9 +375,7 @@ Then group the commits by their Conventional-Commits prefix into Keep-a-Changelo
 | `test:`, `ci:`, `chore:` (no user-visible impact) | **Omit** unless they materially change behaviour |
 | `docs:` | Mention only if user-facing docs changed |
 
-Rewrite each line so it reads as a user-facing change, not a commit subject. Strip the prefix, expand abbreviations, write in past tense or imperative as is consistent with the rest of the file. Add a *why* clause when the commit subject doesn't explain it.
-
-Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, above `## [0.1.0]`. Leave the *Pre-release development history* block and everything under it untouched — those entries are a frozen record, not a running log.
+Insert the new section at the top of `CHANGELOG.md` under `## [X.Y.Z] - YYYY-MM-DD`, above `## [0.1.0]`. Leave the *Pre-release development history* block and everything under it untouched — those entries are a frozen record, not a running log. **The user reviews the entry before it's committed.**
 
 ### 3. Bump the version
 Edit the single `__version__ = "..."` line in `src/cash/__init__.py`. That is the **single source of truth** — `pyproject.toml` declares `dynamic = ["version"]` and hatchling reads it from there at build time (`[tool.hatch.version]`), so the wheel metadata, `cash.__version__`, and `cash version` can never disagree. Do **not** add a `version =` line back to `pyproject.toml`.
