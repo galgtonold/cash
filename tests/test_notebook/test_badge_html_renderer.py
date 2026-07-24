@@ -198,8 +198,10 @@ def test_overhead_renders_as_single_collapsed_row() -> None:
     # Lowercase 'overhead' label, no shouting OVERHEAD banner.
     assert "overhead</span>" in body
     assert "OVERHEAD" not in body
-    # Sub-category labels inline, self-describing (not "init"/"progress").
-    assert "upstream check" in body and "badge setup" in body
+    # Sub-category labels inline as short single words, each with a hover
+    # tooltip carrying the full description.
+    assert "upstream" in body and "badge" in body
+    assert 'title="re-checking and re-restoring upstream cells"' in body
     # No legacy decorative emojis in the rendered body.
     for icon in ("🏷", "📊", "↻", "⚙"):
         assert icon not in body, f"unexpected legacy emoji in overhead: {icon}"

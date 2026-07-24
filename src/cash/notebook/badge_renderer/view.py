@@ -226,10 +226,16 @@ class DecoratorCallGroup:
 
 @dataclass(frozen=True)
 class OverheadEntry:
-    """One line of the overhead breakdown subsection."""
+    """One line of the overhead breakdown subsection.
+
+    ``label`` is kept short so several parts fit on the single collapsed
+    overhead row without ellipsis-clipping; ``tooltip`` carries the full
+    description for a hover ``title`` in renderers that support it.
+    """
 
     label: str
     time_s: float
+    tooltip: str = ""
 
 
 @dataclass(frozen=True)

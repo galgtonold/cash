@@ -1817,15 +1817,17 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
 def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
     """Render the whole overhead breakdown as a single dim row.
 
-    Up to five sub-categories used to render as separate near-zero rows,
-    which dominated the badge visually for no information gain. Now:
-    one row, with an inline ``upstream check 0.05s · cache write 0.06s ·
-    other 0.92s`` breakdown in the code cell, and the total in the time chip.
+    The sub-categories used to render as separate near-zero rows, which
+    dominated the badge visually for no information gain. Now: one row, with an
+    inline ``upstream 0.05s · cache 0.06s · badge 0.03s · other 0.92s``
+    breakdown in the code cell (each part carries a hover tooltip with the full
+    description), and the total in the time chip.
     """
     if not ob.entries:
         return ""
     parts = " · ".join(
-        f'<span class="c3-ovh-part">{_esc(e.label)}'
+        f'<span class="c3-ovh-part"'
+        f'{f" title=\"{_esc(e.tooltip)}\"" if e.tooltip else ""}>{_esc(e.label)}'
         f'&nbsp;<span class="c3-ovh-time">{e.time_s:.3f}s</span></span>'
         for e in ob.entries
     )

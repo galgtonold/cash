@@ -865,11 +865,21 @@ def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup
 # Overhead translation
 # ---------------------------------------------------------------------------
 
+# Labels stay short (one word) so up to four parts fit on the single collapsed
+# overhead row without the cell's ellipsis clipping the rightmost one; the full
+# meaning rides along as a hover tooltip. ``badge`` merges the display's setup
+# and progress-render costs — one number for "what the badge itself cost".
 _OVERHEAD_LABELS = {
-    "upstream_check": "upstream check",
-    "badge_init": "badge setup",
-    "badge_progress": "badge render",
-    "cache_write": "cache write",
+    "upstream_check": "upstream",
+    "cache_write": "cache",
+    "badge": "badge",
+    "other": "other",
+}
+_OVERHEAD_TOOLTIPS = {
+    "upstream_check": "re-checking and re-restoring upstream cells",
+    "cache_write": "hashing inputs and serialising results into the cache",
+    "badge": "building and updating Cash's badge display",
+    "other": "cell time not attributed to a category above",
 }
 
 def _overhead_section(
@@ -901,19 +911,23 @@ def _overhead_section(
         0.0,
         sum(float(m.get("total_time", 0.0)) for m in metrics) - statements_time,
     )
-    other = overhead - (badge_init + upstream_check + badge_progress + cache_write)
+    # The badge's own setup + progress-render costs read as one "badge" number.
+    badge = badge_init + badge_progress
+    other = overhead - (badge + upstream_check + cache_write)
 
     entries: list[OverheadEntry] = []
     for key, value in (
         ("upstream_check", upstream_check),
-        ("badge_init", badge_init),
-        ("badge_progress", badge_progress),
         ("cache_write", cache_write),
+        ("badge", badge),
+        ("other", other),
     ):
         if value > MIN_TIME_DISPLAY_MS:
-            entries.append(OverheadEntry(label=_OVERHEAD_LABELS[key], time_s=value))
-    if other > MIN_TIME_DISPLAY_MS:
-        entries.append(OverheadEntry(label="other", time_s=other))
+            entries.append(OverheadEntry(
+                label=_OVERHEAD_LABELS[key],
+                time_s=value,
+                tooltip=_OVERHEAD_TOOLTIPS[key],
+            ))
     if not entries:
         return None
     return Section(

@@ -326,11 +326,13 @@ def test_overhead_section_only_when_nontrivial() -> None:
     overhead_section = next(s for s in badge.sections if s.kind is SectionKind.OVERHEAD)
     breakdown = overhead_section.items[0]
     assert isinstance(breakdown, OverheadBreakdown)
-    # Labels are short, lowercase, emoji-free in the v3 collapsed layout, and
-    # self-describing (not cryptic abbreviations like "init"/"progress").
+    # Labels are short single words (they share one collapsed row and must not
+    # ellipsis-clip); the full meaning rides along as a hover tooltip.
     labels = {e.label for e in breakdown.entries}
-    assert "badge setup" in labels
-    assert "upstream check" in labels
+    assert "badge" in labels          # merges badge setup + progress render
+    assert "upstream" in labels
+    upstream = next(e for e in breakdown.entries if e.label == "upstream")
+    assert "upstream" in upstream.tooltip.lower()
 
 
 def test_overhead_surfaces_cache_write_cost() -> None:
@@ -356,9 +358,10 @@ def test_overhead_surfaces_cache_write_cost() -> None:
         s for s in badge.sections if s.kind is SectionKind.OVERHEAD
     ).items[0]
     assert isinstance(breakdown, OverheadBreakdown)
-    entry = next((e for e in breakdown.entries if e.label == "cache write"), None)
+    entry = next((e for e in breakdown.entries if e.label == "cache"), None)
     assert entry is not None, [e.label for e in breakdown.entries]
     assert entry.time_s == pytest.approx(0.10, abs=0.005)
+    assert "serialis" in entry.tooltip  # tooltip explains what "cache" means
 
 
 # ---------------------------------------------------------------------------
