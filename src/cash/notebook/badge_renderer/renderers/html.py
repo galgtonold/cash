@@ -1817,10 +1817,10 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
 def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
     """Render the whole overhead breakdown as a single dim row.
 
-    Up to four sub-categories used to render as four near-zero rows,
+    Up to five sub-categories used to render as separate near-zero rows,
     which dominated the badge visually for no information gain. Now:
-    one row, with an inline ``upstream 0.05s · init 0.02s · other 0.92s``
-    breakdown in the code cell, and the total in the time chip.
+    one row, with an inline ``upstream check 0.05s · cache write 0.06s ·
+    other 0.92s`` breakdown in the code cell, and the total in the time chip.
     """
     if not ob.entries:
         return ""

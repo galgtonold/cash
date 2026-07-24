@@ -326,10 +326,39 @@ def test_overhead_section_only_when_nontrivial() -> None:
     overhead_section = next(s for s in badge.sections if s.kind is SectionKind.OVERHEAD)
     breakdown = overhead_section.items[0]
     assert isinstance(breakdown, OverheadBreakdown)
-    # Labels are short, lowercase, emoji-free in the v3 collapsed layout.
+    # Labels are short, lowercase, emoji-free in the v3 collapsed layout, and
+    # self-describing (not cryptic abbreviations like "init"/"progress").
     labels = {e.label for e in breakdown.entries}
-    assert "init" in labels
-    assert "upstream" in labels
+    assert "badge setup" in labels
+    assert "upstream check" in labels
+
+
+def test_overhead_surfaces_cache_write_cost() -> None:
+    """cash's serialise-into-cache cost gets its own labelled line, not lumped
+    into "other".
+
+    A COMPUTED row shows only the compute (``execution_time``); the gap up to
+    ``total_time`` is cash hashing + serialising the result. That gap is exactly
+    the "cache write" line — here 0.10s of serialisation on a 0.04s compute.
+    """
+    metrics = [{
+        "code": "df = make_frame()",
+        "status": str(CacheStatus.COMPUTED),
+        "execution_time": 0.04,
+        "total_time": 0.14,   # 0.10s of that is serialise-into-cache
+    }]
+    badge = build_interactive_badge(
+        metrics,
+        timing_breakdown={"badge_init": 0.01},
+        cell_total_time=0.15,
+    )
+    breakdown = next(
+        s for s in badge.sections if s.kind is SectionKind.OVERHEAD
+    ).items[0]
+    assert isinstance(breakdown, OverheadBreakdown)
+    entry = next((e for e in breakdown.entries if e.label == "cache write"), None)
+    assert entry is not None, [e.label for e in breakdown.entries]
+    assert entry.time_s == pytest.approx(0.10, abs=0.005)
 
 
 # ---------------------------------------------------------------------------

@@ -73,8 +73,8 @@ The next pages explain the shared foundation first, then each path's specifics. 
     and a per-statement rather than per-cell overhead — a trade Cash makes
     deliberately, because real notebooks pile several operations into one cell.
     You do not have to take the trade on faith: the badge breaks the cell's
-    wall time down into Cash's own overhead (badge init, upstream check, and the
-    rest) versus the statements themselves — see
+    wall time down into Cash's own overhead (upstream check, cache write, badge
+    setup, and the rest) versus the statements themselves — see
     [seeing what Cash did](inspecting.md).
 
 ## Where to go next

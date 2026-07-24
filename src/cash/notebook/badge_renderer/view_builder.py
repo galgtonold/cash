@@ -866,9 +866,10 @@ def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup
 # ---------------------------------------------------------------------------
 
 _OVERHEAD_LABELS = {
-    "upstream_check": "upstream",
-    "badge_init": "init",
-    "badge_progress": "progress",
+    "upstream_check": "upstream check",
+    "badge_init": "badge setup",
+    "badge_progress": "badge render",
+    "cache_write": "cache write",
 }
 
 def _overhead_section(
@@ -889,13 +890,25 @@ def _overhead_section(
     upstream_check = float(timing_breakdown.get("upstream_check", 0.0))
     badge_init = float(timing_breakdown.get("badge_init", 0.0))
     badge_progress = float(timing_breakdown.get("badge_progress", 0.0))
-    other = overhead - (badge_init + upstream_check + badge_progress)
+    # cash's per-statement cost that ISN'T the compute/restore the row shows:
+    # hashing the inputs + serialising the result into the cache (the dominant
+    # overhead for a large object). It equals sum(total_time) - sum(displayed),
+    # i.e. exactly the extra carried by COMPUTED rows now that they show only the
+    # compute — so surfacing it here keeps that cost visible instead of hiding it
+    # inside "other". (RESTORED rows already display their full total_time, so
+    # they contribute nothing.)
+    cache_write = max(
+        0.0,
+        sum(float(m.get("total_time", 0.0)) for m in metrics) - statements_time,
+    )
+    other = overhead - (badge_init + upstream_check + badge_progress + cache_write)
 
     entries: list[OverheadEntry] = []
     for key, value in (
         ("upstream_check", upstream_check),
         ("badge_init", badge_init),
         ("badge_progress", badge_progress),
+        ("cache_write", cache_write),
     ):
         if value > MIN_TIME_DISPLAY_MS:
             entries.append(OverheadEntry(label=_OVERHEAD_LABELS[key], time_s=value))
