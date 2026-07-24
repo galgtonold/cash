@@ -326,7 +326,7 @@ class CashAdminMagicsMixin:
         # denominator is dominated by prints, imports and cheap assignments that
         # cash deliberately never tried to cache. Counting cash's own correct
         # "not worth caching" decisions as misses reported 14.9% for a session
-        # in which 100% of the expensive statements hit. CAS-157 fixed
+        # in which 100% of the expensive statements hit. The earlier fix addressed
         # an OVERstatement of savings; that is the same failure inverted, so the
         # same rule binds: the number must not imply a conclusion the data does
         # not support, in EITHER direction.
@@ -341,7 +341,7 @@ class CashAdminMagicsMixin:
         # compute time recorded when the value was FIRST cached. Nothing
         # re-measures that. If the first run was colder — cold page cache, cold
         # imports — the credit is stale-high, and a session that was slower by
-        # wall clock still prints a win. That is the lie CAS-157 fixes, and it
+        # wall clock still prints a win. That is the lie the verified net fixes, and it
         # is not fixable by estimating harder: the true recompute cost cannot be
         # known without doing the recompute.
         #

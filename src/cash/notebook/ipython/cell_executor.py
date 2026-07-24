@@ -189,7 +189,7 @@ class CellExecutor:
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
-        # 5. AST parse (tolerate a top-level ``await`` — CAS-164; a bare
+        # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
         try:
             tree = CodeAnalyzer._parse_cell(raw_cell)
@@ -231,9 +231,9 @@ class CellExecutor:
     def _record_executed_cell_hash(self, raw_cell: str) -> None:
         """Remember that this exact cell source ran, so the upstream checker can
         tell an edited-but-not-rerun seed() cell from one that actually ran
-        (ADR-017 / CAS-225). Also snapshot the RNG state around a cell that
+        (ADR-017). Also snapshot the RNG state around a cell that
         TOUCHED the global RNG so a downstream draw can be restored to its
-        position-correct state (ADR-018 / CAS-226 / CAS-227), and record which
+        position-correct state (ADR-018), and record which
         modules it changed — which catches draws inside called functions that
         static analysis cannot see.
 
@@ -248,7 +248,7 @@ class CellExecutor:
         ``import random`` was recorded as having changed ``numpy.random``
         because cash imported numpy while handling it. Those incidental entries
         used to be load-bearing — they were the only thing giving a first
-        drawing cell something to rewind to — until CAS-227 recorded each
+        drawing cell something to rewind to — until the per-cell snapshot recorded each
         cell's own start position instead."""
         try:
             state = self._statement_processor._tracking_state
@@ -315,7 +315,7 @@ class CellExecutor:
             return upstream_result
         upstream_metrics, _restore_time, _execution_time = upstream_result
 
-        # 5. AST parse (tolerate a top-level ``await`` — CAS-164; a bare
+        # 5. AST parse (tolerate a top-level ``await``; a bare
         # ast.parse rejects module-level await and would silently skip the cell)
         try:
             tree = CodeAnalyzer._parse_cell(raw_cell)
@@ -561,7 +561,7 @@ class CellExecutor:
             # different means we are looking at our own previous run's leftovers
             # (isolated re-run -> re-execute the producer). Must run AFTER
             # re-execution, or an isolated re-run would record the drained state
-            # and destroy the signal for the run after it. See CAS-118 / CAS-50.
+            # and destroy the signal for the run after it.
             self._record_consumable_bases(inputs)
 
         except (RuntimeError, SyntaxError, AmbiguousCellError):
@@ -675,7 +675,7 @@ class CellExecutor:
         - SyntaxError (hook path): re-run the raw cell through IPython so the
           user sees the parse error attributed to their cell.
         - RuntimeError / AmbiguousCellError / UpstreamStateError: synthesise a
-          fresh raise inside the user's cell (the CAS-87 / CAS-153 "fail the cell
+          fresh raise inside the user's cell (the "fail the cell
           loudly" path) so IPython attributes the traceback to the cell.
         - anything else: log and fall back to normal execution.
         """
@@ -897,7 +897,7 @@ class CellExecutor:
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
             occurrence_index=occurrence_index,
-            is_last=is_last_statement,   # CAS-174, as in the sync path
+            is_last=is_last_statement,  # as in the sync path
         )
         return self._handle_regular_stmt_metrics(
             metrics, is_last_statement, all_metrics, buffered_result_outputs,

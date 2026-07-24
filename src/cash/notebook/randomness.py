@@ -27,7 +27,7 @@ class CashRandomnessWarning(CashWarning):
 
         warnings.filterwarnings("ignore", category=cash.CashWarning)
 
-    It sat outside that family while it was unreachable (CAS-114 wired up the
+    It sat outside that family while it was unreachable (nothing had yet wired up the
     only code that raises it). ``CashWarning`` is itself a ``UserWarning``, so
     filters written against ``UserWarning`` keep working.
     """
@@ -119,7 +119,7 @@ MODULE_ALIASES = {
 # The three kinds below are the single taxonomy of "what is an RNG object" for
 # this module.  They are consumed by TWO channels that see different things:
 #
-# * ``_classify_rng_carrier`` (CAS-90, further down) classifies a **live value**
+# * ``_classify_rng_carrier`` (further down) classifies a **live value**
 #   by ``isinstance``.  It runs at store/restore time, when the object exists.
 # * The tables here classify a **constructor call in source**.  Detection has to
 #   run on the AST because the warning fires *before* the statement executes —
@@ -1058,7 +1058,7 @@ def format_stale_randomness_message(call: RandomnessCallInfo) -> str:
 
     The distinct text also earns the message its own slot in the dedupe ledger,
     which is keyed on ``(code, message)``. That is what lets the replay be
-    announced without disturbing CAS-114's once-per-statement-per-session
+    announced without disturbing the once-per-statement-per-session
     contract for the compute-time warning.
     """
     # ASCII only: this lands in a kernel's stderr, and a Windows console
@@ -1163,13 +1163,13 @@ def check_and_warn_randomness(
 # Unseeded estimator fits
 # -----------------------------------------------------------------------------
 #
-# CAS-138 made a bare ``estimator.fit(X, y)`` cacheable. But the AST channels
+# made a bare ``estimator.fit(X, y)`` cacheable. But the AST channels
 # above are blind to it: the randomness lives inside sklearn's compiled ``.fit()``
 # (bootstrap sampling, feature subsampling, weight init), not in any Python call
 # this module can see. An estimator built without a ``random_state`` therefore
 # gets cached and FROZEN with no warning at all -- the notebook-path analogue of
 # the inline unseeded-randomness hazard the detector already flags, and of the
-# object-cache hazard CAS-158 covers on the decorator path.
+# object-cache hazard covered on the decorator path.
 #
 # Detection cannot come off the source, so it is done by the caller against the
 # LIVE estimator (``get_params()['random_state'] is None``); these helpers only
@@ -1590,7 +1590,7 @@ def get_entropy_reseed_modules(code: str) -> set[str]:
     Cash's freeze contract covers draws with *no* seed at all; it must not
     extend to a stream the user has explicitly re-randomised, or every value
     computed after the reseed is replayed from a run whose stream no longer
-    exists. That is the CAS-233 failure: a re-fit model whose accuracy was
+    exists. That is the failure: a re-fit model whose accuracy was
     served from cache, so the printed metric described a model that had already
     been replaced in the kernel.
     """
@@ -1604,7 +1604,7 @@ def get_entropy_reseed_modules(code: str) -> set[str]:
 
 
 def get_seeding_rng_modules(code: str) -> set[str]:
-    """Modules *code* SEEDS (``np.random.seed(0)``, ``random.seed(0)``) — CAS-223.
+    """Modules *code* SEEDS (``np.random.seed(0)``, ``random.seed(0)``).
 
     The counterpart to :func:`get_drawing_rng_modules`. A statement that seeds
     opens a new "seed epoch" for its module; every later draw from that module
@@ -1631,7 +1631,7 @@ def get_seeding_rng_modules(code: str) -> set[str]:
 # every downstream consumer folds that lineage into its own output lineage
 # through the same input-lineage code every real variable uses. This is what
 # makes a seed change propagate to a cached downstream statement -- the half the
-# CAS-223 epoch (a key-only side channel) never did.
+# epoch (a key-only side channel) never did.
 #
 # The engines (runtime ``StatementProcessor`` and the ``VirtualLineage``
 # simulator) integrate at a single seam each via these three helpers; there is

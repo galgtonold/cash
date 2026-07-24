@@ -59,7 +59,7 @@ _LOG_ANNOTATION = "[ANNOTATION]"
 # target. When the loop grows one object -- the classic "add a column per
 # iteration" frame build -- each iteration snapshots the whole object at its
 # current width, so a 40 MB final frame costs sum(widths) on disk: 13x for 25
-# columns, and quadratic in the iteration count thereafter. CAS-142's caps are
+# columns, and quadratic in the iteration count thereafter. The tier caps are
 # structurally blind to this: its per-object refusal compares ONE value against
 # half the tier cap (40 MB vs >=4 GiB -> fine) and its evict-after-write warning
 # needs the total to exceed the cap (520 MB vs >=8 GiB -> never evicts). Neither
@@ -595,7 +595,7 @@ class StatementProcessor:
             _parsed_tree = None
 
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
-        # Caller-forced outputs (accumulator-loop fast path, CAS-145): capture
+        # Caller-forced outputs (accumulator-loop fast path): capture
         # and restore these on top of the AST-discovered outputs, and mark them
         # as expected writes so an in-place accumulator mutation (``out.append``)
         # is not read as a caching blocker. Added AFTER the cache key is computed
@@ -649,13 +649,13 @@ class StatementProcessor:
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
             draw_only = set()
-        # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
+        # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
         # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
         #
-        # It does NOT make aliases safe. CAS-170 originally claimed skipping the fit
-        # made ``backup = clf`` correct "by construction"; CAS-184 disproved that.
+        # It does NOT make aliases safe. An earlier design claimed skipping the fit
+        # made ``backup = clf`` correct "by construction"; that was later disproved.
         # ``backup = clf`` is an ORDINARY ASSIGNMENT that cash caches on its own, and
         # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
         # statement has no bearing on it either way. Do not restore that reasoning.
@@ -682,7 +682,7 @@ class StatementProcessor:
         # genuine skip receiver still skips (the skip wins for that receiver).
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE. Without the directive ``est_fit`` is empty and every
-        # site below degrades to the pre-CAS-138 skip-cache behaviour.
+        # site below degrades to the pre-existing skip-cache behaviour.
         fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
@@ -693,7 +693,7 @@ class StatementProcessor:
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
-        # CAS-220: a draw inside a loop/branch body. Skip the CACHE without
+        # a draw inside a loop/branch body. Skip the CACHE without
         # touching ``outputs`` -- the statement must re-execute so the artists
         # actually land on the Axes, but bumping its lineage from a per-statement
         # source is precisely what the control-body skip above exists to avoid.
@@ -790,8 +790,8 @@ class StatementProcessor:
         statement containing a top-level ``await`` runs on IPython's live loop.
 
         The cache-*hit* path (``_handle_cache_hit``) returns BEFORE any
-        coroutine is built, so an identical second run skips the await entirely
-       .  CAS-96 trailing-semicolon suppression and CAS-115/89
+        coroutine is built, so an identical second run skips the await entirely.
+        Trailing-semicolon suppression and
         live-alias edge-recording (in ``_post_execute``) apply unchanged because
         this method routes through the same ``_analyze_and_hash`` /
         ``_handle_cache_hit`` / ``_post_execute`` helpers.
@@ -842,13 +842,13 @@ class StatementProcessor:
             )
             est_fit = self._estimator_fit_receivers(_parsed_tree, outputs) if cache_fit else set()
             draw_only = set()
-        # OPT-IN ONLY (``# @cash:cache-fit``, CAS-170). A bare ``estimator.fit(X, y)``
+        # OPT-IN ONLY (``# @cash:cache-fit``). A bare ``estimator.fit(X, y)``
         # mutates its receiver in place, so the classifier above routes it to
         # skip-caching: the statement re-executes and is never serialised, which is
         # net-NEUTRAL -- a fit that keeps missing cannot cost more than it saves.
         #
-        # It does NOT make aliases safe. CAS-170 originally claimed skipping the fit
-        # made ``backup = clf`` correct "by construction"; CAS-184 disproved that.
+        # It does NOT make aliases safe. An earlier design claimed skipping the fit
+        # made ``backup = clf`` correct "by construction"; that was later disproved.
         # ``backup = clf`` is an ORDINARY ASSIGNMENT that cash caches on its own, and
         # restoring it rebinds ``backup`` to a pre-fit deserialised copy -- the fit
         # statement has no bearing on it either way. Do not restore that reasoning.
@@ -875,7 +875,7 @@ class StatementProcessor:
         # genuine skip receiver still skips (the skip wins for that receiver).
         # ``est_fit`` also threads to the cache-hit path so its restore is IN
         # PLACE. Without the directive ``est_fit`` is empty and every
-        # site below degrades to the pre-CAS-138 skip-cache behaviour.
+        # site below degrades to the pre-existing skip-cache behaviour.
         fam = self._function_arg_mutation_receivers(_parsed_tree, outputs)
         skip_pre_route = mut_pre_route - est_fit
         if mut_pre_route or est_fit or fam:
@@ -886,7 +886,7 @@ class StatementProcessor:
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
             )
-        # CAS-220: a draw inside a loop/branch body. Skip the CACHE without
+        # a draw inside a loop/branch body. Skip the CACHE without
         # touching ``outputs`` -- the statement must re-execute so the artists
         # actually land on the Axes, but bumping its lineage from a per-statement
         # source is precisely what the control-body skip above exists to avoid.
@@ -986,7 +986,7 @@ class StatementProcessor:
         which is net-neutral.  It does NOT, as this comment used to
         claim, keep aliases correct: ``backup = model`` is an ordinary assignment
         whose own restore rebinds a pre-fit copy, independently of the fit
-        (CAS-184 — fixed by refusing to cache a bare alias bind).
+        (— fixed by refusing to cache a bare alias bind).
         """
         effective_ttl = ttl
         force_persist = self.persist_all
@@ -1160,7 +1160,7 @@ class StatementProcessor:
         That claim can only be made here.  ``_warn_unseeded_randomness`` runs
         before the cache lookup, where the hit/miss outcome does not exist yet —
         so it can only ever say "may not be reproducible".  On a restore that
-        understates it: the value *is* frozen.  CAS-114 warned on the COLD run,
+        understates it: the value *is* frozen. The prior warning fired on the COLD run,
         when the value is freshly computed and correct, and said nothing on the
         restores, when it is not.  This is the missing half.
 
@@ -1172,7 +1172,7 @@ class StatementProcessor:
         this message is a different claim from the compute-time one, so it lands
         in its own slot: the replay is announced once per statement per session,
         on the first restore.  Removing the dedupe instead would flood a
-        re-run — the very thing CAS-114 avoided so users don't learn to filter
+        re-run — the very thing we avoided so users don't learn to filter
         the whole class away.
         """
         if allow_random or not unseeded_calls:
@@ -1189,7 +1189,7 @@ class StatementProcessor:
         """Return the sorted subset of *est_fit* receivers that are UNSEEDED.
 
         A bare ``estimator.fit(X, y)`` under ``# @cash:cache-fit`` caches via the
-        CAS-138 path, but cash's AST
+        cache-fit path, but cash's AST
         randomness detector cannot see the randomness inside sklearn's compiled
         ``.fit()``. An estimator built without a ``random_state`` draws fresh
         entropy each fit, so the cached fitted model is a frozen replay -- two
@@ -1222,7 +1222,7 @@ class StatementProcessor:
         The estimator-fit analogue of :meth:`_warn_unseeded_randomness`, emitted at
         COMPUTE time on the common path (before the cache lookup) so the warning
         describes the *source* independently of this run's hit/miss outcome. Goes
-        out on the SAME ``CashRandomnessWarning`` path as CAS-135, so users'
+        out on the SAME ``CashRandomnessWarning`` path, so users'
         existing filters catch it.
 
         Returns the unseeded receivers found, so the cache-hit path can announce
@@ -1258,7 +1258,7 @@ class StatementProcessor:
     def _inline_unseeded_fit_outputs(
         self, tree: ast.Module | None, outputs: set[str],
     ) -> list[str]:
-        """Output vars that are UNSEEDED fitted estimators (CAS-167 gap).
+        """Output vars that are UNSEEDED fitted estimators (gap).
 
         Closes the anonymous/assignment-form fit hole the receiver-name path
         (:meth:`_estimator_fit_receivers`) cannot reach: ``clf =
@@ -1292,7 +1292,7 @@ class StatementProcessor:
         self, metrics: 'ProcessResult', code: str, tree: ast.Module | None,
         outputs: set[str], allow_random: bool, *, is_hit: bool,
     ) -> None:
-        """Badge + warn for an inline/assignment-form unseeded fit (CAS-167 gap).
+        """Badge + warn for an inline/assignment-form unseeded fit (gap).
 
         Stamps the metric so the badge shows the unseeded pill, and routes the
         same warning the named-receiver path uses — the compute-time "detected"
@@ -1737,7 +1737,7 @@ class StatementProcessor:
                 # tell an already-on-disk writer effect (skip it) from a stale
                 # one (re-fire it) — ``executed_write_stmt_codes`` is empty after
                 # a restart, which used to force every writer to re-fire and
-                # re-run its non-idempotent side effect (CAS-153 round-3).
+                # re-run its non-idempotent side effect (round-3).
                 self._persist_write_provenance(code, inputs, tree)
         except AttributeError:
             pass
@@ -1771,7 +1771,7 @@ class StatementProcessor:
         # run rebuilds and matches forever: after a kernel restart the ledger is
         # empty, the same epoch-free key comes back, and the value computed
         # under the OLD seed is restored -- silently, with a green badge. That
-        # was the whole of CAS-234, and persisting the ledger cannot fix it
+        # was the whole bug, and persisting the ledger cannot fix it
         # because the key is consulted before any metadata is read.
         #
         # So skip the write exactly once. The value is correct for this run and
@@ -1878,9 +1878,9 @@ class StatementProcessor:
         executes because it writes a file. The draw is skipped, the write is
         not, and the deliverable PNG is blank.
 
-        Identity-coupling is the same single discriminator CAS-194 used to tell
+        Identity-coupling is the same single discriminator used to tell
         ``ax.hist()`` (draws on an Axes) from ``df.hist()`` (receiver-pure), and
-        CAS-199 used to widen scope to captured-return draws without
+        is used to widen scope to captured-return draws without
         over-invalidating. It imports no matplotlib and is False for everything
         that is not a Figure/Axes, so no loop that caches today stops caching.
 
@@ -1922,7 +1922,7 @@ class StatementProcessor:
         * ``record_verdict`` — True when this statement's verdict is being learned.
         """
         candidates = standalone_method_call_receivers(tree)
-        # CAS-199: captured-return draws (``counts, bins, _ = ax.hist(...)``) are
+        # captured-return draws (``counts, bins, _ = ax.hist(...)``) are
         # assignments, so they never appear in the bare-``Expr`` candidate set;
         # they are classified by the identity-coupled pass below and must not be
         # short-circuited by the ``not candidates`` guard.
@@ -1955,7 +1955,7 @@ class StatementProcessor:
                 # route it to the mutation path so the figure's fill statements are
                 # rebuilt with it and never cached as an ordinary value.
                 # ``fig.savefig(...)`` lands here too: bumping an identity-coupled
-                # Figure is idempotent + load-bearing for CAS-175 chart coherence.
+                # Figure is idempotent + load-bearing for chart coherence.
                 pre_route.add(base)
                 continue
             if method in KNOWN_PURE_METHODS:
@@ -1971,7 +1971,7 @@ class StatementProcessor:
             else:
                 assumed.add(base)
                 pre_route.add(base)
-        # CAS-199: the CAPTURED-return form ``counts, bins, _ = ax.hist(...)`` is
+        # the CAPTURED-return form ``counts, bins, _ = ax.hist(...)`` is
         # an ``ast.Assign``, so the bare-``Expr`` candidate set above never saw
         # it. Route its receiver as a draw too — but ONLY when it is identity-
         # coupled (a live Axes/Figure). That single discriminator is what keeps a
@@ -2776,7 +2776,7 @@ class StatementProcessor:
         code: str,
         prediction: dict[str, Any] | None,
     ) -> tuple[bool, str | None]:
-        """Return ``(skip, reason)`` for the CAS-160 loop-persist guard.
+        """Return ``(skip, reason)`` for the loop-persist guard.
 
         Consulted immediately before a value-persist: refuse once this
         statement's cumulative *durably stored* bytes are out of all proportion
@@ -2962,7 +2962,7 @@ class StatementProcessor:
                 )
         # Perpetual-miss guard. Placed LAST so it can override the
         # exemptions above: ``has_file_dependencies`` waives the whole size-aware
-        # cost model, and that waiver is precisely how CAS-165/171 shipped — a fit
+        # cost model, and that waiver is precisely how it shipped — a fit
         # on a CSV-derived frame inherits the read's file deps, so the cost model
         # never got a vote and the frame was re-serialised every run for a cache
         # that could never hit. An unstable key does not become stable because the
@@ -3049,7 +3049,7 @@ class StatementProcessor:
             'rng_epochs': dict(self._rng_seed_epochs),
         }
 
-        # CAS-90: the module-global RNG post-state above misses generators the
+        # the module-global RNG post-state above misses generators the
         # user holds in a variable (``rng = np.random.default_rng(42)``).
         # Capture those too, scoped to this statement's inputs so the cost
         # stays proportional to what the statement actually reads.  Omitted
@@ -3158,7 +3158,7 @@ class StatementProcessor:
         # on every run, so the values computed after it are NOT replayable: the
         # statement's key is identical run to run, so downstream consumers kept
         # hitting and reported numbers describing a stream that no longer existed
-        # (CAS-233 -- a re-fit model whose cached accuracy described the previous
+        # (a re-fit model whose cached accuracy described the previous
         # one). Give the virtual variable a value that is fresh per execution so
         # everything downstream of the reseed recomputes.
         entropy_modules = get_entropy_reseed_modules(code)

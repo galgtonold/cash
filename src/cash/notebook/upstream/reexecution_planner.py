@@ -451,7 +451,7 @@ class ReexecutionPlanner:
         already covers behind a divergence probe, re-initialised cross-cell
         accumulators and regressed 12 integration tests.
 
-        The CAS-75 cross-cell-accumulator hazard does not apply here, for the
+        The cross-cell-accumulator hazard does not apply here, for the
         reason the consumable channel gives: re-executing a producer chain IN
         TRACE ORDER is exactly what ``run_all`` does. The danger there is
         re-deriving an object while re-executing only PART of what fills it —
@@ -570,7 +570,7 @@ class ReexecutionPlanner:
         answer with no in-notebook signal. (Measured: a 960x540 chart becomes a
         640x480 blank -- exactly matplotlib's default figure geometry.)
 
-        We cannot follow the Gcf edge, so -- in the spirit of CAS-172 -- we bound
+        We cannot follow the Gcf edge, so -- in the same spirit -- we bound
         the CONSEQUENCE instead of trying to enumerate what might skip the
         producer: drop the orphaned write from the plan and warn. The user
         re-runs the cell; the good chart on disk is left untouched. Governing
@@ -580,7 +580,7 @@ class ReexecutionPlanner:
         Fires ONLY for a module-level ``plt.savefig`` whose most-recent preceding
         figure producer is absent from the plan. On the healthy path (first run,
         or any plan that also rebuilds the figure) the producer is scheduled and
-        this is a no-op, so ``fig.savefig`` and the CAS-144/175 tests are
+        this is a no-op, so ``fig.savefig`` and the tests are
         untouched. A missed re-save is acceptable; a blank PNG on disk is not.
         """
         user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
@@ -611,20 +611,20 @@ class ReexecutionPlanner:
         return remaining, restored_statements_info
 
     def _warn_orphaned_figure_write(self, code: str, producer: int | None, w: int) -> None:
-        """Emit the CAS-187 refusal as a CashWarning (and a trace/debug record)."""
+        """Emit the refusal as a CashWarning (and a trace/debug record)."""
         warnings.warn(
             "cash refused to re-run a plt.savefig() during upstream reconstruction: "
             "the statement that drew the current figure is not being re-run, so the "
             "save would flush a blank/wrong figure over your chart on disk. Re-run "
             "the plot cell to regenerate it. (plt.savefig() has no variable link to "
-            "its figure; use fig.savefig(path) to let cash track it. CAS-187.)",
+            "its figure; use fig.savefig(path) to let cash track it.)",
             CashWarning,
             stacklevel=2,
         )
         trace_event("refuse_orphaned_figure_write", stmt=code[:80], producer=producer)
         if self.debug:
             logger.debug(
-                "[UPSTREAM] CAS-187 refusing orphaned plt.savefig at [%s] (figure "
+                "[UPSTREAM] refusing orphaned plt.savefig at [%s] (figure "
                 "producer %s not scheduled): %.60s", w, producer, code,
             )
 
@@ -849,14 +849,14 @@ class ReexecutionPlanner:
             # Not re-firing is also what the user's own kernel does: the write
             # runs when they run its own cell, and they did not run it here.
             #
-            # ONLY a PROVABLE append is refused. CAS-210 also suggests refusing
+            # ONLY a PROVABLE append is refused. The evidence also suggests refusing
             # UNKNOWN repeatability, and that was measured rather than reasoned
             # about: the two failure modes are not symmetric. Refusing a write
             # that SHOULD re-fire leaves the reader on stale data every time,
-            # silently, on a common path -- the measurement broke two CAS-82
+            # silently, on a common path -- the measurement broke two
             # tests exactly that way. Leaving an unprovable append re-firing
             # costs a duplicated line in an uncommon shape. Narrow is the right
-            # side of that trade; see the measurement recorded on CAS-210.
+            # side of that trade; see the recorded measurement.
             if statement_write_repeatability(stmt_code) == REPEATABILITY_ACCUMULATING:
                 if self.debug:
                     logger.debug(
@@ -874,7 +874,7 @@ class ReexecutionPlanner:
             # non-idempotent side effect and re-derive stale data), check its
             # persisted provenance: if the payload is unchanged AND the output
             # file is still fresh on disk, the effect is already applied — do
-            # NOT schedule it (CAS-153 round-3). Only short-circuit the pure
+            # NOT schedule it (round-3). Only short-circuit the pure
             # ``changed`` path; a genuine input change (``inputs_changed``) must
             # always re-run.
             if changed and not inputs_changed and self._writer_output_already_fresh(
@@ -928,7 +928,7 @@ class ReexecutionPlanner:
     ) -> bool:
         """True when a writer's output file is read by no relevant consumer.
 
-        The scope gate for CAS-193/196/200. Conservative in every uncertain
+        The scope gate. Conservative in every uncertain
         case — returns ``False`` (do not suppress) unless the read set is fully
         known AND the writer's output path(s) all resolve statically AND none of
         them match any relevant read path. Then the writer is an unrelated /
@@ -967,7 +967,7 @@ class ReexecutionPlanner:
 
         Conservative in every uncertain case: no backend, missing provenance, an
         unreadable / stale output file, or a drifted input lineage all return
-        False, so the writer is scheduled exactly as before (CAS-153 round-3).
+        False, so the writer is scheduled exactly as before (round-3).
         """
         cash = getattr(self._virtual_lineage, 'cash_instance', None)
         backend = getattr(cash, 'backend', None) if cash is not None else None

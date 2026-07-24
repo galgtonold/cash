@@ -240,7 +240,7 @@ class VirtualLineage:
         except (SyntaxError, ValueError, RecursionError):
             fam = set()
         candidates = standalone_method_call_receivers(tree)
-        # CAS-199: captured-return draws are assignments, absent from the
+        # captured-return draws are assignments, absent from the
         # bare-``Expr`` candidate set; keep the guard from short-circuiting them.
         assigned = assigned_method_call_receivers(tree)
         if not candidates and not assigned:
@@ -270,7 +270,7 @@ class VirtualLineage:
                     receivers.add(base)
             else:
                 receivers.add(base)  # unknown -> conservative
-        # CAS-199: mirror the runtime — a captured-return draw
+        # mirror the runtime — a captured-return draw
         # (``counts, bins, _ = ax.hist(...)``) routes its receiver as a mutation
         # too, gated SOLELY by the identity-coupled check so the simulated lineage
         # bumps the same source-based receiver the runtime does (unified-key
@@ -384,7 +384,7 @@ class VirtualLineage:
                 # lineages, structurally divergent) would be spuriously marked
                 # broken and re-executed. Break to re-simulate; leave the flag
                 # alone so file staleness stays decoupled from code modification.
-                # [CAS-99]
+                #
                 break
             first_changed_cell = idx + 1
         return first_changed_cell, cache_had_hash_mismatch
@@ -591,7 +591,7 @@ class VirtualLineage:
         are excluded from the loop-trust set entirely, so they fall back to the
         normal lineage-mismatch path (baseline behaviour) that correctly
         re-executes; a constant-init accumulator (``total = 0``) has no external
-        dependency and keeps the new trust. [CAS-120]
+        dependency and keeps the new trust.
 
         Detection scans the trace for a *non-self-referential*, *non-control*
         statement producing the accumulator (its init) that reads a data variable
@@ -1141,7 +1141,7 @@ class VirtualLineage:
                 )
 
         except SyntaxError:
-            # CAS-173: a single unparseable upstream cell (a half-written cell
+            # a single unparseable upstream cell (a half-written cell
             # the user has SAVED but not run) must NOT abort the whole
             # simulation and silently disable caching for every cell below it —
             # a notebook with one mid-edit cell is the normal state of the
@@ -1158,7 +1158,7 @@ class VirtualLineage:
             # ``UpstreamChecker._warn_broken_upstream_cells``; here we only keep
             # the simulation alive. Non-syntax errors still propagate below —
             # they signal a real bug, not a user typo. (Was: re-raise, which
-            # poisoned every downstream cell silently — CAS-173.)
+            # poisoned every downstream cell silently.)
             logger.debug(
                 "[UPSTREAM] Syntax error in cell %d; skipping it and continuing "
                 "simulation so unrelated downstream cells keep caching.",
@@ -2466,7 +2466,7 @@ class VirtualLineage:
              # user-defined function is not spuriously rejected for lacking the
              # function-source component. A hand-rolled sha256(code)+input_lineages
              # omitted it, so any function-routed edit always projected != recorded
-             # and was wrongly discarded. [CAS-88 layer 1]
+             # and was wrongly discarded. [layer 1]
              projected_hash = self._compute_virtual_output_lineage(
                  source_hash, input_lineages, "", inputs, outputs
              )
@@ -2553,7 +2553,7 @@ class VirtualLineage:
                 # Self-referential reassignment accumulators (``total = total + b``,
                 # ``total += b``) leave no in-place-mutation trace, so
                 # all_mutated_vars misses them and the loop is wrongly re-executed,
-                # re-draining one-shot iterables. Trust them like append. [CAS-120]
+                # re-draining one-shot iterables. Trust them like append.
                 mutated_vars.update(selfref_reassignment_targets(body_node))
 
         # Filter out built-ins and loop targets

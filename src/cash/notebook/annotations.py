@@ -183,7 +183,7 @@ def get_statement_annotations(
     # A statement nested in a control body must NOT pick them up implicitly: the
     # control-structure processor decides deliberately what a body inherits and
     # merges it explicitly (resolve_header_annotation -> resolve_statement_
-    # annotation). Letting the header leak in here would re-create CAS-135, where
+    # annotation). Letting the header leak in here would re-create the bug where
     # a whole-range annotation disabled caching for every sibling in the body.
     if getattr(node, 'col_offset', 0) != 0:
         return statement_level

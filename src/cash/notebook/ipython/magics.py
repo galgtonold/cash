@@ -142,7 +142,7 @@ class CashSession:
         self.measured_compute: dict[str, float] = {}
         # decorator cache_key -> compute time measured in THIS session (a miss).
         # The @cash.cache sibling of measured_compute: it lets a later decorator
-        # HIT be credited as VERIFIED under the same CAS-157 rule.
+        # HIT be credited as VERIFIED under the same rule.
         self.measured_decorator_compute: dict[str, float] = {}
 
 
@@ -992,7 +992,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         )
 
     async def _execute_cell_async(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
-        """Proxy for ``interactiveshell.run_cell_async`` (CAS-92 stage 2).
+        """Proxy for ``interactiveshell.run_cell_async`` (stage 2).
 
         ipykernel routes cells that contain top-level ``await`` (IPython
         autoawait) through ``run_cell_async``, not the sync ``run_cell`` that
@@ -1334,7 +1334,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         into ``total_overhead`` and later subtracted from the gross
         ``total_time_saved`` to report an honest NET figure. This is
         a single float subtraction per cell, no I/O — it must never
-        reintroduce the per-cell fsync that CAS-149 removed.
+        reintroduce the per-cell fsync that was removed earlier.
 
         Upstream COMPUTED statements count as user compute, NOT as overhead:
         they are the user's own notebook code, and the state they rebuild is
@@ -1425,7 +1425,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         already contains it, and adding it here would double-count.
 
         A **hit** credits ``time_saved`` to gross, mirrors CacheStatus.RESTORED:
-        gross always, verified only under the CAS-157 min-rule when this session
+        gross always, verified only under the min-rule when this session
         measured the same key's compute, and the cacheable-hit denominator when
         the saving cleared the floor.
         """

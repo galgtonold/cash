@@ -74,7 +74,7 @@ _NOTEBOOK_PATH_CACHE_TTL: float = 300.0  # seconds (5 minutes)
 # cache above never covered this — every failed lookup re-probed from scratch —
 # and the upstream checker resolves the path many times per cell, so a single
 # ``run_all`` under slow-failing discovery paid that timeout dozens of times
-# (CAS-150: measured ~78s to cache ``z = 1 + 1``).
+# (measured ~78s to cache ``z = 1 + 1``).
 #
 # We memoize the failure too, but with a MUCH shorter TTL than the success case:
 # long enough to dedupe the many resolves within one ``run_all`` down to a single
@@ -293,8 +293,7 @@ def _kernel_id_from_connection_file(connection_file: str | None) -> str | None:
     (``.split('-', 1)[1]``) raised an ``IndexError`` that was NOT in the caller's
     except tuple. It escaped ``get_notebook_path``, disabled caching for the whole
     run, and printed "Cash auto-caching failed: list index out of range" on EVERY
-    cell instead of cash's intended one-time "notebook not found" disclosure
-   .
+    cell instead of cash's intended one-time "notebook not found" disclosure.
 
     Semantics are otherwise identical to the original expression: split on the
     FIRST ``-`` (so a UUID's own dashes are preserved) and drop at the first ``.``.

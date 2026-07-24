@@ -141,7 +141,7 @@ class TrackingState:
     # sha256 of every whole-CELL source that has executed this session. Written
     # by the cell executor after a cell runs; read by the upstream checker to
     # tell an edited-but-not-rerun seed() cell from one whose current source has
-    # actually run (ADR-017 / CAS-225). Cell-granular on purpose — it matches the
+    # actually run (ADR-017). Cell-granular on purpose — it matches the
     # notebook view the checker compares against.
     executed_cell_source_hashes: set[str] = field(default_factory=set)
 
@@ -238,7 +238,7 @@ class TrackingState:
     # ``compute_hash``'s identity fallback — is unchanged by being drained; this
     # cell-entry token is the only way to tell "the producer just handed me a
     # fresh object" (run_all) from "I am looking at my own previous run's
-    # leftovers" (isolated re-run). See ``consumables.py``, CAS-118 / CAS-50.
+    # leftovers" (isolated re-run). See ``consumables.py``.
     consumable_bases: dict[str, Any] = field(default_factory=dict)
 
     # Written by StatementLineageBuilder after detecting a live-alias derivation
@@ -249,7 +249,7 @@ class TrackingState:
     # cannot see: mutating a numpy view mutates its base; mutating a frame
     # mutates the groupby that still holds a live reference to it. The runtime
     # detects the edges (it can observe ``.base`` / ``.obj`` identity); the
-    # simulation only REPLAYS this recorded map. See CAS-115 / CAS-89.
+    # simulation only REPLAYS this recorded map.
     derivation_edges: dict[str, set[str]] = field(default_factory=dict)
 
     # The single seam for reading/writing variable lineage. Wraps

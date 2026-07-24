@@ -244,7 +244,7 @@ class ControlStructureProcessor:
                 directives inside the structure — ``ast.unparse`` drops comments,
                 so a body statement's directive can only be recovered from the
                 original text. ``None`` disables annotation handling,
-                which is the pre-CAS-135 behaviour and keeps direct callers
+                which is the pre-existing behaviour and keeps direct callers
                 (tests constructing handlers with mock deps) working unchanged.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
@@ -333,7 +333,7 @@ class ControlStructureProcessor:
 
         *force_outputs* names extra variables the statement processor must
         capture/restore and treat as expected writes — the accumulator + leaked
-        loop variable of a CAS-145 accumulator-loop fast path. ``None`` for every
+        loop variable of an accumulator-loop fast path. ``None`` for every
         other single-unit structure, which keeps their behaviour unchanged.
         """
         try:
@@ -412,8 +412,7 @@ class ControlStructureProcessor:
         Called by BOTH the sync (:meth:`_execute_as_single_unit`) and awaited
         (:meth:`process_await_unit`) paths so their lineage update, badge
         annotation, and clean-traceback line offset can never drift — the drift
-        between a flagged and an unflagged compile path is exactly what produced
-        CAS-198.
+        between a flagged and an unflagged compile path is exactly what produced it.
         """
         # After execution, update lineage for mutated variables
         if metrics.get('status') in (CacheStatus.COMPUTED, CacheStatus.RESTORED):

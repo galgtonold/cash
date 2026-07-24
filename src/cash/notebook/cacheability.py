@@ -86,7 +86,7 @@ MUTATING_METHODS = {
 # ``StatementAnalysis.skip_reasons``: an accumulator loop has a byte-identical
 # comprehension form (``out = [f(e) for e in it]``) that assigns its result and
 # therefore caches. Other in-place mutations (``pop``/``sort``/``df['x'] = …``)
-# have no such rewrite and must NOT get the hint (CAS-145 part b).
+# have no such rewrite and must NOT get the hint (part b).
 ACCUMULATOR_METHODS = frozenset({'append', 'extend', 'add', 'update'})
 
 # Pandas methods that accept inplace=True
@@ -129,8 +129,8 @@ KNOWN_PURE_METHODS = frozenset({
 # Deliberately EXCLUDES ``savefig``: its receiver is an identity-coupled
 # matplotlib Figure (never cached, always re-derived as a unit), and savefig
 # OVERWRITES its PNG (idempotent), so treating it as a Figure mutation carries
-# none of the non-idempotent CAS-196 harm — and doing so is load-bearing for the
-# CAS-175 carrier-coherence path, which relies on the savefig→fig edge to
+# none of the non-idempotent harm — and doing so is load-bearing for the
+# carrier-coherence path, which relies on the savefig→fig edge to
 # re-derive the chart when the plotted data is edited.  The identity-coupled
 # receiver check routes ``fig.savefig(...)`` (like every other Figure/Axes method)
 # to the mutation path.  ``save`` / ``write`` / ``writelines`` are likewise
@@ -234,8 +234,7 @@ class _MutationVisitor(ast.NodeVisitor):
         appears — as a bare statement, a captured result (``r = lst.pop()``), a
         comprehension element (``[base.append(x) for ..]``), or an f-string
         placeholder (``f"{lst.append(x)}"``). Called from :meth:`visit_Call` so
-        every call site is covered, not just top-level ``Expr`` statements
-       .
+        every call site is covered, not just top-level ``Expr`` statements.
         """
         if not isinstance(call.func, ast.Attribute):
             return
@@ -1081,7 +1080,7 @@ class StatementAnalysis:
         pure_mutations = self.top_level_mutated_vars - outputs
         if pure_mutations:
             reasons.append(f"In-place mutation on: {', '.join(sorted(pure_mutations))}")
-            # Guidance only (CAS-145 part b): when the blocking mutation is an
+            # Guidance only (part b): when the blocking mutation is an
             # accumulator (``out.append(f(e))`` in a loop), point the user at the
             # byte-identical comprehension form, which assigns its result and so
             # caches. Scoped to accumulator methods — a ``df['x'] = …`` subscript
@@ -1215,7 +1214,7 @@ def _rhs_reads_same_column(rhs: ast.expr, target: ast.expr, base: str) -> bool:
     two subscripts are not textually identical (so :func:`_rhs_reads_target`
     misses it). A write to a DIFFERENT column read from another
     (``df.loc[mask, 'b'] = df['a']*2``) has disjoint keys and is NOT flagged,
-    preserving the CAS-42 derived-column cache.
+    preserving the derived-column cache.
     """
     written = _subscript_column_keys(target)
     if not written:  # unknown/positional target -> defer to the exact-match path
@@ -1298,26 +1297,26 @@ def selfref_inplace_write_vars(tree: ast.Module | None) -> frozenset[str]:
       ``obj.attr = obj.attr + 1``;
     * MASKED writes whose RHS reads the same column spelled differently
       (``df.loc[mask, 'a'] = df['a']*2``) — matched by column-key overlap, not
-      exact text (CAS-55, see :func:`_rhs_reads_same_column`);
+      exact text (see :func:`_rhs_reads_same_column`);
     * tuple/list unpacking that reads & writes overlapping columns
       (``df['a'], df['b'] = df['b'], df['a']`` — a column swap);
     * ``del`` of a subscript/attribute (``del df['b']``, ``del obj.cache``) — a
       second ``del`` raises, so the receiver must reset;
     * any of the above nested in an if/for/while/with body
       (``if cond: df['a'] = df['a']*2``) — scanned via :func:`_module_level_stmts`
-      (CAS-57; the reset itself uses the live value's lineage, which survives the
+      (the reset itself uses the live value's lineage, which survives the
       simulator's control-structure collapse).
 
     Such writes are NON-IDEMPOTENT, so on an isolated cell re-run the lineage-
     carrying receiver (DataFrame/Series/custom object) must be restored first —
     otherwise the value accumulates (``df['a']*2`` doubles again) or the re-run
     errors. The caller routes these vars through the same stale-value reset used
-    for method receivers (see CAS-54).
+    for method receivers.
 
     Deliberately EXCLUDES writes to a NEW target read from OTHER keys
     (``df['b'] = df['a'] + 1``, ``df['VolAdj'] = df.groupby('Ticker')['Close']…``,
     ``df['c'], df['d'] = df['a'], df['b']``): those are idempotent on re-run and
-    keep their per-statement cache, preserving the CAS-42 design. Augmented
+    keep their per-statement cache, preserving the design. Augmented
     assignment (``+=``) is always self-referential. Scans module-level statements
     including those nested in if/for/while/with bodies but NOT inside
     def/class scopes (their bodies run only when called).
@@ -1449,14 +1448,13 @@ def params_mutated_in_function(
 
     Used (with :func:`function_arg_mutations`) to attribute an argument mutation
     back to the caller's variable: ``def f(x): x.append(1)`` plus ``f(data)``
-    means ``data`` is mutated in place, so it must reset on isolated re-run
-   .
+    means ``data`` is mutated in place, so it must reset on isolated re-run.
 
     When *resolve_source* is given (a ``name -> source`` lookup), the analysis is
     interprocedural: a parameter mutated only via a further resolvable call
     (``def outer(y): inner(y)`` where ``inner`` mutates its arg) is also detected
    . *seen* guards against mutual / self recursion. Without
-    *resolve_source* the analysis is one level deep (the original CAS-58
+    *resolve_source* the analysis is one level deep (the original
     behaviour).
     """
     params = _all_param_names(func)
@@ -1521,7 +1519,7 @@ def function_arg_mutations(tree: ast.Module | None, resolve_source) -> frozenset
     unknown name). For each top-level bare-``Expr`` call the function body is
     parsed, its mutated parameters are found via :func:`params_mutated_in_function`
     (interprocedurally — a param mutated only through a further resolvable call is
-    detected too, CAS-61), and each is mapped back to the call's positional /
+    detected too), and each is mapped back to the call's positional /
     keyword argument variable.
     """
     if tree is None:
@@ -1554,8 +1552,8 @@ def _free_vars_mutated_in_function(
     A name mutated in place (``items.append``, ``store[k]=``, ``g += 1`` under a
     ``global`` declaration) that is neither a parameter nor a plain local
     assignment is a free variable resolved from the enclosing / module scope —
-    calling the function mutates that global. Parameter mutations are CAS-58's
-    job and are excluded; a name rebound locally (``acc = []`` then
+    calling the function mutates that global. Parameter mutations are a
+    separate job and are excluded; a name rebound locally (``acc = []`` then
     ``acc.append``) refers to the local and is excluded, UNLESS declared
     ``global`` / ``nonlocal``.
     """
@@ -1579,7 +1577,7 @@ def _free_vars_mutated_in_function(
 
 
 def function_global_mutations(tree: ast.Module | None, resolve_source) -> frozenset[str]:
-    """Module globals mutated in place by a called function (CAS-68 part A).
+    """Module globals mutated in place by a called function (part A).
 
     For each top-level bare-``Expr`` call ``f()`` whose source resolves, find the
     free / global variables ``f`` mutates in place and return them. The checker
@@ -1627,7 +1625,7 @@ def _is_memoizer_decorator(dec: ast.expr) -> bool:
 
 def _function_mutates_own_object(func: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
     """True if calling *func* mutates state carried on the function OBJECT itself
-    (CAS-68 part B), which persists across calls and must be reset by re-running
+    (part B), which persists across calls and must be reset by re-running
     the ``def``:
 
     * a **mutable default argument** the body mutates in place
@@ -1676,7 +1674,7 @@ def _called_function_names(tree: ast.Module) -> frozenset[str]:
 
 
 def stateful_self_functions(tree: ast.Module | None, resolve_source) -> frozenset[str]:
-    """Called functions that carry mutable state on their own object (CAS-68 B).
+    """Called functions that carry mutable state on their own object (B).
 
     For each function called in the cell (captured or bare) whose source
     resolves, return its name if calling it mutates state on the function object
@@ -1819,7 +1817,7 @@ def _factory_returns_stateful_closure(factory: ast.FunctionDef | ast.AsyncFuncti
     """True if *factory* defines an inner function that mutates a variable
     captured from the factory's own scope (a ``nonlocal`` cell or a factory-local
     container). Such a closure carries state that persists across calls of the
-    returned function and is only reset by re-running the factory (CAS-68 B).
+    returned function and is only reset by re-running the factory (B).
     """
     factory_scope = _factory_body_scope(factory)
     for node in ast.walk(factory):
@@ -1832,7 +1830,7 @@ def _factory_returns_stateful_closure(factory: ast.FunctionDef | ast.AsyncFuncti
 
 def stateful_closure_vars(tree: ast.Module | None, resolve_var_factory) -> frozenset[str]:
     """Closure variables called in the cell that carry mutable captured state
-    (CAS-68 B). *resolve_var_factory* maps a name to the ``FunctionDef`` of the
+    (B). *resolve_var_factory* maps a name to the ``FunctionDef`` of the
     factory it was assigned from (``c = make_counter()`` → ``make_counter``'s
     def), or ``None``. A name is flagged when its factory returns a closure that
     mutates factory-local state, so the checker force-resets it and its producer
@@ -1855,13 +1853,13 @@ def stateful_closure_vars(tree: ast.Module | None, resolve_var_factory) -> froze
 # ``v=s[k]`` / ``a(x)``), a constructor, a decorated call, or an instance /
 # class method invokes a user-defined method whose body mutates hidden state.
 # The mutation is invisible to the cell text, so on an isolated re-run it
-# accumulates. This generalises CAS-68 (hidden state via a called function) to
+# accumulates. This generalises the earlier case (hidden state via a called function) to
 # the object protocol: resolve the receiver's class (or the wrapper / context
 # manager), analyse the invoked method body, and attribute the mutation to one
 # of three reset channels:
 #
 #   * **free_vars**   — a module/free variable the method mutates (``log``);
-#     reset like CAS-68 A (add to the cell's mutated set + inputs so the
+# reset like the A path (add to the cell's mutated set + inputs so the
 #     producer's cell-entry base is restored).
 #   * **receivers**   — the receiver INSTANCE whose ``self`` attribute the
 #     method mutates in place (``cm.n += 1``); reset like a method receiver.
@@ -1881,10 +1879,10 @@ class ObjectProtocolResets:
     class_defs: frozenset[str]
     # Free vars mutated by a base ``__init_subclass__`` hook fired during class
     # creation. Kept apart from ``free_vars`` because — unlike an
-    # ordinary CAS-68 free-var mutation, whose upstream occurrences the simulator
+    # ordinary free-var mutation, whose upstream occurrences the simulator
     # sees as top-level statements — this mutation is hidden behind class creation
     # in EVERY subclass cell, so the simulator's content-base cross-cell guard is
-    # blind to it. The caller applies the CAS-75 cross-cell suppression before
+    # blind to it. The caller applies the cross-cell suppression before
     # routing these to the (otherwise self-protecting) free-var reset.
     init_subclass_free_vars: frozenset[str] = frozenset()
 
@@ -1958,7 +1956,7 @@ def _class_method(
     classdef: ast.ClassDef, method_name: str, resolve_class_source=None
 ) -> ast.FunctionDef | ast.AsyncFunctionDef | None:
     """The method named *method_name* on *classdef* or an inherited base (the
-    first match walking the hierarchy, CAS-76)."""
+    first match walking the hierarchy)."""
     for cls in _iter_class_hierarchy(classdef, resolve_class_source):
         for node in cls.body:
             if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
@@ -2020,7 +2018,7 @@ def _instance_attr_names(classdef: ast.ClassDef, resolve_class_source=None) -> f
 def _class_var_owner(attr: str, classdef: ast.ClassDef, resolve_class_source) -> str | None:
     """The name of the class in *classdef*'s hierarchy that DEFINES class variable
     *attr* at its own body level — the class whose ``def`` must re-run to reset it
-    (``Base.registry`` is owned by ``Base`` even when mutated via ``Sub``, CAS-76).
+    (``Base.registry`` is owned by ``Base`` even when mutated via ``Sub``).
     The nearest defining class wins; ``None`` if no class defines it."""
     for cls in _iter_class_hierarchy(classdef, resolve_class_source):
         if attr in _own_class_level_attr_names(cls):
@@ -2132,7 +2130,7 @@ def _iter_inplace_mutation_chains(method: ast.FunctionDef | ast.AsyncFunctionDef
 def _super_called_methods(method: ast.FunctionDef | ast.AsyncFunctionDef) -> frozenset[str]:
     """Method names invoked via ``super().<name>(...)`` in *method*'s body — the
     inherited implementations whose hidden mutations must also be attributed
-    (``super().__init__()`` running ``Base.__init__``, CAS-76)."""
+    (``super.__init__`` running ``Base.__init__``)."""
     out: set[str] = set()
     for node in _iter_method_body_nodes(method):
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
@@ -2159,9 +2157,9 @@ def _classify_method_mutations(
     * ``cls.<attr>`` (classmethod), ``BaseOrOwnClass.<attr>``, or ``self.<attr>``
       where ``<attr>`` is a class-level variable → class-variable mutation. The
       reset target is the class that OWNS the variable (a base class when the var
-      is inherited, CAS-76), so ``class_reset_targets`` is a SET of class names;
+      is inherited), so ``class_reset_targets`` is a SET of class names;
     * a module/free variable (neither a parameter nor a local) → free-var
-      mutation (reset via the CAS-68 A path).
+      mutation (reset via the A path).
 
     Inheritance is followed: *cdef* + *resolve_class_source* give hierarchy-aware
     attribute sets and owner lookup, and ``super().<m>()`` calls recurse into the
@@ -2227,7 +2225,7 @@ def _classify_method_mutations(
             # ``ClassName.<attr>`` — the class (own or a base) owns the var.
             class_targets.add(root)
         elif root in params or root in local_assigned:
-            # A non-receiver parameter (CAS-58's arg-mutation path) or a local.
+            # A non-receiver parameter (arg-mutation path) or a local.
             continue
         else:
             free.add(root)
@@ -2260,7 +2258,7 @@ def _decorator_free_var_mutations(
    . ``def logged(f): def wrap(*a): calls.append('x'); ...; return
     wrap`` — calling a ``@logged``-decorated function runs ``wrap``, which
     appends to the module list ``calls``. Collect the free vars each inner
-    function mutates that are NOT local to the decorator (those are CAS-68's
+    function mutates that are NOT local to the decorator (those are the
     closure case)."""
     scope = _factory_body_scope(decorator_def)
     out: set[str] = set()
@@ -2331,7 +2329,7 @@ def object_protocol_mutations(
     * *resolve_var_factory* — ``var -> factory FunctionDef`` (or ``None``), for a
       reassignment decorator ``g = counting(g)``.
     * *decorated_class* — ``var -> class_name`` for a class-based decorator
-      binding ``@Counter def task`` (or ``None``), CAS-80.
+      binding ``@Counter def task`` (or ``None``).
     """
     free_vars: set[str] = set()
     receivers: set[str] = set()
@@ -2370,7 +2368,7 @@ def object_protocol_mutations(
     def _apply_ctor(cdef, class_name):
         """A construction ``X()`` — the fresh instance's self-init is discarded, so
         only class-var / free-var mutations in ``__init__`` (or a dataclass
-        ``__post_init__``, CAS-79) persist."""
+        ``__post_init__``) persist."""
         for ctor in ('__init__', '__post_init__'):
             method = _class_method(cdef, ctor, resolve_class_source)
             if method is not None:
@@ -2601,7 +2599,7 @@ def object_protocol_mutations(
     # (the fresh subclass, discarded on re-derivation) — analyse its body exactly
     # like a constructor (``allow_self=False``) so only its class-var / free-var
     # mutations persist. A class-var accumulator (``Base.registry``) routes to the
-    # class-def channel (already under the CAS-75 cross-cell guard); a module/free
+    # class-def channel (already under the cross-cell guard); a module/free
     # var (``registry.append``) is collected SEPARATELY so the caller can apply the
     # same guard — the simulator cannot see this hidden cross-cell mutation.
     # Only ``__init_subclass__`` is handled here (metaclass hooks / __set_name__
@@ -2964,7 +2962,7 @@ def _literal_unpack_aliases(target: ast.expr, value: ast.expr) -> set[str] | Non
 def _is_free_reference_expr(node: ast.expr) -> bool:
     """True for an expression that only DEREFERENCES existing state.
 
-    These are the shapes that share BOTH halves of the CAS-184 argument, which is
+    These are the shapes that share BOTH halves of the argument, which is
     what makes them safe to refuse:
 
     * they alias — the result can be a live sub-object of a tracked variable, so
@@ -3022,7 +3020,7 @@ def reference_alias_targets(
     tree: ast.Module | None,
     user_ns: Mapping[str, Any] | None = None,
 ) -> frozenset[str]:
-    """Names bound by a pure DEREFERENCE of live state — the CAS-188 half.
+    """Names bound by a pure DEREFERENCE of live state — the dereference half.
 
     ``b = obj.inner`` / ``b = holder['k']`` / ``b = lst[0]`` / ``b = obj if c
     else None`` each bind the *same object* that is already reachable through a
@@ -3186,8 +3184,7 @@ def assigned_method_call_receivers(tree: ast.Module | None) -> frozenset[tuple[s
     ``h: BarContainer = ax.hist(data)`` (an ``ast.AnnAssign``). Such a statement
     BOTH draws on ``ax`` (the bars — a live-Axes mutation that cannot be replayed
     from the cached tuple) AND binds a value; caching the tuple while skipping the
-    draw is the exact incoherence CAS-194 kills, one statement-shape further out
-   .
+    draw is the exact incoherence killed here, one statement-shape further out.
 
     The whole RHS value is walked, so a draw nested in a larger expression
     (``h = [ax.hist(d) for d in data]``) is caught too. The runtime and the
@@ -3229,7 +3226,7 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
     :attr:`StatementAnalysis.all_mutated_vars` never surfaces it — which is why
     such accumulators were wrongly excluded from the loop-trust set and
     re-executed (re-draining one-shot iterables) on every downstream read.
-    [CAS-120]
+
 
     Detected shapes (single leaf statement only):
 
@@ -3465,7 +3462,7 @@ def analyze_statement(
     top_level_mutated = frozenset(m.variable for m in top_level_visitor.mutations)
 
     # Top-level vars grown by an accumulator method (append/extend/add/update) —
-    # the only mutations that earn the comprehension guidance hint (CAS-145 b).
+    # the only mutations that earn the comprehension guidance hint (b).
     accumulator_mutated = frozenset(
         m.variable
         for m in top_level_visitor.mutations

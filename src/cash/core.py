@@ -557,7 +557,7 @@ class Cash:
         self._own_pins: dict[int, str] = {}
         # code object -> frozenset of free vars with capture-unsafe uses
         self._capture_use_cache: dict = {}
-        # code object -> tuple of global names it reads (CAS-107 global folding)
+        # code object -> tuple of global names it reads (global folding)
         self._global_read_cache: dict = {}
         # func_name -> RNG modules that function was OBSERVED drawing from.
         # Learned on a miss; only these functions get a seed-epoch in their key.
@@ -701,8 +701,7 @@ class Cash:
         (e.g. a notebook's ``dep()`` vs a library module's ``dep()``).
 
         Opaque callables such as ``functools.partial`` lack both ``__qualname__``
-        and ``__name__``; fall back to ``repr`` so keying them never crashes
-       .
+        and ``__name__``; fall back to ``repr`` so keying them never crashes.
         """
         module = getattr(func, '__module__', None) or '__unknown__'
         qualname = (
@@ -2780,8 +2779,8 @@ class Cash:
 
         A generator expression, comprehension, or ``lambda`` compiles to its
         OWN code object hung off the enclosing ``co_consts``, so anything it
-        references is invisible in the outer ``co_names`` / instruction stream
-       . Walking the const tree is the same trick the CAS-93
+        references is invisible in the outer ``co_names`` / instruction stream.
+        Walking the const tree is the same trick the
         bytecode hash uses (``notebook/function_tracker.py``
         ``_update_code_object_hash``) for exactly this reason.
 
@@ -2802,7 +2801,7 @@ class Cash:
         and minus any global the function WRITES (``STORE_GLOBAL`` /
         ``DELETE_GLOBAL``). A written global is a side-effect accumulator (a
         ``global counter; counter += 1``) whose value drifts every call - folding
-        it would make every call miss (the CAS-104 lesson, applied to globals).
+        it would make every call miss (the lesson, applied to globals).
         Modules / callables / classes are filtered per-call at fold time (a
         name's bound value can change). Cached per code object.
 
@@ -2852,7 +2851,7 @@ class Cash:
     def _stabilize_for_global_hash(v: Any, hash_callable, _depth: int = 0) -> Any:
         """Rewrite *v* so callables (incl. lambdas held in containers) are
         replaced by their source hash, making a container of callables hashable
-        and content-sensitive (CAS-107 dict-dispatch channel)."""
+        and content-sensitive (dict-dispatch channel)."""
         if _depth > 8:
             return v
         if callable(v) and not isinstance(v, type):
@@ -3232,7 +3231,7 @@ class Cash:
             # restart). A value that has a content hash must key on content so
             # the entry survives; the modest extra hashing cost is the price of
             # the flagship "restart-and-run-all in seconds" guarantee. Mirrors
-            # CAS-185's principle: the reproducible signal, not the volatile
+            # principle: the reproducible signal, not the volatile
             # in-memory one, is authoritative.
             builtin_hash = self._try_builtin_type_hash(arg)
             if builtin_hash is not None:

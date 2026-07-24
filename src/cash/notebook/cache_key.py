@@ -124,7 +124,7 @@ def is_module_like(var_name: str, val: object, virtual_modules: set[str]) -> boo
     """Return True if the value should be treated as a module (skipped from input_hashes).
 
     PUBLIC because the lineage WRITE path and the upstream simulation must apply
-    the identical test. They previously did not, and the asymmetry was CAS-214:
+    the identical test. They previously did not, and the asymmetry was:
     this read path skips a module, while the write path fell through to
     ``compute_hash(module)``, which cannot pickle a module and returns
     ``sha256(str(id(module)))`` -- a memory address, fresh on every kernel start.
@@ -428,7 +428,7 @@ def compute_cache_key(
     # tracked input. Without this, re-seeding upstream leaves the key identical
     # and cash replays the previous seed's numbers. Omitted entirely
     # when absent, so keys for non-drawing statements are byte-identical to
-    # their pre-CAS-223 values and no existing entry is invalidated.
+    # their pre-existing values and no existing entry is invalidated.
     rng_component = f":rng{rng_fingerprint}" if rng_fingerprint else ""
 
     # Globals the called functions reach for at CALL time, including any bound

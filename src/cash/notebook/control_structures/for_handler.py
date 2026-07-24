@@ -69,7 +69,7 @@ class ForLoopHandler:
     # to the per-iteration path, which iterates the single, already-evaluated
     # iterator.  Method calls (``df['c'].unique()``, ``d.items()``) are assumed
     # to be pure accessors and stay on the fast path so re-iterable containers
-    # (ndarray/Series/DataFrame/dict views) keep the current behaviour. [CAS-121]
+    # (ndarray/Series/DataFrame/dict views) keep the current behaviour.
     _PURE_ITER_PRODUCERS = frozenset({
         'range', 'sorted', 'reversed', 'list', 'tuple', 'set', 'frozenset',
         'dict', 'enumerate', 'zip', 'map', 'filter', 'iter', 'bytes',
@@ -162,7 +162,7 @@ class ForLoopHandler:
             # first-run result.  Only take the fast path when re-evaluating the
             # header is provably safe; otherwise fall through to the
             # per-iteration path below, which consumes the single, already
-            # evaluated ``iterable``. [CAS-121]
+            # evaluated ``iterable``.
             if (self._should_execute_loop_as_single_unit(node, iterable, parent_context)
                     and self._iter_header_safe_to_reevaluate(node.iter, iterable)):
                 if self.debug:
@@ -427,8 +427,7 @@ class ForLoopHandler:
         The statement's OWN annotation is resolved here, under the loop's. Body
         statements are separate cache entries, so a ``# @cash:no-cache`` on one
         must not leak onto its siblings — resolving per statement rather than
-        applying the loop's whole-range scan is what keeps the sibling cached
-       .
+        applying the loop's whole-range scan is what keeps the sibling cached.
 
         Returns True if the statement was freshly computed (status == 'COMPUTED').
         """
@@ -478,7 +477,7 @@ class ForLoopHandler:
 
         Method calls (``df['c'].unique()``, ``d.items()``) are treated as pure
         accessors and kept on the fast path, so re-iterable containers keep
-        the current byte-identical behaviour. [CAS-121]
+        the current byte-identical behaviour.
         """
         # One-shot self-iterators: re-iterating drains an exhausted source.
         # (Most lack ``__len__`` and never reach the single-unit heuristic, but

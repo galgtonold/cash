@@ -267,11 +267,11 @@ class MismatchClassifier:
             if exec_code and simulation_trace_codes is not None:
                 # A reassignment accumulator (``total = total + b``) is produced by
                 # a per-iteration body statement, so its recorded code carries the
-                # CAS-86 ``# __iteration_context__:`` marker while the simulation
+                # ``# __iteration_context__:`` marker while the simulation
                 # trace codes are stored stripped. Strip it here too (mirroring
                 # _check_loop_derived_trust_override) or the marked code never
                 # matches and the accumulator is falsely treated as overwritten
-                # downstream, defeating the loop trust. [CAS-120]
+                # downstream, defeating the loop trust.
                 normalized_exec_code = re.sub(
                     r'# __iteration_context__:.*?\n', '', exec_code
                 ).strip()
@@ -341,8 +341,8 @@ class MismatchClassifier:
         Returns True if the caller should stop processing this variable
         (it was already handled â€” marked broken, kept, or lineage reset).
         """
-        # CAS-165/166: a bare ``est.fit(X, y)`` receiver has a SELF-REFERENTIAL
-        # key. CAS-138 adds it to the statement's OUTPUTS (so the fit bumps its
+        # a bare ``est.fit(X, y)`` receiver has a SELF-REFERENTIAL
+        # key. cash adds it to the statement's OUTPUTS (so the fit bumps its
         # lineage) while it is also an INPUT (its pre-fit lineage pins the key).
         # On a warm isolated re-run the bumped lineage is "ahead" of the virtual
         # (constructor) lineage exactly like the downstream-advancement case, but
@@ -366,7 +366,7 @@ class MismatchClassifier:
             if self.debug:
                 logger.debug(
                     "[UPSTREAM_DEBUG]   -> '%s' is a bare estimator .fit() receiver "
-                    "(self-referential CAS-138 key). Resetting lineage from %s to "
+                    "(self-referential key). Resetting lineage from %s to "
                     "virtual %s for a stable warm-re-run cache hit.",
                     var_name, actual_lineage[:8], final_virtual_hash[:8],
                 )
@@ -408,7 +408,7 @@ class MismatchClassifier:
         # and the loop recomputes from scratch — mirroring the for-loop path,
         # whose per-iteration capture keeps the guard's base distinct. Scoped to
         # input∩output, so it fires only when re-running the loop cell itself,
-        # never when a downstream cell merely reads the var. [CAS-59]
+        # never when a downstream cell merely reads the var.
         if (required_inputs and var_name in required_inputs
                 and current_cell_outputs and var_name in current_cell_outputs
                 and self._is_singleunit_loop_nolineage_selfmod(var_name)):
@@ -436,7 +436,7 @@ class MismatchClassifier:
     def _is_singleunit_loop_nolineage_selfmod(self, var_name: str) -> bool:
         """True if *var_name* is a no-lineage var self-modified by a single-unit loop.
 
-        Detects the CAS-59 shape: the variable's producing statement is a
+        Detects the shape: the variable's producing statement is a
         ``while`` or ``with`` block (executed as one opaque unit, unlike a ``for``
         loop's per-iteration replay) that writes the variable in place or
         re-binds it each pass — ``n += 1``, ``total += n``, ``acc.append(..)``,
@@ -477,7 +477,7 @@ class MismatchClassifier:
         a live sklearn-style estimator.
 
         A bare ``clf.fit(X, y)`` is routed to CACHING with a self-referential key:
-        CAS-138 adds ``clf`` to the statement's outputs (so the fit bumps its
+        cash adds ``clf`` to the statement's outputs (so the fit bumps its
         lineage) while ``clf`` is also an input (its pre-fit lineage pins the key),
         so ``executed_cell_codes['clf']`` records the bare-fit statement. The
         caller only reaches here on a lineage mismatch with the upstream

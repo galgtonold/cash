@@ -150,8 +150,8 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     checked first — it proves staleness cheaply and we never hash on the
     size-differs path. When the size matches and a content hash was recorded,
     the content hash is authoritative: equal content is FRESH even if the mtime
-    moved (fixes CAS-98 touch), and differing content is STALE even if the mtime
-    is indistinguishable (fixes CAS-10 same-size quick edit). Snapshots written
+    moved (touch), and differing content is STALE even if the mtime
+    is indistinguishable (same-size quick edit). Snapshots written
     before content hashing (no ``hash`` key) fall back to the old mtime
     tolerance so pre-existing cache entries keep working.
 
@@ -163,7 +163,7 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     a matching sampled hash is trusted only when the mtime also matches. Any
     real in-place edit bumps mtime, so the stale read is caught; the sole cost
     is that merely *touching* a large file forces a (safe) spurious recompute.
-    CAS-98's "ignore mtime" reasoning holds only when the hash is authoritative,
+    "ignore mtime" reasoning holds only when the hash is authoritative,
     i.e. for fully-hashed (<= cap) files, which keep the touch-tolerant path.
 
     ``stale_reason`` is ``None`` when fresh, else one of

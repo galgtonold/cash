@@ -481,7 +481,7 @@ class FileAccessTracker:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
             return
         self._add_tracked(abs_path)
-        # CAS-84: a RELATIVE read path also records the UN-resolved relative
+        # a RELATIVE read path also records the UN-resolved relative
         # string as its own dependency. The realpath above is frozen to the cwd
         # at track time, so after an ``os.chdir`` edit it still looks fresh even
         # though a re-run would read a different file. The relative dep is

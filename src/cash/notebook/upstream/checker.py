@@ -128,7 +128,7 @@ class UpstreamChecker:
         self.compute_hash_fn: Callable[[Any], str] | None = compute_hash_fn
         self.function_tracker: Any | None = None
 
-        # CAS-173: per-session ledger of already-warned broken upstream cells,
+        # per-session ledger of already-warned broken upstream cells,
         # keyed by cell index -> cell source hash. Keeps the "cell N has a
         # syntax error" warning to once per distinct break (not once per
         # downstream cell run) while still re-warning when the break changes or
@@ -325,7 +325,7 @@ class UpstreamChecker:
             # be reset to its cell-entry base or the value accumulates.
             # New-column writes read from OTHER columns (``df['VolAdj']=...``) are
             # NOT self-referential and keep their per-statement cache. Same
-            # no-cache opt-out (a no-cache self-write must advance, not reset -- CAS-51).
+            # no-cache opt-out (a no-cache self-write must advance, not reset).
             current_cell_selfref_vars = set(
                 selfref_inplace_write_vars(ast.parse(cell_code))
             ) - nocache_vars
@@ -351,7 +351,7 @@ class UpstreamChecker:
                 # the global accumulating on an isolated re-run because nothing in
                 # the cell text names it. Attribute the mutation back to the
                 # global and add it to the cell's inputs so the reset loop (which
-                # iterates required_inputs) restores its producer's base (CAS-68 A).
+                # iterates required_inputs) restores its producer's base (A).
                 func_global_muts = function_global_mutations(
                     ast.parse(cell_code), func_sources.get
                 ) - nocache_vars
@@ -361,7 +361,7 @@ class UpstreamChecker:
             # its own object -- a mutated mutable-default arg (``def collect(x,
             # acc=[]): acc.append(x)``) or a function-attribute counter -- keeps
             # accumulating across calls. Force-reset the function so its ``def``
-            # re-runs and recreates fresh state on an isolated re-run (CAS-68 B).
+            # re-runs and recreates fresh state on an isolated re-run (B).
             if _called_function_names(ast.parse(cell_code)):
                 func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
                 current_cell_stateful_funcs = set(
@@ -370,7 +370,7 @@ class UpstreamChecker:
                 # A closure variable (``c = make_counter()``) whose factory returns
                 # an inner function that mutates factory-local state accumulates
                 # across calls; force-reset it so ``c = make_counter()`` re-runs
-                # and rebuilds the closure fresh (CAS-68 B closure case).
+                # and rebuilds the closure fresh (B closure case).
                 var_factories = self._notebook_var_factories(cell_code, notebook_path)
 
                 def _resolve_var_factory(name, _fs=func_sources_all, _vf=var_factories):
@@ -417,7 +417,7 @@ class UpstreamChecker:
             # a constructor, a decorated call, or an instance / class method whose
             # body mutates hidden state. Resolve the class / wrapper / context
             # manager, analyse the invoked method, and route the mutation to the
-            # matching reset channel: a free var (mutated + inputs, CAS-68 A), the
+            # matching reset channel: a free var (mutated + inputs, A), the
             # receiver instance (method-receiver), or the class def (stateful
             # re-run).
             op_tree = ast.parse(cell_code)
@@ -485,7 +485,7 @@ class UpstreamChecker:
                     op_func_sources.get, _op_var_factory,
                     decorated_class=_decorated_class,
                 )
-                # The free-var channel resets via the CAS-68 A content-base path,
+                # The free-var channel resets via the A content-base path,
                 # which already suppresses cross-cell accumulators — apply it
                 # directly.
                 op_free = op_resets.free_vars - nocache_vars
@@ -501,13 +501,13 @@ class UpstreamChecker:
                 # the re-derivation loses the other cell's contribution and would
                 # corrupt EVEN THE FIRST run. Suppress those — a cross-cell
                 # accumulator needs a per-cell-base snapshot this reset cannot
-                # provide. The FILED CAS-69/70/71/73 forms construct the receiver
-                # once (no cross-cell in-place build) and are unaffected. [CAS-75]
+                # provide. The FILED forms construct the receiver
+                # once (no cross-cell in-place build) and are unaffected.
                 op_receivers = op_resets.receivers - nocache_vars
                 op_class_defs = op_resets.class_defs - nocache_vars
                 # A base ``__init_subclass__`` free-var registry hides
                 # its mutation behind class creation, so — unlike an ordinary
-                # CAS-68 free var — the simulator's content-base guard cannot see
+                # free var — the simulator's content-base guard cannot see
                 # that a SIBLING subclass cell also appends to it. Guard it with
                 # the same cross-cell suppression as the receiver / class-def
                 # channels: if another cell also registers into it, this cell is
@@ -548,7 +548,7 @@ class UpstreamChecker:
             # instead of accumulating. For a no-lineage source the
             # content-base guard restores it via ``current_cell_mutated``; for a
             # lineage-carrying aliased DataFrame the source must also join the
-            # selfref / method-receiver sets so the CAS-54/57 force-reset fires
+            # selfref / method-receiver sets so the force-reset fires
             # (``df2 = df; df2['a'] = df2['a']*2`` doubled). The selfref set is
             # column-key-scoped, so an aliased NEW-column write (``df2['b'] =
             # df2['a']*2``) is still excluded and keeps its cache.
@@ -800,7 +800,7 @@ class UpstreamChecker:
 
         Used to resolve a closure variable back to the factory that produced it,
         so a stateful closure can be reset by re-running the factory call
-        (CAS-68 B closure case). Last assignment wins.
+        (B closure case). Last assignment wins.
         """
         factories: dict[str, str] = {}
         cells = self._notebook_cells_for(notebook_path)
@@ -1148,7 +1148,7 @@ class UpstreamChecker:
                 getattr(state, attr, {}).pop(var, None)
             state.vars_with_mutation_lineage.discard(var)
             if self.debug:
-                logger.debug("[UPSTREAM] CAS-62 evicted orphaned variable '%s'", var)
+                logger.debug("[UPSTREAM] evicted orphaned variable '%s'", var)
 
     def _warn_broken_upstream_cells(
         self,
@@ -1158,8 +1158,8 @@ class UpstreamChecker:
         """Emit a visible warning for any UPSTREAM cell that cannot be parsed.
 
         A half-written cell the user has SAVED but not run makes the upstream
-        simulator SKIP that cell (see ``VirtualLineage._simulate_one_cell``,
-        CAS-173) so unrelated downstream cells keep caching. But the user must
+        simulator SKIP that cell (see ``VirtualLineage._simulate_one_cell``)
+        so unrelated downstream cells keep caching. But the user must
         still be told: the broken cell will not run, and any cell that depends
         on it can no longer have its dependency tracked. Without this, caching
         degrades silently mid-edit while every signal the user has (the badge,
@@ -1171,7 +1171,7 @@ class UpstreamChecker:
         CHANGED break re-warns, and a fixed cell that is later re-broken warns
         again. Parsing mirrors the simulator exactly (``strip_magics`` then
         ``ast.parse`` on ``\\r\\n``-normalised source) so a VALID cell — the
-        multi-line ``%``-format print of CAS-163 included — is never falsely
+        multi-line ``%``-format print — is never falsely
         flagged. Returns the set of broken cell indices (0-based).
         """
         broken: dict[int, str] = {}
@@ -1259,14 +1259,14 @@ class UpstreamChecker:
             if notebook_cells is None or current_cell_idx is None:
                 return UpstreamResult([], 0.0, 0.0)
 
-            # CAS-173: disclose any unparseable UPSTREAM cell BEFORE simulating.
+            # disclose any unparseable UPSTREAM cell BEFORE simulating.
             # The simulator skips such a cell (VirtualLineage._simulate_one_cell)
             # so unrelated downstream cells keep caching, but the user must be
             # told which cell is broken — otherwise caching degrades silently
             # mid-edit while the badge and auto_cache_enabled still say it is on.
             self._warn_broken_upstream_cells(notebook_cells, current_cell_idx)
 
-            # CAS-62: a variable whose definition was removed/renamed across an
+            # a variable whose definition was removed/renamed across an
             # edit is orphaned — no cell produces it anymore. Evict it (and its
             # transitive consumers) so they re-run from the start and raise
             # NameError like a fresh kernel, instead of serving a stale value.
@@ -1294,7 +1294,7 @@ class UpstreamChecker:
                 logger.debug("[UPSTREAM_DEBUG] Simulation result: %s stmts to re-execute, %s stmts restored from cache",
                       len(statements_to_reexecute), len(restored_info))
 
-            # ADR-017 / CAS-225: a bare ``np.random.seed(N)`` binds no variable,
+            # ADR-017: a bare ``np.random.seed(N)`` binds no variable,
             # so the simulator never links it to a downstream draw. If the
             # current cell draws and an upstream seed cell was edited but not
             # re-run, re-execute that seed cell first — its side effect (the new
@@ -1331,7 +1331,7 @@ class UpstreamChecker:
             self._label_rng_rerun_metrics(executed_metrics, rng_rerun)
             total_execution_time = self._sum_execution_times(executed_metrics)
 
-            # CAS-226 / CAS-227 (ADR-018): restore the position-correct RNG state
+            # (ADR-018): restore the position-correct RNG state
             # right before the current draw runs, so a re-executed draw continues
             # from the stream position (and under the seed) it holds top-to-bottom
             # rather than wherever the live state was last left. Runs after any
@@ -1470,7 +1470,7 @@ class UpstreamChecker:
         the seed and the current cell: those intervening draws advanced the stream
         under the OLD seed, so the current draw would run from the new seed's
         position 0 instead of the position the chain holds top-to-bottom
-        (CAS-226/227 combined case). So when a seed is stale, re-run the whole RNG
+        (combined case). So when a seed is stale, re-run the whole RNG
         chain from the earliest stale seed to the current cell, in order: the
         re-seed updates the global epoch, which makes each intervening draw miss
         and recompute under the new seed, advancing the stream correctly.

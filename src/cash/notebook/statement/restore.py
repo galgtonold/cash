@@ -114,7 +114,7 @@ class StatementRestorer:
         other half.
 
         So an entry may replay its RNG state only while the epochs it was
-        written under still hold. Entries written before CAS-223 carry no
+        written under still hold. Older entries carry no
         epochs, and are replayed as before -- their regime is unknown, and the
         pre-existing behaviour is the safer default for them.
         """
@@ -174,7 +174,7 @@ class StatementRestorer:
                     if self.debug:
                         logger.debug("[CACHE DEBUG] Restoring RNG state")
                     restore_rng_state(rng_state)
-                # Absent on entries written before CAS-90 — restore_object_rng_states
+                # Absent on older entries — restore_object_rng_states
                 # treats None/{} as a no-op, so old cache entries load unchanged.
                 object_rng_states = payload.get('rng_object_states')
             else:
@@ -188,7 +188,7 @@ class StatementRestorer:
             for var_name, value in restored_vars.items():
                 self._restore_one_var(tracking_state, var_name, value, metadata, inplace)
 
-            # CAS-90: advance object-held generators to the post-state the
+            # advance object-held generators to the post-state the
             # cached statement left them in — the module-global equivalent of
             # restore_rng_state above.  Runs AFTER the variable loop so that a
             # carrier which is also an OUTPUT of this statement ends on the
@@ -237,7 +237,7 @@ class StatementRestorer:
         """Write one restored variable into the shell namespace and update tracking state.
 
         For a var in *inplace_restore* (a bare ``estimator.fit(...)`` receiver,
-        CAS-138) the fitted state is transferred ONTO the existing object rather
+) the fitted state is transferred ONTO the existing object rather
         than rebinding the name, so every alias of the receiver (``backup = clf``)
         observes the fit -- mirroring what an in-place ``.fit()`` does at runtime.
         A rebind would leave aliases pointing at the stale, unfitted object.

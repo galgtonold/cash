@@ -376,7 +376,7 @@ class FileBackend(CacheBackend):
                 ImportError, EOFError) as exc:
             # AttributeError/ImportError: the pickled value references a
             # binding that doesn't exist in this process (e.g. a __main__
-            # class from a previous kernel session, CAS-93). The entry is
+            # class from a previous kernel session). The entry is
             # unrestorable here - report it absent so callers recompute
             # instead of crashing the user's cell.
             #
@@ -670,7 +670,7 @@ class FileBackend(CacheBackend):
         """Refuse (skip) any single object larger than half this tier's cap.
 
         The file tier's LRU cap is adaptive (a fraction of free disk,
-        CAS-142), so its per-object refusal threshold is derived from the
+), so its per-object refusal threshold is derived from the
         instance cap rather than a static class attr. Storing something bigger
         than half the cap would leave under half the cap for everything else
         and invite a write-and-evict treadmill; a clean skip (the value stays

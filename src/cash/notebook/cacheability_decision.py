@@ -71,7 +71,7 @@ __all__ = [
 # no scenario in which caching one pays for the risk.  Refuse outright.
 #
 # DETECTION: matplotlib is an OPTIONAL dependency, so this path must never
-# import it (CAS-129 shipped an unimportable package exactly that way).  We walk
+# import it (shipped an unimportable package exactly that way). We walk
 # the MRO and compare ``module.qualname`` STRINGS, which imports nothing.  We
 # match the BASE classes, not the leaf: ``Axes3D`` lives in ``mpl_toolkits`` but
 # inherits ``_AxesBase``, and a user subclass leafs in ``__main__``.  Matching
@@ -91,7 +91,7 @@ _IDENTITY_COUPLED_BASES: Mapping[str, str] = {
 # levels and covers ``dict`` — ``rows = list(axes)`` nests a list of ndarrays,
 # and ``plt.subplot_mosaic(...)`` returns ``dict[str, Axes]`` (and typically
 # binds ONLY that dict, so nothing bare-Figure/Axes co-occurs to trip the check
-# for the statement) — CAS-155.  The depth cap also makes the plain recursion
+# for the statement). The depth cap also makes the plain recursion
 # cycle-safe (unlike ``deepcopy`` it has no memo).
 _CONTAINER_SCAN_LIMIT = 8
 _CONTAINER_SCAN_MAX_DEPTH = 4  # dict-of-list-of-Axes is 2 deep; leave headroom.
@@ -196,9 +196,9 @@ def receiver_is_identity_coupled(value: Any) -> bool:
     ``ax.plot(...)`` returns a ``Line2D``; keying the mutation decision on the
     RECEIVER (this predicate) rather than the return type is what tells
     ``ax.hist()`` (Axes -> in-place draw) apart from ``df.hist()`` (DataFrame ->
-    genuinely receiver-pure, must not bump ``df``) — CAS-194.
+    genuinely receiver-pure, must not bump ``df``).
 
-    Reuses the CAS-144 identity-coupled scan (direct value + bounded container
+    Reuses the identity-coupled scan (direct value + bounded container
     walk for the ``fig, axes = plt.subplots(2, 2)`` object-array spelling), so it
     imports no matplotlib and covers subclasses/projections.
     """

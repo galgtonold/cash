@@ -223,7 +223,7 @@ class NotebookSimulator:
         # mutated mutable-default arg, a function-attribute counter) must have its
         # ``def`` re-run to recreate fresh state — force its producer to re-run by
         # marking it broken. On ``run_all`` the def re-runs to the same fresh
-        # object first, so this only adds a cheap redundant redefine (CAS-68 B).
+        # object first, so this only adds a cheap redundant redefine (B).
         if current_cell_stateful_funcs:
             for fn in current_cell_stateful_funcs:
                 if fn in self.shell.user_ns:
@@ -259,7 +259,7 @@ class NotebookSimulator:
             # staleness is lineage-invisible, so force the reset from the static
             # detector: mark broken and let the producers restore the cell-entry
             # base. On ``run_all`` the producers re-run to the same base first, so
-            # this only adds a cheap redundant restore there. [CAS-65]
+            # this only adds a cheap redundant restore there.
             if current_cell_crossref_reassigned and var_name in current_cell_crossref_reassigned:
                 broken_vars.add(var_name)
                 continue
@@ -285,13 +285,13 @@ class NotebookSimulator:
                 # accumulate unless restored to its cell-entry base. Two cases:
                 #   * METHOD receivers (``b.items.append(..)``): no-output method
                 #     statements skip the per-statement cache (``results.append(x)``
-                #     + ``obj.total += x``). [CAS-53]
+                # + ``obj.total += x``).
                 #   * SELF-REFERENTIAL subscript/attr writes (``df['a']=df['a']*2``,
-                #     ``df['a']+=1``, ``df.iloc[i,j]+=x``). [CAS-54]
+                # ``df['a']+=1``, ``df.iloc[i,j]+=x``).
                 # Restore via the same content/lineage-base machinery used for
                 # no-lineage self-writes. Scoped so that a write to a NEW column read
                 # from OTHER columns (``df['VolAdj']=df.groupby('Close')..``) is NOT
-                # included and keeps its per-statement cache (CAS-42 preserved).
+                # included and keeps its per-statement cache (preserved).
                 force_reset = (
                     (current_cell_method_receivers and var_name in current_cell_method_receivers)
                     or (current_cell_selfref_vars and var_name in current_cell_selfref_vars)
@@ -308,7 +308,7 @@ class NotebookSimulator:
                     # cell-entry base — it survives the collapse and still betrays the
                     # stale (own-prior-mutation) value on an isolated re-run, while a
                     # fresh forward run (producer restored the base) leaves them equal.
-                    # [CAS-57]
+                    #
                     base_lineage = self.executed_input_lineages.get(var_name, {}).get(var_name)
                     if base_lineage is not None and live_lineage != base_lineage:
                         broken_vars.add(var_name)
@@ -337,7 +337,7 @@ class NotebookSimulator:
             # Scoped to vars produced by an UPSTREAM cell: a genuine
             # self-modification whose producer is a statement of the CURRENT cell
             # (``df = df.iloc[1:]`` re-run) must still hit the guard, or its
-            # isolated re-run would double-apply. [CAS-88 layer 2]
+            # isolated re-run would double-apply. [layer 2]
             if virtual_lineage is not None:
                 prod_code = self.executed_cell_codes.get(var_name)
                 produced_by_current_cell = True
@@ -418,7 +418,7 @@ class NotebookSimulator:
         never looked at — the cell re-runs against the leftovers of its own
         previous run and prints ``got=[]`` / ``total=0`` where ``run_all`` (which
         re-runs the producer first) prints ``got=[0, 1, 2]`` / ``total=55``.
-        [CAS-118 / CAS-50]
+
 
         Neither existing staleness signal can see this. The var carries no
         ``_cash_lineage_hash`` and its lineage never advances (the producer's
@@ -439,7 +439,7 @@ class NotebookSimulator:
         (producer re-ran, object fresh) compares equal and this is a no-op, and
         a first run has no baseline at all.
 
-        The CAS-75 cross-cell-accumulator hazard does not apply: that reset
+        The cross-cell-accumulator hazard does not apply: that reset
         re-derives an object that another cell also mutates in place, whereas
         here re-executing the producer chain is exactly what ``run_all`` does.
         """
@@ -719,7 +719,7 @@ class NotebookSimulator:
         # input lineage consistent, so the trust would serve a stale value. Drop
         # such accumulators so they follow the baseline lineage-mismatch path
         # (which re-executes correctly); a constant-init accumulator keeps the
-        # new trust so one-shot iterables are not re-drained. [CAS-120]
+        # new trust so one-shot iterables are not re-drained.
         externally_tainted = self._virtual_lineage._loop_accumulators_with_external_init(
             vars_mutated_by_loops, simulation_trace, loop_target_vars
         )
@@ -772,7 +772,7 @@ class NotebookSimulator:
         # re-running ACCUMULATES (advances), never resets. Pass 2 still flags such
         # a var stale (its runtime lineage advanced past the simulation's), which
         # would re-execute its producer and reset it -- so drop no-cache-written
-        # vars from broken_vars here (the CAS-47 self-write-set exclusion only
+        # vars from broken_vars here (the self-write-set exclusion only
         # covered the stale-value guard, not the pass-2 lineage mismatch).
         if current_cell_nocache_vars:
             removed = broken_vars & set(current_cell_nocache_vars)

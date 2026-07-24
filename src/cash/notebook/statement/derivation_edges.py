@@ -129,7 +129,7 @@ def detect_derivation_edges(
 def _detect_numpy_view_edge(
     derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
 ) -> None:
-    """CAS-89: ``out`` is a numpy view; a future mutation of ``out`` must bump
+    """``out`` is a numpy view; a future mutation of ``out`` must bump
     the root base (and any intermediate NAMED view along the ``.base`` chain)."""
     try:
         import numpy as np
@@ -196,7 +196,7 @@ def _pandas_refholder_types() -> tuple[type, ...]:
 def _detect_pandas_refholder_edge(
     derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
 ) -> None:
-    """CAS-115: ``out`` is a groupby/rolling/... that holds a live reference to
+    """``out`` is a groupby/rolling/... that holds a live reference to
     a source frame; a future mutation of that FRAME must bump ``out``."""
     refholder_types = _pandas_refholder_types()
     if not refholder_types or not isinstance(value, refholder_types):

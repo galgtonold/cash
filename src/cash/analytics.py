@@ -23,7 +23,7 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Sanity cap on the telemetry db file. An events log this large is runaway
-# growth or a corrupt/garbage file (CAS-203 saw a 2.8 GB SQLITE_NOTADB file that
+# growth or a corrupt/garbage file (saw a 2.8 GB SQLITE_NOTADB file that
 # made every ``import cash`` print an error). Analytics is best-effort
 # observability, so a file over the cap is dropped and recreated rather than
 # carried forever.
@@ -105,7 +105,7 @@ class AnalyticsManager:
         Analytics is best-effort observability, never correctness, so
         a pre-existing db that cannot be opened — corrupt pages, a truncated
         write, a non-sqlite or oversized file — must NEVER surface a raw sqlite
-        error to the user on every ``import cash`` (CAS-203, which saw a 2.8 GB
+        error to the user on every ``import cash`` (which saw a 2.8 GB
         ``SQLITE_NOTADB`` file warn forever). The recovery ladder:
 
           1. Drop a file over ``_MAX_DB_BYTES`` up front (runaway / bloat).

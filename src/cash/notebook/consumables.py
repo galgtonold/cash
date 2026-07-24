@@ -12,7 +12,7 @@ Together those two properties break the isolated re-run of a consumer cell: the
 cell's required input is a live object that its producer left in one state and
 the previous run left in another, and nothing can put it back. The fix is to
 re-execute the producer, which is exactly what ``run_all`` does (and why
-``run_all`` is already correct for these cases). See CAS-118 / CAS-50.
+``run_all`` is already correct for these cases).
 
 **Why a bespoke probe instead of the existing content-hash check?**
 ``object_hashing.compute_hash`` falls back to ``sha256(str(id(obj)))`` for
@@ -213,7 +213,7 @@ def has_diverged(obj: Any, baseline: Any, *, had_baseline: bool) -> bool:
     alternative would be to assume divergence and re-execute their producer on
     every isolated re-run — trading a silent wrong answer for unconditional
     recompute of anything that touches them. That is a real (narrower) gap of
-    the same family as CAS-50 and is deliberately left for a later stage rather
+    the same family, and is deliberately left for a later stage rather
     than paid for by every cell here.
     """
     token = consumable_state(obj)

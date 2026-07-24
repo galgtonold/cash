@@ -20,7 +20,7 @@ already-measured numbers), so every clamp branch is unit-testable without
 touching the real machine; the ``resolve_*`` wrappers read the machine and
 delegate.
 
-``psutil`` is an *optional* dependency (CAS-129 bare-install guard), so the
+``psutil`` is an *optional* dependency (bare-install guard), so the
 RAM source guards its import and falls back to a fixed cap when it is
 missing — importing psutil unconditionally here would make a bare
 ``pip install cash-lib`` unimportable.

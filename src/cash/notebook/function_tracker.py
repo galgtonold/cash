@@ -127,7 +127,7 @@ def _update_code_object_hash(h: Any, code_obj: Any) -> None:
     ``str(co_consts)`` is NOT usable for consts holding nested code objects
     (a factory's inner ``def``): their repr embeds the compile-time memory
     address, so two compiles of IDENTICAL source hashed differently and the
-    cache key of every consumer drifted run-to-run (CAS-93 fallout). Recurse
+    cache key of every consumer drifted run-to-run (fallout). Recurse
     into nested code objects structurally instead.
     """
     h.update(code_obj.co_code)

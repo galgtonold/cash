@@ -4,10 +4,10 @@
 new instance of one recurring failure: some input hashes *unstably* across runs,
 so the statement's cache key differs every run, so it never hits — yet cash still
 pays the (large) serialisation on every run. The cache can never pay the user
-back, and the statement is net-negative forever. Known instances: CAS-165 (bare
-fit on a DataFrame, -25 s), CAS-166 (>8 MiB content-hash sampling destabilises
-keys across restarts), CAS-171 (a ``make_classification``-derived frame poisons
-downstream caching, -7.9 s). We have conceded we cannot enumerate the causes, so
+back, and the statement is net-negative forever. Known instances: a bare
+fit on a DataFrame (-25 s); >8 MiB content-hash sampling that destabilises
+keys across restarts; a ``make_classification``-derived frame that poisons
+downstream caching (-7.9 s). We have conceded we cannot enumerate the causes, so
 this module bounds the *consequence* regardless of cause.
 
 **What is and is not guarded.** The guard fires on the perpetual-MISS
@@ -25,7 +25,7 @@ normal, healthy state. The discriminator is key CHURN, not cost.
   lets a statement recover on its own if its key later stabilises onto an entry
   that already exists.
 * Persists only the *verdict* (guarded / not), and only when it FLIPS. The hot
-  path never touches disk: CAS-149 removed a per-cell fsync that cost 8-12 ms a
+  path never touches disk: an earlier change removed a per-cell fsync that cost 8-12 ms a
   cell, and this must not reintroduce one under a new name. The churn counter is
   in-memory-only for exactly that reason — persisting it would mean a write per
   cell. The cost is that a session which accumulates fewer than
@@ -75,8 +75,8 @@ _STORE_VERSION = 1
 # statement could have cached was ever reachable again. An interactive workflow
 # that edits an upstream cell five times running, never once re-running the same
 # state, is unusual — and if it happens, a single repeat run hits and resets the
-# counter to zero before the guard ever fires. The known instances (CAS-165/166/
-# 171) churn on EVERY run, so they reach five within five run-alls of an
+# counter to zero before the guard ever fires. The known instances
+# churn on EVERY run, so they reach five within five run-alls of an
 # otherwise stable notebook. That gap is the discriminator.
 GUARD_AFTER_CONSECUTIVE_CHURN_MISSES = 5
 
@@ -187,7 +187,7 @@ class MissGuard:
     def _persist(self) -> None:
         """Write the guarded set. Called ONLY when a verdict flips.
 
-        Never per cell — that is the CAS-149 fsync-per-cell regression under a
+        Never per cell — that is the fsync-per-cell regression under a
         new name. A flip happens a handful of times in a notebook's whole life.
         Atomic via ``os.replace`` so a crashed write can't leave a torn file for
         the next session to choke on; no ``fsync``, because losing the last

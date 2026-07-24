@@ -1,6 +1,6 @@
 """Short forms for the badge's ``skipped_reason`` text.
 
-The CAS-172 miss guard explains itself in ~46 words. That reads well once, in a
+The miss guard explains itself in ~46 words. That reads well once, in a
 drawer. Printed inline, per statement, it put a paragraph on the badge SEVEN
 times for a single cell -- ~380 words of prose to say the same thing seven
 times. The badge is a glanceable UI, and noise is how a user learns to ignore
@@ -36,7 +36,7 @@ GUARD_SHORT = "unstable key"
 
 
 def is_guard_reason(reason: str | None) -> bool:
-    """True if *reason* is the CAS-172 guard's message.
+    """True if *reason* is the guard's message.
 
     Identity against the imported constant, not a substring of its prose.
     """

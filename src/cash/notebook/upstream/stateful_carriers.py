@@ -62,7 +62,7 @@ _CARRIER_BASES: Mapping[str, str] = {
     # later written out, so a re-derived-but-unfilled builder writes a blank
     # artifact over a good one. These two are here rather than in a
     # longer list of plausible builders because they are the ones that PROVABLY
-    # break: CAS-144 refuses to cache them (they are identity-coupled to
+    # break refuses to cache them (they are identity-coupled to
     # pyplot's globals), so the plan RE-EXECUTES the ``plt.subplots()`` that
     # produces them while the ``ax.bar(...)`` that fills them merely restores.
     # An ordinary builder (a user's ``Report``, an openpyxl ``Workbook``) is

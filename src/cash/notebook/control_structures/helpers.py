@@ -284,7 +284,7 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
             # read, re-draining one-shot iterables. Trust them like append.
             # Kept byte-identical with the simulation collector
             # (VirtualLineage._find_loop_mutated_vars) per the unified-key rule.
-            # [CAS-120]
+            #
             mutated_vars.update(selfref_reassignment_targets(body_node))
 
     # Filter out built-ins
