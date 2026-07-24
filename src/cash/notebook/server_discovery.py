@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import sys
 import time as _time
 import urllib.error
 import urllib.request
@@ -445,6 +446,65 @@ _notebook_cells_cache: dict[tuple[str, bool], tuple[int, int, list]] = {}
 def invalidate_notebook_cells_cache() -> None:
     """Drop the parsed-notebook-cells cache (e.g. on notebook switch / %cash_on)."""
     _notebook_cells_cache.clear()
+    _colab_cells_cache.clear()
+
+
+# --- Google Colab cell source ------------------------------------------------
+# Colab notebooks live in Google Drive, not a local file, so the file reader
+# below finds nothing: get_notebook_path() returns a "/fileId=..." reference
+# that is not openable, and reading it yields []. The Colab frontend instead
+# exposes the LIVE notebook JSON via google.colab._message, so we read the
+# current cells from there. Cached for a short TTL because upstream resolution
+# reads cells several times per cell run and each call is a frontend round-trip;
+# a failure is cached longer so a frontend-less runtime (scheduled / headless
+# execution, where the request would block until timeout) does not pay that on
+# every cell.
+_COLAB_GET_IPYNB_TIMEOUT = 5.0   # seconds to wait for the frontend to answer
+_COLAB_CELLS_TTL = 2.0           # reuse a successful read across one resolution
+_COLAB_FAIL_TTL = 30.0           # back off after a failure (no frontend / timeout)
+_colab_cells_cache: dict[bool, tuple[float, list | None]] = {}
+
+
+def _in_colab() -> bool:
+    """True when running inside a Google Colab runtime."""
+    return "google.colab" in sys.modules
+
+
+def _try_colab_notebook_cells(include_ids: bool) -> list | None:
+    """Return code cells via Colab's ``get_ipynb`` frontend API, or ``None``.
+
+    ``None`` means "not applicable / unavailable" — either not running in Colab,
+    or the frontend request failed — so the caller falls through to the
+    file-based reader. A success returns the current code cells (markdown
+    filtered) in the same shape as the file reader, so the rest of the pipeline
+    is unchanged.
+    """
+    if not _in_colab():
+        return None
+    now = _time.monotonic()
+    cached = _colab_cells_cache.get(include_ids)
+    if cached is not None:
+        ts, val = cached
+        ttl = _COLAB_CELLS_TTL if val is not None else _COLAB_FAIL_TTL
+        if now - ts < ttl:
+            return val
+    try:
+        from google.colab import _message  # type: ignore[import-not-found]
+        resp = _message.blocking_request("get_ipynb", timeout_sec=_COLAB_GET_IPYNB_TIMEOUT)
+        nb = resp.get("ipynb") if isinstance(resp, dict) else None
+        if not isinstance(nb, dict):
+            raise ValueError("unexpected get_ipynb response shape")
+        cells = [
+            _extract_cell_entry(cell, include_ids)
+            for cell in nb.get("cells", [])
+            if cell.get("cell_type") == "code"
+        ]
+    except Exception as e:  # noqa: BLE001 - the Colab frontend API is best-effort
+        logger.debug("[UTILS] Colab get_ipynb failed: %s", e)
+        _colab_cells_cache[include_ids] = (now, None)  # back off; don't block every cell
+        return None
+    _colab_cells_cache[include_ids] = (now, cells)
+    return cells
 
 
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
@@ -461,6 +521,14 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
         include_ids: If True, return list of (cell_id, code) tuples.
                      If False, return list of code strings.
     """
+    # Colab first: its notebook is a Drive fileId, not a local file, so the
+    # file reader below returns []. Reading the live cells from the Colab
+    # frontend is what makes upstream resolution work there. A fast no-op when
+    # not running in Colab.
+    colab_cells = _try_colab_notebook_cells(include_ids)
+    if colab_cells is not None:
+        return colab_cells
+
     if not notebook_path:
         notebook_path = get_notebook_path()
 
