@@ -14,6 +14,14 @@ and **decorator-based caching** (wrap any function with `@cash.cache`).
   Your browser can't play this video — <a href="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero_web.mp4">download it</a> instead.
 </video>
 
+<p style="text-align:center; margin:0 0 1.75em;">
+  <a href="https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash.ipynb"><img src="https://colab.research.google.com/assets/colab-badge.svg" alt="Open the feature tour in Google Colab" style="display:inline; vertical-align:middle; height:28px;"></a>
+  &nbsp;&nbsp;
+  <a href="https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash.ipynb"><img src="https://mybinder.org/badge_logo.svg" alt="Open the feature tour in Binder" style="display:inline; vertical-align:middle; height:28px;"></a>
+  <br>
+  <strong>Take the interactive feature tour in your browser — no install.</strong>
+</p>
+
 ## Quick Example
 
 <!-- test:skip reason="illustrative — references a missing large_file.csv" -->
