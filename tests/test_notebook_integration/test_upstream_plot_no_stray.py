@@ -52,3 +52,44 @@ def test_upstream_plot_not_leaked_into_downstream(nb_runner):
     assert _plot_count(nb_runner.get_cell(4)) == 0, (
         "the reconstructed upstream figure leaked into the downstream cell"
     )
+
+
+def _figure_count(cell):
+    return sum(
+        1 for o in cell.get("outputs", [])
+        if o.get("output_type") in ("display_data", "execute_result")
+        and "image/png" in o.get("data", {})
+    )
+
+
+def test_downstream_can_redisplay_reconstructed_figure(nb_runner):
+    """Closing the reconstructed figure must NOT stop a downstream cell that
+    re-displays it via a bare ``fig`` — Figure objects still render when closed.
+    """
+    nb_runner.create_notebook([SETUP, DATA(5), PLOT, "ax.set_title(f'N={n}')\nfig"])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _figure_count(nb_runner.get_cell(4)) == 1
+
+    nb_runner.set_cell_source(2, DATA(9))
+    nb_runner.run_cell(4)   # run ONLY the redisplay cell
+    assert _figure_count(nb_runner.get_cell(4)) == 1, (
+        "closing the reconstructed figure broke the downstream `fig` redisplay"
+    )
+
+
+def test_downstream_savefig_after_upstream_edit(nb_runner):
+    """savefig carrier-coherence: editing the plotted data and running only a
+    downstream fig.savefig re-writes the chart, with no stray plot leaking in.
+    """
+    save = "fig.savefig('chart.png')\nprint('SIZE', os.path.getsize('chart.png'))"
+    nb_runner.create_notebook([SETUP + "\nimport os", DATA(5), PLOT, save])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "SIZE" in _text(nb_runner.get_cell(4))
+
+    nb_runner.set_cell_source(2, DATA(12))
+    nb_runner.run_cell(4)
+    out = _text(nb_runner.get_cell(4))
+    assert "SIZE" in out, f"savefig failed after an upstream edit: {out!r}"
+    assert _plot_count(nb_runner.get_cell(4)) == 0, "savefig cell leaked a stray plot"
