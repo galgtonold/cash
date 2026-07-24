@@ -87,6 +87,30 @@ def test_single_restored_metric_no_upstream() -> None:
     assert row.saved_time_s == pytest.approx(0.3)
 
 
+def test_computed_row_shows_compute_not_serialisation_overhead() -> None:
+    """A COMPUTED row's displayed time is the pure compute (``execution_time``),
+    not ``total_time`` — which also carries cash's own hashing/serialisation
+    overhead and can dwarf the compute for a large object.
+
+    Showing total_time put "EXECUTED 0.51s" next to "saved 0.44s" on restore for
+    the very same statement (the 0.07s gap is cash writing the result to disk,
+    a one-time cost you don't pay again). The executed time and the saved time
+    must line up; the serialisation cost belongs in the overhead section.
+    """
+    metrics = [{
+        "code": "df = make_frame()",
+        "status": str(CacheStatus.COMPUTED),
+        "execution_time": 0.44,   # pure compute
+        "total_time": 0.51,       # compute + serialise-into-cache overhead
+    }]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.time_s == pytest.approx(0.44), (
+        "row must show the compute, not compute + serialisation overhead"
+    )
+
+
 def test_statement_row_exposes_cache_key_short_prefix() -> None:
     """The badge surfaces an 8-char cache-key prefix in the row detail.
 

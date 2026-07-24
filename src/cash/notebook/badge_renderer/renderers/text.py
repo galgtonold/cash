@@ -118,7 +118,11 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     code = code + _rng_suffix(row)
     tag = _row_tag(row, is_upstream=is_upstream)
     if row.status is BadgeStatus.RESTORED:
-        return f"  {tag}: {code}  (saved {row.time_s:.2f}s)"
+        # "saved" == the compute we avoided (``saved_time_s``), NOT ``time_s``
+        # (the tiny deserialise/restore wall-clock). Showing time_s here labelled
+        # a ~0.01s restore as "saved 0.01s" for a statement whose compute — and
+        # true saving — was e.g. 0.44s.
+        return f"  {tag}: {code}  (saved {row.saved_time_s:.2f}s)"
     if row.status is BadgeStatus.SKIPPED:
         return f"  {tag}: {code}"
     if row.status is BadgeStatus.COMPUTED:
@@ -142,6 +146,7 @@ def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
         status=it.status,
         code=it.code,
         time_s=it.time_s,
+        saved_time_s=it.saved_time_s,
         storage_tiers=it.storage_tiers,
     )
     return _row_line(pseudo, is_upstream=is_upstream)

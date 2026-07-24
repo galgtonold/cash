@@ -17,6 +17,21 @@ def test_cached_summary_header() -> None:
     assert "saved 0.50s" in text
 
 
+def test_restored_row_saved_is_avoided_compute_not_restore_time() -> None:
+    """A RESTORED statement row's "saved" is the compute we skipped
+    (``saved_time``), NOT the tiny deserialise wall-clock (``total_time``).
+
+    The row line used to print ``time_s`` under a "saved" label, so a 0.02s
+    restore of a statement whose true saving was 0.44s read as "saved 0.02s".
+    total_time and saved_time are made distinct here to catch that regression.
+    """
+    metrics = [{"code": "df = make_frame()", "status": str(CacheStatus.RESTORED),
+                "total_time": 0.02, "saved_time": 0.44}]
+    text = render_text(build_interactive_badge(metrics))
+    assert "saved 0.44s" in text            # header AND the statement row
+    assert "saved 0.02s" not in text        # the restore time is never "saved"
+
+
 def test_upstream_section_label_and_indent() -> None:
     metrics = [
         {"code": "setup()", "status": str(CacheStatus.RESTORED), "is_upstream": True,

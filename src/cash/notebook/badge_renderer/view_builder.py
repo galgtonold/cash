@@ -619,11 +619,28 @@ def _strip_context_comments(code: str) -> str:
 # Row builders
 # ---------------------------------------------------------------------------
 
+def _statement_display_time(m: dict[str, Any]) -> float:
+    """The wall-time to show for a statement row.
+
+    For a COMPUTED statement this is the pure compute (``execution_time``), NOT
+    ``total_time``: total_time also includes cash's OWN per-statement overhead
+    (hashing + serialising the result into the cache), which can dwarf the
+    compute for a large object — a DataFrame that computes in 0.01s but takes
+    0.08s to serialise showed "0.09s" here while crediting only "saved 0.01s" on
+    restore (saved == the compute you avoid, by design). Showing the compute
+    keeps the executed time consistent with the saved time; the serialisation
+    cost is attributed to the overhead section instead so the breakdown still
+    sums to the cell's wall-clock total. For a RESTORED statement execution_time
+    is 0, so this falls back to total_time — the restore/deserialise time.
+    """
+    return float(m.get("execution_time", 0.0) or m.get("total_time", 0.0))
+
+
 def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
     """Translate one metric dict into a :class:`StatementRow`."""
     status = map_status(m.get("status"))
 
-    time_s = float(m.get("total_time", 0.0) or m.get("execution_time", 0.0))
+    time_s = _statement_display_time(m)
     saved_time_s = float(m.get("saved_time", 0.0) or 0.0)
 
     # ``evaluated_vars`` is the AST-derived list of variable names this
@@ -861,7 +878,10 @@ def _overhead_section(
 ) -> Section | None:
     if not timing_breakdown or cell_total_time is None:
         return None
-    statements_time = sum(float(m.get("total_time", 0.0)) for m in metrics)
+    # Match what the statement rows DISPLAY (compute for executed, restore time
+    # for restored), so overhead = wall-clock minus shown-times absorbs cash's
+    # per-statement serialisation cost and the breakdown still sums to the total.
+    statements_time = sum(_statement_display_time(m) for m in metrics)
     overhead = cell_total_time - statements_time
     if overhead <= MIN_TIME_DISPLAY_MS:
         return None
