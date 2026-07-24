@@ -1825,12 +1825,18 @@ def _overhead_html(ob: OverheadBreakdown, max_time: float) -> str:
     """
     if not ob.entries:
         return ""
-    parts = " · ".join(
-        f'<span class="c3-ovh-part"'
-        f'{f" title=\"{_esc(e.tooltip)}\"" if e.tooltip else ""}>{_esc(e.label)}'
-        f'&nbsp;<span class="c3-ovh-time">{e.time_s:.3f}s</span></span>'
-        for e in ob.entries
-    )
+
+    def _part(e: OverheadEntry) -> str:
+        # Build the optional title in its own f-string: a backslash inside an
+        # f-string *expression* is a SyntaxError before Python 3.12, and the
+        # project still supports 3.10/3.11.
+        title = f' title="{_esc(e.tooltip)}"' if e.tooltip else ""
+        return (
+            f'<span class="c3-ovh-part"{title}>{_esc(e.label)}'
+            f'&nbsp;<span class="c3-ovh-time">{e.time_s:.3f}s</span></span>'
+        )
+
+    parts = " · ".join(_part(e) for e in ob.entries)
     return (
         f'<div class="c3-row c3-ovh" data-kind="exec">'
         f'<span class="c3-rail c3-rail-soft" style="background:{theme.INK_4};"></span>'
