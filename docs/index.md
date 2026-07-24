@@ -16,6 +16,7 @@ and **decorator-based caching** (wrap any function with `@cash.cache`).
 
 ## Quick Example
 
+<!-- test:skip reason="illustrative — references a missing large_file.csv" -->
 ```python { .nb-cell }
 import cash
 import pandas as pd

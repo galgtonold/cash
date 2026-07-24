@@ -57,7 +57,7 @@ class TestVulnerableShapeRefused:
         planner = _planner(ns)
 
         # The vulnerable plan: the write [2] is scheduled, its producer [0] is not.
-        with pytest.warns(CashWarning, match="CAS-187"):
+        with pytest.warns(CashWarning, match="refused to re-run a plt.savefig"):
             remaining, restored = planner._guard_global_figure_writes(
                 [2], trace, [],
             )

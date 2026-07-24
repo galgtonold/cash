@@ -382,7 +382,7 @@ class TestUnstableKeyStopsSerialising:
         reason = m.get("skipped_reason")
         assert reason, "a guarded statement must tell the user it stopped caching"
         assert "Perpetual cache miss" in reason
-        assert "CAS-172" in reason
+        assert "different cache key" in reason  # the WHY: the key churns and never hits
 
     def test_persist_annotation_outranks_the_guard(self, session):
         """The guard is a default, not a veto: a user who explicitly asks for
