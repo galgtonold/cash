@@ -119,6 +119,7 @@ nav:
     - "Why Cash?": why-cash.md
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quickstart.md
+    - Configuration: getting-started/configuration.md
     - For Coding Agents: for-coding-agents.md
     - Migration Guide: migration_guide.md
   - User Guide:
@@ -127,7 +128,6 @@ nav:
     - Reading the Cash Badge: badges.md
     - Magic Commands: magics.md
     - Annotations: annotations.md
-    - Configuration: getting-started/configuration.md
     - Command-line interface: cli.md
     - Cost model: cost-model.md
     - Benchmarks: benchmarks.md
