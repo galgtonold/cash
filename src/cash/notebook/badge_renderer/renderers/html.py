@@ -549,6 +549,20 @@ label.c3-row {{ cursor: pointer; }}
   background: {theme.CHIP_BG_WARN};
   border-color: #f1c8c1;
 }}
+/* A row's RNG pill shares ONE grid cell with the code (this flex box) instead of
+   being a SEPARATE grid item. The statement-row grid has exactly five columns
+   (rail, code, dots, bar, chip); a sixth child overflowed to a new implicit row,
+   wrapping the time chip onto a second line under the code. Here the code
+   truncates (min-width:0) and the pill never shrinks, so the warning stays whole
+   and the chip keeps its column. */
+.c3-codepill {{
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}}
+.c3-codepill > .c3-code {{ min-width: 0; flex: 0 1 auto; }}
+.c3-codepill > .c3-rng-pill {{ flex: 0 0 auto; }}
 
 /* Loop heading line */
 .c3-loop-head .c3-code {{ font-weight: 500; }}
@@ -1192,14 +1206,18 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     rng_pill = _rng_pill(row)
     drawer = _rowtip_html(row)
 
+    # The pill and the code share ONE grid cell (a flex box) so the pill is not a
+    # sixth child of the five-column row grid — a sixth child wraps the time chip
+    # to a new line. Rows without a pill keep the code as the grid cell directly.
+    code_cell = f'<div class="c3-codepill">{code_html}{rng_pill}</div>' if rng_pill else code_html
+
     rid = _uid("rx")
     return (
         f'<div class="c3-rowx">'
         f'<input type="checkbox" class="c3-rxtog" id="{rid}">'
         f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
-        f"{code_html}"
-        f"{rng_pill}"
+        f"{code_cell}"
         f"{dots}"
         f"{bar}"
         f"{chip}"

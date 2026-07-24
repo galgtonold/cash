@@ -402,3 +402,36 @@ def test_summary_includes_sparkline_when_current_rows_exist() -> None:
     # Both filter counters present.
     assert "c3-fchip-exec" in html
     assert "c3-fchip-cached" in html
+
+
+def test_rng_pill_shares_the_code_grid_cell_not_a_sixth_column():
+    """An RNG pill must NOT be a sixth child of the five-column statement-row
+    grid (rail, code, dots, bar, chip). A sixth grid item overflowed to a new
+    implicit row, wrapping the time chip onto a second line under the code
+    (visible on an ``UNSEEDED`` draw). The pill is folded into a flex box with
+    the code (``c3-codepill``) so the row keeps exactly five grid items.
+    """
+    html = render_html(build_interactive_badge([{
+        "code": "x = np.random.rand(200_000_000)",
+        "status": "COMPUTED", "total_time": 0.29,
+        "random_effect": "draw", "random_unseeded": True,
+        "evaluated_vars": ["x"],
+    }]))
+    body = html.split("</style>", 1)[1]  # ignore the .c3-codepill CSS rule
+    assert "c3-rng-warn" in body, "expected the unseeded pill to render"
+    # The pill sits INSIDE the code+pill flex cell, before the dots cell — i.e.
+    # it is not a bare grid child that would push the chip to a new line.
+    i = body.index('<div class="c3-codepill">')
+    segment = body[i:body.index("c3-dots-cell", i)]
+    assert "c3-rng-pill" in segment, "the pill must live inside .c3-codepill with the code"
+
+
+def test_row_without_rng_pill_has_no_codepill_wrapper():
+    """Rows with no RNG role keep the code as the grid cell directly — the
+    wrapper is added only when a pill is present, so ordinary rows are untouched.
+    """
+    html = render_html(build_interactive_badge([{
+        "code": "y = 1", "status": "COMPUTED", "total_time": 0.0,
+    }]))
+    body = html.split("</style>", 1)[1]  # ignore the .c3-codepill CSS rule
+    assert '<div class="c3-codepill">' not in body

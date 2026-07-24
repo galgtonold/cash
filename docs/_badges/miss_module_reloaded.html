@@ -485,6 +485,20 @@ label.c3-row { cursor: pointer; }
   background: #fbeae5;
   border-color: #f1c8c1;
 }
+/* A row's RNG pill shares ONE grid cell with the code (this flex box) instead of
+   being a SEPARATE grid item. The statement-row grid has exactly five columns
+   (rail, code, dots, bar, chip); a sixth child overflowed to a new implicit row,
+   wrapping the time chip onto a second line under the code. Here the code
+   truncates (min-width:0) and the pill never shrinks, so the warning stays whole
+   and the chip keeps its column. */
+.c3-codepill {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.c3-codepill > .c3-code { min-width: 0; flex: 0 1 auto; }
+.c3-codepill > .c3-rng-pill { flex: 0 0 auto; }
 
 /* Loop heading line */
 .c3-loop-head .c3-code { font-weight: 500; }
