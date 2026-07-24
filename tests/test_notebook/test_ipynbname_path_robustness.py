@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import sys
 import types
+import warnings
 
 import pytest
 
@@ -45,3 +46,31 @@ def test_try_ipynbname_path_returns_str_on_success(monkeypatch):
     monkeypatch.setitem(sys.modules, "ipynbname", fake)
 
     assert sd._try_ipynbname_path() == "/some/dir/notebook.ipynb"
+
+
+def test_collect_running_servers_swallows_thirdparty_warnings(monkeypatch):
+    """cash imports the notebook/jupyter_server packages only for discovery; a
+    warning they emit (e.g. the ``notebook`` banner's SyntaxWarning on 3.12+,
+    seen on Colab) must not leak into the user's cell output.
+
+    A fake ``jupyter_server.serverapp`` stands in so the test runs regardless of
+    whether the real package is installed; its discovery call emits a
+    SyntaxWarning as a proxy for the notebook banner's import-time warning.
+    """
+    fake_js = types.ModuleType("jupyter_server")
+    fake_sa = types.ModuleType("jupyter_server.serverapp")
+
+    def _noisy():
+        warnings.warn("invalid escape sequence '\\/'", SyntaxWarning)
+        return []
+
+    fake_sa.list_running_servers = _noisy
+    fake_js.serverapp = fake_sa
+    monkeypatch.setitem(sys.modules, "jupyter_server", fake_js)
+    monkeypatch.setitem(sys.modules, "jupyter_server.serverapp", fake_sa)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        sd._collect_running_servers()
+    assert not any(issubclass(w.category, SyntaxWarning) for w in caught), \
+        "a third-party discovery warning leaked out of _collect_running_servers"

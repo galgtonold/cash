@@ -215,8 +215,13 @@ def _try_ipynbname_path() -> str | None:
     cell ("Cash auto-caching failed: list index out of range").
     """
     try:
-        import ipynbname
-        return str(ipynbname.path())
+        # ipynbname imports the notebook/jupyter_server packages internally, so
+        # suppress the same third-party import-time warnings here too.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", category=SyntaxWarning)
+            warnings.filterwarnings("ignore", category=DeprecationWarning)
+            import ipynbname
+            return str(ipynbname.path())
     except Exception:  # noqa: BLE001 - a discovery library must never crash cash
         logger.debug("[UTILS] ipynbname not available or failed")
     return None
@@ -225,16 +230,24 @@ def _try_ipynbname_path() -> str | None:
 def _collect_running_servers() -> list:
     """Return all running Jupyter server descriptors from all server packages."""
     servers: list = []
-    try:
-        from jupyter_server import serverapp
-        servers.extend(list(serverapp.list_running_servers()))
-    except (ImportError, AttributeError):
-        logger.debug("[UTILS] jupyter_server not available")
-    try:
-        from notebook import notebookapp
-        servers.extend(list(notebookapp.list_running_servers()))
-    except (ImportError, AttributeError):
-        logger.debug("[UTILS] notebook.notebookapp not available")
+    # Importing these third-party server packages can emit warnings we neither
+    # control nor want in the user's cell output — notably a ``SyntaxWarning:
+    # invalid escape sequence '\/'`` from the (deprecated) ``notebook`` package's
+    # banner on Python 3.12+, seen on Colab. cash triggers the import only for
+    # discovery, so swallow those import-time warnings.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", category=SyntaxWarning)
+        warnings.filterwarnings("ignore", category=DeprecationWarning)
+        try:
+            from jupyter_server import serverapp
+            servers.extend(list(serverapp.list_running_servers()))
+        except (ImportError, AttributeError):
+            logger.debug("[UTILS] jupyter_server not available")
+        try:
+            from notebook import notebookapp
+            servers.extend(list(notebookapp.list_running_servers()))
+        except (ImportError, AttributeError):
+            logger.debug("[UTILS] notebook.notebookapp not available")
     return servers
 
 
