@@ -385,17 +385,29 @@ _IO_SIDE_EFFECT_FUNCTIONS: dict[tuple[str, str], str] = {
     ('requests', 'put'): 'network',
     ('requests', 'delete'): 'network',
     ('requests', 'patch'): 'network',
-    # matplotlib display. ``plt.show()`` flushes pyplot's process-global CURRENT
-    # figure to the cell output; its only "input" is the ``plt`` MODULE, so there
-    # is no value edge from the statement to the figure it displays. With a stable
-    # key it caches and, on a later run, a cache HIT REPLAYS the stale figure while
-    # the (always-re-executed, identity-coupled) plotting statements draw the new
-    # one — duplicating the plot and scrambling output order. Treat it as a display
-    # side-effect so it always re-executes and is never cached/replayed.
-    ('plt', 'show'): 'display',
-    ('pyplot', 'show'): 'display',
-    ('matplotlib.pyplot', 'show'): 'display',
 }
+
+# matplotlib.pyplot module aliases. EVERY module-level ``plt.*`` call operates on
+# pyplot's PROCESS-GLOBAL current figure — drawing (``plt.plot``, ``plt.hist``,
+# ``plt.imshow``), styling (``plt.title``, ``plt.legend``, ``plt.grid``), or
+# displaying (``plt.show``) — state cash does not track. Its only "input" is the
+# module, so with a stable key such a call would cache and then, on a later run,
+# either REPLAY a stale figure (``plt.show``) or SKIP the draw/style (losing that
+# content from a freshly re-drawn figure — visible under ``%cash_persist`` or for
+# an expensive draw above the cost floor). So any pyplot module-level call is a
+# display side-effect: always re-execute, never cache. ``plt.savefig`` is the one
+# exception — it is a file write (handled via ``_WRITE_METHODS`` below), not a
+# display.
+_PYPLOT_MODULE_ALIASES: frozenset[str] = frozenset({'plt', 'pyplot', 'matplotlib.pyplot'})
+
+# pyplot calls that CREATE or FETCH a Figure/Axes rather than draw on / style the
+# current one. They return identity-coupled objects already refused (and
+# explained: "Identity-coupled figure") by the live-alias / figure-identity
+# path, so leave them to it rather than relabel them a generic display effect.
+_PYPLOT_FIGURE_ACCESSORS: frozenset[str] = frozenset({
+    'figure', 'subplots', 'subplot', 'subplot_mosaic', 'subplot2grid',
+    'axes', 'gca', 'gcf', 'get_current_fig_manager',
+})
 
 # Method names that indicate writing (when called on any object)
 _WRITE_METHODS: frozenset[str] = frozenset({
@@ -1008,6 +1020,17 @@ class _SideEffectVisitor(ast.NodeVisitor):
                         description=f"{module_name + '.' if module_name else ''}{func_name}()",
                         line=getattr(node, 'lineno', 0),
                     ))
+            elif (module_name in _PYPLOT_MODULE_ALIASES
+                  and func_name not in _WRITE_METHODS
+                  and func_name not in _PYPLOT_FIGURE_ACCESSORS):
+                # A pyplot module-level call (draw/style/show) mutating the global
+                # figure — uncacheable. savefig is a file_write (below); figure
+                # creation/access is left to the identity-coupling path.
+                self.effects.append(SideEffectInfo(
+                    kind='display',
+                    description=f"{module_name}.{func_name}()",
+                    line=getattr(node, 'lineno', 0),
+                ))
 
             if isinstance(node.func, ast.Attribute):
                 method = node.func.attr

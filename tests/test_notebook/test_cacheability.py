@@ -490,20 +490,34 @@ class TestSideEffects:
         assert not statement_writes_files("x = 1 + 2")
         assert not statement_writes_files("with open('f.txt') as f:\n    body = f.read()")
 
-    def test_plt_show_is_display_side_effect(self):
-        # plt.show() flushes pyplot's process-global current figure and has no
-        # value input, so with a stable key it would cache and REPLAY a stale
-        # figure on re-run (duplicating the plot). Flag it as a display
-        # side-effect so it stays uncacheable and always re-executes.
-        for code in ("plt.show()", "pyplot.show()", "matplotlib.pyplot.show()"):
+    def test_pyplot_module_calls_are_display_side_effects(self):
+        # Any pyplot draw/style/show call mutates pyplot's untracked process-global
+        # figure and must stay uncacheable — else a cache hit skips the draw/style
+        # (losing figure content) or replays a stale figure (duplicating the plot).
+        for code in ("plt.show()", "pyplot.show()", "matplotlib.pyplot.show()",
+                     "plt.title('t')", "plt.plot(x, y)", "plt.hist(a, bins=5)",
+                     "plt.legend()", "plt.grid(True)", "matplotlib.pyplot.xlabel('t')"):
             a = _analyze(code)
             assert any(e.kind == "display" for e in a.side_effects), code
 
-    def test_non_pyplot_show_not_a_side_effect(self):
-        # Only the matplotlib module-level show() is a display side-effect; an
-        # arbitrary obj.show() (or a plotting assignment) must not be flagged.
+    def test_pyplot_savefig_is_file_write_not_display(self):
+        # savefig writes a file (needed by the re-execution planner); it is not a
+        # display effect.
+        kinds = {e.kind for e in _analyze("plt.savefig('out.png')").side_effects}
+        assert "file_write" in kinds and "display" not in kinds
+
+    def test_pyplot_figure_creation_left_to_identity_coupling(self):
+        # Figure creation/access returns identity-coupled objects, refused (and
+        # explained) by that path; not relabelled a generic display side-effect.
+        for code in ("fig, ax = plt.subplots()", "plt.figure()", "ax = plt.gca()"):
+            assert not any(e.kind == "display" for e in _analyze(code).side_effects), code
+
+    def test_non_pyplot_calls_not_display_side_effects(self):
+        # An arbitrary obj.show(), a receiver-bound plot, or an Axes method must
+        # not be flagged — only the pyplot MODULE form.
         assert not _analyze("widget.show()").side_effects
         assert not _analyze("x = df.plot()").side_effects
+        assert not _analyze("ax.hist(a)").side_effects
 
     def test_statement_write_repeatability_classifies_all_three(self):
         # CAS-210: `statement_writes_files` answers "does this write?"; the
