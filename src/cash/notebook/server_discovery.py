@@ -202,11 +202,21 @@ def _try_vscode_path() -> str | None:
 
 
 def _try_ipynbname_path() -> str | None:
-    """Return notebook path via the ipynbname package, or None."""
+    """Return notebook path via the ipynbname package, or None.
+
+    ``ipynbname.path()`` raises whatever its internal probing hits when no
+    discoverable Jupyter server backs the kernel — notably ``IndexError`` from
+    its ``_get_kernel_id`` (indexing an empty running-servers list) under Google
+    Colab and other server-less runtimes. Discovery is best-effort, so ANY
+    failure here must degrade to "no path found" rather than propagate: an
+    uncaught error aborts the whole notebook-path resolution and trips the
+    upstream pipeline's broad failure handler, which disables caching for the
+    cell ("Cash auto-caching failed: list index out of range").
+    """
     try:
         import ipynbname
         return str(ipynbname.path())
-    except (ImportError, OSError, AttributeError):
+    except Exception:  # noqa: BLE001 - a discovery library must never crash cash
         logger.debug("[UTILS] ipynbname not available or failed")
     return None
 
