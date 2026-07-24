@@ -1,9 +1,5 @@
 # Binder environment for examples/try_cash_binder.ipynb (the "Try cash live" demo).
-# Pre-release: install cash from GitHub so the notebook launches ready to run.
-# After the PyPI release, replace the git line below with:  cash-lib[pandas]
-git+https://github.com/galgtonold/cash.git
-# The feature-tour notebook uses these (pre-installed on Colab, not on Binder's
-# minimal base image):
-numpy
-pandas
+# cash-lib[pandas] pulls cash plus pandas (and numpy transitively) + pyarrow;
+# matplotlib is used by the plotting cell and isn't part of any cash extra.
+cash-lib[pandas]
 matplotlib
