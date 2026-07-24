@@ -385,6 +385,16 @@ _IO_SIDE_EFFECT_FUNCTIONS: dict[tuple[str, str], str] = {
     ('requests', 'put'): 'network',
     ('requests', 'delete'): 'network',
     ('requests', 'patch'): 'network',
+    # matplotlib display. ``plt.show()`` flushes pyplot's process-global CURRENT
+    # figure to the cell output; its only "input" is the ``plt`` MODULE, so there
+    # is no value edge from the statement to the figure it displays. With a stable
+    # key it caches and, on a later run, a cache HIT REPLAYS the stale figure while
+    # the (always-re-executed, identity-coupled) plotting statements draw the new
+    # one — duplicating the plot and scrambling output order. Treat it as a display
+    # side-effect so it always re-executes and is never cached/replayed.
+    ('plt', 'show'): 'display',
+    ('pyplot', 'show'): 'display',
+    ('matplotlib.pyplot', 'show'): 'display',
 }
 
 # Method names that indicate writing (when called on any object)

@@ -490,6 +490,21 @@ class TestSideEffects:
         assert not statement_writes_files("x = 1 + 2")
         assert not statement_writes_files("with open('f.txt') as f:\n    body = f.read()")
 
+    def test_plt_show_is_display_side_effect(self):
+        # plt.show() flushes pyplot's process-global current figure and has no
+        # value input, so with a stable key it would cache and REPLAY a stale
+        # figure on re-run (duplicating the plot). Flag it as a display
+        # side-effect so it stays uncacheable and always re-executes.
+        for code in ("plt.show()", "pyplot.show()", "matplotlib.pyplot.show()"):
+            a = _analyze(code)
+            assert any(e.kind == "display" for e in a.side_effects), code
+
+    def test_non_pyplot_show_not_a_side_effect(self):
+        # Only the matplotlib module-level show() is a display side-effect; an
+        # arbitrary obj.show() (or a plotting assignment) must not be flagged.
+        assert not _analyze("widget.show()").side_effects
+        assert not _analyze("x = df.plot()").side_effects
+
     def test_statement_write_repeatability_classifies_all_three(self):
         # CAS-210: `statement_writes_files` answers "does this write?"; the
         # planner also needs "is repeating it safe?", because re-firing a
