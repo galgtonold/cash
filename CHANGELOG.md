@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.1] - 2026-07-23
+## [0.1.1] - 2026-07-24
 
 The first public release. `0.1.0` was published to Test PyPI only; an
 adversarial testing round against that build found the correctness and
@@ -72,6 +72,46 @@ is `0.1.1`.
   with `@cash.mark_pure`, or refactor to a static call. A statically-named call —
   the common case — is unaffected.
 
+**Notebook caching — plots and figures**
+- Re-running a plotting cell no longer shows the previous figure next to the new
+  one, in the wrong order. `plt.show()` and pyplot module-level draw/style calls
+  (`plt.plot`, `plt.title`, …) mutate global figure state, so they are now always
+  re-rendered instead of restored from cache — which also fixes the duplicate
+  plots you saw after editing a value above the plot and re-running.
+- When cash rebuilds an upstream plot to satisfy a downstream cell, the
+  reconstructed figure no longer leaks into that cell as a stray plot.
+- A same-size, in-place edit to a large (>8 MiB) data file, landing outside the
+  regions cash samples when hashing it, is no longer missed: file freshness now
+  also checks the modification time for sampled files, so an edit that kept the
+  file's size invalidates the cache instead of serving a stale read.
+
+**Notebook badge**
+- A failure while building or displaying the badge can no longer swallow the
+  cell's output. The badge is a diagnostic overlay drawn around your statements;
+  if it errors, the cell still runs and shows its result. (On Python 3.10/3.11 a
+  renderer syntax error used to blank every cell after `%cash_on`; badge
+  rendering is now covered across 3.10–3.14.)
+- The time a statement shows on first run now matches the time it reports saving
+  on restore. The first-run figure was the compute *plus* cash's own
+  serialization cost, while "saved" was only the compute; the serialization cost
+  now appears in the overhead breakdown instead, which also gained a labelled
+  `cache write` line and a hover tooltip on each part.
+- A magic indented inside a block (an `if IN_COLAB:` guard around a
+  `%pip install`) no longer makes cash treat the whole cell as a syntax error and
+  stop dependency-tracking everything that reads from it.
+- Third-party import warnings raised while cash locates the notebook no longer
+  leak into the cell's output.
+
+**Colab and Jupyter**
+- On Colab, running a downstream cell now re-runs the upstream cells it depends
+  on. Colab keeps the notebook in Drive rather than as a local file, so cash
+  reads the live cell contents through Colab's frontend API to resolve
+  dependencies.
+- Locating the notebook file no longer crashes in environments where the
+  discovery helper raises instead of returning nothing.
+- The "save your notebook first" tip is suppressed on Colab, where it does not
+  apply.
+
 **Packaging and tooling**
 - `cash.help()` no longer crashes on a default Windows console: the guide's
   arrows and dashes are degraded to what a legacy code page can render. This is
@@ -92,11 +132,31 @@ is `0.1.1`.
   0.1 s smart-persistence floor the default backend actually uses is now
   covered by a test.
 
+### Changed
+
+- Repeated `@cash.cache` calls with the same large, unmutated argument no longer
+  re-hash it every time. A cache *hit* on a function taking a multi-million-row
+  DataFrame was dominated by hashing that argument to build the lookup key; cash
+  now reuses the content hash within a session (guarded by its own mutation
+  tracking), so the second call is effectively free. Cache keys are unchanged, so
+  entries from earlier calls still match.
+- The source distribution now ships only the package and the files needed to
+  build it (`pyproject.toml`, `README`, `LICENSE`). Tests, docs, example
+  notebooks and benchmarks are no longer bundled in it — they remain on GitHub.
+
+### Removed
+
+- The unused `smart_persistence_threshold` configuration field, which the cost
+  model no longer consulted.
+
 ### Added
 
 - `cash.help()` gains a coding-agent guide, surfaced through `llms.txt`; the
   "How Cash Works" documentation section; and a warning when `seed(None)` is
   used with downstream caching (see above).
+- A live **feature-tour notebook**, launchable in Google Colab or Binder from the
+  README and docs, that walks through statement-level caching, cross-cell
+  invalidation, and the `@cash.cache` decorator on a small analytics pipeline.
 
 ---
 
