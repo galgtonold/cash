@@ -278,6 +278,23 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     mutation detection. Think of it as a fast storage layer, not a
     "know-when-to-recompute" layer.
 
+??? question "Why not marimo?"
+    [marimo](https://marimo.io) is a *reactive notebook environment* — it models
+    the dataflow between cells and re-runs exactly the cells that depend on a
+    change, so there's no hidden state or stale output. It also ships its own
+    caching (`mo.cache` in memory, `mo.persistent_cache` to disk) that skips a
+    wrapped block when neither its code nor its ancestors changed, and survives a
+    restart — genuinely dependency-aware, much closer to cash than the key→value
+    caches above.
+
+    The difference is what you adopt. marimo is a **replacement** for Jupyter — a
+    new runtime and file format you move your work into, with caching you wrap
+    around chosen blocks. Cash is **additive**: `%cash_on` inside the Jupyter,
+    Colab, or VS Code notebook you already use, caching every statement
+    automatically. If you're happy switching environments, marimo's reactivity is
+    a strong answer to notebook staleness; if you'd rather stay in Jupyter and
+    make re-running cheap, that's cash.
+
 ## Try it / Go deeper
 
 <div class="cash-cta-split" markdown="0">
