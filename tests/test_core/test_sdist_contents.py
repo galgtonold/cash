@@ -68,3 +68,16 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     assert any("/src/cash/__init__.py" in n for n in names), (
         "sdist does not contain the package itself"
     )
+
+    # The sdist is MINIMAL: the package plus only the files needed to build it
+    # (pyproject + the README/LICENSE the metadata references). Tests, docs,
+    # example notebooks and benchmarks are not required to build, install, or run
+    # cash — they live on GitHub — so they must never bloat the release.
+    rel = [n.split("/", 1)[1] for n in names if "/" in n]  # drop the cash_lib-X.Y.Z/ prefix
+    tops = {r.split("/")[0] for r in rel if r}
+    allowed_top = {"src", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"}
+    assert tops <= allowed_top, (
+        f"sdist ships non-essential top-level entries {sorted(tops - allowed_top)}; "
+        f"the sdist is a minimal include list — see [tool.hatch.build.targets.sdist]."
+    )
+    assert not any(r.endswith(".ipynb") for r in rel), "notebooks must not ship in the sdist"

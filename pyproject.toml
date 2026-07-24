@@ -5,45 +5,26 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cash"]
 
-# Keep local-only artifacts out of the sdist. `tests/` stays in — shipping the
-# suite is a deliberate convention here (downstream packagers run it) — but a
-# coverage report, a dev lockfile, the container recipe and the agent config are
-# not part of the source distribution. `coverage_html/` is the big one: it is a
-# generated directory that no .gitignore rule covers (only `htmlcov/` is listed),
-# so it was silently swept into every sdist.
-# This is an exclude list, not an include list, on purpose: an include list would
-# quietly drop newly added package files and break the sdist build.
+# A source distribution only needs to REBUILD the package, so it ships exactly
+# that: the package source, the build config, and the two files the metadata
+# references (README = the PyPI description, LICENSE). Everything else in the
+# repo — tests, docs, example notebooks, benchmarks, CI/governance files — is not
+# required to build, install, or run cash, so it is deliberately NOT shipped. The
+# demos and docs live on GitHub for anyone who wants them.
 #
-# Note on why the generated directories below need naming EXPLICITLY: tools like
-# venv and coverage drop a self-ignoring `.gitignore` (`*`) inside their own
-# output directory. `git status` therefore shows a clean tree and
-# `git check-ignore` reports them ignored -- but hatchling's sdist walk does not
-# honour those nested files, so it sweeps the directory in anyway. Checking git
-# is not a valid test for what lands in the sdist; only building one is.
-# That is how four stray local venvs (25 MB, 1908 files, including the whole of
-# pip's site-packages) got into a 36 MB sdist while every signal looked clean.
+# This is an INCLUDE list. The usual objection — "an include list silently drops
+# newly added package files" — does not apply here because ``src/cash`` is a
+# whole DIRECTORY: new modules under it are picked up automatically. The payoff
+# is that stray/generated/dev files can never leak in (hatchling's sdist walk
+# does not honour the self-ignoring `.gitignore` that venv/coverage drop in their
+# own output dirs, so an exclude list has to chase each one; a whitelist can't be
+# surprised that way). Verify with an actual build, never with ``git`` alone.
 [tool.hatch.build.targets.sdist]
-exclude = [
-    "/coverage_html",
-    "/uv.lock",
-    "/Dockerfile",
-    "/CLAUDE.md",
-    # Local throwaway venvs. The `Tempcash*` names are a Windows path-mangling
-    # artifact (a `C:/Temp/cash/...` path losing its separators), so match the
-    # prefix rather than just `*.venv` -- one of them has no dot at all.
-    "/Tempcash*",
-    "*.venv",
-    "/.venv",
-    # Dev-internal, not part of a public source release. (``benchmarks/`` is NOT
-    # excluded: tests/test_benchmarks_overhead imports it, and the suite ships.)
-    "/covtools",
-    "/analyze_integration_tests.py",
-    "/CONTEXT.md",
-    # Scratch/dev example notebooks — the polished demos ship, these don't.
-    "/examples/cash_test.ipynb",
-    "/examples/cash_test_print_mode.ipynb",
-    "/examples/cash_testing.ipynb",
-    "/examples/cash_user_testing.ipynb",
+include = [
+    "/src/cash",
+    "/pyproject.toml",
+    "/README.md",
+    "/LICENSE",
 ]
 
 # Single source of truth for the version: src/cash/__init__.py's __version__.
