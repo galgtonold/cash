@@ -606,11 +606,25 @@ class CodeAnalyzer:
         except SyntaxError:
             pass
         starts = CodeAnalyzer._logical_line_start_flags(code)
-        return '\n'.join(
-            line
-            for line, is_start in zip(code.split('\n'), starts)
-            if not (is_start and line.strip().startswith(('%', '!')))
-        )
+        out: list[str] = []
+        for line, is_start in zip(code.split('\n'), starts):
+            if is_start and line.strip().startswith(('%', '!')):
+                indent = line[:len(line) - len(line.lstrip())]
+                if indent:
+                    # An indented magic is the leading (often sole) statement of
+                    # a block — ``if colab:``, ``for``, ``def`` … Deleting it
+                    # outright can leave an EMPTY suite (``if colab:`` with
+                    # nothing under it), a *fictional* SyntaxError that makes cash
+                    # treat a perfectly good cell as unparseable and stop
+                    # dependency-tracking it. Neutralise it in place with
+                    # ``pass`` so the block keeps a body (a magic contributes no
+                    # variable dependencies, so this loses nothing for analysis).
+                    out.append(indent + 'pass')
+                # A top-level magic is dropped entirely: removing a module-level
+                # statement never empties a block.
+                continue
+            out.append(line)
+        return '\n'.join(out)
 
     @staticmethod
     def _parse_cell(code: str) -> ast.Module:

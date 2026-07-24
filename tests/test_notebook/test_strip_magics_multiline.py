@@ -115,3 +115,32 @@ def test_no_magic_cell_returned_unchanged():
     """Ordinary multi-statement cells are passed through byte-for-byte."""
     code = "a = 1\nb = 2\nc = a + b"
     assert CodeAnalyzer.strip_magics(code) == code
+
+
+def test_indented_magic_does_not_empty_its_block():
+    """A magic that is the only statement in a block must not be *deleted*.
+
+    ``if IN_COLAB:`` with a lone ``%pip install`` under it: deleting the magic
+    line leaves ``if IN_COLAB:`` followed by a dedent — 'expected an indented
+    block', a fictional SyntaxError. cash then flags the cell as broken and stops
+    dependency-tracking everything that reads from it. The magic is replaced by
+    ``pass`` so the suite still has a body.
+    """
+    code = (
+        "if IN_COLAB:\n"
+        "    %pip install -q cash-lib\n"
+        "\n"
+        "import cash"
+    )
+    cleaned = CodeAnalyzer.strip_magics(code)
+    ast.parse(cleaned)                       # must NOT raise
+    assert "%pip" not in cleaned             # the magic itself is gone
+    assert "    pass" in cleaned             # ...replaced by pass at its indent
+    assert "import cash" in cleaned
+
+
+def test_magic_as_sole_function_body_survives():
+    """The same guarantee inside a ``def`` (another empty-suite trap)."""
+    cleaned = CodeAnalyzer.strip_magics("def setup():\n    %matplotlib inline")
+    ast.parse(cleaned)
+    assert "def setup():" in cleaned and "pass" in cleaned
