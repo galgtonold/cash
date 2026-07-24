@@ -116,6 +116,44 @@ class _PipelineCompleted:
         self.badge_render_time = badge_render_time
 
 
+def _pyplot_open_fignums() -> set[int]:
+    """Open matplotlib figure numbers, or an empty set if pyplot isn't loaded.
+
+    Only inspects an already-imported ``matplotlib.pyplot`` — never imports it,
+    so it stays a no-op for notebooks that don't plot.
+    """
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is None:
+        return set()
+    try:
+        return set(plt.get_fignums())
+    except Exception:  # noqa: BLE001 - a broken backend must not break execution
+        return set()
+
+
+def _close_pyplot_figures(nums: set[int]) -> None:
+    """Close the given matplotlib figures, removing them from pyplot's registry.
+
+    Used after upstream re-execution: a figure that reconstruction OPENED (to
+    rebuild a ``fig``/``ax`` a downstream cell needs) would otherwise be flushed
+    by the inline backend's post-execute hook into the DOWNSTREAM cell's output —
+    a stray plot. A normally-run cell closes its figures on flush anyway, so
+    closing the reconstructed ones matches that end state. The Figure/Axes
+    objects stay valid (``fig.savefig`` / ``ax.*`` still work) for the cell that
+    asked for them.
+    """
+    if not nums:
+        return
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is None:
+        return
+    for num in nums:
+        try:
+            plt.close(num)
+        except Exception:  # noqa: BLE001 - best-effort cleanup
+            pass
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -520,6 +558,13 @@ class CellExecutor:
         falls through to upstream re-execution via
         :meth:`_check_and_reexecute_upstream_cells`.
         """
+        # Reconstructing an upstream PLOT cell (to rebuild a fig/ax a downstream
+        # cell needs) opens a matplotlib figure. The inline backend's
+        # post-execute hook would then flush that figure into THIS (downstream)
+        # cell's output — a stray plot. Close any figure reconstruction opens so
+        # the downstream cell only shows its own output (a normally-run cell
+        # closes its figures on flush anyway).
+        figs_before = _pyplot_open_fignums()
         try:
             if self._debug:
                 print(f"[ENSURE_STATE_DEBUG] Cell code: {cell_code[:50]}...")
@@ -569,6 +614,8 @@ class CellExecutor:
         except (KeyError, ValueError, TypeError, AttributeError, OSError) as e:
             logger.debug("[STATE] Error in state restoration logic: %s", e)
             raise
+        finally:
+            _close_pyplot_figures(_pyplot_open_fignums() - figs_before)
 
         return upstream_metrics, total_restore_time, total_execution_time
 
