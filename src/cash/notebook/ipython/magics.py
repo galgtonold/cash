@@ -464,14 +464,18 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 print(f"   Found existing cache with {len(entries)} entries.")
         except (OSError, AttributeError, TypeError):
             pass
-        # One-time hint: cash reads upstream cells from the .ipynb file on
-        # disk.  If the user edits an upstream cell but doesn't save, cash
-        # won't see the change.  Recommend enabling VS Code auto-save.
+        # One-time hint: OFF Colab, cash reads upstream cells from the .ipynb
+        # file on disk, so an upstream edit that has not been saved is invisible
+        # until it is — hence the save advice. In Colab the cells are read live
+        # from the frontend (google.colab ``get_ipynb``), so there is nothing to
+        # save and the hint would be misleading; skip it there.
         if not getattr(self, '_save_hint_shown', False):
             self._save_hint_shown = True
-            print("[Tip] Cash reads upstream cells from the saved notebook file.")
-            print("   Save (Ctrl+S) after editing upstream cells, or enable auto-save:")
-            print('   Settings -> "files.autoSave": "afterDelay"')
+            from ..server_discovery import _in_colab
+            if not _in_colab():
+                print("[Tip] Cash reads upstream cells from the saved notebook file.")
+                print("   Save (Ctrl+S) after editing upstream cells, or enable auto-save:")
+                print('   Settings -> "files.autoSave": "afterDelay"')
         if self._debug:
             print(f"TTL: {ttl if ttl is not None else 'None'}")
 

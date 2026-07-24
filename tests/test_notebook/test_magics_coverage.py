@@ -41,6 +41,31 @@ def magics_fixture():
     shell.user_ns.clear()
 
 
+class TestSaveHintColabAware:
+    """The 'save your upstream edits' hint is off-Colab only: in Colab cash
+    reads cells live from the frontend (get_ipynb), so there is nothing to save
+    and the hint would mislead."""
+
+    def test_hint_shown_off_colab(self, magics_fixture, capsys, monkeypatch):
+        magics, _shell, _backend = magics_fixture
+        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: False)
+        magics._save_hint_shown = False
+        magics.cash_on("")
+        out = capsys.readouterr().out
+        assert "saved notebook file" in out
+        assert "Save (Ctrl+S)" in out
+
+    def test_hint_suppressed_in_colab(self, magics_fixture, capsys, monkeypatch):
+        magics, _shell, _backend = magics_fixture
+        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: True)
+        magics._save_hint_shown = False
+        magics.cash_on("")
+        out = capsys.readouterr().out
+        assert "Cash enabled" in out        # cash_on still ran normally
+        assert "Save (Ctrl+S)" not in out   # but the save hint is suppressed
+        assert "saved notebook file" not in out
+
+
 # ============================================================================
 # cash_badge magic
 # ============================================================================
