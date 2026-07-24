@@ -541,6 +541,11 @@ class Cash:
         self.functions: dict[str, Callable[..., Any]] = {} # Registry of cached functions
         self.data_sources: dict[str, DataSource] = {} # Registry of data sources
         self.source_hashes: dict[str, str] = {} # Current source hashes
+        # Session-scoped memo: id(arg) -> (weakref, lineage_hash, content_hash).
+        # Lets a repeated ``@cash.cache`` call with the SAME unmutated argument
+        # skip re-hashing a possibly-huge input. See ``_hash_arg_payload`` for
+        # the read-side validation (weakref identity + lineage). Bounded below.
+        self._arg_hash_memo: dict[int, tuple] = {}
         self._analyzed = set() # Track which functions we've *surfaced* purity for
         # Track which functions have had their graph edges + purity report
         # populated (separate from _analyzed: a dependency can be populated to
@@ -3216,6 +3221,24 @@ class Cash:
                 canon_kwargs[name] = val
         return tuple(canon_args), canon_kwargs
 
+    _ARG_HASH_MEMO_CAP = 1024
+
+    def _memo_arg_hash(self, arg: Any, lineage: str, content_hash: str) -> None:
+        """Record ``id(arg) -> (weakref, lineage, content_hash)`` for the session,
+        bounded so a long session can't grow the memo without limit. When full,
+        drop it wholesale: the memo is a pure speedup, so an occasional cold
+        start just re-hashes. Values that cannot be weak-referenced are skipped
+        (they simply keep full-hashing).
+        """
+        try:
+            wref = weakref.ref(arg)
+        except TypeError:
+            return
+        memo = self._arg_hash_memo
+        if len(memo) >= self._ARG_HASH_MEMO_CAP:
+            memo.clear()
+        memo[id(arg)] = (wref, lineage, content_hash)
+
     def _hash_arg_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form."""
@@ -3233,16 +3256,39 @@ class Cash:
             # the flagship "restart-and-run-all in seconds" guarantee. Mirrors
             # principle: the reproducible signal, not the volatile
             # in-memory one, is authoritative.
+            # Fast path: skip re-hashing a possibly-huge argument we already
+            # content-hashed this session, when it is provably the SAME,
+            # unmutated object. Keyed on ``id`` (NOT lineage): two *different*
+            # objects that happen to share a lineage string must still be
+            # distinguished by content -- an explicit invariant
+            # (test_arg_hash_restart_stable) -- and distinct live objects have
+            # distinct ids. The entry is validated on read by BOTH a weakref
+            # identity check (guards id reuse after GC) AND the object's
+            # ``_cash_lineage_hash`` being unchanged (cash's own mutation signal,
+            # the same one it trusts to cache every notebook statement). The
+            # stored value is still the reproducible content hash, so the cache
+            # key is byte-identical and restart-safe; the memo is a pure
+            # within-session speedup, empty after a restart.
+            lineage = getattr(arg, '_cash_lineage_hash', None)
+            if lineage is not None:
+                entry = self._arg_hash_memo.get(id(arg))
+                if entry is not None:
+                    wref, memo_lineage, content_hash = entry
+                    if memo_lineage == lineage and wref() is arg:
+                        return content_hash
+
             builtin_hash = self._try_builtin_type_hash(arg)
             if builtin_hash is not None:
+                if lineage is not None:
+                    self._memo_arg_hash(arg, lineage, builtin_hash)
                 return builtin_hash
             # Notebook lineage hash: the authoritative, cheap identity for
             # values that carry NO content hasher (custom objects). Kept ahead
             # of registered hashers so a lineage-carrying object short-circuits
             # its (possibly expensive) registered hasher within a session
             # (test_hasher_priority_cash_hash_first).
-            if hasattr(arg, '_cash_lineage_hash'):
-                return arg._cash_lineage_hash
+            if lineage is not None:
+                return lineage
             for type_, (hasher_fn, src_hash) in self._type_hashers.items():
                 if isinstance(arg, type_):
                     # Embed the hasher source hash so that changing the
