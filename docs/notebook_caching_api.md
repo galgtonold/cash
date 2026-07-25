@@ -240,7 +240,7 @@ restart](how-it-works/notebook-path.md#picking-up-after-a-kernel-restart) and
 Cash intercepts file reads (`pd.read_csv`, `np.load`, `open`, `joblib.load`, …)
 and records each file's fingerprint — change the file on disk and the statements
 that read it recompute, no annotation needed. This works the same in the
-[decorator path](decorator.md#file_depends_on-invalidate-when-a-file-changes),
+[decorator path](decorator.md#file-reads-are-tracked-automatically),
 where you can also name files explicitly with `file_depends_on=` (auto-tracking
 fingerprints file *content*; `file_depends_on=` keys on `(mtime, size)`).
 
