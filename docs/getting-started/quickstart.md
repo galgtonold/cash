@@ -248,4 +248,6 @@ work the same for either path. See [Configuration](configuration.md).
 - **[Notebook Caching](../notebook_caching_api.md)** & **[Decorator guide](../decorator.md)** — the full reference for each path.
 - **[Annotations](../annotations.md)** — per-statement control (`# @cash:no-cache`, `ttl`, `persist`, `allow-random`).
 - **[Magic commands](../magics.md)** — `%cash_stats`, `%cash_help`, `%cash_debug`, and friends. Run `%cash_help` in any notebook for the list.
+- **[For coding agents](../for-coding-agents.md)** — using cash from Claude Code, Copilot, Cursor and friends (text badges, what an agent should read).
+- **[Benchmarks](../benchmarks.md)** — measured speedups, and how to reproduce them on your own workload.
 - **Tutorials:** [Data science](../tutorials/use-cases/data-science.md) · [LLM API calls](../tutorials/use-cases/llm-api-calls.md) · [Caching class methods](../tutorials/feature-guides/caching-class-methods.md) · [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md).

@@ -376,6 +376,7 @@ bindable via a `CASH_*` env var or a TOML file — see the
 - [Reading the Cash badge](badges.md) — the visual vocabulary in full.
 - [`@cash.cache` decorator](decorator.md) — the script/module path.
 - [Known limitations](known-limitations.md) — the one page to read before writing cached notebooks.
+- [How Cash works](how-it-works/overview.md) — the architecture tour, start to finish.
 - [The notebook path](how-it-works/notebook-path.md) — how a cell runs, end to end.
 - [Staying correct: invalidation](how-it-works/invalidation.md) — how cash proves a cached value is still valid.
 - [Notebook API reference](api/notebook.md) — programmatic entry points for tooling.

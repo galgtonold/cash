@@ -69,6 +69,27 @@ statements themselves are trivially cheap, in which case the size-aware floor
 keeps those results in RAM rather than paying disk I/O. The
 [cost model](cost-model.md) lays out the maths.
 
+## Measuring your own workload
+
+You don't need the repo to get numbers for the thing you actually care about.
+`%cash_benchmark` arms the **next** cell to run N timed iterations:
+
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
+```python
+%cash_benchmark 5 --compare
+# next cell — this is what gets measured:
+df = pd.read_csv("big.csv").groupby("region").sum()
+```
+
+`--compare` also runs the cell N times with caching off, so the output includes a
+cached-vs-uncached speedup for *your* data; `--cold` clears the cache before each
+cached iteration to measure cold-start instead. Timing uses `perf_counter`, so
+fast cells aren't distorted by Windows' ~16 ms clock granularity. See
+[`%cash_benchmark`](magics.md#cash_benchmark) for the full flag list.
+
+That number is the one worth quoting internally — the table above is shape and
+order of magnitude, not a promise about your hardware.
+
 ## Reproducing these numbers
 
 The `benchmarks/` directory in the repository holds the harness:

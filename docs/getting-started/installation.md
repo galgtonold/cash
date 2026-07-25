@@ -61,3 +61,7 @@ import cash
 %cash_on
 print("Cash is working!")
 ```
+
+Next: the [Quick Start](quickstart.md). If you're upgrading an existing install,
+see [Versioning & compatibility](../versioning.md) for what happens to caches
+written by an older version.

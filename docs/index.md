@@ -135,4 +135,8 @@ Optional backends: `pip install "cash-lib[redis]"`, `[s3]`, or `[all]`. See
     <h3>FAQ &amp; Glossary</h3>
     <p>Quick answers, troubleshooting, and the vocabulary in one place.</p>
   </a>
+  <a class="cash-cta-card secondary" href="for-coding-agents/">
+    <h3>For Coding Agents</h3>
+    <p>Using cash from Claude Code, Copilot, or Cursor — and what an agent should read first.</p>
+  </a>
 </div>

@@ -323,6 +323,7 @@ The `CashConfig` fields that drive all of the above are in the
 ---
 
 See also: [Where your cache lives](how-it-works/storage.md),
+[Benchmarks](benchmarks.md) — measured numbers behind this model,
 [Annotations](annotations.md), [Reading the Cash badge](badges.md),
 [Configuration](getting-started/configuration.md),
 [Smart persistence tutorial](tutorials/feature-guides/smart-persistence.md).

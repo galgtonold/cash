@@ -95,6 +95,43 @@ recent events by default, a custom count, or the whole thing as JSON:
 
 Both magics are documented in full under [Magic Commands](../magics.md).
 
+## The audit log: every cache operation, in order
+
+The badge shows one cell and `%cash_stats` shows session totals. Between them
+sits `%cash_audit` — an append-only record of each individual cache operation
+(hit, miss, compute, restore) with its variable, timestamp, and the statement
+that caused it. It answers "what did cash actually do, in what order?" rather
+than "how did this one cell end up".
+
+It is **off by default**; turn it on and it records from that point:
+
+<!-- test:skip reason="IPython magic command — requires kernel context" -->
+```python
+%cash_audit on                    # start recording (--file <path> also mirrors to disk)
+%cash_audit summary               # totals: entries, unique variables, time range, per-operation counts
+%cash_audit show                  # the last 50 entries
+%cash_audit show cache_hit        # filter to one operation type
+%cash_audit clear                 # drop the entries
+%cash_audit off
+```
+
+A `summary` reads like this — two runs of the same statement, one miss then one
+hit:
+
+```
+Audit Summary:
+  Total entries: 2
+  Unique variables: 1
+  Operations:
+    cache_hit: 1
+    cache_miss: 1
+```
+
+Reach for it when a *sequence* is the question — a cell that behaves differently
+on the third run, or a session where you want a compliance-style record of what
+was served from cache versus computed. Entries live in memory for the session
+unless you pass `--file`. Full flag reference in [Magic Commands](../magics.md#cash_audit).
+
 ## Asking a decorated function directly
 
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call

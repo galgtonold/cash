@@ -67,7 +67,13 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
     It depends on the ratio of compute cost to result size — the range is wide
     (a heavy loop body can see ~190×; a naive big-frame ETL ~1.2×, and Run #1 is
     slower). `%cash_stats` tells you which case you're in and will say so plainly
-    when cash cost you time. See [Cost model](cost-model.md).
+    when cash cost you time. See [Cost model](cost-model.md) for the decision
+    model and [Benchmarks](benchmarks.md) for measured numbers you can reproduce.
+
+??? question "Will my cache still be valid after I upgrade cash?"
+    Cache entries are not guaranteed to survive a version change — see
+    [Versioning & compatibility](versioning.md) for what is and isn't promised,
+    and clear the cache (`python -m cash clear`) if in doubt.
 
 ## Troubleshooting
 
