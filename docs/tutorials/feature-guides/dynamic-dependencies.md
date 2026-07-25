@@ -99,6 +99,10 @@ folds that value into the cache key, so the entry invalidates when it moves.
 > states and cannot track changes, so the cache would never invalidate. Cash
 > warns with a `CashCacheIneffectiveWarning` if it sees a `bool`.
 
+This is the same token contract as a custom
+[`DataSource`](../../api/data_sources.md#custom-data-sources) passed to
+`depends_on=` — write the change-token once and it works either way.
+
 ```python
 import os
 from cash import DataSource

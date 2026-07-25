@@ -33,8 +33,9 @@ class DataSource(ABC):
         not a yes/no flag: return something that *changes* when the underlying
         data changes (a version, a digest, an mtime). Returning a plain ``bool``
         cannot track changes and the cache will never invalidate - Cash warns if
-        it sees one. ``FileDataSource`` overrides :meth:`state_token` to use the
-        file mtime, so its ``has_changed`` (a real bool) is never used as a token.
+        it sees one. ``FileDataSource`` exposes ``_get_mtime``, so the base
+        :meth:`state_token` uses the file mtime and its ``has_changed`` (a real
+        bool) is never used as a token.
         """
 
     @abstractmethod

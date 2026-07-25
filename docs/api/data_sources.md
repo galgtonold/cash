@@ -1,9 +1,10 @@
 # Data sources
 
-Objects that contribute to a cache key by reporting "have I changed
-since you last saw me?". The bundled `FileDataSource` tracks file
-mtime; custom subclasses extend the same pattern to databases, URLs,
-API endpoints, etc.
+Objects that contribute to a cache key by reporting a **token representing
+their current state** (an mtime, a version, a content digest) — the cached
+entry invalidates when that token changes. The bundled `FileDataSource` tracks
+file mtime; custom subclasses extend the same pattern to databases, URLs, API
+endpoints, etc.
 
 ## Imports
 
@@ -43,7 +44,8 @@ typing.
 ## Custom data sources
 
 To track something other than a file as a cache dependency, subclass
-`DataSource`. The contract is three methods:
+`DataSource`. The contract is three abstract methods, plus an optional
+`state_token()` hook:
 
 ::: cash.data_source.DataSource
     options:
@@ -51,33 +53,42 @@ To track something other than a file as a cache dependency, subclass
         - get_id
         - has_changed
         - update_state
+        - state_token
+
+!!! warning "`has_changed()` must return a state *token*, not a `bool`"
+    Despite the name, the value `has_changed()` returns is folded into the cache
+    key — so it must **change when the data changes** (a version, a digest, a
+    max-id). A plain `bool` only has two states and can't track changes: cash
+    warns with `CashCacheIneffectiveWarning` and the cache never invalidates.
+    (`FileDataSource` returns a bool from `has_changed()`, but its state token is
+    the file mtime — the base `state_token()` picks up its `_get_mtime` — which
+    is why it works.) This is the same contract as
+    [`dynamic_depends_on=`](../tutorials/feature-guides/dynamic-dependencies.md).
 
 ### Example: tracking a database table
 
 ```python
-import hashlib
 from cash.data_source import DataSource
 
 class DBTableSource(DataSource):
     def __init__(self, connection, table_name):
         self.conn = connection
         self.table = table_name
-        self._last_max_id = self._current_max_id()
-
-    def _current_max_id(self):
-        row = self.conn.execute(
-            f"SELECT MAX(id), COUNT(*) FROM {self.table}"
-        ).fetchone()
-        return (row[0], row[1])
 
     def get_id(self):
         return f"db_table:{self.table}"
 
     def has_changed(self):
-        return self._current_max_id() != self._last_max_id
+        # The state TOKEN folded into the cache key — a value that moves when
+        # the table changes, not a bool. (max_id, row_count) shifts whenever
+        # rows are added or removed.
+        row = self.conn.execute(
+            f"SELECT MAX(id), COUNT(*) FROM {self.table}"
+        ).fetchone()
+        return (row[0], row[1])
 
     def update_state(self):
-        self._last_max_id = self._current_max_id()
+        pass   # token-based tracking keeps no internal state to update
 ```
 
 Pass via `depends_on=`:
