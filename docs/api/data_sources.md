@@ -32,6 +32,9 @@ source = FileDataSource("data/input.csv")
 @c.cache(depends_on=[source])
 def load_data():
     return pd.read_csv("data/input.csv")
+
+load_data()             # computes, recording the file's current state
+load_data()             # hits — the file hasn't changed
 ```
 
 When `input.csv` changes on disk, cached results are automatically
@@ -91,10 +94,19 @@ class DBTableSource(DataSource):
         pass   # token-based tracking keeps no internal state to update
 ```
 
-Pass via `depends_on=`:
+Pass via `depends_on=`, then **call it** — a `DataSource` only proves itself when
+the token is actually read:
 
 ```python
 @c.cache(depends_on=[DBTableSource(conn, "users")])
 def user_summary():
     return conn.execute("SELECT COUNT(*) FROM users").fetchone()
+
+user_summary()          # computes, and records the current token
+user_summary()          # hits — the table hasn't moved
 ```
+
+Insert a row and the next call recomputes, because `(max_id, count)` changed.
+(If `has_changed()` returned a `bool` instead, this is the moment cash would warn
+that the entry can never invalidate — which is why the example exercises it
+rather than only defining it.)

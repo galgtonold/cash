@@ -95,6 +95,32 @@ def find_expect_raises_for_fence(lines: list[str], fence_start_line: int) -> boo
     return False
 
 
+_ALLOW_UNEXERCISED_RE = re.compile(r"<!--\s*test:allow-unexercised\b(?P<attrs>[^>]*)-->")
+
+
+def find_allow_unexercised(text: str) -> str | None:
+    """Return the reason from a page-level ``test:allow-unexercised`` marker.
+
+    The marker declares that this page deliberately *defines* ``@cash.cache``
+    functions without calling them (a signature reference, a network example
+    that must not run). It is page-level rather than fence-level because the
+    detection happens against the namespace after the whole page has executed.
+
+    Returns the reason string if the marker is present, else ``None``. Raises
+    ``MissingSkipReason`` when the reason is absent, so a page can't opt out
+    silently.
+    """
+    m = _ALLOW_UNEXERCISED_RE.search(text)
+    if not m:
+        return None
+    reason_m = _REASON_RE.search(m.group("attrs"))
+    if not reason_m:
+        raise MissingSkipReason(
+            "test:allow-unexercised marker missing reason= attribute"
+        )
+    return reason_m.group("reason")
+
+
 _EXPECT_WARNING_RE = re.compile(r"<!--\s*test:expect-warning\b[^>]*-->")
 
 

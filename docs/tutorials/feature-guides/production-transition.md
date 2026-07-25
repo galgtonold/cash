@@ -123,6 +123,48 @@ from pipeline import train          # @cash.cache lives in the module
 model = train(features)              # badge reports the decorator hit
 ```
 
+## Running under CI, papermill, or nbconvert
+
+Automation is usually the reason you're moving code out of the notebook in the
+first place, and a headless run needs a few different settings.
+
+**Use the text badge.** The HTML badge is an interactive widget; in a headless
+run nothing renders it. `%cash_badge print` emits a plain-text summary after each
+cell instead — readable in CI logs, in an `nbconvert` artifact, and by a coding
+agent parsing the executed notebook. It's ASCII-only on purpose, so a UTF-8
+kernel writing to a `cp1252` console won't crash the run.
+
+```python { .nb-cell }
+import cash
+%cash_badge print
+%cash_on
+```
+
+**Expect the discovery warning, and ignore it.** Without a live Jupyter Server
+there is no notebook file to inspect, so cash emits
+`CashNotebookDiscoveryWarning` once and disables upstream dependency tracking.
+Statement-level caching still works; what you lose is cross-cell invalidation,
+which a top-to-bottom automated run doesn't need. The warning is expected under
+papermill, nbconvert, and CI — it's only worth investigating if you see it *in*
+JupyterLab or VS Code, where it means a stale runtime.
+
+**Fail the build on accidental impurity.** `@cash.cache(strict=True)` turns the
+purity analyzer's warnings into `CashImpureFunctionError` at first call, so a
+teammate caching a side-effecting function breaks CI instead of shipping a
+silently wrong cache. Reserve it for functions you've deliberately audited —
+see [`strict=`](../../decorator.md#strict-and-assume_safe-purity-gates).
+
+**Decide whether the cache persists between runs.** A fresh container starts
+cold, which is correct but slow. Options, in increasing order of setup:
+
+- Point `CASH_CACHE_DIR` at a path your CI caches between runs.
+- Share one store across runners with a Redis or S3 backend — but read
+  [Sharing a cache](sharing-caches.md) first, because a file-reading *notebook
+  statement* still won't hit across machines, and the paths recorded by
+  `@cash.cache` have to resolve the same way on each runner.
+- Start clean deliberately with `python -m cash clear`, when a run must not be
+  influenced by earlier state.
+
 ## Migration checklist
 
 - [ ] Identify expensive notebook statements

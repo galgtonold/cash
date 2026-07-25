@@ -25,7 +25,8 @@ from pathlib import Path
 
 import pytest
 
-from tests.docs._harness import run_page
+from tests.docs._annotations import find_allow_unexercised
+from tests.docs._harness import run_page, unexercised_cached_functions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCS_ROOT = REPO_ROOT / "docs"
@@ -36,6 +37,14 @@ _BLACKLIST_DIRS = {"superpowers"}
 # can't mislead a reader and a failure there would block CI for an unreachable
 # page. Keep in sync with ``exclude_docs`` in mkdocs.yml.
 _EXCLUDED_DOCS_FILES = {"architecture_decisions.md"}
+
+# Pages whose subject is a runtime *contract* rather than an API surface: an
+# example that defines a cached function without calling it teaches a promise
+# nothing verified. See the enforcement in ``test_doc_page`` for why this is a
+# named set rather than a global rule.
+_EXERCISE_REQUIRED = {
+    "docs/api/data_sources.md",
+}
 
 
 def _discover_docs() -> list[Path]:
@@ -631,6 +640,33 @@ def test_doc_page(doc_path: Path, docs_coverage_recorder) -> None:
     """Execute every python fence in the doc and assert documented cache claims."""
     namespace_overrides = _get_namespace(doc_path)
     result = run_page(doc_path, namespace_overrides=namespace_overrides)
+
+    # A fence that only *defines* a cached function proves nothing about the
+    # behaviour the page teaches — that is how a broken DataSource example once
+    # shipped green (the fence ran, but nothing called it, so the token was
+    # never read and the ineffective-cache warning never fired).
+    #
+    # Enforced on _EXERCISE_REQUIRED only, not globally: a sweep found 14 pages
+    # with definition-only cached functions, nearly all legitimate (network
+    # calls that must not run, missing data files, signature references in the
+    # decorator reference). Global enforcement would mean 14 opt-out markers —
+    # friction for a weak signal, and every marker is somewhere a real bug can
+    # hide. These are the pages whose whole subject is a runtime *contract*, so
+    # an unexercised example there is a genuine smell. Add a page when it starts
+    # documenting behaviour rather than signatures.
+    rel_posix = doc_path.relative_to(REPO_ROOT).as_posix()
+    if rel_posix in _EXERCISE_REQUIRED:
+        unexercised = unexercised_cached_functions(result.namespace or {})
+        if unexercised:
+            allowed = find_allow_unexercised(doc_path.read_text(encoding="utf-8"))
+            assert allowed is not None, (
+                f"{rel_posix}: defines @cash.cache function(s) it never calls: "
+                f"{sorted(unexercised)}. This page documents a runtime contract, "
+                f"so its examples must exercise it — call them, or add "
+                f'<!-- test:allow-unexercised reason="..." --> if a definition '
+                f"really is the whole point."
+            )
+
     docs_coverage_recorder.append({
         "page": str(doc_path.relative_to(REPO_ROOT)),
         "tested_fences": result.tested_fences,

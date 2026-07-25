@@ -230,6 +230,30 @@ def test_run_page_allows_expected_cash_warning():
     assert result.tested_fences == 1
 
 
+def test_unexercised_cached_functions_spots_a_defined_but_uncalled_function():
+    """A wrapper reporting 0 hits / 0 misses was never called."""
+    from tests.docs._harness import unexercised_cached_functions
+
+    ns = {
+        "never_called": type("W", (), {"cache_info": lambda self: {"hits": 0, "misses": 0}})(),
+        "was_called": type("W", (), {"cache_info": lambda self: {"hits": 1, "misses": 1}})(),
+        "not_a_wrapper": 42,
+    }
+    assert unexercised_cached_functions(ns) == ["never_called"]
+
+
+def test_allow_unexercised_marker_requires_a_reason():
+    from tests.docs._annotations import MissingSkipReason, find_allow_unexercised
+
+    assert find_allow_unexercised("# Page\n\nno marker here\n") is None
+    assert (
+        find_allow_unexercised('<!-- test:allow-unexercised reason="signatures only" -->')
+        == "signatures only"
+    )
+    with pytest.raises(MissingSkipReason):
+        find_allow_unexercised("<!-- test:allow-unexercised -->")
+
+
 def test_extract_fences_detects_expect_warning_annotation():
     fences = extract_fences(FIXTURES / "page_with_expected_warning.md")
     assert len(fences) == 1

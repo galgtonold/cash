@@ -109,6 +109,40 @@ class PageExecutionError(RuntimeError):
     """Raised when a docs-parity page fails to exec."""
 
 
+class PageUnexercisedError(RuntimeError):
+    """Raised when a page defines a ``@cash.cache`` function it never calls.
+
+    Executing a fence proves it doesn't raise; it does not prove the behaviour
+    the page teaches actually happens. A definition-only example is how a
+    genuinely broken ``DataSource`` once shipped: the fence ran, but nothing
+    called the function, so the token was never read and the
+    ``CashCacheIneffectiveWarning`` that would have exposed it never fired.
+    """
+
+
+def unexercised_cached_functions(namespace: dict[str, Any]) -> list[str]:
+    """Names of ``@cash.cache``-wrapped functions in *namespace* never called.
+
+    A wrapper reports ``hits == misses == 0`` only if it never served a call.
+    Note this is per-wrapper, so a notebook page that rebuilds its defining cell
+    can legitimately read 0/0 — hence the opt-out marker rather than a hard rule.
+    """
+    out: list[str] = []
+    for name, obj in namespace.items():
+        info = getattr(obj, "cache_info", None)
+        if not callable(info):
+            continue
+        try:
+            stats = info()
+        except Exception:  # noqa: BLE001 - introspection must never break a page
+            continue
+        if not isinstance(stats, dict):
+            continue
+        if stats.get("hits", 0) == 0 and stats.get("misses", 0) == 0:
+            out.append(name)
+    return out
+
+
 class PageWarningError(RuntimeError):
     """Raised when a docs-parity fence emits a ``CashWarning`` at runtime
     without opting in via ``<!-- test:expect-warning -->``.
