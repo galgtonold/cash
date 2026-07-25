@@ -86,7 +86,7 @@ Cache:
 Don't cache (or cache carefully):
 
 - Streaming responses where you need token-by-token UX. The cache materializes the stream — fine for batch, awkward for live UI.
-- `temperature > 0` calls where you actually want sampling variation. Either use a TTL, or annotate with `@cash:no-cache` per call.
+- `temperature > 0` calls where you actually want sampling variation. Give these a `ttl=`, or leave them undecorated — don't cache a call whose whole point is to vary. (In a notebook, `# @cash:no-cache` on the statement does the same.)
 - User-facing chat where freshness matters more than cost.
 
 ## Handling non-determinism explicitly

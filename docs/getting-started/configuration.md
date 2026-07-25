@@ -310,8 +310,7 @@ with open('file.txt') as f:          # built-in open
 File tracking is always on for these recognised patterns — there's no
 global toggle. To opt a single statement out of caching (and therefore
 out of file-dependency tracking for that statement), use the
-`# @cash:no-cache` annotation described in the
-[Quick Start](quickstart.md#statement-level-annotations).
+[`# @cash:no-cache`](../annotations.md#cashno-cache-alias-nocache) annotation.
 
 ## See also
 

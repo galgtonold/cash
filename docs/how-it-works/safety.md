@@ -51,6 +51,14 @@ The split looks arbitrary until you write the two forms side by side.
 statement's outputs; `d.update(o)` is a bare expression with no target at all.
 The first can be re-derived from the statement that made it; the second cannot.
 
+!!! note "…but only when the base was made in the same cell"
+    The **Cached** verdicts above are this classifier's per-statement decision.
+    A separate rule sits on top: if the object being mutated was **created in an
+    earlier cell**, the statement re-runs anyway — there's no local definition to
+    re-derive it from. So `df['x'] = …` caches when `df` was built in the same
+    cell and re-runs when `df` came from upstream. See
+    [Known limitations](../known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
+
 ### Method calls: what the AST can't see
 
 `data.append(4)` is easy — `append` is on the known-mutating list. But

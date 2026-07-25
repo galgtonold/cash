@@ -502,17 +502,17 @@ A blank line terminates the backward walk. Keep annotations directly above the s
 
 ## Edge cases
 
-### Compound statements bind to the whole block
+### A header annotation covers every statement in the block
 
-A single annotation on a `for`/`if`/`while`/`try` block applies to the **entire compound statement** — it's one cache entry, not one per iteration or branch.
+A single annotation on a `for`/`if`/`while`/`try` **header** applies to every statement inside the block — each one inherits it:
 
 ```python
 # @cash:persist
 for i in range(10):
-    results.append(compute(i))
+    results.append(compute(i))    # persisted on every iteration
 ```
 
-The for-loop as a whole is the cached statement. Verified by [`tests/test_notebook/test_annotations.py:125-134`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py).
+This is about *which statements the directive reaches*, not cache granularity. Granularity is unchanged: a `for`/`if` body is still cached per statement (and a `for` per iteration), while `while`/`with` execute as a single unit — see [Scoping inside control structures](#scoping-inside-control-structures).
 
 ### Annotation in a string literal
 

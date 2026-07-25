@@ -1,5 +1,9 @@
 # Installation
 
+Cash has **zero required runtime dependencies** — `pip install cash-lib` pulls in
+nothing but cash itself, and every integration (pandas, Redis, S3, …) is an
+opt-in [extra](#optional-dependencies).
+
 ## Requirements
 
 - Python 3.10 or higher

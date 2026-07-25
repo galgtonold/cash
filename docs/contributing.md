@@ -27,50 +27,43 @@ pytest tests/ -v --tb=short
 
 ## Project Structure
 
+A directory-level map (browse `src/cash/` for the individual modules — the
+layout below is intentionally coarse so it doesn't drift as files move within a
+package):
+
 ```
 src/cash/
-├── core.py                 # Main Cash class, decorator-based caching
-├── config.py               # Configuration management
-├── analytics.py            # Cache usage analytics
-├── data_source.py          # FileDataSource for dependency tracking
-├── logging.py              # Structured logging (JSON, file output)
-├── nbconvert.py            # nbconvert preprocessor for stripping badges
-├── utils.py                # Utility functions
-├── __init__.py             # Public API exports
-├── __main__.py             # CLI tool (python -m cash)
-├── backends/               # Pluggable storage backends
-│   ├── backend.py          # Base classes + InMemory/File/Cascading backends
-│   ├── sqlite_backend.py   # SQLite backend
-│   ├── redis_backend.py    # Redis backend (experimental)
-│   ├── s3_backend.py       # S3 backend (experimental)
-│   ├── tiered_backend.py   # Multi-tier backend (experimental)
-│   ├── serialization.py    # Pickle/CloudPickle serializers
-│   └── lazy.py             # LazyProxy for deferred deserialization
-├── notebook/               # Jupyter integration
-│   ├── magics.py           # IPython magic commands
-│   ├── cache_key.py        # Unified cache key computation (single source of truth)
-│   ├── statement/processor.py  # Statement-level caching
-│   ├── upstream.py         # Upstream cell tracking & virtual restore
-│   ├── analysis.py         # AST-based code analysis
-│   ├── annotations.py      # @cash: directive parser
-│   ├── file_tracker.py     # File dependency tracking
-│   ├── function_tracker.py # Function source tracking & module hot reload
-│   ├── control_structures.py  # Loop/conditional caching
-│   ├── mutation_detector.py   # In-place mutation detection
-│   ├── side_effects.py     # Side effect detection (file writes, network, etc.)
-│   ├── randomness.py       # Unseeded randomness detection
-│   ├── purity.py           # @pure/@stateful decorators
-│   ├── provenance.py       # Variable provenance tracking
-│   └── audit.py            # Audit logging for compliance
-├── ui/                     # Display components
-│   ├── explorer.py         # Interactive cache browser
-│   ├── debugger.py         # Cache state debugger
-│   ├── visualizer.py       # Notebook dependency visualization
-│   ├── dashboard.py        # Analytics dashboard
-│   └── graph.py            # Dependency graph utilities
-└── experimental/           # Experimental feature namespace
-    └── __init__.py         # Lazy imports for experimental APIs
+├── core.py             # The Cash class + @cash.cache decorator
+├── config.py           # CashConfig; TOML / env / programmatic resolution
+├── data_source.py      # FileDataSource and the DataSource protocol
+├── dependency_state.py # Folds source/dep/helper state into the cache key
+├── purity_analyzer.py  # Static purity/impurity analysis for the decorator
+├── analytics.py        # Cache-usage analytics
+├── graph.py            # Dependency-graph utilities
+├── nbconvert.py        # nbconvert preprocessor (strips badges / magics)
+├── logging.py          # Structured logging
+├── exceptions.py       # Public exception types
+├── utils.py            # Shared internal helpers
+├── __main__.py         # CLI entry point (python -m cash)
+│
+├── backends/           # Pluggable storage: _base.py (abstract CacheBackend),
+│                       #   memory / file / cascading / tiered / sqlite / redis /
+│                       #   s3, plus serialization and lazy (LazyProxy)
+├── notebook/           # Jupyter integration
+│   ├── ipython/        #   magics, cell executor, argument parsing
+│   ├── statement/      #   statement-level caching
+│   ├── control_structures/  # per-iteration loop / branch caching
+│   ├── upstream/       #   upstream simulation & virtual restore
+│   ├── badge_renderer/ #   the HTML / text cell badge
+│   └── *.py            #   analysis, annotations, file/function tracking,
+│                       #   cost_model, consumables, randomness, purity,
+│                       #   provenance, audit, …
+├── ui/                 # Interactive display components (explorer, debugger, …)
+└── experimental/       # Lazy-imported experimental APIs
 ```
+
+The default backend is `TieredBackend([InMemoryBackend, FileBackend])` — RAM in
+front of disk. Redis and S3 are optional-dependency backends.
 
 ## Testing
 
