@@ -40,11 +40,19 @@ logger = logging.getLogger(__name__)
 
 __all__ = [
     "snapshot_file_deps",
+    "snapshot_remote_deps",
     "existing_file_deps",
     "split_file_dep_value",
     "file_content_hash",
     "file_dep_is_fresh",
 ]
+
+# Marks a snapshot entry as a REMOTE object rather than a local path. Remote
+# entries ride in the same ``auto_file_deps`` dict as files - they answer the
+# same question ("did what this call read change since?") and every consumer
+# already routes that question through ``file_dep_is_fresh``, so one dict with
+# one branch beats a parallel channel each consumer would have to learn.
+_REMOTE_MARKER = "remote"
 
 # Files up to this size are hashed in full; larger files are sampled
 # deterministically (head / middle / tail) so hashing a multi-GB parquet on
@@ -114,6 +122,54 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
     return snapshot
 
 
+def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Return ``{url: {'remote': True, 'hash': token}}`` for remote reads.
+
+    The token is whatever the object's store maintains to describe its content -
+    an ETag, a version id, a GCS generation - read with a single metadata
+    request (see :class:`cash.remote_source.RemoteFileDataSource`). It stands in
+    for the content hash a local file gets, and slots into the same snapshot
+    dict, so lineage and freshness treat a remote read exactly like a local one.
+
+    A token that could not be read is recorded as ``unresolved``. That is
+    deliberate and fail-**closed**: the entry stays checkable and reports itself
+    stale forever, so the call recomputes. Dropping it instead would leave the
+    entry with no dependency at all - a permanent silent stale hit, the bug this
+    whole mechanism exists to prevent.
+    """
+    from cash.remote_source import RemoteFileDataSource
+
+    snapshot: dict[str, dict[str, Any]] = {}
+    for url in urls:
+        entry: dict[str, Any] = {_REMOTE_MARKER: True}
+        token = RemoteFileDataSource(url).state_token()
+        if token.startswith("unresolved:"):
+            entry["unresolved"] = True
+        else:
+            entry["hash"] = token
+        snapshot[url] = entry
+    return snapshot
+
+
+def remote_dep_is_fresh(url: str, stored: dict[str, Any]) -> tuple[bool, str | None]:
+    """Return ``(is_fresh, stale_reason)`` for a remote dependency.
+
+    Fresh exactly when the store reports the same validator it reported when
+    the entry was written. Anything else - a moved ETag, an unreadable object,
+    a token that could not be resolved in the first place - is stale, so the
+    call recomputes rather than serving a result nobody could verify.
+    """
+    from cash.remote_source import RemoteFileDataSource
+
+    stored_token = stored.get("hash")
+    if stored_token is None:
+        return False, "remote-unresolved"
+    current = RemoteFileDataSource(url).state_token()
+    if current != stored_token:
+        return False, "remote-changed"
+    return True, None
+
+
 def existing_file_deps(paths: Iterable[str]) -> list[str]:
     """Filter tracked paths down to the ones that actually exist, sorted.
 
@@ -167,9 +223,15 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     i.e. for fully-hashed (<= cap) files, which keep the touch-tolerant path.
 
     ``stale_reason`` is ``None`` when fresh, else one of
-    ``'unreadable' | 'size' | 'content' | 'mtime' | 'mtime-sampled'`` for debug
-    attribution.
+    ``'unreadable' | 'size' | 'content' | 'mtime' | 'mtime-sampled' |
+    'remote-changed' | 'remote-unresolved'`` for debug attribution.
+
+    **Remote dependencies** short-circuit to :func:`remote_dep_is_fresh`: the
+    "path" is a URL, so there is nothing to stat, and the store's own validator
+    answers the question instead.
     """
+    if isinstance(stored, dict) and stored.get(_REMOTE_MARKER):
+        return remote_dep_is_fresh(resolved_path, stored)
     stored_mtime, stored_size = split_file_dep_value(stored)
     stored_hash = stored.get("hash") if isinstance(stored, dict) else None
     try:

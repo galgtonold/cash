@@ -19,46 +19,21 @@ import pathlib
 import re
 import sys
 import threading
-import warnings
 from collections.abc import Callable
 from typing import Any, Optional
 
 from cash.utils import normalize_path
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
-# reaches us as the raw first argument. ``os.path.realpath`` mangles it into a
-# bogus local path, nothing resolves, and ``snapshot_file_deps`` drops it — so
-# the entry would be stored with *no* dependency and keep hitting even after the
-# object changes. Warn instead of losing it quietly. ``file://`` is excluded: it
-# names a local path that can genuinely be stat'ed.
+# reaches us as the raw first argument. ``os.path.realpath`` would mangle it into
+# a bogus local path, nothing would resolve, and ``snapshot_file_deps`` would
+# drop it — leaving the entry with *no* dependency, hitting forever even after
+# the object changed. URLs are routed to their own channel instead and tracked
+# by the store's own validator (ETag / version id / generation). ``file://`` is
+# excluded: it names a local path that can genuinely be stat'ed. See CAS-236.
 _URL_SCHEME_RE = re.compile(r"^(?!file://)[a-zA-Z][a-zA-Z0-9+.\-]*://")
-_warned_untrackable: set[str] = set()
 
-
-def _reset_untrackable_warnings() -> None:
-    """Clear the warn-once ledger (tests; a fresh session starts empty)."""
-    _warned_untrackable.clear()
-
-
-def _warn_untrackable_once(path: str) -> None:
-    """Warn a single time per URL that its dependency cannot be tracked."""
-    if path in _warned_untrackable:
-        return
-    if len(_warned_untrackable) < 1024:  # bound the ledger for long sessions
-        _warned_untrackable.add(path)
-    from cash.exceptions import CashCacheIneffectiveWarning
-
-    warnings.warn(
-        f"cash cannot track {path!r} as a data dependency: it is a remote URL, "
-        f"not a local file, so a change to it will NOT invalidate the cached "
-        f"result. Declare it explicitly with a DataSource whose state token is "
-        f"the object's ETag/version (`@cash.cache(depends_on=[...])`), or pass "
-        f"a value that changes with the data as an argument.",
-        CashCacheIneffectiveWarning,
-        stacklevel=4,
-    )
-
-__all__ = ["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies"]
+__all__ =["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies"]
 
 # Type alias for file dependency tracking: maps normalized file path -> mtime at read time
 FileDependencies = dict[str, float]
@@ -465,6 +440,10 @@ class FileAccessTracker:
     """
     def __init__(self, user_ns=None, propagate_to_parent: bool = False):
         self.accessed_files = set()
+        # Remote URLs are kept in their own set, never in ``accessed_files``:
+        # every consumer of that set stats/hashes its members, and a URL is not
+        # a path. They are re-joined downstream as remote dependency entries.
+        self.accessed_remote: set[str] = set()
         self.user_ns = user_ns or {}
         self.registry = FileDependencyRegistry()
         # Stack of ContextVar tokens, one per active __enter__. Supports
@@ -506,13 +485,18 @@ class FileAccessTracker:
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
 
+    def get_accessed_remote_urls(self) -> set[str]:
+        """Remote URLs read in this block, tracked by store validator instead."""
+        return self.accessed_remote
+
     def _track_path(self, path):
         raw_path = str(path)
         if _URL_SCHEME_RE.match(raw_path):
-            # Remote URL: realpath would mangle it into a nonexistent local path
-            # and the dependency would be dropped without a trace. Say so, and
-            # don't record a path that can never be validated. See CAS-236.
-            _warn_untrackable_once(raw_path)
+            # A remote URL is a real dependency, just not a stat-able one:
+            # ``realpath`` would mangle it into a nonexistent local path and the
+            # dependency would vanish. Record it on the remote channel, where it
+            # is tracked by the store's own validator. See CAS-236.
+            self._add_tracked_remote(raw_path)
             return
         try:
             # Normalize path using realpath to get canonical path
@@ -549,6 +533,15 @@ class FileAccessTracker:
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
             parent._add_tracked(abs_path)
+
+    def _add_tracked_remote(self, url: str) -> None:
+        """Record a remote *url* read, propagating to the enclosing tracker."""
+        self.accessed_remote.add(url)
+        if not self._propagate_to_parent:
+            return
+        parent = self._parent_stack[-1] if self._parent_stack else None
+        if parent is not None and parent is not self:
+            parent._add_tracked_remote(url)
 
     def _apply_patches(self):
         # 1. Patch Builtins

@@ -1539,6 +1539,9 @@ class Cash:
                 'size': 'size changed',
                 'content': 'content changed',
                 'mtime': 'mtime changed',
+                'mtime-sampled': 'mtime changed (sampled file)',
+                'remote-changed': 'remote object changed',
+                'remote-unresolved': 'remote object could not be checked',
             }
             stale: dict[str, str] = {}
             for path, recorded in snap.items():
@@ -1696,10 +1699,29 @@ class Cash:
         return _CACHE_MISS
 
     @staticmethod
+    def _snapshot_tracked_deps(tracker: Any) -> dict[str, dict[str, Any]] | None:
+        """Snapshot everything *tracker* saw this call read - local and remote.
+
+        Both land in one dict: they answer the same question ("did what this
+        call read change since?"), and every consumer already routes that
+        question through ``file_dep_is_fresh``, which branches on the entry.
+        Remote entries cost one metadata request each to snapshot; that is the
+        price of the read being tracked at all, and it is small against the
+        download the entry exists to avoid.
+        """
+        from cash.notebook.file_dep_snapshot import snapshot_file_deps, snapshot_remote_deps
+        accessed = tracker.get_accessed_files()
+        deps = snapshot_file_deps(accessed) if accessed else {}
+        remote = tracker.get_accessed_remote_urls()
+        if remote:
+            deps.update(snapshot_remote_deps(remote))
+        return deps or None
+
+    @staticmethod
     def _propagate_file_deps_to_active_tracker(metadata: CacheMetadata) -> None:
-        """Register this entry's recorded file deps with the enclosing
+        """Register this entry's recorded deps with the enclosing
         ``FileAccessTracker`` (if any), so a cached function that calls this
-        one on a *hit* still inherits its file dependencies. Best-effort: any
+        one on a *hit* still inherits its dependencies. Best-effort: any
         failure (no tracker active, import issue) is silently ignored."""
         snap = getattr(metadata, "auto_file_deps", None)
         if not snap:
@@ -1709,8 +1731,15 @@ class Cash:
             tracker = _active_tracker.get()
         except Exception:  # noqa: BLE001 - tracking is best-effort
             return
-        if tracker is not None:
-            for path in snap:
+        if tracker is None:
+            return
+        for path, recorded in snap.items():
+            # A remote entry must go back onto the remote channel: routed to
+            # ``_add_tracked`` it would enter the file set, be stat'ed, and be
+            # dropped - so the outer entry would silently lose the dependency.
+            if isinstance(recorded, dict) and recorded.get("remote"):
+                tracker._add_tracked_remote(path)
+            else:
                 tracker._add_tracked(path)
 
     @staticmethod
@@ -1809,7 +1838,6 @@ class Cash:
                 # are recorded as implicit cache dependencies - a later
                 # content change forces a recompute.
                 from cash.notebook.file_tracker import FileAccessTracker
-                from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 # Watch the global RNG across the call: a draw inside the body is
                 # an input the key cannot see statically.
@@ -1829,8 +1857,7 @@ class Cash:
                             res, cache_key, chunk_max_items, chunk_max_bytes,
                             func_name, cache_if, ttl=ttl,
                         )
-                accessed = tracker.get_accessed_files()
-                auto_file_deps = snapshot_file_deps(accessed) if accessed else None
+                auto_file_deps = self._snapshot_tracked_deps(tracker)
 
                 # Route one-shot iterators through the chunked-storage path.
                 if is_iter:
@@ -2012,7 +2039,6 @@ class Cash:
 
             async def _compute_and_store() -> Any:
                 from cash.notebook.file_tracker import FileAccessTracker
-                from cash.notebook.file_dep_snapshot import snapshot_file_deps
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 rng_pre = self._capture_rng_pre_state()
                 with tracker:
@@ -2028,8 +2054,7 @@ class Cash:
                             res, cache_key, chunk_max_items, chunk_max_bytes,
                             func_name, cache_if, ttl=ttl, warn_stacklevel=5,
                         )
-                accessed = tracker.get_accessed_files()
-                auto_file_deps = snapshot_file_deps(accessed) if accessed else None
+                auto_file_deps = self._snapshot_tracked_deps(tracker)
 
                 # Iterator returns: chunked storage path.
                 if is_iter:
