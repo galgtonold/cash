@@ -97,6 +97,7 @@ class DBTableSource(DataSource):
 Pass via `depends_on=`, then **call it** — a `DataSource` only proves itself when
 the token is actually read:
 
+<!-- test:expect-warning reason="reading the module-global `conn` is unhashable, so cash advises it can't invalidate on it — expected here, the DataSource is what tracks change" -->
 ```python
 @c.cache(depends_on=[DBTableSource(conn, "users")])
 def user_summary():
@@ -105,6 +106,11 @@ def user_summary():
 user_summary()          # computes, and records the current token
 user_summary()          # hits — the table hasn't moved
 ```
+
+Cash may warn here that `user_summary` reads a module global (`conn`) it can't
+hash, so *changes to that global* won't invalidate the entry. That's expected
+for a database example and not a problem: the connection isn't the data, and the
+`DataSource` is what notices when the table moves.
 
 Insert a row and the next call recomputes, because `(max_id, count)` changed.
 (If `has_changed()` returned a `bool` instead, this is the moment cash would warn
