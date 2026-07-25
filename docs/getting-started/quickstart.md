@@ -1,13 +1,32 @@
 # Quick Start
 
+Cash works two ways. Pick the one that matches how you write code — each track
+below is self-contained.
+
+<div class="cash-doc-grid" markdown="0">
+  <a class="cash-cta-card primary" href="#in-a-notebook">
+    <h3>In a notebook →</h3>
+    <p><code>%cash_on</code> and every cell caches automatically — statement-level,
+    with a badge above each cell. For interactive work in Jupyter, Colab, or VS Code.</p>
+  </a>
+  <a class="cash-cta-card" href="#in-a-script">
+    <h3>In a script →</h3>
+    <p><code>@cash.cache</code> on a function — caches by its arguments and its own
+    source code. For modules, pipelines, and batch jobs.</p>
+  </a>
+</div>
+
+Most people start in a notebook, but the two share one engine — the same lineage,
+hashing, and backends underneath — so nothing is second-class.
+
+---
+
+## In a notebook
+
 !!! tip "Prefer to just try it?"
     Run cash in your browser with no install —
     [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb)
     [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb) — then come back here to wire it into your own notebooks.
-
-## Notebook Caching (Recommended)
-
-The easiest way to use Cash is in a Jupyter notebook:
 
 ### Step 1: Enable Cash
 
@@ -53,7 +72,7 @@ Run the cell again — the `read_csv` result loads instantly from cache. The bad
 
 See [Reading the Cash badge](../badges.md) for the full anatomy and every status.
 
-## What Gets Cached?
+### What gets cached?
 
 Cash caches at the **statement level**, not the cell level. This means:
 
@@ -71,9 +90,61 @@ result = df.groupby('category').sum()
 
 If you change Statement 2, only Statement 2 and 3 re-execute. Statement 1 stays cached!
 
-## Decorator-based Caching
+### File dependency tracking
 
-For caching function results outside notebooks:
+Cash automatically tracks file reads — swap the file and the statement that read it recomputes:
+
+```python
+# If 'data.csv' changes, this re-executes automatically
+df = pd.read_csv('data.csv')
+```
+
+Supported file operations:
+
+- `pd.read_csv()`, `pd.read_excel()`, `pd.read_parquet()`, and all `pd.read_*()` functions
+- `np.load()`, `np.loadtxt()`, `np.genfromtxt()`, `np.fromfile()`
+- `polars.read_csv()`, `polars.read_parquet()`, `polars.scan_csv()`, and more
+- `open()` and `io.open()` (the built-in file open)
+- `joblib.load()`, `pickle.load()`, `json.load()`
+
+### Statement-level annotations
+
+Control caching for individual statements with comment annotations:
+
+<!-- test:skip reason="illustrative — references undefined api/get_stock_prices/train_model/data" -->
+```python { .nb-cell }
+# @cash:no-cache
+result = api.fetch_data()       # Always re-executed
+
+# @cash:ttl=300
+prices = get_stock_prices()     # Cached for 5 minutes
+
+# @cash:persist
+model = train_model(data)       # Always saved to disk
+
+# @cash:allow-random
+samples = np.random.randn(100)  # Suppress randomness warning
+```
+
+You can also cache a single cell with `%%cash`, or skip caching a whole cell with `%cash_off`.
+
+### Cash commands
+
+Run `%cash_help` in any notebook for the full list of magics. A few you'll use often:
+
+- `%cash_stats` — hit/miss counts and net time saved this session (gross saving minus cash's own overhead)
+- `%cash_debug on` — log detailed cache decisions to the kernel output
+- `%cash_badge print` — switch to text-only badges (no HTML)
+
+See [Debugging and monitoring](../tutorials/feature-guides/debugging-and-monitoring.md) for the full diagnostic workflow, and [Notebook Caching](../notebook_caching_api.md) for the full notebook API.
+
+---
+
+## In a script
+
+Outside notebooks, wrap any function with `@cash.cache`. It caches by the function's
+**arguments** and its own **source code**, so an identical call returns instantly and
+editing the body invalidates the entry:
 
 <!-- test:skip reason="ends with cache_clear() which resets stats and breaks inferred hit/miss claims" -->
 ```python
@@ -108,11 +179,7 @@ print(expensive_function.explain(1, 2))
 expensive_function.cache_clear()
 ```
 
-Full walkthrough including `ttl`, `cache_if`, async support,
-`strict`/`assume_safe` for the purity analyzer, and iterator caching:
-see the [decorator guide](../decorator.md).
-
-### File Dependency Shorthand
+### File dependency shorthand
 
 ```python
 # test:inject: import cash; c = cash.Cash()
@@ -123,9 +190,9 @@ def load_data():
 # Cache auto-invalidates when data.csv changes on disk
 ```
 
-### Custom Type Hashers
+### Custom type hashers
 
-Cash has built-in hashing for pandas, numpy, polars, PyArrow, modin, and dask objects. For custom types:
+Cash has built-in hashing for pandas, numpy, polars, PyArrow, modin, and dask objects (this applies to both paths). For custom types, register a hasher on the `Cash` instance:
 
 ```python
 c.register_hasher(
@@ -134,76 +201,23 @@ c.register_hasher(
 )
 ```
 
-## Configuration
+The full decorator surface — `ttl`, `cache_if`, async support, `strict`/`assume_safe`
+for the purity analyzer, and iterator caching — is covered in the
+[decorator guide](../decorator.md).
 
-### Change Backend
+---
 
-`%cash_on` only accepts an optional `ttl=N` argument — it does not take backend or cache-dir flags. To pick a different backend or cache directory, construct a `Cash(backend=...)` instance programmatically before enabling the magic. See [Configuration](configuration.md) for a full example.
+## Configuration (both paths)
 
-### Selective Caching
+`%cash_on` only accepts an optional `ttl=N` argument — it does not take backend or cache-dir flags. To pick a different backend or cache directory, construct a `Cash(backend=...)` instance programmatically (before enabling the magic, in a notebook). See [Configuration](configuration.md) for a full example.
 
-<!-- test:skip reason="illustrative — references missing data.csv columns and requires matplotlib" -->
-```python { .nb-cell }
-# Cache a single cell
-%%cash
-df = pd.read_csv('data.csv')
-
-# Skip caching for a specific statement
-# @cash:no-cache
-import matplotlib.pyplot as plt
-plt.plot(df['x'], df['y'])
-```
-
-## File Dependency Tracking
-
-Cash automatically tracks file reads:
-
-```python
-# If 'data.csv' changes, this re-executes automatically
-df = pd.read_csv('data.csv')
-```
-
-Supported file operations:
-
-- `pd.read_csv()`, `pd.read_excel()`, `pd.read_parquet()`, and all `pd.read_*()` functions
-- `np.load()`, `np.loadtxt()`, `np.genfromtxt()`, `np.fromfile()`
-- `polars.read_csv()`, `polars.read_parquet()`, `polars.scan_csv()`, and more
-- `open()` and `io.open()` (the built-in file open)
-- `joblib.load()`, `pickle.load()`, `json.load()`
-
-## Statement-Level Annotations
-
-Control caching for individual statements with comment annotations:
-
-<!-- test:skip reason="illustrative — references undefined api/get_stock_prices/train_model/data" -->
-```python { .nb-cell }
-# @cash:no-cache
-result = api.fetch_data()       # Always re-executed
-
-# @cash:ttl=300
-prices = get_stock_prices()     # Cached for 5 minutes
-
-# @cash:persist
-model = train_model(data)       # Always saved to disk
-
-# @cash:allow-random
-samples = np.random.randn(100)  # Suppress randomness warning
-```
-
-## Explore Cash commands
-
-Run `%cash_help` in any notebook for the full list of magics. A few you'll use often:
-
-- `%cash_stats` — hit/miss counts and net time saved this session (gross saving minus cash's own overhead)
-- `%cash_debug on` — log detailed cache decisions to the kernel output
-- `%cash_badge print` — switch to text-only badges (no HTML)
-
-See [Debugging and monitoring](../tutorials/feature-guides/debugging-and-monitoring.md) for the full diagnostic workflow.
+Optional backends — SQLite, Redis, S3 — are installed via extras (`pip install "cash-lib[redis]"`, `[s3]`, `[all]`) and work the same for either path.
 
 ## What's next?
 
 - **[Why Cash?](../why-cash.md)** — Understand when Cash helps and when it doesn't.
-- **[Decorator guide](../decorator.md)** — Use `@cash.cache` in scripts and modules.
+- **[Notebook Caching](../notebook_caching_api.md)** — the full `%cash_on` / statement-level reference.
+- **[Decorator guide](../decorator.md)** — `@cash.cache` in scripts and modules, in depth.
 - **[Reading the Cash Badge](../badges.md)** — Decode the chips that appear above cells.
 - **Tutorials by feature:** [Caching class methods](../tutorials/feature-guides/caching-class-methods.md), [Choosing a backend](../tutorials/feature-guides/choosing-a-backend.md), [Debugging and monitoring](../tutorials/feature-guides/debugging-and-monitoring.md).
 - **Tutorials by use case:** [Data science](../tutorials/use-cases/data-science.md), [LLM API calls](../tutorials/use-cases/llm-api-calls.md), [Data engineering](../tutorials/use-cases/data-engineering.md), [Scientific computing](../tutorials/use-cases/scientific-computing.md).

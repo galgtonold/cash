@@ -48,6 +48,23 @@ cache — gives you the visual vocabulary at a glance:
 
 See [Reading the Cash badge](badges.md) for the full anatomy.
 
+## Two ways to use cash
+
+Pick the path that matches how you write code — both ride the same engine:
+
+<div class="cash-doc-grid" markdown="0">
+  <a class="cash-cta-card primary" href="getting-started/quickstart/#in-a-notebook">
+    <h3>In a notebook →</h3>
+    <p>Add <code>%cash_on</code> and every cell caches itself — statement-level,
+    with a badge above each cell. For interactive work in Jupyter, Colab, or VS Code.</p>
+  </a>
+  <a class="cash-cta-card" href="getting-started/quickstart/#in-a-script">
+    <h3>In a script →</h3>
+    <p>Wrap a function with <code>@cash.cache</code> — it caches by its arguments and
+    its own source. For modules, pipelines, and batch jobs.</p>
+  </a>
+</div>
+
 ## Key Features
 
 - **Statement-level, not cell-level** — change one line in a 20-line cell and
