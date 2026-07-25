@@ -14,12 +14,24 @@ error — a wrong env-var name, a dead ``#anchor`` — fails CI instead of shipp
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import fields
 from pathlib import Path
 
-from markdown.extensions.toc import slugify
-
 from cash.config import CashConfig, TierConfig
+
+
+def slugify(value: str, separator: str = "-") -> str:
+    """Vendored copy of ``markdown.extensions.toc.slugify`` (default, non-unicode).
+
+    Reproduced here so this module has no dependency on ``markdown`` — the CI
+    ``docs-parity`` job doesn't install mkdocs. mkdocs.yml configures ``toc``
+    with no custom ``slugify``, so it uses exactly this default with ``-``.
+    """
+    value = unicodedata.normalize("NFKD", value)
+    value = value.encode("ascii", "ignore").decode("ascii")
+    value = re.sub(r"[^\w\s-]", "", value).strip().lower()
+    return re.sub(rf"[{re.escape(separator)}\s]+", separator, value)
 
 DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
 # ``superpowers/`` holds internal planning/spec docs that are not part of the

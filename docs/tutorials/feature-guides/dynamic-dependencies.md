@@ -16,6 +16,7 @@ You could expand each case into one `@cash.cache` per dataset, but that doesn't 
 
 ## Quick start
 
+<!-- test:expect-warning reason="load reads a parquet file and builds a FileDataSource, so cash's impurity advisory is expected (it still caches)" -->
 ```python
 import cash
 from cash import FileDataSource
