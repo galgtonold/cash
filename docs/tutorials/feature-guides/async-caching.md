@@ -55,7 +55,7 @@ async def main():
 asyncio.run(main())
 ```
 
-The pattern matches `test_async_function_caches` and `test_async_cache_info` in `tests/test_core/test_async_basic.py:11,53`.
+The pattern matches `test_async_function_caches` and `test_async_cache_info` in `tests/test_core/test_async_basic.py`.
 
 ## What works on async wrappers
 
@@ -63,10 +63,10 @@ The async wrapper (`src/cash/core.py`) mirrors the sync wrapper feature-for-feat
 
 - **TTL and freshness.** `_validate_ttl` on the hit path is shared between wrappers; `ttl=` works identically (`src/cash/core.py`).
 - **Static and dynamic dependencies.** `depends_on=` and `dynamic_depends_on=` go through `_resolve_cache_key` (`src/cash/core.py`), which is the same call the sync wrapper uses.
-- **File dependency auto-tracking.** The `FileAccessTracker` block wraps the `await func(*args, **kwargs)` call (`src/cash/core.py`), so `pandas.read_*`, `numpy.load`, `joblib.load`, and bare `open()` calls inside the coroutine body are auto-tracked the same way they would be in a sync function. Test reference: `test_async_auto_track_open` at `tests/test_core/test_async_file_tracking.py:12`.
+- **File dependency auto-tracking.** The `FileAccessTracker` block wraps the `await func(*args, **kwargs)` call (`src/cash/core.py`), so `pandas.read_*`, `numpy.load`, `joblib.load`, and bare `open()` calls inside the coroutine body are auto-tracked the same way they would be in a sync function. Test reference: `test_async_auto_track_open` in `tests/test_core/test_async_file_tracking.py`.
 - **Purity analysis.** `_analyze_dependencies` runs on the first call regardless of sync/async (`src/cash/core.py`); the AST-level analyzer doesn't distinguish coroutine functions from regular ones, so impurity warnings, `@cash.pure`, `assume_safe`, and `strict` apply unchanged.
 - **`cache_if=` predicate.** Applied identically on the non-iterator path (`src/cash/core.py`) and on the single-chunk path (`src/cash/core.py`).
-- **Iterator chunking for `async def` returning a sync iterator.** When a coroutine body executes `return (i for i in range(n))` or similar, the await produces a regular generator object. `_is_one_shot_iterator(res)` catches it (`src/cash/core.py`) and dispatches through the same `_write_chunks` / `_store_chunked_manifest` path the sync wrapper uses. The single-chunk fast path applies (`src/cash/core.py`); the multi-chunk path returns `_ChunkedCachedIterator` (`src/cash/core.py`). Test reference: `test_async_function_returning_iterator` at `tests/test_core/test_iterator_caching.py:198`:
+- **Iterator chunking for `async def` returning a sync iterator.** When a coroutine body executes `return (i for i in range(n))` or similar, the await produces a regular generator object. `_is_one_shot_iterator(res)` catches it (`src/cash/core.py`) and dispatches through the same `_write_chunks` / `_store_chunked_manifest` path the sync wrapper uses. The single-chunk fast path applies (`src/cash/core.py`); the multi-chunk path returns `_ChunkedCachedIterator` (`src/cash/core.py`). Test reference: `test_async_function_returning_iterator` in `tests/test_core/test_iterator_caching.py`:
 
     ```python
     @cash.cache
@@ -148,7 +148,7 @@ async def main():
 asyncio.run(main())
 ```
 
-The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper returns; expired entries fall through to the recompute branch and the await runs again. Test reference: `test_async_ttl_expires` at `tests/test_core/test_async_ttl.py:12`.
+The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper returns; expired entries fall through to the recompute branch and the await runs again. Test reference: `test_async_ttl_expires` in `tests/test_core/test_async_ttl.py`.
 
 ### Parallel scatter-gather
 
@@ -230,7 +230,7 @@ The decorator surface is unchanged between sync and async — the same kwargs wo
 | `depends_on=[...]` | Honored. Static dependency graph is wrapper-agnostic. |
 | `dynamic_depends_on=...` | Honored. Resolved by the same sync helper before the await. |
 | `file_depends_on=...` | Honored. Augments the `FileDataSource` set the wrapper consults at key-build time. |
-| `cache_if=fn` | Honored. Sync predicate; runs on the awaited value (`src/cash/core.py, 1336-1341`). |
+| `cache_if=fn` | Honored. Sync predicate; runs on the awaited value. |
 | `chunk_max_items`, `chunk_max_bytes` | Honored when the awaited value is a one-shot iterator (`src/cash/core.py`). |
 | `Cash(use_locking=True)` — **constructor, not a decorator kwarg** | **Supported** via in-process single-flight: concurrent same-key awaits coalesce (leader computes, followers read the stored result). In-process only, keyed on the running event loop. Passing it to the decorator (`@cash.cache(use_locking=True)`) raises `TypeError`. See `tests/test_core/test_async_single_flight.py`. |
 | `strict=True`, `assume_safe=True` | Honored. Same purity-mode wiring as sync (`src/cash/core.py`). |

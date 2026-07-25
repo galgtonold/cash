@@ -4,6 +4,17 @@ Cash decides whether each statement in your notebook is safe to cache by reading
 
 This tutorial walks through both decorators, the auto-detection machinery that backs them, and the six footguns that bite people in practice.
 
+!!! note "Two ways to steer the same purity engine"
+    One static analyzer backs both caching paths; how you override it differs:
+
+    - **In a notebook** — the `@pure` / `@stateful` decorators (and
+      `mark_pure` / `mark_stateful` for third-party callables) covered here.
+    - **With `@cash.cache`** — the `strict=` and `assume_safe=` keywords, covered
+      in the [decorator guide](../../decorator.md#strict-and-assume_safe-purity-gates).
+
+    Read on for the notebook side; skip to the decorator guide if you're wrapping
+    functions in a script.
+
 ## Why this exists
 
 Cash's notebook caching layer inspects every cell with an AST visitor before deciding to cache the result. The visitor flags mutations to top-level variables (`data.append(...)`), attribute writes, file I/O, network calls, and a long list of "looks side-effectful" patterns. If the cell looks risky, Cash refuses to cache it — replaying a cached return value when the real call would have written to disk or modified a global would be a serious bug.
