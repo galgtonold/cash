@@ -442,7 +442,7 @@ bypass caching entirely.
 
 ```mermaid
 flowchart TD
-    A[Call f(args)] --> B{Cache key computable?}
+    A["Call f(args)"] --> B{Cache key computable?}
     B -->|No - unhashable arg| W1[Warning, recompute, don't store]
     B -->|Yes| C{Entry in backend?}
     C -->|No| D[Compute, store]
