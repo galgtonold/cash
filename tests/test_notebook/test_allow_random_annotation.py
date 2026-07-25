@@ -251,12 +251,42 @@ class TestDedupe:
     """
 
     def test_repeated_run_of_same_statement_warns_once(self, magics_fixture):
+        """Recompute path: every run executes, so the *same* message is deduped.
+
+        ``# @cash:no-cache`` pins that path. Without it this test silently
+        depended on the cost model: ``np.random.rand(1000)`` is microseconds on a
+        fast machine, so it fell below the 0.01 s "too cheap to cache" floor and
+        the re-run recomputed (silent). On a loaded Windows CI runner the same
+        draw measured *over* the floor, so it was cached and the re-run
+        **restored** — emitting the distinct "restored from cache" warning, which
+        owns a separate dedupe slot. That timing dependency, not the dedupe
+        logic, is what made this test flaky. The cached path is covered below.
+        """
         magics, _shell, _backend, _cash = magics_fixture
-        code = "import numpy as np\nx = np.random.rand(1000)"
+        code = "import numpy as np\n# @cash:no-cache\nx = np.random.rand(1000)"
         first = _run_capturing_warnings(magics, code)
         second = _run_capturing_warnings(magics, code)
         assert len(first) == 1
         assert second == [], "an unchanged re-run must not re-warn"
+
+    def test_rerunning_a_cached_statement_does_not_spam(self, magics_fixture):
+        """Cached path — the case this class's rationale is really about.
+
+        The restore warning makes a *different* claim ("the number you see is a
+        replay"), so it earns its own dedupe slot and fires once. What must not
+        happen is a warning on every re-execution of a cached cell: the third run
+        is silent. ``# @cash:persist`` forces the value past the cost-model floor
+        so the path is deterministic rather than timing-dependent.
+        """
+        magics, _shell, _backend, _cash = magics_fixture
+        code = "import numpy as np\n# @cash:persist\nx = np.random.rand(1000)"
+        first = _run_capturing_warnings(magics, code)
+        second = _run_capturing_warnings(magics, code)
+        third = _run_capturing_warnings(magics, code)
+        assert len(first) == 1, "the compute warns once"
+        assert len(second) == 1, "the first restore warns once, with its own text"
+        assert "restored from cache" in str(second[0].message)
+        assert third == [], "a third run must be silent — no per-run spam"
 
     def test_editing_the_statement_warns_again(self, magics_fixture):
         """Dedupe keys on source, so edited code is a new warning."""
