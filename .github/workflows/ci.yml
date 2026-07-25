@@ -116,7 +116,11 @@ jobs:
 
   docs-parity:
     runs-on: ubuntu-latest
-    continue-on-error: true   # PR1: soft gate. Flip to false after stabilization.
+    # Hard gate. This job runs every tests/docs/ check: the fence harness
+    # (examples execute, documented hit/miss counts hold, no un-opted-in cash
+    # warning), the structured-claim linters (CASH_* env vars, internal
+    # anchors, config defaults), the documented-behavior tier, and the mermaid
+    # diagram validation. Docs drift here is a build failure, not a report.
     steps:
       - uses: actions/checkout@v6
 

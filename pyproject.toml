@@ -191,7 +191,11 @@ asyncio_mode = "auto"
 # clearly (no wasted retries, no masking of genuine test bugs). Reruns are
 # reported, so any test that needed one stays visible. `.` stands in for spaces
 # in the patterns to avoid TOML/shlex quoting.
-addopts = "-n 16 --dist worksteal --max-worker-restart=24 --reruns 2 --reruns-delay 2 --only-rerun crashed --only-rerun ConnectionError --only-rerun WinError --only-rerun ZMQError --only-rerun node.down --only-rerun Not.properly.terminated --only-rerun Kernel.died --only-rerun failed.to.boot"
+# `Timeout` is in the list for the same reason: under worker oversubscription a
+# heavy page (an IPython-kernel docs page caching multi-MB arrays, say) can blow
+# the 30s per-test budget purely from I/O contention — bimodal ~8s vs ~39s. A
+# genuinely hung test still fails, it just burns all three attempts first.
+addopts = "-n 16 --dist worksteal --max-worker-restart=24 --reruns 2 --reruns-delay 2 --only-rerun crashed --only-rerun ConnectionError --only-rerun WinError --only-rerun ZMQError --only-rerun node.down --only-rerun Not.properly.terminated --only-rerun Kernel.died --only-rerun failed.to.boot --only-rerun Timeout"
 filterwarnings = [
     "ignore:Passing individual keyword arguments to compute_cache_key:DeprecationWarning",
     "ignore:set_tracking_dicts\\(\\) is deprecated:DeprecationWarning",

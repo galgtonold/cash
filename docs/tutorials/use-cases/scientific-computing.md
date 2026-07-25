@@ -87,7 +87,7 @@ When you *want* to force persistence — for example, a long-running simulation 
 
 ```python { .nb-cell }
 # @cash:persist
-trajectory = simulate(n_steps=1_000_000, dt=0.001, alpha=0.5, seed=42)
+trajectory = simulate(n_steps=100_000, dt=0.001, alpha=0.5, seed=42)
 ```
 
 See [Smart Persistence](../feature-guides/smart-persistence.md) for the heuristics Cash uses and the difference between L1 (in-memory) and L2 (on-disk) tiers.
