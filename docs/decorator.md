@@ -109,7 +109,24 @@ After the TTL elapses, the next call recomputes. Expired entries are
 not removed from the backend automatically — call `cash.cleanup()` to
 reclaim space, or run `python -m cash clear` from the CLI.
 
-### `file_depends_on=` — invalidate when a file changes
+### File reads are tracked automatically
+
+You usually don't need to declare files at all: cash intercepts file reads
+*inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
+… — and folds each file's fingerprint into the entry, so changing the file on
+disk recomputes with no annotation:
+
+<!-- test:skip reason="illustrative — references a missing data.csv" -->
+```python
+@cash.cache
+def load():
+    return pd.read_csv("data.csv")   # change data.csv → recomputes, automatically
+```
+
+### `file_depends_on=` — name a file explicitly
+
+Reach for this when a file the result depends on isn't read through a tracked
+call — a path handed to a C extension, or a sidecar the function never `open()`s:
 
 ```python
 @cash.cache(file_depends_on="config.yaml")
@@ -117,11 +134,12 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
-The file's `(mtime, size)` is folded into the cache key. Edit the
-file → next call recomputes. Pass a list for multiple files. For more
-complex dependency tracking (database tables, API endpoints,
-remote URLs), implement your own `DataSource` subclass and pass via
-`depends_on=`.
+Pass a list for multiple files. The two mechanisms use deliberately different
+signals: **automatic** tracking fingerprints file **content** (a sha256), while
+`file_depends_on=` keys on the file **mtime** — cheaper, but it re-triggers on a
+content-preserving `touch` and can miss an edit that leaves the mtime unchanged.
+For richer dependencies (database tables, API endpoints, remote URLs), write a
+`DataSource` subclass and pass it via `depends_on=`.
 
 ### `depends_on=` — explicit dependency graph
 
