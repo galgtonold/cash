@@ -16,6 +16,7 @@ If the promotion policy returns `False` for a given call, the result lands in RA
 
 Smart persistence is on by default. Nothing to configure:
 
+<!-- test:expect-warning reason="the slow demo function has a side effect, so the impurity advisory is expected (cash still caches)" -->
 ```python
 import cash
 

@@ -389,6 +389,7 @@ fail CI".
 
 ### Default: warn at first call
 
+<!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
 ```python
 import cash
 

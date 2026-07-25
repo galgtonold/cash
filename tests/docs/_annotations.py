@@ -93,3 +93,36 @@ def find_expect_raises_for_fence(lines: list[str], fence_start_line: int) -> boo
         # Non-blank, non-annotation line: stop.
         return False
     return False
+
+
+_EXPECT_WARNING_RE = re.compile(r"<!--\s*test:expect-warning\b[^>]*-->")
+
+
+def find_expect_warning_for_fence(lines: list[str], fence_start_line: int) -> bool:
+    """Walk backwards from a fence's opening ```python line looking for a
+    test:expect-warning HTML comment. Stops at the first non-blank,
+    non-annotation line.
+
+    A fence carrying this annotation is permitted to emit a ``CashWarning``
+    during execution; without it, any ``CashWarning`` fails the page.
+
+    Returns True if found, else False.
+    """
+    # fence_start_line is 1-based; lines is 0-based.
+    i = fence_start_line - 2  # the line just before the ```python line
+    while i >= 0:
+        line = lines[i].strip()
+        if line == "":
+            i -= 1
+            continue
+        if line.startswith("<!--") and "test:expect-warning" in line:
+            return bool(_EXPECT_WARNING_RE.search(line))
+        # Allow walking past other annotations (so order doesn't matter).
+        if line.startswith("<!--") and (
+            "test:skip" in line or "test:expect-raises" in line
+        ):
+            i -= 1
+            continue
+        # Non-blank, non-annotation line: stop.
+        return False
+    return False

@@ -207,3 +207,30 @@ def test_inject_comment_executes_as_code():
         assert result.namespace["y"] == 99   # y = x after inject replaced x
     finally:
         injected.unlink()
+
+
+def test_run_page_fails_on_unexpected_cash_warning():
+    """A fence that emits a CashWarning at runtime fails the page unless it
+    opts in with test:expect-warning."""
+    from tests.docs._harness import run_page, PageWarningError
+
+    with pytest.raises(PageWarningError) as exc_info:
+        run_page(FIXTURES / "page_with_warning.md")
+    # The error should name the offending warning class so the failure is
+    # actionable, not just "something warned".
+    assert "CashCacheIneffectiveWarning" in str(exc_info.value)
+
+
+def test_run_page_allows_expected_cash_warning():
+    """A fence annotated test:expect-warning may emit a CashWarning."""
+    from tests.docs._harness import run_page
+
+    # Must not raise.
+    result = run_page(FIXTURES / "page_with_expected_warning.md")
+    assert result.tested_fences == 1
+
+
+def test_extract_fences_detects_expect_warning_annotation():
+    fences = extract_fences(FIXTURES / "page_with_expected_warning.md")
+    assert len(fences) == 1
+    assert fences[0].expect_warning is True

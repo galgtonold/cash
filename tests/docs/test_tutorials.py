@@ -162,6 +162,9 @@ class _StubDF:
     def sample(self, n, random_state=None):
         return self
 
+    def apply(self, *a, **kw):
+        return self
+
     def describe(self):
         return "stub describe"
 
@@ -505,7 +508,11 @@ _DOC_NAMESPACES: dict[str, dict] = {
         **_COMMON_NONTUT,
         "complex_transform": lambda x: x,
         "expensive_computation": lambda: 1,
-        "df": _types.SimpleNamespace(apply=lambda f: None),
+        # Picklable DataFrame-shaped stub so cash can build an arg hash. An
+        # unpicklable SimpleNamespace(apply=lambda) here would raise a spurious
+        # CashCacheIneffectiveWarning that a real (content-hashable) DataFrame
+        # never triggers — masking the doc-quality warning check for this page.
+        "df": _StubDF(),
         "MyModel": type("MyModel", (), {}),
     },
     "notebook_caching_api": {

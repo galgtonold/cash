@@ -16,12 +16,28 @@ from __future__ import annotations
 
 import asyncio
 import re
+import warnings
 from ast import PyCF_ALLOW_TOP_LEVEL_AWAIT
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from tests.docs._annotations import find_expect_raises_for_fence, find_skip_for_fence
+from cash.exceptions import CashWarning
+from tests.docs._annotations import (
+    find_expect_raises_for_fence,
+    find_expect_warning_for_fence,
+    find_skip_for_fence,
+)
+
+# Warning classes that reflect the TEST ENVIRONMENT, not doc quality, so they
+# must never fail a page. ``CashNotebookDiscoveryWarning`` fires on every
+# ``%cash_on`` page because CI has no live Jupyter Server — its own message says
+# it's "expected under papermill / nbconvert / CI". Matched by class name so the
+# harness needn't import an internal notebook module. Excluding it keeps the
+# check focused on the doc-quality family (ineffective-cache, impurity, randomness).
+_ENV_ARTIFACT_WARNING_NAMES: frozenset[str] = frozenset(
+    {"CashNotebookDiscoveryWarning"}
+)
 
 
 _FENCE_RE = re.compile(
@@ -42,6 +58,7 @@ class Fence:
     skip: bool = False
     skip_reason: str | None = None
     expect_raises: bool = False
+    expect_warning: bool = False
 
     @property
     def is_nb_cell(self) -> bool:
@@ -69,6 +86,7 @@ def extract_fences(md_path: Path) -> list[Fence]:
             end_line = j + 1  # 1-based line of closing ```
             skip_ann = find_skip_for_fence(lines, start_line)
             expect_raises = find_expect_raises_for_fence(lines, start_line)
+            expect_warning = find_expect_warning_for_fence(lines, start_line)
             fences.append(
                 Fence(
                     code="\n".join(body_lines),
@@ -78,6 +96,7 @@ def extract_fences(md_path: Path) -> list[Fence]:
                     skip=skip_ann is not None,
                     skip_reason=skip_ann.reason if skip_ann else None,
                     expect_raises=expect_raises,
+                    expect_warning=expect_warning,
                 )
             )
             i = j + 1
@@ -88,6 +107,32 @@ def extract_fences(md_path: Path) -> list[Fence]:
 
 class PageExecutionError(RuntimeError):
     """Raised when a docs-parity page fails to exec."""
+
+
+class PageWarningError(RuntimeError):
+    """Raised when a docs-parity fence emits a ``CashWarning`` at runtime
+    without opting in via ``<!-- test:expect-warning -->``.
+
+    A cash warning (``CashCacheIneffectiveWarning``, ``CashImpurityWarning``,
+    ``CashRandomnessWarning``, …) means the documented example is misconfigured
+    — e.g. a cache that will never invalidate — so an unannotated one should
+    fail the page rather than pass silently.
+    """
+
+
+def _cash_warnings(caught: list[warnings.WarningMessage]) -> list[str]:
+    """Return ``"ClassName: message"`` for each captured doc-quality
+    ``CashWarning`` — environment artifacts (see ``_ENV_ARTIFACT_WARNINGS``)
+    are filtered out."""
+    out: list[str] = []
+    for w in caught:
+        cat = w.category if isinstance(w.category, type) else type(w.message)
+        if not (isinstance(cat, type) and issubclass(cat, CashWarning)):
+            continue
+        if any(k.__name__ in _ENV_ARTIFACT_WARNING_NAMES for k in cat.__mro__):
+            continue
+        out.append(f"{cat.__name__}: {w.message}")
+    return out
 
 
 @dataclass
@@ -198,7 +243,9 @@ def _run_page_ipy(
                 indented = "\n".join("    " + line for line in code.splitlines())
                 code = f"try:\n{indented}\nexcept Exception:\n    pass\n"
 
-            cell_result = shell.run_cell(code, store_history=False)
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", CashWarning)
+                cell_result = shell.run_cell(code, store_history=False)
 
             if (
                 cell_result.error_before_exec is not None
@@ -210,6 +257,14 @@ def _run_page_ipy(
                         f"{md_path}: cell at line {f.line_start} failed: "
                         f"{type(err).__name__}: {err}"
                     )
+
+            cash_warns = _cash_warnings(caught)
+            if cash_warns and not f.expect_warning:
+                raise PageWarningError(
+                    f"{md_path}: cell at line {f.line_start} emitted cash "
+                    f"warning(s) with no test:expect-warning annotation:\n  "
+                    + "\n  ".join(cash_warns)
+                )
 
             result.tested_fences += 1
             # Record the (start, end) range of this fence's lines in the
@@ -404,6 +459,10 @@ def run_page(
     if namespace_overrides:
         namespace.update(namespace_overrides)
 
+    # The plain path concatenates every fence into one script, so warnings
+    # can't be attributed to a single fence — allow them page-wide if ANY
+    # non-skipped fence opts in via test:expect-warning.
+    page_allows_warning = any(f.expect_warning for f in fences if not f.skip)
     try:
         code_obj = compile(
             script,
@@ -411,14 +470,23 @@ def run_page(
             "exec",
             flags=PyCF_ALLOW_TOP_LEVEL_AWAIT,
         )
-        # If the compiled code is a coroutine (top-level await), run it.
-        maybe_coro = eval(code_obj, namespace)
-        if asyncio.iscoroutine(maybe_coro):
-            asyncio.run(maybe_coro)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", CashWarning)
+            # If the compiled code is a coroutine (top-level await), run it.
+            maybe_coro = eval(code_obj, namespace)
+            if asyncio.iscoroutine(maybe_coro):
+                asyncio.run(maybe_coro)
     except Exception as e:
         raise PageExecutionError(
             f"{md_path}: exec failed with {type(e).__name__}: {e}"
         ) from e
+
+    cash_warns = _cash_warnings(caught)
+    if cash_warns and not page_allows_warning:
+        raise PageWarningError(
+            f"{md_path}: fence emitted cash warning(s) with no "
+            f"test:expect-warning annotation:\n  " + "\n  ".join(cash_warns)
+        )
 
     result.namespace = namespace
 

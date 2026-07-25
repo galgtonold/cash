@@ -558,6 +558,7 @@ Two boundaries worth knowing:
 
 ### Unhashable arguments
 
+<!-- test:expect-warning reason="threading.Lock is genuinely unpicklable; the ineffective-cache warning is the point of this gotcha" -->
 ```python
 import threading
 

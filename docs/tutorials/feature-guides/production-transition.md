@@ -50,6 +50,7 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 Cash detects `open()`, `pd.read_csv`, `np.load`, and friends inside your function body and folds the file's `(mtime, size)` into the cache key automatically. Check that it picked them up:
 
+<!-- test:expect-warning reason="load_data reads a file, so cash's impurity advisory fires on first call (it still caches) — realistic here" -->
 ```python
 load_data("data.csv")
 print(load_data.cache_info())
@@ -74,6 +75,7 @@ app = Cash(backend=RedisBackend(host="redis.internal", port=6379, db=0))        
 
 ### Step 5: Build a pipeline script
 
+<!-- test:expect-warning reason="the pipeline's extract/transform steps read files, so cash's impurity advisory is expected (it still caches)" -->
 ```python
 # run_pipeline.py
 import pandas as pd

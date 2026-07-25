@@ -14,6 +14,7 @@ The mechanism is a one-time monkey-patch of the popular reader functions: when a
 
 ## Quick start
 
+<!-- test:expect-warning reason="load_features reads a file; the impurity advisory is expected and cash still caches" -->
 ```python
 import cash
 import pandas as pd

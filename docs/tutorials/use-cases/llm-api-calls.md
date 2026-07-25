@@ -10,6 +10,7 @@ Iterating on prompts means calling the same model with the same input dozens of 
 
 ## Quick start (sync)
 
+<!-- test:expect-warning reason="chat reads a module-global client; the 'changes to client won't invalidate' advisory is expected and desirable here" -->
 ```python
 import anthropic
 import cash
