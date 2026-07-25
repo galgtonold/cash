@@ -1,11 +1,13 @@
 # Cash - Smart Caching for Python
 
-> **New to cash?** Read **[Why Cash?](why-cash.md)** first — it answers
-> *"is this for my workflow?"* before you spend time on installation.
+Cash is the only Python cache that works at **notebook-statement level**: turn it
+on with `%cash_on`, change one line in a cell, and only that line and its
+dependents re-run — everything else restores from cache, even across a kernel
+restart. In the notebook: no decorators, no config, no manual invalidation.
+Outside notebooks, the same engine wraps any function as `@cash.cache`.
 
-Cash is a transparent caching library for Python with two primary use cases —
-**Jupyter notebook caching** (add `%cash_on` and cell results cache themselves)
-and **decorator-based caching** (wrap any function with `@cash.cache`).
+> **New to cash?** **[Why Cash?](why-cash.md)** answers *"is this for my
+> workflow?"* before you spend time on installation.
 
 <video class="cash-hero-video" controls playsinline preload="none"
        poster="https://pub-f7df49dc5f45413aad945c29892e0566.r2.dev/hero-poster.jpg"
@@ -39,7 +41,7 @@ result = df.groupby('category').sum()
 # Second run: instant from cache ✅
 ```
 
-Cash adds a badge as the **first output below each cell**, summarizing what it
+Cash adds a badge **above each cell's output**, summarizing what it
 did. The example below — restored upstream `df`, restored intermediate
 `features`, recomputed `preds` because a new `features` lineage invalidated its
 cache — gives you the visual vocabulary at a glance:
@@ -73,14 +75,23 @@ Pick the path that matches how you write code — both ride the same engine:
   value re-runs only what transitively depends on it.
 - **File-aware** — `pd.read_csv`, `np.load`, `open`, … are intercepted; swap a
   data file and the cells that read it recompute automatically.
-- **Mutation-aware** — in-place changes like `df.append(...)` and `+=` are
-  detected, so you never read a stale cache.
+- **Mutation-aware** — in-place changes like `lst.append(...)`, `d[k] = v`, and
+  `+=` are detected, so a mutation invalidates what it touched.
 - **Survives kernel restarts** — the cache lives on disk by default; restart,
   re-run the cell, get the value back instantly.
 - **Zero-config** — `%cash_on` and you're done. No decorators, no config file.
 
-See the full feature list and the [comparison against other caching
-tools](why-cash.md#cash-vs-the-alternatives-youve-tried) in [Why Cash?](why-cash.md).
+See [Why Cash?](why-cash.md) for the full feature list and the [comparison
+against other caching tools](why-cash.md#cash-vs-the-alternatives-youve-tried).
+
+## Install
+
+```bash
+pip install cash-lib
+```
+
+Optional backends: `pip install "cash-lib[redis]"`, `[s3]`, or `[all]`. See
+[Installation](getting-started/installation.md) for the full matrix.
 
 !!! danger "The cache is executable — only load caches you trust"
     Cash persists results by **pickling** Python objects (the file, SQLite,
@@ -96,15 +107,6 @@ tools](why-cash.md#cash-vs-the-alternatives-youve-tried) in [Why Cash?](why-cash
 
     Your own local `.cash/` directory is as safe as the code that wrote it.
     See [Backends](api/backends.md#security) for the full trust model.
-
-## Install
-
-```bash
-pip install cash-lib
-```
-
-Optional backends: `pip install "cash-lib[redis]"`, `[s3]`, or `[all]`. See
-[Installation](getting-started/installation.md) for the full matrix.
 
 ## Documentation
 
