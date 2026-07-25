@@ -127,10 +127,12 @@ result = daily.rolling(7).mean()       # statement 3
 
 Change statement 3 and only it re-runs — statements 1 and 2 stay cached.
 
-*One exception: a top-level statement that mutates in place (`df['x'] = ...`,
-`lst.append(...)`) runs fresh each time — cash tracks the mutation so everything
-downstream stays correct, it just doesn't replay a snapshot. (Inside a loop,
-iterations are cached whole, mutations included.)* See
+*One exception: a top-level statement that mutates an object **created in an
+earlier cell** (`df['x'] = ...` on an upstream `df`, `lst.append(...)` on an
+upstream list) runs fresh each time — cash tracks the mutation so everything
+downstream stays correct, it just doesn't replay a snapshot. The same mutation on
+an object built in the same cell caches normally, and inside a loop iterations are
+cached whole, mutations included.* See
 [Knowing when to recompute](../how-it-works/invalidation.md).
 
 ### File changes are tracked automatically

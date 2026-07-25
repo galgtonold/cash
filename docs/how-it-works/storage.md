@@ -90,8 +90,9 @@ Two places the 0.1 s number quietly becomes 1.0 s. The 0.1 s floor is installed
 by the backend *factory* when `smart_persistence` is on (the default); setting
 `smart_persistence=False`, or constructing a `TieredBackend([...])` by hand,
 falls back to `_default_promotion_policy` — same cost-model rule, same 20%
-savings test, but a 1.0 s floor and always the `_GENERIC` family. "Off" means
-"less eager", not "unconditional". The floor itself is not configurable in
+savings test, but a 1.0 s floor (and the conservative `_GENERIC` family for
+entries that carry no recorded type). "Off" means "less eager", not
+"unconditional". The floor itself is not configurable in
 either case; changing it means supplying your own `promotion_policy`.
 
 Size caps are the last word. Each persistent tier declines objects larger than a
