@@ -1,142 +1,143 @@
-# Notebook Caching API Reference
+# `%cash_on` — notebook caching guide
 
-This document provides detailed API reference for the notebook caching components.
+This page is the cohesive walkthrough of notebook caching: how `%cash_on`
+turns a normal Jupyter session into a cached one, what "statement-level"
+actually buys you, and the behaviors that are unique to running inside a live
+kernel.
+
+It's the notebook-side twin of the [decorator guide](decorator.md). For the
+full magic-command reference (all 20 magics, every flag) see
+[Magic commands](magics.md); for per-statement control comments see
+[Annotations](annotations.md); for the programmatic entry points (writing
+tooling around cash) see the [notebook API reference](api/notebook.md).
 
 ---
 
-## Cell badges
+## When to use it
 
-Every cell shows a Cash badge above its output. The badge is the canonical UI for "what did cash do, and why?" — for example, a typical cell where the upstream input restored from cache and the current computation ran fresh:
+Turn on `%cash_on` whenever you're iterating in a notebook — exploring data,
+tuning a model, building a pipeline cell by cell. The payoff grows with:
 
-<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+- **Expensive upstream cells** you re-run constantly while editing something
+  downstream (a 30 s `read_csv` + join you don't want to pay on every tweak).
+- **Long dependency chains** where a kernel restart would otherwise mean
+  re-running everything from the top.
+- **Loops over cases** (tickers, files, hyperparameters) where you change one
+  case and want the rest to stay put.
 
-See [Reading the Cash badge](badges.md) for the full anatomy, status reference, and a walkthrough of the most common cache-miss and not-cached situations.
+It's less useful for a notebook of sub-second cells with no restarts — cash's
+per-cell bookkeeping can outweigh what it saves. `%cash_stats` reports **net**
+time saved (gross minus cash's own overhead) precisely so you can tell.
+
+For caching individual functions in a module or script instead, reach for the
+[`@cash.cache` decorator](decorator.md). The two share one engine and
+[interoperate](#the-two-paths-meet) — a decorated function called in a cell
+shows its hits on that cell's badge.
 
 ---
 
-## Magic Commands
-
-### `%cash_on`
-
-Enable automatic caching for all subsequent cells.
+## The minimum
 
 ```python
-%cash_on           # Enable caching
-%cash_on ttl=3600  # Enable with 1-hour TTL for all statements
+import cash
+
+%cash_on
 ```
 
-**Options:**
-- `ttl=<seconds>`: Set global time-to-live for cached results
+That's the whole setup. `import cash` auto-registers the magics, so
+`%load_ext cash` is **not** required, and there's no config file or decorator
+to add. Every cell you run from here on is cached automatically.
+
+<!-- test:skip reason="illustrative — references missing large_dataset.csv" -->
+```python
+import pandas as pd
+
+df = pd.read_csv('large_dataset.csv')   # first run: executes and caches
+result = df.groupby('category').sum()
+```
+
+Re-run the cell and both statements restore from cache instead of recomputing.
+A badge above the cell's output tells you what happened — `EXECUTED` (ochre) on
+the first run, `RESTORED` (green) on the second.
+
+`%cash_off` disables auto-caching again; `%%cash` caches a single cell
+explicitly when auto-caching is off. Both are covered in
+[Magic commands](magics.md).
+
+!!! note "Cross-process persistence has a compute floor"
+    Only results whose computation took **longer than ~0.1 s** are written to
+    disk. A cheaper result is still cached in RAM — down to a ~10 ms "too cheap
+    to cache" floor, below which nothing is stored at all — so a repeat run *in
+    the same kernel* is instant, but a fresh kernel recomputes it. That's the right
+    tradeoff — the expensive cells worth caching survive a restart, trivial ones
+    don't waste disk. Force it with [`# @cash:persist`](annotations.md#cashpersist)
+    (or `%cash_persist on` for the whole session) when a fast result must
+    survive a restart. See the [cost model](cost-model.md).
 
 ---
 
-### `%cash_off`
+## Statement-level, not cell-level
 
-Disable automatic caching.
+This is what sets notebook caching apart from every "cache the cell" tool: cash
+caches each **statement** in a cell independently, keyed on the *source* of that
+statement and the lineage of its inputs.
 
+<!-- test:skip reason="illustrative — references missing data.csv" -->
 ```python
-%cash_off
+df     = pd.read_csv('data.csv')       # statement 1
+daily  = df.resample('D').mean()       # statement 2
+result = daily.rolling(7).mean()       # statement 3
 ```
 
----
+Edit statement 3 and only it re-runs — statements 1 and 2 stay cached. A plain
+cell cache would recompute all three, because the cell's text changed.
 
-### `%%cash`
+Because the key is the *source*, not the cell text, cash follows your functions:
+edit a function's body — or a helper it calls, transitively within the module —
+and the statements that use it recompute. It's not blind text matching.
 
-Cache a specific cell (when auto-caching is off).
+### Loops and branches decompose too
 
-<!-- test:skip reason="illustrative — references undefined pd and missing data.csv" -->
+A `for` loop caches **each iteration separately**, keyed on the loop variable,
+so changing one case leaves the rest cached:
+
+<!-- test:skip reason="illustrative — references undefined fetch_and_model/prices" -->
 ```python
-%%cash
-df = pd.read_csv('data.csv')
-df = df.sort_values('date')
+for ticker in ["AAPL", "MSFT", "GOOG"]:
+    prices[ticker] = fetch_and_model(ticker)   # each iteration cached on its own
 ```
 
-**Cell-level options:**
-```python
-%%cash ttl=7200
-# This cell's results expire after 2 hours
-```
+`if`/`elif`/`else` and `try`/`except` bodies are decomposed per branch, so only
+the branch that ran is cached. `while` and `with` blocks (and a `for` containing
+`break`/`continue`) run as a **single** cache unit — they have no enumerable
+iteration space to key on. The full mechanism is in
+[The notebook path](how-it-works/notebook-path.md#fine-grained-caching-loops-and-branches).
 
----
+### In-place mutation runs fresh
 
-### Top-level `await` cells
+One deliberate exception to statement-level caching: a **top-level** statement
+that mutates an object **created in an earlier cell** (`df['x'] = ...` on an
+upstream `df`, `lst.append(...)` on an upstream list) re-runs rather than
+replaying a snapshot. Cash tracks the mutation so everything downstream stays
+correct — it just doesn't cache the mutating statement itself. The *same*
+mutation on an object built in the same cell caches normally, and inside a loop
+body iterations are cached whole, mutations included. See
+[Staying correct](how-it-works/invalidation.md) and
+[Known limitations](known-limitations.md#mutating-an-object-created-in-an-earlier-cell).
 
-Cells using Jupyter's top-level `await` are cached like any other cell — no
-opt-in, no separate magic. ipykernel dispatches them through
-`shell.run_cell_async` rather than the `pre_run_cell` hook, so cash intercepts
-that entry point too and routes the cell into the same pipeline
-(`CellExecutor.execute_cell_async` → `StatementProcessor.process_statement_async`).
+### Controlling individual statements
 
-<!-- test:skip reason="illustrative — top-level await requires a live IPython kernel" -->
-```python
-%%cash
-data = await fetch_from_api(url)   # cached: lineage, reset, and the result
-```
+Per-statement `# @cash:` comments override the defaults — force-cache a cheap
+statement, opt one out entirely, set a TTL, or acknowledge unseeded randomness:
 
-The async path is the line-for-line twin of the sync one, so awaited cells get
-lineage tracking, upstream reset, **and** result caching. On a cache hit the
-restore returns before the coroutine is ever built, so an unchanged re-run
-skips the `await` entirely rather than re-issuing the request.
-
----
-
-### `%cash_debug`
-
-Toggle debug output.
-
-```python
-%cash_debug on   # Enable detailed logging
-%cash_debug off  # Disable logging
-```
-
----
-
-## Statement-Level Annotations
-
-Fine-tune caching behavior for individual statements using comments.
-All annotation directives use the `@cash:` prefix.
-
-### `# @cash:no-cache`
-
-Skip caching for a statement. Also accepts `@cash:nocache`.
-
+<!-- test:skip reason="illustrative — references datetime without import; shows annotation placement" -->
 ```python
 # @cash:no-cache
-result = api.fetch_data()  # Always executed, never cached
+now = datetime.utcnow()      # always fresh, never stored
 ```
 
----
-
-### `# @cash:ttl=<seconds>`
-
-Set TTL for a specific statement.
-
-```python
-# @cash:ttl=300
-prices = get_stock_prices()  # Cached for 5 minutes
-```
-
----
-
-### `# @cash:persist`
-
-Force persistence to disk (override smart policy).
-
-```python
-# @cash:persist
-model = train_model(data)  # Always saved to disk
-```
-
----
-
-### `# @cash:allow-random`
-
-Suppress randomness warnings for a statement. Also accepts `@cash:allowrandom`.
-
-```python
-# @cash:allow-random
-result = np.random.randn(100)  # No warning about unseeded randomness
-```
+The five directives and their scoping rules (including how a directive on a loop
+header cascades to the whole body) are documented in [Annotations](annotations.md).
 
 ---
 
@@ -145,11 +146,11 @@ result = np.random.randn(100)  # No warning about unseeded randomness
 Some objects are **drained in place** by reading them: a generator, a
 `queue.Queue`, an open file handle. Re-running *only* the cell that drains one
 would otherwise read the leftovers of its own previous run — a drained queue
-gives `got=[]`, an exhausted generator totals `0` — where `run_all` re-runs the
-producer first and gives the real answer.
+gives `got=[]`, an exhausted generator totals `0` — where **Run all** re-runs
+the producer first and gives the real answer.
 
 Cash detects this and re-executes the producer, so an isolated re-run matches
-`run_all`:
+**Run all**:
 
 <!-- test:skip reason="illustrative — spans multiple notebook cells with a live kernel" -->
 ```python
@@ -167,27 +168,27 @@ print(f"got={got}")
 
 The check compares the object's drain position (generator state, queue
 `qsize()`, file offset) against a baseline recorded at the cell's *entry*, so it
-self-disables on `run_all` — where the producer has already handed the cell the
-same state — and on a cell's first run, which has no baseline. It is also scoped
-to inputs the cell actually consumes: a reporting read like `n = q.qsize()`
-leaves the producer alone.
+self-disables on **Run all** — where the producer has already handed the cell
+the same state — and on a cell's first run, which has no baseline. It's also
+scoped to inputs the cell actually consumes: a reporting read like
+`n = q.qsize()` leaves the producer alone.
 
-Deep-copyable iterators (`map`, `zip`, `enumerate`, `io.StringIO`, `iter(range(6))`)
-are snapshotted fresh by the cache and restore correctly, so they are **not**
-flagged and their producers are never re-run. Opaque `itertools` cursors
-(`cycle`, `chain`, `tee`) expose no observable position and are deliberately
-left alone.
+Deep-copyable iterators (`map`, `zip`, `enumerate`, `io.StringIO`,
+`iter(range(6))`) are snapshotted fresh by the cache and restore correctly, so
+they are **not** flagged and their producers are never re-run. Opaque
+`itertools` cursors (`cycle`, `chain`, `tee`) expose no observable position and
+are deliberately left alone.
 
 ---
 
 ## Output replay and display suppression
 
 A cache hit replays the statement's captured `stdout`, `stderr`, and rich
-outputs, so a restored cell looks the same as one that just ran.
+outputs, so a restored cell looks exactly like one that just ran.
 
 A trailing `;` still suppresses output on a **cached** re-run. `ast.unparse`
-drops the semicolon, so cash recovers it from the raw cell source and re-attaches
-it to the statement code — the suppression therefore rides through both the cache
+drops the semicolon, so cash recovers it from the raw cell source and
+re-attaches it to the statement — the suppression rides through both the cache
 key and the execution path, and nothing is displayed *or* captured:
 
 <!-- test:skip reason="illustrative — display suppression requires a live IPython kernel" -->
@@ -200,461 +201,162 @@ distinct cache entries.
 
 ---
 
-## Core Classes
+## Top-level `await` cells
 
-### CashMagics
+Cells using Jupyter's top-level `await` are cached like any other cell — no
+opt-in, no separate magic. Awaited cells get the same lineage tracking, upstream
+reset, **and** result caching as synchronous ones:
 
-Main entry point for notebook integration.
-
+<!-- test:skip reason="illustrative — top-level await requires a live IPython kernel" -->
 ```python
-class CashMagics(Magics):
-    """IPython magic commands for transparent caching."""
-    
-    def __init__(self, shell, cash_instance: Cash):
-        """
-        Initialize CashMagics.
-        
-        Args:
-            shell: IPython InteractiveShell instance
-            cash_instance: Cash backend for storage
-        """
+data = await fetch_from_api(url)   # cached: lineage, reset, and the result
 ```
 
-**Key Attributes:**
-
-| Attribute | Type | Description |
-|-----------|------|-------------|
-| `_auto_cache_enabled` | `bool` | Whether auto-caching is active |
-| `_global_ttl` | `int` | Default TTL for all statements |
-| `_debug` | `bool` | Debug mode flag |
-| `_variable_lineage` | `Dict[str, str]` | Variable name → lineage hash |
-| `_executed_cell_codes` | `Dict[str, str]` | Variable name → defining code |
+On a cache hit the restore returns before the coroutine is ever built, so an
+unchanged re-run skips the `await` entirely rather than re-issuing the request.
+See [`%%cash`](magics.md#cash-cell) for the mechanism.
 
 ---
 
-### CodeAnalyzer
+## Surviving a kernel restart
 
-Static code analysis utilities.
+The cache lives on disk, not just in memory, so notebook state survives a
+restart. Run a cell that needs `df` after restarting and cash restores `df`
+straight from cache instead of replaying the chain that built it — a deep
+pipeline comes back in the time it takes to deserialize, not the time it took to
+compute.
 
-```python
-class CodeAnalyzer:
-    """Analyzes Python code to determine dependencies."""
-    
-    @staticmethod
-    def analyze_code_block(code: str) -> tuple[Set[str], Set[str]]:
-        """
-        Analyze code to find input and output variables.
-        
-        Args:
-            code: Python source code
-            
-        Returns:
-            Tuple of (input_vars, output_vars)
-            
-        Raises:
-            SyntaxError: If code cannot be parsed
-        """
-    
-    @staticmethod
-    def strip_magics(code: str) -> str:
-        """
-        Remove Jupyter magic commands from code.
-        
-        Args:
-            code: Code possibly containing magics
-            
-        Returns:
-            Code with magics removed
-        """
-```
-
-**Example:**
-
-<!-- test:skip reason="CodeAnalyzer is an internal class with no public analyze_code_block method" -->
-```python
-inputs, outputs = CodeAnalyzer.analyze_code_block("""
-df = pd.read_csv('data.csv')
-result = df.groupby('x').sum()
-""")
-
-print(inputs)   # {'pd'}
-print(outputs)  # {'df', 'result'}
-```
+This is the payoff `%store` and `diskcache` can't match: they persist values
+too, but don't know whether a stored value is still *valid*. Cash proves
+freshness through lineage before it restores, and re-runs the upstream cells it
+can't prove — see [Picking up after a kernel
+restart](how-it-works/notebook-path.md#picking-up-after-a-kernel-restart) and
+[Staying correct](how-it-works/invalidation.md).
 
 ---
 
-### StatementProcessor
+## File changes are tracked automatically
 
-Handles individual statement execution and caching.
-
-```python
-class StatementProcessor:
-    """Processes and caches individual Python statements."""
-    
-    def __init__(
-        self,
-        shell,
-        cash_instance: Cash,
-        debug: bool = False,
-        compute_hash_fn=None,
-        calculate_memory_fn=None
-    ):
-        """
-        Initialize StatementProcessor.
-        
-        Args:
-            shell: IPython shell instance
-            cash_instance: Cache backend
-            debug: Enable debug output
-            compute_hash_fn: Function to hash variable values
-            calculate_memory_fn: Function to estimate memory usage
-        """
-    
-    def process_statement(
-        self,
-        code: str,
-        ttl: Optional[int] = None,
-        silent: bool = False,
-        render_badge: bool = True,
-        annotation: Optional[CacheAnnotation] = None,
-        iteration_context: Optional[Dict[str, Any]] = None
-    ) -> Dict[str, Any]:
-        """
-        Process a single statement with caching.
-        
-        Args:
-            code: Python statement to execute
-            ttl: Time-to-live in seconds
-            silent: Suppress output
-            render_badge: Show execution badge
-            annotation: Cache annotation from comments
-            iteration_context: Loop iteration context
-            
-        Returns:
-            Dict with execution metrics:
-            {
-                'status': 'COMPUTED' | 'RESTORED' | 'SKIPPED' | 'ERROR',
-                'execution_time': float,
-                'total_time': float,
-                'saved_time': float,
-                'restored_vars': List[str],
-                'code': str,
-                'error': Optional[str],
-                'uncacheable_reasons': List[str]
-            }
-        """
-```
+Cash intercepts file reads (`pd.read_csv`, `np.load`, `open`, `joblib.load`, …)
+and records each file's fingerprint — change the file on disk and the statements
+that read it recompute, no annotation needed. This works the same in the
+[decorator path](decorator.md#file_depends_on-invalidate-when-a-file-changes),
+where you can also name files explicitly with `file_depends_on=` (auto-tracking
+fingerprints file *content*; `file_depends_on=` keys on `(mtime, size)`).
 
 ---
 
-### UpstreamChecker
+## The two paths meet
 
-Manages upstream dependency detection and re-execution.
-
-```python
-class UpstreamChecker:
-    """Detects and handles changed upstream dependencies."""
-    
-    def __init__(
-        self,
-        shell,
-        cash_instance=None,
-        debug: bool = False,
-        compute_hash_fn=None
-    ):
-        """
-        Initialize UpstreamChecker.
-        
-        Args:
-            shell: IPython shell instance
-            cash_instance: Cache backend for lookups
-            debug: Enable debug output
-            compute_hash_fn: Function to hash values
-        """
-    
-    def check_and_reexecute(
-        self,
-        cell_code: str,
-        required_inputs: Set[str],
-        process_statement_callback,
-        global_ttl: Optional[int] = None,
-        cell_id: Optional[str] = None
-    ) -> UpstreamResult:
-        """
-        Check upstream dependencies and re-execute if needed.
-        
-        Args:
-            cell_code: Current cell's code
-            required_inputs: Variables needed by current cell
-            process_statement_callback: Function to execute statements
-            global_ttl: Default TTL
-            cell_id: Jupyter cell ID (for disambiguation)
-            
-        Returns:
-            Tuple of:
-            - List of execution metrics for re-executed statements
-            - Total restore time
-            - Total execution time
-        """
-```
+Call a [`@cash.cache`](decorator.md)-decorated function inside a cell and its
+hits and misses show up on that cell's badge alongside the statement rows — same
+engine, either way. This is the natural bridge from notebook exploration to a
+reusable module: prototype with `%cash_on`, then lift the stable pieces into
+decorated functions without giving up caching.
 
 ---
 
-### ControlStructureProcessor
+## Reading the badge
 
-Handles loops and conditionals with per-iteration caching.
+Every cached cell shows a Cash badge above its output — the canonical answer to
+"what did cash do, and why?" Here a mixed cell restored its upstream input and
+computed the current statement fresh:
 
-```python
-class ControlStructureProcessor:
-    """Processes control structures with fine-grained caching."""
-    
-    def __init__(
-        self,
-        shell,
-        statement_processor,
-        debug: bool = False
-    ):
-        """
-        Initialize ControlStructureProcessor.
-        
-        Args:
-            shell: IPython shell instance
-            statement_processor: StatementProcessor for body statements
-            debug: Enable debug output
-        """
-    
-    def process(
-        self,
-        node: ast.AST,
-        ttl: Optional[int] = None,
-        silent: bool = False,
-        parent_context: Optional[Dict[str, Any]] = None
-    ) -> ControlStructureResult:
-        """
-        Process a control structure node.
-        
-        Args:
-            node: AST node (For, While, If, With, Try)
-            ttl: Time-to-live
-            silent: Suppress output
-            parent_context: Context from parent structure (for nesting)
-            
-        Returns:
-            ControlStructureResult with:
-            - success: bool
-            - metrics: List of statement metrics
-            - total_iterations: int
-            - cached_iterations: int
-            - computed_iterations: int
-        """
-```
+<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+See [Reading the Cash badge](badges.md) for the full anatomy, every status, and
+a walkthrough of the common cache-miss situations. Switch modes with
+[`%cash_badge`](magics.md#cash_badge) (`html` / `print` / `off`).
 
 ---
 
-### ControlStructureResult
+## Inspecting and managing a session
 
-Result from processing a control structure.
+These are all magics — the full reference, with every flag, is in
+[Magic commands](magics.md):
 
-<!-- test:skip reason="@dataclass requires the class's __module__ to be in sys.modules" -->
-```python
-@dataclass
-class ControlStructureResult:
-    """Result from executing a control structure."""
-    success: bool
-    metrics: List[Dict[str, Any]]
-    error: Optional[Exception] = None
-    total_iterations: int = 0
-    cached_iterations: int = 0
-    computed_iterations: int = 0
-```
+| Want to… | Magic |
+|---|---|
+| See session-wide hits, misses, and **net** time saved | [`%cash_stats`](magics.md#cash_stats) |
+| Trace how a variable was computed | [`%cash_provenance`](magics.md#cash_provenance) |
+| Watch a local module for source changes | [`%cash_track`](magics.md#cash_track) |
+| Move a cache between sessions / teammates | [`%cash_export`](magics.md#cash_export) / [`%cash_import`](magics.md#cash_import) |
+| Audit or repair cache integrity | [`%cash_verify`](magics.md#cash_verify) / [`%cash_repair`](magics.md#cash_repair) |
+| Print the quick-reference card | [`%cash_help`](magics.md#cash_help) |
 
----
-
-## Cache Backend Interface
-
-The caching system uses a pluggable backend architecture.
-
-### CacheBackend (Abstract)
-
-```python
-class CacheBackend(ABC):
-    """Abstract base class for cache backends."""
-    
-    @abstractmethod
-    def get(self, key: str) -> Tuple[Optional[Dict], Optional[Any]]:
-        """
-        Retrieve item from cache.
-        
-        Args:
-            key: Cache key
-            
-        Returns:
-            Tuple of (metadata, data) or (None, None) if not found
-        """
-    
-    @abstractmethod
-    def set(
-        self,
-        key: str,
-        data: Any,
-        metadata: Dict = None,
-        ttl: int = None
-    ) -> bool:
-        """
-        Store item in cache.
-        
-        Args:
-            key: Cache key
-            data: Data to cache
-            metadata: Optional metadata dict
-            ttl: Time-to-live in seconds
-            
-        Returns:
-            True if stored successfully
-        """
-    
-    @abstractmethod
-    def delete(self, key: str) -> bool:
-        """Delete item from cache."""
-    
-    @abstractmethod
-    def clear(self) -> None:
-        """Clear all items from cache."""
-```
-
-### Built-in Backends
-
-| Backend | Description | Persistence |
-|---------|-------------|-------------|
-| `InMemoryBackend` | Fast dictionary-based storage | No |
-| `FileBackend` | Disk-based with optional compression | Yes |
-| `TieredBackend` | Combines multiple backends (L1+L2) | Configurable |
-| `CascadingBackend` | Chain of backends with fallthrough | Configurable |
+For programmatic access — reading statement metrics or lineage from tooling
+rather than a magic — see the [notebook API reference](api/notebook.md) and
+[`%cash_status`](magics.md#cash_status).
 
 ---
 
 ## Configuration
 
-### Cash Initialization
+`%cash_on` takes only an optional `ttl=N`. To point cash at a different backend
+or cache directory, call `cash.configure(...)` *before* enabling the magic — the
+magics use whatever configuration is current:
 
+<!-- test:skip reason="illustrative — Redis backend requires a running server" -->
 ```python
-from cash import Cash
+import cash
 
-# Default configuration (auto-tiered)
-cash = Cash()
-
-# Custom configuration — any CashConfig field name works as a kwarg.
-cash = Cash(
-    cache_dir=".my_cache",     # Custom cache directory
-    compress=True,              # Enable compression
-    debug=True,                 # Enable debug output
-    use_locking=True,           # Thread-safe operations
-    # Any other CashConfig field: backend, redis_host, redis_port,
-    # s3_bucket, cache_dir, persist_all, ...
-)
+cash.configure(cache_dir=".my_cache", backend="redis")   # applies to all caching from here
+%cash_on
 ```
 
-Background writes are on by default for every backend except RAM —
-serialisation happens on the calling thread, the actual storage write
-runs in a per-backend background worker, so `set()` returns once the
-bytes are captured. There's no opt-in flag.
+(You can also construct a `Cash(...)` instance explicitly and hand it a backend
+object — see [Configuration](getting-started/configuration.md).)
 
-### Environment variables
+Optional backends (SQLite, Redis, S3) install via extras
+(`pip install "cash-lib[redis]"`, `[s3]`, `[all]`). Every setting is also
+bindable via a `CASH_*` env var or a TOML file — see the
+[Configuration reference](getting-started/configuration.md).
 
-Every `CashConfig` field has a `CASH_*` env-var binding; see the
-[Configuration reference](getting-started/configuration.md#all-cashconfig-fields)
-for the complete table.
+!!! note "Cache errors never break your cell"
+    If cash hits an error while caching a statement — an unpicklable result, a
+    corrupted entry — it falls back to running the statement normally and the
+    cell still produces the right output. The badge names what wasn't cached and
+    why; caching is an optimization, never a correctness dependency. (Cash *can*
+    still stop loudly on byte-identical duplicate cells it can't disambiguate —
+    see [Known limitations](known-limitations.md#ambiguouscellerror).)
 
 ---
 
-## Execution Metrics
+## Do's and don'ts
 
-Each statement returns metrics in this format:
+**Do**
 
-<!-- test:skip reason="illustrative dict literal at top level (not a runnable script)" -->
-```python
-{
-    'status': str,           # 'COMPUTED', 'RESTORED', 'SKIPPED', 'ERROR', or 'UNKNOWN'
-    'execution_time': float, # Actual execution time (seconds)
-    'total_time': float,     # Total processing time (seconds)
-    'saved_time': float,     # Time saved by caching (seconds)
-    'restored_vars': List[str],  # Variables restored from cache
-    'code': str,             # The statement code (trimmed)
-    'error': Optional[str],  # Error message if status='ERROR'
-    'uncacheable_reasons': List[str],  # Reasons caching was skipped
-    'decorator_calls': List[dict],    # @cash.cache call events (if any)
-}
-```
+- ✅ Lean on it for expensive upstream cells and long chains — that's where the
+  restart and partial-recompute payoff is largest.
+- ✅ Enable [`%cash_debug on`](magics.md#cash_debug) when a cache decision
+  surprises you.
+- ✅ Use [`# @cash:no-cache`](annotations.md#cashno-cache-alias-nocache) for
+  statements with side effects that must run every time (API writes, `datetime.now()`).
+- ✅ Seed your RNG (`np.random.seed(...)`) for reproducible cached draws, or
+  acknowledge the freeze with [`# @cash:allow-random`](annotations.md#cashallow-random-alias-allowrandom).
 
-### Decorator Call Metrics
+**Don't**
 
-When a statement invokes `@cash.cache` decorated functions, the `decorator_calls` list contains entries like:
-
-<!-- test:skip reason="illustrative dict literal at top level (not a runnable script)" -->
-```python
-{
-    'func_name': 'my_module.process',  # Module-qualified function name
-    'cache_hit': True,                  # Whether the decorator cache was hit
-    'execution_time': 0.001,            # Time for this decorator call
-    'args_hash': 'abc123...',           # Hash of the arguments
-    'cache_key': 'my_module.process:...', # Full decorator cache key
-    'timestamp': 1718000000.0,          # When the call occurred
-}
-```
-
-These metrics are displayed in the notebook badge alongside statement-level metrics.
+- ❌ Don't expect an unseeded random draw to vary once cached — the first value
+  is frozen and replayed. `allow-random` silences the warning but does *not*
+  stop the caching; `# @cash:no-cache` is what forces a fresh draw.
+- ❌ Don't put byte-identical code in two different cells — where the
+  environment exposes no resolvable cell ID this raises `AmbiguousCellError`
+  ([Known limitations](known-limitations.md#ambiguouscellerror)). A distinguishing
+  comment is enough to separate them.
+- ❌ Don't cache reads from `stdin` or closures over mutable state you expect to
+  keep changing.
 
 ---
 
-## Error Handling
+## Where to go next
 
-### Common Exceptions
-
-| Exception | When Raised | Recovery |
-|-----------|-------------|----------|
-| `SyntaxError` | Invalid Python in cell | Fix syntax |
-| `RuntimeError` | Ambiguous cell content | Save notebook |
-| `PicklingError` | Unpicklable result | Use `@cash:no-cache` |
-| `ValueError` | Invalid annotation | Fix comment syntax |
-
-### Graceful Degradation
-
-When caching fails, the system falls back to normal execution:
-
-```python
-try:
-    result = process_with_caching(code)
-except Exception as e:
-    logger.warning(f"Caching failed: {e}. Falling back to normal execution.")
-    exec(code, namespace)
-```
-
----
-
-## Best Practices
-
-### Do's
-
-✅ Use for expensive computations (>1s execution time)
-✅ Enable `%cash_debug on` when troubleshooting
-✅ Use TTL for data that changes frequently
-✅ Use `@cash:no-cache` for side effects (API calls, file writes)
-✅ Use `@cash:allow-random` to suppress warnings for intentionally random code
-
-### Don'ts
-
-❌ Don't rely on cached values from unseeded random code being reproducible — seed with `random.seed()` first, or acknowledge it with `@cash:allow-random` (which silences the warning; it does *not* stop the caching — use `@cash:no-cache` for that)
-❌ Don't cache code that reads from stdin
-❌ Don't expect caching of closures over mutable state
-❌ Don't use identical cell content in multiple cells (causes ambiguity)
-
----
-
-## See also
-
-- [Purity decorators](tutorials/feature-guides/purity-decorators.md) —
-  `@pure` / `@stateful` and `mark_pure` / `mark_stateful` for declaring
-  function-level purity so the notebook tracker treats helpers correctly.
-- [Controlling cache behavior](tutorials/feature-guides/controlling-cache-behavior.md) —
-  end-to-end tour of the annotation directives (`# @cash:persist`,
-  `no-cache`, `ttl=`) and how they interact with the cost model.
+- [Magic commands](magics.md) — the full reference for all 20 `%cash_*` magics.
+- [Annotations](annotations.md) — every `# @cash:` directive and its scoping.
+- [Reading the Cash badge](badges.md) — the visual vocabulary in full.
+- [`@cash.cache` decorator](decorator.md) — the script/module path.
+- [Known limitations](known-limitations.md) — the one page to read before writing cached notebooks.
+- [The notebook path](how-it-works/notebook-path.md) — how a cell runs, end to end.
+- [Staying correct: invalidation](how-it-works/invalidation.md) — how cash proves a cached value is still valid.
+- [Notebook API reference](api/notebook.md) — programmatic entry points for tooling.
+- [Purity decorators](tutorials/feature-guides/purity-decorators.md) — `@pure` / `@stateful` for declaring helper purity.
