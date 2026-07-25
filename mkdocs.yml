@@ -138,6 +138,7 @@ nav:
       - Purity Decorators: tutorials/feature-guides/purity-decorators.md
       - Production Transition: tutorials/feature-guides/production-transition.md
       - Choosing a Backend: tutorials/feature-guides/choosing-a-backend.md
+      - Sharing a Cache: tutorials/feature-guides/sharing-caches.md
       - Controlling Cache Behavior: tutorials/feature-guides/controlling-cache-behavior.md
       - Troubleshooting & Debugging: tutorials/feature-guides/debugging-and-monitoring.md
       - Custom File Sources: tutorials/feature-guides/custom-file-sources.md

@@ -300,7 +300,7 @@ These are all magics — the full reference, with every flag, is in
 | See session-wide hits, misses, and **net** time saved | [`%cash_stats`](magics.md#cash_stats) |
 | Trace how a variable was computed | [`%cash_provenance`](magics.md#cash_provenance) |
 | Watch a local module for source changes | [`%cash_track`](magics.md#cash_track) |
-| Move a cache between sessions / teammates | [`%cash_export`](magics.md#cash_export) / [`%cash_import`](magics.md#cash_import) |
+| Snapshot a cache to a file (bug report, archive) | [`%cash_export`](magics.md#cash_export) / [`%cash_import`](magics.md#cash_import) — for team sharing prefer a [shared backend](tutorials/feature-guides/sharing-caches.md) |
 | Audit or repair cache integrity | [`%cash_verify`](magics.md#cash_verify) / [`%cash_repair`](magics.md#cash_repair) |
 | Print the quick-reference card | [`%cash_help`](magics.md#cash_help) |
 

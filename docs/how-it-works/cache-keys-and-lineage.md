@@ -51,9 +51,14 @@ flowchart TD
     fresh kernel recomputes the same key and hits. But a statement that reads a file folds
     that file's **mtime and size** into its lineage (`compute_file_hash_component` in
     `cash.notebook.statement.file_deps`), and the path is only relative when the file sits
-    near the notebook. Copy a `.cash` directory to another machine and those entries will
-    miss. Cross-machine sharing is a property of the [storage backend](storage.md), not of
-    the key.
+    near the notebook. Copy a `.cash` directory to another machine — or point two machines
+    at one shared backend — and those file-reading statements will still miss, because the
+    two runs compute *different keys*. A shared [storage backend](storage.md) puts everyone
+    in the same store, but it cannot make mismatched keys agree. The decorator revalidates
+    by content instead of baking a timestamp into the key, so its entries can survive a
+    move — when the file paths recorded at write time still resolve. See
+    [Sharing a cache](../tutorials/feature-guides/sharing-caches.md) for what survives a
+    move and what doesn't.
 
 ## The lineage chain
 
