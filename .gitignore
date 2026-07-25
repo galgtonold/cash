@@ -138,9 +138,6 @@ large_financial_data.csv
 /test_data.txt
 /test_numpy.txt
 /test_path.txt
-# Written by the docs suite: iterator-caching.md's `test:inject` seeds a
-# data.txt for its example, relative to the repo root.
-/data.txt
 
 # Archived examples (development experiments)
 examples/archive/
