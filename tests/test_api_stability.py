@@ -50,6 +50,7 @@ def test_core_exports_stable():
         'CascadingBackend',
         # Data sources
         'DataSource', 'FileDataSource',
+        'RemoteFileDataSource',  # public since CAS-236 (track s3://, gs://, http(s):// objects)
         # Exception hierarchy
         'CashError', 'CacheBackendError', 'CacheExpiredError',
         'CacheSerializationError', 'DependencyNotFoundError',

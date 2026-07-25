@@ -22,6 +22,7 @@ from .backends.sqlite_backend import SQLiteBackend
 from .config import CashConfig, create_default_config, get_config
 from .core import Cash, CacheExplanation
 from .data_source import DataSource, FileDataSource
+from .remote_source import RemoteFileDataSource
 from .exceptions import (
     AmbiguousCellError,
     CacheBackendError,
@@ -365,6 +366,7 @@ __all__ = [
     # Data sources (stable)
     "DataSource",
     "FileDataSource",
+    "RemoteFileDataSource",
     # Exceptions (stable)
     "CashError",
     "CacheBackendError",
