@@ -1,8 +1,9 @@
 # `@cash.cache` — decorator guide
 
 This page is the cohesive walkthrough of `@cash.cache`: when to use it,
-what every parameter does, the wrapper methods you can call on a
-decorated function, and the gotchas that bite people in practice.
+**what invalidates a cached result by default**, what every parameter adds
+on top, the wrapper methods you can call on a decorated function, and the
+gotchas that bite people in practice.
 
 For the auto-generated, exhaustive signature reference see the
 [API reference](api/cash.md). For the notebook-side
@@ -78,9 +79,187 @@ def slow_square(n):
 
 ---
 
+## What invalidates your cache
+
+Worth understanding before any parameter. With a bare `@cash.cache` and nothing
+configured, a cached result is discarded and recomputed when **any** of these
+change:
+
+| What changed | How it's detected |
+|---|---|
+| The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
+| The **function's own source** | Edit the body and old entries stop matching |
+| The source of a **helper it calls** | Followed **transitively** within the module |
+| A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
+| A **module global it reads** | A config constant, a threshold, a dispatch dict |
+
+None of that needs an annotation. That is the point: the usual reasons a cached
+result goes stale are tracked for you, and the [parameters](#parameters) exist
+for the cases this model *can't* see.
+
+> `functools.lru_cache` sees only the arguments — and refuses unhashable ones.
+> `joblib.Memory` adds the decorated function's own body but **not** the helpers
+> it calls, so editing a helper quietly serves a stale result. Cash follows the
+> call graph.
+
+### It follows the functions you call
+
+Editing a plain helper called from a cached function invalidates that
+function's cache — even a few levels down:
+
+<!-- test:skip reason="illustrative — schematic call graph" -->
+```python
+def clean(x):     ...                      # edit this...
+def features(x):  return clean(x) + ...
+
+@cash.cache
+def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
+```
+
+The analyzer captures helper source hashes and folds them into the cache key, so
+both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
+are picked up automatically. Per-call overhead is ~5-30μs. Helpers are resolved
+within the module; name cross-module dependencies with
+[`depends_on=`](#depends_on-explicit-dependency-graph).
+
+### File reads are tracked automatically
+
+You usually don't need to declare files at all: cash intercepts file reads
+*inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
+… — and folds each file's fingerprint into the entry, so changing the file on
+disk recomputes with no annotation:
+
+<!-- test:skip reason="illustrative — references a missing data.csv" -->
+```python
+@cash.cache
+def load():
+    return pd.read_csv("data.csv")   # change data.csv → recomputes, automatically
+```
+
+Auto-tracking fingerprints file **content**; to name a file cash can't see you
+read, use [`file_depends_on=`](#file_depends_on-name-a-file-explicitly).
+
+### Module globals a function reads
+
+A cached function that reads a module-level global — a config constant, a
+dispatch dict of callables — invalidates when that global changes:
+
+```python
+TAX_RATE = 0.2
+
+@cash.cache
+def net(amount):
+    return amount * (1 - TAX_RATE)
+
+net(100)          # 80.0
+TAX_RATE = 0.5
+net(100)          # 50.0 — recomputed, not the stale 80.0
+```
+
+Only globals the function **reads** participate. Globals it *writes*
+(`global x; x = ...`) or mutates in place are excluded — those are
+side-effect accumulators, and folding them in would invalidate the
+function on its own output. A read global whose value can't be hashed
+warns once rather than failing the call.
+
+Globals read inside a nested scope count too. A generator expression,
+comprehension, or `lambda` compiles to its own code object, so detection
+recurses into them:
+
+```python
+THRESHOLD = 10
+
+@cash.cache
+def count_big(values):
+    return sum(v > THRESHOLD for v in values)   # THRESHOLD is tracked
+
+count_big([5, 20])   # 1
+THRESHOLD = 1
+count_big([5, 20])   # 2 — recomputed
+```
+
+#### Pre-built objects: the class's method source is tracked too
+
+A read global that is an **instance of one of your classes** — a transformer,
+client, or config object built once at import and used as data — folds its
+class's *source*, not just its `__dict__`. Editing a method on that class
+invalidates, even though the object's pickled state is unchanged:
+
+<!-- test:skip reason="illustrative: two-file pipeline sketch; fit()/edit-and-rerun not executable inline" -->
+```python
+# preprocessor.py
+class Scaler:
+    def apply(self, x):
+        return x / 100          # ...edit this to  x / 50
+
+SCALER = Scaler()
+
+# pipeline.py
+@cash.cache
+def run(rows):
+    steps = [("scale", SCALER)]         # SCALER used as data
+    return fit(steps, rows)             # fit() calls SCALER.apply internally
+```
+
+Editing `Scaler.apply` re-keys `run` and it recomputes. cash also follows, a few
+levels deep, into user-class instances the object *holds* (a pipeline holding a
+transformer holding another). Third-party classes (a fitted sklearn estimator,
+a numpy array) are **not** walked — their source is fixed for your environment,
+and stopping there keeps the key from churning.
+
+Two boundaries worth knowing:
+
+- **This is the *data* path.** An object you call a method on directly
+  (`obj.transform(x)`) or pass as a bare argument (`fn(obj)`) is excluded from
+  value-folding (it might mutate — see the write/mutate rule above). A directly
+  *called* method's own edit is still caught, by the helper-source channel; only
+  a method reached **solely** through such an excluded object can be missed.
+- **Source is assumed stable within a process.** cash reads a class's source
+  once per interpreter run. Editing a class's source *between two calls in the
+  same running process* is out of scope — that only happens with live
+  re-`exec`/reload tricks, not normal use. Re-run the process (the ordinary
+  edit-and-rerun loop) and the edit is seen.
+
+### How a call decides hit vs miss
+
+```mermaid
+flowchart TD
+    A["Call f(args)"] --> B{Cache key computable?}
+    B -->|No - unhashable arg| W1[Warning, recompute, don't store]
+    B -->|Yes| C{Entry in backend?}
+    C -->|No| D[Compute, store]
+    C -->|Yes| E{TTL expired?}
+    E -->|Yes| D
+    E -->|No| F{File deps fresh?}
+    F -->|No| D
+    F -->|Yes| G[Return cached value]
+```
+
+The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
+
+- `state_hash` folds in the function's own source hash + every
+  `depends_on` source + transitive helper hashes (so editing a helper
+  invalidates) + the content of any **module global the function reads**
+  (see above).
+- `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
+  set).
+- `args_hash` is a SHA-256 over the pickled args (with custom hashers
+  via `cash.register_hasher` taking precedence for non-picklable types).
+  Dicts are canonicalised to sorted-key order first, so two dicts that
+  are equal but for insertion order share a key —
+  `f({"a": 1, "b": 2})` and `f({"b": 2, "a": 1})` hit the same entry.
+
+When something that affects the result *isn't* among those five signals — a
+database table, a remote URL, a file you never `open()` — declare it with the
+parameters below. And when a miss (or a suspicious hit) mystifies you,
+[`func.explain()`](#funcexplainargs-kwargs) shows which signal decided.
+
+---
+
 ## Parameters
 
-All of these are keyword-only and optional.
+For the cases the automatic model above can't see — plus
+expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
 | Param | What it does |
 |---|---|
@@ -108,20 +287,6 @@ def stock_price(symbol):
 After the TTL elapses, the next call recomputes. Expired entries are
 not removed from the backend automatically — call `cash.cleanup()` to
 reclaim space, or run `python -m cash clear` from the CLI.
-
-### File reads are tracked automatically
-
-You usually don't need to declare files at all: cash intercepts file reads
-*inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
-… — and folds each file's fingerprint into the entry, so changing the file on
-disk recomputes with no annotation:
-
-<!-- test:skip reason="illustrative — references a missing data.csv" -->
-```python
-@cash.cache
-def load():
-    return pd.read_csv("data.csv")   # change data.csv → recomputes, automatically
-```
 
 ### `file_depends_on=` — name a file explicitly
 
@@ -438,122 +603,6 @@ bypass caching entirely.
 
 ---
 
-## How a call decides hit vs miss
-
-```mermaid
-flowchart TD
-    A["Call f(args)"] --> B{Cache key computable?}
-    B -->|No - unhashable arg| W1[Warning, recompute, don't store]
-    B -->|Yes| C{Entry in backend?}
-    C -->|No| D[Compute, store]
-    C -->|Yes| E{TTL expired?}
-    E -->|Yes| D
-    E -->|No| F{File deps fresh?}
-    F -->|No| D
-    F -->|Yes| G[Return cached value]
-```
-
-The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
-
-- `state_hash` folds in the function's own source hash + every
-  `depends_on` source + transitive helper hashes (so editing a helper
-  invalidates) + the content of any **module global the function reads**
-  (see below).
-- `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
-  set).
-- `args_hash` is a SHA-256 over the pickled args (with custom hashers
-  via `cash.register_hasher` taking precedence for non-picklable types).
-  Dicts are canonicalised to sorted-key order first, so two dicts that
-  are equal but for insertion order share a key —
-  `f({"a": 1, "b": 2})` and `f({"b": 2, "a": 1})` hit the same entry.
-
-### Module globals a function reads
-
-A cached function that reads a module-level global — a config constant, a
-dispatch dict of callables — invalidates when that global changes:
-
-```python
-TAX_RATE = 0.2
-
-@cash.cache
-def net(amount):
-    return amount * (1 - TAX_RATE)
-
-net(100)          # 80.0
-TAX_RATE = 0.5
-net(100)          # 50.0 — recomputed, not the stale 80.0
-```
-
-Only globals the function **reads** participate. Globals it *writes*
-(`global x; x = ...`) or mutates in place are excluded — those are
-side-effect accumulators, and folding them in would invalidate the
-function on its own output. A read global whose value can't be hashed
-warns once rather than failing the call.
-
-Globals read inside a nested scope count too. A generator expression,
-comprehension, or `lambda` compiles to its own code object, so detection
-recurses into them:
-
-```python
-THRESHOLD = 10
-
-@cash.cache
-def count_big(values):
-    return sum(v > THRESHOLD for v in values)   # THRESHOLD is tracked
-
-count_big([5, 20])   # 1
-THRESHOLD = 1
-count_big([5, 20])   # 2 — recomputed
-```
-
-Anything that affects the result should be in one of those. If it
-isn't, the cache will go stale silently — that's where `func.explain()`
-helps diagnose mysteries.
-
-#### Pre-built objects: the class's method source is tracked too
-
-A read global that is an **instance of one of your classes** — a transformer,
-client, or config object built once at import and used as data — folds its
-class's *source*, not just its `__dict__`. Editing a method on that class
-invalidates, even though the object's pickled state is unchanged:
-
-<!-- test:skip reason="illustrative: two-file pipeline sketch; fit()/edit-and-rerun not executable inline" -->
-```python
-# preprocessor.py
-class Scaler:
-    def apply(self, x):
-        return x / 100          # ...edit this to  x / 50
-
-SCALER = Scaler()
-
-# pipeline.py
-@cash.cache
-def run(rows):
-    steps = [("scale", SCALER)]         # SCALER used as data
-    return fit(steps, rows)             # fit() calls SCALER.apply internally
-```
-
-Editing `Scaler.apply` re-keys `run` and it recomputes. cash also follows, a few
-levels deep, into user-class instances the object *holds* (a pipeline holding a
-transformer holding another). Third-party classes (a fitted sklearn estimator,
-a numpy array) are **not** walked — their source is fixed for your environment,
-and stopping there keeps the key from churning.
-
-Two boundaries worth knowing:
-
-- **This is the *data* path.** An object you call a method on directly
-  (`obj.transform(x)`) or pass as a bare argument (`fn(obj)`) is excluded from
-  value-folding (it might mutate — see the write/mutate rule above). A directly
-  *called* method's own edit is still caught, by the helper-source channel; only
-  a method reached **solely** through such an excluded object can be missed.
-- **Source is assumed stable within a process.** cash reads a class's source
-  once per interpreter run. Editing a class's source *between two calls in the
-  same running process* is out of scope — that only happens with live
-  re-`exec`/reload tricks, not normal use. Re-run the process (the ordinary
-  edit-and-rerun loop) and the edit is seen.
-
----
-
 ## Common gotchas
 
 ### Unhashable arguments
@@ -636,14 +685,6 @@ If that's what you want (memoizing an API call where the network
 roundtrip is the "side effect"), `assume_safe=True` silences the
 warning. If it isn't, refactor: separate the pure compute from the
 side effect, and only cache the pure part.
-
-### Editing a helper invalidates the caller's cache
-
-Editing a plain helper called from a cached function invalidates that
-function's cache. The analyzer captures helper source hashes and folds
-them into the cache key, so both cross-process edits and in-process
-redefinitions (notebook cell rerun, REPL) are picked up automatically.
-Per-call overhead is ~5-30μs.
 
 ### `@cash.cache` on a generator
 

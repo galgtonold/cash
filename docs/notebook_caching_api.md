@@ -57,8 +57,12 @@ result = df.groupby('category').sum()
 ```
 
 Re-run the cell and both statements restore from cache instead of recomputing.
-A badge above the cell's output tells you what happened — `EXECUTED` (ochre) on
-the first run, `RESTORED` (green) on the second.
+You see that happen on the **badge** above the cell's output — `EXECUTED` (ochre)
+on the first run, `RESTORED` (green) on the second:
+
+<iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+<iframe class="cash-badge" src="/_badges/status_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 `%cash_off` disables auto-caching again; `%%cash` caches a single cell
 explicitly when auto-caching is off. Both are covered in
@@ -73,6 +77,36 @@ explicitly when auto-caching is off. Both are covered in
     don't waste disk. Force it with [`# @cash:persist`](annotations.md#cashpersist)
     (or `%cash_persist on` for the whole session) when a fast result must
     survive a restart. See the [cost model](cost-model.md).
+
+---
+
+## The badge tells you what happened, and why
+
+Caching that works silently is caching you can't trust. Every cell cash touches
+gets a badge above its output — one row per statement, with the status, the time
+saved, and, when something recomputed, **the reason**. It is the primary way you
+work with cash: you don't guess whether a hit happened, you read it.
+
+A mixed cell — upstream input restored, current statement computed fresh:
+
+<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+The valuable part is the *why*. When a statement re-runs, the badge names the
+cause rather than leaving you to wonder — here, a function the statement calls
+was edited:
+
+<iframe class="cash-badge" src="/_badges/miss_function_source_changed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+Other reasons it will name: an input's lineage changed, a file on disk changed, a
+module was reloaded, or the statement was deliberately **not cached** (too cheap,
+a side effect, an explicit `# @cash:no-cache`).
+
+**→ [Reading the Cash badge](badges.md)** is the full reference: every status and
+chip, the anatomy of a row, and a walkthrough of the common cache-miss and
+not-cached situations. It's the page to keep open while you get used to cash.
+
+Switch modes with [`%cash_badge`](magics.md#cash_badge) — `html` (default),
+`print` for a plain-text summary (nbconvert, CI, agents), or `off`.
 
 ---
 
@@ -242,7 +276,7 @@ and records each file's fingerprint — change the file on disk and the statemen
 that read it recompute, no annotation needed. This works the same in the
 [decorator path](decorator.md#file-reads-are-tracked-automatically),
 where you can also name files explicitly with `file_depends_on=` (auto-tracking
-fingerprints file *content*; `file_depends_on=` keys on `(mtime, size)`).
+fingerprints file *content*; `file_depends_on=` keys on the file **mtime**).
 
 ---
 
@@ -253,20 +287,6 @@ hits and misses show up on that cell's badge alongside the statement rows — sa
 engine, either way. This is the natural bridge from notebook exploration to a
 reusable module: prototype with `%cash_on`, then lift the stable pieces into
 decorated functions without giving up caching.
-
----
-
-## Reading the badge
-
-Every cached cell shows a Cash badge above its output — the canonical answer to
-"what did cash do, and why?" Here a mixed cell restored its upstream input and
-computed the current statement fresh:
-
-<iframe class="cash-badge" src="/_badges/status_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
-See [Reading the Cash badge](badges.md) for the full anatomy, every status, and
-a walkthrough of the common cache-miss situations. Switch modes with
-[`%cash_badge`](magics.md#cash_badge) (`html` / `print` / `off`).
 
 ---
 
