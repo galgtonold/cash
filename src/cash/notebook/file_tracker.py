@@ -16,12 +16,47 @@ import importlib.util
 import logging
 import os
 import pathlib
+import re
 import sys
 import threading
+import warnings
 from collections.abc import Callable
 from typing import Any, Optional
 
 from cash.utils import normalize_path
+
+# A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
+# reaches us as the raw first argument. ``os.path.realpath`` mangles it into a
+# bogus local path, nothing resolves, and ``snapshot_file_deps`` drops it — so
+# the entry would be stored with *no* dependency and keep hitting even after the
+# object changes. Warn instead of losing it quietly. ``file://`` is excluded: it
+# names a local path that can genuinely be stat'ed.
+_URL_SCHEME_RE = re.compile(r"^(?!file://)[a-zA-Z][a-zA-Z0-9+.\-]*://")
+_warned_untrackable: set[str] = set()
+
+
+def _reset_untrackable_warnings() -> None:
+    """Clear the warn-once ledger (tests; a fresh session starts empty)."""
+    _warned_untrackable.clear()
+
+
+def _warn_untrackable_once(path: str) -> None:
+    """Warn a single time per URL that its dependency cannot be tracked."""
+    if path in _warned_untrackable:
+        return
+    if len(_warned_untrackable) < 1024:  # bound the ledger for long sessions
+        _warned_untrackable.add(path)
+    from cash.exceptions import CashCacheIneffectiveWarning
+
+    warnings.warn(
+        f"cash cannot track {path!r} as a data dependency: it is a remote URL, "
+        f"not a local file, so a change to it will NOT invalidate the cached "
+        f"result. Declare it explicitly with a DataSource whose state token is "
+        f"the object's ETag/version (`@cash.cache(depends_on=[...])`), or pass "
+        f"a value that changes with the data as an argument.",
+        CashCacheIneffectiveWarning,
+        stacklevel=4,
+    )
 
 __all__ = ["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies"]
 
@@ -472,11 +507,18 @@ class FileAccessTracker:
         return self.accessed_files
 
     def _track_path(self, path):
+        raw_path = str(path)
+        if _URL_SCHEME_RE.match(raw_path):
+            # Remote URL: realpath would mangle it into a nonexistent local path
+            # and the dependency would be dropped without a trace. Say so, and
+            # don't record a path that can never be validated. See CAS-236.
+            _warn_untrackable_once(raw_path)
+            return
         try:
             # Normalize path using realpath to get canonical path
             # This resolves symlinks and normalizes the path, making it
             # stable across os.chdir() calls
-            abs_path = normalize_path(os.path.realpath(str(path)))
+            abs_path = normalize_path(os.path.realpath(raw_path))
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
             return

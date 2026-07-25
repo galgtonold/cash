@@ -222,3 +222,66 @@ class TestPermanentInstallSemantics:
         assert not any(r.endswith("b.txt") for r in t1.get_accessed_files())
         assert any(r.endswith("b.txt") for r in t2.get_accessed_files())
         assert not any(r.endswith("a.txt") for r in t2.get_accessed_files())
+
+
+class TestUntrackableUrlWarning:
+    """A read cash cannot track must not vanish silently.
+
+    ``pd.read_parquet("s3://bucket/key")`` hands the tracker the URL as given.
+    ``os.path.realpath`` mangles it into a bogus local path, nothing resolves,
+    and ``snapshot_file_deps`` drops it — so the entry is stored with no file
+    dependency and hits forever even after the object changes. CAS-236.
+    """
+
+    def test_tracking_a_url_warns_that_it_cannot_be_tracked(self):
+        import warnings
+
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from cash.notebook.file_tracker import _reset_untrackable_warnings
+
+        _reset_untrackable_warnings()
+        tracker = FileAccessTracker()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tracker._track_path("s3://bucket/events.parquet")
+
+        hits = [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
+        assert len(hits) == 1, "an untrackable cloud read must warn"
+        assert "s3://bucket/events.parquet" in str(hits[0].message)
+
+    def test_the_same_url_warns_only_once(self):
+        import warnings
+
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from cash.notebook.file_tracker import _reset_untrackable_warnings
+
+        _reset_untrackable_warnings()
+        tracker = FileAccessTracker()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            for _ in range(3):
+                tracker._track_path("s3://bucket/events.parquet")
+
+        hits = [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
+        assert len(hits) == 1, "a read in a loop must not spam"
+
+    def test_local_paths_do_not_warn(self, tmp_path):
+        """Only URL-shaped paths warn — a plain local path is tracked normally,
+        and a missing/transient local file must not produce noise."""
+        import warnings
+
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from cash.notebook.file_tracker import _reset_untrackable_warnings
+
+        _reset_untrackable_warnings()
+        real = tmp_path / "data.csv"
+        real.write_text("a,b\n1,2\n")
+        tracker = FileAccessTracker()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            tracker._track_path(str(real))
+            tracker._track_path(str(tmp_path / "gone.csv"))
+            tracker._track_path(r"C:\Users\someone\data.csv")
+
+        hits = [w for w in caught if issubclass(w.category, CashCacheIneffectiveWarning)]
+        assert hits == [], f"local paths must not warn, got {[str(h.message) for h in hits]}"

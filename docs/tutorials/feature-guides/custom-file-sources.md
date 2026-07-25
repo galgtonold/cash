@@ -103,9 +103,18 @@ The patch set is a curated list. Reads that go through anything else slip past t
 - **Specialized format libraries** — `feather.read_dataframe`, `h5py.File`, `netCDF4.Dataset`, custom binary readers in vendored utilities.
 - **C extensions and subprocesses** — anything that opens a file descriptor outside the Python-level `open()` (e.g. a C library called via `ctypes`, a `subprocess.run` that reads the file) is invisible. The monkey-patch only intercepts Python-side dispatch.
 - **Database files** — `sqlite3.connect('db.sqlite')` or a SQLAlchemy engine pointed at a file URL doesn't open the file via the patched readers. The query itself goes through the driver and Cash sees nothing.
-- **Lazy scans you don't materialize** — `polars.scan_csv(...)` *is* tracked at scan time, but a remote URL passed to any reader is not (the path-arg handler at `src/cash/notebook/file_tracker.py` only records `str | bytes | os.PathLike` values that point at real filesystem entries).
+- **Lazy scans you don't materialize** — `polars.scan_csv(...)` *is* tracked at scan time.
+- **Remote URLs** — `pd.read_parquet("s3://bucket/key")`, `gs://`, `https://`. The reader hands cash the URL as given; there is no local file to fingerprint, so the dependency can't be recorded. Cash **warns** (`CashCacheIneffectiveWarning`) rather than dropping it silently, because an untracked dependency means the result caches and then never invalidates.
 
-For each of these gaps, use the `file_depends_on=` escape hatch.
+For the local-file gaps, use the `file_depends_on=` escape hatch below.
+
+!!! warning "`file_depends_on=` does not work for a remote URL"
+    It builds a `FileDataSource`, whose token is the file's mtime — and
+    `os.path.getmtime("s3://…")` fails, so the token is a constant `0.0` and the
+    entry **never invalidates**. For object storage, write a `DataSource` whose
+    `has_changed()` returns the object's **ETag / version-id / generation** (a
+    token that changes with the data and is identical on every machine), and
+    pass it via `depends_on=`. See [Data sources](../../api/data_sources.md#custom-data-sources).
 
 ## Escape hatch 1: `file_depends_on=` on `@cash.cache`
 

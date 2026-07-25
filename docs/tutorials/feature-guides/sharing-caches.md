@@ -127,6 +127,19 @@ absolute path from config — is what makes sharing pay off.
 The notebook keeps its statement-level caching for everything else; that part
 stays local, which is usually what you want anyway.
 
+!!! tip "Data in object storage? Track the object, not a path"
+    If the shared data already lives in S3/GCS/Azure, you sidestep the path
+    problem entirely — but cash does **not** auto-track a remote URL, and
+    `file_depends_on=` won't help either (its token is a local mtime, which for
+    a URL is a constant, so the entry never invalidates). Cash warns when it
+    sees an untrackable read.
+
+    Instead, write a `DataSource` whose `has_changed()` returns the object's
+    **ETag / version-id / generation** and pass it via `depends_on=`. That token
+    is derived from the object itself, so it is *identical on every machine* —
+    the portability problem disappears rather than being worked around. See
+    [Data sources](../../api/data_sources.md#custom-data-sources).
+
 ---
 
 ## The trust boundary
