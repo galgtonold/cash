@@ -48,17 +48,16 @@ def engineer_features(df: pd.DataFrame) -> pd.DataFrame:
 
 ### Step 3: Verify auto file tracking
 
-Cash detects `open()`, `pd.read_csv`, `np.load`, and friends inside your function body and folds the file's `(mtime, size)` into the cache key automatically. Check that it picked them up:
+Cash detects `open()`, `pd.read_csv`, `np.load`, and friends inside your function body and records each file's **content fingerprint** automatically. Check that it picked them up with `explain()`, which reports why the next call would hit or miss:
 
 <!-- test:expect-warning reason="load_data reads a file, so cash's impurity advisory fires on first call (it still caches) — realistic here" -->
 ```python
 load_data("data.csv")
-print(load_data.cache_info())
-# {'hits': 0, 'misses': 1, 'hit_rate': 0.0, 'total_time_saved': 0.0,
-#  'tracked_files': ['data.csv'], 'warnings': []}
+print(load_data.cache_info())     # {'hits': 0, 'misses': 1, 'hit_rate': 0.0, ...}
+print(load_data.explain("data.csv"))   # [HIT] ... — tracked files are fresh
 ```
 
-If `tracked_files` is empty but you *do* read external state — for instance, you read from a URL, a database, or your own loader function — declare it explicitly with `file_depends_on=` or a custom `DataSource`. See [Custom file sources](custom-file-sources.md).
+Now edit `data.csv` and call `explain()` again: the reason flips to `file_changed`, which is the proof the read was tracked. If it *doesn't* — because you read from a URL, a database, or your own loader — declare the dependency explicitly with `file_depends_on=` or a custom `DataSource`. See [Custom file sources](custom-file-sources.md).
 
 ### Step 4: Choose a backend
 
@@ -128,7 +127,7 @@ model = train(features)              # badge reports the decorator hit
 
 - [ ] Identify expensive notebook statements
 - [ ] Wrap each in a function and decorate with `@cache` / `@app.cache`
-- [ ] Verify `cache_info()['tracked_files']` lists the inputs you expect
+- [ ] Verify tracked inputs with `explain()` — edit a file, confirm the reason becomes `file_changed`
 - [ ] Choose a backend for the production environment
 - [ ] Add `cache_info()` to logging or end-of-run output
 - [ ] Test invalidation: change an input, rerun, confirm recomputation

@@ -11,7 +11,7 @@ The notebook layer makes a verdict on every statement: cache it, refuse to cache
 - The 200 MB model you just trained should hit disk, even though the smart-persistence policy would normally leave it in RAM.
 - The `np.random.randn` call is intentional and you don't need a warning every cell run.
 
-Four comment annotations and a magic-level TTL cover all of those cases. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
+Four general-purpose comment annotations and a magic-level TTL cover all of those cases (a fifth, the ML-specific `# @cash:cache-fit`, is covered in [Annotations](../../annotations.md#cashcache-fit-alias-cachefit)). They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
 
 ## Quick start
 

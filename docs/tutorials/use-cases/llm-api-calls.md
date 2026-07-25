@@ -51,7 +51,7 @@ async def chat_async(prompt: str, model: str = "claude-sonnet-4-6"):
     return msg.content[0].text
 ```
 
-See [Async Caching](../feature-guides/async-caching.md) for concurrency semantics — Cash coalesces concurrent calls to the same key into a single in-flight request.
+See [Async Caching](../feature-guides/async-caching.md) for concurrency semantics. Note that coalescing concurrent calls to the same key into a single in-flight request is **opt-in**: construct your instance as `Cash(use_locking=True)`. By default two `gather`ed calls for the same prompt on a cold cache both hit the API — worth knowing when the calls cost money.
 
 ## TTL for non-deterministic prompts
 

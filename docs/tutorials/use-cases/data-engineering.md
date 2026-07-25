@@ -41,17 +41,17 @@ if __name__ == "__main__":
     run("s3://bucket/raw.parquet")
 ```
 
-Change the `aggregate` function and re-run: `extract` and `normalize` are cache hits; only `aggregate` re-executes. Change the source file and re-run: `extract` misses (the file mtime moved), and everything downstream cascades.
+Change the `aggregate` function and re-run: `extract` and `normalize` are cache hits; only `aggregate` re-executes. Change the source file and re-run: `extract` misses (its recorded content fingerprint no longer matches), and everything downstream cascades.
 
 The first run on a fresh cache reads the parquet, normalises, aggregates, and writes. Every subsequent run with the same source path returns the aggregated frame in milliseconds — the whole pipeline collapses to three cache lookups and one parquet write.
 
 ## File-based source data
 
-Pandas readers (`read_parquet`, `read_csv`, `read_json`) are intercepted automatically and the source file's mtime folds into the cache key. Touch the file and `extract` misses on the next call. For non-pandas readers — Arrow, HDF5, custom binary formats — declare the dependency explicitly with `file_depends_on=` or `dynamic_depends_on=`. See [Custom File Sources](../feature-guides/custom-file-sources.md).
+Pandas readers (`read_parquet`, `read_csv`, `read_json`) are intercepted automatically and the source file's **content fingerprint** is recorded. Change the file's bytes and `extract` misses on the next call; a bare `touch` that leaves the content identical does **not** invalidate it. For non-pandas readers — Arrow, HDF5, custom binary formats — declare the dependency explicitly with `file_depends_on=` or `dynamic_depends_on=`. See [Custom File Sources](../feature-guides/custom-file-sources.md).
 
 ## Database and API sources
 
-Cash doesn't auto-track SQL connections or HTTP endpoints — there's no mtime to watch. Two practical patterns:
+Cash doesn't auto-track SQL connections or HTTP endpoints — there's no file on disk to fingerprint. Two practical patterns:
 
 **Snapshot to file first.** Land the query result on disk, then key your transforms off the snapshot:
 
@@ -103,7 +103,7 @@ This is the workflow Cash optimises for: you've spent two hours running a 30-day
 
 When the *code* changes, Cash sees the new function source and invalidates downstream automatically. The trickier case is when the schema changes but the code that consumes it doesn't — a new column appears in the source table, but `normalize` still does `df['amount'].fillna(0)` and doesn't notice. Two options:
 
-- **Re-snapshot and rely on file mtime.** If your snapshot file rewrites whenever the upstream schema moves, the file mtime change cascades through every cached step.
+- **Re-snapshot and rely on the file's content.** If your snapshot file is rewritten whenever the upstream schema moves, its changed content cascades through every cached step. (A rewrite that produces byte-identical output correctly changes nothing.)
 - **Bump a version dependency.** Wrap "schema version" in a `DataSource` subclass and pass it via `dynamic_depends_on=` (see the feature guide). Increment the version on schema changes; every cached step re-runs.
 
 ## Monitoring

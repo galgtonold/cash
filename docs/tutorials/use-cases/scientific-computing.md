@@ -109,7 +109,7 @@ See [Custom Hashers](../feature-guides/custom-hashers.md) for the full hook surf
 
 ## File-based input data
 
-Initial conditions, mesh files, observation data — anything you read with `pandas.read_*` is auto-tracked. The source file's mtime folds into the cache key, so editing `initial_conditions.csv` invalidates every cached call downstream of it.
+Initial conditions, mesh files, observation data — anything you read with `pandas.read_*` is auto-tracked by its **content fingerprint**, so editing `initial_conditions.csv` invalidates every cached call downstream of it (and re-saving it unchanged does not).
 
 For non-pandas formats (HDF5 via `h5py`, NetCDF, Zarr, custom binary), declare the dependency explicitly with `file_depends_on=` so Cash sees the file. See [Custom File Sources](../feature-guides/custom-file-sources.md).
 
