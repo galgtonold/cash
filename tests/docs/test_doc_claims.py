@@ -38,10 +38,15 @@ DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
 # published site (and are riddled with intentionally-stale links), so they are
 # out of scope — same blacklist the fence harness uses.
 _BLACKLIST_DIRS = {"superpowers"}
+# Files mkdocs.yml lists under ``exclude_docs`` — they are never built, so a
+# dead anchor in one would fail this (hard-gated) check for a page no reader
+# can reach. Keep in sync with ``exclude_docs`` in mkdocs.yml.
+_EXCLUDED_FILES = {"architecture_decisions.md"}
 ALL_MD = sorted(
     p
     for p in DOCS_ROOT.rglob("*.md")
     if not any(part in _BLACKLIST_DIRS for part in p.relative_to(DOCS_ROOT).parts)
+    and p.relative_to(DOCS_ROOT).as_posix() not in _EXCLUDED_FILES
 )
 
 

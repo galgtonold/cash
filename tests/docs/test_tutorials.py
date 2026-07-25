@@ -32,6 +32,10 @@ _DOCS_ROOT = REPO_ROOT / "docs"
 _EXAMPLES_ROOT = REPO_ROOT / "examples"
 # Directory names to skip wholesale when recursing into docs/ or examples/.
 _BLACKLIST_DIRS = {"superpowers"}
+# Files mkdocs.yml lists under ``exclude_docs``: never built, so their fences
+# can't mislead a reader and a failure there would block CI for an unreachable
+# page. Keep in sync with ``exclude_docs`` in mkdocs.yml.
+_EXCLUDED_DOCS_FILES = {"architecture_decisions.md"}
 
 
 def _discover_docs() -> list[Path]:
@@ -61,8 +65,10 @@ def _discover_docs() -> list[Path]:
 
     # 1. docs/ subtree
     for path in sorted(_DOCS_ROOT.rglob("*.md")):
-        rel_parts = path.relative_to(_DOCS_ROOT).parts
-        if any(part in _BLACKLIST_DIRS for part in rel_parts):
+        rel = path.relative_to(_DOCS_ROOT)
+        if any(part in _BLACKLIST_DIRS for part in rel.parts):
+            continue
+        if rel.as_posix() in _EXCLUDED_DOCS_FILES:
             continue
         _add_if_has_python(path)
 

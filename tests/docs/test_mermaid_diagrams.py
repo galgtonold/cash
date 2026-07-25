@@ -26,6 +26,9 @@ from pathlib import Path
 
 DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
 _BLACKLIST_DIRS = {"superpowers"}  # internal planning docs, not published
+# Files mkdocs.yml lists under ``exclude_docs`` — never built, so a broken
+# diagram in one can't reach a reader. Keep in sync with mkdocs.yml.
+_EXCLUDED_FILES = {"architecture_decisions.md"}
 
 _REAL_PARSER_NOTE = """\
 To re-verify against the real parser:
@@ -68,6 +71,8 @@ def _mermaid_blocks() -> list[tuple[Path, int, str]]:
     for md in sorted(DOCS_ROOT.rglob("*.md")):
         rel_parts = md.relative_to(DOCS_ROOT).parts
         if any(part in _BLACKLIST_DIRS for part in rel_parts):
+            continue
+        if md.relative_to(DOCS_ROOT).as_posix() in _EXCLUDED_FILES:
             continue
         text = md.read_text(encoding="utf-8")
         for m in _MERMAID_BLOCK_RE.finditer(text):
