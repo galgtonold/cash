@@ -1,36 +1,62 @@
 # `@pure` and `@stateful` — telling Cash what to trust
 
-Cash decides whether each statement in your notebook is safe to cache by reading its source code. That works well for ordinary numeric code, but the analyzer is necessarily conservative: anything it can't prove safe is treated as suspicious. `@pure` and `@stateful` are the two escape hatches that let you override the default — promise that a function really is safe to cache, or tell Cash to leave it alone entirely.
+Cash reads your code to decide what is safe to cache. `@pure` and `@stateful` are
+how you overrule that judgement — one says "trust this function", the other says
+"never cache anything that calls this".
 
-This tutorial walks through both decorators, the auto-detection machinery that backs them, and the six footguns that bite people in practice.
+This tutorial walks through both markers, the auto-detection machinery behind
+them, and the footguns that bite people in practice.
 
-!!! note "Two ways to steer the same purity engine"
-    One static analyzer backs both caching paths; how you override it differs:
+!!! note "Which marker do you need?"
+    They act on different mechanisms, and that decides which one is useful to you:
 
-    - **In a notebook** — the `@pure` / `@stateful` decorators (and
-      `mark_pure` / `mark_stateful` for third-party callables) covered here.
-    - **With `@cash.cache`** — the `strict=` and `assume_safe=` keywords, covered
-      in the [decorator guide](../../decorator.md#strict-and-assume_safe-purity-gates).
+    | You want to… | Use | Applies to |
+    |---|---|---|
+    | Stop a notebook statement from caching | **`@stateful`** | statements (`%cash_on`) **and** the decorator's analyzer |
+    | Vouch for a function so cash stops warning about it | **`@pure`** | the `@cash.cache` analyzer |
+    | Silence or harden a decorated function wholesale | `assume_safe=` / `strict=` | `@cash.cache` — see the [decorator guide](../../decorator.md#strict-and-assume_safe-purity-gates) |
 
-    Read on for the notebook side; skip to the decorator guide if you're wrapping
-    functions in a script.
+    `@pure` does **not** turn caching on for a notebook statement — statements
+    that call ordinary helpers already cache. Use `@stateful` when you need to
+    stop one.
 
 ## Why this exists
 
-Cash's notebook caching layer inspects every cell with an AST visitor before deciding to cache the result. The visitor flags mutations to top-level variables (`data.append(...)`), attribute writes, file I/O, network calls, and a long list of "looks side-effectful" patterns. If the cell looks risky, Cash refuses to cache it — replaying a cached return value when the real call would have written to disk or modified a global would be a serious bug.
+Cash inspects your code with an AST visitor before deciding what to cache. It
+flags mutations to top-level variables (`data.append(...)`), attribute writes,
+file I/O, network calls, and a long list of "looks side-effectful" patterns —
+because replaying a cached return value when the real call would have written to
+disk or posted to an API would be a serious bug.
 
-The downside of conservatism is false positives. A perfectly deterministic helper function whose body Cash can't see (because it lives in an imported module, or because Cash's heuristic happens to misfire) ends up tagged as uncacheable. The user knows it's safe, but Cash can't prove it.
+But cash can only see what's in front of it. A call into a function it can't
+introspect is a judgement call, and it can be wrong in either direction:
 
-The two decorators close that loop:
+- **It can't tell that your side-effecting helper matters.** A statement calling
+  `post_to_slack(df)` looks like any other call, and its return value caches
+  happily — so the second run silently skips the notification. `@stateful` is
+  how you say "never cache a statement that calls this."
+- **It can flag a function you know is fine.** The `@cash.cache` analyzer warns
+  about callees that look impure. `@pure` is how you say "I've audited this,
+  stop warning" — the warning is advisory, so this is about noise, not
+  correctness.
 
-- `@pure` is your sworn statement that a function has no side effects worth caring about — Cash should trust it and cache the cell.
-- `@stateful` is the opposite — even if the call looks innocent, Cash must never cache cells that invoke it.
-
-Cash also runs a fallback AST-based heuristic (`analyze_function_purity`) on undeclared functions so you don't have to decorate everything. The decorators only matter when the heuristic would get it wrong.
+Cash also runs a fallback heuristic (`analyze_function_purity`) on undeclared
+functions, so you don't have to mark everything. The markers matter when you
+know something the analyzer cannot.
 
 ## Quick start
 
-Here's a function Cash refuses to cache by default — it calls a user-defined helper that Cash can't introspect easily:
+The two markers do different jobs, and picking the right one starts with knowing
+which mechanism you're steering:
+
+- **`@stateful`** stops a **notebook statement** from being cached at all. This is
+  the marker that changes what `%cash_on` does.
+- **`@pure`** tells the purity **analyzer** to trust a function, silencing the
+  warning that [`@cash.cache`](#purity-on-the-decorator-cashcache) raises about
+  it. It does *not* decide whether a notebook statement caches.
+
+Start from the default: an ordinary helper needs no marker at all. Cash already
+caches statements that call it, and a re-run restores:
 
 ```python { .nb-cell }
 import cash
@@ -39,34 +65,44 @@ import cash
 def featurize(df):
     return df.assign(score=df["a"] * df["b"])
 
-# Cell:
-result = featurize(my_df)
+result = featurize(my_df)      # re-run the cell: the badge reads RESTORED
 ```
-
-Without `@pure`, Cash plays it safe and the badge shows a NOT CACHED row:
-
-<iframe class="cash-badge" src="/_badges/not_cached_purity.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
-
-Slap `@pure` on `featurize` and Cash will happily cache the result:
-
-```python { .nb-cell }
-from cash import pure
-
-@pure
-def featurize(df):
-    return df.assign(score=df["a"] * df["b"])
-
-# Cell:
-result = featurize(my_df)
-```
-
-Next run, the badge flips to RESTORED:
 
 <iframe class="cash-badge" src="/_badges/purity_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-That's the entire workflow: import, decorate, re-run.
+Now mark a helper `@stateful` — the side effect is the point of calling it, so a
+replayed return value would be wrong. Cash stops caching every statement that
+calls it, and the badge names the reason:
 
-## `@pure` — "trust me, this caches"
+<!-- test:skip reason="illustrative — posts to a fake endpoint; the @stateful verdict is the point, not the call" -->
+```python { .nb-cell }
+from cash import stateful
+
+@stateful
+def log_run(df):
+    requests.post("https://hooks.example.com/run", json={"rows": len(df)})
+
+log_run(my_df)                 # NOT CACHED — "Calls @stateful function"
+```
+
+<iframe class="cash-badge" src="/_badges/not_cached_purity.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+
+That is the whole notebook-statement story: **`@stateful` is the lever; nothing
+else is required.** `@pure` earns its keep on the decorator — see
+[Purity on the decorator](#purity-on-the-decorator-cashcache).
+
+## `@pure` — "trust me, this is safe"
+
+!!! note "`@pure` does not make a notebook statement cacheable"
+    A statement calling an unmarked helper already caches — there is no
+    "refused until you vouch for it" state to rescue. `@pure` is a promise to
+    the **purity analyzer**, and the analyzer is what
+    [`@cash.cache`](#purity-on-the-decorator-cashcache) consults: marking a
+    callee `@pure` silences the `CashImpurityWarning` that would otherwise fire
+    for it. That applies to decorated functions written in a notebook cell too —
+    it's the decorator path that matters, not the file it lives in. In the
+    statement path (`%cash_on`) the only marker that changes a verdict is
+    [`@stateful`](#stateful-this-should-never-cache).
 
 ### When to use it
 
@@ -110,9 +146,14 @@ When the statement processor evaluates a cell, it looks at every bare-name call 
 1. Returns `False` (not stateful) if the name is a known-pure builtin like `len` or `sum`.
 2. Returns `True` if the resolved object has `_cash_stateful = True`.
 3. Returns `False` if the resolved object has `_cash_pure = True` — the path `@pure` activates.
-4. Otherwise falls back to `analyze_function_purity` and trusts that result.
+4. Otherwise falls back to `analyze_function_purity`, and returns `False` regardless.
 
-So `@pure` is effectively a short-circuit: Cash never tries to peek inside, never runs the AST heuristic — it just believes you.
+Read steps 3 and 4 together and the consequence is clear: **only step 2 changes
+the outcome.** `@pure` short-circuits to the same "not stateful" answer the
+fallthrough already gives, so in the statement path it is a performance and
+predictability nicety — Cash never peeks inside and never runs the AST heuristic
+— not a switch that turns caching on. Its load-bearing use is on the decorator,
+below.
 
 ### When NOT to use it
 

@@ -380,4 +380,4 @@ bindable via a `CASH_*` env var or a TOML file — see the
 - [The notebook path](how-it-works/notebook-path.md) — how a cell runs, end to end.
 - [Staying correct: invalidation](how-it-works/invalidation.md) — how cash proves a cached value is still valid.
 - [Notebook API reference](api/notebook.md) — programmatic entry points for tooling.
-- [Purity decorators](tutorials/feature-guides/purity-decorators.md) — `@pure` / `@stateful` for declaring helper purity.
+- [Purity decorators](tutorials/feature-guides/purity-decorators.md) — `@stateful` to stop a statement from caching (and where `@pure` actually applies).

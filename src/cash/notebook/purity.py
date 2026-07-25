@@ -18,10 +18,15 @@ _PURE_ATTR = '_cash_pure'
 _STATEFUL_ATTR = '_cash_stateful'
 
 def pure(func: F) -> F:
-    """Mark a function as pure (no side effects).
+    """Mark a function as pure (no side effects) for the purity analyzer.
 
-    Pure functions are always safe to cache. The notebook caching system
-    will skip mutation detection for code that only calls pure functions.
+    This is a promise to the analyzer, not a caching switch. Its load-bearing
+    effect is on the ``@cash.cache`` decorator: a callee marked pure is trusted,
+    so the ``CashImpurityWarning`` that would otherwise fire for it is
+    suppressed (see :mod:`cash.purity_analyzer`). In the notebook *statement*
+    path it changes no verdict — an unmarked helper's statements already cache,
+    and ``@pure`` merely short-circuits the AST heuristic to the same answer.
+    Use :func:`stateful` when you need to stop a statement from caching.
 
     Args:
         func: The function to mark as pure.

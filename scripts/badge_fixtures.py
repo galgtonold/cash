@@ -251,15 +251,16 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
-    # §5.f — function called without @pure; Cash can't verify it has no side
-    # effects, so it plays it safe and skips caching.
+    # §5.f — the statement calls a function the user marked @stateful, so its
+    # return value alone doesn't capture the effect and Cash refuses to cache.
+    # The reason string must match what cacheability_decision.py actually emits.
     "not_cached_purity": [
         {
             "status": "COMPUTED",
-            "code": "result = featurize(my_df)",
+            "code": "log_run(my_df)",
             "total_time": 0.094,
-            "evaluated_vars": ["result"],
-            "uncacheable_reasons": ["function purity unknown"],
+            "evaluated_vars": [],
+            "uncacheable_reasons": ["Calls @stateful function"],
             "is_upstream": False,
         },
     ],
