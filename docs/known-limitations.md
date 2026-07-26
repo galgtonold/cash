@@ -292,6 +292,43 @@ The same applies to `while` loops that accumulate, and to `for` loops that build
 
 If you are unsure which side of the line a particular loop is on, do not infer it from the iteration count — check `%cash_stats` or the badge, which report what actually happened.
 
+### Reordering a loop's items re-runs the tail
+
+A loop body that folds into a **running accumulator** (`total += f(x)`, `acc = acc + f(x)`) reads the accumulator as an input, so iteration *k*'s cache key encodes every iteration before it. Reuse therefore survives *appending* to the list but stops at the first position where the sequence diverges — everything from there on is a different key and re-runs, even if the same values appear later in a different order.
+
+<!-- test:skip reason="illustrative: `compute` stands in for the reader's own slow function" -->
+```python { .nb-cell }
+s = 0
+for x in [1, 10, 5]:        # compute() sleeps 1s
+    s += compute(x)
+```
+
+Measured on exactly that cell:
+
+| Change to the list | Iterations re-run | Cost |
+|---|---|---|
+| `[1, 10]` → `[1, 10, 5]` (append) | just the new one | 1 s |
+| `[1, 10, 5]` → `[1, 5, 10]` (swap the last two) | 2 of 3 | 2 s |
+| `[1, 10, 5]` → `[5, 10, 1]` (new first element) | all 3 | 3 s |
+| back to `[1, 10, 5]` | none — those keys are still cached | 0 s |
+
+This is the fold, not the loop: drop the accumulator (`y = compute(x)`, or a comprehension) and reordering is fully cached, because each iteration then depends only on its own loop variable.
+
+**What to do:** if the expensive part is the *call* rather than the statement around it, cache the call. `@cash.cache` keys on the function's arguments and source — not on execution history — so it is order-independent by construction, and it composes with `%cash_on`:
+
+<!-- test:skip reason="illustrative: pairs with the loop above; `compute` is the reader's own" -->
+```python { .nb-cell }
+@cash.cache
+def compute(x):
+    ...
+
+s = 0
+for x in [5, 10, 1]:     # reordered: the fold's per-iteration cache misses,
+    s += compute(x)      # but every compute() call still hits. 0s.
+```
+
+The statement-level cache still misses on the reorder and the loop still re-executes — but each `compute(x)` hits its own entry, so the *work* is not repeated. Adding a genuinely new value costs exactly one call.
+
 ### Editing without saving
 
 Editing a cell in VS Code without saving the notebook file can make the cell-ID match fail, which skips the upstream check and misses the cache for statements that did not change. Values stay correct. **What to do:** save the notebook.

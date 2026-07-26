@@ -69,33 +69,49 @@ cell flips from `EXECUTED` (ochre) to `RESTORED` (green):
 
 See [Reading the Cash badge](../badges.md) for the full anatomy.
 
-### Change one thing upstream — only what depends on it re-runs
+### Change one thing upstream — run only the cell you care about
 
-This is the part a plain cache can't do. Suppose one cell sets a parameter, another
-does expensive work, and a third depends on the parameter:
+This is the part a plain cache can't do. Cash answers "what depends on this?" per
+**statement**, so it can repair *part* of a cell you never ran.
 
-<!-- test:skip reason="illustrative — references missing data + build_features()" -->
+Suppose Cell 2 mixes expensive work that ignores `THRESHOLD` with a cheap step that
+reads it:
+
+<!-- test:skip reason="illustrative — references undefined build_features()/score()" -->
 ```python { .nb-cell }
 # Cell 1
-THRESHOLD = 10                       # ← change me to 20, then Run all
+THRESHOLD = 10                          # ← change me to 15
 
-# Cell 2 — expensive, and unrelated to THRESHOLD
-df = pd.read_csv('big.csv')
-features = build_features(df)        # stays RESTORED
+# Cell 2 — one statement ignores THRESHOLD, the other reads it
+features = build_features(df)           # expensive (minutes), THRESHOLD-independent
+flagged  = score(features, THRESHOLD)   # cheap, THRESHOLD-dependent
 
-# Cell 3 — depends on THRESHOLD
-outliers = features[features.score > THRESHOLD]
+# Cell 3
+print(f"{len(flagged)} rows flagged")
 ```
 
-Change `THRESHOLD` and **Run all**: Cell 2 stays green (`RESTORED` — cash saw its
-inputs didn't change), and only Cell 3 recomputes. No decorators, no dependency
-graph to declare. And if you jump straight to Cell 3 after a kernel restart, cash
-restores or re-runs the upstream cells it needs — restored straight from cache when
-nothing changed.
+Change `THRESHOLD`, then **run Cell 3 by itself** — not *Run All*, and without
+touching Cell 2. Cash walks back from what Cell 3 needs, works out that `flagged`
+is stale but `features` is not, and repairs exactly that:
 
-> `joblib.Memory` only sees a call's arguments (and the wrapped function's own code);
-> `jupyter-cache` re-runs the whole notebook when any cell changes. Cash tracks the
-> lineage between statements, so it recomputes exactly what changed and nothing else.
+- `build_features(df)` **does not run again** — cash reuses the value it already has,
+- `score(features, THRESHOLD)` re-runs, once, with the new threshold,
+- Cell 3 prints the new number.
+
+You get the same result you'd get from *Run All*, at the cost of the one cheap
+statement that actually changed. That's the difference between caching *cells* and
+tracking lineage *between statements*: the unit of repair is the statement, and cash
+will reach into a cell you didn't run to fix just the part that went stale.
+
+Nothing to declare — no decorators on Cell 2, no dependency graph. And the same
+walk-back works from cold: jump straight to Cell 3 after a kernel restart and cash
+restores or re-runs the upstream statements it needs.
+
+**Cell 3's badge after the change.** The `Upstream` section lists what cash had to
+repair in cells you didn't run. `features = build_features(df)` isn't there — it
+never needed touching:
+
+<iframe class="cash-badge" src="/_badges/quickstart_partial_upstream.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 ### It follows your functions and loops
 
@@ -103,8 +119,8 @@ Cash keys on the **source** of what you run, not the text of a cell:
 
 - Edit a function's body — or a helper it calls — and the statements that use it
   recompute (the badge marks it **changed**). It's not blind text matching.
-- In a loop, each iteration is cached on its own — change one case and the rest
-  still restore:
+- In a loop, each iteration is cached on its own — add a case and the ones you
+  already ran still restore:
 
 <!-- test:skip reason="illustrative — references undefined fetch_and_model/prices" -->
 ```python { .nb-cell }
@@ -112,6 +128,18 @@ for ticker in ["AAPL", "MSFT", "GOOG"]:
     prices[ticker] = fetch_and_model(ticker)   # each iteration cached separately
 ```
 
+!!! warning "Collect with an assignment or a store, not `.append()`"
+    A subscript store like the one above caches per iteration. A
+    `results.append(...)` does **not** — cash has no snapshot that would
+    reproduce an append, so that body re-executes on every run. Build the list
+    with a comprehension (`results = [fetch_and_model(t) for t in tickers]`) or
+    store into a dict by key.
+
+Two more things worth knowing before you lean on loop caching: iteration reuse
+follows the *order* of the items when the body accumulates (appending to the list
+is free; reordering re-runs the tail), and a long loop can switch to whole-loop
+caching. Both are measured in
+[Known limitations](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 See [The notebook path](../how-it-works/notebook-path.md) for how partial hits work.
 
 ### Statement-level, not cell-level
@@ -145,8 +173,8 @@ read it recompute, no annotation needed. See the [notebook reference](../noteboo
 
 The cache lives on disk, not just in memory. Restart the kernel, re-run a cell, and
 cash restores the value instead of replaying the whole chain — a fresh kernel picks
-up where you left off. (`%store` and `diskcache` persist too, but don't know what's
-still *valid*; cash proves freshness through lineage.)
+up where you left off, and each restored value has been checked against its lineage
+first, so you are not trusting a stale snapshot.
 
 ---
 
@@ -177,9 +205,9 @@ cheaper ones are kept in memory for the session (see the [cost model](../cost-mo
 
 ### Pass DataFrames and arrays — they just work
 
-`functools.lru_cache` refuses a DataFrame (`TypeError: unhashable type: 'DataFrame'`).
-Cash hashes by **content**, so unhashable inputs are fine — and two *content-equal*
-frames hit the same entry, even if they're different objects:
+Arguments don't need to be hashable. Cash hashes by **content**, so a DataFrame or
+array is fine — and two *content-equal* frames hit the same entry, even if they're
+different objects:
 
 <!-- test:skip reason="illustrative — references undefined df/weights" -->
 ```python
@@ -207,10 +235,9 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-Editing `clean`, two calls down, invalidates `pipeline`'s cached results.
-`lru_cache`, `diskcache.memoize`, and even `joblib.Memory` (which hashes only the
-decorated function, not its callees) all miss this. Helpers are resolved within the
-module; for cross-module dependencies, name them with `depends_on=`.
+Editing `clean`, two calls down, invalidates `pipeline`'s cached results — you do
+not have to remember which entries a helper edit reaches. Helpers are resolved
+within the module; for cross-module dependencies, name them with `depends_on=`.
 
 ### File reads are tracked here too
 
