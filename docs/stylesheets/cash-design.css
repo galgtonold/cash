@@ -501,6 +501,11 @@
   border-radius: 0 var(--cash-radius-code) var(--cash-radius-code) 0;
   /* Clip the ::before header corners inside the container */
   overflow: hidden;
+  /* `overflow: hidden` makes this a BFC, so the inner <pre>'s margins no
+     longer collapse OUT through the container — they became interior space
+     and the blue rail ran ~16px past the last line of code. The `> pre` rule
+     below zeroes both margins; the block's own spacing lives here instead. */
+  margin: 1em 0;
 }
 
 /* "In [ ]:" header bar — instantly recognizable to any Jupyter user */
@@ -518,9 +523,11 @@
   line-height: 1.4;
 }
 
-/* Flush the <pre> against the header — no gap, no double rounding */
+/* Flush the <pre> against the header — no gap, no double rounding, and no
+   trapped bottom margin overshooting the rail (see the BFC note above) */
 .md-typeset .highlight.nb-cell > pre {
   margin-top: 0;
+  margin-bottom: 0;
   border-top-left-radius: 0 !important;
   border-top-right-radius: 0 !important;
 }
