@@ -11,6 +11,7 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
 | `# @cash:allow-random` | `allowrandom` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random-alias-allowrandom). |
 | `# @cash:cache-fit` | `cachefit` | no | Opt a bare `estimator.fit(X, y)` in to caching. Off by default — see [below](#cashcache-fit-alias-cachefit). |
+| `# @cash:cache-calls` | `cachecalls` | no | Cache the expensive **call inside** the statement rather than the statement. Off by default — see [below](#cashcache-calls-alias-cachecalls). |
 
 A minimal example:
 
@@ -205,6 +206,71 @@ model = train_model(X_train, y_train)
 An unseeded opted-in fit warns that the cached model is a frozen replay (the
 `.fit()`'s internal randomness is invisible to the AST scanner);
 [`# @cash:allow-random`](#cashallow-random-alias-allowrandom) suppresses it.
+
+### `# @cash:cache-calls` (alias: `cachecalls`)
+
+Moves the cache **one level down**, from the statement to the expensive call
+inside it. Use it when the statement is a cheap wrapper around slow work —
+which is exactly when statement-level caching cannot help:
+
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own" -->
+```python { .nb-cell }
+# @cash:cache-calls
+for x in items:
+    results.append(compute(x))     # compute(x) is cached; the append re-runs
+```
+
+Two shapes benefit, and neither can be fixed at statement level:
+
+- **A call inside an in-place mutation.** `results.append(compute(x))` mutates an
+  object that already exists, so cash refuses to cache the statement — there is
+  no snapshot that would reproduce an append. With the directive, `compute(x)` is
+  cached and the append still executes, which is both faster *and* more faithful:
+  the mutation genuinely happens on every run.
+- **A call inside an accumulator fold.** `s += compute(x)` reads `s`, so each
+  iteration's key encodes every iteration before it and reordering the list
+  re-runs everything after the first change. A call cache keys on arguments, not
+  on execution history, so it is order-independent by construction. See
+  [Reordering a loop's items](known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
+
+**What is eligible.** One rule: a call qualifies when it does **not** read the
+statement's assignment or mutation target. If it does, it *is* the fold and
+nothing order-independent can be pulled out of it:
+
+| Statement | Cached call |
+|---|---|
+| `s += compute(x)` | `compute(x)` |
+| `out.append(compute(x))` | `compute(x)` |
+| `prices[t] = compute(t)` | `compute(t)` |
+| `s = merge(s, x)` | none — the call reads `s` |
+| `df.sort_values(inplace=True)` | none — the mutation *is* the work |
+
+Calls already wrapped in `@cash.cache` are left alone (they are on this path
+already), and builtins are skipped so a hot loop doesn't pay for a cache key per
+`len()`. Bound methods are not intercepted yet.
+
+The directive attaches to the statement below it and the backward scan stops at
+the first non-comment line, so on a loop put it on the **header**:
+
+<!-- test:skip reason="illustrative: contrasts directive placement" -->
+```python { .nb-cell }
+s = 0
+# @cash:cache-calls                 <- on the header: reaches the body
+for x in items:
+    s += compute(x)
+```
+
+Hits show up on the badge in the same place as decorated calls (`compute(): 2/3
+cached`), so you can confirm it engaged.
+
+!!! warning "Opt-in for a reason"
+    Cash's statement path judges a statement's callees only against the
+    forbidden-function scan and explicit `@stateful` marks. Routing a call
+    through the cache applies the *stricter* decorator gate — but it also means
+    statements cash previously declined for an unrelated reason (the mutation)
+    are purity-judged for the first time. If `compute` has side effects the
+    analyzer can't see, a cached call will skip them. Opt in per statement, and
+    check the badge shows the hits you expect.
 
 ### The two warnings
 

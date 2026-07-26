@@ -281,7 +281,7 @@ for e in entities:          # several statements per iteration, >50 of them,
 
 When it does happen the badge says so (`Storage uncacheable · Reason: In-place mutation on: out`) and gives the fix, so you are not misled about *whether* it cached — but nothing tells you which threshold you crossed.
 
-**What to do:** assign the result instead of appending to it. A comprehension is cached as a single value at any length, and sidesteps the question entirely:
+**What to do:** either cache the call instead of the statement — `# @cash:cache-calls` on the loop header caches `fetch(e)` and lets the append re-run, see [the directive](annotations.md#cashcache-calls-alias-cachecalls) — or assign the result instead of appending to it. A comprehension is cached as a single value at any length, and sidesteps the question entirely:
 
 <!-- test:skip reason="illustrative: the comprehension rewrite of the loop above" -->
 ```python
@@ -314,7 +314,19 @@ Measured on exactly that cell:
 
 This is the fold, not the loop: drop the accumulator (`y = compute(x)`, or a comprehension) and reordering is fully cached, because each iteration then depends only on its own loop variable.
 
-**What to do:** if the expensive part is the *call* rather than the statement around it, cache the call. `@cash.cache` keys on the function's arguments and source — not on execution history — so it is order-independent by construction, and it composes with `%cash_on`:
+**What to do:** cache the *call* rather than the statement around it — a call cache keys on arguments, not on execution history, so it is order-independent by construction. One directive does it in place:
+
+<!-- test:skip reason="illustrative: pairs with the loop above; `compute` is the reader's own" -->
+```python { .nb-cell }
+s = 0
+# @cash:cache-calls
+for x in [5, 10, 1]:     # reordered: the per-iteration entries still miss,
+    s += compute(x)      # but every compute(x) hits. 0s.
+```
+
+See [`# @cash:cache-calls`](annotations.md#cashcache-calls-alias-cachecalls) for what qualifies. Adding a genuinely new value still costs exactly one call.
+
+The same effect is available by hand if you'd rather decorate the function — `@cash.cache` keys the same way and composes with `%cash_on`:
 
 <!-- test:skip reason="illustrative: pairs with the loop above; `compute` is the reader's own" -->
 ```python { .nb-cell }

@@ -310,6 +310,7 @@ except ImportError:
 from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
+from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
 from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
 from ..cacheability import (
@@ -404,6 +405,13 @@ class StatementProcessor:
         # Source hashes of entropy-reseed statements already warned about, so the
         # "seed(None) does not make everything below it fresh" note fires once.
         self._warned_entropy_reseed: set[str] = set()
+
+        # Sub-expression caching (CAS-243), built on first use under
+        # ``# @cash:cache-calls``. Held with the Cash instance it wraps so a
+        # ``reset_session()`` that swaps the instance rebuilds it rather than
+        # resolving callees against a dead backend.
+        self._call_cache: Any | None = None
+        self._call_cache_owner: Any | None = None
 
         self.analytics_manager = AnalyticsManager()
 
@@ -744,8 +752,12 @@ class StatementProcessor:
                 )
                 return hit_result
 
+        _exec_code, _exec_tree = self._code_and_tree_for_execution(
+            code, _parsed_tree, annotation,
+        )
         error_metrics, result, captured, execution_time, accessed_files, accessed_remote = self._execute_and_drain(
-            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, is_last,
+            _exec_code, stream_output, skip_cache, _exec_tree,
+            metrics, process_start, silent, is_last,
         )
         if error_metrics is not None:
             return error_metrics
@@ -940,8 +952,12 @@ class StatementProcessor:
                 )
                 return hit_result
 
+        _exec_code, _exec_tree = self._code_and_tree_for_execution(
+            code, _parsed_tree, annotation,
+        )
         error_metrics, result, captured, execution_time, accessed_files, accessed_remote = await self._execute_and_drain_async(
-            code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, is_last,
+            _exec_code, stream_output, skip_cache, _exec_tree,
+            metrics, process_start, silent, is_last,
         )
         if error_metrics is not None:
             return error_metrics
@@ -1518,6 +1534,59 @@ class StatementProcessor:
         if '# __iteration_context__:' in code or '# control_context:' in code:
             return
         self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
+
+    def _code_and_tree_for_execution(
+        self, code: str, tree: ast.Module | None, annotation: Any | None
+    ) -> tuple[str, ast.Module | None]:
+        """The ``(code, tree)`` to execute, with eligible calls routed via cache.
+
+        Under ``# @cash:cache-calls`` (CAS-243) each eligible call has its
+        callee wrapped so it resolves to a cached counterpart at call time —
+        ``compute(x)`` becomes ``__cash_call__(compute)(x)``. That fixes the two
+        shapes statement-level caching structurally cannot: an expensive call
+        inside an in-place mutation (skip-cached, so never reused) and one
+        inside an accumulator fold (cached, but keyed on the running prefix, so
+        a reorder re-runs the tail).
+
+        **Both halves are returned, and both are load-bearing.**
+        :meth:`_execute_statement` compiles the *tree* only when the statement's
+        last node is an ``ast.Expr`` (so the value can be echoed); every other
+        shape compiles the *code string*. Handing back a rewritten tree alone
+        therefore worked for ``out.append(compute(x))`` and was silently
+        discarded for ``s += compute(x)`` — the accumulator fold, which is half
+        the point of the feature.
+
+        Returns the inputs unchanged when the directive is absent, when nothing
+        is eligible, or on any failure: a caching optimisation must never be the
+        reason a statement stops running.
+        """
+        if annotation is None or not getattr(annotation, 'cache_calls', False):
+            return code, tree
+        cash_instance = self._get_cash_instance()
+        if cash_instance is None:
+            return code, tree
+        try:
+            rewritten, count = wrap_eligible_calls(
+                tree if tree is not None else ast.parse(code)
+            )
+            if not count:
+                return code, tree
+            new_code = ast.unparse(rewritten)
+            # ``ast.unparse`` drops a trailing ';', which _execute_statement
+            # reads as "suppress the repr". Losing it would make a rewritten
+            # statement echo a value the user silenced.
+            if code.rstrip().endswith(';'):
+                new_code += ';'
+            if self._call_cache is None or self._call_cache_owner is not cash_instance:
+                self._call_cache = CallCache(cash_instance)
+                self._call_cache_owner = cash_instance
+            self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
+            return new_code, rewritten
+        except (SyntaxError, ValueError, TypeError, AttributeError):
+            logger.debug(
+                "%s cache-calls rewrite failed; executing unmodified", _LOG_PROCESSOR
+            )
+            return code, tree
 
     def _execute_and_drain(
         self,
