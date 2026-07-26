@@ -35,9 +35,13 @@ A sweep is just a loop over arguments. Each combination is an independent cache 
 ```python
 results = {}
 for alpha in [0.1, 0.5, 1.0, 2.0]:
-    for seed in range(10):
-        results[(alpha, seed)] = simulate(10_000, 0.01, alpha, seed)
+    for seed in range(3):
+        results[(alpha, seed)] = simulate(1_000, 0.01, alpha, seed)
 ```
+
+Deliberately small so you can paste and run it. A real sweep is the same three
+lines with bigger numbers — and that is the point: adding seeds or alphas later
+only computes the combinations you haven't run yet.
 
 First run: 40 simulations execute and get cached. Re-running the same loop: 40 cache hits, no computation. Add `alpha=4.0` to the list: 10 new runs, the existing 40 still hit. This is the workflow that justifies the cache directory's existence.
 
