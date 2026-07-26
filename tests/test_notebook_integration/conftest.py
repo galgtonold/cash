@@ -987,8 +987,40 @@ class NotebookTestRunner:
             self._init_cash()
         elif cash_already_initialized:
             self._cash_initialized = True
-        
+        else:
+            self._force_cash_off()
+
         return self
+
+    def _force_cash_off(self) -> None:
+        """Guarantee a ``with_cash=False`` kernel really has caching disabled.
+
+        A fresh kernel is not necessarily a bare one. ``cash autoload`` installs
+        an IPython **startup file** (``~/.ipython/profile_default/startup/
+        00-cash.py``) that imports cash and runs ``%cash_on`` in every session
+        on that machine — so on a developer box with autoload enabled, every
+        "cash off" control arm in this suite is actually cash ON, reporting the
+        same warm-count as a genuine cache hit and silently proving nothing.
+
+        The suite must not depend on the developer having left a product feature
+        switched off, so the control is asserted rather than assumed. Best
+        effort: if the magics were never registered there is nothing to turn
+        off, which is the state we wanted anyway.
+        """
+        snippet = (
+            "try:\n"
+            "    get_ipython().run_line_magic('cash_off', '')\n"
+            "except Exception:\n"
+            "    pass\n"
+        )
+        try:
+            self._run_async(
+                self.client.kc._async_execute_interactive(
+                    snippet, store_history=False, output_hook=lambda _m: None,
+                )
+            )
+        except Exception:  # noqa: BLE001 - a control that can't be forced off
+            pass          # is caught by assert_cash_active, not hidden here
     
     def _start_new_kernel(self) -> None:
         """Start a new kernel (not from pool), retrying a flaky boot.
@@ -1047,14 +1079,27 @@ class NotebookTestRunner:
         hit -- so the comparison silently proves nothing. Assert on this in any
         test whose conclusion depends on an arm really being cash-off.
         """
+        # Read ``_auto_cache_enabled`` off the registered CashMagics instance,
+        # which ``ip.register_magics()`` files under its class name.
+        #
+        # This used to look for ``ip._cash_magics_instance`` -- an attribute
+        # cash never sets -- so the precise limb was dead code and the probe
+        # ALWAYS fell through to "are the cash magics registered?". That is a
+        # different question with a different answer: registration happens when
+        # a ``Cash()`` is constructed (``register_magic`` defaults True), so
+        # merely importing cash makes a genuinely cash-OFF kernel report ON.
+        # The hook is installed but inert while ``_auto_cache_enabled`` is
+        # False, so nothing is being cached and the arm really is a control.
+        #
+        # There is deliberately no fallback to the registration signal. Falling
+        # back is what produced the false positive, and a guard that answers a
+        # question it wasn't asked is worse than one that says "off".
         probe = (
             "try:\n"
             "    _ip = get_ipython()\n"
-            "    _lm = _ip.magics_manager.magics.get('line', {})\n"
-            "    _loaded = 'cash_on' in _lm\n"
-            "    _mag = getattr(_ip, '_cash_magics_instance', None)\n"
-            "    _auto = bool(getattr(_mag, '_auto_cache_enabled', False)) if _mag else None\n"
-            "    _on = bool(_loaded) if _auto is None else bool(_auto)\n"
+            "    _reg = getattr(_ip.magics_manager, 'registry', {})\n"
+            "    _mag = _reg.get('CashMagics')\n"
+            "    _on = bool(getattr(_mag, '_auto_cache_enabled', False))\n"
             "except Exception:\n"
             "    _on = False\n"
             "print('CASH_ACTIVE=' + ('1' if _on else '0'))"
