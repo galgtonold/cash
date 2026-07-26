@@ -1759,13 +1759,29 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
 # Decorator section
 # ---------------------------------------------------------------------------
 
-def _decorator_call_row_html(c: DecoratorCall, max_time: float) -> str:
+#: Tag shown on a call cash wrapped itself under ``# @cash:cache-calls``, as
+#: opposed to one the user decorated. Same cache, but the reader needs to know
+#: which mechanism put it there — and whether their directive engaged.
+_INTERCEPTED_TAG = "@cache-calls"
+_INTERCEPTED_TITLE = "cached by # @cash:cache-calls, not by a decorator"
+
+
+def _cache_tag_html(intercepted: bool) -> str:
+    if intercepted:
+        return (f'<span class="c3-cache-tag" title="{_INTERCEPTED_TITLE}">'
+                f'{_INTERCEPTED_TAG}</span>')
+    return '<span class="c3-cache-tag">@cache</span>'
+
+
+def _decorator_call_row_html(
+    c: DecoratorCall, max_time: float, *, intercepted: bool = False
+) -> str:
     kind = theme.kind_of(c.status.value)
     rail = theme.rail_color(c.status.value)
     short_name = c.func_name.split(".")[-1] if "." in c.func_name else c.func_name
     status_text = "HIT" if c.status is BadgeStatus.RESTORED else "MISS"
     code = (
-        f'<span class="c3-cache-tag">@cache</span> '
+        f'{_cache_tag_html(intercepted)} '
         f'<span class="c3-kw">{_esc(short_name)}</span>() '
         f'<span class="c3-com">{status_text}</span>'
     )
@@ -1782,7 +1798,10 @@ def _decorator_call_row_html(c: DecoratorCall, max_time: float) -> str:
 
 def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
     if not g.condensed:
-        return "".join(_decorator_call_row_html(c, max_time) for c in g.calls)
+        return "".join(
+            _decorator_call_row_html(c, max_time, intercepted=g.intercepted)
+            for c in g.calls
+        )
     n = len(g.calls)
     hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
     misses = n - hits
@@ -1809,7 +1828,7 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         f'<input type="checkbox" class="c3-rxtog" id="{dec_rid}">'
         f'<label class="c3-row" for="{dec_rid}" data-kind="{kind}">'
         f'<span class="c3-rail" style="background:{rail};"></span>'
-        f'<pre class="c3-code"><span class="c3-cache-tag">@cache</span> '
+        f'<pre class="c3-code">{_cache_tag_html(g.intercepted)} '
         f'<span class="c3-kw">{_esc(short)}</span>() '
         f'<span class="c3-com">{_esc(summary_label)}</span></pre>'
         f'<span class="c3-dots-cell"></span>'
@@ -1819,7 +1838,7 @@ def _decorator_group_html(g: DecoratorCallGroup, max_time: float) -> str:
         # Inline detail block (own class so we don't share rowtip's
         # row-properties styling) — revealed by the same checkbox-hack.
         f'<div class="c3-deco-detail">'
-        f'<div class="c3-detail-h"><span class="c3-cache-tag">@cache</span> '
+        f'<div class="c3-detail-h">{_cache_tag_html(g.intercepted)} '
         f"{hits} of {n} cached · {total_time:.2f}s total</div>"
         f'<div class="c3-deco-fn">'
         f'<div class="c3-deco-fn-name">{_esc(short)}()</div>'

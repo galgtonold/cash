@@ -96,6 +96,37 @@ def test_text_badge_leaves_a_decorated_group_unmarked():
     )
 
 
+def _html(intercepted: bool, n_calls: int = 2) -> str:
+    from cash.notebook.badge_renderer.renderers.html import render_html
+    metrics = _metrics(intercepted)
+    call = metrics[0]["decorator_calls"][0]
+    metrics[0]["decorator_calls"] = [dict(call) for _ in range(n_calls)]
+    return render_html(build_interactive_badge(metrics))
+
+
+def test_html_badge_marks_an_intercepted_group():
+    """A notebook shows HTML badges by default, so the marker must reach there too."""
+    assert "@cache-calls" in _html(intercepted=True), (
+        "the HTML badge does not distinguish an intercepted call"
+    )
+
+
+def test_html_badge_marks_an_intercepted_group_when_condensed():
+    """The >3-call path renders the group directly and must mark it too.
+
+    The two HTML paths are separate code: below the condense threshold each
+    call renders its own row and never sees the group, so marking only the
+    condensed branch would leave short loops unlabelled.
+    """
+    assert "@cache-calls" in _html(intercepted=True, n_calls=5)
+
+
+def test_html_badge_leaves_decorated_groups_unmarked():
+    """Positive control, both paths."""
+    assert "@cache-calls" not in _html(intercepted=False, n_calls=2)
+    assert "@cache-calls" not in _html(intercepted=False, n_calls=5)
+
+
 def test_absent_flag_reads_as_decorated():
     """Metrics from before this field existed must not start claiming interception."""
     metrics = _metrics(intercepted=False)
