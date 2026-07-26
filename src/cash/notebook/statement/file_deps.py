@@ -46,8 +46,28 @@ _SCALAR_TYPES = (int, float, str, bool, bytes, type(None))
 # Pure helpers (used by both StatementFileDeps and StatementLineageBuilder)
 # ---------------------------------------------------------------------------
 
-def compute_file_hash_component(accessed_files: set[str]) -> str:
-    """Compute a hash component from accessed file paths and their stats."""
+def compute_file_hash_component(
+    accessed_files: set[str],
+    accessed_remote: set[str] | None = None,
+) -> str:
+    """Compute a hash component from accessed file paths and their stats.
+
+    *accessed_remote* carries URLs the statement read from object storage. They
+    contribute the validator their store maintains — an ETag, a version id, a
+    GCS generation — rather than a stat, because there is nothing local to stat
+    (see :class:`cash.remote_source.RemoteFileDataSource`).
+
+    Folding the token straight into the key is the right shape *here*, and
+    differs from the decorator path deliberately. A statement's file state is
+    already part of its lineage, so a changed object simply yields a different
+    key: there is no entry to re-validate and therefore no way to serve a stale
+    one. The decorator, whose key is fixed before the call runs, has to record
+    the token and re-check it on a hit instead.
+
+    Remote URLs are deliberately kept out of ``executed_file_deps``: that set is
+    ``stat``-ed and ``getmtime``-d by its consumers, so a URL there contributes
+    nothing at best. The key component alone is sufficient. See CAS-237.
+    """
     notebook_dir = None
     try:
         notebook_path = get_notebook_path()
@@ -73,6 +93,18 @@ def compute_file_hash_component(accessed_files: set[str]) -> str:
                 file_components.append(f"{display_path}:{stat.st_mtime}:{stat.st_size}")
             except OSError:
                 pass  # File may have been removed between exists() and stat()
+
+    for url in sorted(accessed_remote or ()):
+        # The URL is the identity and the token is the state, exactly as
+        # display_path/mtime/size are for a local file. Both are facts about the
+        # object rather than about this machine, so unlike the local component
+        # this one is identical on every machine -- a statement reading object
+        # storage keys the same for a teammate (CAS-233's portability problem,
+        # which for remote data simply does not arise).
+        from cash.remote_source import RemoteFileDataSource
+
+        file_components.append(f"{url}:{RemoteFileDataSource(url).state_token()}")
+
     if file_components:
         component = ":" + hashlib.sha256(",".join(file_components).encode('utf-8')).hexdigest()
         logger.debug("[FILE_HASH] Final hash component: %s...", component[:50])

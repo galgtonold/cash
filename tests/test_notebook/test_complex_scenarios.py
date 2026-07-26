@@ -56,7 +56,8 @@ def test_delete_code_in_cell(statement_processor_fixture):
         shell.user_ns['z'] = 3
         result = MagicMock(success=True)
         result.skipped = False
-        return result, MagicMock(stdout="", stderr="", outputs=[]), 0.1, set()
+        # (result, captured, execution_time, accessed_files, accessed_remote)
+        return result, MagicMock(stdout="", stderr="", outputs=[]), 0.1, set(), set()
     
     # We need to patch _execute_statement to avoid actual compilation issues or just let it run if simple
     # But since we use StatementProcessor directly, let's patch _execute_statement for control
@@ -73,7 +74,8 @@ def test_delete_code_in_cell(statement_processor_fixture):
         shell.user_ns['z'] = 2
         result = MagicMock(success=True)
         result.skipped = False
-        return result, MagicMock(stdout="", stderr="", outputs=[]), 0.1, set()
+        # (result, captured, execution_time, accessed_files, accessed_remote)
+        return result, MagicMock(stdout="", stderr="", outputs=[]), 0.1, set(), set()
 
     with patch.object(processor, '_execute_statement', side_effect=exec_side_effect_2):
         metrics2 = processor.process_statement(code2)

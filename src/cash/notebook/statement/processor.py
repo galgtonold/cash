@@ -744,7 +744,7 @@ class StatementProcessor:
                 )
                 return hit_result
 
-        error_metrics, result, captured, execution_time, accessed_files = self._execute_and_drain(
+        error_metrics, result, captured, execution_time, accessed_files, accessed_remote = self._execute_and_drain(
             code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, is_last,
         )
         if error_metrics is not None:
@@ -775,6 +775,7 @@ class StatementProcessor:
             captured, skip_cache, force_persist, metrics, process_start,
             _parsed_tree, statement_analysis,
             mut_observe, mut_assumed, mut_record, est_fit,
+            accessed_remote,
         )
 
         return metrics
@@ -939,7 +940,7 @@ class StatementProcessor:
                 )
                 return hit_result
 
-        error_metrics, result, captured, execution_time, accessed_files = await self._execute_and_drain_async(
+        error_metrics, result, captured, execution_time, accessed_files, accessed_remote = await self._execute_and_drain_async(
             code, stream_output, skip_cache, _parsed_tree, metrics, process_start, silent, is_last,
         )
         if error_metrics is not None:
@@ -961,6 +962,7 @@ class StatementProcessor:
             captured, skip_cache, force_persist, metrics, process_start,
             _parsed_tree, statement_analysis,
             mut_observe, mut_assumed, mut_record, est_fit,
+            accessed_remote,
         )
 
         return metrics
@@ -1530,13 +1532,14 @@ class StatementProcessor:
     ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
         """Execute the statement, drain decorator calls, populate stdout/stderr in metrics.
 
-        Returns ``(error_metrics, result, captured, execution_time, accessed_files)``.
+        Returns ``(error_metrics, result, captured, execution_time, accessed_files,
+        accessed_remote)``.
         *error_metrics* is non-None only when execution fails; callers should return it.
         """
         if self.debug:
             logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
 
-        result, captured, execution_time, accessed_files = self._execute_statement(
+        result, captured, execution_time, accessed_files, accessed_remote = self._execute_statement(
             code, stream_output=stream_output, tree=tree,
             skip_capture=(skip_cache and stream_output), is_last=is_last,
         )
@@ -1568,9 +1571,9 @@ class StatementProcessor:
             metrics['error'] = result.error
             metrics['total_time'] = time.time() - process_start
             self._handle_execution_error(result, silent)
-            return metrics, result, captured, execution_time, accessed_files
+            return metrics, result, captured, execution_time, accessed_files, accessed_remote
 
-        return None, result, captured, execution_time, accessed_files
+        return None, result, captured, execution_time, accessed_files, accessed_remote
 
     async def _execute_and_drain_async(
         self,
@@ -1594,7 +1597,7 @@ class StatementProcessor:
         if self.debug:
             logger.debug("%s Executing (cache miss)", _LOG_CACHE_DEBUG)
 
-        result, captured, execution_time, accessed_files = await self._execute_statement_async(
+        result, captured, execution_time, accessed_files, accessed_remote = await self._execute_statement_async(
             code, stream_output=stream_output, tree=tree,
             skip_capture=(skip_cache and stream_output), is_last=is_last,
         )
@@ -1621,9 +1624,9 @@ class StatementProcessor:
             metrics['error'] = result.error
             metrics['total_time'] = time.time() - process_start
             self._handle_execution_error(result, silent)
-            return metrics, result, captured, execution_time, accessed_files
+            return metrics, result, captured, execution_time, accessed_files, accessed_remote
 
-        return None, result, captured, execution_time, accessed_files
+        return None, result, captured, execution_time, accessed_files, accessed_remote
 
     def _post_execute(
         self,
@@ -1647,6 +1650,7 @@ class StatementProcessor:
         mut_assumed: set[str] = frozenset(),
         mut_record: bool = False,
         est_fit: set[str] = frozenset(),
+        accessed_remote: set[str] = frozenset(),
     ) -> None:
         """Auto-track imports, capture vars, detect mutations, save to cache, record analytics."""
         # Broad-precise mutation observation: for a standalone method call whose
@@ -1686,6 +1690,7 @@ class StatementProcessor:
         captured_vars = self._lineage.capture_and_track_variables(
             self._tracking_state, outputs, inputs, code, source_hash,
             cache_key=cache_key, accessed_files=accessed_files, tree=tree,
+            accessed_remote=accessed_remote,
         )
 
         # A statement producing a live-alias object (numpy view, pandas
@@ -2343,6 +2348,7 @@ class StatementProcessor:
         """
         start_time = time.time()
         accessed_files = set()
+        accessed_remote: set[str] = set()
         # Observe randomness the way we observe file access: snapshot the global
         # RNG streams around execution so a before/after diff catches a draw that
         # static analysis and object-introspection both miss -- one hidden inside
@@ -2410,6 +2416,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
+                accessed_remote = file_tracker.get_accessed_remote_urls()
                 self._observe_statement_rng(pre_rng, code)
 
                 result = ExecutionResult(success=True)
@@ -2424,7 +2431,7 @@ class StatementProcessor:
                 captured = _EmptyCaptured()
 
         execution_time = time.time() - start_time
-        return result, captured, execution_time, accessed_files
+        return result, captured, execution_time, accessed_files, accessed_remote
 
     async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True) -> tuple[Any, Any, float, set[str]]:
         """Async twin of :meth:`_execute_statement` for top-level-await cells.
@@ -2445,6 +2452,7 @@ class StatementProcessor:
         """
         start_time = time.time()
         accessed_files = set()
+        accessed_remote: set[str] = set()
         _FLAG = ast.PyCF_ALLOW_TOP_LEVEL_AWAIT
         # Per-statement RNG observation, same as the sync path.
         self._observed_rng_draw = set()
@@ -2497,6 +2505,7 @@ class StatementProcessor:
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
+                accessed_remote = file_tracker.get_accessed_remote_urls()
                 self._observe_statement_rng(pre_rng, code)
 
                 result = ExecutionResult(success=True)
@@ -2511,7 +2520,7 @@ class StatementProcessor:
                 captured = _EmptyCaptured()
 
         execution_time = time.time() - start_time
-        return result, captured, execution_time, accessed_files
+        return result, captured, execution_time, accessed_files, accessed_remote
 
     def _update_state_tracking(self, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], source_hash: str, cache_key: str, tree: ast.Module | None = None) -> None:
         """Update lineage and variable tracking."""

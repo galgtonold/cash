@@ -87,8 +87,14 @@ class StatementLineageBuilder:
         cache_key: str,
         accessed_files: set[str] | None = None,
         tree: ast.Module | None = None,
+        accessed_remote: set[str] | None = None,
     ) -> dict[str, Any]:
         """Capture output variables, compute their lineage, and update tracking state.
+
+        *accessed_remote* holds object-storage URLs the statement read. They
+        join the same lineage component as local files, contributing the store's
+        validator instead of a stat — see
+        :func:`~cash.notebook.statement.file_deps.compute_file_hash_component`.
 
         Returns ``{var_name: value}`` for the captured outputs.
         """
@@ -96,8 +102,10 @@ class StatementLineageBuilder:
         user_ns = self.shell.user_ns
 
         file_hash_component = ""
-        if accessed_files:
-            file_hash_component = compute_file_hash_component(accessed_files)
+        if accessed_files or accessed_remote:
+            file_hash_component = compute_file_hash_component(
+                accessed_files or set(), accessed_remote
+            )
 
         # A draw READS its module's hidden RNG variable (ADR-018): fold that
         # variable's lineage into every output's lineage so a re-seed upstream
