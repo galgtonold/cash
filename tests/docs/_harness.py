@@ -827,7 +827,12 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
             # behaviour that never runs.
             continue
         if id(node) in main_guard_ids:
-            in_body = True  # a __main__ guard never runs here
+            # Under `if __name__ == "__main__":` the harness never executes the
+            # body, so this call does not happen -- the same situation as a call
+            # inside a function nobody invokes, and it belongs in the same
+            # defined-but-not-called category rather than being reported as an
+            # unverified demonstration.
+            continue
         in_loop = bool({ast.For, ast.While} & anc)
         calls.setdefault(name, []).append((node.lineno, in_body, in_loop))
 

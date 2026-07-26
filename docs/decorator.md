@@ -75,6 +75,9 @@ c = Cash(cache_dir="/tmp/my_app_cache", debug=True)
 @c.cache
 def slow_square(n):
     return sum(i * i for i in range(n))
+
+slow_square(1000)      # first call on this instance — computes
+slow_square(1000)      # cache hit, from /tmp/my_app_cache
 ```
 
 ---

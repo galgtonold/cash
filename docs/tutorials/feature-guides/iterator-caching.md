@@ -158,6 +158,9 @@ import cash
 def stream_records(path):
     # Yield records one-by-one; Cash chunks them automatically.
     return iter(range(100))
+
+list(stream_records("events.jsonl"))   # first call — chunked as configured
+list(stream_records("events.jsonl"))   # cache hit — replayed from the chunks
 ```
 
 | Knob | Default | Effect |
