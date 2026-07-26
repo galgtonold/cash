@@ -108,14 +108,27 @@ When the *code* changes, Cash sees the new function source and invalidates downs
 
 ## Monitoring
 
-In a pipeline run, you want to know which steps hit and which missed:
+In a pipeline run, you want to know which steps hit and which missed. Every
+`@cash.cache` function carries its own counters:
 
 ```python
-print(extract.cache_info())
-print(normalize.cache_info())
-print(aggregate.cache_info())
-# {'hits': 1, 'misses': 0, 'hit_rate': 1.0, 'total_time_saved': 0.5, 'warnings': []}
+import cash
+
+@cash.cache
+def load_day(date):
+    return {"date": date, "rows": 1000}
+
+load_day("2026-01-15")          # first call — computes
+load_day("2026-01-16")          # different date, computes again
+load_day("2026-01-15")          # cache hit
+
+print(load_day.cache_info())
+# {'hits': 1, 'misses': 2, 'hit_rate': 0.333…, 'total_time_saved': …, 'warnings': []}
 ```
+
+`hit_rate` is the number to watch across a backfill: on a re-run of dates you
+have already processed it should be close to 1.0, and each step of a pipeline
+reports its own, so you can see exactly where the re-run stopped being free.
 
 In a notebook, `%cash_stats` prints a summary across every tracked function. On the CLI, `cash inspect` reads the cache directory and lists entries with sizes and timestamps. See [Debugging and Monitoring](../feature-guides/debugging-and-monitoring.md) for the full surface — `f.explain()` is especially useful in CI when you want to know *why* a step missed.
 
