@@ -240,14 +240,25 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
-    # §5.e — file accessed through an API cash doesn't intercept.
-    "not_cached_untracked_io": [
+    # §5.e — statement mutates a pre-existing object in place, so there is no
+    # value to snapshot. The reason string is copied verbatim from a real
+    # kernel (`%cash_badge print` on `out.append(fetch(1))` where `out` came
+    # from an earlier cell); it is emitted by statement/processor.py's
+    # ``skip_pre_route`` branch.
+    #
+    # This replaced a fabricated "untracked I/O" fixture whose reason string
+    # ("untracked file read: data.bin") no code path has ever produced — cash
+    # caches an untracked read rather than refusing it. Do not reinstate it.
+    "not_cached_mutation": [
         {
             "status": "COMPUTED",
-            "code": "data = my_custom_loader('data.bin')",
-            "total_time": 0.812,
-            "evaluated_vars": ["data"],
-            "uncacheable_reasons": ["untracked file read: data.bin"],
+            "code": "out.append(fetch(entity))",
+            "total_time": 0.212,
+            "evaluated_vars": ["out"],
+            "uncacheable_reasons": [
+                "In-place mutation on: out "
+                "(receiver lineage bumped; statement re-executes)"
+            ],
             "is_upstream": False,
         },
     ],
@@ -342,6 +353,53 @@ FIXTURES: dict[str, MetricsList] = {
             "storage": ["RAM", "DISK"],
             "source": "RAM",
             "cache_key": "stmt:5b1d8e2af0c34719",
+            "is_upstream": False,
+        },
+    ],
+    # Quickstart prose — "run only Cell 3 after editing THRESHOLD".
+    #
+    # The row set here is NOT invented: it mirrors what the engine actually
+    # emits for that scenario, captured from a real kernel via
+    # ``%cash_badge print``:
+    #
+    #   [Cash] EXECUTED
+    #     Upstream:
+    #       ^COMPUTED: THRESHOLD = 15
+    #       ^COMPUTED: flagged = score(features, THRESHOLD)
+    #     COMPUTED: print(f'{len(flagged)} rows flagged')
+    #
+    # In particular ``features = build_features(df)`` is ABSENT — cash decided
+    # it needed no repair at all, so it never appears. Do not "helpfully" add a
+    # RESTORED row for it; the point of the badge in the docs is that the
+    # expensive statement is missing.
+    "quickstart_partial_upstream": [
+        {
+            "status": "COMPUTED",
+            "code": "THRESHOLD = 15",
+            "total_time": 0.001,
+            "evaluated_vars": ["THRESHOLD"],
+            "cache_key": "stmt:4d2e9f1a03b57c68",
+            "miss_reason": "code changed",
+            "is_upstream": True,
+        },
+        {
+            "status": "COMPUTED",
+            "code": "flagged = score(features, THRESHOLD)",
+            "total_time": 0.004,
+            "execution_time": 0.004,
+            "evaluated_vars": ["flagged"],
+            "storage": ["RAM"],
+            "cache_key": "stmt:6b0c7d8e9f102a34",
+            "miss_reason": "input lineage changed (one of: THRESHOLD)",
+            "is_upstream": True,
+        },
+        {
+            "status": "COMPUTED",
+            "code": "print(f'{len(flagged)} rows flagged')",
+            "total_time": 0.001,
+            "execution_time": 0.001,
+            "evaluated_vars": [],
+            "miss_reason": "input lineage changed (one of: flagged)",
             "is_upstream": False,
         },
     ],

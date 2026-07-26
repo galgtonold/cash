@@ -145,13 +145,20 @@ See [Cost model and smart persistence](cost-model.md) for how this decision is m
 
 **Fix:** Delete the annotation if you no longer want the opt-out.
 
-### Untracked I/O
+### In-place mutation
 
-<iframe class="cash-badge" src="/_badges/not_cached_untracked_io.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
+<iframe class="cash-badge" src="/_badges/not_cached_mutation.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
-**Why:** The statement read a file via an API Cash doesn't intercept (a custom loader, a third-party library, a C extension). Cash can't tell whether the file changed, so it refuses to cache rather than risk staleness.
+**Why:** The statement mutates an object that already existed — `out.append(...)`, `d[k] = v`, `df.sort_values(inplace=True)` — rather than producing a new value. There is no snapshot to restore that would reproduce the mutation, so Cash bumps the receiver's lineage (everything downstream stays correct) and re-executes the statement each run.
 
-**Fix:** Either (a) use a tracked loader if one will do (`pd.read_*`, `np.load`, `joblib.load`, `open()`), or (b) wrap your loader and register it via `cash.register_hasher()` so Cash knows how to fingerprint the input.
+**Fix:** Assign the result instead of mutating in place — `out = [f(e) for e in items]` caches at any length where the append loop does not. See [A long `for`-append loop can stop caching](known-limitations.md#a-long-for-append-loop-can-stop-caching).
+
+!!! info "Not on this list: a file read through a loader Cash doesn't intercept"
+    Cash does **not** refuse to cache a statement because it couldn't see the
+    file it read — it caches it like any other statement, and simply has no file
+    dependency recorded for it. That is a staleness risk rather than a badge
+    state, and it is described under
+    [Reads through a loader cash cannot see](known-limitations.md#reads-through-a-loader-cash-cannot-see).
 
 ## See also
 
