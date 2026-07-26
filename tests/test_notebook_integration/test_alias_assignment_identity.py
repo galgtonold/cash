@@ -160,12 +160,23 @@ def test_alias_output_matches_plain_kernel_ground_truth(tmp_path):
         finally:
             runner.shutdown()
 
-    off = _run(tmp_path / "off", cells_off, False, 4).strip()
-    on = _run(tmp_path / "on", cells_on, True, 5)
-    # The badge is cash-only chrome; compare just the printed lines.
-    on_lines = "\n".join(
-        ln for ln in on.splitlines() if ln.startswith(("same ", "backup_tag "))
-    ).strip()
+    def _probe_lines(raw: str) -> str:
+        """The probe's printed lines, free of stream framing.
+
+        Applied to BOTH sides. ipykernel buffers stdout and flushes on a timer,
+        so two `print` calls arrive as one stream message or two depending on
+        machine speed; joining them inserts a blank line in the second case.
+        That framing is not what this test is about — comparing raw output made
+        the oracle guard fail on slower machines with a spurious blank line,
+        which reads as a cash bug and is not one. The badge is cash-only chrome
+        and is filtered by the same rule.
+        """
+        return "\n".join(
+            ln for ln in raw.splitlines() if ln.startswith(("same ", "backup_tag "))
+        ).strip()
+
+    off = _probe_lines(_run(tmp_path / "off", cells_off, False, 4))
+    on_lines = _probe_lines(_run(tmp_path / "on", cells_on, True, 5))
 
     assert off == "same True\nbackup_tag fitted", (
         f"the cash-off oracle itself is wrong -- test bug: {off!r}"

@@ -194,11 +194,22 @@ def test_computed_rhs_alias_matches_plain_kernel(tmp_path, name, bind, id_expr, 
         finally:
             runner.shutdown()
 
-    off = _run(tmp_path / "off", cells_off, False, 4).strip()
-    on = _run(tmp_path / "on", _cells(bind, id_expr, val_expr), True, 5)
-    on_lines = "\n".join(
-        ln for ln in on.splitlines() if ln.startswith(("same ", "val "))
-    ).strip()
+    def _probe_lines(raw: str) -> str:
+        """The probe's printed lines, free of stream framing.
+
+        Applied to BOTH sides. ipykernel buffers stdout and flushes on a timer,
+        so two `print` calls arrive as one stream message or two depending on
+        machine speed; joining them inserts a blank line in the second case.
+        Comparing raw output made the oracle guard fail on slower machines with
+        a spurious blank line, which reads as a cash bug and is not one. The
+        badge is cash-only chrome and is filtered by the same rule.
+        """
+        return "\n".join(
+            ln for ln in raw.splitlines() if ln.startswith(("same ", "val "))
+        ).strip()
+
+    off = _probe_lines(_run(tmp_path / "off", cells_off, False, 4))
+    on_lines = _probe_lines(_run(tmp_path / "on", _cells(bind, id_expr, val_expr), True, 5))
 
     assert off == f"same True\nval {expected}", (
         f"[{name}] the cash-off oracle itself is wrong -- test bug: {off!r}"
