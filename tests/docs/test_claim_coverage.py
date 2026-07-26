@@ -36,32 +36,26 @@ from tests.docs.test_tutorials import ALL_DOCS, REPO_ROOT
 #                        the last definition. Rebinding makes the earlier
 #                        function object unreachable, so its cache_info() can
 #                        never be read. A real limit of the mechanism.
-#   calls-inside-body    every call is inside a function or class body that
-#                        does not demonstrably run exactly once. Inference DOES
-#                        now follow a body whose function is invoked exactly
-#                        once at top level (the `asyncio.run(main())` shape), so
-#                        what remains here genuinely cannot be counted:
-#                        async-caching.md defines and runs `main` three times,
-#                        so a call inside "main" cannot be attributed to one
-#                        run -- the helper is shadowed exactly like the cached
-#                        functions are. Calls under `if __name__ == "__main__":`
-#                        are also counted as not running, because under the
-#                        harness they don't.
+#   calls-inside-body    every call is inside a function body whose run count
+#                        cannot be established. A body invoked exactly once at
+#                        top level (the `asyncio.run(main())` shape) IS followed
+#                        and counted; a body never invoked at all is the
+#                        separate defined-but-not-called category and is not
+#                        listed here. What remains is genuinely ambiguous --
+#                        a helper called more than once, or under a
+#                        `if __name__ == "__main__":` guard that the harness
+#                        never executes.
 #
 # Burn this down; do not add to it without a reason in the PR.
 KNOWN_UNVERIFIED: dict[str, set[str]] = {
-    "docs/decorator.md": {"load_users", "slow_square"},
+    "docs/decorator.md": {"slow_square"},
     "docs/migration_guide.md": {"slow_function"},
-    "docs/tutorials/feature-guides/async-caching.md": {
-        "f", "fetch_one", "fetch_user", "stock_quote",
-    },
     "docs/tutorials/feature-guides/custom-file-sources.md": {"load_features"},
     "docs/tutorials/feature-guides/debugging-and-monitoring.md": {"expensive"},
     "docs/tutorials/feature-guides/iterator-caching.md": {"stream_records"},
     "docs/tutorials/feature-guides/production-transition.md": {
         "engineer_features", "extract", "transform",
     },
-    "docs/tutorials/use-cases/data-engineering.md": {"aggregate", "extract", "normalize"},
     "docs/tutorials/use-cases/llm-api-calls.md": {"chat"},
     "docs/tutorials/use-cases/scientific-computing.md": {"simulate"},
 }

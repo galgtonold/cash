@@ -21,11 +21,11 @@ async def fetch_user(uid):
         async with s.get(f"https://api.example.com/users/{uid}") as r:
             return await r.json()
 
-async def main():
+async def demo_cached_await():
     user = await fetch_user(42)   # First call: cache miss — runs the request
     user = await fetch_user(42)   # Second call: cache hit — returns the cached dict
 
-asyncio.run(main())
+asyncio.run(demo_cached_await())
 ```
 
 No async-specific decorator flag. `@cash.cache` recognises the coroutine function and wires up the async wrapper automatically.
@@ -48,12 +48,12 @@ async def f(x):
     await asyncio.sleep(0)        # actually async-suspends the coroutine
     return x * 11
 
-async def main():
+async def demo_compute_count():
     print(await f(3), await f(3))  # 33 33
     print("compute count:", n["calls"])   # 1
     print(f.cache_info())                  # {'hits': 1, 'misses': 1, ...}
 
-asyncio.run(main())
+asyncio.run(demo_compute_count())
 ```
 
 The pattern matches `test_async_function_caches` and `test_async_cache_info` in `tests/test_core/test_async_basic.py`.
@@ -139,14 +139,14 @@ A typical TTL pattern for "data is fine if it's under an hour old":
 async def stock_quote(symbol):
     return await price_api.get(symbol)
 
-async def main():
+async def demo_ttl_expiry():
     q1 = await stock_quote("ACME")           # First call: cache miss — hits the API
     q2 = await stock_quote("ACME")           # Second call: cache hit — cached value
     # test:inject: import time as _t; _saved_time = _t.time; _t.time = lambda: _saved_time() + 7200
     q3 = await stock_quote("ACME")           # cache miss — TTL expired, refetches
     # test:inject: _t.time = _saved_time
 
-asyncio.run(main())
+asyncio.run(demo_ttl_expiry())
 ```
 
 The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper returns; expired entries fall through to the recompute branch and the await runs again. Test reference: `test_async_ttl_expires` in `tests/test_core/test_async_ttl.py`.
@@ -155,7 +155,7 @@ The TTL check happens in `_validate_ttl` on the sync hit path before the wrapper
 
 `asyncio.gather` over a cached async function gives you parallel hits on the same backend with no contention on the read path — each `get` is a sync call that returns immediately on hit:
 
-<!-- test:skip reason="top-level await re-enters event loop already running asyncio.run(main()) earlier on the page" -->
+<!-- test:skip reason="top-level await re-enters an event loop already running asyncio.run(...) earlier on the page" -->
 ```python
 @cash.cache
 async def fetch(uid):

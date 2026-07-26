@@ -709,6 +709,27 @@ def _top_level_invocation_counts(
     return counts
 
 
+def _never_runs(
+    node: ast.AST,
+    enclosing: dict[int, list[ast.AST]],
+    top_level_calls: dict[str, int],
+) -> bool:
+    """Whether *node* cannot execute at all, because an enclosing frame is never
+    invoked from module scope.
+
+    The counterpart to :func:`_runs_exactly_once`, and the distinction matters:
+    a call that runs an unknown number of times is unverifiable (worth
+    flagging), while a call that never runs is simply an example nobody
+    exercised (a different, already-triaged category).
+    """
+    chain = enclosing.get(id(node)) or []
+    for frame in chain:
+        if isinstance(frame, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if top_level_calls.get(frame.name, 0) == 0:
+                return True
+    return False
+
+
 def _runs_exactly_once(
     node: ast.AST,
     enclosing: dict[int, list[ast.AST]],
@@ -797,6 +818,14 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
         )
         if in_body and _runs_exactly_once(node, enclosing, top_level_calls):
             in_body = False
+        elif in_body and _never_runs(node, enclosing, top_level_calls):
+            # The enclosing function is never invoked, so this call never
+            # happens. That makes the cached function DEFINED-BUT-NOT-CALLED --
+            # the separate, already-triaged category (unexercised_cached_
+            # functions), typically a side-by-side signature comparison. Not
+            # our concern: we flag behaviour that runs unverified, not
+            # behaviour that never runs.
+            continue
         if id(node) in main_guard_ids:
             in_body = True  # a __main__ guard never runs here
         in_loop = bool({ast.For, ast.While} & anc)
