@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any
 from IPython.display import display, publish_display_data
 
 from ...exceptions import AmbiguousCellError, UpstreamStateError
+from ...remote_source import measured_validation as _measured_validation
 from .._protocols import ShellProtocol
 from ..analysis import CodeAnalyzer
 from ..annotations import get_statement_annotations
@@ -246,10 +247,16 @@ class CellExecutor:
         # 7. Statement execution. The per-statement RNG observer does the
         # measuring; this only opens a fresh accumulation for the cell.
         self._statement_processor.begin_cell_rng_observation()
-        result = self._execute_cell_statements(
-            raw_cell, tree, all_metrics, badge_display_id,
-            hook_start, timing_breakdown,
-        )
+        # Remote freshness checks (a cached function reading s3:// and friends)
+        # are network round trips that land on the HIT path, where the badge
+        # reports a saving and nothing reports what establishing it cost. The
+        # measurement writes itself into the breakdown on exit, so it survives
+        # the early return below.
+        with _measured_validation(sink=timing_breakdown):
+            result = self._execute_cell_statements(
+                raw_cell, tree, all_metrics, badge_display_id,
+                hook_start, timing_breakdown,
+            )
         if isinstance(result, _EarlyReturn):
             return result
 
@@ -371,10 +378,12 @@ class CellExecutor:
 
         # 7. Statement execution (awaited). Same single observer as the sync path.
         self._statement_processor.begin_cell_rng_observation()
-        result = await self._execute_cell_statements_async(
-            raw_cell, tree, all_metrics, badge_display_id,
-            hook_start, timing_breakdown,
-        )
+        # Remote freshness checks, measured exactly as in the sync path.
+        with _measured_validation(sink=timing_breakdown):
+            result = await self._execute_cell_statements_async(
+                raw_cell, tree, all_metrics, badge_display_id,
+                hook_start, timing_breakdown,
+            )
         if isinstance(result, _EarlyReturn):
             return result
 

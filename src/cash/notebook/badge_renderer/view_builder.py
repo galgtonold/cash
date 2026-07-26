@@ -872,12 +872,14 @@ def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup
 _OVERHEAD_LABELS = {
     "upstream_check": "upstream",
     "cache_write": "cache",
+    "remote_validate": "remote",
     "badge": "badge",
     "other": "other",
 }
 _OVERHEAD_TOOLTIPS = {
     "upstream_check": "re-checking and re-restoring upstream cells",
     "cache_write": "hashing inputs and serialising results into the cache",
+    "remote_validate": "asking object storage whether tracked remote data changed",
     "badge": "building and updating Cash's badge display",
     "other": "cell time not attributed to a category above",
 }
@@ -911,22 +913,37 @@ def _overhead_section(
         0.0,
         sum(float(m.get("total_time", 0.0)) for m in metrics) - statements_time,
     )
+    # Network round trips asking object storage whether tracked remote data
+    # moved. It gets its own line because it is the one overhead a user cannot
+    # otherwise see or act on: it happens on the HIT path, where the badge
+    # reports a saving and nothing reports what establishing it cost.
+    remote_validate = float(timing_breakdown.get("remote_validate", 0.0))
+    remote_count = int(timing_breakdown.get("remote_validate_count", 0))
     # The badge's own setup + progress-render costs read as one "badge" number.
     badge = badge_init + badge_progress
-    other = overhead - (badge + upstream_check + cache_write)
+    other = overhead - (badge + upstream_check + cache_write + remote_validate)
 
     entries: list[OverheadEntry] = []
     for key, value in (
         ("upstream_check", upstream_check),
         ("cache_write", cache_write),
+        ("remote_validate", remote_validate),
         ("badge", badge),
         ("other", other),
     ):
         if value > MIN_TIME_DISPLAY_MS:
+            tooltip = _OVERHEAD_TOOLTIPS[key]
+            if key == "remote_validate" and remote_count:
+                # The count is the actionable half - it is what tells you when
+                # to trade N metadata requests for one prefix listing.
+                tooltip = (
+                    f"{tooltip} ({remote_count} "
+                    f"{'source' if remote_count == 1 else 'sources'} checked)"
+                )
             entries.append(OverheadEntry(
                 label=_OVERHEAD_LABELS[key],
                 time_s=value,
-                tooltip=_OVERHEAD_TOOLTIPS[key],
+                tooltip=tooltip,
             ))
     if not entries:
         return None

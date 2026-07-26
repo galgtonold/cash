@@ -387,3 +387,35 @@ def test_bug_report_url_under_size_limit() -> None:
         "notebook_source": huge_cells,
     })
     assert len(url) <= 7800 + len("https://github.com/galgtonold/cash/issues/new?title=...&body=")
+
+
+def test_overhead_surfaces_remote_validation_with_its_count() -> None:
+    """Asking object storage "did this change?" gets its own labelled line.
+
+    It is the one overhead a user cannot otherwise see: it lands on the HIT
+    path, where the badge reports a saving and nothing reports what
+    establishing that saving cost. The COUNT rides in the tooltip because it is
+    the actionable half — it is what tells you to trade N metadata requests for
+    one prefix listing.
+    """
+    badge = build_interactive_badge(
+        [{"code": "df = load()", "status": str(CacheStatus.COMPUTED), "total_time": 1.0}],
+        timing_breakdown={
+            "badge_init": 0.01,
+            "remote_validate": 0.24,
+            "remote_validate_count": 14,
+        },
+        cell_total_time=1.3,
+    )
+    breakdown = next(
+        s for s in badge.sections if s.kind is SectionKind.OVERHEAD
+    ).items[0]
+    remote = next(e for e in breakdown.entries if e.label == "remote")
+    assert remote.time_s == pytest.approx(0.24)
+    assert "14 sources checked" in remote.tooltip
+
+    # And it must come OUT of "other" rather than being double-counted.
+    other = next((e for e in breakdown.entries if e.label == "other"), None)
+    other_time = other.time_s if other else 0.0
+    assert sum(e.time_s for e in breakdown.entries) == pytest.approx(breakdown.total_s)
+    assert other_time < 0.24

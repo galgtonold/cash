@@ -171,3 +171,105 @@ def _stored_deps(cash: Cash) -> dict:
     for metadata in cash.backend.list_entries():
         deps.update((metadata or {}).get("auto_file_deps") or {})
     return deps
+
+
+class TestValidationCostIsVisible:
+    """Freshness checking is the one overhead a user cannot otherwise see.
+
+    It happens on the HIT path, where the badge shows a saving and nothing
+    shows what establishing that saving cost. So it is measured, and said out
+    loud when it stops being a good trade.
+    """
+
+    def test_resolutions_are_counted_and_timed(self, origin):
+        from cash.remote_source import RemoteFileDataSource, measured_validation
+
+        with measured_validation() as validation:
+            RemoteFileDataSource(origin.url).state_token()
+            RemoteFileDataSource(origin.url).state_token()
+
+        assert validation.count == 2, "the count is what tells you to batch"
+        assert validation.seconds > 0
+
+    def test_a_pinned_url_costs_nothing_and_is_not_counted(self):
+        from cash.remote_source import RemoteFileDataSource, measured_validation
+
+        with measured_validation() as validation:
+            RemoteFileDataSource("s3://bucket/key?versionId=abc").state_token()
+
+        assert validation.count == 0, (
+            "counting a free check would inflate the number a user consults to "
+            "decide whether validation is worth its price"
+        )
+
+    def test_nested_measurement_rolls_up(self, origin):
+        from cash.remote_source import RemoteFileDataSource, measured_validation
+
+        with measured_validation() as outer:
+            RemoteFileDataSource(origin.url).state_token()
+            with measured_validation() as inner:
+                RemoteFileDataSource(origin.url).state_token()
+
+        assert inner.count == 1
+        assert outer.count == 2
+
+    @pytest.mark.parametrize(
+        "seconds, saved, expected, why",
+        [
+            (0.05, 10.0, False, "cheap against a big saving - fine"),
+            (0.10, 0.05, False, "over the ratio but under the floor - noise"),
+            (6.0, 10.0, True, "more than half the saving - relative rule"),
+            (3.0, 60.0, True, "only 5% of the saving, but 3s in a notebook - absolute rule"),
+            (0.30, None, False, "no known saving and under the absolute cap"),
+            (5.0, None, True, "no known saving, but over the absolute cap"),
+        ],
+    )
+    def test_the_two_rules_catch_different_bad_trades(self, seconds, saved, expected, why):
+        from cash.remote_source import validation_is_expensive
+
+        assert validation_is_expensive(seconds, saved) is expected, why
+
+    def test_an_expensive_check_warns_once(self, origin):
+        from cash.exceptions import CashCacheIneffectiveWarning
+        from cash.remote_source import warn_validation_cost_once
+
+        import warnings as w
+
+        with w.catch_warnings(record=True) as caught:
+            w.simplefilter("always")
+            for _ in range(3):
+                warn_validation_cost_once("mymod.load", 14, 0.38, 1.0)
+
+        hits = [x for x in caught if issubclass(x.category, CashCacheIneffectiveWarning)]
+        assert len(hits) == 1, "warn once per call site, not once per hit"
+        assert "14 remote sources" in str(hits[0].message)
+        assert "immutable=True" in str(hits[0].message), "a warning must name the fix"
+
+    def test_the_hit_path_measures_and_warns(self, origin, monkeypatch):
+        """End-to-end: the wiring, not the thresholds.
+
+        The thresholds are pinned by the table above; what this pins is that the
+        hit path measures at all. The absolute cap is dropped to zero so an
+        ordinary loopback HEAD trips it, rather than making the test sleep to
+        manufacture a slow one.
+        """
+        import warnings as w
+
+        from cash.exceptions import CashCacheIneffectiveWarning
+
+        pd = pytest.importorskip("pandas")
+        monkeypatch.setattr("cash.remote_source.VALIDATION_WARN_ABSOLUTE_SECONDS", 0.0)
+        cash = Cash(backend=InMemoryBackend())
+
+        @cash.cache
+        def load(url):
+            return pd.read_csv(url)
+
+        load(origin.url)  # compute: nothing to revalidate yet
+        with w.catch_warnings(record=True) as caught:
+            w.simplefilter("always")
+            load(origin.url)  # hit: revalidates, and that is what gets measured
+
+        hits = [x for x in caught if issubclass(x.category, CashCacheIneffectiveWarning)]
+        assert len(hits) == 1, f"expected one cost warning, got {[str(h.message) for h in hits]}"
+        assert "checking 1 remote source" in str(hits[0].message)

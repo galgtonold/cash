@@ -34,6 +34,7 @@ on); a missing one raises :class:`~cash.exceptions.DependencyNotFoundError`.
 
 from __future__ import annotations
 
+import contextvars
 import itertools
 import logging
 import time
@@ -89,6 +90,121 @@ def _reset_remote_warnings() -> None:
     """Clear the warn-once ledgers (tests; a fresh session starts empty)."""
     _warned_failures.clear()
     _warned_weak_tokens.clear()
+    _warned_validation_cost.clear()
+
+
+# ---------------------------------------------------------------------------
+# Validation cost
+#
+# With ``depends_on=`` chains one call can fan out to many sources, and until
+# it is measured nothing shows where the time went. The COUNT is the actionable
+# half: it is what tells you to swap N HEADs for one prefix LIST.
+#
+# The accumulator is a ContextVar so concurrent calls - asyncio tasks, threads -
+# each measure their own work instead of stealing each other's numbers.
+# ---------------------------------------------------------------------------
+
+_validation_cost: contextvars.ContextVar[list[float] | None] = contextvars.ContextVar(
+    "cash_remote_validation_cost", default=None
+)
+
+
+class measured_validation:
+    """Context manager recording token resolutions inside the block.
+
+    Exposes ``count`` and ``seconds`` after exit. Nests safely: an inner block
+    measures its own work and adds it to the enclosing one.
+
+    Pass *sink* (a timing-breakdown dict) to have the result written on exit
+    under ``<key>`` and ``<key>_count``. Writing from ``__exit__`` rather than
+    after the block is what makes the numbers survive an early ``return`` out
+    of the middle of the measured region.
+    """
+
+    def __init__(self, sink: dict[str, float] | None = None, key: str = "remote_validate") -> None:
+        self.count = 0
+        self.seconds = 0.0
+        self._sink = sink
+        self._key = key
+        self._token: contextvars.Token | None = None
+        self._outer: list[float] | None = None
+        self._cell: list[float] = [0.0, 0.0]
+
+    def __enter__(self) -> measured_validation:
+        self._outer = _validation_cost.get()
+        self._token = _validation_cost.set(self._cell)
+        return self
+
+    def __exit__(self, *exc_info) -> None:
+        if self._token is not None:
+            _validation_cost.reset(self._token)
+        self.count = int(self._cell[0])
+        self.seconds = self._cell[1]
+        if self._outer is not None:
+            self._outer[0] += self._cell[0]
+            self._outer[1] += self._cell[1]
+        if self._sink is not None and self.count:
+            self._sink[self._key] = self._sink.get(self._key, 0.0) + self.seconds
+            self._sink[f"{self._key}_count"] = (
+                self._sink.get(f"{self._key}_count", 0) + self.count
+            )
+
+
+def _record_validation(seconds: float) -> None:
+    """Add one resolution to the enclosing measurement, if any."""
+    cell = _validation_cost.get()
+    if cell is not None:
+        cell[0] += 1
+        cell[1] += seconds
+
+
+# Two independent ways validation can be a bad deal, because they catch
+# different failures. RELATIVE catches "you paid more than you saved". ABSOLUTE
+# catches the case that is technically net-positive and still miserable: 8 s of
+# HEAD requests to save 60 s is a win on paper and unusable in a notebook.
+# Either alone triggers the warning.
+#
+# The relative rule carries a floor, the same shape the cost model uses for its
+# own gate (``max(fixed_budget, ratio x time)``): without it, a 100 ms function
+# would warn about 60 ms of validation, which is true and useless.
+VALIDATION_WARN_RATIO = 0.5
+VALIDATION_WARN_FLOOR_SECONDS = 0.25
+VALIDATION_WARN_ABSOLUTE_SECONDS = 2.0
+
+_warned_validation_cost: set[str] = set()
+
+
+def validation_is_expensive(seconds: float, saved_seconds: float | None) -> bool:
+    """Whether *seconds* of validation is a bad trade against *saved_seconds*."""
+    if seconds > VALIDATION_WARN_ABSOLUTE_SECONDS:
+        return True
+    if not saved_seconds or saved_seconds <= 0:
+        return False
+    return seconds > max(VALIDATION_WARN_FLOOR_SECONDS, VALIDATION_WARN_RATIO * saved_seconds)
+
+
+def warn_validation_cost_once(
+    label: str, count: int, seconds: float, saved_seconds: float | None
+) -> None:
+    """Warn a single time per *label* that freshness checking is costing real time."""
+    if label in _warned_validation_cost:
+        return
+    if len(_warned_validation_cost) < 1024:
+        _warned_validation_cost.add(label)
+    saved = (
+        f", against {saved_seconds:.2f}s of compute it avoids"
+        if saved_seconds and saved_seconds > 0
+        else ""
+    )
+    warnings.warn(
+        f"cash spent {seconds:.2f}s checking {count} remote "
+        f"{'source' if count == 1 else 'sources'} for freshness on {label}{saved}. "
+        f"Mark sources that cannot change with "
+        f"RemoteFileDataSource(..., immutable=True), pin a version in the URL, or "
+        f"raise max_age= to revalidate less often.",
+        CashCacheIneffectiveWarning,
+        stacklevel=4,
+    )
 
 
 class _NoTokenError(ValueError):
@@ -271,7 +387,12 @@ class RemoteFileDataSource(DataSource):
                 return cached
             if self.max_age > 0 and (time.monotonic() - self._cached_at) < self.max_age:
                 return cached
+        started = time.perf_counter()
         token = self._resolve()
+        # A pin costs no request; counting it would inflate the very number a
+        # user consults to decide whether validation is worth its price.
+        if self._pinned is None:
+            _record_validation(time.perf_counter() - started)
         self._cached_token = token
         self._cached_at = time.monotonic()
         return token

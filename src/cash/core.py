@@ -1766,12 +1766,43 @@ class Cash:
         if not snap:
             return True  # nothing to check
         from cash.notebook.file_dep_snapshot import file_dep_is_fresh
-        for path, recorded in snap.items():
-            is_fresh, reason = file_dep_is_fresh(path, recorded)
-            if not is_fresh:
-                logger.debug("[FILE_DEP] stale (%s): %s", reason, path)
-                return False
-        return True
+        from cash.remote_source import measured_validation
+
+        # Remote entries cost a network round trip each to check, so the check
+        # itself is worth measuring - see _warn_if_validation_is_expensive.
+        with measured_validation() as validation:
+            fresh = True
+            for path, recorded in snap.items():
+                is_fresh, reason = file_dep_is_fresh(path, recorded)
+                if not is_fresh:
+                    logger.debug("[FILE_DEP] stale (%s): %s", reason, path)
+                    fresh = False
+                    break
+        Cash._warn_if_validation_is_expensive(validation, metadata)
+        return fresh
+
+    @staticmethod
+    def _warn_if_validation_is_expensive(
+        validation: Any, metadata: CacheMetadata
+    ) -> None:
+        """Say so when checking freshness costs a serious share of the saving.
+
+        A freshness check that has to ask the network is the one overhead a user
+        cannot see: it happens on the HIT path, where the badge shows a saving
+        and nothing shows what the saving cost to establish.
+        """
+        if not validation.count:
+            return
+        from cash.remote_source import validation_is_expensive, warn_validation_cost_once
+
+        saved = metadata.execution_time
+        if validation_is_expensive(validation.seconds, saved):
+            warn_validation_cost_once(
+                metadata.func_name or "a cached call",
+                validation.count,
+                validation.seconds,
+                saved,
+            )
 
     def _wrap_iterator_hit(
         self,
