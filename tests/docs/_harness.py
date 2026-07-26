@@ -656,6 +656,86 @@ def _find_main_guard_nodes(tree: ast.AST) -> set[int]:
     return guarded_ids
 
 
+def called_but_uninferable(md_path: Path) -> dict[str, str]:
+    """Cached functions the page CALLS but whose calls claim inference can't see.
+
+    Returns ``{function_name: reason}``. Empty is the healthy state.
+
+    This is the narrow question, and getting it narrow matters. A page that
+    *defines* a cached function without calling it is a different, already
+    triaged category (``unexercised_cached_functions`` + ``_EXERCISE_REQUIRED``),
+    and a sweep found most such cases legitimate — a signature reference, a
+    network example that must not run. Gating on "this page verifies no claim"
+    re-litigates that decision and flags 13 pages.
+
+    What is genuinely wrong is a page that *does* call its cached function — so
+    it teaches runtime behaviour — where nothing checks the behaviour, because
+    every call site is invisible to :func:`infer_claims`. Two causes:
+
+    * ``shadowed`` — the name is redefined later and all calls sit above the
+      last definition. Rebinding makes the earlier function object unreachable,
+      so its ``cache_info()`` can never be read. A real limit, not a bug.
+    * ``calls-inside-body`` — every call is inside a function or class body,
+      which inference skips because such code usually does not run.
+    """
+    try:
+        fences = extract_fences(md_path)
+        script = _strip_magic_lines(_apply_inject_comments(
+            "\n\n".join(f.code for f in fences if not f.skip)
+        ))
+        tree = ast.parse(script)
+    except (OSError, SyntaxError, ValueError):
+        return {}
+
+    ancestors = _get_ancestor_types(tree)
+    defs: dict[str, list[int]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
+            _is_cache_decorator(d) for d in node.decorator_list
+        ):
+            defs.setdefault(node.name, []).append(node.lineno)
+    if not defs:
+        return {}
+
+    calls: dict[str, list[tuple[int, bool, bool]]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = (
+            node.func.id if isinstance(node.func, ast.Name)
+            else node.func.attr if isinstance(node.func, ast.Attribute)
+            else None
+        )
+        if name not in defs:
+            continue
+        anc = ancestors.get(id(node), set())
+        in_body = bool(
+            {ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef} & anc
+        )
+        in_loop = bool({ast.For, ast.While} & anc)
+        calls.setdefault(name, []).append((node.lineno, in_body, in_loop))
+
+    out: dict[str, str] = {}
+    for name, linenos in defs.items():
+        sites = calls.get(name, [])
+        if not sites:
+            continue  # never called - the other category, not ours
+        last_def = max(linenos)
+        after = [s for s in sites if s[0] > last_def]
+        if any(not in_body and not in_loop for _, in_body, in_loop in after):
+            continue  # at least one usable call site: inference sees this one
+        if not after:
+            out[name] = (
+                f"shadowed - {len(linenos)} definitions, all {len(sites)} call(s) "
+                f"above the last one (line {last_def})"
+            )
+        elif all(in_body for _, in_body, _ in after):
+            out[name] = f"every call ({len(after)}) is inside a function or class body"
+        else:
+            out[name] = f"every call ({len(after)}) is inside a loop"
+    return out
+
+
 def infer_claims(
     source: str,
     exclude_line_ranges: list[tuple[int, int]] | None = None,
