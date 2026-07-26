@@ -656,6 +656,82 @@ def _find_main_guard_nodes(tree: ast.AST) -> set[int]:
     return guarded_ids
 
 
+def _enclosing_functions(tree: ast.AST) -> dict[int, list[ast.AST]]:
+    """Map each node id to its chain of enclosing function/lambda/class nodes.
+
+    Innermost first. ``ast.walk`` is breadth-first and loses this, but "does
+    this call actually run?" is a question about the chain, not about whether
+    *some* function encloses it.
+    """
+    chains: dict[int, list[ast.AST]] = {}
+
+    def visit(node: ast.AST, stack: list[ast.AST]) -> None:
+        for child in ast.iter_child_nodes(node):
+            chains[id(child)] = list(stack)
+            if isinstance(
+                child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+            ):
+                visit(child, [child, *stack])
+            else:
+                visit(child, stack)
+
+    visit(tree, [])
+    return chains
+
+
+def _top_level_invocation_counts(
+    tree: ast.AST, ancestors: dict[int, set], main_guard_ids: set[int]
+) -> dict[str, int]:
+    """How many times each name is called from module scope.
+
+    Module scope only: a call nested in another body is counted for *that*
+    body's own run count, which is what the recursive check in
+    :func:`_runs_exactly_once` walks. Calls in loops are deliberately excluded
+    rather than counted as one, since the iteration count is unknown.
+
+    ``if __name__ == "__main__":`` bodies are excluded too, and missing that was
+    a real bug in the first cut of this: data-engineering.md ends with
+    ``run("s3://…")`` under such a guard, so the harness counted a pipeline that
+    never executes and inferred a miss for ``aggregate`` that could not happen.
+    """
+    counts: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        anc = ancestors.get(id(node), set())
+        if {ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef} & anc:
+            continue
+        if {ast.For, ast.While} & anc:
+            continue
+        if id(node) in main_guard_ids:
+            continue
+        counts[node.func.id] = counts.get(node.func.id, 0) + 1
+    return counts
+
+
+def _runs_exactly_once(
+    node: ast.AST,
+    enclosing: dict[int, list[ast.AST]],
+    top_level_calls: dict[str, int],
+) -> bool:
+    """Whether *node* executes exactly once per page run.
+
+    True only when every function enclosing it is a plain ``def``/``async def``
+    invoked exactly once from module scope — the ``asyncio.run(main())`` shape.
+    A lambda or class body anywhere in the chain returns False: those are not
+    invoked by name, so the run count cannot be established.
+    """
+    chain = enclosing.get(id(node))
+    if chain is None:
+        return False
+    for frame in chain:
+        if not isinstance(frame, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return False
+        if top_level_calls.get(frame.name, 0) != 1:
+            return False
+    return True
+
+
 def called_but_uninferable(md_path: Path) -> dict[str, str]:
     """Cached functions the page CALLS but whose calls claim inference can't see.
 
@@ -688,6 +764,13 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
         return {}
 
     ancestors = _get_ancestor_types(tree)
+    # Same allowance infer_claims makes, from the same helpers: a call inside a
+    # function that is itself invoked exactly once at top level DOES run and IS
+    # counted. Sharing the helpers is deliberate -- a detector that disagreed
+    # with the inference it reports on would list cases that are actually fine.
+    enclosing = _enclosing_functions(tree)
+    main_guard_ids = _find_main_guard_nodes(tree)
+    top_level_calls = _top_level_invocation_counts(tree, ancestors, main_guard_ids)
     defs: dict[str, list[int]] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
@@ -712,6 +795,10 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
         in_body = bool(
             {ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef} & anc
         )
+        if in_body and _runs_exactly_once(node, enclosing, top_level_calls):
+            in_body = False
+        if id(node) in main_guard_ids:
+            in_body = True  # a __main__ guard never runs here
         in_loop = bool({ast.For, ast.While} & anc)
         calls.setdefault(name, []).append((node.lineno, in_body, in_loop))
 
@@ -775,6 +862,9 @@ def infer_claims(
                 last_def_line[node.name] = max(last_def_line.get(node.name, 0), node.lineno)
 
     # Map each call to its function name and arg tuple (text representation).
+    enclosing = _enclosing_functions(tree)
+    top_level_calls = _top_level_invocation_counts(tree, ancestors, main_guard_ids)
+
     lines = source.splitlines()
     calls: dict[str, list[tuple[str, int]]] = {}  # func -> [(args_repr, lineno)]
     for node in ast.walk(tree):
@@ -783,13 +873,28 @@ def infer_claims(
             node_ancestors = ancestors.get(id(node), set())
             if ast.For in node_ancestors or ast.While in node_ancestors:
                 continue
-            # Skip calls inside function/class bodies — those only run if the
-            # enclosing function is called, which is rare in doc examples.
-            if (ast.FunctionDef in node_ancestors
-                    or ast.AsyncFunctionDef in node_ancestors
-                    or ast.Lambda in node_ancestors
-                    or ast.ClassDef in node_ancestors):
+            # Calls inside a function or class body only run if the enclosing
+            # function is called — usually it isn't, so these are skipped.
+            #
+            # The exception is the standard async doc shape:
+            #
+            #     async def main():
+            #         await fetch_user(1)      # <- the call we care about
+            #     asyncio.run(main())          # <- and it definitely runs
+            #
+            # Here the call runs exactly once, so skipping it threw away the
+            # only evidence those pages offer. ``_runs_exactly_once`` allows the
+            # call through only when every enclosing function is itself invoked
+            # exactly once at top level; anything else (a lambda, a class body,
+            # a helper called twice, or not called at all) still skips, because
+            # then the run count is not one and the inferred claim would be
+            # wrong in a way that is worse than absent.
+            if (ast.Lambda in node_ancestors or ast.ClassDef in node_ancestors):
                 continue
+            if (ast.FunctionDef in node_ancestors
+                    or ast.AsyncFunctionDef in node_ancestors):
+                if not _runs_exactly_once(node, enclosing, top_level_calls):
+                    continue
             # Skip calls inside if __name__ == "__main__" guards
             if id(node) in main_guard_ids:
                 continue
