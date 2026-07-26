@@ -35,6 +35,7 @@ Lift each expensive statement into a function and decorate it. For the full deco
 ```python
 # pipeline.py
 from cash import cache
+import numpy as np
 import pandas as pd
 
 @cache
@@ -52,9 +53,12 @@ Cash detects `open()`, `pd.read_csv`, `np.load`, and friends inside your functio
 
 <!-- test:expect-warning reason="load_data reads a file, so cash's impurity advisory fires on first call (it still caches) — realistic here" -->
 ```python
-load_data("data.csv")
+df = load_data("data.csv")
 print(load_data.cache_info())     # {'hits': 0, 'misses': 1, 'hit_rate': 0.0, ...}
 print(load_data.explain("data.csv"))   # [HIT] ... — tracked files are fresh
+
+engineer_features(df)             # the second stage, same treatment
+print(engineer_features.cache_info())  # {'hits': 0, 'misses': 1, ...}
 ```
 
 Now edit `data.csv` and call `explain()` again: the reason flips to `file_changed`, which is the proof the read was tracked. If it *doesn't* — because you read from a URL, a database, or your own loader — declare the dependency explicitly with `file_depends_on=` or a custom `DataSource`. See [Custom file sources](custom-file-sources.md).

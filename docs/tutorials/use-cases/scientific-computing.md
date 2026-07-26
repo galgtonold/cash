@@ -121,6 +121,7 @@ For non-pandas formats (HDF5 via `h5py`, NetCDF, Zarr, custom binary), declare t
 
 The high-leverage layout for a research notebook is one cached function per stage:
 
+<!-- test:skip reason="illustrative stage sketch — the bodies are `...`, so running it proves only that a def parses" -->
 ```python
 # test:inject: import cash
 @cash.cache

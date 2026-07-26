@@ -103,7 +103,7 @@ from diskcache import Cache
 cache = Cache("/tmp/diskcache")
 
 @cache.memoize()
-def slow_function(data):
+def transform_frame(data):
     return data.apply(complex_transform)
 ```
 
@@ -112,7 +112,7 @@ def slow_function(data):
 import cash
 
 @cash.cache
-def slow_function(data):
+def transform_frame(data):
     return data.apply(complex_transform)
 ```
 

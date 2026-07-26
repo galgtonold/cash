@@ -100,7 +100,7 @@ When the model itself is non-deterministic, make that visible in the cache key:
 
 ```python
 @cash.cache
-def chat(prompt: str, temperature: float = 0.0, seed: int | None = None):
+def chat_deterministic(prompt: str, temperature: float = 0.0, seed: int | None = None):
     return client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,
@@ -148,8 +148,12 @@ Cash tracks hits and misses per function:
 
 ```python
 chat.cache_info()
-# {'hits': 42, 'misses': 8, 'hit_rate': 0.84, 'total_time_saved': 12.4, 'warnings': []}
+# {'hits': 1, 'misses': 1, 'hit_rate': 0.5, ...}
 ```
+
+Those are this page's two calls. Over a real session the interesting number is
+`hit_rate` — a run that re-asks mostly the same prompts should climb toward 1.0,
+and a sudden drop usually means a prompt template changed.
 
 Multiply hits by your per-call cost for a quick spend-avoided estimate. For a Sonnet call at ~$0.05/request, 42 hits ≈ $2.10 saved on that function in this session.
 

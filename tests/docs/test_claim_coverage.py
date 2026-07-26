@@ -48,23 +48,16 @@ from tests.docs.test_tutorials import ALL_DOCS, REPO_ROOT
 #
 # Burn this down; do not add to it without a reason in the PR.
 KNOWN_UNVERIFIED: dict[str, set[str]] = {
-    # Before/after migration comparisons: the "after" fence is a signature, and
-    # calling it would be noise in a page about porting from another library.
-    "docs/migration_guide.md": {"slow_function"},
-    # Three progressively richer versions of the same example; the last is a
-    # custom-file-handler variant that needs a module that does not exist.
-    "docs/tutorials/feature-guides/custom-file-sources.md": {"load_features"},
-    # Calls are inside `for x in range(10)`, whose iteration count inference
-    # does not evaluate. The documented {'hits': 7, 'misses': 3,
-    # 'hit_rate': 0.7} WAS checked by hand against the running page and is
-    # exactly right -- unverified here means un-automated, not unknown.
+    # The only one left. Its calls are inside `for x in range(10)`, and
+    # inference does not evaluate iteration counts -- doing so would mean
+    # interpreting the loop's argument expressions, not just counting nodes.
+    #
+    # The page documents {'hits': 7, 'misses': 3, 'hit_rate': 0.7}. That was
+    # CHECKED by hand against the live page and is exactly right, so
+    # "unverified" here means un-automated, not unknown. The loop is also the
+    # teaching device -- hit rate over repeated calls is the thing being shown
+    # -- so replacing it with explicit calls would cost more than it gains.
     "docs/tutorials/feature-guides/debugging-and-monitoring.md": {"expensive"},
-    "docs/tutorials/feature-guides/production-transition.md": {"engineer_features"},
-    # Second definition adds temperature/seed; calling it would hit a real API.
-    "docs/tutorials/use-cases/llm-api-calls.md": {"chat"},
-    # Last definition is a `...` stub in a DAG sketch alongside analyse/reduce/
-    # plot; renaming one sibling reads worse than the entry does.
-    "docs/tutorials/use-cases/scientific-computing.md": {"simulate"},
 }
 
 

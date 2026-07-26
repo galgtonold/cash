@@ -231,6 +231,7 @@ A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *
 
 For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` (`src/cash/core.py`) lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
+<!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->
 ```python
 import cash
 
