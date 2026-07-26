@@ -140,6 +140,19 @@ dev = [
     # scipy is used by tests/test_notebook/test_size_estimator.py to
     # exercise the csr/csc/coo branches of _estimate_object_size.
     "scipy",
+    # scikit-learn is needed by the integration tests that drive a REAL kernel
+    # (test_real_world_libraries.py, test_rng_badge_indicator.py,
+    # test_user_testing_findings.py). The `docs-test` note above explains that
+    # sklearn is injected as a fake module for the docs pages — that works only
+    # because those execute in-process. `nb_runner` runs a separate kernel, and
+    # a fake module in the pytest process is not on the kernel's sys.path, so
+    # those tests need the genuine package.
+    #
+    # Declared rather than importorskip'd on purpose: skipping would keep the
+    # estimator duck-type gate, the `# @cash:cache-fit` opt-in path and the
+    # unseeded-fit randomness pills silently untested on any dev machine
+    # without it, which is how nine of them read as a regression (CAS-244).
+    "scikit-learn",
     "nest_asyncio",
     "traitlets",
     "pyinstrument>=4.6,<6",
