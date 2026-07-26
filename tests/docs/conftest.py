@@ -13,19 +13,33 @@ import pytest
 
 @pytest.fixture(autouse=True)
 def reset_cash_state(tmp_path, monkeypatch):
-    """Each doc page gets a fresh Cash default instance with an isolated
-    cache directory in tmp_path. This prevents tests from interfering
-    via shared on-disk caches.
+    """Each doc page gets a fresh Cash default instance.
+
+    This used to be a **no-op in both halves**, so every page inherited
+    whatever global state an earlier test happened to leave behind:
+
+    * ``cash._reset_default_for_tests`` does not exist, and the ``hasattr``
+      guard meant the call was silently skipped rather than failing.
+    * ``CASH_DEFAULT_BACKEND_TYPE`` is not a config field. Env vars map to
+      field names (``CASH_BACKEND``), and unknown ``CASH_*`` vars are ignored
+      by design, so setting it did nothing.
+
+    The consequence was not theoretical (CAS-238): `test_configure_runtime`
+    calls ``cash.configure(backend="redis", persist_all=True)`` and never
+    restores it, so a doc page landing on that xdist worker afterwards tried to
+    write **every** statement to a Redis that isn't running. That is a 30 s
+    pytest-timeout, reported by xdist as "worker crashed", against a page that
+    runs in 0.74 s on its own.
+
+    ``reset_session()`` is the real API: it drops the singleton so the next
+    access re-resolves config from TOML/env/defaults. Cache isolation comes for
+    free from ``parquet_stubs``' ``chdir(tmp_path)``, since the default
+    ``cache_dir`` is the relative ``.cash``.
     """
-    monkeypatch.setenv("CASH_DEFAULT_BACKEND_TYPE", "in_memory")
-    # The default Cash singleton lazily initializes on first import; force
-    # a fresh import by clearing module-level state. The exact mechanism
-    # depends on Cash's internals — see src/cash/__init__.py for the
-    # default-instance hook.
     import cash
-    if hasattr(cash, "_reset_default_for_tests"):
-        cash._reset_default_for_tests()
+    cash.reset_session()
     yield
+    cash.reset_session()
 
 
 @pytest.fixture(autouse=True)
