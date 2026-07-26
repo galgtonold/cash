@@ -863,6 +863,15 @@ def _expand_loop_call(
             return None
         axes.append((loop.target.id, values))
 
+    # Cap the PRODUCT, not each axis. Capping per axis let two nested loops of
+    # 1000 expand to a million binding dicts, which timed out the page and --
+    # because pytest-timeout kills the process -- surfaced as "worker crashed".
+    total = 1
+    for _, values in axes:
+        total *= len(values)
+        if total > 1000:
+            return None
+
     combos: list[dict[str, Any]] = [{}]
     for name, values in axes:
         combos = [{**c, name: v} for c in combos for v in values]
