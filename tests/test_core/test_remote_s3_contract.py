@@ -172,3 +172,113 @@ class TestEndToEndAgainstRealS3Api:
         with pytest.raises(Exception):
             load(URL)
         assert len(calls) == 2, "freshness could not be confirmed, so it recomputed"
+
+
+class TestMultipartEtags:
+    """S3 derives a multipart ETag from the PART checksums plus ``-N``.
+
+    It is therefore a function of how the object was uploaded, not only of its
+    bytes. Both halves matter to cash and neither is obvious, so both are
+    pinned here rather than assumed.
+    """
+
+    BODY = b"x" * (12 * 1024 * 1024)  # 12 MiB, over the 5 MiB multipart threshold
+
+    def _upload(self, client, chunk_mb: int) -> str:
+        import io
+
+        from boto3.s3.transfer import TransferConfig
+        import s3fs
+
+        client.upload_fileobj(
+            io.BytesIO(self.BODY),
+            BUCKET,
+            KEY,
+            Config=TransferConfig(
+                multipart_threshold=5 * 1024 * 1024,
+                multipart_chunksize=chunk_mb * 1024 * 1024,
+            ),
+        )
+        s3fs.S3FileSystem.clear_instance_cache()
+        return RemoteFileDataSource(URL).state_token()
+
+    def test_a_re_upload_with_the_same_part_size_is_stable(self, s3):
+        """The case that actually matters: re-running the same upload job must
+        not throw away everyone's cache."""
+        first = self._upload(s3, 5)
+        # The ETag is quoted, so the part count is the tail INSIDE the quotes.
+        assert first.rstrip('"').endswith("-3"), (
+            f"expected a 3-part multipart ETag, got {first}"
+        )
+        assert self._upload(s3, 5) == first
+
+    def test_a_different_part_size_moves_the_token_for_identical_bytes(self, s3):
+        """Known over-invalidation, documented rather than fixed.
+
+        Re-uploading the SAME bytes with a different part size yields a
+        different ETag, so cash recomputes needlessly. There is no better
+        validator available: a version id moves on every re-upload (strictly
+        worse), and size/mtime are weaker. Correctness is never at risk —
+        changed content always moves the ETag — and the cost is one spurious
+        recompute that the next run caches under the new token.
+
+        This only bites when the uploader's chunk size changes, e.g. switching
+        between the AWS CLI and a boto3 default.
+        """
+        five = self._upload(s3, 5)
+        eight = self._upload(s3, 8)
+        assert five != eight
+        assert eight.rstrip('"').endswith("-2"), f"expected a 2-part ETag, got {eight}"
+
+
+class TestVersionPinnedUrls:
+    """``?versionId=`` is only ever tested against a string parse elsewhere."""
+
+    def test_a_pinned_url_is_stable_across_later_overwrites(self, s3):
+        s3.put_bucket_versioning(
+            Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"}
+        )
+        v1 = s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"one")["VersionId"]
+        v2 = s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"two")["VersionId"]
+
+        pinned_v1 = RemoteFileDataSource(f"{URL}?versionId={v1}")
+        pinned_v2 = RemoteFileDataSource(f"{URL}?versionId={v2}")
+
+        assert pinned_v1.immutable and pinned_v2.immutable
+        assert pinned_v1.state_token() != pinned_v2.state_token()
+
+        before = pinned_v1.state_token()
+        s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"three")
+        assert pinned_v1.state_token() == before, (
+            "a pinned version names one immutable object; later writes to the "
+            "key must not disturb it - that is what makes the pin free"
+        )
+
+    def test_a_pinned_url_is_still_readable(self, s3):
+        """The pin must not break the READ. cash resolves the token without a
+        request, so nothing else would notice if the URL form were unusable."""
+        import fsspec
+        import s3fs
+
+        s3.put_bucket_versioning(
+            Bucket=BUCKET, VersioningConfiguration={"Status": "Enabled"}
+        )
+        v1 = s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"one")["VersionId"]
+        s3.put_object(Bucket=BUCKET, Key=KEY, Body=b"two")
+        s3fs.S3FileSystem.clear_instance_cache()
+
+        with fsspec.open(f"{URL}?versionId={v1}", "rb") as fh:
+            assert fh.read() == b"one", "the pinned URL must read the pinned bytes"
+
+
+class TestValidationCostAgainstS3:
+    def test_one_metadata_request_per_check(self, s3):
+        """The count users are told to act on must not be inflated by retries."""
+        from cash.remote_source import measured_validation
+
+        with measured_validation() as validation:
+            RemoteFileDataSource(URL).state_token()
+            RemoteFileDataSource(URL).state_token()
+
+        assert validation.count == 2
+        assert validation.seconds > 0

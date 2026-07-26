@@ -155,6 +155,17 @@ load_events.explain("s3://bucket/events.parquet")
 Re-uploading *identical* bytes does **not** invalidate: an ETag is derived from
 content, so a no-op rewrite doesn't throw away everyone's cache.
 
+!!! note "One exception, for large multipart uploads"
+    S3 computes a **multipart** ETag from the checksums of the parts plus a
+    `-N` part-count suffix, so it depends on how the object was uploaded as
+    well as on its bytes. Re-uploading identical data with a *different part
+    size* — switching between the AWS CLI and a boto3 default, say — produces a
+    different ETag, and cash recomputes once even though nothing changed.
+
+    Correctness is never at risk (changed content always moves the ETag), and
+    the next run caches under the new token. Keeping your upload tooling
+    consistent avoids it entirely.
+
 Two things follow, and both are the point:
 
 - **A hit costs no download.** The metadata request is tens of milliseconds
