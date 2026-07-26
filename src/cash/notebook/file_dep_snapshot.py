@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "snapshot_file_deps",
     "snapshot_remote_deps",
+    "snapshot_dependencies",
     "existing_file_deps",
     "split_file_dep_value",
     "file_content_hash",
@@ -148,6 +149,24 @@ def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
         else:
             entry["hash"] = token
         snapshot[url] = entry
+    return snapshot
+
+
+def snapshot_dependencies(
+    paths: Iterable[str], urls: Iterable[str] | None = None
+) -> dict[str, dict[str, Any]]:
+    """Snapshot everything a call read — local files and remote objects — as one dict.
+
+    The single entry point both caching subsystems use, so neither has to
+    remember to merge two helpers. Local and remote entries answer the same
+    question ("did what this call read change since?") and are re-checked
+    through the same :func:`file_dep_is_fresh`, which dispatches on the entry
+    shape; keeping the *capture* side unified too means the discriminator is
+    written in exactly one place.
+    """
+    snapshot = snapshot_file_deps(set(paths)) if paths else {}
+    if urls:
+        snapshot.update(snapshot_remote_deps(urls))
     return snapshot
 
 

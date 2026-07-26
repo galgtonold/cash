@@ -21,7 +21,7 @@ from cash.exceptions import CacheBackendError, CacheKeyComputationError, CacheSe
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key, write_provenance_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
-from cash.notebook.file_dep_snapshot import snapshot_file_deps
+from cash.notebook.file_dep_snapshot import snapshot_dependencies, snapshot_file_deps
 from cash.notebook.object_hashing import estimate_object_size
 from cash.notebook.purity import is_known_pure, is_pure, is_stateful
 from cash.notebook.statement._metadata import StatementCacheMetadata
@@ -1797,7 +1797,7 @@ class StatementProcessor:
                 cache_key, code, result, inputs, outputs, accessed_files,
                 execution_time, effective_ttl, captured, process_start,
                 source_hash, captured_vars, force_persist=force_persist,
-                miss_guarded=miss_guarded,
+                miss_guarded=miss_guarded, accessed_remote=accessed_remote,
             )
         elif self.debug:
             logger.debug("%s Skipping cache save due to @cash:no-cache", _LOG_ANNOTATION)
@@ -2526,7 +2526,7 @@ class StatementProcessor:
         """Update lineage and variable tracking."""
         self._lineage.capture_and_track_variables(self._tracking_state, outputs, inputs, code, source_hash, cache_key=cache_key, accessed_files=accessed_files, tree=tree)
 
-    def _save_to_cache(self, cache_key: str, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], execution_time: float, ttl: int | None, captured: Any, process_start: float, source_hash: str, captured_vars: dict[str, Any], force_persist: bool = False, miss_guarded: bool = False) -> StatementCacheMetadata | None:
+    def _save_to_cache(self, cache_key: str, code: str, result: Any, inputs: set[str], outputs: set[str], accessed_files: set[str], execution_time: float, ttl: int | None, captured: Any, process_start: float, source_hash: str, captured_vars: dict[str, Any], force_persist: bool = False, miss_guarded: bool = False, accessed_remote: set[str] | None = None) -> StatementCacheMetadata | None:
         if getattr(result, 'skipped', False):
              return None
 
@@ -2552,6 +2552,7 @@ class StatementProcessor:
             source_hash=source_hash,
             code=code,
             file_dependencies=all_file_deps,
+            accessed_remote=accessed_remote or set(),
             force_persist=force_persist,
             miss_guarded=miss_guarded,
         )
@@ -2899,6 +2900,7 @@ class StatementProcessor:
         source_hash: str,
         code: str,
         file_dependencies: set[str],
+        accessed_remote: set[str] = frozenset(),
         force_persist: bool = False,
         miss_guarded: bool = False,
     ) -> StatementCacheMetadata | None:
@@ -2917,7 +2919,7 @@ class StatementProcessor:
         # would pay ~1ms/statement of cache-lookup overhead reading
         # them only to discover they're skipped entries. By writing
         # nothing, the next lookup is a fast clean miss.
-        if not force_persist and not file_dependencies:
+        if not force_persist and not file_dependencies and not accessed_remote:
             config_obj = getattr(self.cash_instance, 'config', None)
             min_exec_time = _config_float(
                 config_obj, 'min_execution_time_to_cache_seconds', 0.01
@@ -2944,7 +2946,7 @@ class StatementProcessor:
         # Size-aware caching: skip storing large objects when serialization overhead dominates
         should_skip, skip_reason, prediction = self._should_skip_large_object_caching(
             captured_vars, execution_time, force_persist,
-            has_file_dependencies=bool(file_dependencies),
+            has_file_dependencies=bool(file_dependencies or accessed_remote),
         )
 
         # Statements whose outputs include a __main__-defined function or
@@ -3036,7 +3038,7 @@ class StatementProcessor:
             source_hash=source_hash,
             code=code,
             key=cache_key,
-            file_dependencies=snapshot_file_deps(file_dependencies),
+            file_dependencies=snapshot_dependencies(file_dependencies, accessed_remote),
             force_persist=force_persist,
             output_lineages=self._lineage.build_output_lineages(self._tracking_state, outputs),
             ttl=ttl,

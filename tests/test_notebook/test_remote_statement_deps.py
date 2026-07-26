@@ -1,15 +1,19 @@
 """A notebook statement reading s3:// must invalidate when the object changes.
 
-The decorator path tracks remote reads by recording the store's validator in
-the entry's metadata and re-checking it on a hit (CAS-236). The statement path
-works differently: ``compute_file_hash_component`` folds file state directly
-into the statement's *lineage*, so the natural home for a remote token is the
-same component. A changed ETag then yields a different key, which cannot go
-stale by construction — there is nothing to re-validate.
+Two mechanisms, and both are needed — a statement's ``cache_key`` is computed
+*before* it executes, so nothing discovered during execution can be in it:
 
-Remote URLs deliberately do NOT enter ``executed_file_deps``. That set is
-stat'ed and getmtime'd by its consumers, so a URL there is silently dropped at
-best; the key component alone is sufficient. See CAS-237.
+* **Lineage** — ``compute_file_hash_component`` folds ``url:token`` alongside
+  ``path:mtime:size``. This keys statements *downstream* of the read, so a
+  consumer of ``df`` invalidates.
+* **Recorded dependency** — the token is stored with the entry and re-checked
+  on lookup by ``CacheFreshnessChecker._invalidate_if_direct_file_changed``,
+  which rejects the entry so the *reading* statement recomputes under the same
+  key. Exactly how local files have always worked.
+
+Remote URLs deliberately do NOT enter ``executed_file_deps``: that set is
+stat'ed and getmtime'd by its consumers, so a URL there contributes nothing.
+See CAS-237.
 """
 from __future__ import annotations
 
@@ -140,41 +144,39 @@ class TestThroughARealStatement:
         proc.debug = False
         return proc
 
-    @pytest.mark.xfail(
-        reason=(
-            "CAS-237 is NOT finished. A statement's cache_key is computed "
-            "BEFORE it executes, so a token discovered DURING execution cannot "
-            "be in it. compute_file_hash_component feeds lineage, which keys "
-            "DOWNSTREAM statements — so a consumer of `df` does invalidate, but "
-            "the reading statement itself still hits. Closing this needs the "
-            "decorator's shape: record the token with the entry and re-check it "
-            "on lookup. The lineage half (below, and the component tests above) "
-            "is done and correct as far as it goes."
-        ),
-        strict=True,
-    )
-    def test_a_changed_object_gives_the_statement_a_new_key(self, processor, origin):
+    def test_a_changed_object_forces_the_statement_to_recompute(self, processor, origin):
+        """The key does NOT move — it is computed before the statement runs.
+
+        Invalidation happens the way it does for local files: the token is
+        recorded with the entry and re-checked on lookup, so the entry is
+        rejected and the statement recomputes under the *same* key.
+        """
+        from cash.notebook.cache_status import CacheStatus
+
         pytest.importorskip("pandas")
         code = f'df = pd.read_csv("{origin.url}")'
-
         processor.shell.user_ns["pd"] = __import__("pandas")
-        first = processor.process_statement(code)
 
+        processor.process_statement(code)
         origin.etag = '"v2"'
         second = processor.process_statement(code)
 
-        assert first.get("cache_key") != second.get("cache_key"), (
-            "the statement's key must move with the object, or an edited "
-            "upstream dataset is served stale forever"
+        assert second["status"] == CacheStatus.COMPUTED, (
+            "a changed object must force a recompute, or an edited upstream "
+            "dataset is served stale forever"
         )
 
-    def test_an_unchanged_object_keeps_the_key(self, processor, origin):
+    def test_an_unchanged_object_still_hits(self, processor, origin):
+        """The other half: tracking must not cost every re-run a recompute."""
+        from cash.notebook.cache_status import CacheStatus
+
         pytest.importorskip("pandas")
         code = f'df = pd.read_csv("{origin.url}")'
         processor.shell.user_ns["pd"] = __import__("pandas")
 
-        first = processor.process_statement(code)
+        processor.process_statement(code)
         second = processor.process_statement(code)
-        assert first.get("cache_key") == second.get("cache_key"), (
-            "an unchanged object must not churn the key, or nothing ever hits"
+
+        assert second["status"] != CacheStatus.COMPUTED, (
+            f"an unchanged object must hit, got {second['status']!r}"
         )

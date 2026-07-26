@@ -9,16 +9,32 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sys
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
+    "is_remote_url",
     "normalize_path",
     "resolve_file_dep_path",
     "safe_text",
     "stdout_supports_unicode",
 ]
+
+# ``file://`` is excluded: it names a local path that can genuinely be stat'ed.
+_URL_SCHEME_RE = re.compile(r"^(?!file://)[a-zA-Z][a-zA-Z0-9+.\-]*://")
+
+
+def is_remote_url(path: str) -> bool:
+    """Whether *path* is a remote URL rather than a local filesystem path.
+
+    A single definition, because the answer decides behaviour in a dozen
+    places: whether the file tracker records a read on its remote channel,
+    whether a dependency entry is validated by stat or by the store's
+    validator, and whether a stored key can be path-resolved at all.
+    """
+    return bool(_URL_SCHEME_RE.match(path))
 
 
 def normalize_path(path: str) -> str:
@@ -182,7 +198,18 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
        (handles subdirectory structure like ``examples/data.csv``).
 
     Returns the resolved path if found, or ``None`` if the file cannot be located.
+
+    A **remote URL is returned unchanged**. There is nothing on this filesystem
+    to locate, and the fallbacks below would mangle it into a bogus local path,
+    fail, and report the dependency as missing — a permanent miss for every
+    statement that reads object storage. Handling it here rather than at each
+    call site is deliberate: there are nine of them across restore, freshness,
+    re-execution planning and virtual lineage, and a rule that nine callers must
+    remember is a rule that will be forgotten. This makes them all correct by
+    construction.
     """
+    if is_remote_url(stored_path):
+        return stored_path
     if os.path.exists(stored_path):
         return stored_path
 

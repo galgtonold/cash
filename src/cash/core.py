@@ -1709,12 +1709,10 @@ class Cash:
         price of the read being tracked at all, and it is small against the
         download the entry exists to avoid.
         """
-        from cash.notebook.file_dep_snapshot import snapshot_file_deps, snapshot_remote_deps
-        accessed = tracker.get_accessed_files()
-        deps = snapshot_file_deps(accessed) if accessed else {}
-        remote = tracker.get_accessed_remote_urls()
-        if remote:
-            deps.update(snapshot_remote_deps(remote))
+        from cash.notebook.file_dep_snapshot import snapshot_dependencies
+        deps = snapshot_dependencies(
+            tracker.get_accessed_files(), tracker.get_accessed_remote_urls()
+        )
         return deps or None
 
     @staticmethod

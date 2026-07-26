@@ -22,7 +22,7 @@ import threading
 from collections.abc import Callable
 from typing import Any, Optional
 
-from cash.utils import normalize_path
+from cash.utils import is_remote_url, normalize_path
 
 # A remote URL handed to a reader (``pd.read_parquet("s3://bucket/key")``)
 # reaches us as the raw first argument. ``os.path.realpath`` would mangle it into
@@ -31,7 +31,6 @@ from cash.utils import normalize_path
 # the object changed. URLs are routed to their own channel instead and tracked
 # by the store's own validator (ETag / version id / generation). ``file://`` is
 # excluded: it names a local path that can genuinely be stat'ed. See CAS-236.
-_URL_SCHEME_RE = re.compile(r"^(?!file://)[a-zA-Z][a-zA-Z0-9+.\-]*://")
 
 __all__ =["FileDependencyRegistry", "PostImportHook", "FileAccessTracker", "FileDependencies"]
 
@@ -491,7 +490,7 @@ class FileAccessTracker:
 
     def _track_path(self, path):
         raw_path = str(path)
-        if _URL_SCHEME_RE.match(raw_path):
+        if is_remote_url(raw_path):
             # A remote URL is a real dependency, just not a stat-able one:
             # ``realpath`` would mangle it into a nonexistent local path and the
             # dependency would vanish. Record it on the remote channel, where it
