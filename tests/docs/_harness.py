@@ -15,6 +15,7 @@ Supports two execution paths:
 from __future__ import annotations
 
 import asyncio
+import operator
 import re
 import warnings
 from ast import PyCF_ALLOW_TOP_LEVEL_AWAIT
@@ -753,6 +754,133 @@ def _runs_exactly_once(
     return True
 
 
+# Operators safe to evaluate on literals when expanding a loop. Deliberately
+# arithmetic-only: the goal is to resolve `expensive(x % 3)` across a known
+# range, not to interpret Python. Anything outside this set makes the whole
+# loop unexpandable, which returns the old skip-the-loop behaviour.
+_SAFE_BINOPS = {
+    ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul,
+    ast.FloorDiv: operator.floordiv, ast.Mod: operator.mod, ast.Pow: operator.pow,
+}
+
+
+def _enclosing_for_loops(tree: ast.AST) -> dict[int, list[ast.For]]:
+    """Map each node id to the ``for`` loops enclosing it, innermost first."""
+    chains: dict[int, list[ast.For]] = {}
+
+    def visit(node: ast.AST, stack: list[ast.For]) -> None:
+        for child in ast.iter_child_nodes(node):
+            chains[id(child)] = list(stack)
+            visit(child, [child, *stack] if isinstance(child, ast.For) else stack)
+
+    visit(tree, [])
+    return chains
+
+
+def _literal_iter_values(node: ast.AST) -> list[Any] | None:
+    """The values a literal iterable yields, or ``None`` if not statically known.
+
+    Handles ``range(...)`` with constant arguments and literal list/tuple
+    displays. A generator, a name, or a call to anything else is unknowable and
+    returns ``None``.
+    """
+    if isinstance(node, (ast.List, ast.Tuple)):
+        out = []
+        for elt in node.elts:
+            if not isinstance(elt, ast.Constant):
+                return None
+            out.append(elt.value)
+        return out
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and node.func.id == "range" and not node.keywords):
+        args = []
+        for a in node.args:
+            if not isinstance(a, ast.Constant) or not isinstance(a.value, int):
+                return None
+            args.append(a.value)
+        if not 1 <= len(args) <= 3:
+            return None
+        try:
+            values = list(range(*args))
+        except ValueError:
+            return None
+        # A pathological range would make the expansion dominate the run.
+        return values if len(values) <= 1000 else None
+    return None
+
+
+def _eval_literal(node: ast.AST, bindings: dict[str, Any]) -> tuple[bool, Any]:
+    """Evaluate *node* against *bindings*, or report that it cannot be.
+
+    Returns ``(ok, value)``. Never executes a call, attribute access, or
+    subscript — an unevaluable expression must degrade to "unknown", not to a
+    guess, because a wrong argument value produces a wrong claim.
+    """
+    if isinstance(node, ast.Constant):
+        return True, node.value
+    if isinstance(node, ast.Name):
+        if node.id in bindings:
+            return True, bindings[node.id]
+        return False, None
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.USub, ast.UAdd)):
+        ok, val = _eval_literal(node.operand, bindings)
+        if not ok or not isinstance(val, (int, float)):
+            return False, None
+        return True, (-val if isinstance(node.op, ast.USub) else +val)
+    if isinstance(node, ast.BinOp) and type(node.op) in _SAFE_BINOPS:
+        ok_l, left = _eval_literal(node.left, bindings)
+        ok_r, right = _eval_literal(node.right, bindings)
+        if not ok_l or not ok_r:
+            return False, None
+        if not isinstance(left, (int, float)) or not isinstance(right, (int, float)):
+            return False, None
+        try:
+            return True, _SAFE_BINOPS[type(node.op)](left, right)
+        except (ZeroDivisionError, OverflowError, ValueError):
+            return False, None
+    return False, None
+
+
+def _expand_loop_call(
+    call: ast.Call, loops: list[ast.For]
+) -> list[str] | None:
+    """The per-iteration ``args_repr`` for *call*, or ``None`` if unknowable.
+
+    A loop was previously skipped outright because the iteration count is
+    usually unknown. When the iterable is literal and every argument is a pure
+    arithmetic function of the loop variables, the count AND the arguments are
+    both known — which is what a claim needs, since hits depend on argument
+    *uniqueness*, not merely on how many calls happen.
+    """
+    if not loops or len(loops) > 2:      # deeper nesting: not worth the risk
+        return None
+    axes: list[tuple[str, list[Any]]] = []
+    for loop in reversed(loops):         # outermost first
+        if not isinstance(loop.target, ast.Name):
+            return None
+        values = _literal_iter_values(loop.iter)
+        if values is None:
+            return None
+        axes.append((loop.target.id, values))
+
+    combos: list[dict[str, Any]] = [{}]
+    for name, values in axes:
+        combos = [{**c, name: v} for c in combos for v in values]
+
+    out: list[str] = []
+    for bindings in combos:
+        parts: list[str] = []
+        for arg in call.args:
+            ok, val = _eval_literal(arg, bindings)
+            if not ok:
+                return None
+            parts.append(repr(val))
+        if call.keywords:
+            return None
+        out.append(",".join(parts))
+    return out
+
+
 def called_but_uninferable(md_path: Path) -> dict[str, str]:
     """Cached functions the page CALLS but whose calls claim inference can't see.
 
@@ -792,6 +920,7 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
     enclosing = _enclosing_functions(tree)
     main_guard_ids = _find_main_guard_nodes(tree)
     top_level_calls = _top_level_invocation_counts(tree, ancestors, main_guard_ids)
+    for_loops = _enclosing_for_loops(tree)
     defs: dict[str, list[int]] = {}
     for node in ast.walk(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and any(
@@ -834,6 +963,11 @@ def called_but_uninferable(md_path: Path) -> dict[str, str]:
             # unverified demonstration.
             continue
         in_loop = bool({ast.For, ast.While} & anc)
+        if in_loop and ast.While not in anc:
+            # An expandable `for` loop is countable, so it is a usable call
+            # site. Same rule infer_claims applies, from the same helper.
+            if _expand_loop_call(node, for_loops.get(id(node), [])) is not None:
+                in_loop = False
         calls.setdefault(name, []).append((node.lineno, in_body, in_loop))
 
     out: dict[str, str] = {}
@@ -898,15 +1032,26 @@ def infer_claims(
     # Map each call to its function name and arg tuple (text representation).
     enclosing = _enclosing_functions(tree)
     top_level_calls = _top_level_invocation_counts(tree, ancestors, main_guard_ids)
+    for_loops = _enclosing_for_loops(tree)
 
     lines = source.splitlines()
     calls: dict[str, list[tuple[str, int]]] = {}  # func -> [(args_repr, lineno)]
     for node in ast.walk(tree):
         if isinstance(node, ast.Call):
-            # Skip calls inside loops
             node_ancestors = ancestors.get(id(node), set())
-            if ast.For in node_ancestors or ast.While in node_ancestors:
+            # A `while` loop's trip count is never statically known.
+            if ast.While in node_ancestors:
                 continue
+            # A `for` loop over a literal iterable IS known, and so are the
+            # arguments when they are arithmetic on the loop variable. That
+            # matters because hits depend on argument UNIQUENESS: ten calls to
+            # `expensive(x % 3)` are three misses and seven hits, not ten of
+            # anything. Expanded below; unexpandable loops still skip.
+            loop_expansion: list[str] | None = None
+            if ast.For in node_ancestors:
+                loop_expansion = _expand_loop_call(node, for_loops.get(id(node), []))
+                if loop_expansion is None:
+                    continue
             # Calls inside a function or class body only run if the enclosing
             # function is called — usually it isn't, so these are skipped.
             #
@@ -947,6 +1092,10 @@ def infer_claims(
                 continue
             # Only count calls AFTER the last definition of this function.
             if node.lineno <= last_def_line.get(target_name, 0):
+                continue
+            if loop_expansion is not None:
+                for args_repr in loop_expansion:
+                    calls.setdefault(target_name, []).append((args_repr, node.lineno))
                 continue
             args_repr = ",".join(
                 ast.unparse(a) if hasattr(ast, "unparse") else repr(a) for a in node.args

@@ -47,18 +47,18 @@ from tests.docs.test_tutorials import ALL_DOCS, REPO_ROOT
 #                        never executes.
 #
 # Burn this down; do not add to it without a reason in the PR.
-KNOWN_UNVERIFIED: dict[str, set[str]] = {
-    # The only one left. Its calls are inside `for x in range(10)`, and
-    # inference does not evaluate iteration counts -- doing so would mean
-    # interpreting the loop's argument expressions, not just counting nodes.
-    #
-    # The page documents {'hits': 7, 'misses': 3, 'hit_rate': 0.7}. That was
-    # CHECKED by hand against the live page and is exactly right, so
-    # "unverified" here means un-automated, not unknown. The loop is also the
-    # teaching device -- hit rate over repeated calls is the thing being shown
-    # -- so replacing it with explicit calls would cost more than it gains.
-    "docs/tutorials/feature-guides/debugging-and-monitoring.md": {"expensive"},
-}
+# EMPTY, and the goal is to keep it that way. Every doc page that calls a
+# cached function now has at least one call site claim inference can see, so
+# every cache demonstration in the docs is checked against real cache_info().
+#
+# Getting here fixed three genuinely broken examples that had been passing every
+# suite: two pages documenting cache_info() payloads they never produced, and
+# one using np.log1p on a page that never imported numpy.
+#
+# Add an entry only with a reason. A page landing here means it teaches runtime
+# behaviour nothing verifies -- which is how a documented hit where cash
+# actually misses gets shipped.
+KNOWN_UNVERIFIED: dict[str, set[str]] = {}
 
 
 def _actual() -> dict[str, dict[str, str]]:
@@ -115,3 +115,58 @@ def test_known_pages_still_exist(page):
         f"{page} is listed in KNOWN_UNVERIFIED but does not exist; the entry "
         f"can never be satisfied and hides whatever replaced the page"
     )
+
+
+# ---------------------------------------------------------------------------
+# Loop expansion
+#
+# A `for` loop over a literal iterable has a knowable trip count, and when the
+# arguments are arithmetic on the loop variable the argument VALUES are knowable
+# too. That second half is what a claim needs: ten calls to `expensive(x % 3)`
+# are three misses and seven hits, not ten of anything, because hits depend on
+# argument uniqueness.
+#
+# The negative cases matter more than the positive ones. An expander that
+# quietly returned "unknown" would empty KNOWN_UNVERIFIED by failing rather than
+# by working, and an expander that guessed would produce confidently wrong
+# claims -- worse than the skip it replaced.
+# ---------------------------------------------------------------------------
+
+_DEF = "import cash\n@cash.cache\ndef f(x):\n    return x\n\n"
+
+
+def _claims(body: str):
+    from tests.docs._harness import infer_claims
+
+    return [(c.function, c.expected_hits, c.expected_misses) for c in infer_claims(_DEF + body)]
+
+
+@pytest.mark.parametrize(
+    "label, body, expected",
+    [
+        ("repeated args collapse to unique keys",
+         "for x in range(10):\n    f(x % 3)\n", [("f", 7, 3)]),
+        ("distinct args are all misses",
+         "for x in range(3):\n    f(x)\n", [("f", 0, 3)]),
+        ("literal list iterable",
+         "for x in [1, 1, 2]:\n    f(x)\n", [("f", 1, 2)]),
+        ("nested loops multiply out",
+         "for a in range(2):\n    for b in range(2):\n        f(a + b)\n", [("f", 1, 3)]),
+    ],
+)
+def test_loop_expansion_counts_argument_uniqueness(label, body, expected):
+    assert _claims(body) == expected, label
+
+
+@pytest.mark.parametrize(
+    "label, body",
+    [
+        ("iterable is a name, trip count unknown", "for x in data:\n    f(x)\n"),
+        ("argument needs a call, value unknown", "for x in range(3):\n    f(compute(x))\n"),
+        ("while loops never have a known trip count", "while cond:\n    f(1)\n"),
+        ("keyword arguments are not expanded", "for x in range(3):\n    f(x=x)\n"),
+    ],
+)
+def test_unknowable_loops_claim_nothing(label, body):
+    """Degrade to silence, never to a guess."""
+    assert _claims(body) == [], label
