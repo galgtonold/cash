@@ -233,7 +233,10 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
         cached = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
         time_s = sum(c.time_s for c in g.calls)
         short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name
-        lines.append(f"    {short}(): {cached}/{total} cached ({time_s:.3f}s)")
+        # Name the mechanism for a call cash wrapped itself: the user decorated
+        # nothing, so an unlabelled entry reads as someone else's doing.
+        via = " [via @cash:cache-calls]" if g.intercepted else ""
+        lines.append(f"    {short}(){via}: {cached}/{total} cached ({time_s:.3f}s)")
     return lines
 
 

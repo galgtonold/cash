@@ -67,6 +67,12 @@ class CallCache:
         # reused after garbage collection, so the original is held alongside
         # the wrapper to keep it alive and to detect a recycled id.
         self._wrappers: dict[int, tuple[types.FunctionType, object]] = {}
+        #: Log keys of functions this instance actually wrapped. The badge uses
+        #: it to tell an intercepted call from a hand-decorated one — both land
+        #: in the same call log, and undifferentiated the section appears out of
+        #: nowhere for someone who decorated nothing. Only genuinely wrapped
+        #: functions are recorded, so the badge cannot over-claim.
+        self.wrapped_names: set[str] = set()
 
     def resolve(self, fn):
         """Return *fn* or a cached counterpart. Never raises."""
@@ -84,7 +90,21 @@ class CallCache:
         except Exception:  # noqa: BLE001 - a caching wrapper is never worth an error
             return fn
         self._wrappers[id(fn)] = (fn, wrapper)
+        self.wrapped_names.add(self._log_key(fn))
         return wrapper
+
+    def _log_key(self, fn) -> str:
+        """The name this function's calls appear under in the decorator log.
+
+        Delegates to ``Cash._get_func_key`` rather than rebuilding
+        ``module.qualname`` here: the two must agree exactly or the badge
+        silently stops marking intercepted calls, and a second copy of the
+        rule is how that drifts.
+        """
+        try:
+            return self._cash._get_func_key(fn)
+        except Exception:  # noqa: BLE001 - falls back to a best-effort name
+            return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
 
 def wrap_eligible_calls(tree: ast.Module) -> tuple[ast.Module, int]:

@@ -247,7 +247,20 @@ nothing order-independent can be pulled out of it:
 
 Calls already wrapped in `@cash.cache` are left alone (they are on this path
 already), and builtins are skipped so a hot loop doesn't pay for a cache key per
-`len()`. Bound methods are not intercepted yet.
+`len()`.
+
+**Bound methods are deliberately not intercepted.** `model.predict(x)` looks like
+an obvious candidate, but caching a method puts `self` in the key, and
+[caching class methods](tutorials/feature-guides/caching-class-methods.md)
+documents why that needs your judgement rather than cash's guess: an unpicklable
+receiver silently fails to cache, a heavy `self.df` gets pickled on every call,
+and two logically-identical instances miss each other. Self-mutating methods
+(`counter.next()`, `cursor.fetchone()`) would be frozen outright. Decorate the
+method yourself, with a `register_hasher` for its type, when you want that.
+
+**If nothing is eligible, cash says so.** A directive that matches no call emits
+a `CashCacheIneffectiveWarning` naming the statement, once — not once per loop
+iteration. Silence would be indistinguishable from a cache that merely missed.
 
 The directive attaches to the statement below it and the backward scan stops at
 the first non-comment line, so on a loop put it on the **header**:
@@ -260,8 +273,15 @@ for x in items:
     s += compute(x)
 ```
 
-Hits show up on the badge in the same place as decorated calls (`compute(): 2/3
-cached`), so you can confirm it engaged.
+Hits show up on the badge alongside decorated calls — it is the same cache — but
+labelled with the directive that produced them, so you can confirm it engaged and
+aren't left wondering where a `@cash.cache` section came from when you decorated
+nothing:
+
+```text
+  @cash.cache:
+    compute() [via @cash:cache-calls]: 2/3 cached (0.402s)
+```
 
 !!! warning "Opt-in for a reason"
     Cash's statement path judges a statement's callees only against the

@@ -222,6 +222,11 @@ class DecoratorCallGroup:
     func_name: str
     calls: tuple[DecoratorCall, ...]
     condensed: bool
+    # True when cash wrapped this callee itself under ``# @cash:cache-calls``
+    # rather than the user decorating it. Same cache, same section — but the
+    # reader needs to know where it came from, and whether their directive
+    # engaged. Defaults False so pre-existing metrics keep reading as decorated.
+    intercepted: bool = False
 
 
 @dataclass(frozen=True)

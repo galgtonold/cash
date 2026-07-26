@@ -81,6 +81,30 @@ def test_without_the_directive_nothing_changes(nb_runner, tmp_path):
     assert _n(log) == 4, "interception engaged without the directive"
 
 
+def test_badge_names_the_directive_that_cached_the_call(nb_runner, tmp_path):
+    """The user decorated nothing, so the badge must say where the cache came from.
+
+    The directive's docs tell readers to confirm it engaged by checking the
+    badge; that instruction is only honest if the badge distinguishes an
+    intercepted call from a hand-decorated one.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        "%cash_badge print",
+        _helpers(log),
+        "out = []",
+        "# @cash:cache-calls\nfor t in [1, 2]:\n    out.append(compute(t))",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    badge = nb_runner.get_output(4)
+
+    assert "compute()" in badge, badge
+    assert "[via @cash:cache-calls]" in badge, (
+        f"the badge does not say the call was cached by the directive:\n{badge}"
+    )
+
+
 def test_reordering_an_accumulator_fold_costs_nothing(nb_runner, tmp_path):
     """The user-reported case: a reorder must stop re-running the tail.
 

@@ -857,6 +857,10 @@ def _decorator_groups(metrics: list[dict[str, Any]]) -> tuple[DecoratorCallGroup
             func_name=str(func_name),
             calls=dc_calls,
             condensed=len(dc_calls) > _CONDENSE_THRESHOLD,
+            # A group is intercepted only if every call in it was — a name that
+            # is sometimes hand-decorated and sometimes not should not be
+            # labelled as cash's doing.
+            intercepted=all(c.get("intercepted") for c in calls),
         ))
     return tuple(groups)
 

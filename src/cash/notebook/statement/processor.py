@@ -17,7 +17,12 @@ from contextlib import contextmanager
 from io import StringIO
 from typing import Any, TypedDict
 
-from cash.exceptions import CacheBackendError, CacheKeyComputationError, CacheSerializationError
+from cash.exceptions import (
+    CacheBackendError,
+    CacheKeyComputationError,
+    CacheSerializationError,
+    CashCacheIneffectiveWarning,
+)
 from cash.notebook._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key, write_provenance_key
 from cash.notebook.cache_status import CacheStatus, ExecutionResult
@@ -405,6 +410,10 @@ class StatementProcessor:
         # Source hashes of entropy-reseed statements already warned about, so the
         # "seed(None) does not make everything below it fresh" note fires once.
         self._warned_entropy_reseed: set[str] = set()
+        # Statements whose ``# @cash:cache-calls`` matched nothing, so the
+        # "this directive did nothing" note fires once per statement rather
+        # than once per loop iteration.
+        self._warned_cache_calls_noop: set[str] = set()
 
         # Sub-expression caching (CAS-243), built on first use under
         # ``# @cash:cache-calls``. Held with the Cash instance it wraps so a
@@ -1535,6 +1544,60 @@ class StatementProcessor:
             return
         self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
 
+    def _mark_intercepted_calls(self, decorator_calls: list) -> None:
+        """Flag drained log entries that cash wrapped itself (CAS-243).
+
+        A ``# @cash:cache-calls`` call and a hand-decorated one land in the same
+        log and the same badge section — correctly, it is the same cache. But
+        undifferentiated, the section materialises out of nowhere for a user who
+        decorated nothing, and a user who *did* write the directive has no way
+        to confirm it engaged, which its own docs tell them to check.
+
+        Matched by the log key the interceptor recorded when it wrapped the
+        function, so a name it never wrapped is never claimed.
+        """
+        if not decorator_calls or self._call_cache is None:
+            return
+        wrapped = self._call_cache.wrapped_names
+        if not wrapped:
+            return
+        for call in decorator_calls:
+            if isinstance(call, dict) and call.get('func_name') in wrapped:
+                call['intercepted'] = True
+
+    def _warn_cache_calls_noop(self, code: str) -> None:
+        """Say so when ``# @cash:cache-calls`` matched nothing.
+
+        The eligibility rule is not guessable — a call that reads the
+        statement's own target is declined because it *is* the fold — so the
+        failure mode is silence: the directive is written, nothing is cached,
+        and nothing distinguishes that from a cache that merely missed.
+
+        Keyed on the source with the per-iteration discriminator stripped, so a
+        1000-iteration loop warns once rather than a thousand times, matching
+        the persist-amplification and entropy-reseed notes.
+        """
+        import warnings
+
+        stmt_id = self._strip_control_markers(code)
+        if stmt_id in self._warned_cache_calls_noop:
+            return
+        self._warned_cache_calls_noop.add(stmt_id)
+        first_line = next(
+            (ln for ln in stmt_id.splitlines() if ln.strip() and not ln.lstrip().startswith('#')),
+            stmt_id.strip(),
+        )
+        warnings.warn(
+            f"@cash:cache-calls on {first_line.strip()!r} matched no cacheable "
+            "call, so nothing was cached. A call is only extractable when it "
+            "does not read the statement's own assignment/mutation target -- "
+            "`s = merge(s, x)` reads `s`, so it IS the fold and has no "
+            "order-independent value to cache. Remove the directive, or "
+            "restructure so the expensive call takes only its own inputs.",
+            CashCacheIneffectiveWarning,
+            stacklevel=2,
+        )
+
     def _code_and_tree_for_execution(
         self, code: str, tree: ast.Module | None, annotation: Any | None
     ) -> tuple[str, ast.Module | None]:
@@ -1570,6 +1633,7 @@ class StatementProcessor:
                 tree if tree is not None else ast.parse(code)
             )
             if not count:
+                self._warn_cache_calls_noop(code)
                 return code, tree
             new_code = ast.unparse(rewritten)
             # ``ast.unparse`` drops a trailing ';', which _execute_statement
@@ -1618,6 +1682,7 @@ class StatementProcessor:
             cash_instance = self._get_cash_instance()
             if cash_instance is not None:
                 decorator_calls = cash_instance.drain_decorator_calls()
+                self._mark_intercepted_calls(decorator_calls)
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
 
@@ -1676,6 +1741,7 @@ class StatementProcessor:
             cash_instance = self._get_cash_instance()
             if cash_instance is not None:
                 decorator_calls = cash_instance.drain_decorator_calls()
+                self._mark_intercepted_calls(decorator_calls)
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
 
