@@ -128,15 +128,32 @@ This happens **automatically**. A read of `s3://`, `gs://`, `az://` or
 `https://` inside a cached function is recorded as a dependency and rechecked on
 every hit:
 
-<!-- test:skip reason="illustrative — requires a reachable bucket" -->
+<!-- test:skip reason="needs a reachable bucket; the behaviour below is verified against an S3 emulator in tests/test_core/test_remote_s3_contract.py" -->
 ```python
+import cash
+import pandas as pd
+
 @cash.cache
 def load_events(url):
-    return pd.read_parquet(url)      # s3://bucket/events.parquet
+    return pd.read_csv(url)
 
-load_events("s3://bucket/events.parquet")   # downloads, records the ETag
-load_events("s3://bucket/events.parquet")   # HEAD only — no download
+load_events("s3://bucket/events.parquet")   # first call — downloads, records the ETag
+load_events("s3://bucket/events.parquet")   # cache hit — ETag check only, no download
 ```
+
+Overwrite the object and the next call recomputes, because the store hands back
+a different ETag:
+
+<!-- test:skip reason="needs a reachable bucket; see test_remote_s3_contract.py" -->
+```python
+# Someone overwrites s3://bucket/events.parquet, then:
+load_events.explain("s3://bucket/events.parquet")
+# [MISS] __main__.load_events — file_changed
+#   changed_files: {'s3://bucket/events.parquet': 'remote object changed'}
+```
+
+Re-uploading *identical* bytes does **not** invalidate: an ETag is derived from
+content, so a no-op rewrite doesn't throw away everyone's cache.
 
 Two things follow, and both are the point:
 
@@ -156,7 +173,7 @@ subprocess, a format library — name it explicitly:
 from cash import RemoteFileDataSource
 
 @cash.cache(depends_on=[RemoteFileDataSource("s3://bucket/events.parquet")])
-def load_events():
+def load_via_boto3():
     return read_via_boto3("bucket", "events.parquet")
 ```
 
@@ -183,7 +200,7 @@ import cash
 import pyarrow.parquet as pq
 
 @cash.cache(file_depends_on="data/events.parquet")
-def load_events():
+def load_local_events():
     return pq.read_table("data/events.parquet").to_pandas()
 ```
 

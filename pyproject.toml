@@ -143,6 +143,15 @@ dev = [
     "nest_asyncio",
     "traitlets",
     "pyinstrument>=4.6,<6",
+    # An in-process S3 emulator, so the object-storage examples in the docs run
+    # against a real store rather than a stub. Two things need it, and neither
+    # is servable any other way: the docs claim "a hit costs no download", which
+    # is only checkable if something counts the requests; and cash's remote
+    # token depends on which keys s3fs puts in fs.info(), which is a fact about
+    # s3fs that only s3fs can confirm. Both tests importorskip, so a contributor
+    # without these installed sees skips rather than failures.
+    "s3fs",
+    "moto[server]>=5.0",
 ]
 
 [project.urls]
