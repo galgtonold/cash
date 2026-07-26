@@ -104,17 +104,75 @@ The patch set is a curated list. Reads that go through anything else slip past t
 - **C extensions and subprocesses** — anything that opens a file descriptor outside the Python-level `open()` (e.g. a C library called via `ctypes`, a `subprocess.run` that reads the file) is invisible. The monkey-patch only intercepts Python-side dispatch.
 - **Database files** — `sqlite3.connect('db.sqlite')` or a SQLAlchemy engine pointed at a file URL doesn't open the file via the patched readers. The query itself goes through the driver and Cash sees nothing.
 - **Lazy scans you don't materialize** — `polars.scan_csv(...)` *is* tracked at scan time.
-- **Remote URLs** — `pd.read_parquet("s3://bucket/key")`, `gs://`, `https://`. The reader hands cash the URL as given; there is no local file to fingerprint, so the dependency can't be recorded. Cash **warns** (`CashCacheIneffectiveWarning`) rather than dropping it silently, because an untracked dependency means the result caches and then never invalidates.
+
+Remote URLs are the exception to the "not tracked" list: `pd.read_parquet("s3://bucket/key")` **is** tracked, just not by fingerprinting bytes — see [Remote objects](#remote-objects-tracked-by-the-stores-own-validator) below.
 
 For the local-file gaps, use the `file_depends_on=` escape hatch below.
 
 !!! warning "`file_depends_on=` does not work for a remote URL"
     It builds a `FileDataSource`, whose token is the file's mtime — and
     `os.path.getmtime("s3://…")` fails, so the token is a constant `0.0` and the
-    entry **never invalidates**. For object storage, write a `DataSource` whose
-    `has_changed()` returns the object's **ETag / version-id / generation** (a
-    token that changes with the data and is identical on every machine), and
-    pass it via `depends_on=`. See [Data sources](../../api/data_sources.md#custom-data-sources).
+    entry **never invalidates**. Remote objects are tracked automatically
+    (below); to declare one explicitly, use
+    `depends_on=[RemoteFileDataSource(url)]`, not `file_depends_on=`.
+
+## Remote objects: tracked by the store's own validator
+
+A remote object can't be checked the way a local file is — downloading it to
+see whether it moved defeats the point of caching. Object stores answer the
+question directly instead: every object carries a validator the store maintains
+itself — an **ETag**, a **version id**, a GCS **generation** — that changes when
+the bytes change. Cash reads that with a single metadata request.
+
+This happens **automatically**. A read of `s3://`, `gs://`, `az://` or
+`https://` inside a cached function is recorded as a dependency and rechecked on
+every hit:
+
+<!-- test:skip reason="illustrative — requires a reachable bucket" -->
+```python
+@cash.cache
+def load_events(url):
+    return pd.read_parquet(url)      # s3://bucket/events.parquet
+
+load_events("s3://bucket/events.parquet")   # downloads, records the ETag
+load_events("s3://bucket/events.parquet")   # HEAD only — no download
+```
+
+Two things follow, and both are the point:
+
+- **A hit costs no download.** The metadata request is tens of milliseconds
+  against a `GET` that may be hundreds of megabytes, so tracking a remote read
+  usually *reduces* network traffic rather than adding to it.
+- **The dependency travels.** A local path is a fact about one filesystem, so a
+  cache keyed on one can't be shared; an ETag is a fact about the object, so
+  your teammate's key matches yours. See
+  [Sharing a cache](sharing-caches.md).
+
+To declare a remote dependency the tracker can't see — a read through `boto3`, a
+subprocess, a format library — name it explicitly:
+
+<!-- test:skip reason="illustrative — requires a reachable bucket" -->
+```python
+from cash import RemoteFileDataSource
+
+@cash.cache(depends_on=[RemoteFileDataSource("s3://bucket/events.parquet")])
+def load_events():
+    return read_via_boto3("bucket", "events.parquet")
+```
+
+!!! tip "Data that can never change? Say so, and pay nothing"
+    `RemoteFileDataSource(url, immutable=True)` resolves once per session and
+    skips every later request. Cash infers it for free when the URL **pins a
+    version** (`?versionId=…`, `#generation=…`), because the storage contract
+    guarantees those bytes can't change — the pin *is* the token, so no request
+    is made at all. It is never inferred from a path that merely looks
+    write-once: a wrong guess there never invalidates, silently, forever.
+
+**When the store can't be reached**, cash recomputes rather than serving a
+result whose freshness nobody could verify, and warns once. A bad day costs you
+the speedup, never correctness. If freshness checking starts costing real
+time — many sources, a slow link — cash says so on the badge's `remote` overhead
+line and warns with the source count.
 
 ## Escape hatch 1: `file_depends_on=` on `@cash.cache`
 

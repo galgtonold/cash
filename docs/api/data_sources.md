@@ -2,14 +2,16 @@
 
 Objects that contribute to a cache key by reporting a **token representing
 their current state** (an mtime, a version, a content digest) — the cached
-entry invalidates when that token changes. The bundled `FileDataSource` tracks
-file mtime; custom subclasses extend the same pattern to databases, URLs, API
-endpoints, etc.
+entry invalidates when that token changes. Two are bundled:
+`FileDataSource` tracks a local file's mtime, and `RemoteFileDataSource` tracks
+a remote object by the validator its store maintains. Custom subclasses extend
+the same pattern to databases, API endpoints, etc.
 
 ## Imports
 
 ```python
-from cash import FileDataSource       # the bundled file-mtime source
+from cash import FileDataSource         # the bundled file-mtime source
+from cash import RemoteFileDataSource   # s3://, gs://, az://, http(s)://
 from cash.data_source import DataSource  # ABC for writing your own
 ```
 
@@ -41,6 +43,42 @@ When `input.csv` changes on disk, cached results are automatically
 invalidated. For the simpler one-off case, prefer
 `@c.cache(file_depends_on="data/input.csv")` — same behavior, less
 typing.
+
+---
+
+::: cash.RemoteFileDataSource
+    options:
+      members:
+        - __init__
+        - get_id
+        - has_changed
+        - state_token
+        - update_state
+
+### Example
+
+<!-- test:skip reason="illustrative — requires a reachable bucket" -->
+```python
+from cash import Cash, RemoteFileDataSource
+
+c = Cash()
+
+@c.cache(depends_on=[RemoteFileDataSource("s3://bucket/events.parquet")])
+def load_events():
+    return read_via_boto3("bucket", "events.parquet")
+```
+
+Reads cash can already see — `pd.read_parquet("s3://bucket/key")` and friends —
+are tracked this way **automatically**; declare a source explicitly only for the
+ones it can't see. See
+[Remote objects](../tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator)
+for the full story, including `immutable=` and the failure behaviour.
+
+!!! note "`http(s)://` needs no extra install"
+    It resolves through the standard library. Other schemes go through fsspec
+    and its filesystem for that scheme (`pip install "cash-lib[s3]"` plus
+    `s3fs` for `s3://`, `gcsfs` for `gs://`); a missing one raises
+    `DependencyNotFoundError` rather than silently recomputing forever.
 
 ---
 

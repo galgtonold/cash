@@ -34,6 +34,7 @@ No async-specific decorator flag. `@cash.cache` recognises the coroutine functio
 
 A quick sanity check that the second await is served from cache, not the wire:
 
+<!-- test:expect-warning reason="the call counter mutates an enclosing dict, which the purity analyzer correctly flags — it is the teaching device here, since counting the computes is exactly how you show the second await didn't run the body" -->
 ```python
 import asyncio
 import cash
