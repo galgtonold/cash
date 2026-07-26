@@ -222,6 +222,23 @@ class CashConfig:
     write cost exceeds this fraction of the compute saved, skip
     the write. Pairs with ``min_cache_savings_pct``."""
 
+    remote_revalidate_max_age_seconds: float = 0.0
+    """How long a remote object's state token may be reused before the
+    store is asked again (seconds). ``0`` (the default) revalidates on
+    every cache hit, which is the only setting that cannot serve stale
+    data.
+
+    Raising it trades correctness for latency, so raise it deliberately:
+    for the window's duration, a changed object goes unnoticed. It exists
+    for the case the per-source ``max_age`` can't reach — reads cash
+    tracked *automatically*, where you never construct the source and so
+    have nowhere to put ``immutable=True``. Strict in CI, relaxed in a
+    long exploratory session over a slow link.
+
+    A very large value is the effective "stop checking" switch; there is
+    deliberately no boolean for it, because "never revalidate" is a
+    window, not a different mode."""
+
     # --- Observability ---
     debug: bool = False
     """When True, every cache decision logs at INFO level with the

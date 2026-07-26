@@ -326,3 +326,50 @@ class TestAsACacheDependency:
         # fact about one filesystem, a URL is a fact about the object.
         url = "s3://bucket/events.parquet"
         assert RemoteFileDataSource(url).get_id() == f"remote:{url}"
+
+
+class TestRevalidationWindow:
+    """The cash-level window, and why it is keyed by URL rather than by source.
+
+    An automatically-tracked read builds a fresh source for every check, so a
+    per-instance memo would never survive to be used - and those are exactly
+    the reads whose owner has nowhere to put ``immutable=True``. Sharing the
+    windowed token per URL is what makes the knob reach them.
+    """
+
+    def test_default_is_revalidate_always(self, origin):
+        RemoteFileDataSource(origin.url).state_token()
+        RemoteFileDataSource(origin.url).state_token()
+        assert origin.requests == ["HEAD", "HEAD"], (
+            "0 is the only setting that cannot serve stale data, so it is the default"
+        )
+
+    def test_a_configured_window_is_shared_across_source_instances(self, origin):
+        import cash as cash_module
+
+        cash_module.configure(remote_revalidate_max_age_seconds=300)
+        try:
+            first = RemoteFileDataSource(origin.url).state_token()
+            origin.etag = '"v2"'
+            second = RemoteFileDataSource(origin.url).state_token()
+        finally:
+            cash_module.configure(remote_revalidate_max_age_seconds=0.0)
+
+        assert first == second
+        assert origin.requests == ["HEAD"], (
+            "the window must reach a separately-constructed source, or it cannot "
+            "reach an auto-tracked read at all"
+        )
+
+    def test_a_per_source_window_overrides_the_default(self, origin):
+        RemoteFileDataSource(origin.url, max_age=300).state_token()
+        origin.etag = '"v2"'
+        RemoteFileDataSource(origin.url, max_age=300).state_token()
+        assert origin.requests == ["HEAD"]
+
+    def test_immutable_is_not_shared_between_sources(self, origin):
+        """``immutable`` is a promise made by whoever built THAT source; another
+        source for the same URL never made it."""
+        RemoteFileDataSource(origin.url, immutable=True).state_token()
+        RemoteFileDataSource(origin.url).state_token()
+        assert origin.requests == ["HEAD", "HEAD"]

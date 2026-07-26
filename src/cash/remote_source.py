@@ -81,6 +81,13 @@ _HEAD_REJECTED = frozenset({403, 405, 501})
 _warned_failures: set[str] = set()
 _warned_weak_tokens: set[str] = set()
 
+# Tokens held inside a revalidation window, keyed by URL rather than by source
+# instance. Auto-tracked reads build a fresh source per check, so a per-instance
+# memo would never survive to be used - and those are exactly the reads whose
+# owner has nowhere to put ``immutable=True``. Only written when a window is
+# actually configured, so the default (revalidate always) keeps no state.
+_token_memo: dict[str, tuple[float, str]] = {}
+
 # Distinguishes one failed resolution from the next so the key genuinely moves.
 # See ``_unresolved_token`` for why that is the failure behaviour.
 _failure_serial = itertools.count()
@@ -91,6 +98,7 @@ def _reset_remote_warnings() -> None:
     _warned_failures.clear()
     _warned_weak_tokens.clear()
     _warned_validation_cost.clear()
+    _token_memo.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -200,8 +208,11 @@ def warn_validation_cost_once(
         f"cash spent {seconds:.2f}s checking {count} remote "
         f"{'source' if count == 1 else 'sources'} for freshness on {label}{saved}. "
         f"Mark sources that cannot change with "
-        f"RemoteFileDataSource(..., immutable=True), pin a version in the URL, or "
-        f"raise max_age= to revalidate less often.",
+        f"RemoteFileDataSource(..., immutable=True) or pin a version in the URL. "
+        f"For reads cash tracked automatically - where there is no source to "
+        f"annotate - widen the window with "
+        f"cash.configure(remote_revalidate_max_age_seconds=...), accepting that "
+        f"a change goes unnoticed for that long.",
         CashCacheIneffectiveWarning,
         stacklevel=4,
     )
@@ -333,8 +344,12 @@ class RemoteFileDataSource(DataSource):
             Setting it wrongly means the entry never invalidates, silently, so
             declare it only for content-addressed or write-once data.
         max_age: Seconds a resolved token may be reused before the store is
-            asked again. ``0`` (the default) revalidates on every check. Trading
-            correctness for latency, so raise it deliberately.
+            asked again. ``0`` (the default) defers to the cash-level
+            ``remote_revalidate_max_age_seconds``, itself ``0`` = revalidate
+            every time. Trading correctness for latency, so raise it
+            deliberately: for the window's duration a changed object goes
+            unnoticed. Windowed tokens are shared per URL, so they apply to
+            automatically-tracked reads too.
         storage_options: Passed through to fsspec (credentials, endpoint,
             profile). Ignored for ``http(s)://``, which uses the standard library.
         timeout: Seconds to wait for the metadata request.
@@ -361,7 +376,6 @@ class RemoteFileDataSource(DataSource):
         self._pinned = pinned_version(self.url)
         self.immutable = bool(self._pinned) if immutable is None else bool(immutable)
         self._cached_token: str | None = None
-        self._cached_at: float = 0.0
 
     def get_id(self) -> str:
         """Identity of the dependency - the URL, so it matches across machines."""
@@ -378,15 +392,19 @@ class RemoteFileDataSource(DataSource):
         """The validator folded into the cache key.
 
         Reads the store's ETag / version id / generation, honouring
-        ``immutable`` and ``max_age``. Never raises: an unresolvable object
-        yields a token that forces a recompute.
+        ``immutable`` and the revalidation window. Never raises: an unresolvable
+        object yields a token that forces a recompute.
         """
-        cached = self._cached_token
-        if cached is not None:
-            if self.immutable:
-                return cached
-            if self.max_age > 0 and (time.monotonic() - self._cached_at) < self.max_age:
-                return cached
+        if self.immutable and self._cached_token is not None:
+            # A promise about the object, made by whoever built THIS source -
+            # so it is deliberately not shared with other sources for the same
+            # URL, which may not have made it.
+            return self._cached_token
+        max_age = self._effective_max_age()
+        if max_age > 0:
+            entry = _token_memo.get(self.url)
+            if entry is not None and (time.monotonic() - entry[0]) < max_age:
+                return entry[1]
         started = time.perf_counter()
         token = self._resolve()
         # A pin costs no request; counting it would inflate the very number a
@@ -394,8 +412,34 @@ class RemoteFileDataSource(DataSource):
         if self._pinned is None:
             _record_validation(time.perf_counter() - started)
         self._cached_token = token
-        self._cached_at = time.monotonic()
+        if max_age > 0:
+            _token_memo[self.url] = (time.monotonic(), token)
         return token
+
+    def _effective_max_age(self) -> float:
+        """This source's window, falling back to the cash-level default.
+
+        Read off the *already-resolved* config on the global singleton, not via
+        ``get_config()``: that re-merges env and TOML from disk on every call,
+        which is not something to do per freshness check. It also means
+        ``cash.configure(...)`` is honoured, since that is what ``configure``
+        mutates.
+
+        Before any singleton exists there is nothing resolved to read, so the
+        env var is consulted directly - cheap, and it covers the CI case. A
+        TOML-only setting is not seen in that window, which errs toward
+        revalidating: the safe direction.
+        """
+        if self.max_age:
+            return self.max_age
+        try:
+            from . import _global_cash
+            if _global_cash is not None:
+                return float(_global_cash.config.remote_revalidate_max_age_seconds)
+            import os
+            return float(os.environ.get("CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS", 0.0))
+        except Exception:  # noqa: BLE001 - a config problem must not break a read
+            return 0.0
 
     def _resolve(self) -> str:
         """Read the token from the store, degrading to a recompute on failure."""

@@ -63,6 +63,18 @@ the `CASH_*` binding; the TOML key matches the field name.
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
 
+### Remote data
+
+| Field | Env var | Default | Description |
+|---|---|---|---|
+| `remote_revalidate_max_age_seconds` | `CASH_REMOTE_REVALIDATE_MAX_AGE_SECONDS` | `0.0` | How long a remote object's state token may be reused before the store is asked again. `0` revalidates on every hit. |
+
+Raising this is the one setting here that trades **correctness** for latency:
+for the window's duration, a changed object goes unnoticed. It exists for reads
+cash tracked automatically, where there is no source object on which to set
+`immutable=True`. Prefer per-source control where you have it — see
+[Remote objects](../tutorials/feature-guides/custom-file-sources.md#remote-objects-tracked-by-the-stores-own-validator).
+
 ### Observability
 
 | Field | Env var | Default | Description |
