@@ -281,3 +281,72 @@ def test_a_drift_message_quotes_the_claim_it_grounds():
 
 def test_anchor_count_counts_targets_not_comments():
     assert anchor_count(FIXTURES / "clean.md") == 5
+
+
+def test_broad_justification_does_not_suppress_drift_detection():
+    """The only branch proven by inspection rather than by a test until now.
+
+    A `broad=`-justified anchor must fall through to the fingerprint check
+    rather than skip the target entirely — this fixture pairs `broad="..."`
+    with a deliberately stale pin on a real class, and the sole problem
+    reported must be the drift, not a (suppressed) breadth complaint.
+    """
+    problems = check_page(FIXTURES / "broad_pinned.md")
+    assert len(problems) == 1, problems
+    assert problems[0].kind == "drift"
+
+
+# --------------------------------------------------------------------------- #
+# Manifest / coverage ratchet                                                 #
+# --------------------------------------------------------------------------- #
+import json  # noqa: E402
+
+from tests.docs import _claims  # noqa: E402
+from tests.docs._claims import check_manifest  # noqa: E402
+
+
+def _write_manifest(path, data):
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def test_manifest_missing_a_published_page_is_a_problem(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "claim_manifest.json"
+    pages = {p.relative_to(_claims.REPO_ROOT).as_posix() for p in _claims.published_pages()}
+    some_page = sorted(pages)[0]
+    _write_manifest(manifest_path, {p: {"audited": None, "anchors": 0}
+                                     for p in pages if p != some_page})
+    monkeypatch.setattr(_claims, "MANIFEST", manifest_path)
+
+    problems = check_manifest()
+    assert any(p.kind == "manifest" and p.page == some_page for p in problems)
+
+
+def test_manifest_entry_for_a_nonexistent_page_is_a_problem(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "claim_manifest.json"
+    pages = {p.relative_to(_claims.REPO_ROOT).as_posix() for p in _claims.published_pages()}
+    data = {p: {"audited": None, "anchors": 0} for p in pages}
+    data["docs/does-not-exist.md"] = {"audited": None, "anchors": 0}
+    _write_manifest(manifest_path, data)
+    monkeypatch.setattr(_claims, "MANIFEST", manifest_path)
+
+    problems = check_manifest()
+    assert any(
+        p.kind == "manifest" and p.page == "docs/does-not-exist.md" for p in problems
+    )
+
+
+def test_manifest_anchor_count_regression_is_a_problem(tmp_path, monkeypatch):
+    manifest_path = tmp_path / "claim_manifest.json"
+    pages = {p.relative_to(_claims.REPO_ROOT).as_posix() for p in _claims.published_pages()}
+    some_page = sorted(pages)[0]
+    data = {p: {"audited": None, "anchors": 0} for p in pages}
+    # Audited, and recorded as having more anchors than the real page has (0).
+    data[some_page] = {"audited": "2026-07-27", "anchors": 1}
+    _write_manifest(manifest_path, data)
+    monkeypatch.setattr(_claims, "MANIFEST", manifest_path)
+
+    problems = check_manifest()
+    assert any(
+        p.kind == "manifest" and p.page == some_page and "fell from" in p.message
+        for p in problems
+    )
