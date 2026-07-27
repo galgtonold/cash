@@ -804,3 +804,43 @@ def test_accept_does_not_repin_a_fenced_example_anchor(tmp_path, monkeypatch):
     assert lines[5] == f"<!-- claim: mod.py:foo @{want} -->", (
         "the live anchor after the fence must be the one that gets re-pinned"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Display: full claim text stored, ellipsized only where shown                #
+# --------------------------------------------------------------------------- #
+from tests.docs._claims import ellipsize  # noqa: E402
+
+
+def test_claim_text_is_stored_in_full_not_truncated(tmp_path):
+    """Truncating at parse time silently shortens the value for every consumer.
+
+    The old code cut at 120 chars inside ``_claim_text``, so a long claim was
+    lossy before any caller saw it -- including a future one that compares
+    claim text rather than printing it.
+    """
+    long_claim = "A " + "very " * 60 + "long claim sentence."
+    assert len(long_claim) > 120
+    page = tmp_path / "p.md"
+    page.write_text(f"<!-- claim: cash/core.py:Cash.cache -->\n{long_claim}\n", encoding="utf-8")
+    (anchor,) = parse_anchors(page.read_text(encoding="utf-8"), page)
+    assert anchor.claim == long_claim
+
+
+def test_ellipsize_breaks_on_a_word_boundary():
+    text = "the quick brown fox jumps over the lazy dog"
+    out = ellipsize(text, 20)
+    assert out.endswith("...")
+    assert not out[:-3].endswith(" ")
+    # never splits a word in half
+    assert all(w in text.split() for w in out[:-3].split())
+
+
+def test_ellipsize_leaves_short_text_untouched():
+    assert ellipsize("short", 100) == "short"
+
+
+def test_ellipsize_handles_a_single_unbroken_token():
+    """No space to break on -- must still bound the length, not loop or crash."""
+    out = ellipsize("x" * 50, 10)
+    assert out == "x" * 10 + "..."

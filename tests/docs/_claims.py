@@ -77,7 +77,7 @@ class Anchor:
 
 
 def strip_code_fences(text: str) -> str:
-    """Blank out fenced code blocks so their contents can't parse as anchors.
+    r"""Blank out fenced code blocks so their contents can't parse as anchors.
 
     An anchor shown as an *example* inside a ```` ``` ```` fence (the
     README's own "Claim anchors" section does exactly this) must not be
@@ -140,11 +140,29 @@ _TARGET_RE = re.compile(
 )
 
 
+def ellipsize(text: str, width: int = 100) -> str:
+    """Shorten *text* to *width*, breaking on a word boundary.
+
+    Display-time only. ``Anchor.claim`` keeps the full sentence so a consumer
+    that wants all of it (or wants to match against it) is not fighting a
+    truncation baked in at parse time.
+    """
+    if len(text) <= width:
+        return text
+    cut = text[:width].rsplit(" ", 1)[0].rstrip(",;:.")
+    return f"{cut or text[:width]}..."
+
+
 def _claim_text(lines: list[str], end_line_idx: int) -> str:
-    """The first non-blank line after the comment — used in error messages."""
+    """The first non-blank line after the comment: the claim being grounded.
+
+    Returned in full. Callers that display it apply ``ellipsize`` themselves —
+    truncating here would silently shorten the value every consumer sees,
+    including any future one that compares claim text rather than printing it.
+    """
     for line in lines[end_line_idx + 1:]:
         if line.strip():
-            return line.strip()[:120]
+            return line.strip()
     return ""
 
 
@@ -498,7 +516,7 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
                     Problem(
                         rel, anchor.line, "drift",
                         f"{name} changed (@{t.pin} -> @{actual_fp}); re-read the "
-                        f"claim: {anchor.claim!r}",
+                        f"claim: {ellipsize(anchor.claim)!r}",
                     )
                 )
     return problems

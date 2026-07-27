@@ -29,10 +29,24 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+# This tool prints DOC PROSE back at you -- claim text lifted verbatim from
+# pages full of em-dashes, curly quotes and arrows. On a console whose encoding
+# cannot represent them (cp1252 is still the Windows default for a redirected
+# stream) printing would raise UnicodeEncodeError and take the whole command
+# down. Keeping our own literals ASCII would not help: the risky characters
+# come from the docs, not from here. So widen the stream instead, and fall back
+# to replacement characters rather than dying -- a mangled dash is a far better
+# outcome than a release-gate command that crashes on a page it was meant to
+# report.
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 from tests.docs._claims import (  # noqa: E402
     AnchorError,
     Target,
     check_page,
+    ellipsize,
     fingerprint,
     normalize,
     parse_anchors,
@@ -270,12 +284,12 @@ def _cmd_report(src_path: str) -> int:
                     continue
                 rel = page.relative_to(REPO_ROOT).as_posix()
                 print(f"{rel}:{anchor.line}  {t.symbol or '<module>'}")
-                print(f"    {anchor.claim}")
+                print(f"    {ellipsize(anchor.claim)}")
                 hits += 1
     if not hits:
         print(f"No doc claims rest on src/{src_path}")
     else:
-        print(f"\n{hits} claim(s) rest on src/{src_path} — check them before merging.")
+        print(f"\n{hits} claim(s) rest on src/{src_path} -- check them before merging.")
     return 0
 
 
