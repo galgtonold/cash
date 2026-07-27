@@ -26,10 +26,18 @@ blocking at release, where ``CASH_CLAIMS_STRICT=1`` is set.
 from __future__ import annotations
 
 import os
+import re
 
 import pytest
 
-from tests.docs._claims import Problem, check_manifest, check_page, published_pages
+from tests.docs._claims import (
+    REPO_ROOT,
+    Problem,
+    _CLAIM_RE,
+    check_manifest,
+    check_page,
+    published_pages,
+)
 
 STRICT = os.environ.get("CASH_CLAIMS_STRICT") == "1"
 
@@ -98,3 +106,112 @@ def test_manifest_covers_every_published_page():
         f"manifest/page mismatch — missing: {sorted(actual - manifest)}, "
         f"stale: {sorted(manifest - actual)}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# False-assurance guards: a claim anchor that LOOKS like it grounds a claim  #
+# but is invisible to every check above because it never parses as one.     #
+# --------------------------------------------------------------------------- #
+
+_ANY_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+
+def test_no_mistyped_claim_keyword():
+    """An HTML comment that mentions "claim" but isn't a real anchor is worse
+    than no anchor at all: the author believes the claim is grounded, and
+    every check in this module silently skips it because it never parses.
+    ``<!-- claims: ... -->``, ``<!-- Claim: ... -->``, and ``<!-- claim ... -->``
+    (missing colon) all pass every other test in this file with zero anchors
+    found and zero problems reported.
+    """
+    problems: list[str] = []
+    for page in published_pages():
+        text = page.read_text(encoding="utf-8")
+        recognized = {m.span() for m in _CLAIM_RE.finditer(text)}
+        for m in _ANY_COMMENT_RE.finditer(text):
+            comment = m.group(0)
+            if "claim" not in comment.lower():
+                continue
+            if m.span() in recognized:
+                continue
+            rel = page.relative_to(REPO_ROOT).as_posix()
+            line = text.count("\n", 0, m.start()) + 1
+            problems.append(
+                f"  {rel}:{line}: comment mentions 'claim' but is not a valid "
+                f"claim anchor (typo'd keyword?): {comment.strip()!r}"
+            )
+    assert not problems, (
+        "Comments that look like claim anchors but don't parse as one -- the "
+        "claim they meant to ground is completely ungrounded:\n"
+        + "\n".join(problems)
+    )
+
+
+def test_no_unfilled_placeholder_survives():
+    """A literal ``@?`` anywhere on a published page must not ship.
+
+    Inside a well-formed anchor this is already caught as "unpinned" by
+    ``test_anchors_are_narrow_and_pinned``. This is the stronger, parser-blind
+    backstop: an ``@?`` inside a comment that ``_CLAIM_RE`` never recognized
+    as an anchor at all (see ``test_no_mistyped_claim_keyword``) would
+    otherwise ship invisibly, since nothing upstream ever looked at it.
+    """
+    problems: list[str] = []
+    for page in published_pages():
+        text = page.read_text(encoding="utf-8")
+        if "@?" not in text:
+            continue
+        rel = page.relative_to(REPO_ROOT).as_posix()
+        idx = -1
+        while True:
+            idx = text.find("@?", idx + 1)
+            if idx == -1:
+                break
+            line = text.count("\n", 0, idx) + 1
+            problems.append(f"  {rel}:{line}")
+    assert not problems, (
+        "Literal `@?` placeholder text found in published docs; run "
+        "`python scripts/claims.py --pin`, or if it's inside a comment that "
+        "isn't resolving as an anchor, fix the typo:\n" + "\n".join(problems)
+    )
+
+
+@pytest.mark.parametrize(
+    "bad_comment",
+    [
+        "<!-- claims: mod.py:foo @? -->",   # plural keyword typo
+        "<!-- Claim: mod.py:foo @? -->",    # wrong case
+        "<!-- claim mod.py:foo @? -->",     # missing colon
+    ],
+)
+def test_mistyped_claim_keyword_guard_actually_fires(tmp_path, monkeypatch, bad_comment):
+    """Prove the guard catches each mistyped form named in the finding.
+
+    Calling the gate function directly (rather than re-deriving its logic
+    here) means this test fails if the guard itself ever regresses to
+    matching nothing.
+    """
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "bad.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(f"{bad_comment}\nSome claim body.\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match="typo'd keyword"):
+        _mod.test_no_mistyped_claim_keyword()
+
+
+def test_unfilled_placeholder_guard_actually_fires(tmp_path, monkeypatch):
+    """A stray ``@?`` -- inside or outside a recognized anchor -- must fail."""
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "bad.md"
+    page.parent.mkdir(parents=True)
+    page.write_text("Some prose with a stray @? in it.\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match=r"Literal `@\?`"):
+        _mod.test_no_unfilled_placeholder_survives()
