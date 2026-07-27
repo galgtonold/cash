@@ -80,3 +80,107 @@ def test_published_pages_excludes_superpowers_and_unbuilt_adr():
     assert not any(r.startswith("superpowers/") for r in rels)
     assert "index.md" in rels
     assert len(rels) == 56
+
+
+# --------------------------------------------------------------------------- #
+# Resolution and fingerprinting                                               #
+# --------------------------------------------------------------------------- #
+import ast  # noqa: E402
+
+from tests.docs._claims import fingerprint, normalize, resolve  # noqa: E402
+
+
+def test_resolves_a_method_through_its_class():
+    nodes, _ = resolve(Target("cash/core.py", "Cash.cache"))
+    assert all(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) for n in nodes)
+    assert {n.name for n in nodes} == {"cache"}
+
+
+def test_overloads_all_resolve_not_just_the_first():
+    """Cash.cache is two @overload stubs plus the real implementation.
+
+    Taking the first match would pin a one-line stub that never changes, so the
+    anchor would stay green forever while the implementation drifted. That is
+    the exact false negative this whole mechanism exists to prevent.
+    """
+    nodes, _ = resolve(Target("cash/core.py", "Cash.cache"))
+    assert len(nodes) == 3
+    spans = [n.end_lineno - n.lineno + 1 for n in nodes]
+    assert max(spans) > 100, "the real implementation must be among them"
+
+
+def test_resolves_a_module_level_function():
+    nodes, _ = resolve(Target("cash/notebook/cache_key.py", "compute_cache_key"))
+    assert [n.name for n in nodes] == ["compute_cache_key"]
+
+
+def test_resolves_a_dataclass_field_to_its_annassign():
+    nodes, _ = resolve(Target("cash/config.py", "CashConfig.compress"))
+    assert isinstance(nodes[-1], ast.AnnAssign)
+
+
+def test_no_symbol_resolves_to_the_module():
+    nodes, _ = resolve(Target("cash/config.py", None))
+    assert isinstance(nodes[-1], ast.Module)
+
+
+def test_missing_file_is_an_anchor_error_naming_the_path():
+    with pytest.raises(AnchorError, match="no such source file"):
+        resolve(Target("cash/does_not_exist.py", "X"))
+
+
+def test_missing_symbol_is_an_anchor_error_naming_the_symbol():
+    with pytest.raises(AnchorError, match="nope"):
+        resolve(Target("cash/core.py", "Cash.nope"))
+
+
+def test_fingerprint_is_eight_hex_chars():
+    nodes, src = resolve(Target("cash/core.py", "Cash.cache"))
+    fp = fingerprint(nodes, src)
+    assert len(fp) == 8 and all(c in "0123456789abcdef" for c in fp)
+
+
+def test_fingerprint_covers_every_overload_not_just_one():
+    """Changing any one definition must move the digest."""
+    nodes, src = resolve(Target("cash/core.py", "Cash.cache"))
+    whole = fingerprint(nodes, src)
+    assert whole != fingerprint(nodes[:1], src)
+    assert whole != fingerprint(nodes[-1:], src)
+
+
+def test_normalize_strips_comments_blank_lines_and_trailing_space():
+    src = 'def f():\n    # a comment\n    x = 1  # trailing\n\n    return x   \n'
+    node = ast.parse(src).body[0]
+    assert normalize(node, src) == "def f():\n    x = 1\n    return x"
+
+
+def _fp(src: str) -> str:
+    return fingerprint([ast.parse(src).body[0]], src)
+
+
+def test_comment_only_edits_do_not_change_the_fingerprint():
+    """The whole point: churn must not fire, real change must."""
+    assert _fp('def f():\n    return 1\n') == _fp(
+        'def f():\n    # explain the 1\n    return 1   \n'
+    )
+
+
+def test_a_real_code_edit_does_change_the_fingerprint():
+    assert _fp('def f():\n    return 1\n') != _fp('def f():\n    return 2\n')
+
+
+def test_decorator_changes_are_inside_the_fingerprint():
+    """A decorator decides behaviour; excluding it would hide a real change."""
+    assert _fp('@property\ndef f(self):\n    return 1\n') != _fp(
+        '@cached_property\ndef f(self):\n    return 1\n'
+    )
+
+
+def test_hash_of_a_known_string_is_pinned():
+    """Cross-version determinism guard.
+
+    CI runs 3.12, development runs 3.14, and ast.dump digests differ between
+    them. If a Python upgrade ever moves this constant, it fails here — one
+    obvious test — rather than as a wall of false drift across every page.
+    """
+    assert _fp("def f():\n    return 1\n") == "8795b1c4"

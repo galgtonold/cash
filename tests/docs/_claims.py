@@ -11,7 +11,12 @@ This module is pure — no pytest import — so ``scripts/claims.py`` can use it
 """
 from __future__ import annotations
 
+import ast
+import hashlib
+import io
 import re
+import textwrap
+import tokenize
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -126,3 +131,124 @@ def parse_anchors(text: str, page: Path) -> list[Anchor]:
             )
         )
     return out
+
+
+# --------------------------------------------------------------------------- #
+# Resolution                                                                  #
+# --------------------------------------------------------------------------- #
+
+_DEF_NODES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+
+def _children_named(node: ast.AST, name: str) -> list[ast.AST]:
+    """EVERY child binding *name*, in source order — not just the first.
+
+    One name can have several definitions: ``@overload`` stubs before the real
+    implementation, or a conditional redefinition. ``Cash.cache`` is three
+    ``def cache``s, the first a one-line stub. Returning only that stub would
+    pin something that never changes, leaving the anchor green forever while
+    the implementation drifted -- the precise false negative this exists to
+    prevent.
+    """
+    found: list[ast.AST] = []
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, _DEF_NODES) and child.name == name:
+            found.append(child)
+        elif isinstance(child, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == name for t in child.targets
+        ):
+            found.append(child)
+        elif (
+            isinstance(child, ast.AnnAssign)
+            and isinstance(child.target, ast.Name)
+            and child.target.id == name
+        ):
+            found.append(child)
+    return found
+
+
+def resolve(target: Target, src_root: Path = SRC_ROOT) -> tuple[list[ast.AST], str]:
+    """Resolve *target* to its AST node(s) and the source of its module.
+
+    Returns a LIST: see ``_children_named``. Callers wanting a single node
+    (a value anchor) take ``nodes[-1]``, the effective definition.
+    """
+    file = src_root / target.path
+    if not file.is_file():
+        raise AnchorError(f"no such source file: src/{target.path}")
+    source = file.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    if not target.symbol:
+        return [tree], source
+
+    nodes: list[ast.AST] = [tree]
+    seen: list[str] = []
+    for part in target.symbol.split("."):
+        # Descend through the LAST binding of each intermediate name.
+        found = _children_named(nodes[-1], part)
+        if not found:
+            where = ".".join(seen) if seen else "module scope"
+            raise AnchorError(
+                f"src/{target.path}: no symbol {part!r} in {where}"
+            )
+        nodes = found
+        seen.append(part)
+    return nodes, source
+
+
+# --------------------------------------------------------------------------- #
+# Fingerprinting                                                              #
+# --------------------------------------------------------------------------- #
+
+
+def normalize(node: ast.AST, source: str) -> str:
+    """The node's source, stripped of everything that is not code.
+
+    Comments, blank lines and trailing whitespace go; the result is dedented.
+    Deterministic across Python versions *by construction*, unlike ``ast.dump``
+    (whose node fields change between releases) — which matters because CI runs
+    3.12 and development runs 3.14.
+    """
+    if isinstance(node, ast.Module):
+        segment = source
+    else:
+        start = node.lineno
+        # A decorator is part of what the node does, so include it.
+        for deco in getattr(node, "decorator_list", []) or []:
+            start = min(start, deco.lineno)
+        lines = source.splitlines()
+        segment = "\n".join(lines[start - 1: node.end_lineno])
+
+    segment = textwrap.dedent(segment)
+
+    # Column at which a comment starts, per line. tokenize (not a regex) so a
+    # '#' inside a string literal is not mistaken for one.
+    cuts: dict[int, int] = {}
+    try:
+        for tok in tokenize.generate_tokens(io.StringIO(segment).readline):
+            if tok.type == tokenize.COMMENT:
+                line, col = tok.start
+                cuts[line] = min(cuts.get(line, col), col)
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        # An unparseable slice keeps its comments rather than losing content.
+        pass
+
+    out: list[str] = []
+    for i, line in enumerate(segment.splitlines(), 1):
+        if i in cuts:
+            line = line[: cuts[i]]
+        line = line.rstrip()
+        if line:
+            out.append(line)
+    return "\n".join(out)
+
+
+def fingerprint(nodes: list[ast.AST], source: str) -> str:
+    """8-hex-char digest over the normalized source of every node.
+
+    Takes a list so that all of a name's definitions are covered — a change to
+    any ``@overload`` signature moves the digest, not only a change to the
+    implementation.
+    """
+    blob = "\n".join(normalize(n, source) for n in nodes)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
