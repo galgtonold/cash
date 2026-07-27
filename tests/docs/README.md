@@ -78,3 +78,64 @@ When you add a new tutorial:
    `<!-- test:skip reason="..." -->`.
 3. Don't paste an example you haven't actually run yourself first. The
    harness will catch you.
+
+## Claim anchors
+
+Prose is the one thing the fence harness cannot check, and it is where every
+doc failure in this repo has actually lived. A **claim anchor** links a prose
+claim to the source that decides it:
+
+```markdown
+<!-- claim: cash/core.py:Cash.cache @7a77d1c5 -->
+Cash keys a call on the function source plus its arguments.
+```
+
+Anchor a claim whenever it asserts **how cash behaves** — a default, a
+threshold, an invalidation rule, what a flag does, what is cached versus
+skipped. Motivation, comparisons and narration need no anchor.
+
+### Three forms
+
+| Form | Example | Checks |
+|---|---|---|
+| Fingerprint | `cash/core.py:Cash.cache @7a77d1c5` | resolves, and its source is unchanged |
+| Value | `cash/config.py:CashConfig.max_cache_size == None` | the documented literal **equals** the one in source |
+| Existence | `cash/backends/redis.py:RedisBackend` | resolves only |
+
+Prefer the **value** form whenever the claim quotes a constant. A fingerprint
+proves only that someone looked; `== 0.01` proves the number is right forever.
+
+### Authoring
+
+Write `@?` and let the tool fill the digest — never copy a hash by hand:
+
+```bash
+python scripts/claims.py --pin
+```
+
+Paths are relative to `src/`. One comment may carry several targets, separated
+by commas (so a value containing a comma, like a tuple, needs a fingerprint
+anchor instead). Anchor the **narrowest** node: a class-level anchor fires on
+every unrelated edit inside it, and the checker rejects one unless it carries
+`broad="reason"`.
+
+### When a claim drifts
+
+CI reports drift in the job summary; it blocks only at release, when
+`CASH_CLAIMS_STRICT=1` is set. To clear an entry, read the claim against the
+current source and then re-pin:
+
+```bash
+python scripts/claims.py --accept docs/page.md          # dry run: shows the code
+python scripts/claims.py --accept docs/page.md --yes    # re-pin
+```
+
+Re-pinning without reading is worse than having no mechanism at all — it
+manufactures assurance that nobody checked. The dry run exists to make reading
+the default.
+
+Working on source rather than docs? Check what your change touches first:
+
+```bash
+python scripts/claims.py --report cash/notebook/cost_model.py
+```
