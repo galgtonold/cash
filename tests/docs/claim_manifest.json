@@ -128,8 +128,8 @@
     "audited": null
   },
   "docs/known-limitations.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 17,
+    "audited": "2026-07-27"
   },
   "docs/magics.md": {
     "anchors": 20,

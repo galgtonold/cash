@@ -15,6 +15,7 @@ This page lists every such case we know about, what you actually see, and what t
 
 The single most-often-misread behaviour, and it is working as designed.
 
+<!-- claim: cash/notebook/statement/restore.py:StatementRestorer.restore_from_cache @0388af0f, cash/notebook/randomness.py:restore_rng_state @ccba2493 -->
 An unseeded random draw that is expensive enough to cache **is** cached. Re-running the cell returns the *same* numbers, because you are seeing a restored value rather than a fresh draw:
 
 <!-- test:skip reason="illustrative: demonstrates replayed randomness across re-runs" -->
@@ -28,6 +29,7 @@ Cash warns the first time this happens:
 
 > Unseeded randomness restored from cache … The value you are seeing is a replay of an earlier run, not a fresh draw — re-running will not change it.
 
+<!-- claim: cash/notebook/cost_model.py:_COEFFS @19a78800 broad="the claim is that a cost floor, not the kind of randomness, decides caching" -->
 **Why it looks inconsistent.** Cheap draws behave differently. A statement that runs in well under 10 ms falls below the cost floor and is never cached at all, so `random.random()` *does* give you a new number each time while `np.random.rand(200_000)` does not. The rule is the cost floor, not the kind of randomness.
 
 **What to do**
@@ -59,6 +61,7 @@ x = np.random.rand(10**6) # cell 2 — run this alone
 
 The **module-global** RNG channels — `np.random.*`, `random.*`, `torch.*` — are fully tracked: a draw is flagged on the badge (a `random` / `unseeded` pill), an unseeded draw's cached value is announced as a frozen replay, editing a `seed()` invalidates everything cached downstream, and a re-run reflects the position a clean top-to-bottom run would produce.
 
+<!-- claim: cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870, cash/notebook/randomness.py:capture_object_rng_states @b4e01b79 -->
 A **per-object generator** created with `np.random.default_rng()` (or `Generator(...)` / `RandomState(...)`) is a different, narrower story. Its **seed is tracked** — `rng = np.random.default_rng(SEED)` binds a variable, so editing `SEED` and re-running refreshes through the ordinary variable-lineage path, and an *unseeded* named generator (`rng = np.random.default_rng()`) drawn from by name is flagged. But three things about a per-object generator are **not** tracked:
 
 **1. Stream position across cells.** cash does not follow a generator's internal position as several cells draw from it:
@@ -95,6 +98,7 @@ These all share one shape: a cell changes an object through a path cash does not
 
 ### Mutating through an alias
 
+<!-- claim: cash/notebook/cacheability.py:bare_alias_targets @b6d520b0, cash/notebook/cacheability.py:reference_alias_targets @0e0de16b -->
 Cash tracks mutation through the name an object was bound to. Reach the same object through a different name and the mutation is invisible — re-running the cell applies it twice:
 
 <!-- test:skip reason="illustrative: alias-mutation shapes, need isolated cell re-runs" -->
@@ -111,12 +115,14 @@ y = x if flag else z   # ternary: two possible sources
 y.append(3)
 ```
 
-Nested unpacking has the same hole one level down — `(p, (q,)) = (x, (y,))` then `q.append(9)` double-applies, though the flat `(y,) = (x,)` form is handled.
+<!-- claim: cash/notebook/cacheability.py:_literal_unpack_aliases @b9e32ac9 -->
+Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`) — is **not** in this list: cash recognises every leaf of a 1:1 literal unpack as a pointer copy, at any nesting depth, and refuses to cache the statement. A later `q.append(9)` is therefore not double-applied. One `*rest` or one computed element (`b, c = a, f()`) opts the whole statement back out, since that element may be real work worth caching.
 
 **What to do:** mutate through the original name (`x.append(99)`), or rebind rather than mutate (`x = x + [99]`).
 
 ### Mutating global state inside a function
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f6bf4ab2 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). What it still cannot see is a function mutating a **global**
@@ -213,6 +219,7 @@ A thread that mutates data after the cell that created it has finished is outsid
 
 ### Reads through a loader cash cannot see
 
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21 -->
 Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, plain `open()`, and friends. A read that goes through none of those — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible.
 
 The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `RESTORED` badge and no warning.
@@ -236,6 +243,7 @@ data = my_reader.load('sensor.bin')    # RESTORED — the old contents
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f6bf4ab2 broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
@@ -258,6 +266,7 @@ The one worth planning around. If you have N cells that each read a file, modify
 
 Cash normally caches a loop **per iteration**, so a warm re-run restores every one. A *long* loop can instead be cached as a **single unit** — per-statement bookkeeping stops paying for itself. That switch is reasonable on its own, but a loop that appends into a list is an in-place mutation, which cash will not cache as a whole unit, so the two combine and you get no caching at all.
 
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._should_execute_loop_as_single_unit @ad980fd0, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/for_handler.py:ForLoopHandler._PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_OVERHEAD_SEC == 1.0 -->
 Three conditions must hold together before the switch happens, which is why many append loops never hit it:
 
 - **more than ~50 iterations**, and
@@ -357,6 +366,7 @@ Editing a cell in VS Code without saving the notebook file can make the cell-ID 
 
 To keep hashing cheap, cash samples large values rather than reading them whole:
 
+<!-- claim: cash/notebook/object_hashing.py:compute_hash @e849aae7 -->
 | Type | What is hashed |
 |---|---|
 | DataFrame | shape, dtypes, **first 5 rows** |
