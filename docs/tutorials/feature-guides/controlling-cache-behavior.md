@@ -11,7 +11,7 @@ The notebook layer makes a verdict on every statement: cache it, refuse to cache
 - The 200 MB model you just trained should hit disk, even though the smart-persistence policy would normally leave it in RAM.
 - The `np.random.randn` call is intentional and you don't need a warning every cell run.
 
-Four general-purpose comment annotations and a magic-level TTL cover all of those cases (a fifth, the ML-specific `# @cash:cache-fit`, is covered in [Annotations](../../annotations.md#cashcache-fit-alias-cachefit)). They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
+Four general-purpose comment annotations and a magic-level TTL cover all of those cases. Two more specialised directives are covered elsewhere: the ML-specific [`# @cash:cache-fit`](../../annotations.md#cashcache-fit-alias-cachefit), and [`# @cash:cache-calls`](../../annotations.md#cashcache-calls-alias-cachecalls), which caches the *calls inside* a statement instead of the statement itself — the fix for an accumulator loop that can never cache as a whole. They live as `# @cash:<directive>` comments on or immediately above the statement, and they're picked up by the same parser regardless of whether you came in via `%cash_on` or `%%cash`.
 
 ## Quick start
 
@@ -32,7 +32,8 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-That's the whole language. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment, `src/cash/notebook/annotations.py`).
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @7b6bd448, cash/notebook/annotations.py:ANNOTATION_PATTERN @8370c735 -->
+That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
 
@@ -52,7 +53,8 @@ api_response = requests.get("https://api.example.com/data")
 print(f"Debug: {some_value}")
 ```
 
-The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else (`src/cash/notebook/cacheability_decision.py`). The badge shows the statement as NOT CACHED with that exact reason string.
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130 -->
+The decision-merge layer short-circuits as soon as it sees this annotation — `decide_cacheability` returns `(False, ['@cash:no-cache annotation'])` before consulting anything else. The badge shows the statement as NOT CACHED with that exact reason string.
 
 <iframe class="cash-badge" src="/_badges/not_cached_explicit.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
@@ -71,9 +73,10 @@ hourly_report = generate_summary(df)       # one hour
 daily_data = fetch_daily_metrics()         # one day
 ```
 
-The annotation TTL overrides the global TTL set by `%cash_on ttl=N` or `%%cash ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies (`src/cash/notebook/statement/processor.py`).
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd, cash/core.py:Cash._validate_ttl @98fd97a4 -->
+The annotation TTL overrides the global TTL set by `%cash_on ttl=N` or `%%cash ttl=N`. `_parse_annotation` does the merge: if `annotation.ttl is not None`, the effective TTL becomes that value; otherwise the global TTL applies.
 
-The check itself is at `src/cash/core.py`: on a lookup hit, `_validate_ttl` compares `time.time() - metadata['timestamp']` against the TTL and raises `CacheExpiredError` when it's stale. Stale entries fall through to recompute as if the cache had missed.
+The check itself is in `Cash._validate_ttl`: on a lookup hit, `_validate_ttl` compares `time.time() - metadata['timestamp']` against the TTL and raises `CacheExpiredError` when it's stale. Stale entries fall through to recompute as if the cache had missed.
 
 ### `@cash:persist` — force it onto disk
 
@@ -89,11 +92,12 @@ model = train_neural_network(X, y)         # 15 min — save it
 embeddings = compute_embeddings(corpus)    # 2 GB of vectors — persist them
 ```
 
-The annotation sets `force_persist = True` (`src/cash/notebook/statement/processor.py`), which the post-execute path threads into the tiered backend so promotion runs unconditionally.
+The annotation sets `force_persist = True`, which the post-execute path threads into the tiered backend so promotion runs unconditionally.
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list at `src/cash/notebook/randomness.py`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
+<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @cb85eaf1, cash/notebook/randomness.py:MODULE_ALIASES @1d79cda4, cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0 -->
+Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:
 
@@ -111,7 +115,7 @@ Or, if non-reproducibility is exactly what you want (you're exploring, you'll re
 noise = np.random.rand(1000)
 ```
 
-The annotation flips `suppress_warning=True` in `check_and_warn_randomness` (`src/cash/notebook/randomness.py`); **the cell still caches either way.** `allow-random` is advisory — it changes what Cash *says*, never what it *stores*. Unseeded randomness has never blocked caching, and adding the annotation doesn't opt you out of it; if you want the statement to re-run every time, use `@cash:no-cache`.
+The annotation flips `suppress_warning=True` in `check_and_warn_randomness`; **the cell still caches either way.** `allow-random` is advisory — it changes what Cash *says*, never what it *stores*. Unseeded randomness has never blocked caching, and adding the annotation doesn't opt you out of it; if you want the statement to re-run every time, use `@cash:no-cache`.
 
 The warning fires once per statement per session, so a re-run of an unchanged cell won't nag you and a loop won't warn per iteration.
 
@@ -126,6 +130,7 @@ The warning fires once per statement per session, so a re-run of an unchanged ce
 
 ## RNG state is replayed across cache hits
 
+<!-- claim: cash/notebook/randomness.py:capture_object_rng_states @b4e01b79, cash/notebook/randomness.py:restore_object_rng_states @fa5d1e25 -->
 A cache hit restores more than the value. If you hold your own RNG object — an
 `np.random.Generator`, an `np.random.RandomState`, or a `random.Random` —
 its internal state is captured alongside the cached statement and **replayed**
@@ -166,9 +171,9 @@ Two ways to set a default TTL for every cached statement in scope:
 result = compute_something()
 ```
 
-`%cash_on ttl=N` sets `self._global_ttl` on the magic (`src/cash/notebook/ipython/magics.py`). `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell (`src/cash/notebook/ipython/magics.py`), so the cell-scoped value doesn't leak out.
+`%cash_on ttl=N` sets `self._global_ttl` on the magic. `%%cash` parses the same `ttl=N` arg locally and swaps the global TTL in/out around the cell, so the cell-scoped value doesn't leak out.
 
-A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set (`src/cash/notebook/statement/processor.py`).
+A per-statement `# @cash:ttl=N` annotation always wins over both: the merge logic in `_parse_annotation` favors the annotation's TTL whenever it's set.
 
 ## Function-level controls on `@cash.cache`
 
@@ -192,17 +197,17 @@ def critical_function(x):
     return ...
 ```
 
-`ttl` here works identically to the statement annotation — `_validate_ttl` is the same code path. `assume_safe` and `strict` are about purity, not freshness; see [Purity Decorators](purity-decorators.md) for the full breakdown. They're mutually exclusive at decoration time (`src/cash/core.py`).
+`ttl` here works identically to the statement annotation — `_validate_ttl` is the same code path. `assume_safe` and `strict` are about purity, not freshness; see [Purity Decorators](purity-decorators.md) for the full breakdown. They're mutually exclusive at decoration time.
 
 ## Randomness detection — what gets flagged
 
-`RandomnessDetector` (`src/cash/notebook/randomness.py`) keeps a session-wide set of `seeded_modules`. When it sees a seed call (`np.random.seed(42)`, `torch.manual_seed(0)`, `random.seed(...)`), it marks the module as seeded and stops warning about subsequent calls to its RNG functions. When it sees an unseeded call, it emits a `CashRandomnessWarning`.
+`RandomnessDetector` keeps a session-wide set of `seeded_modules`. When it sees a seed call (`np.random.seed(42)`, `torch.manual_seed(0)`, `random.seed(...)`), it marks the module as seeded and stops warning about subsequent calls to its RNG functions. When it sees an unseeded call, it emits a `CashRandomnessWarning`.
 
 Tracked module aliases:
 
 - `np` → `numpy` (so `np.random.randn` resolves to `numpy.random.randn`)
 - `tf` → `tensorflow`
-- Full alias map at `src/cash/notebook/randomness.py`; imports detected via `visit_Import` and `visit_ImportFrom` so `import numpy.random as nr` and `from random import choice` both work.
+- Full alias map in `MODULE_ALIASES`; imports detected via `visit_Import` and `visit_ImportFrom` so `import numpy.random as nr` and `from random import choice` both work.
 
 Tracked functions:
 
@@ -211,11 +216,11 @@ Tracked functions:
 - `torch.*` — `rand`, `randn`, `randint`, `randperm`, `rand_like`, …
 - `tensorflow.random.*` / `tf.random.*` — `uniform`, `normal`, `truncated_normal`, …
 
-The full set is `RANDOM_FUNCTIONS` at `src/cash/notebook/randomness.py`. Anything outside this set isn't checked — third-party RNG libraries are silently allowed.
+The full set is `RANDOM_FUNCTIONS`. Anything outside this set isn't checked — third-party RNG libraries are silently allowed.
 
 ## Precedence and edge cases
 
-The merge for cacheability has one absolute winner: **`@cash:no-cache` short-circuits everything else**. If it's set, the statement is not cached, full stop — no TTL check, no persist, no purity scan (`src/cash/notebook/cacheability_decision.py`).
+The merge for cacheability has one absolute winner: **`@cash:no-cache` short-circuits everything else**. If it's set, the statement is not cached, full stop — no TTL check, no persist, no purity scan.
 
 After that, the reason-source order is:
 
@@ -225,11 +230,12 @@ After that, the reason-source order is:
 4. In-place mutations / side effects detected by the AST visitor
 5. Inputs missing lineage
 
-The first source that triggers wins; later sources are not consulted (`src/cash/notebook/cacheability_decision.py`).
+The first source that triggers wins; later sources are not consulted.
 
 For the annotations that *don't* skip caching:
 
-- `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. The annotation merger ORs persist flags and overrides TTL (`src/cash/notebook/annotations.py`), so stacking on consecutive lines works:
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @ff86f11c -->
+- `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
 
   ```python { .nb-cell }
   # @cash:persist
@@ -239,9 +245,9 @@ For the annotations that *don't* skip caching:
 
 - `@cash:allow-random` is purely advisory — it suppresses warnings but does not influence the cacheability decision. You can combine it with anything.
 
-- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`statement/processor.py:591-592`).
+- Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`StatementProcessor._parse_annotation` assigns `effective_ttl = annotation.ttl` whenever it is not `None`).
 
-- A negative or non-integer TTL: the regex `\d+` only matches non-negative integers (`src/cash/notebook/annotations.py`), and bad values return `None` from `parse_annotation_line` and are silently dropped.
+- A negative or non-integer TTL: the regex `\d+` only matches non-negative integers, and bad values return `None` from `parse_annotation_line` and are silently dropped.
 
 ## API reference
 
@@ -255,7 +261,7 @@ For the annotations that *don't* skip caching:
 | `%%cash ttl=N` | cell-magic flag | Swaps `_global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
 
-All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')` (`annotations.py`).
+All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')`.
 
 ## Related
 

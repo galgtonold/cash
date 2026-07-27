@@ -415,10 +415,13 @@ def test_magics_page_states_the_right_count() -> None:
 _LINE_PIN_RE = re.compile(r"`([\w./-]+\.py)[:,](\d[\d,-]*)`")
 
 # page -> number of line-pinned refs still present. Burn these down; do not add.
-_KNOWN_LINE_PINS: dict[str, int] = {
-    "tutorials/feature-guides/async-caching.md": 1,
-    "tutorials/feature-guides/controlling-cache-behavior.md": 1,
-}
+#
+# EMPTY as of the 2026-07-27 audit: every line-pinned reference in the published
+# docs has been replaced with a symbol reference. It started at 22 across five
+# pages and all 22 were checked -- 20 of them had rotted, most by the same
+# ~68-line shift when something was inserted above them. Keeping the dict (rather
+# than deleting the mechanism) means a single new pin fails the build.
+_KNOWN_LINE_PINS: dict[str, int] = {}
 
 
 def _line_pin_counts() -> dict[str, int]:
@@ -505,4 +508,51 @@ def test_every_cited_test_name_exists() -> None:
         "Docs cite test names that no longer exist:\n" + "\n".join(missing)
         + "\n\nA 'Test reference:' claiming a guard that isn't there is worse "
         "than no citation. Rename the reference or drop it."
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Annotation directives                                                       #
+# --------------------------------------------------------------------------- #
+#
+# The same completeness argument as the magics gate: a page that says "that's
+# the whole language" is making a claim about a SET, and a set claim goes stale
+# the moment the set grows. controlling-cache-behavior.md -- titled "this guide
+# covers every knob" -- never mentioned `# @cash:cache-calls` after it shipped.
+#
+# Canonical names only (the `nocache` / `cachefit` run-together spellings are
+# aliases the parser accepts, not directives a page has to advertise).
+
+_DIRECTIVE_RE = re.compile(r"directive == '([a-z][a-z-]+)'")
+_ANNOTATIONS_SRC = (
+    Path(__file__).resolve().parents[2] / "src" / "cash" / "notebook" / "annotations.py"
+)
+# Pages that claim to cover the directive set, and so must cover all of it.
+_DIRECTIVE_PAGES = (
+    "annotations.md",
+    "tutorials/feature-guides/controlling-cache-behavior.md",
+)
+
+
+def _parsed_directives() -> set[str]:
+    src = _ANNOTATIONS_SRC.read_text(encoding="utf-8")
+    found = set(_DIRECTIVE_RE.findall(src))
+    # Aliases are the run-together spelling of a canonical name already found.
+    return {d for d in found if "-" in d or not any(d == c.replace("-", "") for c in found)}
+
+
+def test_every_annotation_directive_is_documented() -> None:
+    directives = _parsed_directives()
+    assert directives, "parsed no directives -- the scan pattern has drifted"
+    problems: list[str] = []
+    for page in _DIRECTIVE_PAGES:
+        text = (DOCS_ROOT / page).read_text(encoding="utf-8")
+        for d in sorted(directives):
+            if f"@cash:{d}" not in text:
+                problems.append(f"  {page}: never mentions `# @cash:{d}`")
+    assert not problems, (
+        "Annotation directives the parser accepts but the docs don't cover:\n"
+        + "\n".join(problems)
+        + "\n\nThese pages present themselves as complete; a missing directive "
+        "is a feature users cannot discover."
     )
