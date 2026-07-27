@@ -1,0 +1,226 @@
+{
+  "docs/annotations.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/backend_internals.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/backends.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/cash.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/config.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/data_sources.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/exceptions.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/experimental.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/index.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/notebook.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/api/purity.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/badges.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/benchmarks.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/cli.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/contributing.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/cost-model.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/decorator.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/faq.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/for-coding-agents.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/getting-started/configuration.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/getting-started/installation.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/getting-started/quickstart.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/glossary.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/cache-keys-and-lineage.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/decorator-path.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/inspecting.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/invalidation.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/notebook-path.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/overview.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/safety.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/how-it-works/storage.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/index.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/known-limitations.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/magics.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/migration_guide.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/notebook_caching_api.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/async-caching.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/caching-class-methods.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/choosing-a-backend.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/controlling-cache-behavior.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/custom-file-sources.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/custom-hashers.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/debugging-and-monitoring.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/dynamic-dependencies.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/iterator-caching.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/production-transition.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/purity-decorators.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/sharing-caches.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/smart-persistence.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/feature-guides/thread-safety.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/use-cases/data-engineering.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/use-cases/data-science.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/use-cases/llm-api-calls.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/tutorials/use-cases/scientific-computing.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/versioning.md": {
+    "anchors": 0,
+    "audited": null
+  },
+  "docs/why-cash.md": {
+    "anchors": 0,
+    "audited": null
+  }
+}

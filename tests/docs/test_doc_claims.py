@@ -19,6 +19,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from cash.config import CashConfig, TierConfig
+from tests.docs._claims import published_pages, strip_code_fences
 
 
 def slugify(value: str, separator: str = "-") -> str:
@@ -34,20 +35,12 @@ def slugify(value: str, separator: str = "-") -> str:
     return re.sub(rf"[{re.escape(separator)}\s]+", separator, value)
 
 DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
-# ``superpowers/`` holds internal planning/spec docs that are not part of the
-# published site (and are riddled with intentionally-stale links), so they are
-# out of scope — same blacklist the fence harness uses.
-_BLACKLIST_DIRS = {"superpowers"}
-# Files mkdocs.yml lists under ``exclude_docs`` — they are never built, so a
-# dead anchor in one would fail this (hard-gated) check for a page no reader
-# can reach. Keep in sync with ``exclude_docs`` in mkdocs.yml.
-_EXCLUDED_FILES = {"architecture_decisions.md"}
-ALL_MD = sorted(
-    p
-    for p in DOCS_ROOT.rglob("*.md")
-    if not any(part in _BLACKLIST_DIRS for part in p.relative_to(DOCS_ROOT).parts)
-    and p.relative_to(DOCS_ROOT).as_posix() not in _EXCLUDED_FILES
-)
+# The set of pages mkdocs actually builds -- ``superpowers/`` internal
+# planning docs and mkdocs.yml's ``exclude_docs`` entries are out of scope.
+# ``_claims.py::published_pages`` is the single definition; this used to be a
+# byte-equivalent second copy of the same comprehension, which is exactly the
+# kind of duplication an anti-drift mechanism shouldn't itself have.
+ALL_MD = published_pages()
 
 
 def _is_autodoc(path: Path) -> bool:
@@ -129,31 +122,10 @@ _INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _FENCE_RE = re.compile(r"^(?P<indent>\s*)(?P<ticks>`{3,}|~{3,})", re.MULTILINE)
 
 
-def _strip_code_fences(text: str) -> str:
-    """Blank out fenced code blocks so their contents don't parse as headings."""
-    out: list[str] = []
-    in_fence = False
-    fence_marker = ""
-    for line in text.splitlines():
-        stripped = line.lstrip()
-        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
-            in_fence = True
-            fence_marker = stripped[:3]
-            out.append("")
-            continue
-        if in_fence:
-            out.append("")
-            if stripped.startswith(fence_marker):
-                in_fence = False
-            continue
-        out.append(line)
-    return "\n".join(out)
-
-
 def _anchor_ids(text: str) -> set[str]:
     """The set of #anchors a rendered page would expose (as mkdocs/toc slugs)."""
     ids: set[str] = set()
-    body = _strip_code_fences(text)
+    body = strip_code_fences(text)
 
     for m in _HEADING_RE.finditer(body):
         heading = m.group("text")
@@ -177,7 +149,7 @@ def _iter_internal_links() -> list[tuple[Path, str, str | None]]:
     out: list[tuple[Path, str, str | None]] = []
     for md in ALL_MD:
         text = md.read_text(encoding="utf-8")
-        body = _strip_code_fences(text)
+        body = strip_code_fences(text)
         for m in _LINK_RE.finditer(body):
             target = m.group("target")
             if target.startswith(("http://", "https://", "mailto:", "//", "www.")):
@@ -281,7 +253,7 @@ def _parse_doc_default(cell: str):
 
 def _tables(text: str):
     """Yield (header_cells, rows) for each pipe table in the markdown text."""
-    lines = _strip_code_fences(text).splitlines()
+    lines = strip_code_fences(text).splitlines()
     i = 0
     while i < len(lines):
         line = lines[i]

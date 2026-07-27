@@ -338,6 +338,30 @@ Prefer plain final versions over pre-release suffixes. `pip install cash-lib`
 ignores pre-releases unless the user passes `--pre`, so a `bN`/`rcN` release is
 invisible to most people — that is a deliberate choice, not a default.
 
+### 1b. Clear the doc-claim queue
+
+Every claim in the docs is anchored to the source that decides it. Between
+releases, fingerprint drift is reported but not enforced — this is where it is
+enforced.
+
+```bash
+python scripts/claims.py --queue
+```
+
+It must print `No drifted claims.` For each entry it does print, re-read the
+claim against the code shown by `--accept <page>`, then either fix the prose or
+re-pin with `--accept <page> --yes`.
+
+Do this **before** the CHANGELOG: a claim found wrong is often a **Fixed**
+entry in its own right.
+
+The `build` job in `.github/workflows/publish.yml` — the workflow every
+release actually runs — sets `CASH_CLAIMS_STRICT=1` and re-runs
+`tests/docs/test_claim_anchors.py::test_no_fingerprint_drift`, promoting
+drift from advisory to blocking before the package is built. That is the real
+gate; running `--queue` above by hand is what keeps you from finding out
+about a non-empty queue only when the build fails.
+
 ### 2. Write the CHANGELOG entry FROM the `git log` (curate, don't transcribe)
 
 The `git log` is the **source of truth, not the output**. Read the whole range,

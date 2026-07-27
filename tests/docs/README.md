@@ -78,3 +78,95 @@ When you add a new tutorial:
    `<!-- test:skip reason="..." -->`.
 3. Don't paste an example you haven't actually run yourself first. The
    harness will catch you.
+
+## Claim anchors
+
+Prose is the one thing the fence harness cannot check, and it is where every
+doc failure in this repo has actually lived. A **claim anchor** links a prose
+claim to the source that decides it:
+
+```markdown
+<!-- claim: cash/core.py:Cash.cache @7a77d1c5 -->
+Cash keys a call on the function source plus its arguments.
+```
+
+Anchor a claim whenever it asserts **how cash behaves** — a default, a
+threshold, an invalidation rule, what a flag does, what is cached versus
+skipped. Motivation, comparisons and narration need no anchor.
+
+### Three forms
+
+| Form | Example | Checks |
+|---|---|---|
+| Fingerprint | `cash/core.py:Cash.cache @7a77d1c5` | resolves, and its source is unchanged |
+| Value | `cash/config.py:CashConfig.max_cache_size == None` | the documented literal **equals** the one in source |
+| Existence | `cash/backends/redis.py:RedisBackend` | resolves only |
+
+Prefer the **value** form whenever the claim quotes a constant. A fingerprint
+proves only that someone looked; `== 0.01` proves the number is right forever.
+
+### Authoring
+
+Write `@?` and let the tool fill the digest — never copy a hash by hand:
+
+```bash
+python scripts/claims.py --pin
+```
+
+Paths are relative to `src/`. One comment may carry several targets, separated
+by commas (so a value containing a comma, like a tuple, needs a fingerprint
+anchor instead). Anchor the **narrowest** node: a class-level anchor fires on
+every unrelated edit inside it, and the checker rejects one unless it carries
+`broad="reason"`.
+
+### When a claim drifts
+
+The `docs-parity` job (`.github/workflows/ci.yml`) reports drift in the job
+summary on every PR, but does not fail the build on it. The `build` job in
+`.github/workflows/publish.yml` — the workflow every release runs — sets
+`CASH_CLAIMS_STRICT=1` and re-runs
+`tests/docs/test_claim_anchors.py::test_no_fingerprint_drift`, which turns
+that same drift into a build failure before a package is ever built. To clear
+an entry, read the claim against the current source and then re-pin:
+
+```bash
+python scripts/claims.py --accept docs/page.md          # dry run: shows the code
+python scripts/claims.py --accept docs/page.md --yes    # re-pin
+```
+
+Re-pinning without reading is worse than having no mechanism at all — it
+manufactures assurance that nobody checked. The dry run exists to make reading
+the default.
+
+### Limitations
+
+- **Only direct children are walked.** A symbol defined inside
+  `if TYPE_CHECKING:` or a `try:`/`except ImportError:` block cannot be
+  anchored — `resolve()` only descends through a definition's immediate
+  children, not into nested conditional bodies.
+- **A tuple-unpacked constant cannot be anchored.** `X, Y = 1, 2` has no
+  single `ast.Assign`/`ast.AnnAssign` target named `X` or `Y` on its own;
+  write it as two separate assignments if it needs a value anchor.
+- **A value containing a comma needs a fingerprint anchor instead** — one
+  claim comment's targets are split on `,`, so `== (1, 2)` would parse as two
+  targets.
+- **Anchor placement matters when a fence follows.** Put the anchor **above**
+  any `<!-- test:skip reason="..." -->` or `<!-- test:expect-* -->`
+  annotation, not between it and the fence it annotates.
+  `_annotations.py`'s backward walk stops at the first non-blank,
+  non-`test:`-comment line, so a claim anchor sitting between the annotation
+  and the fence silently breaks the annotation's link to that fence.
+- **"Claim" is overloaded.** `test_doc_claims.py` and `test_claim_coverage.py`
+  use "claim" for a different concept entirely — a fence's inferred cache
+  hit/miss expectation. That is unrelated to the prose claim anchors this
+  section describes.
+- **An anchor inside a code fence is an example, not a live claim.** It is
+  ignored by the parser, by `--pin`/`--accept`, and by the false-assurance
+  guards — write one there only to illustrate the anchor syntax itself, never
+  expecting it to be checked or filled in.
+
+Working on source rather than docs? Check what your change touches first:
+
+```bash
+python scripts/claims.py --report cash/notebook/cost_model.py
+```
