@@ -53,6 +53,7 @@ That's it. The default `Cash()` singleton writes a tiered RAM + disk
 cache under `./.cash/`. The next call with the same `n` (this run or
 next month) returns the stored value.
 
+<!-- claim: cash/config.py:CashConfig.smart_persistence @907f59bc, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 !!! note "Cross-process persistence has a compute floor"
     Only results whose computation took **longer than ~0.1 s** are promoted to
     the disk tier. A cheaper result is still cached in RAM (so a repeat call
@@ -88,6 +89,7 @@ Worth understanding before any parameter. With a bare `@cash.cache` and nothing
 configured, a cached result is discarded and recomputed when **any** of these
 change:
 
+<!-- claim: cash/dependency_state.py:DependencyStateHasher.compute @58f96079, cash/core.py:Cash._analyze_dependencies @d32aeb90 -->
 | What changed | How it's detected |
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
@@ -119,6 +121,7 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
+<!-- claim: cash/core.py:Cash._hash_callable_source @a63f1105, cash/core.py:Cash._ensure_closure_analyzed @adbb1f94 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Per-call overhead is ~5-30μs. Helpers are resolved
@@ -127,6 +130,7 @@ within the module; name cross-module dependencies with
 
 ### File reads are tracked automatically
 
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @8bb47d39 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -159,6 +163,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
+<!-- claim: cash/core.py:Cash._fold_read_globals @f5229284 -->
 Only globals the function **reads** participate. Globals it *writes*
 (`global x; x = ...`) or mutates in place are excluded — those are
 side-effect accumulators, and folding them in would invalidate the
@@ -238,6 +243,7 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962 -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
@@ -264,6 +270,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
+<!-- claim: cash/core.py:Cash.cache @91b24c1a -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -287,6 +294,7 @@ def stock_price(symbol):
     return requests.get(f"https://api.example.com/{symbol}").json()
 ```
 
+<!-- claim: cash/core.py:Cash._validate_ttl @98fd97a4, cash/core.py:Cash.cleanup @ba377011 -->
 After the TTL elapses, the next call recomputes. Expired entries are
 not removed from the backend automatically — call `cash.cleanup()` to
 reclaim space, or run `python -m cash clear` from the CLI.
@@ -302,6 +310,7 @@ def parse_config():
     return yaml.safe_load(open("config.yaml"))
 ```
 
+<!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the claim is that this whole source type keys on mtime, which is the class's design" -->
 Pass a list for multiple files. The two mechanisms use deliberately different
 signals: **automatic** tracking fingerprints file **content** (a sha256), while
 `file_depends_on=` keys on the file **mtime** — cheaper, but it re-triggers on a
@@ -358,10 +367,29 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-The resolver runs with the same `args/kwargs` as the function on every
-call. If the resolver raises, you get a one-shot
-`CashCacheIneffectiveWarning` and the call proceeds without the dep
-in the key.
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @b5776c0f -->
+The resolver runs with the same `args/kwargs` as the function on every call.
+
+!!! warning "A resolver exception is only *sometimes* survivable"
+    Five exception types are caught — `OSError`, `TypeError`, `ValueError`,
+    `AttributeError`, `RuntimeError`. Raise one of those and you get a one-shot
+    `CashCacheIneffectiveWarning` and the call proceeds without the dep in the
+    key.
+
+    **Anything else propagates and fails the call.** The realistic way to hit
+    this is a lookup in the resolver:
+
+    <!-- test:skip reason="illustrative: demonstrates the KeyError escaping" -->
+    ```python
+    @cash.cache(dynamic_depends_on=lambda uid: FileDataSource(PATHS[uid]))
+    def load(uid): ...
+
+    load("unknown")   # KeyError — from the resolver, not from load()
+    ```
+
+    A resolver is dependency *bookkeeping*, so keep it total: return `None` for
+    an input you can't map rather than raising, and do the lookup inside the
+    function where an error belongs.
 
 ### `cache_if=` — skip caching by result
 
@@ -385,6 +413,7 @@ is bypassed (warning fires) — see the iterator section below.
 
 ### `strict=` and `assume_safe=` — purity gates
 
+<!-- claim: cash/core.py:Cash._surface_purity @8dc9b22e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -421,6 +450,7 @@ callables.
 
 ### `allow_random=` — unseeded randomness
 
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @72c25ef0 -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -484,6 +514,7 @@ for line in read_lines("huge.log"):
 # Second run: chunks are read lazily from disk; RAM bounded by chunk size.
 ```
 
+<!-- claim: cash/core.py:_ChunkedCachedIterator @d808794a broad="the claim is about the replay iterator's whole supported protocol" -->
 The cached iterator supports `iter()`, `__next__`, `close()`. Generator
 methods `.send()` and `.throw()` are not supported — call them and you
 get an `AttributeError` reminding you the iterator is a replay.
@@ -531,6 +562,7 @@ f.cache_info()
 #  'warnings': []}
 ```
 
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b -->
 Keys:
 
 - **`hits`**, **`misses`**, **`hit_rate`** — counters since the wrapper
@@ -567,12 +599,14 @@ Keys:
 
 ### `func.cache_clear()`
 
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e34e346 -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
+<!-- claim: cash/core.py:Cash._explain_call @02d3d980 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
@@ -699,6 +733,7 @@ exhaust). For very large finite iterators, tune `chunk_max_items=` /
 
 ### `cache_clear()` clears more than you'd expect on iterators
 
+<!-- claim: cash/core.py:Cash._delete_backend_entries @6f7d8f2e -->
 For chunked iterator caches, `cache_clear()` removes the manifest entry
 but the individual chunk entries (keyed
 `f"{cache_key}:chunk_{i}"`) are also caught by the
