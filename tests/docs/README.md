@@ -138,6 +138,29 @@ Re-pinning without reading is worse than having no mechanism at all — it
 manufactures assurance that nobody checked. The dry run exists to make reading
 the default.
 
+### Limitations
+
+- **Only direct children are walked.** A symbol defined inside
+  `if TYPE_CHECKING:` or a `try:`/`except ImportError:` block cannot be
+  anchored — `resolve()` only descends through a definition's immediate
+  children, not into nested conditional bodies.
+- **A tuple-unpacked constant cannot be anchored.** `X, Y = 1, 2` has no
+  single `ast.Assign`/`ast.AnnAssign` target named `X` or `Y` on its own;
+  write it as two separate assignments if it needs a value anchor.
+- **A value containing a comma needs a fingerprint anchor instead** — one
+  claim comment's targets are split on `,`, so `== (1, 2)` would parse as two
+  targets.
+- **Anchor placement matters when a fence follows.** Put the anchor **above**
+  any `<!-- test:skip reason="..." -->` or `<!-- test:expect-* -->`
+  annotation, not between it and the fence it annotates.
+  `_annotations.py`'s backward walk stops at the first non-blank,
+  non-`test:`-comment line, so a claim anchor sitting between the annotation
+  and the fence silently breaks the annotation's link to that fence.
+- **"Claim" is overloaded.** `test_doc_claims.py` and `test_claim_coverage.py`
+  use "claim" for a different concept entirely — a fence's inferred cache
+  hit/miss expectation. That is unrelated to the prose claim anchors this
+  section describes.
+
 Working on source rather than docs? Check what your change touches first:
 
 ```bash

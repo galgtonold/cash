@@ -5,7 +5,11 @@ An anchor is an HTML comment immediately before the claim it grounds::
     <!-- claim: cash/core.py:Cash.cache @7a77d1c5 -->
     Cash keys a call on the function source plus its arguments.
 
-See ``docs/superpowers/specs/2026-07-27-docs-claim-grounding-design.md``.
+An unresolvable anchor, a mismatched ``== <literal>``, or a page that lost
+anchors under the manifest ratchet blocks every PR. Fingerprint drift alone is
+advisory on a PR and blocking only at release, via ``CASH_CLAIMS_STRICT=1``
+(set by the ``build`` job in ``.github/workflows/publish.yml``) — see
+``tests/docs/README.md``'s "Claim anchors" section for the authoring rules.
 
 This module is pure — no pytest import — so ``scripts/claims.py`` can use it.
 """
