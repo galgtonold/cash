@@ -21,6 +21,7 @@ always a second, conscious step after reading the printed source.
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import sys
 from pathlib import Path
@@ -41,7 +42,16 @@ from tests.docs._claims import (  # noqa: E402
 
 
 def _needle(t: Target) -> str:
-    """The literal text a target's path/symbol occupy in an anchor comment.
+    """A regex fragment matching a target's path/symbol text in an anchor comment.
+
+    This must accept exactly the whitespace ``_TARGET_RE`` accepts around the
+    ``:`` separator (``\\s*:\\s*``) -- the parser blesses ``path : symbol`` as
+    valid (see ``test_whitespace_around_punctuation_is_insignificant``), so a
+    needle built as a plain literal string with a bare ``:`` would silently
+    fail to match that on-disk text. "Silently" is the operative danger: see
+    the ``re.subn`` + zero-match guard at both call sites, which exists
+    precisely because a needle/parser mismatch must never be allowed to reach
+    a success message.
 
     A module-only target (``t.symbol`` is ``None``) is written in the doc as
     just ``path`` -- there is no ``:<module>`` suffix in the real text, even
@@ -50,7 +60,10 @@ def _needle(t: Target) -> str:
     the ``@?`` case keeps both mutating code paths honest about what they are
     actually matching against.
     """
-    return f"{t.path}:{t.symbol}" if t.symbol else t.path
+    pattern = re.escape(t.path)
+    if t.symbol:
+        pattern += r"\s*:\s*" + re.escape(t.symbol)
+    return pattern
 
 
 def _display(t: Target) -> str:
@@ -107,12 +120,20 @@ def _cmd_pin() -> int:
                 nodes, source = resolve(t)
                 fp = fingerprint(nodes, source)
                 needle = _needle(t)
-                new = re.sub(
-                    rf"({re.escape(needle)}\s*)@\s*\?",
+                new, n = re.subn(
+                    rf"({needle}\s*)@\s*\?",
                     rf"\g<1>@{fp}",
                     new,
                     count=1,
                 )
+                if n == 0:
+                    # A needle that does not match on-disk text must never be
+                    # reported as filled -- that is exactly the false-assurance
+                    # failure this mechanism exists to prevent (see _needle).
+                    raise AnchorError(
+                        f"{page}: could not find {_display(t)} @? to pin -- "
+                        f"the anchor text does not match what the parser saw"
+                    )
                 filled += 1
         if new != text:
             page.write_text(new, encoding="utf-8")
@@ -154,11 +175,19 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
         return 0
 
     new = text
+    rewritten = 0
     for anchor in parse_anchors(text, page):
         for t in anchor.targets:
             if not t.pin or t.pin == "?":
                 continue
             nodes, source = resolve(t)
+            node = nodes[-1]
+            # Mirror check_page's breadth gate: a class/module anchor with no
+            # broad="reason" is reported as a "broad" problem, not "drift" --
+            # --accept must not silently re-pin it, or a real breadth problem
+            # gets papered over as if someone had re-verified it.
+            if isinstance(node, (ast.Module, ast.ClassDef)) and not anchor.broad:
+                continue
             fp = fingerprint(nodes, source)
             if fp == t.pin:
                 continue
@@ -172,12 +201,20 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
                     print(f"  {line}")
             print()
             needle = _needle(t)
-            new = re.sub(
-                rf"({re.escape(needle)}\s*@\s*){re.escape(t.pin)}",
+            new, n = re.subn(
+                rf"({needle}\s*@\s*){re.escape(t.pin)}",
                 rf"\g<1>{fp}",
                 new,
                 count=1,
             )
+            if n == 0:
+                # Same guard as --pin: a rewrite that matched nothing must
+                # never reach the "re-pinned N claim(s)" success message.
+                raise AnchorError(
+                    f"{page_arg}: could not find {display} @{t.pin} to re-pin -- "
+                    f"the anchor text does not match what the parser saw"
+                )
+            rewritten += 1
 
     if not write:
         print("=" * 72)
@@ -185,7 +222,12 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
         print(f"re-run with --yes to re-pin: --accept {page_arg} --yes")
         return 0
     page.write_text(new, encoding="utf-8")
-    print(f"re-pinned {len(drifted)} claim(s) in {page_arg}")
+    # The count of substitutions actually performed, not len(drifted): the
+    # breadth gate above can (correctly) skip a target check_page counted as
+    # "drift" -- most tellingly it excludes broad-unjustified anchors, which
+    # check_page reports as a separate "broad" problem, not "drift", so they
+    # were never in `drifted` to begin with; this count is honest either way.
+    print(f"re-pinned {rewritten} claim(s) in {page_arg}")
     return 0
 
 

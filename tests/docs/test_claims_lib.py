@@ -452,6 +452,166 @@ def test_accept_rewrites_both_occurrences_of_a_duplicated_stale_pin(tmp_path, mo
     assert new_text.count(f"mod.py:foo @{want}") == 2
 
 
+def test_pin_matches_an_anchor_with_whitespace_around_the_colon(tmp_path, monkeypatch):
+    """The parser accepts ``path : symbol`` (see test_whitespace_around_...
+    above); the writer must recognize the exact same on-disk text or --pin
+    reports success while writing nothing (the CRITICAL 1 regression).
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text(
+        "<!-- claim: mod.py : foo @? -->\nA claim about foo.\n", encoding="utf-8"
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+    monkeypatch.setattr(_cli, "published_pages", lambda: [page])
+    monkeypatch.setattr(_cli, "REPO_ROOT", tmp_path)
+
+    assert _cli._cmd_pin() == 0
+
+    new_text = page.read_text(encoding="utf-8")
+    assert "@?" not in new_text, "the placeholder must actually be replaced"
+    nodes, source = resolve(Target("mod.py", "foo"), src_root=src_root)
+    want = fingerprint(nodes, source)
+    assert f"mod.py : foo @{want}" in new_text
+
+
+def test_accept_matches_an_anchor_with_whitespace_around_the_colon(tmp_path, monkeypatch):
+    """Same regression as above, on the --accept --yes rewrite path."""
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 2\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text(
+        "<!-- claim: mod.py : foo @00000000 -->\nA claim about foo.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+
+    assert _cli._cmd_accept(str(page), write=True) == 0
+
+    new_text = page.read_text(encoding="utf-8")
+    assert "@00000000" not in new_text, "the stale pin must actually be replaced"
+    nodes, source = resolve(Target("mod.py", "foo"), src_root=src_root)
+    want = fingerprint(nodes, source)
+    assert f"mod.py : foo @{want}" in new_text
+
+
+def test_pin_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(
+    tmp_path, monkeypatch
+):
+    """The re.subn zero-match guard: if the needle EVER fails to match the
+    on-disk text (whatever the reason), --pin must error rather than print
+    "N placeholder(s) filled" while writing nothing. This is the safety net
+    for a third instance of the CRITICAL 1 bug class, not a specific needle
+    rule.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    original = "<!-- claim: mod.py:foo @? -->\nA claim.\n"
+    page.write_text(original, encoding="utf-8")
+
+    _patch_src_root(monkeypatch, src_root)
+    monkeypatch.setattr(_cli, "published_pages", lambda: [page])
+    monkeypatch.setattr(_cli, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(_cli, "_needle", lambda t: "this-never-appears-in-the-page")
+
+    with pytest.raises(AnchorError, match="could not find"):
+        _cli._cmd_pin()
+    assert page.read_text(encoding="utf-8") == original
+
+
+def test_accept_raises_rather_than_silently_reporting_success_on_a_needle_mismatch(
+    tmp_path, monkeypatch
+):
+    """Same guard, on the --accept --yes rewrite path."""
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 2\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    original = "<!-- claim: mod.py:foo @00000000 -->\nA claim.\n"
+    page.write_text(original, encoding="utf-8")
+
+    _patch_src_root(monkeypatch, src_root)
+    monkeypatch.setattr(_cli, "_needle", lambda t: "this-never-appears-in-the-page")
+
+    with pytest.raises(AnchorError, match="could not find"):
+        _cli._cmd_accept(str(page), write=True)
+    assert page.read_text(encoding="utf-8") == original
+
+
+def test_accept_does_not_repin_a_broad_unjustified_anchor(tmp_path, monkeypatch):
+    """A class-level anchor with no ``broad="reason"`` is a "broad" problem,
+    not "drift" (see check_page). --accept must not quietly re-pin it just
+    because another, genuinely drifted, anchor shares the page -- that would
+    paper over a real breadth problem as if someone had re-verified it.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text(
+        "class Foo:\n    def bar(self):\n        return 1\n", encoding="utf-8"
+    )
+    page = tmp_path / "page.md"
+    page.write_text(
+        "<!-- claim: mod.py:Foo @00000000 -->\n"
+        "A bare class-level claim (no broad= justification).\n\n"
+        "<!-- claim: mod.py:Foo.bar @00000000 -->\n"
+        "A real, narrow claim that has genuinely drifted.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+
+    assert _cli._cmd_accept(str(page), write=True) == 0
+
+    new_text = page.read_text(encoding="utf-8")
+    bar_nodes, bar_src = resolve(Target("mod.py", "Foo.bar"), src_root=src_root)
+    want_bar = fingerprint(bar_nodes, bar_src)
+    # The narrow, genuinely-drifted anchor is re-pinned.
+    assert f"mod.py:Foo.bar @{want_bar}" in new_text
+    # The bare class anchor is a breadth problem, not drift -- left untouched.
+    assert "mod.py:Foo @00000000" in new_text
+
+
+def test_accept_prints_the_count_actually_rewritten_not_len_drifted(
+    tmp_path, monkeypatch, capsys
+):
+    """MINOR 8: the printed count must reflect substitutions actually made.
+
+    Without the breadth gate, this page's ``drifted`` (from check_page) has
+    length 1 (the narrow Foo.bar anchor only -- Foo's mismatch is "broad",
+    not "drift"), but a version of --accept that re-pinned both anchors while
+    still printing ``len(drifted)`` would say "re-pinned 1 claim(s)" despite
+    having rewritten two. Assert the message names exactly what was rewritten.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text(
+        "class Foo:\n    def bar(self):\n        return 1\n", encoding="utf-8"
+    )
+    page = tmp_path / "page.md"
+    page.write_text(
+        "<!-- claim: mod.py:Foo @00000000 -->\n"
+        "A bare class-level claim (no broad= justification).\n\n"
+        "<!-- claim: mod.py:Foo.bar @00000000 -->\n"
+        "A real, narrow claim that has genuinely drifted.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+    capsys.readouterr()
+
+    assert _cli._cmd_accept(str(page), write=True) == 0
+
+    out = capsys.readouterr().out
+    assert "re-pinned 1 claim(s)" in out
+
+
 def test_accept_rewrites_a_module_level_broad_anchor(tmp_path, monkeypatch):
     """A symbol-less (module) target's real text has no ``:<module>`` suffix.
 
