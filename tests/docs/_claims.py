@@ -14,6 +14,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import io
+import json
 import re
 import textwrap
 import tokenize
@@ -333,3 +334,147 @@ def values_match(documented: str, actual: object) -> bool:
         except (TypeError, ValueError):
             return False
     return want == actual
+
+
+# --------------------------------------------------------------------------- #
+# Page checking                                                               #
+# --------------------------------------------------------------------------- #
+
+MANIFEST = Path(__file__).resolve().parent / "claim_manifest.json"
+
+
+@dataclass(frozen=True)
+class Problem:
+    page: str
+    line: int
+    kind: str    # unresolved | drift | value | broad | unpinned | manifest
+    message: str
+
+
+def anchor_count(page: Path) -> int:
+    """Total anchored *targets* on a page (a comment may carry several)."""
+    text = page.read_text(encoding="utf-8")
+    return sum(len(a.targets) for a in parse_anchors(text, page))
+
+
+def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
+    """Every problem with the claim anchors on one page."""
+    try:
+        rel = page.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        rel = page.as_posix()
+    problems: list[Problem] = []
+
+    for anchor in parse_anchors(page.read_text(encoding="utf-8"), page):
+        for t in anchor.targets:
+            try:
+                nodes, source = resolve(t, src_root)
+            except AnchorError as exc:
+                problems.append(Problem(rel, anchor.line, "unresolved", str(exc)))
+                continue
+
+            name = f"{t.path}:{t.symbol or '<module>'}"
+            node = nodes[-1]  # the effective definition
+
+            # A class or module anchor fires on every unrelated edit inside it.
+            # That noise is what trains people to re-pin without reading.
+            if isinstance(node, (ast.Module, ast.ClassDef)) and not anchor.broad:
+                what = "module" if isinstance(node, ast.Module) else "class"
+                problems.append(
+                    Problem(
+                        rel, anchor.line, "broad",
+                        f"{name} is a {what}-level anchor; narrow it to the "
+                        f"function or attribute the claim is actually about, or "
+                        f'justify it with broad="reason"',
+                    )
+                )
+                continue
+
+            if t.value is not None:
+                try:
+                    actual = literal_value(node)
+                    ok = values_match(t.value, actual)
+                except AnchorError as exc:
+                    problems.append(Problem(rel, anchor.line, "value", str(exc)))
+                    continue
+                if not ok:
+                    problems.append(
+                        Problem(
+                            rel, anchor.line, "value",
+                            f"docs say {name} == {t.value}, source says {actual!r}",
+                        )
+                    )
+                continue
+
+            if t.pin == "?":
+                problems.append(
+                    Problem(
+                        rel, anchor.line, "unpinned",
+                        f"{name} has an unfilled pin placeholder; run "
+                        f"`python scripts/claims.py --pin`",
+                    )
+                )
+                continue
+
+            if t.pin is None:
+                continue  # existence-only anchor: resolving it was the check
+
+            actual_fp = fingerprint(nodes, source)
+            if actual_fp != t.pin:
+                problems.append(
+                    Problem(
+                        rel, anchor.line, "drift",
+                        f"{name} changed (@{t.pin} -> @{actual_fp}); re-read the "
+                        f"claim: {anchor.claim!r}",
+                    )
+                )
+    return problems
+
+
+# --------------------------------------------------------------------------- #
+# Manifest / coverage ratchet                                                 #
+# --------------------------------------------------------------------------- #
+
+
+def load_manifest() -> dict:
+    return json.loads(MANIFEST.read_text(encoding="utf-8"))
+
+
+def check_manifest() -> list[Problem]:
+    """The coverage ratchet: an audited page may gain anchors, never lose them."""
+    manifest = load_manifest()
+    pages = {p.relative_to(REPO_ROOT).as_posix(): p for p in published_pages()}
+    problems: list[Problem] = []
+
+    for rel in sorted(set(manifest) - set(pages)):
+        problems.append(
+            Problem(
+                rel, 0, "manifest",
+                "listed in claim_manifest.json but is not a published page; "
+                "remove the entry or restore the page",
+            )
+        )
+
+    for rel, page in sorted(pages.items()):
+        entry = manifest.get(rel)
+        if entry is None:
+            problems.append(
+                Problem(
+                    rel, 0, "manifest",
+                    'not in claim_manifest.json; add {"audited": null, '
+                    '"anchors": 0} and triage the page',
+                )
+            )
+            continue
+        if not entry.get("audited"):
+            continue  # unaudited pages are exempt until their tranche lands
+        actual = anchor_count(page)
+        if actual < entry["anchors"]:
+            problems.append(
+                Problem(
+                    rel, 0, "manifest",
+                    f"anchor count fell from {entry['anchors']} to {actual}; a "
+                    f"claim was removed along with its anchor",
+                )
+            )
+    return problems

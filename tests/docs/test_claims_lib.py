@@ -26,7 +26,7 @@ def test_existence_anchor_has_no_pin_and_no_value():
 
 def test_fingerprint_anchor_captures_the_pin():
     a = _anchors("clean.md")[1]
-    assert a.targets[0].pin == "deadbeef"
+    assert a.targets[0].pin == "28e97877"
     assert a.targets[0].symbol == "compute_cache_key"
 
 
@@ -243,3 +243,41 @@ def test_a_non_literal_documented_value_is_an_error_not_a_mismatch():
     """'roughly 10' must be fixed by the author, not silently reported wrong."""
     with pytest.raises(AnchorError, match="not a Python literal"):
         values_match("roughly 10", 10)
+
+
+# --------------------------------------------------------------------------- #
+# Page checking                                                               #
+# --------------------------------------------------------------------------- #
+from tests.docs._claims import anchor_count, check_page  # noqa: E402
+
+
+def test_a_clean_page_reports_nothing():
+    """Positive control: without this the checker could pass by rejecting all."""
+    assert check_page(FIXTURES / "clean.md") == []
+
+
+@pytest.mark.parametrize(
+    "fixture, kind, fragment",
+    [
+        ("bad_path.md", "unresolved", "no such source file"),
+        ("bad_symbol.md", "unresolved", "no_such_method"),
+        ("stale_pin.md", "drift", "re-read the claim"),
+        ("bare_class.md", "broad", "narrow it"),
+        ("unpinned.md", "unpinned", "--pin"),
+    ],
+)
+def test_each_defect_is_caught_exactly_once(fixture, kind, fragment):
+    problems = check_page(FIXTURES / fixture)
+    assert len(problems) == 1, problems
+    assert problems[0].kind == kind
+    assert fragment in problems[0].message
+
+
+def test_a_drift_message_quotes_the_claim_it_grounds():
+    """The reviewer needs the claim, not just a hash, to re-verify it."""
+    (problem,) = check_page(FIXTURES / "stale_pin.md")
+    assert "A claim whose pin no longer matches" in problem.message
+
+
+def test_anchor_count_counts_targets_not_comments():
+    assert anchor_count(FIXTURES / "clean.md") == 5
