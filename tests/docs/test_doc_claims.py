@@ -401,8 +401,16 @@ def test_magics_page_states_the_right_count() -> None:
 #
 # Renumbering only resets the clock. The fix is to name the SYMBOL, which moves
 # with the code (and, for a load-bearing claim, to add a claim anchor so the
-# fingerprint check re-verifies it). This is a burn-down ratchet, not a gate:
-# the counts below may fall, never rise.
+# fingerprint check re-verifies it).
+#
+# POLICY (2026-07-27): a bare line number in a published doc page is BANNED
+# outright. This started as a burn-down ratchet with 22 grandfathered pins; all
+# 22 are gone and 20 of them had rotted, so there is no evidence a bare pin ever
+# earns its keep. The one exempt form is a pin that carries the commit it was
+# read at -- ``core.py:1234@8e5f4ce`` -- because that names a fixed snapshot and
+# therefore cannot rot: `git show 8e5f4ce:src/cash/core.py` resolves it forever.
+# Prefer a symbol even then; reach for the commit form only when the claim is
+# genuinely about a historical state (an ADR, a post-mortem, a CHANGELOG note).
 #
 # CAS-126 filed this idea; annotations.md is the proof it was worth doing.
 
@@ -417,55 +425,112 @@ def test_magics_page_states_the_right_count() -> None:
 # number in SEPARATE code spans -- ``(`…/memory_backend.py`, `:210-221`)``.
 # A pattern anchored on ``.py`` cannot see it, so the second alternative
 # matches a bare ``:NNN`` / ``:NNN-MMM`` span, which has no other use in prose.
-_LINE_PIN_RE = re.compile(r"`[\w./-]+\.py[:,]\d[\d,-]*`|`:\d+(?:-\d+)?`")
+_LINE_PIN_RE = re.compile(
+    r"`[\w./-]+\.py[:,]\d[\d,-]*(?:@[0-9a-f]{7,40})?`|`:\d+(?:-\d+)?(?:@[0-9a-f]{7,40})?`"
+)
 
-# page -> number of line-pinned refs still present. Burn these down; do not add.
-#
-# EMPTY as of the 2026-07-27 audit: every line-pinned reference in the published
-# docs has been replaced with a symbol reference. It started at 22 across five
-# pages and all 22 were checked -- 20 of them had rotted, most by the same
-# ~68-line shift when something was inserted above them. Keeping the dict (rather
-# than deleting the mechanism) means a single new pin fails the build.
-_KNOWN_LINE_PINS: dict[str, int] = {}
+# The exempt form: the same pin with the commit it was read at appended. Matched
+# against the WHOLE span so ``core.py:12@deadbee`` counts as commit-pinned while
+# ``core.py:12`` does not.
+_COMMIT_PINNED_RE = re.compile(r"^`.+@(?P<sha>[0-9a-f]{7,40})`$")
 
 
-def _line_pin_counts() -> dict[str, int]:
-    out: dict[str, int] = {}
-    for md in ALL_MD:
-        n = len(_LINE_PIN_RE.findall(md.read_text(encoding="utf-8")))
-        if n:
-            out[md.relative_to(DOCS_ROOT).as_posix()] = n
-    return out
+def _bare_line_pins(text: str) -> list[str]:
+    """Line-pinned spans that do NOT carry a commit."""
+    return [m for m in _LINE_PIN_RE.findall(text) if not _COMMIT_PINNED_RE.match(m)]
 
 
-def test_no_new_line_pinned_source_references() -> None:
-    actual = _line_pin_counts()
+def test_no_line_pinned_source_references() -> None:
+    """A bare line number in a doc page is banned. Name the symbol.
+
+    Not a ratchet any more -- there is nothing left to grandfather. See the
+    policy note above for the one exempt form (``path.py:NNN@<commit>``).
+    """
     problems: list[str] = []
-    for page, count in sorted(actual.items()):
-        allowed = _KNOWN_LINE_PINS.get(page, 0)
-        if count > allowed:
-            problems.append(
-                f"  {page}: {count} line-pinned refs (allowed {allowed}). "
-                f"Reference the symbol instead of the line -- line numbers rot "
-                f"on any edit above them and nothing catches it."
-            )
+    for md in ALL_MD:
+        bare = _bare_line_pins(md.read_text(encoding="utf-8"))
+        for span in bare:
+            problems.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: {span}")
     assert not problems, (
-        "New line-pinned source references in the docs:\n" + "\n".join(problems)
+        "Line-pinned source references in the docs:\n" + "\n".join(problems)
+        + "\n\nName the SYMBOL instead -- it moves with the code, and a claim "
+        "anchor can re-verify it. A line number rots on any edit above it and "
+        "still reads as authoritative. If the claim is genuinely about a "
+        "historical state, append the commit you read it at "
+        "(`path.py:1234@8e5f4ce`), which names a fixed snapshot and cannot rot."
     )
 
 
-def test_line_pin_ratchet_has_no_stale_entries() -> None:
-    """A page that was fixed must leave the list, or the ratchet stops biting."""
-    actual = _line_pin_counts()
-    stale: list[str] = []
-    for page, allowed in sorted(_KNOWN_LINE_PINS.items()):
-        found = actual.get(page, 0)
-        if found < allowed:
-            stale.append(
-                f"  {page}: listed as {allowed} but only {found} remain -- "
-                f"lower the number (or delete the entry at 0)"
-            )
-    assert not stale, "Line-pin ratchet is out of date:\n" + "\n".join(stale)
+def _repo_is_shallow(repo: Path) -> bool:
+    """True when history is truncated, so an old SHA is legitimately absent.
+
+    ``actions/checkout`` defaults to ``fetch-depth: 1``, so CI runs shallow.
+    Without this distinction an unresolvable SHA is ambiguous — bad pin, or
+    just a commit this clone doesn't have — and the check has to skip both.
+    With it, a full clone (any developer, and any CI job that sets fetch-depth)
+    fails a fabricated SHA properly.
+    """
+    import subprocess
+
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--is-shallow-repository"],
+            cwd=repo, capture_output=True, text=True, timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return True  # can't tell -> assume the weaker claim
+    return r.returncode != 0 or r.stdout.strip() != "false"
+
+
+def test_commit_pinned_references_resolve() -> None:
+    """A commit-pinned line must name a real commit, and a line that exists in it.
+
+    The exemption is only worth granting if the coordinate is real: a pin at a
+    fabricated (or force-pushed-away) SHA is a bare pin wearing a disguise.
+
+    On a full clone this is a genuine check, including of the SHA itself. On a
+    shallow one (CI's default) an absent commit is expected, so only pins whose
+    commit *does* resolve are verified. The regex enforces the format either way.
+    """
+    import subprocess
+
+    repo = DOCS_ROOT.parent
+    shallow = _repo_is_shallow(repo)
+    problems: list[str] = []
+    for md in ALL_MD:
+        text = md.read_text(encoding="utf-8")
+        for span in _LINE_PIN_RE.findall(text):
+            m = _COMMIT_PINNED_RE.match(span)
+            if m is None:
+                continue  # bare pin -- the other test owns it
+            sha = m.group("sha")
+            path_m = re.match(r"`([\w./-]+\.py):(\d+)", span)
+            if path_m is None:
+                continue  # bare ``:NNN@sha`` span, no path to resolve against
+            path, line_no = path_m.group(1), int(path_m.group(2))
+            where = f"  {md.relative_to(DOCS_ROOT).as_posix()}: {span}"
+            try:
+                blob = subprocess.run(
+                    ["git", "show", f"{sha}:{path}"],
+                    cwd=repo, capture_output=True, text=True, timeout=30,
+                )
+            except (OSError, subprocess.SubprocessError):
+                continue  # no git at all -- format check already passed
+            if blob.returncode != 0:
+                if not shallow:
+                    problems.append(
+                        f"{where} -- {sha} does not name a commit containing "
+                        f"{path} (full clone, so this is not a depth problem)"
+                    )
+                continue
+            n_lines = len(blob.stdout.splitlines())
+            if line_no > n_lines:
+                problems.append(
+                    f"{where} -- {path} had only {n_lines} lines at {sha}"
+                )
+    assert not problems, (
+        "Commit-pinned references that don't resolve:\n" + "\n".join(problems)
+    )
 
 
 # --------------------------------------------------------------------------- #

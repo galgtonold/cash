@@ -78,6 +78,40 @@ When you add a new tutorial:
    `<!-- test:skip reason="..." -->`.
 3. Don't paste an example you haven't actually run yourself first. The
    harness will catch you.
+4. **Never cite a line number.** See below.
+
+## Never cite a line number
+
+`test_no_line_pinned_source_references` bans a bare line number in any
+published page — `` `core.py:1234` ``, `` `core.py,1234` ``, and the
+split-span `` (`core.py`, `:1234`) `` form all fail the build.
+
+This was a burn-down ratchet with 22 grandfathered pins. All 22 are gone and
+**20 of them had rotted** — pointing at a docstring, at a matplotlib comment,
+at an entropy-reseed guard, and in one case at a different test than the one
+whose code the page quoted verbatim. They don't drift one at a time; they
+drift together, whenever something is inserted above them, and a stale line
+number still reads as authoritative. That is what makes it worse than no
+citation.
+
+**Name the symbol instead** — `Cash._compute_with_lock`, `MUTATING_METHODS`,
+`ForLoopHandler._should_execute_loop_as_single_unit`. It moves with the code,
+`--report` can find it when the code changes, and a [claim
+anchor](#claim-anchors) can re-verify it.
+
+The one exempt form carries the commit the line was read at:
+
+```markdown
+`src/cash/core.py:1234@8e5f4ce`
+```
+
+That names a fixed snapshot — `git show 8e5f4ce:src/cash/core.py` resolves it
+forever — so it cannot rot. `test_commit_pinned_references_resolve` checks
+that the commit is real and that the file actually had that many lines at that
+commit (fully, on a complete clone; on CI's shallow clone it verifies the pins
+whose commits are present). Reach for this only when the claim is genuinely
+*about* a historical state — an ADR, a post-mortem, a CHANGELOG note. For
+"here is where this behaviour lives", the symbol is strictly better.
 
 ## Claim anchors
 

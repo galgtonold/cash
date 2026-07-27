@@ -291,6 +291,22 @@ For an exclusion or filter, add a **positive control** in the same test (assert
 the thing that must survive is still there), or the assertion passes when
 everything is excluded.
 
+## Writing documentation
+- **Never cite a line number.** `` `core.py:1234` `` is banned in any published
+  page and fails `tests/docs/test_doc_claims.py`. Name the **symbol**
+  (`Cash._compute_with_lock`, `MUTATING_METHODS`) — it moves with the code. The
+  ban started as a ratchet over 22 grandfathered pins; 20 of them had already
+  rotted onto unrelated code. The one exempt form appends the commit the line
+  was read at (`` `src/cash/core.py:1234@8e5f4ce` ``), which names a fixed
+  snapshot and so cannot rot — use it only for claims genuinely *about* history.
+- **Anchor every mechanism claim** to the source that decides it:
+  `<!-- claim: cash/core.py:Cash.cache @? -->`, then `python scripts/claims.py
+  --pin` fills the digest. Prefer a **value** anchor (`== 0.01`) whenever the
+  prose quotes a constant — it verifies itself forever with no human in the loop.
+- **Before changing code, run `python scripts/claims.py --report <src file>`** to
+  see which doc claims rest on it.
+- Full authoring guide: `tests/docs/README.md`.
+
 ## Common Pitfalls
 - **File paths**: Always normalize paths (`path.replace('\\', '/')`) for cross-platform cache key consistency
 - **Windows file locking**: Use retry loops when deleting temp directories in tests
