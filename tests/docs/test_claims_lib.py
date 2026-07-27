@@ -318,54 +318,100 @@ def test_broad_justification_does_not_suppress_drift_detection():
 import json  # noqa: E402
 
 from tests.docs import _claims  # noqa: E402
-from tests.docs._claims import check_manifest  # noqa: E402
+from tests.docs._claims import Problem, check_manifest  # noqa: E402
 
 
 def _write_manifest(path, data):
     path.write_text(json.dumps(data), encoding="utf-8")
 
 
+def _synthetic_pages(tmp_path, monkeypatch):
+    """A tiny, fully-controlled published-page set, standing in for the real
+    56-page docs/ tree.
+
+    These tests used to derive ``some_page`` from ``_claims.published_pages()``
+    (the REAL docs tree) and assume it carries 0 anchors -- true today only
+    because every real page is still unaudited. The coming 56-page audit will
+    break that assumption for whichever page sorts first, and it would fail
+    for a reason that looks like something else entirely. Building a
+    synthetic ``docs/`` tree (the same ``src_root=``-style technique the CLI
+    tests use, applied to REPO_ROOT/published_pages instead) removes that
+    coupling: these tests now exercise check_manifest's logic against content
+    they fully control.
+    """
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    page_a = docs / "page_a.md"
+    page_a.write_text("# Page A\n\nNo anchors here.\n", encoding="utf-8")
+    page_b = docs / "page_b.md"
+    page_b.write_text(
+        "# Page B\n\n<!-- claim: mod.py:Foo -->\nAn existence-only claim.\n",
+        encoding="utf-8",
+    )
+    pages = [page_a, page_b]
+    monkeypatch.setattr(_claims, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(_claims, "published_pages", lambda: pages)
+    return page_a, page_b
+
+
 def test_manifest_missing_a_published_page_is_a_problem(tmp_path, monkeypatch):
+    page_a, page_b = _synthetic_pages(tmp_path, monkeypatch)
     manifest_path = tmp_path / "claim_manifest.json"
-    pages = {p.relative_to(_claims.REPO_ROOT).as_posix() for p in _claims.published_pages()}
-    some_page = sorted(pages)[0]
-    _write_manifest(manifest_path, {p: {"audited": None, "anchors": 0}
-                                     for p in pages if p != some_page})
+    # page_a is published but absent from the manifest entirely.
+    _write_manifest(manifest_path, {"docs/page_b.md": {"audited": None, "anchors": 0}})
     monkeypatch.setattr(_claims, "MANIFEST", manifest_path)
 
     problems = check_manifest()
-    assert any(p.kind == "manifest" and p.page == some_page for p in problems)
+    assert problems == [
+        Problem(
+            "docs/page_a.md", 0, "manifest",
+            'not in claim_manifest.json; add {"audited": null, "anchors": 0} '
+            "and triage the page",
+        )
+    ]
 
 
 def test_manifest_entry_for_a_nonexistent_page_is_a_problem(tmp_path, monkeypatch):
+    _synthetic_pages(tmp_path, monkeypatch)
     manifest_path = tmp_path / "claim_manifest.json"
-    pages = {p.relative_to(_claims.REPO_ROOT).as_posix() for p in _claims.published_pages()}
-    data = {p: {"audited": None, "anchors": 0} for p in pages}
-    data["docs/does-not-exist.md"] = {"audited": None, "anchors": 0}
+    data = {
+        "docs/page_a.md": {"audited": None, "anchors": 0},
+        "docs/page_b.md": {"audited": None, "anchors": 0},
+        "docs/does-not-exist.md": {"audited": None, "anchors": 0},
+    }
     _write_manifest(manifest_path, data)
     monkeypatch.setattr(_claims, "MANIFEST", manifest_path)
 
     problems = check_manifest()
-    assert any(
-        p.kind == "manifest" and p.page == "docs/does-not-exist.md" for p in problems
-    )
+    assert problems == [
+        Problem(
+            "docs/does-not-exist.md", 0, "manifest",
+            "listed in claim_manifest.json but is not a published page; "
+            "remove the entry or restore the page",
+        )
+    ]
 
 
 def test_manifest_anchor_count_regression_is_a_problem(tmp_path, monkeypatch):
+    page_a, page_b = _synthetic_pages(tmp_path, monkeypatch)
     manifest_path = tmp_path / "claim_manifest.json"
-    pages = {p.relative_to(_claims.REPO_ROOT).as_posix() for p in _claims.published_pages()}
-    some_page = sorted(pages)[0]
-    data = {p: {"audited": None, "anchors": 0} for p in pages}
-    # Audited, and recorded as having more anchors than the real page has (0).
-    data[some_page] = {"audited": "2026-07-27", "anchors": 1}
+    data = {
+        "docs/page_a.md": {"audited": None, "anchors": 0},
+        # Audited, and recorded as having more anchors than page_b really has
+        # (1, from the single existence-only claim in _synthetic_pages).
+        "docs/page_b.md": {"audited": "2026-07-27", "anchors": 2},
+    }
     _write_manifest(manifest_path, data)
     monkeypatch.setattr(_claims, "MANIFEST", manifest_path)
 
     problems = check_manifest()
-    assert any(
-        p.kind == "manifest" and p.page == some_page and "fell from" in p.message
-        for p in problems
-    )
+    assert problems == [
+        Problem(
+            "docs/page_b.md", 0, "manifest",
+            "anchor count fell from 2 to 1; a claim was removed along with "
+            "its anchor",
+        )
+    ]
 
 
 # --------------------------------------------------------------------------- #
