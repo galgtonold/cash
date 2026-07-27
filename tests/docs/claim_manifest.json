@@ -172,8 +172,8 @@
     "audited": null
   },
   "docs/tutorials/feature-guides/dynamic-dependencies.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 4,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/iterator-caching.md": {
     "anchors": 10,
