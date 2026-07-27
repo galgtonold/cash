@@ -8,6 +8,9 @@ import pytest
 from tests.docs._claims import AnchorError, Target, parse_anchors, published_pages
 
 FIXTURES = Path(__file__).parent / "_fixtures" / "claims"
+# clean.md's fingerprint anchors are pinned against this synthetic tree, not
+# the real src/ -- see clean.md's own leading comment for why.
+CLEAN_SRC_ROOT = FIXTURES / "src"
 
 
 def _anchors(name: str):
@@ -26,7 +29,7 @@ def test_existence_anchor_has_no_pin_and_no_value():
 
 def test_fingerprint_anchor_captures_the_pin():
     a = _anchors("clean.md")[1]
-    assert a.targets[0].pin == "28e97877"
+    assert a.targets[0].pin == "37576d6b"
     assert a.targets[0].symbol == "compute_cache_key"
 
 
@@ -253,7 +256,7 @@ from tests.docs._claims import anchor_count, check_page  # noqa: E402
 
 def test_a_clean_page_reports_nothing():
     """Positive control: without this the checker could pass by rejecting all."""
-    assert check_page(FIXTURES / "clean.md") == []
+    assert check_page(FIXTURES / "clean.md", src_root=CLEAN_SRC_ROOT) == []
 
 
 @pytest.mark.parametrize(
