@@ -19,6 +19,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from cash.config import CashConfig, TierConfig
+from tests.docs._claims import published_pages
 
 
 def slugify(value: str, separator: str = "-") -> str:
@@ -34,20 +35,12 @@ def slugify(value: str, separator: str = "-") -> str:
     return re.sub(rf"[{re.escape(separator)}\s]+", separator, value)
 
 DOCS_ROOT = Path(__file__).resolve().parents[2] / "docs"
-# ``superpowers/`` holds internal planning/spec docs that are not part of the
-# published site (and are riddled with intentionally-stale links), so they are
-# out of scope — same blacklist the fence harness uses.
-_BLACKLIST_DIRS = {"superpowers"}
-# Files mkdocs.yml lists under ``exclude_docs`` — they are never built, so a
-# dead anchor in one would fail this (hard-gated) check for a page no reader
-# can reach. Keep in sync with ``exclude_docs`` in mkdocs.yml.
-_EXCLUDED_FILES = {"architecture_decisions.md"}
-ALL_MD = sorted(
-    p
-    for p in DOCS_ROOT.rglob("*.md")
-    if not any(part in _BLACKLIST_DIRS for part in p.relative_to(DOCS_ROOT).parts)
-    and p.relative_to(DOCS_ROOT).as_posix() not in _EXCLUDED_FILES
-)
+# The set of pages mkdocs actually builds -- ``superpowers/`` internal
+# planning docs and mkdocs.yml's ``exclude_docs`` entries are out of scope.
+# ``_claims.py::published_pages`` is the single definition; this used to be a
+# byte-equivalent second copy of the same comprehension, which is exactly the
+# kind of duplication an anti-drift mechanism shouldn't itself have.
+ALL_MD = published_pages()
 
 
 def _is_autodoc(path: Path) -> bool:
