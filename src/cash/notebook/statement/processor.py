@@ -1625,6 +1625,12 @@ class StatementProcessor:
         """
         if annotation is None or not getattr(annotation, 'cache_calls', False):
             return code, tree
+        # ``# @cash:no-cache`` is an explicit instruction about this statement,
+        # and caching the expensive call inside it honours the letter while
+        # breaking the intent. no-cache wins, exactly as it wins over
+        # ``persist``.
+        if getattr(annotation, 'no_cache', False):
+            return code, tree
         cash_instance = self._get_cash_instance()
         if cash_instance is None:
             return code, tree

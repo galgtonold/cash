@@ -106,6 +106,13 @@ class CallCache:
             return fn
         if getattr(fn, '_cash_cached', False):
             return fn
+        # ``@cash.stateful`` is THE documented way to say "never cache this".
+        # ``decide_cacheability`` honours it for statements; skipping it here
+        # cached a stateful callee and returned a stale value on the FIRST run
+        # (``[1, 1]`` where plain Python gives ``[1, 2]``), because the second
+        # call in a loop hit the entry the first had just written.
+        if getattr(fn, '_cash_stateful', False):
+            return fn
 
         entry = self._wrappers.get(id(fn))
         if entry is not None and entry[0] is fn:
