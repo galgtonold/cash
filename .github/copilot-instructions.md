@@ -1,4 +1,4 @@
-﻿# Agent Instructions for Cash
+# Agent Instructions for Cash
 
 > **Scope:** This file is the single source of truth for AI coding assistants working in this repo —
 > GitHub Copilot, Claude Code (loaded via `CLAUDE.md` → this file), Cursor, Codex, etc.
@@ -23,7 +23,7 @@ Cash is a smart caching library for Python with two primary use cases:
 
 ### Core Components (`src/cash/`)
 - **`core.py`** - Main `Cash` class, entry point for decorator-based caching
-- **`backends/`** - Pluggable storage backends (InMemoryBackend, FileBackend, Redis, S3, Tiered)
+- **`backends/`** - Pluggable storage backends: `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, `RedisBackend`, `S3Backend`, plus two multi-backend composites, `TieredBackend` (promotion + read-repair) and `CascadingBackend`. `factory.py` maps a `TierConfig.type` string (`memory` / `file` / `sqlite` / `redis` / `s3` / `tiered`) to the class.
 - **`notebook/`** - Jupyter integration (the most complex subsystem)
 
 ### Notebook Subsystem (`src/cash/notebook/`)
@@ -71,7 +71,7 @@ The notebook caching is statement-level, not cell-level. The four biggest cluste
 **Every feature must have both unit tests AND integration tests before completion. Same goes for every bug fix.**
 
 #### Unit Tests (`tests/test_notebook/`)
-- Use `magics_fixture` from `conftest.py` for mock IPython shell testing
+- Use a `magics_fixture` for mock IPython shell testing. It is **not** a shared conftest fixture — each test module defines its own (27 files under `tests/test_notebook/` do). Copy the pattern from a neighbouring test file rather than importing it.
 - Test individual components in isolation (statement processor, upstream checker, etc.)
 - Always use `tmp_path` for file-based test data to ensure isolation
 
@@ -183,7 +183,7 @@ def test_slow_operation(nb_runner):
 ### Test Fixtures
 
 #### Unit Tests
-- Use `magics_fixture` from `conftest.py` for unit tests with mock IPython shell
+- Define a `magics_fixture` in the test module itself (see the note under *Unit Tests* above — it is per-file, not shared)
 - Always use `tmp_path` for file-based test data to ensure isolation
 
 #### Integration Tests
@@ -210,29 +210,29 @@ Debug output prefixes: `[UPSTREAM_DEBUG]`, `[LINEAGE_DEBUG]`, `[ALREADY_EXECUTED
 ## Critical Conventions
 
 ### Lineage System
-- **`variable_lineage`**: Maps var_name â†’ lineage hash (full dependency chain)
-- **`executed_cell_codes`**: Maps var_name â†’ code that last produced it
-- **`executed_input_lineages`**: Maps var_name â†’ {input_var: lineage} used when computing
-- **`_cash_hash`**: Attribute attached to objects with their lineage hash
+- **`variable_lineage`**: Maps var_name → lineage hash (full dependency chain)
+- **`executed_cell_codes`**: Maps var_name → code that last produced it
+- **`executed_input_lineages`**: Maps var_name → {input_var: lineage} used when computing
+- **`_cash_lineage_hash`**: Attribute attached to objects with their lineage hash. (There is no `_cash_hash` — the shorter name appears only inside a test name.)
 
 ### Cache Key Format
 Statement cache keys: `stmt:{sha256(code + ':'.join(sorted(input_lineages)) + file_hash_component)}`
 
-### âš ï¸ Unified Cache Key Computation (CRITICAL ARCHITECTURAL RULE)
+### ⚠️ Unified Cache Key Computation (CRITICAL ARCHITECTURAL RULE)
 **All cache key computation MUST go through `compute_cache_key()` in `cash.notebook.cache_key`.** This is the single source of truth for building statement cache keys. Never duplicate cache key logic in other modules.
 
-**Why this matters:** Cache keys are computed in multiple contexts â€” runtime execution (`statement/processor.py`), upstream simulation (`upstream/virtual_lineage.py` `_update_virtual_lineage`), virtual restore (`upstream/virtual_lineage.py` `_try_virtual_restore`), and skip checks. Any divergence between these computations causes cache misses or stale data after kernel restarts. This has caused critical bugs multiple times in the past.
+**Why this matters:** Cache keys are computed in multiple contexts — runtime execution (`statement/processor.py`), upstream simulation (`upstream/virtual_lineage.py` `_update_virtual_lineage`), virtual restore (`upstream/virtual_lineage.py` `_try_virtual_restore`), and skip checks. Any divergence between these computations causes cache misses or stale data after kernel restarts. This has caused critical bugs multiple times in the past.
 
 **Call sites that use `compute_cache_key()`:**
-1. `_analyze_and_hash()` in `statement/processor.py` â€” runtime cache key
-2. `_update_virtual_lineage()` in `upstream/virtual_lineage.py` â€” simulation forward propagation
-3. `_try_virtual_restore()` in `upstream/virtual_lineage.py` â€” backward restore from disk
-4. Skipped statement checking in `upstream/virtual_lineage.py` â€” verifying skipped stmts
+1. `_analyze_and_hash()` in `statement/processor.py` — runtime cache key
+2. `_update_virtual_lineage()` in `upstream/virtual_lineage.py` — simulation forward propagation
+3. `_try_virtual_restore()` in `upstream/virtual_lineage.py` — backward restore from disk
+4. Skipped statement checking in `upstream/virtual_lineage.py` — verifying skipped stmts
 
 **Input lineage priority order** (in `compute_cache_key()`):
-1. `virtual_lineage` (simulation context â€” checked FIRST, reflects current simulated code)
-2. `variable_lineage` (runtime state â€” may hold stale lineages from previous execution)
-3. `_cash_hash` attribute on the object in `user_ns`
+1. `virtual_lineage` (simulation context — checked FIRST, reflects current simulated code)
+2. `variable_lineage` (runtime state — may hold stale lineages from previous execution)
+3. `_cash_lineage_hash` attribute on the object in `user_ns`
 4. `compute_hash_fn` fallback (content-based hashing)
 
 **Module lineage propagation:** When `_update_virtual_lineage()` processes import statements (`import X` / `from X import Y`), it copies module output lineages to `self.variable_lineage`. This ensures modules are available for downstream runtime cache key computation even after kernel restart (when imports are "skipped stmts" that never go through `process()`).
@@ -242,7 +242,7 @@ Statement cache keys: `stmt:{sha256(code + ':'.join(sorted(input_lineages)) + fi
 ### Skip Optimization Logic
 Before executing a statement, check if it was already computed:
 1. Code matches `executed_cell_codes[var]`
-2. Output's `_cash_hash` matches stored lineage (not externally modified)
+2. Output's `_cash_lineage_hash` matches stored lineage (not externally modified)
 3. No file dependencies OR file deps haven't changed
 4. Input lineages match `executed_input_lineages[var]`
 5. Special case: self-assignment (`df = df.sort_values()`) - check output lineage, not input
@@ -300,7 +300,7 @@ everything is excluded.
 
 ## Project Management
 
-**Linear is the single source of truth.** All tasks, bugs, follow-ups, and roadmap live in the Linear workspace (team `Cash`, issue prefix `CAS`), accessed via the Linear MCP. Do **not** create or resurrect roadmap markdown — the old `planning/ROADMAP.md` is archived under `planning/archive/` for history only and must not be edited as a live plan.
+**Linear is the single source of truth.** All tasks, bugs, follow-ups, and roadmap live in the Linear workspace (team `Cash`, issue prefix `CAS`), accessed via the Linear MCP. Do **not** create or resurrect roadmap markdown. The old `planning/ROADMAP.md` no longer exists in the working tree at all (neither `planning/` nor `planning/archive/` is present) — if you need that history, read it out of git, and do not recreate the directory.
 
 **Behavioral rules for AI assistants (do these without being asked):**
 1. **Look in Linear by default.** At the start of planning work, query Linear for the active `v0.5.0 Release` project plus In Progress / Todo issues before proposing what to do. Don't ask the user to paste issue state — fetch it.
