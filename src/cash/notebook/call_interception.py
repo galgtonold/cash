@@ -113,6 +113,16 @@ class CallCache:
         # call in a loop hit the entry the first had just written.
         if getattr(fn, '_cash_stateful', False):
             return fn
+        # Cash's own instrumentation. ``file_tracker`` replaces ``open``,
+        # ``pd.read_csv`` and friends with tracking wrappers, and a wrapper is a
+        # plain Python function -- so the builtin exclusion above does not cover
+        # it. Wrapping one means trying to cache a file handle: the audit-log
+        # repro on CAS-246 raised, and wrote nothing. The sentinel is the same
+        # one ``cache_key.py`` already reads defensively (CAS-214, where this
+        # shim poisoned a cache key), and every install site sets it, so new
+        # shims are covered without a new list to maintain.
+        if getattr(fn, '_is_file_tracker_patch', False):
+            return fn
 
         entry = self._wrappers.get(id(fn))
         if entry is not None and entry[0] is fn:
