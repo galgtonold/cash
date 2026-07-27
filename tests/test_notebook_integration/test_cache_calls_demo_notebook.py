@@ -16,12 +16,31 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
-NB = pathlib.Path(__file__).resolve().parents[2] / "examples" / "cache_calls_demo.ipynb"
+REPO = pathlib.Path(__file__).resolve().parents[2]
+NB = REPO / "examples" / "cache_calls_demo.ipynb"
 
 
 def _code_cells():
+    """The notebook's code cells, from the COMMITTED version.
+
+    Read from git rather than the working tree on purpose. This notebook is
+    meant to be run and edited by hand — extra scratch cells, saved outputs —
+    and a guard that indexes into the working copy fails the moment someone
+    uses it as intended. What must not drift is the committed demo.
+
+    Falls back to the working tree when git is unavailable (a source export, a
+    detached checkout), which is still better than not checking at all.
+    """
+    import subprocess
     import nbformat
-    nb = nbformat.read(str(NB), as_version=4)
+    try:
+        raw = subprocess.run(
+            ["git", "show", f"HEAD:{NB.relative_to(REPO).as_posix()}"],
+            cwd=REPO, capture_output=True, text=True, timeout=30, check=True,
+        ).stdout
+        nb = nbformat.reads(raw, as_version=4)
+    except (subprocess.SubprocessError, OSError, ValueError):
+        nb = nbformat.read(str(NB), as_version=4)
     return [c.source for c in nb.cells if c.cell_type == "code"]
 
 

@@ -39,6 +39,32 @@ __all__ = ["eligible_call_nodes", "wrap_eligible_calls", "CallCache", "HELPER_NA
 HELPER_NAME = "__cash_call__"
 
 
+def _is_storable(result) -> bool:
+    """``cache_if`` predicate: may this call's result be written to the cache?
+
+    Refuses objects that are identity-coupled to a library global — today, a
+    matplotlib Figure/Axes. The RAM tier deep-copies on store and
+    ``Figure.__setstate__`` re-registers the COPY as pyplot's *current figure*,
+    so a later bare ``plt.savefig()`` writes the cache's snapshot instead of the
+    figure the user drew on, on the FIRST run and silently.
+
+    ``statement/processor.py`` already refuses exactly this shape. Routing calls
+    through the decorator skipped that guard, because the decorator never sees a
+    statement — adversarial probing produced two different PNGs from one figure
+    and ``plt.gcf() is fig`` returning False. Applied as ``cache_if`` rather than
+    a post-check so the refusal lands *before* the write, which is what stops
+    the deep copy from being made at all.
+
+    Deliberately narrow: only the identity-coupled family. Everything else the
+    decorator would cache is still cached.
+    """
+    try:
+        from .cacheability_decision import identity_coupled_reason
+        return identity_coupled_reason("<intercepted call>", result) is None
+    except Exception:  # noqa: BLE001 - never let the predicate break the call
+        return True
+
+
 class CallCache:
     """Resolves a callee to the thing that should actually be called.
 
@@ -86,7 +112,7 @@ class CallCache:
             return entry[1]
 
         try:
-            wrapper = self._cash.cache(fn)
+            wrapper = self._cash.cache(fn, cache_if=_is_storable)
         except Exception:  # noqa: BLE001 - a caching wrapper is never worth an error
             return fn
         self._wrappers[id(fn)] = (fn, wrapper)
