@@ -350,3 +350,133 @@ def test_manifest_anchor_count_regression_is_a_problem(tmp_path, monkeypatch):
         p.kind == "manifest" and p.page == some_page and "fell from" in p.message
         for p in problems
     )
+
+
+# --------------------------------------------------------------------------- #
+# CLI (scripts/claims.py) -- the two correctness risks named in the task 6    #
+# brief: does a prefix symbol (Cash.cache vs Cash.cache_info) or a duplicated #
+# target cross-wire the regex-based rewrites in --pin / --accept?            #
+# --------------------------------------------------------------------------- #
+import functools  # noqa: E402
+
+import scripts.claims as _cli  # noqa: E402
+
+
+def _patch_src_root(monkeypatch, src_root):
+    """Route the CLI's resolve()/check_page() calls at a throwaway source tree.
+
+    ``resolve``/``check_page`` default their ``src_root`` parameter to the
+    real repo's ``src/`` at *definition* time, so monkeypatching the module
+    constant after the fact would not reach an already-bound default. Instead
+    we replace the names ``scripts.claims`` looks up at call time with
+    partials pinned to the fixture tree.
+    """
+    monkeypatch.setattr(_cli, "resolve", functools.partial(resolve, src_root=src_root))
+    monkeypatch.setattr(_cli, "check_page", functools.partial(check_page, src_root=src_root))
+
+
+def test_pin_does_not_cross_wire_a_prefix_symbol_pair(tmp_path, monkeypatch):
+    """Cash.cache vs Cash.cache_info: a shorter symbol must not eat a longer one's @?.
+
+    Both placeholders sit on the same page, in the order the longer name
+    comes FIRST -- the case where a naive leftmost regex would be most likely
+    to misfire if the needle for ``cache`` could match inside the text for
+    ``cache_info``.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text(
+        "def cache():\n    return 1\n\n\ndef cache_info():\n    return 2\n",
+        encoding="utf-8",
+    )
+    page = tmp_path / "page.md"
+    page.write_text(
+        "<!-- claim: mod.py:cache_info @? -->\n"
+        "Claim about cache_info.\n\n"
+        "<!-- claim: mod.py:cache @? -->\n"
+        "Claim about cache.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+    monkeypatch.setattr(_cli, "published_pages", lambda: [page])
+    # _cmd_pin's progress print does page.relative_to(REPO_ROOT); the fixture
+    # page lives under tmp_path, not the real repo, so REPO_ROOT must follow.
+    monkeypatch.setattr(_cli, "REPO_ROOT", tmp_path)
+
+    assert _cli._cmd_pin() == 0
+
+    cache_nodes, cache_src = resolve(Target("mod.py", "cache"), src_root=src_root)
+    want_cache = fingerprint(cache_nodes, cache_src)
+    info_nodes, info_src = resolve(Target("mod.py", "cache_info"), src_root=src_root)
+    want_cache_info = fingerprint(info_nodes, info_src)
+    assert want_cache != want_cache_info, "fixture must exercise genuinely different digests"
+
+    new_text = page.read_text(encoding="utf-8")
+    assert "@?" not in new_text
+    assert f"mod.py:cache_info @{want_cache_info}" in new_text
+    assert f"mod.py:cache @{want_cache}" in new_text
+    # The precise cross-wire this test guards against: cache's line must not
+    # have picked up cache_info's digest, or vice versa.
+    assert f"mod.py:cache @{want_cache_info}" not in new_text
+    assert f"mod.py:cache_info @{want_cache}" not in new_text
+
+
+def test_accept_rewrites_both_occurrences_of_a_duplicated_stale_pin(tmp_path, monkeypatch):
+    """Two anchors on the same target with the same stale pin must both update.
+
+    A naive ``str.replace(old, new, count=1)`` would only touch the first
+    occurrence, silently leaving the second one stale while still reporting
+    success.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 2\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text(
+        "<!-- claim: mod.py:foo @00000000 -->\n"
+        "First claim about foo.\n\n"
+        "<!-- claim: mod.py:foo @00000000 -->\n"
+        "Second claim about foo.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+
+    assert _cli._cmd_accept(str(page), write=True) == 0
+
+    new_text = page.read_text(encoding="utf-8")
+    assert new_text.count("@00000000") == 0
+    nodes, source = resolve(Target("mod.py", "foo"), src_root=src_root)
+    want = fingerprint(nodes, source)
+    assert new_text.count(f"mod.py:foo @{want}") == 2
+
+
+def test_accept_rewrites_a_module_level_broad_anchor(tmp_path, monkeypatch):
+    """A symbol-less (module) target's real text has no ``:<module>`` suffix.
+
+    ``--accept``'s display string uses ``<module>`` for readability, but the
+    text it rewrites in the page must match what is actually on disk -- using
+    the display string as the rewrite needle would silently no-op here while
+    still printing "re-pinned 1 claim(s)".
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("X = 1\nY = 2\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text(
+        '<!-- claim: mod.py @00000000 broad="whole module" -->\n'
+        "A claim about the whole module.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+
+    assert _cli._cmd_accept(str(page), write=True) == 0
+
+    new_text = page.read_text(encoding="utf-8")
+    assert "@00000000" not in new_text
+    assert "<module>" not in new_text  # never leaks into the actual file
+    nodes, source = resolve(Target("mod.py", None), src_root=src_root)
+    want = fingerprint(nodes, source)
+    assert f"mod.py @{want}" in new_text

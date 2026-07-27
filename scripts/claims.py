@@ -1,0 +1,236 @@
+#!/usr/bin/env python
+"""Inspect and maintain doc claim anchors.
+
+    python scripts/claims.py --queue                     # what needs re-reading
+    python scripts/claims.py --pin                       # fill in every `@?`
+    python scripts/claims.py --accept docs/page.md       # dry run: show the code
+    python scripts/claims.py --accept docs/page.md --yes # re-pin after reading
+    python scripts/claims.py --report cash/core.py       # claims resting on a file
+
+`--accept` prints the claim beside the target's CURRENT source, because that is
+what re-verification needs: you check the claim against the code as it now is.
+The old source is not recoverable from an 8-char digest, and reconstructing it
+from git history would be fragile -- so this deliberately does not attempt a
+before/after diff.
+
+`--accept` without `--yes` is a dry run by design. Re-pinning without reading
+is worse than having no mechanism at all: it manufactures the appearance that
+someone checked the claim, when nobody did. `--yes` exists so re-pinning is
+always a second, conscious step after reading the printed source.
+"""
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from tests.docs._claims import (  # noqa: E402
+    AnchorError,
+    Target,
+    check_page,
+    fingerprint,
+    normalize,
+    parse_anchors,
+    published_pages,
+    resolve,
+)
+
+
+def _needle(t: Target) -> str:
+    """The literal text a target's path/symbol occupy in an anchor comment.
+
+    A module-only target (``t.symbol`` is ``None``) is written in the doc as
+    just ``path`` -- there is no ``:<module>`` suffix in the real text, even
+    though that suffix is useful in *display* strings (see ``_display``).
+    Building the search/replace needle from the same rule ``--pin`` uses for
+    the ``@?`` case keeps both mutating code paths honest about what they are
+    actually matching against.
+    """
+    return f"{t.path}:{t.symbol}" if t.symbol else t.path
+
+
+def _display(t: Target) -> str:
+    """Human-readable target name for printed output (never used as a needle)."""
+    return f"{t.path}:{t.symbol or '<module>'}"
+
+
+def _cmd_queue() -> int:
+    drifted = []
+    for page in published_pages():
+        drifted += [p for p in check_page(page) if p.kind == "drift"]
+    if not drifted:
+        print("No drifted claims. Docs are pinned to current source.")
+        return 0
+    print(f"{len(drifted)} claim(s) rest on code that has changed:\n")
+    for p in drifted:
+        print(f"{p.page}:{p.line}")
+        print(f"    {p.message}")
+        print()
+    print("Re-read each, then: python scripts/claims.py --accept <page> --yes")
+    return 1
+
+
+def _cmd_pin() -> int:
+    """Fill in every ``@?`` placeholder with the target's current digest.
+
+    This is the ergonomic hinge of the whole mechanism: an author writes
+    ``@?`` and never hand-computes or hand-copies a hash. The substitution is
+    a regex (not a plain string replace) so that whatever whitespace the
+    author put around ``@?`` survives untouched -- only the ``?`` itself is
+    replaced.
+
+    Each page is parsed once, up front, from the text on disk; the loop below
+    then edits a working copy (``new``) left to right in the same order the
+    anchors appear in the source. Because every substitution uses
+    ``count=1`` and only the *still-unfilled* (``@?``) occurrences match, two
+    anchors naming the same target -- or a target whose symbol is a prefix of
+    another (``Cash.cache`` vs ``Cash.cache_info``) -- cannot cross-wire: the
+    needle-then-``@``-then-``?`` pattern requires the placeholder to sit
+    immediately (mod whitespace) after the needle, and a longer symbol's own
+    trailing characters (``_info``) break that adjacency, so the shorter
+    needle never matches inside the longer one's occurrence.
+    """
+    filled = 0
+    for page in published_pages():
+        text = page.read_text(encoding="utf-8")
+        if "@?" not in text:
+            continue
+        new = text
+        for anchor in parse_anchors(text, page):
+            for t in anchor.targets:
+                if t.pin != "?":
+                    continue
+                nodes, source = resolve(t)
+                fp = fingerprint(nodes, source)
+                needle = _needle(t)
+                new = re.sub(
+                    rf"({re.escape(needle)}\s*)@\s*\?",
+                    rf"\g<1>@{fp}",
+                    new,
+                    count=1,
+                )
+                filled += 1
+        if new != text:
+            page.write_text(new, encoding="utf-8")
+            print(f"pinned {page.relative_to(REPO_ROOT).as_posix()}")
+    print(f"{filled} placeholder(s) filled")
+    return 0
+
+
+def _cmd_accept(page_arg: str, write: bool) -> int:
+    """Re-pin one page's drifted claims -- print-only unless ``write`` is set.
+
+    Printing the claim beside the CURRENT normalized source (not a diff
+    against the old pin) is the point: an 8-char digest carries no old
+    source to diff against, and reconstructing one from git history would be
+    fragile and easy to get subtly wrong. What re-verification actually needs
+    is "is this claim still true of the code as it stands" -- which the
+    current source answers directly.
+
+    The rewrite uses the same needle rule as ``--pin`` (see ``_needle``) and
+    the same tolerant-whitespace regex, rather than a hardcoded
+    ``f"{name} @{pin}"`` string: a plain string match would silently no-op
+    (while still printing a success message) for a module-only target, whose
+    real text has no ``:<module>`` suffix, or for an anchor written with
+    different spacing than assumed. As with ``--pin``, two anchors sharing a
+    target and stale pin are rewritten in document order without cross-wiring
+    for the same reason: each substitution only touches an occurrence that
+    still carries the OLD pin, and once the leftmost one is rewritten it no
+    longer matches, so the next call's leftmost remaining match is the next
+    anchor in the document, not an already-handled one.
+    """
+    page = (REPO_ROOT / page_arg).resolve()
+    if not page.is_file():
+        print(f"no such page: {page_arg}", file=sys.stderr)
+        return 2
+    text = page.read_text(encoding="utf-8")
+    drifted = [p for p in check_page(page) if p.kind == "drift"]
+    if not drifted:
+        print(f"{page_arg}: no drifted claims")
+        return 0
+
+    new = text
+    for anchor in parse_anchors(text, page):
+        for t in anchor.targets:
+            if not t.pin or t.pin == "?":
+                continue
+            nodes, source = resolve(t)
+            fp = fingerprint(nodes, source)
+            if fp == t.pin:
+                continue
+            display = _display(t)
+            print("=" * 72)
+            print(f"{page_arg}:{anchor.line}  ->  {display}  @{t.pin} -> @{fp}")
+            print(f"\nCLAIM:\n  {anchor.claim}\n")
+            print("CURRENT SOURCE:")
+            for node in nodes:
+                for line in normalize(node, source).splitlines():
+                    print(f"  {line}")
+            print()
+            needle = _needle(t)
+            new = re.sub(
+                rf"({re.escape(needle)}\s*@\s*){re.escape(t.pin)}",
+                rf"\g<1>{fp}",
+                new,
+                count=1,
+            )
+
+    if not write:
+        print("=" * 72)
+        print("Dry run. Re-read each claim above against the source shown, then")
+        print(f"re-run with --yes to re-pin: --accept {page_arg} --yes")
+        return 0
+    page.write_text(new, encoding="utf-8")
+    print(f"re-pinned {len(drifted)} claim(s) in {page_arg}")
+    return 0
+
+
+def _cmd_report(src_path: str) -> int:
+    hits = 0
+    for page in published_pages():
+        text = page.read_text(encoding="utf-8")
+        for anchor in parse_anchors(text, page):
+            for t in anchor.targets:
+                if t.path != src_path:
+                    continue
+                rel = page.relative_to(REPO_ROOT).as_posix()
+                print(f"{rel}:{anchor.line}  {t.symbol or '<module>'}")
+                print(f"    {anchor.claim}")
+                hits += 1
+    if not hits:
+        print(f"No doc claims rest on src/{src_path}")
+    else:
+        print(f"\n{hits} claim(s) rest on src/{src_path} — check them before merging.")
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("--queue", action="store_true", help="list drifted claims")
+    g.add_argument("--pin", action="store_true", help="fill in every @? placeholder")
+    g.add_argument("--accept", metavar="PAGE", help="re-pin one page's drifted claims")
+    g.add_argument("--report", metavar="SRC", help="claims resting on a source file")
+    ap.add_argument("--yes", action="store_true", help="with --accept: actually write")
+    args = ap.parse_args(argv)
+
+    try:
+        if args.queue:
+            return _cmd_queue()
+        if args.pin:
+            return _cmd_pin()
+        if args.accept:
+            return _cmd_accept(args.accept, write=args.yes)
+        return _cmd_report(args.report)
+    except AnchorError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
