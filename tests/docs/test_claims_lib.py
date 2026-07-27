@@ -184,3 +184,62 @@ def test_hash_of_a_known_string_is_pinned():
     obvious test — rather than as a wall of false drift across every page.
     """
     assert _fp("def f():\n    return 1\n") == "8795b1c4"
+
+
+# --------------------------------------------------------------------------- #
+# Value anchors                                                               #
+# --------------------------------------------------------------------------- #
+from tests.docs._claims import literal_value, values_match  # noqa: E402
+
+
+def test_literal_value_reads_a_plain_assignment():
+    src = "X = 42\n"
+    assert literal_value(ast.parse(src).body[0]) == 42
+
+
+def test_literal_value_reads_a_dataclass_field_default():
+    src = "from dataclasses import field\nx: int = field(default=7)\n"
+    assert literal_value(ast.parse(src).body[1]) == 7
+
+
+def test_default_factory_is_rejected_not_silently_passed():
+    """It has no comparable literal; passing it would be a false green."""
+    src = "from dataclasses import field\nx: list = field(default_factory=list)\n"
+    with pytest.raises(AnchorError, match="default_factory"):
+        literal_value(ast.parse(src).body[1])
+
+
+def test_a_non_literal_default_is_rejected():
+    src = "X = compute()\n"
+    with pytest.raises(AnchorError, match="not a literal"):
+        literal_value(ast.parse(src).body[0])
+
+
+def test_value_anchor_on_a_function_is_rejected():
+    src = "def f():\n    return 1\n"
+    with pytest.raises(AnchorError, match="assignment"):
+        literal_value(ast.parse(src).body[0])
+
+
+@pytest.mark.parametrize(
+    "documented, actual, expected",
+    [
+        ("0.01", 0.01, True),
+        ("0.01", 0.02, False),
+        ("None", None, True),
+        ("None", 0, False),
+        ("True", True, True),
+        ("False", True, False),
+        ('"sha256"', "sha256", True),
+        ('"md5"', "sha256", False),
+        ("10", 10.0, True),      # int/float cross-compare is intentional
+    ],
+)
+def test_values_match(documented, actual, expected):
+    assert values_match(documented, actual) is expected
+
+
+def test_a_non_literal_documented_value_is_an_error_not_a_mismatch():
+    """'roughly 10' must be fixed by the author, not silently reported wrong."""
+    with pytest.raises(AnchorError, match="not a Python literal"):
+        values_match("roughly 10", 10)

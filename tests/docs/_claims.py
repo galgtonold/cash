@@ -252,3 +252,84 @@ def fingerprint(nodes: list[ast.AST], source: str) -> str:
     """
     blob = "\n".join(normalize(n, source) for n in nodes)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:8]
+
+
+# --------------------------------------------------------------------------- #
+# Value anchors                                                               #
+# --------------------------------------------------------------------------- #
+
+
+def _is_field_call(call: ast.Call) -> bool:
+    fn = call.func
+    return (isinstance(fn, ast.Name) and fn.id == "field") or (
+        isinstance(fn, ast.Attribute) and fn.attr == "field"
+    )
+
+
+def literal_value(node: ast.AST) -> object:
+    """The literal a symbol is assigned, for ``== <literal>`` anchors.
+
+    Takes a single node — Task 4 passes ``nodes[-1]``, the effective
+    definition, since only one binding can hold the current value.
+    """
+    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+        raise AnchorError(
+            "a value anchor only applies to an assignment; use a fingerprint "
+            "anchor for a function or class"
+        )
+    value = node.value
+    if value is None:
+        raise AnchorError("annotation has no assigned value to compare")
+
+    if isinstance(value, ast.Call) and _is_field_call(value):
+        # Checked BEFORE the default= scan below, and unconditionally (not
+        # elif'd with it): a field can carry both default_factory= and a
+        # stray default=, and default_factory must always win the raise, or
+        # such a field would slip through the default= branch untested.
+        for kw in value.keywords:
+            if kw.arg == "default_factory":
+                raise AnchorError(
+                    "dataclasses.field(default_factory=...) has no comparable "
+                    "literal; use a fingerprint anchor instead"
+                )
+        for kw in value.keywords:
+            if kw.arg == "default":
+                value = kw.value
+                break
+        else:
+            raise AnchorError("dataclasses.field() with no default= to compare")
+
+    try:
+        return ast.literal_eval(value)
+    except (ValueError, TypeError, SyntaxError) as exc:
+        raise AnchorError(
+            f"not a literal: {ast.unparse(value)[:60]}"
+        ) from exc
+
+
+def values_match(documented: str, actual: object) -> bool:
+    """Compare a documented literal against the value in source.
+
+    ``documented`` must itself be a Python literal (``ast.literal_eval``-able)
+    or this raises ``AnchorError`` — a malformed anchor like ``== roughly 10``
+    is the author's mistake to fix, not a claim to report as "mismatched"
+    against some value it never actually named.
+    """
+    try:
+        want = ast.literal_eval(documented)
+    except (ValueError, TypeError, SyntaxError) as exc:
+        raise AnchorError(
+            f"documented value {documented!r} is not a Python literal; write it "
+            f"as one (0.01, None, \"sha256\") or use a fingerprint anchor"
+        ) from exc
+    # bool FIRST and by `is`: bool is a subclass of int, so `True == 1` and
+    # `False == 0` in plain Python. Falling through to `want == actual` below
+    # would let a documented `True` silently match a source `1`.
+    if isinstance(want, bool) or isinstance(actual, bool):
+        return want is actual
+    if isinstance(want, float) or isinstance(actual, float):
+        try:
+            return float(want) == float(actual)  # type: ignore[arg-type]
+        except (TypeError, ValueError):
+            return False
+    return want == actual
