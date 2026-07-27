@@ -160,8 +160,8 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-file-sources.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 8,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/custom-hashers.md": {
     "anchors": 6,
@@ -180,16 +180,16 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/production-transition.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 3,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/purity-decorators.md": {
     "anchors": 0,
     "audited": null
   },
   "docs/tutorials/feature-guides/sharing-caches.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 5,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/smart-persistence.md": {
     "anchors": 15,

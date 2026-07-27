@@ -33,7 +33,8 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-The default handler set is registered in `FileDependencyRegistry._initialize_defaults` (`src/cash/notebook/file_tracker.py`):
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @9540ade4, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
+The default handler set is registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
 |---|---|
@@ -48,9 +49,10 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | `glob` | `glob`, `iglob` — tracks the *directory* enumerated (see below) |
 | `os` | `listdir`, `scandir` — tracks the *directory* enumerated (see below) |
 
-The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` (`src/cash/notebook/file_tracker.py`) against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
+The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
 
-For `open()`, the wrapper records the path only when the mode contains `'r'` or `'+'` (read or read/write), not pure writes — see `_create_open_handler` at `src/cash/notebook/file_tracker.py`. So an `open(path, 'w')` for output does *not* get tracked, which is what you want: writes are accounted for by hashing the function's return value, not its outputs.
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @2c6b1e1b -->
+For `open()`, the wrapper records the path only when the mode contains `'r'` or `'+'` (read or read/write), not pure writes — see `_create_open_handler`. So an `open(path, 'w')` for output does *not* get tracked, which is what you want: writes are accounted for by hashing the function's return value, not its outputs.
 
 ### Directory enumeration tracks the directory
 
@@ -91,7 +93,7 @@ load_features.explain()
 #   changed_files: {'data/features.csv': 'content changed'}
 ```
 
-The `file_changed` reason and the `changed_files` dict are emitted by `_explain_call` in `src/cash/core.py`. The dict's values are short human-readable strings: `'content changed'`, `'size changed'`, or `'file missing'`.
+The `file_changed` reason and the `changed_files` dict are emitted by `Cash._explain_call`. The dict's values are short human-readable strings: `'content changed'`, `'size changed'`, or `'file missing'`.
 
 `explain()` decides freshness through the same content-authoritative `file_dep_is_fresh` helper a real lookup uses, so it cannot disagree with the call: a **touch** (identical bytes, bumped mtime) explains as `hit`, exactly as it behaves. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
 
@@ -223,13 +225,15 @@ def load_model():
     return MyModel.from_disk("models/embeddings.bin", "models/vocab.json")
 ```
 
-Under the hood, `_register_func` wraps each path in a `FileDataSource` and folds it into the function's static dependency list (`src/cash/core.py`). `FileDataSource.has_changed()` re-reads the file's mtime on every lookup (`src/cash/data_source.py`); a change propagates into the cache key and forces a miss.
+<!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the mtime-at-init behaviour is a property of the whole class" -->
+Under the hood, `_register_func` wraps each path in a `FileDataSource` and folds it into the function's static dependency list. `FileDataSource.has_changed()` re-reads the file's mtime on every lookup; a change propagates into the cache key and forces a miss.
 
-A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *at decoration time* (`src/cash/data_source.py`). If the file doesn't exist yet when the decorator runs, the snapshot is `0.0` (the OSError fallback at `src/cash/data_source.py`). That's fine — the next stat sees the real mtime and triggers a miss for the first real run. But it means `file_depends_on` on a not-yet-created file does *not* fail loudly; you have to remember it's there.
+A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *at decoration time*. If the file doesn't exist yet when the decorator runs, the snapshot is `0.0` (the `OSError` fallback in `_get_mtime`). That's fine — the next stat sees the real mtime and triggers a miss for the first real run. But it means `file_depends_on` on a not-yet-created file does *not* fail loudly; you have to remember it's there.
 
 ## Escape hatch 2: registering a custom file source for auto-tracking
 
-For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` (`src/cash/core.py`) lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
+<!-- claim: cash/core.py:Cash.register_file_handler @5731a107, cash/notebook/file_tracker.py:_install_module_patches @4cabaa21 -->
+For libraries you use across many cached functions, manually adding `file_depends_on=` to each decorator is repetitive. `Cash.register_file_handler` lets you teach the auto-tracker about a new reader once and have every subsequent call site picked up automatically:
 
 <!-- test:skip reason="illustrative — the handler wraps `my_lib`, which does not exist; executing it only proves a def parses, while shadowing the real load_features above" -->
 ```python
@@ -253,16 +257,16 @@ def load_features():
     # ^ now auto-tracked, no file_depends_on= needed
 ```
 
-The handler is a factory: Cash calls it with the original function and a `track_callback(path)` shim; your wrapper records and forwards. `func_name` supports glob patterns (`"read_*"` catches every reader in one call), and `module_name` may be dotted (`"my_lib.io"`). The wrapper is installed on the live module via the same `_install_module_patches` path used for the built-ins (`src/cash/notebook/file_tracker.py`).
+The handler is a factory: Cash calls it with the original function and a `track_callback(path)` shim; your wrapper records and forwards. `func_name` supports glob patterns (`"read_*"` catches every reader in one call), and `module_name` may be dotted (`"my_lib.io"`). The wrapper is installed on the live module via the same `_install_module_patches` path used for the built-ins.
 
 Two caveats from the docstring:
 
 - The wrapper replaces the attribute on the module object, so existing imports (`from my_lib import read_data`) still see the original unwrapped version. Track via the module namespace (`my_lib.read_data(...)`) or import after registering.
-- Pass an absolute or resolvable path to `track_callback`. Relative paths are resolved against `os.getcwd()` at tracking time by `_track_path` (`src/cash/notebook/file_tracker.py`).
+- Pass an absolute or resolvable path to `track_callback`. Relative paths are resolved against `os.getcwd()` at tracking time by `_track_path`.
 
 ## Staleness detection
 
-Cash checks freshness on every lookup, not at write time. `_auto_file_deps_fresh` (`src/cash/core.py`) walks the recorded dictionary and delegates each entry to `file_dep_is_fresh` (`src/cash/notebook/file_dep_snapshot.py`) — the **same** helper the notebook-statement layer uses, so the two subsystems cannot drift. An entry is stale as soon as any of these is true:
+Cash checks freshness on every lookup, not at write time. `_auto_file_deps_fresh` walks the recorded dictionary and delegates each entry to `file_dep_is_fresh` — the **same** helper the notebook-statement layer uses, so the two subsystems cannot drift. An entry is stale as soon as any of these is true:
 
 - The file is unreadable (`os.stat` raises) — reason `unreadable`.
 - The size moved — reason `size`. Checked first, and Cash never hashes on this path.
@@ -274,14 +278,22 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`, `src/cash/notebook/file_dep_snapshot.py`):
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @5f35e472, cash/notebook/file_dep_snapshot.py:file_content_hash @6bdf50df, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES == 8388608, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`):
 
 - Files **≤ 8 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
 - Files **> 8 MiB** are **sampled** at three deterministic, size-derived offsets — head, middle, and tail, **256 KiB each** (`_HASH_SAMPLE_REGION_BYTES`) — with the byte length folded into the digest.
 
-**The footgun:** for a file over 8 MiB, an edit that changes **only unsampled interior bytes and preserves the exact size** is **not detected** — Cash serves the stale cache entry. This is the honest residue of the tradeoff: it moved, it didn't vanish. The sampling is deterministic (same bytes + same size → same digest at snapshot time and at every later check), so it never produces *false* invalidation, only this narrow class of missed one.
+A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry an mtime backstop**: above the 8 MiB cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.
 
-If you're editing large files in place at fixed offsets — memory-mapped arrays, HDF5 datasets, a record patched at a known offset in a big binary — don't rely on auto-tracking. Use `file_depends_on=` (which keys on mtime and will see the write), or write a `DataSource` subclass whose `state_token()` returns a full hash of the file.
+The tradeoff therefore inverted rather than disappearing. What you pay for a large file is the opposite error: **touching** it — `touch`, a re-checkout that rewrites identical bytes, an rsync that resets timestamps — forces one spurious recompute. That is the safe direction to be wrong in, and it is why the two regimes differ:
+
+| File size | Hash covers | mtime | You can be surprised by |
+|---|---|---|---|
+| ≤ 8 MiB | every byte | ignored | nothing — content decides |
+| > 8 MiB | head/middle/tail | must also match | a needless recompute after a touch |
+
+If a spurious recompute on a multi-GB input is itself too expensive, write a `DataSource` subclass whose `state_token()` returns whatever cheap, authoritative version marker your data already has (a manifest hash, an ETag, a build id) and pass it via `depends_on=`.
 
 Race condition to be aware of: if a file is rewritten *while* a cached function is running, the snapshot captures the post-write content. On the next call Cash sees a matching hash and returns the cached value — which now reflects half-old, half-new data. The window is small and rarely matters, but for high-churn pipelines wrap the write in a tempfile-then-rename so each run sees a consistent snapshot.
 
@@ -289,7 +301,7 @@ Race condition to be aware of: if a file is rewritten *while* a cached function 
 
 ### Symlinks are followed
 
-`_track_path` resolves the path through `os.path.realpath` before storing it (`src/cash/notebook/file_tracker.py`). If you read a symlink, Cash records and checks the *target*, and the resolution is frozen at track time. Editing the symlink target's contents invalidates the cache. Repointing the symlink at a different file does **not** — Cash goes on checking the original target, which hasn't changed. This matches what most users expect ("the data file changed"), but if you genuinely care about the symlink identity itself, use `file_depends_on=` with the link path explicitly.
+`_track_path` resolves the path through `os.path.realpath` before storing it. If you read a symlink, Cash records and checks the *target*, and the resolution is frozen at track time. Editing the symlink target's contents invalidates the cache. Repointing the symlink at a different file does **not** — Cash goes on checking the original target, which hasn't changed. This matches what most users expect ("the data file changed"), but if you genuinely care about the symlink identity itself, use `file_depends_on=` with the link path explicitly.
 
 ### Relative paths re-resolve against the live cwd
 
@@ -309,7 +321,7 @@ Without the relative dependency, the frozen `run_a/results.csv` realpath still e
 
 ### Paths are absolute and platform-normalized
 
-Stored paths are absolute and use forward slashes regardless of OS (`normalize_path` in `src/cash/utils.py`). Moving the cache directory to a different machine where the same files live at different paths invalidates everything — paths are part of the dependency key. For portable cache archives, expect a full re-compute after relocation.
+Stored paths are absolute and use forward slashes regardless of OS (`cash.utils.normalize_path`). Moving the cache directory to a different machine where the same files live at different paths invalidates everything — paths are part of the dependency key. For portable cache archives, expect a full re-compute after relocation.
 
 ### Network-mounted filesystems
 
@@ -327,7 +339,7 @@ The tracker records full absolute paths and stats them on every lookup. There's 
 
 ### Writes are intentionally not tracked
 
-`FileAccessTracker` only intercepts read paths (`src/cash/notebook/file_tracker.py`). A cached function that writes a file does not record the write as a dependency — and shouldn't, because the function's return value is what Cash hashes for downstream cache keys. If you need a downstream function to invalidate when an upstream wrote a file, depend on the upstream function's return value, not its on-disk side effect.
+`FileAccessTracker` only intercepts read paths. A cached function that writes a file does not record the write as a dependency — and shouldn't, because the function's return value is what Cash hashes for downstream cache keys. If you need a downstream function to invalidate when an upstream wrote a file, depend on the upstream function's return value, not its on-disk side effect.
 
 ## API reference
 

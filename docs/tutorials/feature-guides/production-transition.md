@@ -132,6 +132,7 @@ model = train(features)              # badge reports the decorator hit
 Automation is usually the reason you're moving code out of the notebook in the
 first place, and a headless run needs a few different settings.
 
+<!-- claim: cash/notebook/badge_renderer/_text.py:print_text_badge @6739dc99 -->
 **Use the text badge.** The HTML badge is an interactive widget; in a headless
 run nothing renders it. `%cash_badge print` emits a plain-text summary after each
 cell instead — readable in CI logs, in an `nbconvert` artifact, and by a coding
@@ -152,6 +153,7 @@ which a top-to-bottom automated run doesn't need. The warning is expected under
 papermill, nbconvert, and CI — it's only worth investigating if you see it *in*
 JupyterLab or VS Code, where it means a stale runtime.
 
+<!-- claim: cash/core.py:Cash._surface_purity @8dc9b22e -->
 **Fail the build on accidental impurity.** `@cash.cache(strict=True)` turns the
 purity analyzer's warnings into `CashImpureFunctionError` at first call, so a
 teammate caching a side-effecting function breaks CI instead of shipping a
@@ -166,8 +168,11 @@ cold, which is correct but slow. Options, in increasing order of setup:
   [Sharing a cache](sharing-caches.md) first, because a file-reading *notebook
   statement* still won't hit across machines, and the paths recorded by
   `@cash.cache` have to resolve the same way on each runner.
-- Start clean deliberately with `python -m cash clear`, when a run must not be
-  influenced by earlier state.
+<!-- claim: cash/__main__.py:cmd_clear @23843bc2 -->
+- Start clean deliberately with `python -m cash clear --all`, when a run must
+  not be influenced by earlier state. The `--all` matters: bare
+  `python -m cash clear` takes no default target, prints a usage line and
+  **exits 1**, which in a CI step is a failed build rather than a clean start.
 
 ## Migration checklist
 
