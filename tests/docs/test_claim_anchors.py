@@ -116,6 +116,14 @@ def test_manifest_covers_every_published_page():
 
 _ANY_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 
+# A NEAR-MISS of the anchor keyword: the comment body *opens* with something
+# that was clearly meant to be ``claim:``. Matching the word "claim" anywhere in
+# the comment instead would flag ordinary prose comments that merely talk about
+# claim anchors -- and the page that documents the convention is exactly the
+# page most likely to contain one. A guard that fires on correct authoring is a
+# guard people learn to ignore, which costs more than the typo it was catching.
+_NEAR_MISS_KEYWORD_RE = re.compile(r"<!--\s*claims?\b\s*:?", re.IGNORECASE)
+
 
 def test_no_mistyped_claim_keyword():
     """An HTML comment that mentions "claim" but isn't a real anchor is worse
@@ -138,7 +146,7 @@ def test_no_mistyped_claim_keyword():
         recognized = {m.span() for m in _CLAIM_RE.finditer(text)}
         for m in _ANY_COMMENT_RE.finditer(text):
             comment = m.group(0)
-            if "claim" not in comment.lower():
+            if not _NEAR_MISS_KEYWORD_RE.match(comment):
                 continue
             if m.span() in recognized:
                 continue
@@ -325,3 +333,52 @@ def test_unfilled_placeholder_guard_still_fires_beside_a_fenced_example(tmp_path
 
     with pytest.raises(AssertionError, match=r"Literal `@\?`"):
         _mod.test_no_unfilled_placeholder_survives()
+
+
+def test_mistyped_claim_keyword_guard_tolerates_prose_about_claims(tmp_path, monkeypatch):
+    """A prose comment that merely *mentions* claims is not a typo'd anchor.
+
+    The guard originally matched the substring "claim" anywhere in an HTML
+    comment, which flagged an explanatory note on docs/magics.md describing how
+    that page's anchors work. The page documenting the convention is precisely
+    the page most likely to talk about it, so the broad match turned correct
+    authoring into a build failure -- and a guard that fires on correct work is
+    one people route around. It now matches only a near-miss of the KEYWORD at
+    the start of the comment.
+    """
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "prose.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "<!-- The count above, and the completeness of the table below, are\n"
+        "     checked against source. Each section also carries a claim anchor\n"
+        "     pinned to the method that implements it. -->\n"
+        "Some prose.\n"
+        '<!-- test:skip reason="mentions a claim, still not an anchor" -->\n',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    _mod.test_no_mistyped_claim_keyword()  # must not raise
+
+
+def test_mistyped_claim_keyword_guard_still_fires_beside_prose(tmp_path, monkeypatch):
+    """Narrowing the match must not make the guard blind on the same page."""
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "mixed.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "<!-- prose that mentions a claim anchor in passing -->\n"
+        "Some prose.\n"
+        "<!-- claims: cash/core.py:Cash.cache @? -->\n"
+        "A claim nobody grounded.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match="claims:"):
+        _mod.test_no_mistyped_claim_keyword()

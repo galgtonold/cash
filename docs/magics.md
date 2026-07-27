@@ -6,6 +6,13 @@ reference for all **20** magics — each entry lists the exact signature, every
 parsed flag, and a working example. Behaviour is derived directly from
 `src/cash/notebook/ipython/magics.py` and `src/cash/notebook/ipython/admin.py`.
 
+<!-- The count above, and the completeness of the table and the per-magic
+     sections below, are checked against the registered decorators by
+     tests/docs/test_doc_claims.py::test_every_registered_magic_is_documented
+     and ::test_magics_page_states_the_right_count. Each section additionally
+     carries a claim anchor pinned to the method that implements it, so a
+     changed signature or flag surfaces in the re-verification queue. -->
+
 ## At a glance
 
 | Magic | Purpose |
@@ -36,6 +43,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @fbbd8852 -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -63,6 +71,7 @@ Enable automatic caching for every subsequent cell.
 ```
 
 ### `%cash_off`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_off @b6796687 -->
 
 Disable automatic caching. Subsequent cells run uncached until you call
 `%cash_on` again.
@@ -82,6 +91,7 @@ Disable automatic caching. Subsequent cells run uncached until you call
 ```
 
 ### `%cash_persist`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_persist @0197157d -->
 
 Cache *every* statement regardless of how cheap it was to compute — equivalent
 to putting `# @cash:persist` on every statement. It bypasses the cost-aware
@@ -105,6 +115,7 @@ trivial statements in normal use.
 ```
 
 ### `%cash_help`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_help @7290a5b1 -->
 
 Print a quick-reference card. With no argument the main card is shown; pass a
 topic name to drill into a sub-card.
@@ -130,6 +141,7 @@ topic name to drill into a sub-card.
 ```
 
 ### `%cash_feedback`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_feedback @ae5c76bf -->
 
 Print bug-report and feedback URLs. Useful pointer for beta users.
 
@@ -144,6 +156,7 @@ Print bug-report and feedback URLs. Useful pointer for beta users.
 ```
 
 ### `%cash_status`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_status @29029be3 -->
 
 Report status of the last cell plus a snapshot of session state (lineage,
 executed-code map, auto-cache flag, backend stats).
@@ -167,6 +180,7 @@ blob   = %cash_status json # capture as JSON string
 ```
 
 ### `%cash_badge`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_badge @6bc4c33b -->
 
 Set the badge display mode for subsequent cached cells. See
 [Reading the Cash Badge](badges.md) for the full anatomy of each mode.
@@ -189,6 +203,7 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @851d8352 -->
 
 Show session-wide cache statistics: counts, hit rate, compute time, and the
 savings broken out as **gross saved**, **cash overhead**, and **net saved**
@@ -220,6 +235,7 @@ caches.
 ```
 
 ### `%cash_debug`
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @ce13e22b -->
 
 Toggle or configure debug logging. Levels propagate to the global `cash` logger
 and to the statement processor, upstream checker, and core Cash instance.
@@ -247,6 +263,7 @@ Argument matching is case-insensitive.
 ```
 
 ### `%%cash` { #cash-cell }
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash @42d8d6c6 -->
 
 Cell magic. Explicitly cache a single cell with the same statement-level
 processing as `%cash_on` (upstream simulation, file tracking, badge rendering).
@@ -295,6 +312,7 @@ built, so an unchanged re-run skips the `await` rather than re-issuing the call.
 ## Admin and integrity
 
 ### `%cash_verify`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_verify @ced721ff -->
 
 Audit cache integrity by reading every entry in the backend. Reports total,
 healthy, corrupted, and the first 20 issues. Also notes lineage entries whose
@@ -319,6 +337,7 @@ an info message and return.
 ```
 
 ### `%cash_repair`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @2cfd33e0 -->
 
 Recover from corruption or reset tracking state. Three modes with different
 levels of aggression.
@@ -350,6 +369,7 @@ After `--state` or `--full` you must re-run upstream cells to rebuild lineage.
 ## Inspecting your session
 
 ### `%cash_provenance`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_provenance @c880acac -->
 
 Show how a variable was computed: its lineage hash, the cell code that produced
 it, and (optionally) a dependency graph or timeline.
@@ -380,6 +400,7 @@ it, and (optionally) a dependency graph or timeline.
 ```
 
 ### `%cash_track`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_track @0665b4b1 -->
 
 Watch a local Python module for source changes; reload it (and invalidate any
 cache entries that depend on it) when it changes.
@@ -406,6 +427,7 @@ cache entries that depend on it) when it changes.
 ```
 
 ### `%cash_diff`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_diff @8d07650d -->
 
 Compare the current session's lineage with a cache file produced by
 [`%cash_export`](#cash_export). Reports per-bucket counts (only-current,
@@ -427,6 +449,7 @@ only-other, changed, identical) and optionally per-variable detail.
 ```
 
 ### `%cash_log`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_log @ce466107 -->
 
 View the in-memory structured log buffer (CashLogHandler). Requires a JSON
 handler installed via [`%cash_debug json`](#cash_debug) (or
@@ -452,6 +475,7 @@ handler installed via [`%cash_debug json`](#cash_debug) (or
 ```
 
 ### `%cash_audit`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_audit @42b61658 -->
 
 Manage audit logging of cache operations (hits, misses, computes, restores).
 Audit entries are kept in memory by default and optionally mirrored to a file.
@@ -489,6 +513,7 @@ Audit entries are kept in memory by default and optionally mirrored to a file.
 ## Moving data between sessions
 
 ### `%cash_export`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @1ce0818b -->
 
 Serialize the cache to a file. Default is a pickle that contains backend
 entries plus lineage and cell-code metadata; `--json` writes a lineage-only
@@ -513,6 +538,7 @@ JSON file suitable for [`%cash_diff`](#cash_diff).
 ```
 
 ### `%cash_import`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @1a4d7a1b -->
 
 Load cache entries from a file written by `%cash_export`. **Pickle only** —
 JSON exports are lineage-only and cannot be re-imported as cache entries.
@@ -540,6 +566,7 @@ Prints a warning if the export version isn't `1`.
 ## Benchmarking
 
 ### `%cash_benchmark`
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_benchmark @ee658c4b -->
 
 Arm the **next** cell to run N timed iterations. Does nothing on its own — the
 next cell triggers the benchmark when it executes.

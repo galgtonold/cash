@@ -310,3 +310,79 @@ def test_config_defaults_in_docs_match_source() -> None:
     assert not problems, "Documented config defaults disagree with CashConfig:\n" + "\n".join(
         problems
     )
+
+
+# --------------------------------------------------------------------------- #
+# Magics documented vs magics registered                                      #
+# --------------------------------------------------------------------------- #
+#
+# ``docs/magics.md`` calls itself "the canonical reference for all N magics" and
+# carries both an at-a-glance table and a detail section per magic. Nothing else
+# checks that against the code: a new ``@line_magic`` lands, the page is not
+# touched, and the page is now silently a reference to 20 of 21 things while
+# still claiming to be canonical. A fingerprint anchor is the wrong instrument
+# here -- it would fire on every unrelated edit to magics.py -- so the
+# completeness property gets its own structural check.
+
+_MAGICS_PAGE = DOCS_ROOT / "magics.md"
+_MAGIC_SOURCES = (
+    "notebook/ipython/magics.py",
+    "notebook/ipython/admin.py",
+)
+
+
+def _registered_magics() -> set[str]:
+    """Every magic name IPython would register, read from the decorators."""
+    import ast
+
+    src_root = DOCS_ROOT.parent / "src" / "cash"
+    found: set[str] = set()
+    for rel in _MAGIC_SOURCES:
+        tree = ast.parse((src_root / rel).read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for dec in node.decorator_list:
+                text = ast.unparse(dec)
+                if "line_magic" not in text and "cell_magic" not in text:
+                    continue
+                # ``@line_magic("cash_foo")`` renames; bare ``@line_magic`` does not.
+                named = (
+                    dec.args[0].value
+                    if isinstance(dec, ast.Call)
+                    and dec.args
+                    and isinstance(dec.args[0], ast.Constant)
+                    else node.name
+                )
+                found.add(("%%" if "cell_magic" in text else "%") + named)
+    return found
+
+
+def test_every_registered_magic_is_documented() -> None:
+    doc = _MAGICS_PAGE.read_text(encoding="utf-8")
+    registered = _registered_magics()
+    assert registered, "found no magics in source -- the decorator scan broke"
+
+    table = set(re.findall(r"^\| \[`(%%?[a-z_]+)`\]", doc, re.M))
+    headings = set(re.findall(r"^### `(%%?[a-z_]+)", doc, re.M))
+
+    problems = []
+    for label, documented in (("at-a-glance table", table), ("detail section", headings)):
+        for name in sorted(registered - documented):
+            problems.append(f"  {name} is registered in source but has no {label}")
+        for name in sorted(documented - registered):
+            problems.append(f"  {name} has a {label} but is not registered in source")
+    assert not problems, "docs/magics.md is out of sync with the registered magics:\n" + "\n".join(
+        problems
+    )
+
+
+def test_magics_page_states_the_right_count() -> None:
+    """The page says 'all **N** magics'. N is a claim, so check it."""
+    doc = _MAGICS_PAGE.read_text(encoding="utf-8")
+    m = re.search(r"canonical\s+reference\s+for\s+all\s+\*\*(\d+)\*\*\s+magics", doc)
+    assert m, "could not find the 'all **N** magics' claim -- did the wording change?"
+    claimed, actual = int(m.group(1)), len(_registered_magics())
+    assert claimed == actual, (
+        f"docs/magics.md claims {claimed} magics; source registers {actual}"
+    )
