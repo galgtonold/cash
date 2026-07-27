@@ -259,6 +259,26 @@ def _children_named(node: ast.AST, name: str) -> list[ast.AST]:
     return found
 
 
+# Parsed-source memo, keyed by resolved path. Every anchor target re-reads and
+# re-``ast.parse``s its module, and the four anchor tests each resolve the whole
+# corpus independently -- so ``core.py`` (4.5k lines) was being parsed hundreds
+# of times per run. At 378 anchors that had pushed each of those tests to
+# 13-18s against pytest's 30s per-test timeout: a spurious CI failure waiting
+# for the next few anchors to be added. Memoising makes it O(files) instead of
+# O(targets). Safe because the suite never edits src/ mid-run; a process
+# boundary is the invalidation.
+_PARSE_MEMO: dict[Path, tuple[ast.Module, str]] = {}
+
+
+def _parsed(file: Path) -> tuple[ast.Module, str]:
+    hit = _PARSE_MEMO.get(file)
+    if hit is None:
+        source = file.read_text(encoding="utf-8")
+        hit = (ast.parse(source), source)
+        _PARSE_MEMO[file] = hit
+    return hit
+
+
 def resolve(target: Target, src_root: Path = SRC_ROOT) -> tuple[list[ast.AST], str]:
     """Resolve *target* to its AST node(s) and the source of its module.
 
@@ -268,8 +288,7 @@ def resolve(target: Target, src_root: Path = SRC_ROOT) -> tuple[list[ast.AST], s
     file = src_root / target.path
     if not file.is_file():
         raise AnchorError(f"no such source file: src/{target.path}")
-    source = file.read_text(encoding="utf-8")
-    tree = ast.parse(source)
+    tree, source = _parsed(file)
     if not target.symbol:
         return [tree], source
 
