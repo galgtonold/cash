@@ -406,7 +406,13 @@ def test_magics_page_states_the_right_count() -> None:
 #
 # CAS-126 filed this idea; annotations.md is the proof it was worth doing.
 
-_LINE_PIN_RE = re.compile(r"`([\w./-]+\.py):(\d+)(?:-(\d+))?`")
+# Both separators, because the docs used both. thread-safety.md carried
+# ``core.py,526`` and ``core.py,526,1503-1504`` -- comma-delimited, so a
+# colon-only pattern scored that page 1 when it really had 3, and the two it
+# missed were BOTH rotted (526 landed on a comment about backends; 1503-1504
+# inside _explain_call). A ratchet that under-counts reports progress it did
+# not make, so match ``.py`` followed by any digit/comma/hyphen run.
+_LINE_PIN_RE = re.compile(r"`([\w./-]+\.py)[:,](\d[\d,-]*)`")
 
 # page -> number of line-pinned refs still present. Burn these down; do not add.
 _KNOWN_LINE_PINS: dict[str, int] = {
@@ -414,7 +420,6 @@ _KNOWN_LINE_PINS: dict[str, int] = {
     "tutorials/feature-guides/smart-persistence.md": 6,
     "tutorials/feature-guides/async-caching.md": 1,
     "tutorials/feature-guides/controlling-cache-behavior.md": 1,
-    "tutorials/feature-guides/thread-safety.md": 1,
 }
 
 
