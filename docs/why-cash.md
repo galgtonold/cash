@@ -222,13 +222,27 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 ### Production readiness
 
 ??? question "Is a 0.x release safe for real work?"
-    Yes for notebook use; `0.1.1`, the first public release, is backed by
-    comprehensive unit + integration test coverage (the test suite is thousands
-    of integration tests, many derived from real-world bug reports). Treat it
-    like any other library you'd pin a version of — this is a `0.x` release, so
-    the API and the cache format may change between minor versions (run
-    `%cash_repair --full` after upgrading). The
-    [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
+    The honest answer: if you set out to break it, you probably can. Knowing
+    when a cached value is still valid is a genuinely hard problem, and the
+    notebook's **statement-level** tracking is the hard end of it — it has to
+    reason about what your code reads, writes and mutates across cells, from
+    the source alone. That is where surprises live, and where you should keep
+    an eye on the badge.
+
+    The **`@cash.cache` decorator is a much smaller problem**, and
+    correspondingly more solid: it keys on a function's arguments and its own
+    source, with no cross-cell reasoning involved. If you want the conservative
+    option for something that matters, that's the one.
+
+    Both are validated against many real production workflows, and the test
+    suite runs to thousands of integration tests, a large share of them derived
+    from actual bug reports rather than invented cases. Where cash knows it can
+    be wrong, it says so on one page:
+    [Known limitations](known-limitations.md).
+
+    Treat it like any other library you'd pin a version of — this is a `0.x`
+    release, so the API and the cache format may change between minor versions.
+    The [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
     documents breaking changes between releases.
 
 ??? question "How do I force a fresh run?"
@@ -287,13 +301,29 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
     restart — genuinely dependency-aware, much closer to cash than the key→value
     caches above.
 
-    The difference is what you adopt. marimo is a **replacement** for Jupyter — a
-    new runtime and file format you move your work into, with caching you wrap
-    around chosen blocks. Cash is **additive**: `%cash_on` inside the Jupyter,
-    Colab, or VS Code notebook you already use, caching every statement
-    automatically. If you're happy switching environments, marimo's reactivity is
-    a strong answer to notebook staleness; if you'd rather stay in Jupyter and
-    make re-running cheap, that's cash.
+    Two scope differences if you're comparing the caches directly. marimo keys on
+    a block's arguments and closed-over variables, but
+    [not on the source of imported modules](https://docs.marimo.io/api/caching/) —
+    so editing a helper in a `.py` file next door doesn't invalidate it — and file
+    dependencies are explicit (`mo.watch.file()`) rather than automatic. Cash
+    folds both in for every statement without being asked.
+
+    marimo is clearly ahead on the **artifact**: its notebooks are pure `.py`, so
+    they diff, review, and run as scripts — better than `.ipynb` for anything
+    production-shaped. The trade is what you adopt, and how much of your existing
+    code comes along. marimo is a **replacement** for Jupyter: you migrate with
+    `marimo convert`, and its execution model puts real constraints on ordinary
+    Python — a variable can't be assigned in more than one cell, and IPython
+    magics and `!shell` lines aren't supported. Cash is **additive**: one line in
+    the Jupyter, Colab, or VS Code notebook you already have, running the code you
+    already wrote, in the production setup you already have.
+
+    If you're happy switching environments, marimo's reactivity is a strong answer
+    to notebook staleness. If you'd rather keep your existing notebooks and make
+    re-running cheap, that's cash. The two aren't exclusive either: `@cash.cache`
+    is a plain decorator and cash has **no required dependencies** — it doesn't
+    need IPython — so it runs wherever Python does. (`%cash_on` and the other
+    magics do need IPython.)
 
 ## Try it / Go deeper
 

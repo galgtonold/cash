@@ -377,32 +377,100 @@
 }
 .cash-calculator-row {
   display: grid;
-  grid-template-columns: 1fr 110px;
-  align-items: center;
-  gap: 10px;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  column-gap: 10px;
+  row-gap: 4px;
 }
 .cash-calculator label {
   font-size: 14px;
   color: var(--cash-ink);
 }
-.cash-calculator input[type="number"] {
+/* The live value, right-aligned against its label. Monospace and
+   tabular so the row does not reflow while a slider is being dragged. */
+.cash-calculator-value {
   font-family: var(--cash-font-mono);
   font-size: 14px;
-  padding: 4px 8px;
-  border: 1px solid var(--cash-rule-strong);
-  border-radius: var(--cash-radius-code);
-  background: var(--cash-bg);
-  color: var(--cash-ink);
-  width: 100%;
-  box-sizing: border-box;
-  text-align: right;
-}
-.cash-calculator-output {
-  font-size: 16px;
   font-weight: 600;
   color: var(--cash-green);
-  padding-top: 6px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.cash-calculator-slider {
+  grid-column: 1 / -1;
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 20px;              /* touch target, not the visible track */
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+/* Track. `--cash-slider-pct` is set by the JS on every input event so the
+   filled portion reads as a value rather than a knob on a bare line. */
+.cash-calculator-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(
+    to right,
+    var(--cash-green) 0 var(--cash-slider-pct, 50%),
+    var(--cash-rule-strong) var(--cash-slider-pct, 50%) 100%
+  );
+}
+.cash-calculator-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cash-rule-strong);
+}
+.cash-calculator-slider::-moz-range-progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--cash-green);
+}
+.cash-calculator-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  margin-top: -6px;          /* centre the 16px thumb on the 4px track */
+  border-radius: 50%;
+  background: var(--cash-green);
+  border: 2px solid var(--cash-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.cash-calculator-slider::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--cash-green);
+  border: 2px solid var(--cash-bg);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.cash-calculator-slider:focus-visible {
+  outline: none;
+}
+.cash-calculator-slider:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 3px var(--cash-green-bg), 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.cash-calculator-slider:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 3px var(--cash-green-bg), 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+.cash-calculator-output {
+  margin-top: 4px;
+  padding-top: 10px;
   border-top: 1px solid var(--cash-rule);
+}
+.cash-calculator-figure {
+  display: block;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--cash-green);
+  font-variant-numeric: tabular-nums;
+}
+.cash-calculator-sub {
+  display: block;
+  font-size: 13px;
+  color: var(--cash-ink-3);
 }
 .cash-calculator-caveat {
   font-size: 12px;
