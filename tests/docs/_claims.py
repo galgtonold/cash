@@ -358,6 +358,42 @@ def _is_field_call(call: ast.Call) -> bool:
     )
 
 
+# Arithmetic that ``ast.literal_eval`` refuses but that is unambiguously a
+# constant: ``8 * 1024 * 1024``. That idiom is how every byte threshold in this
+# codebase is written, and byte thresholds are exactly the numbers docs quote
+# ("files over 8 MiB are sampled"), so without this the most drift-prone
+# constants could only get a fingerprint anchor -- which proves someone looked,
+# not that the documented number is right.
+#
+# Deliberately NOT a general evaluator: operands must bottom out in numeric
+# literals, so no name lookup, no call, no attribute access, nothing that could
+# execute. A non-numeric operand raises rather than guessing.
+_ARITH_OPS = {
+    ast.Add: lambda a, b: a + b,
+    ast.Sub: lambda a, b: a - b,
+    ast.Mult: lambda a, b: a * b,
+    ast.Div: lambda a, b: a / b,
+    ast.FloorDiv: lambda a, b: a // b,
+    ast.Pow: lambda a, b: a**b,
+}
+
+
+def _fold_numeric(node: ast.AST):
+    """Constant-fold a numeric expression, or raise ValueError."""
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, bool) or not isinstance(node.value, (int, float)):
+            raise ValueError("not a numeric literal")
+        return node.value
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+        operand = _fold_numeric(node.operand)
+        return operand if isinstance(node.op, ast.UAdd) else -operand
+    if isinstance(node, ast.BinOp) and type(node.op) in _ARITH_OPS:
+        return _ARITH_OPS[type(node.op)](
+            _fold_numeric(node.left), _fold_numeric(node.right)
+        )
+    raise ValueError("not a constant numeric expression")
+
+
 def literal_value(node: ast.AST) -> object:
     """The literal a symbol is assigned, for ``== <literal>`` anchors.
 
@@ -393,7 +429,13 @@ def literal_value(node: ast.AST) -> object:
 
     try:
         return ast.literal_eval(value)
-    except (ValueError, TypeError, SyntaxError) as exc:
+    except (ValueError, TypeError, SyntaxError):
+        pass
+    # ``literal_eval`` rejects ``8 * 1024 * 1024``; fold it ourselves, over
+    # numeric literals only. See ``_fold_numeric``.
+    try:
+        return _fold_numeric(value)
+    except ValueError as exc:
         raise AnchorError(
             f"not a literal: {ast.unparse(value)[:60]}"
         ) from exc

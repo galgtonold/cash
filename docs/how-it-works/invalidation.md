@@ -8,14 +8,17 @@ A change in any cell propagates transitively through the lineage chain: if `raw`
 
 ## Finding your notebook
 
+<!-- claim: cash/notebook/server_discovery.py:_NOTEBOOK_PATH_CACHE_TTL == 300.0 -->
 To check upstream cells, Cash must read the live `.ipynb` file. It locates it through a prioritised fallback chain: first it reads the **VS Code injected variable** (`__vsc_ipynb_file__`) set by the Jupyter extension; if that is absent it tries the **`ipynbname` library** when installed; and finally it queries the **Jupyter Server REST API** (reliable inside JupyterLab or the classic Notebook). The resolved path is cached in memory for five minutes, and the cache is cleared whenever you switch notebooks via `%cash_on`.
 
 Graceful degradation is by design. If notebook discovery fails entirely — for example in a plain IPython REPL or an environment where none of the three mechanisms succeed — Cash disables upstream checking rather than guessing. Notably, it does **not** fall back to scanning the filesystem for the most-recently-modified `.ipynb`: that heuristic can silently pick the wrong notebook, so Cash skips upstream detection instead. The current cell still uses its own code and input hashes, but stale-upstream detection is simply skipped. Cash never invalidates against a notebook it cannot see.
 
+<!-- claim: cash/notebook/server_discovery.py:_NOTEBOOK_PATH_NEGATIVE_TTL == 2.0 -->
 A *failed* lookup is memoised too, but for two seconds rather than five minutes — long enough to stop a dead Jupyter runtime entry from being probed once per statement, short enough that a notebook which becomes discoverable is picked up on the next cell.
 
 ## Upstream simulation
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @08b94818, cash/notebook/upstream/simulator.py:NotebookSimulator @8ffd10e8 broad="the simulation story is the two orchestrating classes, not one method" -->
 The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the current notebook file and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
 
 ```mermaid
@@ -76,6 +79,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES == 8388608, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @5f35e472 -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first, and when it matches, the
     content hash decides — so a bare `touch` no longer invalidates, and a same-size
@@ -116,6 +120,7 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
+<!-- claim: cash/notebook/cacheability.py @fd932092 broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
@@ -130,6 +135,7 @@ That verdict dictionary is shared with the upstream simulation, which cannot obs
 
 `x = np.random.rand(3)` has stable source and no tracked inputs. Editing `np.random.seed(0)` to `seed(1)` above it therefore moved nothing, and Cash replayed the first seed's numbers — following the documented advice for reproducibility produced provably wrong values. Three mechanisms now cover this, and they are separate on purpose:
 
+<!-- claim: cash/notebook/randomness.py:hidden_lineage_writes @1369d609, cash/notebook/randomness.py:hidden_lineage_reads @e9ddd20b -->
 - **The seed is a hidden lineage variable.** A `seed()` writes `__cash_rng__<module>`, a draw reads it, and that lineage flows through the ordinary input path — so a re-seed re-keys the draw *and* propagates to everything cached downstream of it.
 - **A stale RNG replay is suppressed.** Restoring a cached statement also restores the RNG state it left behind, which keeps the stream coherent when a restore stands in for an execution. After a re-seed that replay would rewind the generator to the old regime, so entries record the seed epoch they were written under and are only replayed while it still holds. Keying the draw was necessary but not sufficient — both halves are required.
 - **The stream is repositioned before a re-executed draw.** If reconstruction re-runs a draw because one of its *ordinary* inputs changed, the unchanged `seed()` above it is not scheduled, so the draw would continue from wherever the live stream happened to be. Cash restores the position that draw holds top-to-bottom before running it.

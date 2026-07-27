@@ -844,3 +844,52 @@ def test_ellipsize_handles_a_single_unbroken_token():
     """No space to break on -- must still bound the length, not loop or crash."""
     out = ellipsize("x" * 50, 10)
     assert out == "x" * 10 + "..."
+
+
+# --------------------------------------------------------------------------- #
+# Value anchors over constant arithmetic (8 * 1024 * 1024)                    #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "expr, expected",
+    [
+        ("X = 8 * 1024 * 1024", 8388608),
+        ("X = 256 * 1024", 262144),
+        ("X = 60 * 60", 3600),
+        ("X = 1024 ** 2", 1048576),
+        ("X = 100 // 3", 33),
+        ("X = -5 * 2", -10),
+        ("X = 1.5 * 2", 3.0),
+    ],
+)
+def test_value_anchor_folds_constant_arithmetic(expr, expected):
+    """`8 * 1024 * 1024` is how every byte threshold here is written, and byte
+    thresholds are exactly the numbers docs quote."""
+    assert literal_value(ast.parse(expr).body[0]) == expected
+
+
+@pytest.mark.parametrize(
+    "expr, why",
+    [
+        ("X = SOME_NAME * 1024", "name lookup"),
+        ("X = compute() * 2", "call"),
+        ("X = mod.ATTR * 2", "attribute access"),
+        ("X = 'a' * 3", "non-numeric operand"),
+        ("X = [1] * 3", "non-numeric operand"),
+        ("X = 8 % 3", "operator not in the allowlist"),
+    ],
+)
+def test_value_anchor_refuses_anything_that_is_not_pure_numeric(expr, why):
+    """Folding must never execute or resolve anything -- it is a constant
+    folder, not an evaluator. Anything it cannot prove constant must raise, so
+    the anchor fails loudly instead of comparing against a guess."""
+    with pytest.raises(AnchorError, match="not a literal"):
+        literal_value(ast.parse(expr).body[0])
+
+
+def test_folded_arithmetic_compares_against_a_documented_number():
+    """End to end: the doc writes 8388608, the source writes 8 * 1024 * 1024."""
+    value = literal_value(ast.parse("X = 8 * 1024 * 1024").body[0])
+    assert values_match("8388608", value)
+    assert not values_match("4194304", value)
