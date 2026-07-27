@@ -416,7 +416,6 @@ _LINE_PIN_RE = re.compile(r"`([\w./-]+\.py)[:,](\d[\d,-]*)`")
 
 # page -> number of line-pinned refs still present. Burn these down; do not add.
 _KNOWN_LINE_PINS: dict[str, int] = {
-    "tutorials/feature-guides/smart-persistence.md": 6,
     "tutorials/feature-guides/async-caching.md": 1,
     "tutorials/feature-guides/controlling-cache-behavior.md": 1,
 }

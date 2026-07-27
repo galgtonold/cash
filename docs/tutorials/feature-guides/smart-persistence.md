@@ -10,7 +10,7 @@ The decision applies to **multi-tier backends only**. A single-tier `FileBackend
 
 ## The decision in one sentence
 
-If the promotion policy returns `False` for a given call, the result lands in RAM only — the next disk tier (and every tier after) is skipped (`src/cash/backends/tiered_backend.py`). Promote when recomputing the value would cost more than restoring it: `execution_time - est_restore_time > min_cache_savings_pct × execution_time`, where `est_restore_time` is the fitted cost model's end-to-end serialize-write / read-deserialize prediction.
+If the promotion policy returns `False` for a given call, the result lands in RAM only — the next disk tier (and every tier after) is skipped. Promote when recomputing the value would cost more than restoring it: `execution_time - est_restore_time > min_cache_savings_pct × execution_time`, where `est_restore_time` is the fitted cost model's end-to-end serialize-write / read-deserialize prediction.
 
 ## Quick start
 
@@ -37,7 +37,8 @@ After both calls, peek at the cache directory: only `slow`'s entry is on disk. `
 
 ## The promotion policy
 
-The active policy is built by `_build_smart_persistence_policy` (`src/cash/backends/factory.py`) and handed to the `TieredBackend` constructor at startup. Its body:
+<!-- claim: cash/backends/factory.py:_build_smart_persistence_policy @e178f401, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+The active policy is built by `_build_smart_persistence_policy` in `backends/factory.py` and handed to the `TieredBackend` constructor at startup. Its body:
 
 ```python
 # test:inject: min_persist_compute_s = 0.1
@@ -53,6 +54,7 @@ def policy(execution_time: float, size_bytes: int) -> bool:
     return execution_time - est_restore > min_savings * execution_time
 ```
 
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._cost_model_promote @1376cc8e, cash/notebook/cost_model.py:estimated_restore_time @19d51f03 -->
 Two things gate the promotion:
 
 1. **Hard floor at 100 ms.** Anything that ran faster than `0.1 s` never reaches disk — the I/O alone would cost more than recomputing.
@@ -88,7 +90,8 @@ The comparison is *write-now-read-later* vs *recompute-now*: `est_restore_time` 
 
 ## Configuration
 
-The policy knobs exposed via `CashConfig` (`src/cash/config.py`):
+<!-- claim: cash/config.py:CashConfig.smart_persistence == True, cash/config.py:CashConfig.min_cache_savings_pct == 0.20 -->
+The policy knobs exposed via `CashConfig`:
 
 | Field | Default | Effect |
 |---|---|---|
@@ -104,11 +107,13 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-`cash.configure(smart_persistence=...)` is **not** in the BACKEND_AFFECTING set (`src/cash/__init__.py`), so changing it at runtime updates the dataclass but does not rebuild the active backend's policy closure. To make a runtime change stick, restart the process or reconstruct the `Cash` instance.
+<!-- claim: cash/__init__.py:configure @7169eecd -->
+`cash.configure(smart_persistence=...)` is **not** in the `BACKEND_AFFECTING` set that `cash.configure` consults, so changing it at runtime updates the dataclass but does not rebuild the active backend's policy closure. To make a runtime change stick, restart the process or reconstruct the `Cash` instance.
 
 ## Inspecting where a value actually landed
 
-The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']` (`src/cash/backends/tiered_backend.py`). This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (`tiered_backend.py:72-73`).
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @2466264a, cash/backends/tiered_backend.py:TieredBackend.get @5413e4ec -->
+The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 For debugging, enable verbose logging:
 
@@ -119,7 +124,7 @@ logging.basicConfig(level=logging.DEBUG)
 cash.configure(debug=True)
 ```
 
-The TieredBackend logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (`tiered_backend.py:139-140`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in (`src/cash/core.py`):
+The TieredBackend logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (logged at the end of `TieredBackend.set`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in:
 
 ```python
 @cash.cache
@@ -136,7 +141,7 @@ print(slow.explain(1))
 #   cache_age_seconds: 0.012
 ```
 
-`explain` returns the `reason` string, the `cache_key`, and a `details` dict (`src/cash/core.py`). To see *which tier* a hit came from, read the metadata directly from the backend or watch the `[STORAGE]` log lines.
+`explain` returns the `reason` string, the `cache_key`, and a `details` dict. To see *which tier* a hit came from, read the metadata directly from the backend or watch the `[STORAGE]` log lines.
 
 > **Note.** The decorator's `f.cache_info()` returns aggregate hit/miss/savings stats and a recent-warnings log — it does *not* expose persist/skip context per call. Inspecting promotion decisions is a debug-log job, not a `cache_info` field.
 
@@ -147,7 +152,8 @@ The notebook integration (`%%cash` cells, `%cash_on` magic) applies the **same**
 1. `benchmarks/measure_ser_deser.py` — runs a measurement campaign across families and sizes, writing the matrix to `benchmarks/results/ser_deser_matrix.csv`.
 2. `benchmarks/fit_cost_model.py` — fits per-(family, backend, op) `cost = a + b · size_bytes` lines and prints constants ready to paste into the module.
 
-Two further `CashConfig` fields apply **only** to the notebook Gate A (`src/cash/config.py`):
+<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/config.py:CashConfig.min_cache_fixed_budget_seconds == 0.05 -->
+Two further `CashConfig` fields apply **only** to the notebook Gate A:
 
 | Field | Default | Effect |
 |---|---|---|
@@ -162,7 +168,8 @@ For a deep dive into the notebook filter and its skip-reason taxonomy, see [Cost
 
 Two override mechanisms exist, and they apply to different paths:
 
-- **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata (`src/cash/notebook/annotations.py`, `src/cash/notebook/statement/processor.py`). The notebook filter then bypasses its skip checks (`statement/processor.py:1127`), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (`tiered_backend.py:105-109`). The annotation is the only way to force a single statement past both filters.
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.persist == False, cash/notebook/statement/processor.py:StatementProcessor._should_skip_large_object_caching @8220af13 -->
+- **Notebook `# @cash:persist` annotation.** When a `%%cash` cell carries a `# @cash:persist` comment, the parser sets `force_persist=True` on the entry's metadata. The notebook filter then bypasses its skip checks (`StatementProcessor._should_skip_large_object_caching` returns early), and the `TieredBackend` also reads `metadata['force_persist']` and bypasses its promotion policy (in `TieredBackend.set`). The annotation is the only way to force a single statement past both filters.
 - **`smart_persistence=False`.** Disables the policy for every call. Useful for benchmarking, debugging, or workloads where you've measured that the heuristic is wrong on your data.
 - **`%cash_persist on` / `cash.configure(persist_all=True)`.** Force-caches *every* statement, bypassing the cost-aware floors globally — the blanket equivalent of putting `# @cash:persist` on all of them. Good for reproducibility and benchmarking; wasteful for trivial statements in normal use.
 
@@ -180,8 +187,8 @@ There is **no** `@cash.cache(persist=True)` decorator parameter. To force persis
 
 Two decisions are made when a value is set on a `TieredBackend`:
 
-1. **Tier 0 always writes.** Memory tier 0 takes every entry, no policy consulted (`tiered_backend.py:87-95`).
-2. **Tiers 1..N consult the promotion policy.** If the policy returns `True` *and* the entry fits under each tier's `max_size_bytes` cap, the entry is set on that tier. A 20 MB entry might land in RAM + DISK but skip a Redis tier with a 10 MB cap (`tiered_backend.py:115-122`).
+1. **Tier 0 always writes.** Memory tier 0 takes every entry, no policy consulted (`TieredBackend.set`).
+2. **Tiers 1..N consult the promotion policy.** If the policy returns `True` *and* the entry fits under each tier's `max_size_bytes` cap, the entry is set on that tier. A 20 MB entry might land in RAM + DISK but skip a Redis tier with a 10 MB cap.
 
 The promotion policy decides *whether to write past tier 0*. Each tier's `max_size_bytes` then decides *which tiers* among the eligible ones get a copy. The two checks are independent — a `True` from the policy is necessary, not sufficient.
 
@@ -189,7 +196,8 @@ See [Choosing a Backend](choosing-a-backend.md) for how to wire `TieredBackend` 
 
 ## Built-in `_default_promotion_policy` fallback
 
-When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy` (`src/cash/backends/tiered_backend.py`):
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/backends/tiered_backend.py:TieredBackend.__init__ @59106d1e -->
+When `smart_persistence=False` (so the factory wires in no cost-model closure), or when a user constructs `TieredBackend(..., promotion_policy=None)` directly, the backend falls back to its own bound method `_default_promotion_policy`:
 
 ```python
 def _default_promotion_policy(self, execution_time, size_bytes):
