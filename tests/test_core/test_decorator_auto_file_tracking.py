@@ -122,3 +122,66 @@ class TestAutoFileTracking:
         _touch_future(path)
         assert f() == "v2"
         assert calls[0] == 2
+
+
+# --------------------------------------------------------------------------- #
+# Kernel pseudo-filesystems must never become cache dependencies              #
+# --------------------------------------------------------------------------- #
+
+
+def test_pseudo_fs_reads_are_not_tracked_as_dependencies():
+    """A ``/proc`` read inside a cached call must not become a file dep.
+
+    ``/proc/meminfo`` reports live memory, so its content changes on every
+    read. An entry that records it as a dependency is found on lookup and then
+    thrown away as stale, every single time — the cache silently never hits,
+    with no warning.
+
+    cash reaches it through its OWN machinery, not the user's:
+    ``InMemoryBackend._check_and_evict`` calls ``psutil.virtual_memory()``
+    every ``check_interval`` writes and psutil reads ``/proc/meminfo`` on
+    Linux, while the tracker is active for the user's call.
+    """
+    from cash.notebook.file_tracker import FileAccessTracker, _is_pseudo_fs
+
+    assert _is_pseudo_fs("/proc/meminfo")
+    assert _is_pseudo_fs("/sys/fs/cgroup/memory.max")
+    assert _is_pseudo_fs("/dev/urandom")
+    assert not _is_pseudo_fs("/home/me/data.csv")
+    assert not _is_pseudo_fs("/tmp/procession.csv")  # prefix, not a path component
+
+    tracker = FileAccessTracker({})
+    tracker._track_path("/proc/meminfo")
+    tracker._track_path("/sys/kernel/mm/transparent_hugepage/enabled")
+    assert tracker.accessed_files == set(), (
+        f"pseudo-fs paths leaked into deps: {tracker.accessed_files}"
+    )
+
+
+def test_a_chunked_iterator_still_hits_after_an_eviction_check(tmp_path):
+    """End-to-end guard for the shape that exposed this.
+
+    A chunked iterator writes one entry per chunk plus a manifest, so a
+    10-chunk result crosses ``InMemoryBackend``'s eviction-check threshold
+    (``check_interval``, 10 writes) *inside a single cached call* — which is
+    what pulled ``/proc/meminfo`` into the entry and made the second identical
+    call recompute. Verified failing before the fix on Linux (``hits=0
+    misses=2``); it is the second call hitting that matters here.
+    """
+    import cash
+
+    c = cash.Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+
+    @c.cache(chunk_max_items=10)
+    def stream():
+        yield from range(100)
+
+    list(stream())
+    before = stream.cache_info()["hits"]
+    list(stream())
+    after = stream.cache_info()["hits"]
+
+    assert after == before + 1, (
+        "the second identical call did not hit; a dependency captured during "
+        f"the first call is defeating the cache. cache_info={stream.cache_info()}"
+    )

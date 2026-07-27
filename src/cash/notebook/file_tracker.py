@@ -55,6 +55,39 @@ _active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = (
 # already-installed wrappers are no-op skipped.
 _install_lock = threading.Lock()
 
+# Kernel pseudo-filesystems are never data dependencies, and recording one is
+# actively harmful: ``/proc/meminfo`` reports live memory and so changes on
+# every read, which means an entry that captured it can NEVER be fresh again.
+# The cache still stores, still finds the entry, and still throws it away —
+# a silent, permanent cache defeat with no warning anywhere.
+#
+# cash reaches these paths through its OWN machinery, not the user's code:
+# ``InMemoryBackend._check_and_evict`` calls ``psutil.virtual_memory()`` every
+# ``check_interval`` (10) writes, and ``psutil`` reads ``/proc/meminfo`` on
+# Linux. The tracker is active for the duration of the user's cached call, so
+# that read is attributed to the user's result. A chunked iterator is the
+# reliable trigger — it writes one entry per chunk plus a manifest, so a
+# 10-chunk result crosses the eviction-check threshold inside a single call.
+#
+# Same shape as CAS-214 (cash's own ``open`` shim poisoning its cache key):
+# the tracker cannot tell cash's internal reads from the user's, so paths that
+# are definitionally not data get excluded here. Linux-only in effect; on
+# Windows these prefixes never match.
+_PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
+
+
+def _is_pseudo_fs(path: str) -> bool:
+    """True for kernel pseudo-filesystem paths, which are machine state rather
+    than data and must never become cache dependencies.
+
+    Checked against the RAW path as well as the resolved one, because
+    ``os.path.realpath`` is not identity-preserving here: on Windows it turns
+    ``/proc/meminfo`` into ``C:/proc/meminfo``, which no ``/proc/`` prefix
+    would match. Testing the raw string keeps the guard honest wherever the
+    read comes from.
+    """
+    return str(path).replace("\\", "/").startswith(_PSEUDO_FS_PREFIXES)
+
 
 def _dispatch_track(path: Any) -> None:
     """Module-level tracker-dispatching shim. Custom handler factories
@@ -489,6 +522,11 @@ class FileAccessTracker:
 
     def _track_path(self, path):
         raw_path = str(path)
+        if _is_pseudo_fs(raw_path):
+            # See _PSEUDO_FS_PREFIXES. Checked BEFORE realpath, which on
+            # Windows rewrites /proc/... to C:/proc/... and would slip past.
+            logger.debug("[TRACKER] Ignoring pseudo-fs read %r", raw_path)
+            return
         if is_remote_url(raw_path):
             # A remote URL is a real dependency, just not a stat-able one:
             # ``realpath`` would mangle it into a nonexistent local path and the
@@ -503,6 +541,12 @@ class FileAccessTracker:
             abs_path = normalize_path(os.path.realpath(raw_path))
         except (TypeError, ValueError, OSError) as e:
             logger.debug("[TRACKER] Could not track file path %r: %s", path, e)
+            return
+        if _is_pseudo_fs(abs_path):
+            # See _PSEUDO_FS_PREFIXES: recording one of these makes the entry
+            # permanently unfreshenable. Return before the relative-path arm
+            # too — these paths are always absolute.
+            logger.debug("[TRACKER] Ignoring pseudo-fs read %r", abs_path)
             return
         self._add_tracked(abs_path)
         # a RELATIVE read path also records the UN-resolved relative
