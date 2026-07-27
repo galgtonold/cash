@@ -28,6 +28,7 @@ stored (too cheap, a side effect, or `# @cash:no-cache`). Check the running tota
 with `%cash_stats` ("Net time saved" — honest, and it will report a **loss** if
 you cached something too cheap).
 
+<!-- claim: cash/_agent_guide.py:AGENT_GUIDE @546df8da broad="the rule set mirrors the in-package agent guide" -->
 ## The six rules that keep you correct
 
 1. **Cache pure + expensive only.** Same code + same inputs → restored. Editing

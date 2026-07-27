@@ -10,6 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
+<!-- claim: cash/__main__.py:main @73dc853e broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
@@ -190,6 +191,7 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
+<!-- claim: cash/__main__.py:cmd_inspect @9eed112e, cash/__main__.py:_inspect_cache_dir @be5b4bea, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path]`
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -248,6 +250,7 @@ cash inspect /tmp/some-cache-dir
 
 ## Clearing caches
 
+<!-- claim: cash/__main__.py:cmd_clear @23843bc2 -->
 ### `cash clear [path] [--all]`
 
 Delete a cache directory.
@@ -291,6 +294,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @c6a1b14a -->
 ## Exit codes
 
 | Code | When |

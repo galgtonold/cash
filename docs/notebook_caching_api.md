@@ -147,6 +147,7 @@ the branch that ran is cached. `while` and `with` blocks (and a `for` containing
 iteration space to key on. The full mechanism is in
 [The notebook path](how-it-works/notebook-path.md#fine-grained-caching-loops-and-branches).
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f6bf4ab2 -->
 ### In-place mutation runs fresh
 
 One deliberate exception to statement-level caching: a **top-level** statement
@@ -175,6 +176,7 @@ header cascades to the whole body) are documented in [Annotations](annotations.m
 
 ---
 
+<!-- claim: cash/notebook/consumables.py:is_consumable_unrestorable @a2f83cac, cash/notebook/consumables.py:has_diverged @0355bace -->
 ## Consumable inputs and isolated re-runs
 
 Some objects are **drained in place** by reading them: a generator, a

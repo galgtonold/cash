@@ -20,6 +20,7 @@ and together they sort every statement into one of three outcomes:
 
 | Compute time | What cash does | Survives a kernel restart? |
 |---|---|---|
+<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 | **< 10 ms** | Nothing — recomputed every run (too cheap to be worth an entry) | — |
 | **10 ms – 0.1 s** | Cached in **RAM** — instant this session | No |
 | **> 0.1 s** *(and worth it)* | Cached in **RAM and on disk** | Yes |
@@ -275,6 +276,7 @@ size caps still apply.
 ### How the restore time is predicted
 
 The prediction is a **fitted linear regression** of deserialize wall-time as
+<!-- claim: cash/notebook/cost_model.py:_TYPE_TO_FAMILY @674b9d86, cash/notebook/cost_model.py:resolve_family @91ef972a, cash/notebook/cost_model.py:_resolve_backend @d6308bba, cash/notebook/cost_model.py:_KNOWN_BACKENDS @3f31251c -->
 `a + b × size_bytes`, per `(type_family, backend)`:
 
 1. Map `type(value).__name__` to a **family** — `DataFrame → dataframe_numeric`,

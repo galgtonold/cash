@@ -10,6 +10,7 @@ This is a badge from a cell where the upstream `df` was restored, the intermedia
 
 What you're looking at:
 
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_compute_stats @bceb6587, cash/notebook/badge_renderer/view_builder.py:_overhead_section @67bf94ef -->
 1. **Header line** — the collapsed view. Shows the cell-level status (`EXECUTED` here), the total time and the **net** saving (`0.42s · saved 3.38s`), a tiny sparkline, and counter chips (`exec 1`, `cached 2`). The header saving is net: it subtracts this cell's own Cash overhead from the gross recompute the restores avoided, so it can read a little below the sum of the per-row savings (that difference is the overhead row at the bottom). Click the header to expand and see the panel below.
 2. **Upstream context** — a collapsed pill at the top of the panel labeled "upstream context · 1 step · ↑2.85s". Click to expand and see the upstream rows (statements from earlier cells that Cash had to re-check or re-restore for this cell to be valid).
 3. **Current cell** — the section labeled `CURRENT CELL`. Each row is a statement in *this* cell with its per-row status — `restored` (green rail) for `features = encode(df)`, `computed` (ochre rail) for `preds = decorated_predict(features)`. Click any row for a detail tooltip showing the cache key, storage tiers, miss reason, and `@cash.cache` hit ratio (`2/3 cache hits` here).
@@ -123,6 +124,7 @@ A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused
 
 <iframe class="cash-badge" src="/_badges/not_cached_side_effect.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:map_status @4b2a5f04 -->
 **Why:** The statement writes to a file, sends a network request, mutates a database, or prints/plots — Cash never caches statements with observable side effects because restoring from cache would skip the side effect.
 
 **Fix:** Split the side effect off into its own statement and let the *value-producing* statement above it cache. If the side effect *is* the point of the cell, leave it uncached and use `@cash:no-cache` to suppress the warning.

@@ -44,24 +44,24 @@
     "audited": "2026-07-27"
   },
   "docs/badges.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 3,
+    "audited": "2026-07-27"
   },
   "docs/benchmarks.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/cli.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 8,
+    "audited": "2026-07-27"
   },
   "docs/contributing.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/cost-model.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 6,
+    "audited": "2026-07-27"
   },
   "docs/decorator.md": {
     "anchors": 23,
@@ -69,11 +69,11 @@
   },
   "docs/faq.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/for-coding-agents.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 1,
+    "audited": "2026-07-27"
   },
   "docs/getting-started/configuration.md": {
     "anchors": 7,
@@ -89,7 +89,7 @@
   },
   "docs/glossary.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/how-it-works/cache-keys-and-lineage.md": {
     "anchors": 14,
@@ -125,7 +125,7 @@
   },
   "docs/index.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/known-limitations.md": {
     "anchors": 17,
@@ -137,11 +137,11 @@
   },
   "docs/migration_guide.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/notebook_caching_api.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 3,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/async-caching.md": {
     "anchors": 7,
@@ -217,10 +217,10 @@
   },
   "docs/versioning.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/why-cash.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   }
 }
