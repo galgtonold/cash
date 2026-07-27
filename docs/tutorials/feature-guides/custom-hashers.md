@@ -6,7 +6,7 @@ Cash hashes every function argument to compute the cache key. The default uses `
 
 There are three failure modes that custom hashers exist to solve, and you'll usually hit one of them by accident before you read about them here:
 
-1. **"Unhashable argument" warning.** The argument is unpicklable (an open file handle, a thread lock, a C-extension object that doesn't survive `pickle.dumps`). Cash refuses to cache the call and emits `CashCacheIneffectiveWarning` naming the offending type. The warning message itself suggests `cash.register_hasher(YourType, ...)` (`src/cash/core.py`).
+1. **"Unhashable argument" warning.** The argument is unpicklable (an open file handle, a thread lock, a C-extension object that doesn't survive `pickle.dumps`). Cash refuses to cache the call and emits `CashCacheIneffectiveWarning` naming the offending type. The warning message itself suggests `cash.register_hasher(YourType, ...)`.
 2. **Slow pickle of complex objects.** Some objects pickle correctly but slowly — a 200 MB embedding model, a giant dict, a nested graph. The pickle round-trip on every call dominates the cache lookup. A bespoke hasher that reads one or two structural fields is orders of magnitude faster.
 3. **False misses from non-deterministic pickling.** Two equal instances may pickle to different byte strings — protocol-buffer messages with map fields, dicts with non-deterministic hash ordering on objects, anything that captures memory addresses. A hand-written hasher derived from the type's identity-bearing fields produces stable keys.
 
@@ -35,30 +35,48 @@ def evaluate(model: MyModel, data):
     return model.weights @ data
 ```
 
-That's the entire workflow. `cash.register_hasher` is a top-level helper that proxies to the default `Cash` instance (`src/cash/__init__.py`); if you've constructed your own `Cash(...)` object call `c.register_hasher(...)` on it instead. Subsequent `@cash.cache` calls that receive a `MyModel` argument will route through `hash_model` instead of attempting to pickle the instance.
+That's the entire workflow. `cash.register_hasher` is a top-level helper that proxies to the default `Cash` instance; if you've constructed your own `Cash(...)` object call `c.register_hasher(...)` on it instead. Subsequent `@cash.cache` calls that receive a `MyModel` argument will route through `hash_model` instead of attempting to pickle the instance.
 
 ## How registration works
 
-`register_hasher` lives at `src/cash/core.py`. The signature is straightforward:
+`register_hasher` is a method on `Cash`. The signature is straightforward:
 
 <!-- test:skip reason="signature illustration only" -->
 ```python
 def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str]) -> None: ...
 ```
 
+<!-- claim: cash/core.py:Cash._hash_callable_source @a63f1105, cash/core.py:Cash.register_hasher @2cc59e2a -->
 Two things happen on registration:
 
-1. The hasher's *source* is hashed via `_hash_callable_source` (`src/cash/core.py`). Resolution order is `inspect.getsource(fn)` first, then `fn.__code__.co_code`, then `fn.__call__.__code__.co_code` for callable instances, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity.
-2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object (`src/cash/core.py`).
+1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first, then `fn.__code__.co_code`, then `fn.__call__.__code__.co_code` for callable instances, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity.
+2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object.
 
-When a cached function runs, `_serialize_args` (`src/cash/core.py`) walks each argument:
+<!-- claim: cash/core.py:Cash._hash_arg_payload @a311dda3, cash/core.py:Cash._try_builtin_type_hash @09adf0d5 -->
+When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
-1. **Lineage short-circuit.** If the value carries `_cash_lineage_hash` (the output of an upstream `@cash.cache` call), that hash is used directly. Registered hashers never run for lineage-tagged values.
-2. **Type-hasher dispatch.** Cash iterates `self._type_hashers.items()` in insertion order and tests each registered type with `isinstance(arg, type_)`. The first match wins. `isinstance` makes the dispatch MRO-aware: register a hasher on `BaseModel` and every subclass uses it.
-3. **Built-in fallback.** If no registered hasher matched, `_try_builtin_type_hash` (`src/cash/core.py`) tries the library-specific shortcuts for pandas / numpy / polars / PyArrow / modin / dask.
-4. **Pickle fallback.** Anything that's left goes through `pickle.dumps`, and the resulting bytes feed the SHA-256 that yields the args hash.
+1. **Built-in content hashers, FIRST.** `_try_builtin_type_hash` handles pandas / numpy / polars / PyArrow / modin / dask. These are *content*-derived and therefore byte-stable across processes and kernel restarts, which is what lets a persisted entry survive a restart. They are not a fallback — they take precedence over everything below.
+2. **Notebook lineage hash.** If the value carries `_cash_lineage_hash` (the output of an upstream cached statement) *and* no built-in content hasher claimed it, that hash is used directly. It sits here rather than first because it is recomputed per session and would not survive a restart.
+3. **Registered type hashers.** Cash iterates `self._type_hashers.items()` in insertion order and tests each with `isinstance(arg, type_)`. First match wins, and `isinstance` makes the dispatch MRO-aware: register on `BaseModel` and every subclass uses it.
+4. **Pickle fallback.** Anything left goes through `pickle.dumps`, and those bytes feed the SHA-256 that yields the args hash.
 
-The returned hash is *not* the raw `hasher_fn(arg)` output — it's `f"{src_hash}:{hasher_fn(arg)}"` (`src/cash/core.py`). Editing the hasher body invalidates every cache entry that depended on it, even when the hasher's output coincidentally matches the old one. This is by design: a silent change of hashing behaviour without a key change would silently return stale results.
+!!! warning "You cannot override a built-in content hasher"
+    Because step 1 runs first, registering a hasher for `pd.DataFrame`,
+    `np.ndarray`, or any other type Cash already content-hashes has **no
+    effect** — and no error, no warning. The registration succeeds and the
+    function is simply never called:
+
+    <!-- test:skip reason="demonstrates a no-op registration; asserting it would assert the absence of an effect" -->
+    ```python
+    cash.register_hasher(pd.DataFrame, my_faster_hasher)   # silently never runs
+    ```
+
+    This is deliberate: a custom hasher that sampled a frame would collide two
+    different frames onto one key, and the built-ins are the guarantee against
+    that. If you need different behaviour for a DataFrame argument, wrap it in
+    a thin type of your own and register the hasher on the wrapper.
+
+The returned hash is *not* the raw `hasher_fn(arg)` output — it's `f"{src_hash}:{hasher_fn(arg)}"`. Editing the hasher body invalidates every cache entry that depended on it, even when the hasher's output coincidentally matches the old one. This is by design: a silent change of hashing behaviour without a key change would silently return stale results.
 
 ## What makes a good hasher
 
@@ -66,6 +84,7 @@ Four properties, in priority order:
 
 - **Deterministic.** Same input, same hash, every time. No `id(obj)`, no `time.time()`, no `random.random()`, no `hash(str)` (PYTHONHASHSEED randomises that across processes). If your hasher returns a different string on two runs of the same Python script for the same input, every cache entry is a guaranteed miss.
 - **Total.** Capture every field that affects the function's output. If `MyModel` has a `temperature` knob and your hasher only reads `weights`, two models with different temperatures share a cache entry — your function returns the wrong answer.
+<!-- claim: cash/core.py:Cash._try_hash_numpy @ca38104d -->
 - **Cheap, but never at the cost of correctness.** The hasher runs on every call, so it should be fast — but a hasher that only samples the data will collide two different inputs into a wrong cache hit. Cash's built-in `_try_hash_numpy` hashes the **full** buffer (plus shape/dtype) for this reason. Only sample if you can *guarantee* the sampled fields uniquely identify the value (e.g. a content version you control), never as a blind speed shortcut over raw bytes.
 - **Stable across processes.** Don't depend on the process-local hash seed, `id()`, memory addresses, or anything else that varies between Python invocations. The whole point of disk caching is sharing entries across runs.
 
@@ -118,18 +137,19 @@ A new `Engine` constructed for the same URL hashes the same way, so the cache su
 
 ## Built-in registrations Cash provides automatically
 
-Cash ships with module-level fingerprinting for the dataframe ecosystem. These are *not* installed via `register_hasher` — they live in `_try_builtin_type_hash` (`src/cash/core.py`) and run *after* the user registry, so a user-registered hasher always wins.
+Cash ships with module-level fingerprinting for the dataframe ecosystem. These are *not* installed via `register_hasher` — they live in `_try_builtin_type_hash`, and as the dispatch order above shows they run **before** the user registry, so for these types the built-in always wins and a user registration is a no-op.
 
+<!-- claim: cash/core.py:Cash._try_builtin_type_hash @09adf0d5 broad="the table enumerates every type the builtin dispatcher recognises" -->
 | Type | Hash strategy | Source |
 |---|---|---|
-| `pandas.DataFrame`, `pandas.Series` | `pd.util.hash_pandas_object(value).values.tobytes()` then SHA-256 | `src/cash/core.py` |
-| `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype, at any size | `src/cash/core.py` |
-| `polars.DataFrame`, `Series`, `LazyFrame` | `hash_rows()`, `hash()`, or `explain()` output then SHA-256 | `src/cash/core.py` |
-| `pyarrow.Table`, `RecordBatch` | Schema + row count + every column buffer (full content, any size) | `src/cash/core.py` |
-| `modin.DataFrame`, `Series` | Convert to pandas, then `hash_pandas_object` | `src/cash/core.py` |
-| `dask` objects | `str(value.__dask_keys__())` then SHA-256 | `src/cash/core.py` |
-| Generators / iterators | Returns `None` — never hashable | `src/cash/core.py` |
-| Everything else | Falls through to `pickle.dumps` + SHA-256 | `_serialize_args` at `src/cash/core.py` |
+| `pandas.DataFrame`, `pandas.Series` | `pd.util.hash_pandas_object(value).values.tobytes()` then SHA-256 | `_try_hash_pandas` |
+| `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype, at any size | `_try_hash_numpy` |
+| `polars.DataFrame`, `Series`, `LazyFrame` | `hash_rows()`, `hash()`, or `explain()` output then SHA-256 | `_try_hash_polars` |
+| `pyarrow.Table`, `RecordBatch` | Schema + row count + every column buffer (full content, any size) | `_try_hash_pyarrow` |
+| `modin.DataFrame`, `Series` | Convert to pandas, then `hash_pandas_object` | `_try_hash_modin` |
+| `dask` objects | `str(value.__dask_keys__())` then SHA-256 | `_try_hash_dask` |
+| Generators / iterators | Returns `None` — never hashable | `_try_builtin_type_hash` |
+| Everything else | Falls through to `pickle.dumps` + SHA-256 | `_serialize_args` |
 
 If pandas isn't installed and you pass a pandas DataFrame anyway, the import inside `_try_hash_pandas` raises `ImportError` and the value falls through to pickle. So Cash never *requires* the optional dataframe libraries — it just uses better hashing when they're available.
 
@@ -141,7 +161,7 @@ When you cache a method, `self` is one of the arguments and Cash hashes it. The 
 
 ### Changing a hasher invalidates old entries
 
-By design (`src/cash/core.py`). The source hash is embedded in the per-argument digest, which folds into the args hash, which folds into the cache key. Edit `hash_model`'s body and every cache entry it produced becomes unreachable — the next call computes a fresh key and re-runs the function. If you want to refactor the hasher *without* invalidating, keep the function body byte-identical (rename via alias, or use `mark_pure`-style attribute patching instead of editing).
+By design. The source hash is embedded in the per-argument digest, which folds into the args hash, which folds into the cache key. Edit `hash_model`'s body and every cache entry it produced becomes unreachable — the next call computes a fresh key and re-runs the function. If you want to refactor the hasher *without* invalidating, keep the function body byte-identical (rename via alias, or use `mark_pure`-style attribute patching instead of editing).
 
 ### MRO dispatch — subclasses inherit
 
@@ -171,16 +191,16 @@ explanation = evaluate.explain(model, data)
 print(explanation.cache_key)
 ```
 
-`f.explain()` returns a `CacheExplanation` whose `cache_key` field is the SHA-256 that would be used on the next call (`src/cash/core.py`). Call it before and after a hasher edit, or with two "should be equal" model instances; if the keys differ, the hasher is hashing identity rather than value.
+`f.explain()` returns a `CacheExplanation` whose `cache_key` field is the SHA-256 that would be used on the next call. Call it before and after a hasher edit, or with two "should be equal" model instances; if the keys differ, the hasher is hashing identity rather than value.
 
-When Cash can't hash an argument at all, the warning names the type explicitly and suggests the exact `register_hasher` call to make (`src/cash/core.py`). The same hint appears in `explain().details['hint']` for the `key_uncomputable` reason (`src/cash/core.py`). See [Debugging and Monitoring](debugging-and-monitoring.md) for the wider toolkit.
+When Cash can't hash an argument at all, the warning names the type explicitly and suggests the exact `register_hasher` call to make. The same hint appears in `explain().details['hint']` for the `key_uncomputable` reason. See [Debugging and Monitoring](debugging-and-monitoring.md) for the wider toolkit.
 
 ## API reference
 
 | Symbol | Surface | Effect |
 |---|---|---|
 | `cash.register_hasher(type_, hasher_fn)` | Module-level helper | Proxies to the global `Cash` singleton's `register_hasher`. Signature: `(type_: type, hasher_fn: Callable[[Any], str]) -> None`. |
-| `Cash.register_hasher(type_, hasher_fn)` | Instance method | Same, but on a user-constructed `Cash(...)`. Defined at `src/cash/core.py`. |
+| `Cash.register_hasher(type_, hasher_fn)` | Instance method | Same, but on a user-constructed `Cash(...)`. |
 | `_type_hashers` registry | Private dict | `type → (hasher_fn, src_hash)`. Iterated in insertion order during `isinstance` dispatch. |
 | Built-in fallbacks | `_try_builtin_type_hash` | Auto-applies to pandas / numpy / polars / PyArrow / modin / dask without registration. User registrations take precedence. |
 | Pickle fallback | `_serialize_args` | `pickle.dumps` + SHA-256 for anything that didn't match a registered or built-in hasher. |

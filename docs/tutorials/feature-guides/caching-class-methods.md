@@ -5,9 +5,9 @@ any other argument. Two failure modes follow:
 
 1. **`self` is unpicklable.** Instances holding file handles, database
    connections, threads, or locks fail the pickle path silently — cash
-   can't build a key and your method recomputes on every call. Since
-   v0.5.0b2 you'll see a `CashCacheIneffectiveWarning` on the first
-   such call telling you which type was unpicklable.
+   can't build a key and your method recomputes on every call. Cash
+   emits a `CashCacheIneffectiveWarning` on the first such call, naming
+   the type that could not be pickled.
 2. **`self` is picklable but holds incidental state.** Lazy attributes,
    a `__cache__` dict, or a heavy `self.df` change the pickle bytes
    even when the *logical* identity is unchanged. Two equivalent
@@ -17,6 +17,7 @@ any other argument. Two failure modes follow:
 The fix is the same in both cases: tell cash how to summarise your
 type into a cache key.
 
+<!-- claim: cash/core.py:Cash.register_hasher @2cc59e2a, cash/core.py:Cash._hash_arg_payload @a311dda3 -->
 ## Register a type-level hasher
 
 ```python
@@ -62,6 +63,7 @@ only correct when the instances are truly interchangeable.
 
 ## What `__hash__` won't do
 
+<!-- claim: cash/core.py:Cash._hash_arg_payload @a311dda3 -->
 Defining `__hash__` on your class doesn't help cash. Cash uses a
 256-bit composite cache key (SHA-256). Python's built-in `hash()` is
 a 64-bit value designed for hash-table bucketing, not for collision
