@@ -160,6 +160,10 @@ the default.
   use "claim" for a different concept entirely — a fence's inferred cache
   hit/miss expectation. That is unrelated to the prose claim anchors this
   section describes.
+- **An anchor inside a code fence is an example, not a live claim.** It is
+  ignored by the parser, by `--pin`/`--accept`, and by the false-assurance
+  guards — write one there only to illustrate the anchor syntax itself, never
+  expecting it to be checked or filled in.
 
 Working on source rather than docs? Check what your change touches first:
 
