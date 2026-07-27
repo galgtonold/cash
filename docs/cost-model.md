@@ -47,6 +47,11 @@ is: **cheap statements don't survive a restart; force the ones that matter with
     your restart. Force it with `# @cash:persist`, flip `%cash_persist on` for
     the session, or restructure so the expensive work lands in one statement.
 
+    One exception, in your favour: a **long loop** is cached as a single unit
+    once per-iteration bookkeeping stops paying for itself, and that entry's
+    compute is the whole loop — so it clears the floor. See
+    [What's worth persisting](how-it-works/storage.md#whats-worth-persisting).
+
 ---
 
 ## What you see when caching is refused

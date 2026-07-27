@@ -95,7 +95,7 @@ gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
 argument type, and runs the function uncached.
 
 ??? question "Why is the `func` segment module-qualified?"
-<!-- claim: cash/core.py:Cash._get_func_key @0f005572 -->
+    <!-- claim: cash/core.py:Cash._get_func_key @0f005572 -->
     Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
     `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
     `dep()` and a helper module's `dep()` produced the *same* key, so a call to

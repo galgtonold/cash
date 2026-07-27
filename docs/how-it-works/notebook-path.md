@@ -119,8 +119,25 @@ assert statement_source.startswith("# __iteration_context__: ")
 # "stmt:" + sha256(source_hash + input lineages + occurrence index + ...).
 ```
 
-The payoff is **partial cache hits**: edit the `AAPL` case and only that
-iteration recomputes; `MSFT` and `GOOGL` still hit.
+The payoff is **partial cache hits** — but *which* ones you get depends on the
+body, and it is worth knowing before you rely on it.
+
+`stats[ticker] = compute(ticker)` writes into `stats`, so each iteration reads
+the dict the previous ones built. That makes reuse a **prefix** property:
+appending a ticker, or editing the last one, costs a single `compute`, while
+changing the **first** re-runs all three. Measured on this exact loop:
+
+| Change to the list | `compute` calls |
+|---|---|
+| re-run unchanged | 0 |
+| append `'NVDA'` | 1 |
+| edit the last entry | 1 |
+| edit the **first** entry | 3 |
+
+A body that doesn't accumulate has no such chain — with `price =
+compute(ticker)` each iteration depends only on its own loop variable, so any
+one of them can change on its own and the rest still hit. See
+[Reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
 <!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @7cb54870, cash/notebook/control_structures/try_handler.py:TryHandler.process @c03cc7e0 -->
 Conditionals work the same way with a different marker: `if`/`elif`/`else` and

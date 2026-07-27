@@ -70,14 +70,23 @@ where the line falls:
 </div>
 
 !!! warning "The floor is per entry — it does not compose"
-    The 0.1 s floor is applied to each cached value on its own. A loop body that
-    runs 120 statements at 0.05 s each takes six seconds of wall clock and
-    persists **nothing**: no individual statement cleared the floor, and Cash
-    never sums them. If you have a genuinely slow cell made of individually
-    cheap steps, the floor is why nothing survives your kernel restart. Force
-    the write with a `# @cash:persist` comment on the statement, flip
-    `%cash_persist on` (`persist_all=True`) for the session, or restructure so
-    the expensive work lands in one statement.
+    The 0.1 s floor is applied to each cached value on its own. A cell of 120
+    statements at 0.05 s each takes six seconds of wall clock and persists
+    **nothing**: no individual statement cleared the floor, and Cash never sums
+    them. If you have a genuinely slow cell made of individually cheap steps,
+    the floor is why nothing survives your kernel restart. Force the write with
+    a `# @cash:persist` comment on the statement, flip `%cash_persist on`
+    (`persist_all=True`) for the session, or restructure so the expensive work
+    lands in one statement.
+
+    **A long loop is the exception, and it cuts the other way.** Once
+    per-iteration bookkeeping stops paying for itself — over ~50 iterations, and
+    roughly `iterations × body-statements × 8 ms` above one second — Cash caches
+    the loop as a *single unit*. That one entry's compute is the whole loop, so
+    it clears the floor and does persist. A shorter loop stays per-iteration and
+    does not: 60 iterations of two cheap statements produce 120 sub-0.1 s
+    entries and nothing on disk, while the same loop with a third statement in
+    the body crosses the threshold, becomes one entry, and survives a restart.
 
 <!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01 -->
 Before promotion is even considered, a separate and much lower floor decides
@@ -164,7 +173,7 @@ backend precisely so existence and size can be established without touching the
 payload. `resolve()` is idempotent: the loader runs at most once.
 
 ??? question "How does cache metadata stay typed without locking the backends in?"
-<!-- claim: cash/backends/_base.py:CacheMetadata @0076177c, cash/notebook/statement/_metadata.py:StatementCacheMetadata @59339cb6 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
+    <!-- claim: cash/backends/_base.py:CacheMetadata @0076177c, cash/notebook/statement/_metadata.py:StatementCacheMetadata @59339cb6 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
     Each entry carries metadata — execution time, size, ttl, type. Inside the
     cash layer that metadata is a **frozen dataclass** (`CacheMetadata` for the
     decorator layer, `StatementCacheMetadata` for the notebook layer), so call
