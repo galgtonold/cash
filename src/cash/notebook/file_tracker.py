@@ -16,7 +16,6 @@ import importlib.util
 import logging
 import os
 import pathlib
-import re
 import sys
 import threading
 from collections.abc import Callable
