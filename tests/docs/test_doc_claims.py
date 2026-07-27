@@ -412,7 +412,12 @@ def test_magics_page_states_the_right_count() -> None:
 # missed were BOTH rotted (526 landed on a comment about backends; 1503-1504
 # inside _explain_call). A ratchet that under-counts reports progress it did
 # not make, so match ``.py`` followed by any digit/comma/hyphen run.
-_LINE_PIN_RE = re.compile(r"`([\w./-]+\.py)[:,](\d[\d,-]*)`")
+#
+# Third form, found later in choosing-a-backend.md: the path and the line
+# number in SEPARATE code spans -- ``(`…/memory_backend.py`, `:210-221`)``.
+# A pattern anchored on ``.py`` cannot see it, so the second alternative
+# matches a bare ``:NNN`` / ``:NNN-MMM`` span, which has no other use in prose.
+_LINE_PIN_RE = re.compile(r"`[\w./-]+\.py[:,]\d[\d,-]*`|`:\d+(?:-\d+)?`")
 
 # page -> number of line-pinned refs still present. Burn these down; do not add.
 #
