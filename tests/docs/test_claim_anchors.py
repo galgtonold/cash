@@ -31,9 +31,9 @@ import re
 import pytest
 
 from tests.docs._claims import (
+    _CLAIM_RE,
     REPO_ROOT,
     Problem,
-    _CLAIM_RE,
     check_manifest,
     check_page,
     published_pages,
