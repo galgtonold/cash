@@ -152,6 +152,7 @@ See [Production Transition](../feature-guides/production-transition.md) for the 
 ## Caveats
 
 - **Don't cache the write step.** `to_parquet`, `to_csv`, `write_table` — these are side effects with no useful return value. Cache the *computation* that produces the frame; leave the write outside the cached function.
+<!-- claim: cash/notebook/cacheability.py:_SideEffectVisitor @6c2e4302 broad="the write-detection claim is about the visitor as a whole" -->
 - **Large intermediate states bloat disk.** A 50GB intermediate cached after every step adds up fast. For cheap or transient transforms (a `df.rename(columns=...)` that runs in milliseconds), skip caching with `# @cash:no-cache` and let it recompute. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md).
 - **Mutable state.** Cash assumes pure transforms. If a function mutates its input (`df.fillna(0, inplace=True)`), the cached result may not match what callers see on a miss. Defensive `df.copy()` at the top of each step is cheap insurance.
 - **Don't cache the client object.** Database connections, S3 clients, Spark sessions — initialize them at module scope, not inside a cached function. The client isn't a function of its arguments and serializing it usually doesn't even work.

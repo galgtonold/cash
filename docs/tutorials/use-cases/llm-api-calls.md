@@ -2,6 +2,7 @@
 
 Iterating on prompts means calling the same model with the same input dozens of times. Cash caches the response, so the second iteration costs $0 and 0ms instead of $0.05 and 800ms. This applies to any LLM API client (OpenAI, Anthropic, local) and any inference endpoint.
 
+<!-- claim: cash/core.py:Cash._validate_ttl @98fd97a4 -->
 ## Why this matters
 
 - **Cost.** Every call has a dollar cost. A single afternoon of prompt iteration on a frontier model can easily run into double-digit dollars if every re-run hits the API.

@@ -4,6 +4,7 @@ Cash has **zero required runtime dependencies** — `pip install cash-lib` pulls
 nothing but cash itself, and every integration (pandas, Redis, S3, …) is an
 opt-in [extra](#optional-dependencies).
 
+<!-- claim: cash/config.py:CashConfig @ec76110a broad="the requires-python floor and zero-deps claim are properties of the package, checked against pyproject by test_documented_install_extras_exist" -->
 ## Requirements
 
 - Python 3.10 or higher
@@ -34,8 +35,8 @@ pip install "cash-lib[all]"           # every extra above, in one go
 ```
 
 `[all]` is defined as the union of the individual extras above, so it always stays
-in step with them. It does **not** include the contributor-only `dev` and `docs`
-extras — see *Development Installation* below for those.
+in step with them. It does **not** include the contributor-only `dev`, `docs` and
+`docs-test` extras — see *Development Installation* below for those.
 
 ## Development Installation
 

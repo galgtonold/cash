@@ -76,16 +76,16 @@
     "audited": null
   },
   "docs/getting-started/configuration.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 7,
+    "audited": "2026-07-27"
   },
   "docs/getting-started/installation.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 1,
+    "audited": "2026-07-27"
   },
   "docs/getting-started/quickstart.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 4,
+    "audited": "2026-07-27"
   },
   "docs/glossary.md": {
     "anchors": 0,
@@ -200,20 +200,20 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-engineering.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 1,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/data-science.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 3,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/llm-api-calls.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 1,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/use-cases/scientific-computing.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 3,
+    "audited": "2026-07-27"
   },
   "docs/versioning.md": {
     "anchors": 0,

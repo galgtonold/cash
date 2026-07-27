@@ -38,6 +38,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
+<!-- claim: cash/config.py:CashConfig @ec76110a broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -148,6 +149,7 @@ a *promotion hint*. A value larger than the cap quietly skips that tier but
 still writes to the unconstrained ones. Most caps are static class-level
 values; the file tier's is *dynamic* — half its (machine-scaled) LRU cap.
 
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @5fcfe4f9, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
@@ -182,6 +184,7 @@ type = "redis"
 host = "redis.internal"
 ```
 
+<!-- claim: cash/config.py:_default_user_config_path @c0252c47, cash/config.py:_default_project_config_path @3e6c11e6 -->
 ### `~/.config/cash/config.toml` (user, machine-private)
 
 For personal defaults spanning all projects on a machine — e.g. your
@@ -220,6 +223,7 @@ cash = Cash(config_path="./my_special_config.toml")
 Loads the named TOML as the user-level layer (so env vars and
 constructor kwargs still override it).
 
+<!-- claim: cash/__init__.py:configure @7169eecd -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime

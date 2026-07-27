@@ -714,3 +714,42 @@ def test_every_public_exception_is_documented() -> None:
         "Public cash exceptions/warnings missing from docs/api/exceptions.md, "
         "which claims to be the complete hierarchy:\n  " + "\n  ".join(missing)
     )
+
+
+# --------------------------------------------------------------------------- #
+# Install extras                                                              #
+# --------------------------------------------------------------------------- #
+#
+# ``pip install "cash-lib[typo]"`` does not install what the reader wanted --
+# modern pip warns and carries on, older pip is silent -- so a wrong extra in
+# the install instructions is a user who quietly lacks the integration they
+# were told to install. Cheap to check: the names are right there in
+# pyproject.toml.
+
+_EXTRA_RE = re.compile(r"cash-lib\[([\w,\-]+)\]")
+
+
+def test_documented_install_extras_exist() -> None:
+    try:
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+        import tomli as tomllib  # type: ignore[no-redef]
+
+    pyproject = DOCS_ROOT.parent / "pyproject.toml"
+    with pyproject.open("rb") as fh:
+        real = set(tomllib.load(fh)["project"].get("optional-dependencies", {}))
+
+    problems: list[str] = []
+    for md in ALL_MD:
+        for m in _EXTRA_RE.finditer(md.read_text(encoding="utf-8")):
+            for name in m.group(1).split(","):
+                name = name.strip()
+                if name and name not in real:
+                    problems.append(
+                        f"  {md.relative_to(DOCS_ROOT).as_posix()}: cash-lib[{name}]"
+                    )
+    assert not problems, (
+        "Docs tell users to install extras that pyproject.toml doesn't define:\n"
+        + "\n".join(sorted(set(problems)))
+        + f"\n\nDefined extras: {', '.join(sorted(real))}"
+    )

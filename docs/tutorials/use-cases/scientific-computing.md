@@ -47,6 +47,7 @@ First run: 40 simulations execute and get cached. Re-running the same loop: 40 c
 
 For an embarrassingly parallel sweep you can dispatch the same loop across workers — see the parallel-sweep note in [Caveats](#caveats).
 
+<!-- claim: cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870 -->
 ## Determinism: always seed the RNG
 
 The hard rule for cacheable simulations: **the seed is an argument, not a global**.
@@ -85,7 +86,18 @@ This does not weaken the rule above — a seed passed as an argument is still th
 
 ## Large arrays and persistence
 
-Simulation outputs are usually arrays — and often big ones. Cash's smart-persistence layer decides automatically when an in-memory entry is worth writing to disk, and multi-megabyte arrays cross that threshold quickly. You normally don't have to do anything.
+<!-- claim: cash/backends/factory.py:_build_smart_persistence_policy @e178f401, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+Simulation outputs are usually arrays — and often big ones. Cash's
+smart-persistence layer decides automatically when an in-memory entry is worth
+writing to disk, and a simulation is the shape it says yes to.
+
+Worth being precise about *why*, because the intuition "big things get
+persisted" is backwards: size pushes **against** persistence, since a bigger
+value costs more to restore. What earns the write is **compute time** — the
+value has to have taken longer than 0.1 s, and recomputing it has to cost more
+than restoring it. A simulation clears that easily on the compute side, so its
+output persists despite being large; a large array that was cheap to produce
+stays in RAM.
 
 When you *want* to force persistence — for example, a long-running simulation whose output absolutely must survive a kernel restart — annotate the cell:
 
