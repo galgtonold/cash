@@ -225,6 +225,26 @@ def test_default_factory_is_rejected_not_silently_passed():
         literal_value(ast.parse(src).body[1])
 
 
+def test_bare_annotation_with_no_value_is_rejected():
+    """``x: int`` with no ``= ...`` has ``node.value is None`` -- nothing to
+    compare a documented literal against.
+    """
+    src = "x: int\n"
+    with pytest.raises(AnchorError, match="no assigned value"):
+        literal_value(ast.parse(src).body[0])
+
+
+def test_field_with_neither_default_is_rejected():
+    """``field()`` with no ``default=`` and no ``default_factory=`` at all --
+    distinct from the default_factory-present case above, and from the
+    field-with-a-real-default case: this hits the for/else with nothing to
+    break out of at all.
+    """
+    src = "from dataclasses import field\nx: int = field()\n"
+    with pytest.raises(AnchorError, match="no default= to compare"):
+        literal_value(ast.parse(src).body[1])
+
+
 def test_a_non_literal_default_is_rejected():
     src = "X = compute()\n"
     with pytest.raises(AnchorError, match="not a literal"):
