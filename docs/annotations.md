@@ -39,7 +39,8 @@ It's applied with `re.search` (not `re.match`), so the directive can appear **an
 
 A few details that bite people:
 
-- **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py:45`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @8370c735, cash/notebook/annotations.py:parse_annotation_line @7b6bd448 -->
+- **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
 - **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl=`, `# @cash:ttl=abc`, and `# @cash:ttl=-5` all silently no-op (the regex requires `\d+`).
@@ -60,7 +61,8 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py:49`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py:566`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @7b6bd448, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
 
@@ -77,7 +79,8 @@ now = datetime.utcnow()    # always fresh
 
 This is the right directive when a statement has observable side effects or produces values that must always be recomputed (timestamps, monotonic counters, "fire and forget" prints).
 
-Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py):
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130 -->
+Behind the scenes: the cacheability decision short-circuits at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py):
 
 <!-- test:skip reason="source-code excerpt: has return outside function" -->
 ```python
@@ -102,7 +105,8 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py:54-58`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py:564-565`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @7b6bd448 -->
+Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random` (alias: `allowrandom`)
 
@@ -395,14 +399,15 @@ generator instead.
 
 ## Lookback and scoping
 
-Cash needs to associate each annotation with a specific statement. It does this in [`parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) at `annotations.py:62-105`, which walks two directions from a top-level AST node:
+<!-- claim: cash/notebook/annotations.py:parse_annotations_in_range @f1299a54 -->
+Cash needs to associate each annotation with a specific statement. It does this in [`parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py) which walks two directions from a top-level AST node:
 
 ### Backward walk
 
 Starting from the line **immediately above** the statement and walking up, the parser collects annotations until it hits a stop condition. For each line:
 
-1. **Blank line** → STOP. The lookback block is over. ([`annotations.py:94-95`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py))
-2. **Code line** (non-blank, doesn't start with `#`) → STOP. ([`annotations.py:85-86`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py))
+1. **Blank line** → STOP. The lookback block is over. ([`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py))
+2. **Code line** (non-blank, doesn't start with `#`) → STOP. ([`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py))
 3. **Plain comment line** (`# hello`, no `@cash:`) → CONTINUE walking. Plain comments are *transparent*; they don't break the binding.
 4. **Annotation comment** (`# @cash:directive`) → merge into the running annotation, then continue walking.
 
@@ -425,7 +430,7 @@ model = train_model(data)    # the annotation does NOT apply
 
 ### Forward walk
 
-After the backward walk, the parser also scans the lines *inside* the statement's range (`start_line..end_line` inclusive, [`annotations.py:99-103`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)). This lets you put an annotation inside the body of a compound statement:
+After the backward walk, the parser also scans the lines *inside* the statement's range (`start_line..end_line` inclusive, [`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)). This lets you put an annotation inside the body of a compound statement:
 
 ```python
 for i in range(10):
@@ -433,7 +438,7 @@ for i in range(10):
     result = compute(i)     # this statement re-runs every iteration
 ```
 
-Verified by [`tests/test_notebook/test_annotations.py:125-134`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py).
+Verified by [`test_annotations.py` — `test_for_loop_with_internal_annotation`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py).
 
 Because the forward walk runs *after* the backward walk, an in-body annotation overrides a header annotation when they conflict (see [Merging](#merging-multiple-annotations)).
 
@@ -492,7 +497,8 @@ That's a perfectly valid placement. Don't overuse it — the multi-line form abo
 
 ## Merging multiple annotations
 
-When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py:19-26`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)):
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @ff86f11c -->
+When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)):
 
 | Field | Merge rule |
 |---|---|
@@ -506,7 +512,7 @@ That means:
 
 - Boolean flags are sticky: once `persist=True` shows up in the block, the whole block is `persist=True`.
 - **`ttl` order matters**: the *last* `ttl=` the parser sees wins. The forward walk runs after the backward walk, so an in-body `ttl=` overrides a header `ttl=`.
-- Mixing `persist` and `no-cache` is allowed, but `no-cache` short-circuits cacheability at [`cacheability_decision.py:71`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py), so `persist` becomes a no-op.
+- Mixing `persist` and `no-cache` is allowed, but `no-cache` short-circuits cacheability at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py), so `persist` becomes a no-op.
 
 Examples:
 
@@ -633,11 +639,11 @@ Because the regex is applied with `re.search`, `## @cash:persist` still binds �
 For source-diving:
 
 - Grammar regex: [`src/cash/notebook/annotations.py`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- `parse_annotation_line`: [`annotations.py:35-60`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- Lookback semantics: [`annotations.py:62-105`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- Merge rules: [`annotations.py:19-26`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
-- Consumer (statement processor): [`statement/processor.py:554-568`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)
-- `no-cache` short-circuit: [`cacheability_decision.py:71-72`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py)
+- `parse_annotation_line`: [`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
+- Lookback semantics: [`annotations.py` — `parse_annotations_in_range`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
+- Merge rules: [`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)
+- Consumer (statement processor): [`statement/processor.py` — `StatementProcessor.process_statement`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)
+- `no-cache` short-circuit: [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py)
 - Tests: [`tests/test_notebook/test_annotations.py`](https://github.com/galgtonold/cash/blob/main/tests/test_notebook/test_annotations.py)
 
 ## See also
