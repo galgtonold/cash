@@ -416,7 +416,6 @@ _LINE_PIN_RE = re.compile(r"`([\w./-]+\.py)[:,](\d[\d,-]*)`")
 
 # page -> number of line-pinned refs still present. Burn these down; do not add.
 _KNOWN_LINE_PINS: dict[str, int] = {
-    "tutorials/feature-guides/iterator-caching.md": 8,
     "tutorials/feature-guides/smart-persistence.md": 6,
     "tutorials/feature-guides/async-caching.md": 1,
     "tutorials/feature-guides/controlling-cache-behavior.md": 1,
@@ -460,3 +459,51 @@ def test_line_pin_ratchet_has_no_stale_entries() -> None:
                 f"lower the number (or delete the entry at 0)"
             )
     assert not stale, "Line-pin ratchet is out of date:\n" + "\n".join(stale)
+
+
+# --------------------------------------------------------------------------- #
+# Cited test names                                                            #
+# --------------------------------------------------------------------------- #
+#
+# "Test reference: ``test_foo``" is the strongest citation a doc page can make:
+# it says a claim is not just true but *guarded*. It is also the citation that
+# rots most quietly -- renaming or deleting the test leaves the sentence intact
+# and still authoritative-sounding.
+#
+# iterator-caching.md cited eight tests by name AND line; the names were all
+# real but six of the eight line numbers had drifted by ~68 lines. Dropping the
+# lines is only half the fix -- without this check, a later rename would put the
+# page right back where it started, with no line number left to look wrong.
+
+_TEST_NAME_RE = re.compile(r"`(test_[a-z0-9_]+)`")
+_TESTS_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _defined_test_names() -> set[str]:
+    names: set[str] = set()
+    for py in _TESTS_ROOT.rglob("test_*.py"):
+        # ``async def`` too -- omitting it reported all six of async-caching.md's
+        # citations as dead when every one of them exists.
+        names.update(
+            re.findall(
+                r"^\s*(?:async\s+)?def (test_[a-z0-9_]+)",
+                py.read_text(encoding="utf-8"),
+                re.M,
+            )
+        )
+    return names
+
+
+def test_every_cited_test_name_exists() -> None:
+    defined = _defined_test_names()
+    missing: list[str] = []
+    for md in ALL_MD:
+        text = strip_code_fences(md.read_text(encoding="utf-8"))
+        for name in sorted(set(_TEST_NAME_RE.findall(text))):
+            if name not in defined:
+                missing.append(f"  {md.relative_to(DOCS_ROOT).as_posix()}: `{name}`")
+    assert not missing, (
+        "Docs cite test names that no longer exist:\n" + "\n".join(missing)
+        + "\n\nA 'Test reference:' claiming a guard that isn't there is worse "
+        "than no citation. Rename the reference or drop it."
+    )
