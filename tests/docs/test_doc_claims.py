@@ -386,3 +386,72 @@ def test_magics_page_states_the_right_count() -> None:
     assert claimed == actual, (
         f"docs/magics.md claims {claimed} magics; source registers {actual}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Line-pinned source references                                               #
+# --------------------------------------------------------------------------- #
+#
+# A reference like ``annotations.py:85-86`` rots on ANY edit above line 85, and
+# nothing notices. docs/annotations.md carried sixteen of them and every single
+# one was wrong -- pointing at a docstring, at `result = CacheAnnotation()`, at
+# a matplotlib comment block, and in one case at a test that verified something
+# else entirely. They did not drift one at a time; they drifted together, and
+# silently, because a stale line number still looks authoritative.
+#
+# Renumbering only resets the clock. The fix is to name the SYMBOL, which moves
+# with the code (and, for a load-bearing claim, to add a claim anchor so the
+# fingerprint check re-verifies it). This is a burn-down ratchet, not a gate:
+# the counts below may fall, never rise.
+#
+# CAS-126 filed this idea; annotations.md is the proof it was worth doing.
+
+_LINE_PIN_RE = re.compile(r"`([\w./-]+\.py):(\d+)(?:-(\d+))?`")
+
+# page -> number of line-pinned refs still present. Burn these down; do not add.
+_KNOWN_LINE_PINS: dict[str, int] = {
+    "tutorials/feature-guides/iterator-caching.md": 8,
+    "tutorials/feature-guides/smart-persistence.md": 6,
+    "tutorials/feature-guides/async-caching.md": 1,
+    "tutorials/feature-guides/controlling-cache-behavior.md": 1,
+    "tutorials/feature-guides/thread-safety.md": 1,
+}
+
+
+def _line_pin_counts() -> dict[str, int]:
+    out: dict[str, int] = {}
+    for md in ALL_MD:
+        n = len(_LINE_PIN_RE.findall(md.read_text(encoding="utf-8")))
+        if n:
+            out[md.relative_to(DOCS_ROOT).as_posix()] = n
+    return out
+
+
+def test_no_new_line_pinned_source_references() -> None:
+    actual = _line_pin_counts()
+    problems: list[str] = []
+    for page, count in sorted(actual.items()):
+        allowed = _KNOWN_LINE_PINS.get(page, 0)
+        if count > allowed:
+            problems.append(
+                f"  {page}: {count} line-pinned refs (allowed {allowed}). "
+                f"Reference the symbol instead of the line -- line numbers rot "
+                f"on any edit above them and nothing catches it."
+            )
+    assert not problems, (
+        "New line-pinned source references in the docs:\n" + "\n".join(problems)
+    )
+
+
+def test_line_pin_ratchet_has_no_stale_entries() -> None:
+    """A page that was fixed must leave the list, or the ratchet stops biting."""
+    actual = _line_pin_counts()
+    stale: list[str] = []
+    for page, allowed in sorted(_KNOWN_LINE_PINS.items()):
+        found = actual.get(page, 0)
+        if found < allowed:
+            stale.append(
+                f"  {page}: listed as {allowed} but only {found} remain -- "
+                f"lower the number (or delete the entry at 0)"
+            )
+    assert not stale, "Line-pin ratchet is out of date:\n" + "\n".join(stale)

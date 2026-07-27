@@ -41,7 +41,7 @@ The notebook caching is statement-level, not cell-level. The four biggest cluste
 - **`analysis.py`** - AST-based code analysis for inputs/outputs detection
 - **`cacheability.py`** - Pure-AST cacheability analysis. **Folds the former `mutation_detector.py` (in-place mutations) and `side_effects.py` (file writes, network calls) into one module** — both names are gone.
 - **`cacheability_decision.py`** - The runtime merge (`decide_cacheability`): AST analysis + annotations + `@stateful` + forbidden-function scan → `(cacheable, reasons)`
-- **`annotations.py`** - Parses `@cash:` comment directives (no-cache, ttl, persist, allow-random)
+- **`annotations.py`** - Parses `@cash:` comment directives. Six of them: `persist`, `no-cache`, `allow-random`, `cache-fit`, `cache-calls`, and `ttl=N`. Each hyphenated name also accepts a run-together alias (`nocache`, `allowrandom`, `cachefit`, `cachecalls`). An unknown directive is silently dropped — no warning, no log line.
 - **`lineage_store.py`** - `LineageStore`: the single seam for reading/writing variable lineage; owns the resolution priority ladder
 - **`restore.py`** - `Restorer`: **variable**-granular cache restoration (distinct from `statement/restore.py`, which is statement-granular)
 - **`consumables.py`** - Classification + divergence probing for consumable, unrestorable inputs (generators, file handles)
