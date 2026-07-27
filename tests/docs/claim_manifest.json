@@ -72,8 +72,9 @@
     "audited": "2026-07-27"
   },
   "docs/for-coding-agents.md": {
-    "anchors": 1,
-    "audited": "2026-07-27"
+    "anchors": 0,
+    "audited": "2026-07-27",
+    "note": "Cannot carry anchors: this page must stay BYTE-IDENTICAL to cash._agent_guide.AGENT_GUIDE (tests/test_core/test_agent_guide_sync.py). Any HTML comment added here fails that test. Ground its claims in the docstring of AGENT_GUIDE instead."
   },
   "docs/getting-started/configuration.md": {
     "anchors": 7,

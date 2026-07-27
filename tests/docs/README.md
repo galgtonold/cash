@@ -80,6 +80,25 @@ When you add a new tutorial:
    harness will catch you.
 4. **Never cite a line number.** See below.
 
+## Pages that other tests own
+
+`docs/for-coding-agents.md` is **byte-identical** to
+`cash._agent_guide.AGENT_GUIDE` — one guide, two surfaces — and
+`tests/test_core/test_agent_guide_sync.py` asserts the equality. It therefore
+**cannot carry a claim anchor**: any HTML comment you add fails that test.
+Ground its claims in the `AGENT_GUIDE` string instead. Its manifest entry
+records this in a `note` field.
+
+The general lesson, learned the expensive way: `tests/docs/` is not the only
+suite that reads `docs/`. Before pushing a docs change, run
+
+```bash
+pytest tests/docs/ tests/test_docs/ tests/test_core/test_agent_guide_sync.py -n0 -o addopts=""
+```
+
+A green `tests/docs/` alone let an anchor through that reddened all 15
+test-matrix jobs in CI.
+
 ## Never cite a line number
 
 `test_no_line_pinned_source_references` bans a bare line number in any
