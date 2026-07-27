@@ -76,6 +76,19 @@ def test_whitespace_around_punctuation_is_insignificant():
     assert tight[0].targets == loose[0].targets
 
 
+def test_anchor_inside_a_fence_is_ignored_but_one_outside_is_found():
+    """An anchor shown as an illustrative example in a ``` fence (exactly what
+    the README's own "Claim anchors" section does) must not be parsed as a
+    live one -- it names no real target and would sit as permanent,
+    uncleavable drift the moment such a section reaches a published page.
+    """
+    anchors = _anchors("fenced.md")
+    assert len(anchors) == 1
+    assert anchors[0].targets == (
+        Target("cash/config.py", "CashConfig.compress", None, None),
+    )
+
+
 def test_published_pages_excludes_superpowers_and_unbuilt_adr():
     rels = {p.relative_to(Path(__file__).resolve().parents[2] / "docs").as_posix()
             for p in published_pages()}

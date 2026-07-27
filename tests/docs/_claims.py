@@ -62,6 +62,35 @@ class Anchor:
     broad: str | None = None
 
 
+def _strip_code_fences(text: str) -> str:
+    """Blank out fenced code blocks so their contents can't parse as anchors.
+
+    An anchor shown as an *example* inside a ```` ``` ```` fence (the
+    README's own "Claim anchors" section does exactly this) must not be
+    parsed as a live one -- it names no real target and would sit forever as
+    uncleavable drift once such a section lands on a published page. Blanking
+    (not stripping) preserves every line number, matching
+    ``test_doc_claims.py``'s ``_strip_code_fences``, which this mirrors.
+    """
+    out: list[str] = []
+    in_fence = False
+    fence_marker = ""
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
+            in_fence = True
+            fence_marker = stripped[:3]
+            out.append("")
+            continue
+        if in_fence:
+            out.append("")
+            if stripped.startswith(fence_marker):
+                in_fence = False
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
 _CLAIM_RE = re.compile(r"<!--\s*claim:\s*(?P<body>.*?)-->", re.DOTALL)
 _BROAD_RE = re.compile(r'broad\s*=\s*"(?P<reason>[^"]*)"')
 _TARGET_RE = re.compile(
@@ -90,10 +119,16 @@ def parse_anchors(text: str, page: Path) -> list[Anchor]:
     prevent.
     """
     lines = text.splitlines()
+    # Masked, not the raw text: an anchor written as an illustrative example
+    # inside a fenced code block must not be parsed as a live one (see
+    # _strip_code_fences). Blanking rather than stripping preserves every
+    # line number, so positions computed against `masked` below still index
+    # correctly into `lines`, which comes from the untouched original text.
+    masked = _strip_code_fences(text)
     out: list[Anchor] = []
-    for m in _CLAIM_RE.finditer(text):
-        line_no = text.count("\n", 0, m.start()) + 1
-        end_idx = text.count("\n", 0, m.end())
+    for m in _CLAIM_RE.finditer(masked):
+        line_no = masked.count("\n", 0, m.start()) + 1
+        end_idx = masked.count("\n", 0, m.end())
         body = m.group("body")
 
         broad_m = _BROAD_RE.search(body)
