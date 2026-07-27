@@ -626,3 +626,91 @@ def test_every_annotation_directive_is_documented() -> None:
         + "\n\nThese pages present themselves as complete; a missing directive "
         "is a feature users cannot discover."
     )
+
+
+# --------------------------------------------------------------------------- #
+# mkdocstrings autodoc targets                                                #
+# --------------------------------------------------------------------------- #
+#
+# ``::: cash.Cash`` renders a symbol's docstring at build time. If the symbol is
+# renamed or moved, mkdocs emits a warning and the page renders that section
+# EMPTY -- the surrounding prose still reads as if the reference is there, so
+# the failure is invisible to anyone not diffing the built site. `mkdocs build
+# --strict` would catch it, but that job doesn't run on every PR and doesn't
+# install on every contributor's machine; resolving the dotted path in-process
+# costs nothing and runs with the rest of the docs suite.
+
+_AUTODOC_RE = re.compile(r"^:::\s+([\w.]+)", re.MULTILINE)
+
+
+def _resolve_dotted(target: str) -> str | None:
+    """Return None if *target* resolves, else a reason string."""
+    import importlib
+
+    parts = target.split(".")
+    obj = None
+    rest: list[str] = []
+    for i in range(len(parts), 0, -1):
+        try:
+            obj = importlib.import_module(".".join(parts[:i]))
+        except ImportError:
+            continue
+        rest = parts[i:]
+        break
+    else:
+        return "no importable module prefix"
+    for attr in rest:
+        try:
+            obj = getattr(obj, attr)
+        except AttributeError:
+            return f"{'.'.join(parts)} has no attribute {attr!r}"
+    return None
+
+
+def test_autodoc_targets_resolve() -> None:
+    problems: list[str] = []
+    checked = 0
+    for md in ALL_MD:
+        for m in _AUTODOC_RE.finditer(md.read_text(encoding="utf-8")):
+            checked += 1
+            reason = _resolve_dotted(m.group(1))
+            if reason:
+                problems.append(
+                    f"  {md.relative_to(DOCS_ROOT).as_posix()}: ::: {m.group(1)} -- {reason}"
+                )
+    assert checked, "found no ::: directives -- the scan pattern has drifted"
+    assert not problems, (
+        "Autodoc targets that don't resolve (the section renders EMPTY):\n"
+        + "\n".join(problems)
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Exception / warning completeness                                            #
+# --------------------------------------------------------------------------- #
+#
+# docs/api/exceptions.md opens with "The complete hierarchy of things Cash
+# raises or warns about" -- a claim about a SET, which goes stale the moment
+# the set grows. It had omitted CashRandomnessWarning and
+# CashUpstreamSyntaxWarning, both of which users hit and both of which hang
+# directly off CashWarning rather than off the ineffective-cache branch the
+# page's filter recipes target.
+
+
+def test_every_public_exception_is_documented() -> None:
+    import cash
+
+    page = (DOCS_ROOT / "api" / "exceptions.md").read_text(encoding="utf-8")
+    missing = [
+        name
+        for name in sorted(dir(cash))
+        if not name.startswith("_")
+        and isinstance(getattr(cash, name), type)
+        and issubclass(getattr(cash, name), (Exception, Warning))
+        and getattr(cash, name).__module__.startswith("cash")
+        and name not in page
+    ]
+    assert not missing, (
+        "Public cash exceptions/warnings missing from docs/api/exceptions.md, "
+        "which claims to be the complete hierarchy:\n  " + "\n  ".join(missing)
+    )

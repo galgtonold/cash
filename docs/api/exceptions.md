@@ -16,6 +16,7 @@ from cash import (
     CashWarning,
     CashCacheIneffectiveWarning, CashImpurityWarning,
     CashCacheStoreFailedWarning,
+    CashRandomnessWarning, CashUpstreamSyntaxWarning,
 )
 ```
 
@@ -23,6 +24,7 @@ Every exception and warning Cash produces is reachable from the
 top-level `cash` module. `CashError` and `CashWarning` are the
 inheritance roots — see the hierarchies below for filtering recipes.
 
+<!-- claim: cash/exceptions.py:__all__ @6574cfb2 broad="the page claims to be the COMPLETE hierarchy, which is a claim about the whole module's exports" -->
 ## Exception hierarchy
 
 ```text
@@ -68,7 +70,10 @@ UserWarning
 └── CashWarning                        — base for everything Cash warns about
     ├── CashCacheIneffectiveWarning    — cache won't help this call
     │   └── CashImpurityWarning        — purity analyzer found issues
-    └── CashCacheStoreFailedWarning    — compute OK but backend rejected store
+    ├── CashCacheStoreFailedWarning    — compute OK but backend rejected store
+    ├── CashRandomnessWarning          — unseeded draw; the cached value is frozen
+    └── CashUpstreamSyntaxWarning      — an upstream cell won't parse, so it
+                                         could not be simulated
 ```
 
 `CashImpurityWarning` deliberately subclasses `CashCacheIneffectiveWarning`
@@ -82,6 +87,10 @@ Filter more precisely with `CashImpurityWarning` directly.
 ::: cash.CashImpurityWarning
 
 ::: cash.CashCacheStoreFailedWarning
+
+::: cash.CashRandomnessWarning
+
+::: cash.CashUpstreamSyntaxWarning
 
 ---
 
@@ -102,4 +111,11 @@ warnings.filterwarnings("ignore", category=cash.CashImpurityWarning)
 
 # Suppress just the store-failed warnings:
 warnings.filterwarnings("ignore", category=cash.CashCacheStoreFailedWarning)
+
+# Stop being told a cached random draw is a replay (it still is one):
+warnings.filterwarnings("ignore", category=cash.CashRandomnessWarning)
 ```
+
+Note that `CashRandomnessWarning` and `CashUpstreamSyntaxWarning` hang
+directly off `CashWarning`, *not* off `CashCacheIneffectiveWarning` — a filter
+on the ineffective-cache branch will not catch them.

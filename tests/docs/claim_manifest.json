@@ -4,44 +4,44 @@
     "audited": "2026-07-27"
   },
   "docs/api/backend_internals.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 1,
+    "audited": "2026-07-27"
   },
   "docs/api/backends.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 2,
+    "audited": "2026-07-27"
   },
   "docs/api/cash.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/api/config.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/api/data_sources.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 2,
+    "audited": "2026-07-27"
   },
   "docs/api/exceptions.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 1,
+    "audited": "2026-07-27"
   },
   "docs/api/experimental.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 2,
+    "audited": "2026-07-27"
   },
   "docs/api/index.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/api/notebook.md": {
     "anchors": 0,
-    "audited": null
+    "audited": "2026-07-27"
   },
   "docs/api/purity.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 3,
+    "audited": "2026-07-27"
   },
   "docs/badges.md": {
     "anchors": 0,

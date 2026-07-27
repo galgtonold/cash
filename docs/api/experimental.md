@@ -1,5 +1,6 @@
 # Experimental
 
+<!-- claim: cash/experimental/__init__.py:_LOADERS @e8607bb8, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 APIs under `cash.experimental` are useful but their surfaces are
 still evolving — minor versions may rearrange them. Importing emits
 a `FutureWarning` so you can spot the dependency in any project that

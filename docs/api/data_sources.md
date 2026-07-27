@@ -1,5 +1,6 @@
 # Data sources
 
+<!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the mtime contract is a property of the whole class", cash/remote_source.py:RemoteFileDataSource @82f97a3d broad="the scheme list and validator contract are properties of the whole class" -->
 Objects that contribute to a cache key by reporting a **token representing
 their current state** (an mtime, a version, a content digest) — the cached
 entry invalidates when that token changes. Two are bundled:
