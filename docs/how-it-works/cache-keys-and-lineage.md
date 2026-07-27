@@ -6,6 +6,7 @@ Every cached result is stored under a key that captures exactly what was compute
 
 A cache key is a deterministic fingerprint of a computation: the same source code over the same inputs always produces the same key, so a hit means the result can be reused without re-executing anything. Any relevant change — edited code, a recomputed upstream variable, a changed helper function — produces a different key and causes a miss.
 
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @28e97877 -->
 The statement-level key is built by `compute_cache_key()` in `cash.notebook.cache_key`:
 
 ```
@@ -47,6 +48,7 @@ flowchart TD
 ```
 
 ??? warning "Keys survive a restart, not a move to another machine"
+    <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @3dc65a7c -->
     Keys carry no wall-clock value *of their own*, so re-running the same notebook in a
     fresh kernel recomputes the same key and hits. But a statement that reads a file folds
     that file's **mtime and size** into its lineage (`compute_file_hash_component` in
@@ -113,6 +115,7 @@ flowchart LR
 
 A statement's `inputs` come from its AST, which only sees the names it mentions. Two real dependencies are invisible there, and each gets its own key component.
 
+<!-- claim: cash/notebook/randomness.py:rng_virtual_var @a0a5f014, cash/notebook/randomness.py:hidden_lineage_reads @e9ddd20b, cash/notebook/randomness.py:hidden_lineage_writes @1369d609 -->
 **The RNG is modelled as a hidden lineage variable.** A draw such as `x = np.random.rand(3)` has stable source and no tracked inputs, so nothing about it moves when you edit the seed above it — Cash would replay the previous seed's numbers. So each RNG module gets a virtual variable, `__cash_rng__numpy.random`: a `seed()` statement *writes* it (taking the seeding statement's own cache key as its lineage), a draw *reads* it. That virtual name never enters `user_ns`; it exists only as a key in the lineage dict, and it flows through the ordinary input-lineage code, which is what makes a re-seed propagate to everything cached downstream of the draw. See `rng_virtual_var` / `hidden_lineage_reads` / `hidden_lineage_writes` in `cash.notebook.randomness`.
 
 **A call site is keyed on the globals its callees reach for.** `r = a(3)` names `a`, not what `a` touches when it runs. Python resolves a function's globals at *call* time, so the call genuinely depends on every global `a` reads — but the ordinary input path cannot supply them: it is built when `def a` executes and only sees names bound *above* it. Cash therefore walks `__code__.co_names` transitively from the called functions (with a seen-guard so mutual recursion terminates) and folds `name:lineage` for each into the `:callees:` component. A **missing** name contributes the literal string `ABSENT` rather than being skipped, and that half is the point: it is what makes *deleting* a callee change the key, so Cash surfaces the `NameError` a plain kernel would raise instead of reprinting a cached value.
@@ -128,6 +131,7 @@ A statement's `inputs` come from its AST, which only sees the names it mentions.
 
 Most notebook variables never need content hashing: a variable produced by a tracked statement already carries a lineage hash, and that is what the key uses. Content hashing is the fallback for a value Cash sees but did not produce — and it is the *primary* path for the decorator, which hashes call arguments.
 
+<!-- claim: cash/core.py:Cash._try_builtin_type_hash @09adf0d5 -->
 The decorator path's built-in type hashers (`Cash._try_builtin_type_hash`) cover the common data-science types:
 
 | Type | Module | Hashing strategy |
@@ -160,6 +164,7 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
+    <!-- claim: cash/core.py:Cash.register_hasher @2cc59e2a, cash/notebook/object_hashing.py:compute_hash @e849aae7 -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
     notebook path hashes fallback values through `cash.notebook.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a
@@ -170,6 +175,7 @@ See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full
 
 The two paths answer "what is this object's fingerprint?" differently, and the ordering in each is deliberate.
 
+<!-- claim: cash/core.py:Cash._hash_arg_payload @a311dda3 -->
 **Decorator — hashing a call argument** (`Cash._hash_arg_payload`):
 
 1. **Built-in content hashers** — pandas, numpy, polars, PyArrow, modin, dask.
@@ -180,6 +186,7 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
+<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @f1dc058b, cash/notebook/object_hashing.py:_hash_dataframe_or_series @3cb5309c, cash/notebook/object_hashing.py:_hash_collection @f3ff9c8e, cash/notebook/object_hashing.py:compute_hash @e849aae7 -->
 **Notebook — resolving a statement input** (`LineageStore.resolve`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.
@@ -191,6 +198,7 @@ Content beats the lineage attribute, and that ordering is the fix for a real bug
 `compute_hash` itself ends at `sha256(str(id(obj)))` for an object that cannot be pickled. That does not corrupt anything — the statement executes normally and the result is stored — but the key is then tied to a memory address, so the entry is effectively per-session and will not restore after a kernel restart.
 
 ??? note "Under the hood"
+    <!-- claim: cash/notebook/statement/lineage.py:StatementLineageBuilder.capture_and_track_variables @a1f1d54b -->
     All statement keys are built by `compute_cache_key()` in
     `cash.notebook.cache_key` — a single source of truth shared by runtime
     execution and upstream simulation, so the two can never diverge. Output
