@@ -258,3 +258,35 @@ def test_extract_fences_detects_expect_warning_annotation():
     fences = extract_fences(FIXTURES / "page_with_expected_warning.md")
     assert len(fences) == 1
     assert fences[0].expect_warning is True
+
+
+def test_fence_defined_function_reports_its_own_source():
+    """``inspect.getsource`` on a fence-defined function must return ITS source.
+
+    The harness compiles with the .md path as the filename, so a function
+    defined in a fence has ``co_filename`` pointing at the markdown. Line
+    padding usually keeps that honest, but not always — and the failure mode is
+    silent, not an error.
+
+    On Linux this exact page returned ``async def demo_cached_await():`` for
+    ``f``. cash excludes a mutated global from the cache key by AST-parsing the
+    function's source; handed a different function it finds no mutation, keeps
+    the counter foldable, and every call after the first misses. That was the
+    ``hits=0 misses=2`` this page reported in CI for two days while passing on
+    Windows, because the misalignment is platform-dependent.
+    """
+    import inspect
+
+    from tests.docs._harness import run_page
+
+    page = Path(__file__).resolve().parents[2] / "docs" / "tutorials" / "feature-guides" / "async-caching.md"
+    from tests.docs.test_tutorials import _get_namespace
+
+    result = run_page(page, namespace_overrides=_get_namespace(page))
+    fn = result.namespace["f"].__wrapped__
+
+    src = inspect.getsource(fn)
+    assert "n[" in src and "async def f" in src, (
+        "getsource returned a DIFFERENT function's source, so cash's "
+        "source-based analysis is running on the wrong body:\n" + src
+    )

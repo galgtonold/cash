@@ -15,6 +15,7 @@ Supports two execution paths:
 from __future__ import annotations
 
 import asyncio
+import linecache
 import operator
 import re
 import warnings
@@ -498,6 +499,32 @@ def run_page(
     # can't be attributed to a single fence — allow them page-wide if ANY
     # non-skipped fence opts in via test:expect-warning.
     page_allows_warning = any(f.expect_warning for f in fences if not f.skip)
+    # Make the executed script retrievable by ``inspect.getsource``.
+    #
+    # We compile with the .md path as the filename so tracebacks name the page.
+    # That also makes a fence-defined function carry ``co_filename = <the
+    # markdown file>``, so ``inspect.getsource`` on it reads the MARKDOWN. The
+    # padding above aligns script lines with md lines well enough that this
+    # usually returns the right text — but not always, and when it doesn't the
+    # failure is silent rather than loud.
+    #
+    # Measured on Linux, this page: ``f`` reports ``co_firstlineno = 45`` and
+    # ``getsource`` returns ``async def demo_cached_await():`` — a DIFFERENT
+    # function. ``Cash._read_global_data_names`` excludes a global the body
+    # mutates in place by AST-parsing that source; fed the wrong function it
+    # sees no mutation, keeps the ``n`` counter foldable, and every call after
+    # the first gets a new key. That is exactly the ``hits=0 misses=2`` that
+    # async-caching.md reported in CI: verified by instrumenting the fold
+    # decision, which returns ``('asyncio', 'n')`` before this line and ``()``
+    # after it.
+    #
+    # Registering the real script under the same filename fixes it for every
+    # page. ``None`` in the mtime slot is the documented convention for exec'd
+    # code — it stops ``linecache.checkcache`` reloading the .md over the top.
+    linecache.cache[str(md_path)] = (
+        len(script), None, script.splitlines(keepends=True), str(md_path),
+    )
+
     try:
         code_obj = compile(
             script,
