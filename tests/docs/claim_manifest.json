@@ -184,8 +184,8 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/purity-decorators.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 15,
+    "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/sharing-caches.md": {
     "anchors": 5,

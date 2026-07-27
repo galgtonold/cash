@@ -139,9 +139,10 @@ def euclidean(p, q):
 
 ### What it actually does
 
-`@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper (`src/cash/notebook/purity.py`).
+<!-- claim: cash/notebook/purity.py:pure @de701258, cash/notebook/statement/processor.py:StatementProcessor._check_callable_stateful @328208d8 -->
+`@pure` is a one-line marker. It sets `_cash_pure = True` on both the original function and the wrapper.
 
-When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful` (`src/cash/notebook/statement/processor.py`), which:
+When the statement processor evaluates a cell, it looks at every bare-name call (`foo(x)`, not `obj.foo(x)`). For each name, it consults `_check_callable_stateful`, which:
 
 1. Returns `False` (not stateful) if the name is a known-pure builtin like `len` or `sum`.
 2. Returns `True` if the resolved object has `_cash_stateful = True`.
@@ -204,13 +205,15 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ### What it actually does
 
-`@stateful` sets `_cash_stateful = True` on the wrapped function (`src/cash/notebook/purity.py`). When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
+<!-- claim: cash/notebook/purity.py:stateful @d2b97ef0, cash/notebook/cacheability_decision.py:decide_cacheability @894ac130 -->
+`@stateful` sets `_cash_stateful = True` on the wrapped function. When the statement processor walks the bare-name calls in a cell and finds one whose resolved callable has that attribute, `_check_callable_stateful` returns `True`. The caller (in `decide_cacheability`) then refuses to cache the cell and records the reason "Calls @stateful function".
 
 `@stateful` is checked *before* `@pure` in `_check_callable_stateful`, so if you ever (accidentally) stack both decorators on the same function, stateful wins. Don't rely on that — see the [caveats](#mixing-markers).
 
 ## Auto-detection (`analyze_function_purity`)
 
-You won't decorate everything. For undecorated functions, Cash falls back to an AST-based heuristic — `analyze_function_purity` (`src/cash/notebook/purity.py`). It:
+<!-- claim: cash/notebook/purity.py:analyze_function_purity @7323a225, cash/notebook/purity.py:_ImpurityVisitor @04e3cd91 broad="the flag list is a claim about every branch of the visitor", cash/notebook/purity.py:_IMPURE_FUNCTION_CALLS @bb3b34e8, cash/notebook/purity.py:_IMPURE_MODULE_CALLS @2f4b3aee, cash/notebook/purity.py:_WRITE_METHODS @83c86ec8 -->
+You won't decorate everything. For undecorated functions, Cash falls back to an AST-based heuristic — `analyze_function_purity`. It:
 
 1. Grabs the function's source via `inspect.getsource`.
 2. Parses it with `ast`.
@@ -222,12 +225,13 @@ The visitor flags the function as impure if it sees any of:
 - A `yield` or `yield from` (generators are not safe to memoize as plain values).
 - A call to a known-impure builtin: `print`, `input`, `open`, `exec`, `eval`, `compile`, `exit`, `quit`, `breakpoint`.
 - A dotted call to a known-impure module function: `os.system`, `os.remove`, `subprocess.run`, `shutil.move`, `requests.get`, `requests.post`, `json.dump`, `pickle.dump`, `logging.info`, and friends.
-- A method call to a name in the "write-ish" set: `write`, `writelines`, `append`, `extend`, `insert`, `pop`, `remove`, `sort`, `reverse`, `clear`, `update`, `add`, `discard`, `to_csv`, `to_excel`, `to_parquet`, `to_json`, `to_pickle`, `savefig`, `save`, `send`, `sendall`, `sendto`.
+- A method call to a name in the "write-ish" set: `write`, `writelines`, `append`, `extend`, `insert`, `pop`, `remove`, `sort`, `reverse`, `clear`, `update`, `add`, `discard`, `to_csv`, `to_excel`, `to_parquet`, `to_json`, `to_pickle`, `savefig`, `save`, `send`, `sendall`, `sendto`, plus pathlib's `write_text` / `write_bytes`.
 - Any assignment whose target is an attribute (`self.x = ...`) or subscript (`d[k] = ...`).
 - Any `+=`/`del` on an attribute or subscript.
 
-The full set lives in `_IMPURE_FUNCTION_CALLS`, `_IMPURE_MODULE_CALLS`, and `_WRITE_METHODS` at `src/cash/notebook/purity.py`.
+The full set lives in `_IMPURE_FUNCTION_CALLS`, `_IMPURE_MODULE_CALLS`, and `_WRITE_METHODS` in `cash/notebook/purity.py`.
 
+<!-- claim: cash/notebook/purity.py:_PURITY_CACHE_MAX_SIZE == 200 -->
 Results are cached by source-SHA-256 to keep repeated analyses cheap — the cache holds up to 200 entries and evicts oldest-first.
 
 You can call this directly if you want to inspect a function programmatically:
@@ -251,7 +255,8 @@ The heuristic is intentionally conservative. False positives (declaring somethin
 
 ## Known-pure builtins
 
-Cash short-circuits the analysis for stdlib names it already knows are safe. The full list lives in `KNOWN_PURE_BUILTINS` (`src/cash/notebook/purity.py`):
+<!-- claim: cash/notebook/purity.py:KNOWN_PURE_BUILTINS @13fb552c -->
+Cash short-circuits the analysis for stdlib names it already knows are safe. The full list lives in `KNOWN_PURE_BUILTINS`:
 
 ```
 # Type constructors / conversions
@@ -292,7 +297,7 @@ Six footguns account for most "but Cash said it would cache" surprises.
 
 ### Method calls bypass the gate
 
-The bare-name check at `src/cash/notebook/cacheability.py` only collects calls whose `node.func` is an `ast.Name`. Method calls (`obj.train()`) have `node.func` as `ast.Attribute` and are *not* fed into `_check_callable_stateful`.
+The bare-name check (`called_names` on `StatementAnalysis`) only collects calls whose `node.func` is an `ast.Name`. Method calls (`obj.train()`) have `node.func` as `ast.Attribute` and are *not* fed into `_check_callable_stateful`.
 
 That means this does **not** work:
 
@@ -374,6 +379,7 @@ def confused(x):
 
 This works (the cell will refuse to cache), but it's a check-order artifact, not a language-level guarantee. Treat it as undefined behavior and never stack the two decorators on the same function.
 
+<!-- claim: cash/notebook/purity.py:is_known_pure @a40e4d3e -->
 ### `is_known_pure` takes a string
 
 Common slip-up: the helper takes a *name string*, not a callable:
@@ -385,8 +391,9 @@ is_known_pure(len)       # False — `len` the function object is not in the fro
 is_known_pure("len")     # True
 ```
 
-It's checking membership in a `frozenset[str]` (`src/cash/notebook/purity.py`). Always pass the name, not the callable. If you have a callable and want the name, use `func.__name__`.
+It's checking membership in a `frozenset[str]`. Always pass the name, not the callable. If you have a callable and want the name, use `func.__name__`.
 
+<!-- claim: cash/notebook/purity.py:clear_purity_cache @8ad1b066 -->
 ### Source-hash cached analysis
 
 `analyze_function_purity` keys its result cache on the SHA-256 of the function's source. Two byte-identical functions share a verdict — fine in 99% of cases, but it bites in one specific pattern: redefining a function with the *same body* but different surrounding globals or different intent.
@@ -418,7 +425,7 @@ In practice you'll mostly hit this when stubbing functions in tests. The fix is 
 clear_purity_cache()
 ```
 
-`clear_purity_cache` is a public helper (`src/cash/notebook/purity.py`) — call it in `setUp` / a pytest fixture / wherever you redefine functions and want fresh analysis.
+`clear_purity_cache` is a public helper — call it in `setUp` / a pytest fixture / wherever you redefine functions and want fresh analysis.
 
 ## Purity on the decorator (`@cash.cache`)
 
@@ -428,6 +435,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
+<!-- claim: cash/core.py:Cash._surface_purity @8dc9b22e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -507,6 +515,7 @@ also count as issues — the paranoid setting.
 `strict=True` and `assume_safe=True` are mutually exclusive; passing
 both raises `ValueError` at decoration time.
 
+<!-- claim: cash/__init__.py:mark_pure @ba10636a, cash/__init__.py:mark_stateful @ca0b83f6 -->
 ### `cash.mark_pure(func)` and `cash.mark_stateful(func)`
 
 The `@pure` and `@stateful` decorators wrap the function — convenient
