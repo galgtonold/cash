@@ -47,7 +47,8 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-The return value is a `CacheExplanation` dataclass (`src/cash/core.py`) with five fields and one of five reason codes:
+<!-- claim: cash/core.py:CacheExplanation @28df5e84 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @02d3d980 -->
+The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`) with five fields and one of five reason codes:
 
 | `reason` | Meaning | Key `details` |
 |---|---|---|
@@ -57,12 +58,13 @@ The return value is a `CacheExplanation` dataclass (`src/cash/core.py`) with fiv
 | `file_changed` | An auto-tracked file dependency changed. Invalidation is decided by **content**: size first, then a content hash when the size matches — a touch alone is not a change. | `changed_files: {path: reason}` |
 | `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
 
-`_explain_call` in `src/cash/core.py` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are `'content changed'`, `'size changed'`, or `'file missing'`.
+`Cash._explain_call` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are `'content changed'`, `'size changed'`, or `'file missing'`.
 
 ## Tool 2: `%cash_debug on` / `%cash_debug off`
 
-Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>` — see `src/cash/notebook/ipython/magics.py`).
+Inside a notebook, `%cash_debug on` raises the cash logger to DEBUG and prints labelled lines from each subsystem as cells execute. Turn it off with `%cash_debug off` (or pipe to JSON with `%cash_debug json`, or to a file with `%cash_debug file <path>`).
 
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_debug @ce13e22b -->
 The five log prefixes you'll see most:
 
 | Prefix | What it tells you |
@@ -99,7 +101,8 @@ For health checks rather than per-call diagnostics, you want aggregates.
 %cash_stats
 ```
 
-Prints a session-wide summary: entries cached, hits, misses, overall hit rate, and the savings broken out as gross saved, cash overhead, and net saved (net = gross − overhead). The net line is the honest headline — it subtracts cash's own per-cell overhead from the gross recompute it avoided, and shows a negative ("cash cost you Xs this session") when a run of cheap cells paid more overhead than it saved. `%cash_stats json` returns the same as a dict for programmatic use (including `total_overhead` and `net_time_saved`); `%cash_stats reset` zeros the counters (`src/cash/notebook/ipython/admin.py`).
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @851d8352 -->
+Prints a session-wide summary: cells executed, statements computed / restored / skipped, hit rate, and a time ledger of gross saved, cash overhead, and net saved. The net line is the honest headline, and it is **not** gross minus overhead: it credits only savings this session *verified* by recomputing the same statement, minus the measured overhead. Gross is printed beside it and labelled *(estimated)*, because it values each restore at what the entry cost when first written and nothing re-measures that. The consequence is deliberate understatement — an overstatement would be the bug — and a real loss prints as one ("cash cost you Xs this session"). `%cash_stats json` returns the same numbers as a dict (including `total_overhead`, `net_time_saved`, and `net_time_saved_upper_bound`); `%cash_stats reset` zeros the counters.
 
 ### On a decorated function — `cache_info()`
 
@@ -118,7 +121,7 @@ expensive.cache_info()
 #  'total_time_saved': 0.0021, 'warnings': []}
 ```
 
-The full shape and field meanings are at `src/cash/core.py`:
+The full shape and field meanings:
 
 - `hits`, `misses`, `hit_rate` — counters since the wrapper was created (not since process start).
 - `total_time_saved` — sum of execution times avoided on hits.
@@ -151,7 +154,8 @@ cash clear ./notebooks/analysis.ipynb # nuke the sibling .cash
 
 ### "Hit rate is low"
 
-Start with `cache_info().warnings` (decorator) or `%cash_stats` (notebook). Look for:
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b -->
+Start with `cache_info()['warnings']` (decorator) or `%cash_stats` (notebook) — `cache_info()` returns a plain dict, so subscript it; `.warnings` raises `AttributeError`. Look for:
 
 - `CashRandomnessWarning` — unseeded RNG; pass `random_state=42` (or whatever) to make calls reproducible.
 - `CashImpurityWarning` — analyzer found `requests.get` / `datetime.now()` / similar in the function body. See [Purity Decorators](purity-decorators.md).
@@ -173,8 +177,10 @@ The opposite mystery: you edited code, but Cash is serving a stale value. Call `
 cash inspect ./.cash
 ```
 
-The output lists the five biggest recent entries with sizes. If a single statement is responsible for most of the size, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
+<!-- claim: cash/__main__.py:_inspect_cache_dir @be5b4bea -->
+The output gives the entry count, the total size, and a breakdown by file type — then lists the five **most recently written** entries. Note that those five are sorted by modification time, not by size, so they are not necessarily the ones filling your disk; use the total and the file-type breakdown for that. If a single statement is responsible for most of the size, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
+<!-- claim: cash/analytics.py:AnalyticsManager.__init__ @db5dc0e8 -->
 !!! note "The `~/.cash/analytics.db` telemetry file"
     Separate from the project-local `./.cash/` cache, Cash keeps a small global
     SQLite file at `~/.cash/analytics.db` recording per-session hit/miss/timing
@@ -184,6 +190,7 @@ The output lists the five biggest recent entries with sizes. If a single stateme
     oversized, so you should never see an error about it; if you want to reset the
     telemetry, just delete the file.
 
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_repair @2cfd33e0, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_export @1ce0818b, cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_import @1a4d7a1b -->
 ## Cache management — export, import, clear
 
 When diagnosis is done and you need to *act*, four notebook magics and one CLI command cover the lifecycle:
@@ -196,7 +203,7 @@ When diagnosis is done and you need to *act*, four notebook magics and one CLI c
 %cash_export lineage.json --json                       # lineage graph as JSON
 ```
 
-Definitions at `src/cash/notebook/ipython/admin.py`. The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
+The `.cache` file is a portable bundle; the `--json` variant is human-readable and useful for code review or dependency-graph inspection.
 
 ### Import
 
@@ -205,11 +212,11 @@ Definitions at `src/cash/notebook/ipython/admin.py`. The `.cache` file is a port
 %cash_import teammate_cache.cache --merge     # merge with the current cache instead of replacing
 ```
 
-Definitions at `src/cash/notebook/ipython/admin.py`. Use `--merge` when pulling in a teammate's cache without losing your own entries.
+Use `--merge` when pulling in a teammate's cache without losing your own entries.
 
 ### Clear
 
-From inside a notebook, `%cash_repair` covers the two flavors of reset (`src/cash/notebook/ipython/admin.py`):
+From inside a notebook, `%cash_repair` covers the two flavors of reset:
 
 ```python { .nb-cell }
 %cash_repair             # remove corrupted entries, keep healthy ones
@@ -242,7 +249,8 @@ explorer.get_preview(key)              # peek at a stored value
 explorer.clear_function("mod.func")    # surgical per-function clear
 ```
 
-`CacheExplorer` (`src/cash/ui/explorer.py`) is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache. `CacheDebugger` (`src/cash/ui/debugger.py`) is a step-through inspector for the notebook decision pipeline — drives the same machinery `%cash_on` uses but stops between phases so you can see what Cash sees.
+<!-- claim: cash/ui/explorer.py:CacheExplorer @326b80ba broad="the listed method set is a claim about the whole class", cash/core.py:Cash.explorer @599913c8 -->
+`CacheExplorer` is the read-side: list, search, preview, and surgically clear entries by function name without touching the rest of the cache. `CacheDebugger` is a step-through inspector for the notebook decision pipeline — drives the same machinery `%cash_on` uses but stops between phases so you can see what Cash sees.
 
 Both are experimental: stick to `f.explain()` and `%cash_debug` for anything that needs to survive a version bump.
 
