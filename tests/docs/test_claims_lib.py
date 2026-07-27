@@ -722,3 +722,85 @@ def test_accept_rewrites_a_module_level_broad_anchor(tmp_path, monkeypatch):
     nodes, source = resolve(Target("mod.py", None), src_root=src_root)
     want = fingerprint(nodes, source)
     assert f"mod.py @{want}" in new_text
+
+
+def test_pin_does_not_pin_a_fenced_example_anchor(tmp_path, monkeypatch):
+    """A fenced example anchor for the same target, appearing BEFORE the live
+    anchor in raw document order, must not be the occurrence --pin rewrites.
+
+    ``parse_anchors`` masks code fences so the example is never treated as
+    live (it names no real claim), but ``_cmd_pin`` rewrites the *raw* text
+    with ``re.subn(..., count=1)``. A naive leftmost-match rewrite would hit
+    the fenced example first and leave the real, live anchor un-pinned --
+    exactly the false-assurance failure this mechanism exists to prevent.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 1\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text(
+        "```markdown\n"
+        "<!-- claim: mod.py:foo @? -->\n"
+        "An example claim shown for illustration.\n"
+        "```\n"
+        "\n"
+        "<!-- claim: mod.py:foo @? -->\n"
+        "The real, live claim about foo.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+    monkeypatch.setattr(_cli, "published_pages", lambda: [page])
+    monkeypatch.setattr(_cli, "REPO_ROOT", tmp_path)
+
+    assert _cli._cmd_pin() == 0
+
+    nodes, source = resolve(Target("mod.py", "foo"), src_root=src_root)
+    want = fingerprint(nodes, source)
+
+    lines = page.read_text(encoding="utf-8").splitlines()
+    assert lines[1] == "<!-- claim: mod.py:foo @? -->", (
+        "the fenced EXAMPLE anchor must stay byte-identical -- it is not a "
+        "live claim and must never be pinned"
+    )
+    assert lines[5] == f"<!-- claim: mod.py:foo @{want} -->", (
+        "the live anchor after the fence must be the one that gets pinned"
+    )
+
+
+def test_accept_does_not_repin_a_fenced_example_anchor(tmp_path, monkeypatch):
+    """Same defect as above, on the ``--accept --yes`` rewrite path.
+
+    A fenced example anchor sharing the live anchor's stale pin, and
+    appearing before it in raw text, must not be the occurrence rewritten.
+    """
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text("def foo():\n    return 2\n", encoding="utf-8")
+    page = tmp_path / "page.md"
+    page.write_text(
+        "```markdown\n"
+        "<!-- claim: mod.py:foo @00000000 -->\n"
+        "An example claim shown for illustration.\n"
+        "```\n"
+        "\n"
+        "<!-- claim: mod.py:foo @00000000 -->\n"
+        "The real, live claim about foo.\n",
+        encoding="utf-8",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+
+    assert _cli._cmd_accept(str(page), write=True) == 0
+
+    nodes, source = resolve(Target("mod.py", "foo"), src_root=src_root)
+    want = fingerprint(nodes, source)
+
+    lines = page.read_text(encoding="utf-8").splitlines()
+    assert lines[1] == "<!-- claim: mod.py:foo @00000000 -->", (
+        "the fenced EXAMPLE anchor must stay byte-identical -- it is not a "
+        "live claim and must never be re-pinned"
+    )
+    assert lines[5] == f"<!-- claim: mod.py:foo @{want} -->", (
+        "the live anchor after the fence must be the one that gets re-pinned"
+    )

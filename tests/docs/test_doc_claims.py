@@ -19,7 +19,7 @@ from dataclasses import fields
 from pathlib import Path
 
 from cash.config import CashConfig, TierConfig
-from tests.docs._claims import published_pages
+from tests.docs._claims import published_pages, strip_code_fences
 
 
 def slugify(value: str, separator: str = "-") -> str:
@@ -122,31 +122,10 @@ _INLINE_LINK_RE = re.compile(r"\[([^\]]*)\]\([^)]*\)")
 _FENCE_RE = re.compile(r"^(?P<indent>\s*)(?P<ticks>`{3,}|~{3,})", re.MULTILINE)
 
 
-def _strip_code_fences(text: str) -> str:
-    """Blank out fenced code blocks so their contents don't parse as headings."""
-    out: list[str] = []
-    in_fence = False
-    fence_marker = ""
-    for line in text.splitlines():
-        stripped = line.lstrip()
-        if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
-            in_fence = True
-            fence_marker = stripped[:3]
-            out.append("")
-            continue
-        if in_fence:
-            out.append("")
-            if stripped.startswith(fence_marker):
-                in_fence = False
-            continue
-        out.append(line)
-    return "\n".join(out)
-
-
 def _anchor_ids(text: str) -> set[str]:
     """The set of #anchors a rendered page would expose (as mkdocs/toc slugs)."""
     ids: set[str] = set()
-    body = _strip_code_fences(text)
+    body = strip_code_fences(text)
 
     for m in _HEADING_RE.finditer(body):
         heading = m.group("text")
@@ -170,7 +149,7 @@ def _iter_internal_links() -> list[tuple[Path, str, str | None]]:
     out: list[tuple[Path, str, str | None]] = []
     for md in ALL_MD:
         text = md.read_text(encoding="utf-8")
-        body = _strip_code_fences(text)
+        body = strip_code_fences(text)
         for m in _LINK_RE.finditer(body):
             target = m.group("target")
             if target.startswith(("http://", "https://", "mailto:", "//", "www.")):
@@ -274,7 +253,7 @@ def _parse_doc_default(cell: str):
 
 def _tables(text: str):
     """Yield (header_cells, rows) for each pipe table in the markdown text."""
-    lines = _strip_code_fences(text).splitlines()
+    lines = strip_code_fences(text).splitlines()
     i = 0
     while i < len(lines):
         line = lines[i]

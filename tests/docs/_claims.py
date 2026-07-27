@@ -64,17 +64,50 @@ class Anchor:
     claim: str                # first non-blank line after the comment
     targets: tuple[Target, ...]
     broad: str | None = None
+    span: tuple[int, int] = (0, 0)  # (start, end) char offsets of the WHOLE
+    # `<!-- claim: ... -->` comment in the page's raw text. `_CLAIM_RE` is
+    # matched against the fence-masked text (see `parse_anchors`), but
+    # masking only blanks characters -- it never changes the text's length or
+    # line structure -- so `m.start()`/`m.end()` computed there index the raw
+    # text identically. A rewriter (`scripts/claims.py`) that needs to edit
+    # THIS anchor and no other must confine its substitution to this span:
+    # matching the needle text anywhere in the page (the alternative) finds
+    # whatever occurrence sorts first, including one sitting inside a fenced
+    # *example* that this same masking correctly decided was not live.
 
 
-def _strip_code_fences(text: str) -> str:
+def strip_code_fences(text: str) -> str:
     """Blank out fenced code blocks so their contents can't parse as anchors.
 
     An anchor shown as an *example* inside a ```` ``` ```` fence (the
     README's own "Claim anchors" section does exactly this) must not be
     parsed as a live one -- it names no real target and would sit forever as
-    uncleavable drift once such a section lands on a published page. Blanking
-    (not stripping) preserves every line number, matching
-    ``test_doc_claims.py``'s ``_strip_code_fences``, which this mirrors.
+    uncleavable drift once such a section lands on a published page.
+
+    Each fenced line is replaced with NUL characters (``\0``) equal to its own
+    length, not with an empty string: a blanked line must occupy exactly as
+    many characters as the line it replaces, or every character offset after
+    the first fence would drift away from its true position in the raw text.
+    That property is not just cosmetic -- ``parse_anchors`` computes each
+    ``Anchor.span`` from a match against this masked text and hands that span
+    to callers (``scripts/claims.py``) as a raw-text index, so length
+    preservation is exactly what makes a span computed here valid to slice out
+    of the original, unmasked ``text``. Preserving line *count* alone (as
+    blanking to ``""`` would) is not sufficient for that.
+
+    ``\0``, not spaces: a run of plain spaces can itself accidentally satisfy
+    a downstream consumer's regex -- ``test_doc_claims.py``'s table-separator
+    detector (``^\s*\|?[\s:|-]+\|?\s*$``) matches a whitespace-only line, so a
+    fenced line blanked to spaces right after a ``| looks | like a header |``
+    line would be misread as that table's separator row. ``\0`` cannot satisfy
+    any of this module's regexes (they all require a literal non-whitespace
+    token -- ``#``, ``<!--``, ``[``, `` id=" ``, or one of ``\s:|-``), so it
+    reliably reads as "nothing here" everywhere this masked text is consumed.
+
+    This is the single definition: ``test_doc_claims.py`` and
+    ``test_claim_anchors.py``'s false-assurance guards import it from here
+    rather than keeping their own copies, which is exactly the kind of
+    duplication an anti-drift mechanism shouldn't itself have.
     """
     out: list[str] = []
     in_fence = False
@@ -84,10 +117,10 @@ def _strip_code_fences(text: str) -> str:
         if not in_fence and (stripped.startswith("```") or stripped.startswith("~~~")):
             in_fence = True
             fence_marker = stripped[:3]
-            out.append("")
+            out.append("\0" * len(line))
             continue
         if in_fence:
-            out.append("")
+            out.append("\0" * len(line))
             if stripped.startswith(fence_marker):
                 in_fence = False
             continue
@@ -125,10 +158,10 @@ def parse_anchors(text: str, page: Path) -> list[Anchor]:
     lines = text.splitlines()
     # Masked, not the raw text: an anchor written as an illustrative example
     # inside a fenced code block must not be parsed as a live one (see
-    # _strip_code_fences). Blanking rather than stripping preserves every
+    # strip_code_fences). Blanking rather than stripping preserves every
     # line number, so positions computed against `masked` below still index
     # correctly into `lines`, which comes from the untouched original text.
-    masked = _strip_code_fences(text)
+    masked = strip_code_fences(text)
     out: list[Anchor] = []
     for m in _CLAIM_RE.finditer(masked):
         line_no = masked.count("\n", 0, m.start()) + 1
@@ -168,6 +201,7 @@ def parse_anchors(text: str, page: Path) -> list[Anchor]:
                 claim=_claim_text(lines, end_idx),
                 targets=tuple(targets),
                 broad=broad,
+                span=(m.start(), m.end()),
             )
         )
     return out

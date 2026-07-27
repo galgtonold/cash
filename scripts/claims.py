@@ -96,16 +96,28 @@ def _cmd_pin() -> int:
     author put around ``@?`` survives untouched -- only the ``?`` itself is
     replaced.
 
-    Each page is parsed once, up front, from the text on disk; the loop below
-    then edits a working copy (``new``) left to right in the same order the
-    anchors appear in the source. Because every substitution uses
-    ``count=1`` and only the *still-unfilled* (``@?``) occurrences match, two
-    anchors naming the same target -- or a target whose symbol is a prefix of
-    another (``Cash.cache`` vs ``Cash.cache_info``) -- cannot cross-wire: the
-    needle-then-``@``-then-``?`` pattern requires the placeholder to sit
-    immediately (mod whitespace) after the needle, and a longer symbol's own
-    trailing characters (``_info``) break that adjacency, so the shorter
-    needle never matches inside the longer one's occurrence.
+    Each page is parsed once, up front, from the text on disk. The loop below
+    then edits a working copy (``new``) anchor by anchor, in the same source
+    order ``parse_anchors`` found them, and -- critically -- confines every
+    substitution to that ONE anchor's own ``span`` (the exact character range
+    of its ``<!-- claim: ... -->`` comment, computed by the parser against the
+    fence-masked text and equally valid as an index into the raw text; see
+    ``Anchor.span``). Searching the needle anywhere in the page, rather than
+    within its own anchor's text, is exactly how a fenced *example* anchor
+    (which parse_anchors correctly never treats as live) could still end up
+    being the occurrence a leftmost ``re.subn`` rewrites, if it happens to sit
+    before the real, live anchor for the same target. Confining the
+    substitution to the span the parser actually decided was live eliminates
+    that by construction -- it cannot pick the wrong occurrence because it is
+    never even shown one. The same confinement is also why a target whose
+    symbol is a prefix of another (``Cash.cache`` vs ``Cash.cache_info``) or a
+    duplicated target on the page cannot cross-wire: each rewrite only ever
+    sees the text of the one anchor it belongs to.
+
+    Because a rewrite can change an anchor's length (``@?`` is one character,
+    a digest is nine with the ``@``), ``delta`` tracks the cumulative shift so
+    each subsequent anchor's span -- computed against the original, unedited
+    ``text`` -- is translated into the correct offset into ``new``.
     """
     filled = 0
     for page in published_pages():
@@ -113,17 +125,21 @@ def _cmd_pin() -> int:
         if "@?" not in text:
             continue
         new = text
+        delta = 0
         for anchor in parse_anchors(text, page):
+            start, end = anchor.span[0] + delta, anchor.span[1] + delta
+            original_segment = new[start:end]
+            segment = original_segment
             for t in anchor.targets:
                 if t.pin != "?":
                     continue
                 nodes, source = resolve(t)
                 fp = fingerprint(nodes, source)
                 needle = _needle(t)
-                new, n = re.subn(
+                segment, n = re.subn(
                     rf"({needle}\s*)@\s*\?",
                     rf"\g<1>@{fp}",
-                    new,
+                    segment,
                     count=1,
                 )
                 if n == 0:
@@ -135,6 +151,9 @@ def _cmd_pin() -> int:
                         f"the anchor text does not match what the parser saw"
                     )
                 filled += 1
+            if segment != original_segment:
+                new = new[:start] + segment + new[end:]
+                delta += len(segment) - len(original_segment)
         if new != text:
             page.write_text(new, encoding="utf-8")
             print(f"pinned {page.relative_to(REPO_ROOT).as_posix()}")
@@ -157,12 +176,15 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
     ``f"{name} @{pin}"`` string: a plain string match would silently no-op
     (while still printing a success message) for a module-only target, whose
     real text has no ``:<module>`` suffix, or for an anchor written with
-    different spacing than assumed. As with ``--pin``, two anchors sharing a
-    target and stale pin are rewritten in document order without cross-wiring
-    for the same reason: each substitution only touches an occurrence that
-    still carries the OLD pin, and once the leftmost one is rewritten it no
-    longer matches, so the next call's leftmost remaining match is the next
-    anchor in the document, not an already-handled one.
+    different spacing than assumed. As with ``--pin``, every substitution is
+    confined to the ONE anchor's own ``span`` -- the exact character range of
+    its comment, computed by the parser -- rather than searched for anywhere
+    on the page (see ``_cmd_pin``'s docstring for why: a fenced *example*
+    anchor sharing the same stale pin, sitting earlier in the page than the
+    real, live anchor, would otherwise be the occurrence a leftmost match
+    rewrites instead). That confinement is also what lets two anchors sharing
+    a target and stale pin, or a bare class/module anchor beside a narrow one
+    on the same target, be rewritten independently without cross-wiring.
     """
     page = (REPO_ROOT / page_arg).resolve()
     if not page.is_file():
@@ -175,8 +197,12 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
         return 0
 
     new = text
+    delta = 0
     rewritten = 0
     for anchor in parse_anchors(text, page):
+        start, end = anchor.span[0] + delta, anchor.span[1] + delta
+        original_segment = new[start:end]
+        segment = original_segment
         for t in anchor.targets:
             if not t.pin or t.pin == "?":
                 continue
@@ -201,10 +227,10 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
                     print(f"  {line}")
             print()
             needle = _needle(t)
-            new, n = re.subn(
+            segment, n = re.subn(
                 rf"({needle}\s*@\s*){re.escape(t.pin)}",
                 rf"\g<1>{fp}",
-                new,
+                segment,
                 count=1,
             )
             if n == 0:
@@ -215,6 +241,9 @@ def _cmd_accept(page_arg: str, write: bool) -> int:
                     f"the anchor text does not match what the parser saw"
                 )
             rewritten += 1
+        if segment != original_segment:
+            new = new[:start] + segment + new[end:]
+            delta += len(segment) - len(original_segment)
 
     if not write:
         print("=" * 72)
