@@ -121,9 +121,13 @@ every unrelated edit inside it, and the checker rejects one unless it carries
 
 ### When a claim drifts
 
-CI reports drift in the job summary; it blocks only at release, when
-`CASH_CLAIMS_STRICT=1` is set. To clear an entry, read the claim against the
-current source and then re-pin:
+The `docs-parity` job (`.github/workflows/ci.yml`) reports drift in the job
+summary on every PR, but does not fail the build on it. The `build` job in
+`.github/workflows/publish.yml` — the workflow every release runs — sets
+`CASH_CLAIMS_STRICT=1` and re-runs
+`tests/docs/test_claim_anchors.py::test_no_fingerprint_drift`, which turns
+that same drift into a build failure before a package is ever built. To clear
+an entry, read the claim against the current source and then re-pin:
 
 ```bash
 python scripts/claims.py --accept docs/page.md          # dry run: shows the code

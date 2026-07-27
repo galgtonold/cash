@@ -355,8 +355,12 @@ re-pin with `--accept <page> --yes`.
 Do this **before** the CHANGELOG: a claim found wrong is often a **Fixed**
 entry in its own right.
 
-Release CI sets `CASH_CLAIMS_STRICT=1`, which promotes drift from advisory to
-blocking, so a release cannot ship past a non-empty queue.
+The `build` job in `.github/workflows/publish.yml` — the workflow every
+release actually runs — sets `CASH_CLAIMS_STRICT=1` and re-runs
+`tests/docs/test_claim_anchors.py::test_no_fingerprint_drift`, promoting
+drift from advisory to blocking before the package is built. That is the real
+gate; running `--queue` above by hand is what keeps you from finding out
+about a non-empty queue only when the build fails.
 
 ### 2. Write the CHANGELOG entry FROM the `git log` (curate, don't transcribe)
 
