@@ -37,6 +37,7 @@ from tests.docs._claims import (
     check_manifest,
     check_page,
     published_pages,
+    strip_code_fences,
 )
 
 STRICT = os.environ.get("CASH_CLAIMS_STRICT") == "1"
@@ -123,10 +124,17 @@ def test_no_mistyped_claim_keyword():
     ``<!-- claims: ... -->``, ``<!-- Claim: ... -->``, and ``<!-- claim ... -->``
     (missing colon) all pass every other test in this file with zero anchors
     found and zero problems reported.
+
+    Scans the fence-masked text, not the raw page -- the same masking
+    ``parse_anchors`` applies (see ``strip_code_fences``). A mistyped anchor
+    shown as a fenced *example* (illustrating the wrong form, on purpose) is
+    not live text and must not fail the build: ``--pin`` already treats
+    anything inside a fence as inert, so "fix the typo" is not even
+    actionable advice for it.
     """
     problems: list[str] = []
     for page in published_pages():
-        text = page.read_text(encoding="utf-8")
+        text = strip_code_fences(page.read_text(encoding="utf-8"))
         recognized = {m.span() for m in _CLAIM_RE.finditer(text)}
         for m in _ANY_COMMENT_RE.finditer(text):
             comment = m.group(0)
@@ -155,10 +163,15 @@ def test_no_unfilled_placeholder_survives():
     backstop: an ``@?`` inside a comment that ``_CLAIM_RE`` never recognized
     as an anchor at all (see ``test_no_mistyped_claim_keyword``) would
     otherwise ship invisibly, since nothing upstream ever looked at it.
+
+    Scans the fence-masked text (see ``test_no_mistyped_claim_keyword`` for
+    why): a ``@?`` shown inside a fenced example is not a live placeholder,
+    and ``--pin`` is correctly a no-op on it -- flagging it here would give
+    remediation advice ("run --pin") that cannot do anything.
     """
     problems: list[str] = []
     for page in published_pages():
-        text = page.read_text(encoding="utf-8")
+        text = strip_code_fences(page.read_text(encoding="utf-8"))
         if "@?" not in text:
             continue
         rel = page.relative_to(REPO_ROOT).as_posix()
@@ -210,6 +223,103 @@ def test_unfilled_placeholder_guard_actually_fires(tmp_path, monkeypatch):
     page = tmp_path / "docs" / "bad.md"
     page.parent.mkdir(parents=True)
     page.write_text("Some prose with a stray @? in it.\n", encoding="utf-8")
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match=r"Literal `@\?`"):
+        _mod.test_no_unfilled_placeholder_survives()
+
+
+# --------------------------------------------------------------------------- #
+# Both guards above must tolerate a legitimately-fenced example -- and must   #
+# NOT go blind to a real violation sitting outside the fence on the same      #
+# page. A guard that stops flagging everything is as broken as one that      #
+# flags everything.                                                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_mistyped_claim_keyword_guard_tolerates_a_fenced_example(tmp_path, monkeypatch):
+    """A mistyped anchor shown ONLY as a fenced example must not fail the
+    build -- it names no real claim, and "fix the typo" is not actionable
+    advice for text that is illustrative, not live.
+    """
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "bad.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "```markdown\n"
+        "<!-- claims: mod.py:foo @? -->\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    _mod.test_no_mistyped_claim_keyword()  # must not raise
+
+
+def test_mistyped_claim_keyword_guard_still_fires_beside_a_fenced_example(tmp_path, monkeypatch):
+    """Fence-tolerance above must not swallow a REAL mistyped keyword that
+    sits outside the fence, on the very same page.
+    """
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "bad.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "```markdown\n"
+        "<!-- claims: mod.py:foo @? -->\n"
+        "```\n"
+        "\n"
+        "<!-- claims: mod.py:bar @? -->\n"
+        "A real, live claim -- but mistyped.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    with pytest.raises(AssertionError, match="typo'd keyword"):
+        _mod.test_no_mistyped_claim_keyword()
+
+
+def test_unfilled_placeholder_guard_tolerates_a_fenced_example(tmp_path, monkeypatch):
+    """A ``@?`` shown ONLY inside a fenced example must not fail the build --
+    ``--pin`` is correctly a no-op on it, so flagging it gives advice that
+    cannot do anything.
+    """
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "bad.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "```markdown\n"
+        "<!-- claim: mod.py:foo @? -->\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(_mod, "published_pages", lambda: [page])
+    monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
+
+    _mod.test_no_unfilled_placeholder_survives()  # must not raise
+
+
+def test_unfilled_placeholder_guard_still_fires_beside_a_fenced_example(tmp_path, monkeypatch):
+    """Fence-tolerance above must not swallow a REAL stray ``@?`` that sits
+    outside the fence, on the very same page.
+    """
+    import tests.docs.test_claim_anchors as _mod
+
+    page = tmp_path / "docs" / "bad.md"
+    page.parent.mkdir(parents=True)
+    page.write_text(
+        "```markdown\n"
+        "<!-- claim: mod.py:foo @? -->\n"
+        "```\n"
+        "\n"
+        "Some prose with a stray @? in it.\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(_mod, "published_pages", lambda: [page])
     monkeypatch.setattr(_mod, "REPO_ROOT", tmp_path)
 
