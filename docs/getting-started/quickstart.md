@@ -226,20 +226,45 @@ own for custom types with [`register_hasher`](../decorator.md).
 
 ### Edit a helper — the cache notices
 
-Cash folds the source of the functions you *call* into the key, **transitively**:
+Cash folds the source of the functions you *call* into the key, **transitively**.
+`pipeline` below never mentions `clean` — but editing `clean` still invalidates it:
 
-<!-- test:skip reason="illustrative — schematic call graph" -->
 ```python
-def clean(x):     ...                      # edit this...
-def features(x):  return clean(x) + ...
+import cash
+
+c = cash.Cash()
+
+def clean(text):
+    return text.strip().lower()
+
+def features(text):
+    return len(set(clean(text).split()))
 
 @c.cache
-def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
+def pipeline(text):
+    return features(text)
+
+sample = "  The cat  the HAT  "
+print(pipeline(sample))          # 3  -> {'the', 'cat', 'hat'}
+print(pipeline(sample))          # 3  -> cache hit; the body never ran
+print(pipeline.cache_info())     # {'hits': 1, 'misses': 1, ...}
 ```
 
-Editing `clean`, two calls down, invalidates `pipeline`'s cached results — you do
-not have to remember which entries a helper edit reaches. Helpers are resolved
-within the module; for cross-module dependencies, name them with `depends_on=`.
+Now edit `clean`, two calls below `pipeline` — stop lower-casing:
+
+<!-- test:skip reason="the docs harness infers expected hits/misses from call sites, which cannot model an invalidation between two identical calls; this fence is executed and its output asserted by tests/docs/test_quickstart_helper_invalidation.py instead" -->
+```python
+def clean(text):
+    return text.strip()
+
+print(pipeline(sample))          # 4  -> {'The', 'cat', 'the', 'HAT'}
+print(pipeline.cache_info())     # {'hits': 1, 'misses': 2, ...}
+```
+
+The answer changed *and* `misses` went up: cash threw the cached result away
+because a function `pipeline` calls indirectly changed. You don't have to
+remember which entries a helper edit reaches. Helpers are resolved within the
+module; for cross-module dependencies, name them with `depends_on=`.
 
 ### File reads are tracked here too
 
