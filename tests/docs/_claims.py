@@ -511,7 +511,21 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
 
             # A class or module anchor fires on every unrelated edit inside it.
             # That noise is what trains people to re-pin without reading.
-            if isinstance(node, (ast.Module, ast.ClassDef)) and not anchor.broad:
+            #
+            # It only applies to a PINNED anchor, though. The rule exists to
+            # stop fingerprint noise, and an existence anchor carries no
+            # fingerprint -- ``cash/backends/redis_backend.py:RedisBackend``
+            # with no pin says "this class exists", can never drift, and is the
+            # correct way to ground a claim like "Cash ships a Redis backend".
+            # Demanding broad="reason" for that is friction with nothing behind
+            # it, and a rule that fires on correct authoring is one people learn
+            # to satisfy by rote.
+            is_pinned = t.pin is not None or t.value is not None
+            if (
+                is_pinned
+                and isinstance(node, (ast.Module, ast.ClassDef))
+                and not anchor.broad
+            ):
                 what = "module" if isinstance(node, ast.Module) else "class"
                 problems.append(
                     Problem(

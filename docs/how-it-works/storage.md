@@ -6,6 +6,7 @@ on-disk layer, with a promotion policy that decides what's worth writing down.
 
 ## The tiers
 
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend @e936f94d, cash/backends/memory_backend.py:InMemoryBackend, cash/backends/file_backend.py:FileBackend, cash/backends/sqlite_backend.py:SQLiteBackend, cash/backends/redis_backend.py:RedisBackend, cash/backends/s3_backend.py:S3Backend, cash/backends/cascading_backend.py:CascadingBackend broad="tier ordering and read-repair are properties of the class as a whole" -->
 The default `TieredBackend` stacks two layers, fastest first:
 
 | Tier | Backend | Speed | Survives restart? |
@@ -33,8 +34,10 @@ the fit itself and every knob; what follows is only the promotion decision.
 
 Two gates, in order:
 
+<!-- claim: cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 1. **A compute floor.** Anything under **0.1 s** never leaves RAM — disk I/O
    alone would cost more than rerunning it.
+<!-- claim: cash/config.py:CashConfig.min_cache_savings_pct == 0.2 -->
 2. **A savings test.** Promote only when the restore is meaningfully cheaper
    than the recompute:
    `execution_time - est_restore > min_cache_savings_pct × execution_time`,
@@ -76,6 +79,7 @@ where the line falls:
     `%cash_persist on` (`persist_all=True`) for the session, or restructure so
     the expensive work lands in one statement.
 
+<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01 -->
 Before promotion is even considered, a separate and much lower floor decides
 whether a notebook statement is written at all: compute under
 `min_execution_time_to_cache_seconds` (default **10 ms**) writes no entry, not
@@ -86,6 +90,7 @@ file read that only discovers the entry is a skip marker.
 `persist_all=True` — bypasses the compute floor entirely. It does not escape the
 per-tier size caps below.
 
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.__init__ @59106d1e, cash/backends/tiered_backend.py:TieredBackend._default_promotion_policy @7c228c64, cash/config.py:CashConfig.smart_persistence == True -->
 Two places the 0.1 s number quietly becomes 1.0 s. The 0.1 s floor is installed
 by the backend *factory* when `smart_persistence` is on (the default); setting
 `smart_persistence=False`, or constructing a `TieredBackend([...])` by hand,
@@ -105,6 +110,7 @@ on restart.
 
 ## Turning objects into bytes
 
+<!-- claim: cash/backends/serialization.py:get_serializer @3dd730a0, cash/backends/serialization.py:ParquetSerializer, cash/backends/serialization.py:PickleSerializer, cash/backends/serialization.py:CloudPickleSerializer -->
 To persist a value, Cash serializes it. A small factory — `get_serializer` —
 picks the strategy from the data's type:
 
@@ -131,6 +137,7 @@ standard `pickle` if `cloudpickle` isn't installed.
 
 ## Deciding before you deserialize
 
+<!-- claim: cash/backends/lazy.py:LazyProxy @33f4359b, cash/backends/lazy.py:make_lazy_loader @11b3e48d broad="the defer-until-touched contract is the class as a whole" -->
 Deserializing a multi-gigabyte object only to discover you wanted its size is
 wasted work. `LazyProxy` exists for that: a handle that carries the entry's
 metadata but defers `backend.get` until you reach for the value.
@@ -157,6 +164,7 @@ backend precisely so existence and size can be established without touching the
 payload. `resolve()` is idempotent: the loader runs at most once.
 
 ??? question "How does cache metadata stay typed without locking the backends in?"
+<!-- claim: cash/backends/_base.py:CacheMetadata @0076177c, cash/notebook/statement/_metadata.py:StatementCacheMetadata @59339cb6 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
     Each entry carries metadata — execution time, size, ttl, type. Inside the
     cash layer that metadata is a **frozen dataclass** (`CacheMetadata` for the
     decorator layer, `StatementCacheMetadata` for the notebook layer), so call

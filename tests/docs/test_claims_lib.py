@@ -893,3 +893,38 @@ def test_folded_arithmetic_compares_against_a_documented_number():
     value = literal_value(ast.parse("X = 8 * 1024 * 1024").body[0])
     assert values_match("8388608", value)
     assert not values_match("4194304", value)
+
+
+def test_unpinned_class_anchor_needs_no_broad_justification(tmp_path):
+    """An existence anchor on a class carries no fingerprint, so it cannot
+    drift -- the breadth rule has nothing to protect against and must stay
+    quiet. `redis_backend.py:RedisBackend` with no pin is the correct way to
+    ground "Cash ships a Redis backend"."""
+    page = tmp_path / "p.md"
+    page.write_text(
+        "<!-- claim: cash/backends/redis_backend.py:RedisBackend -->\nCash ships a Redis backend.\n",
+        encoding="utf-8",
+    )
+    assert check_page(page) == []
+
+
+def test_pinned_class_anchor_still_needs_broad_justification(tmp_path):
+    """The rule must keep biting where the noise actually comes from."""
+    page = tmp_path / "p.md"
+    page.write_text(
+        "<!-- claim: cash/backends/redis_backend.py:RedisBackend @00000000 -->\nA claim.\n",
+        encoding="utf-8",
+    )
+    (problem,) = check_page(page)
+    assert problem.kind == "broad"
+
+
+def test_value_anchor_on_a_class_still_needs_broad_justification(tmp_path):
+    """A value anchor is pinned too -- it must not slip through the new gate."""
+    page = tmp_path / "p.md"
+    page.write_text(
+        "<!-- claim: cash/backends/redis_backend.py:RedisBackend == 1 -->\nA claim.\n",
+        encoding="utf-8",
+    )
+    (problem,) = check_page(page)
+    assert problem.kind == "broad"
