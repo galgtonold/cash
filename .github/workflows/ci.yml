@@ -140,8 +140,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,docs-test]"
 
+      # `-rs` surfaces skip REASONS in the log, not just a skip count.
+      # test_no_fingerprint_drift's whole reason for existing is that reason
+      # string -- it's the drift queue -- so without -rs it never reaches
+      # the log at all (pytest's default reportchars is "fE").
       - name: Run docs feature-parity tests
-        run: pytest tests/docs/ -n auto -v --tb=short
+        run: pytest tests/docs/ -n auto -v -rs --tb=short
 
       # Advisory, never blocking. Surfaces the re-verification queue while the
       # author still remembers why the code moved -- which is the only moment
@@ -150,4 +154,12 @@ jobs:
       - name: Report drifted doc claims
         if: always()
         run: |
-          python scripts/claims.py --queue >> "$GITHUB_STEP_SUMMARY" || true
+          # $GITHUB_STEP_SUMMARY renders as Markdown: --queue's indented
+          # lines become code blocks and adjacent lines collapse unless the
+          # whole thing is fenced.
+          output="$(python scripts/claims.py --queue || true)"
+          {
+            echo '```'
+            printf '%s\n' "$output"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
