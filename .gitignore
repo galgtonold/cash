@@ -196,3 +196,6 @@ docs/superpowers/
 covrun/
 /integration_inventory.json
 /integration_inventory.md
+
+# Re-run benchmark sweeps (multi-GB, timestamped)
+benchmarks/results_*/

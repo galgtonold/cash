@@ -11,8 +11,26 @@ is where a restore wins big; a statement whose result is nearly as slow to load
 from disk as to recompute is where it wins little — or loses, in which case the
 [cost model](cost-model.md) tries to decline to persist it.
 
-The numbers below are measured by independent testers on real workloads, not
-projections. This page adds the methodology and how to reproduce them.
+!!! warning "These figures are being re-validated — do not cite them yet"
+    The numbers below came from external tester sessions. They are **not**
+    currently reproducible from the harness in `benchmarks/`, and the archived
+    results that ship with the repo do not support them:
+
+    - The archived run (`cash_version: 0.5.0b1`) recorded heavy per-statement
+      **errors** in warm mode — 7 of 11 statements in `synthetic_heavy`, 22 of
+      50 in `01_nyc_taxi_analysis`. A notebook that dies partway does less work,
+      so its warm time is artificially low and the ratio is inflated.
+    - A clean re-run of all ten reference notebooks on the current code tops out
+      at **5.9x**, not ~190x.
+    - That re-run is not a fair measure either: the reference notebooks are
+      built around per-object RNG generators, whose stream position cash does
+      not track, so warm mode restores almost nothing (3.63 s recomputed vs
+      0.03 s restored on `synthetic_heavy_xl`) for reasons unrelated to how
+      cash performs on ordinary work.
+
+    Both the suite and the figures need rebuilding before this page can claim
+    reproducibility. Until then, measure your own workload — the methodology
+    below is sound even though the headline numbers are not yet backed.
 
 ## How much a re-run saves
 
