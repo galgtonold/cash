@@ -106,7 +106,30 @@ def _run_once(
     )
 
 
+def _force_utf8_stdio() -> None:
+    """Make this process's stdio UTF-8, like a real Jupyter kernel.
+
+    Under a Windows console the benchmark child inherits cp1252, and any
+    notebook cell that prints a non-ASCII character dies with
+    UnicodeEncodeError partway through. The cell still returns a timing, so
+    the damage surfaces as *missing statement metrics* rather than as an
+    encoding error -- 09_yelp_reviews lost its data-generation cell (and with
+    it every downstream cell, to NameError), cfd lost three cells, and
+    10_us_flights produced no metrics at all. It read exactly like a caching
+    defect and was chased as one.
+
+    A kernel is UTF-8, so matching it is also the more faithful measurement.
+    ``errors='replace'`` because a benchmark must never die over a glyph.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):  # not a reconfigurable stream
+            pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     p = argparse.ArgumentParser(description="Notebook overhead benchmark")
     p.add_argument("notebook", type=Path)
     p.add_argument("--mode", required=True,

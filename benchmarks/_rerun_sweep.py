@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import pathlib
 import subprocess
 import sys
@@ -51,9 +52,14 @@ def main() -> int:
                 "--repeats", str(args.repeats),
                 "--results-dir", str(out),
             ]
+            # UTF-8 for the child: on Windows it would otherwise inherit
+            # cp1252 and every notebook that prints a non-ASCII character
+            # would die mid-cell. The driver also reconfigures its own stdio,
+            # but setting it here covers anything it spawns in turn.
+            env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             try:
                 p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
-                                   timeout=args.timeout)
+                                   timeout=args.timeout, env=env)
             except subprocess.TimeoutExpired:
                 print(f"TIMEOUT {nb} [{mode}]", flush=True)
                 failures.append(f"{nb} [{mode}]: timeout")
