@@ -21,9 +21,25 @@ from pathlib import Path
 # Make the benchmarks package importable when invoked as a script.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from benchmarks._overhead_driver import run_notebook
+from benchmarks._overhead_driver import new_cash_session, run_notebook
 from benchmarks._overhead_io import load_code_cells
 from benchmarks._overhead_results import RunResult, write_results
+
+# The two warm paths a notebook user actually has. They differ in one thing:
+# whether the RAM tier survives between the priming run and the measured one.
+#
+#   warm-session   same kernel, run the cells again. RAM + disk are both live.
+#                  This is the everyday iteration loop.
+#   warm-restart   kernel restarted (or a new process). Only what the cost
+#                  model wrote to DISK can come back.
+#
+# These were one mode called "warm", which built a fresh Cash for the measured
+# pass and so behaved as warm-restart while being read as though it covered
+# both. Values the cost model parks in RAM — most statements under ~0.1s of
+# compute — were scored as misses, which is why several reference notebooks
+# reported zero restores while caching perfectly well.
+WARM_MODES = ("warm-session", "warm-restart")
+_MODE_ALIASES = {"warm": "warm-restart"}
 
 
 def _dir_size_bytes(path: Path) -> int:
@@ -53,6 +69,7 @@ def _run_once(
     repeat: int,
     cache_dir: Path | None,
     profile_path: Path | None,
+    session=None,
 ) -> RunResult:
     cells = load_code_cells(notebook_path)
 
@@ -67,6 +84,7 @@ def _run_once(
         cells,
         cash_enabled=(mode != "off"),
         cache_dir=cache_dir,
+        session=session,
     )
     total = time.perf_counter() - t0
 
@@ -91,7 +109,11 @@ def _run_once(
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="Notebook overhead benchmark")
     p.add_argument("notebook", type=Path)
-    p.add_argument("--mode", choices=["off", "cold", "warm"], required=True)
+    p.add_argument("--mode", required=True,
+                   choices=["off", "cold", "warm-session", "warm-restart",
+                            "warm"],
+                   help="'warm' is a deprecated alias for warm-restart; it "
+                        "only ever measured disk-tier restores.")
     p.add_argument("--profile", action="store_true",
                    help="Wrap the run in pyinstrument and emit HTML")
     p.add_argument("--repeats", type=int, default=3,
@@ -111,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
                         "and module-level state leak across repeats in one "
                         "process and contaminate cold-mode measurements.")
     args = p.parse_args(argv)
+
+    if args.mode in _MODE_ALIASES:
+        resolved = _MODE_ALIASES[args.mode]
+        print(f"note: --mode {args.mode} is deprecated; running "
+              f"{resolved}. It measures kernel-restart survival (disk tier "
+              f"only). For the same-kernel iteration loop use warm-session.")
+        args.mode = resolved
 
     if args.mode != "off" and args.cache_root is None:
         args.cache_root = args.results_dir / "_caches" / args.notebook.stem
@@ -139,7 +168,10 @@ def main(argv: list[str] | None = None) -> int:
         # uses it. The populate run uses cold mode so cash actually
         # writes entries; its CASH_CACHE_DIR is the same warm_shared so
         # any global cash created in-notebook also populates it.
-        if args.mode == "warm":
+        # Only warm-restart primes from a separate process. warm-session must
+        # prime inside the process that measures — a RAM tier cannot cross a
+        # process boundary — so its child does its own priming below.
+        if args.mode == "warm-restart":
             warm_shared = global_cash_root / "warm-shared"
             if warm_shared.exists():
                 shutil.rmtree(warm_shared, ignore_errors=True)
@@ -161,7 +193,7 @@ def main(argv: list[str] | None = None) -> int:
                     shutil.rmtree(per_repeat_dir, ignore_errors=True)
                 per_repeat_dir.mkdir(parents=True, exist_ok=True)
                 cash_dir = per_repeat_dir
-            elif args.mode == "warm":
+            elif args.mode in WARM_MODES:
                 cash_dir = global_cash_root / "warm-shared"
             else:  # off — isolate per repeat so any in-notebook cash use
                    # doesn't accumulate state
@@ -194,9 +226,24 @@ def main(argv: list[str] | None = None) -> int:
         global_cash_dir.mkdir(parents=True, exist_ok=True)
         os.environ["CASH_CACHE_DIR"] = str(global_cash_dir)
 
-    if args.mode == "warm" and args.single_repeat is None:
-        # In-process warm mode (no subprocess-per-repeat): populate the
-        # cache once, then re-run --repeats times against it.
+    # --- Warm priming ----------------------------------------------------
+    # Populate the cache once, then measure re-runs against it.
+    #
+    # warm-restart primes with its own throwaway Cash and each measured repeat
+    # builds another, so only values that reached disk survive the handover.
+    # warm-session threads ONE Cash through the priming run and every repeat,
+    # keeping the RAM tier alive — and therefore must prime in this process,
+    # including when the parent forked us with --single-repeat.
+    warm_session = None
+    if args.mode == "warm-session":
+        warm_dir = args.cache_root / "warm-shared"
+        if args.single_repeat is None and warm_dir.exists():
+            shutil.rmtree(warm_dir, ignore_errors=True)
+        warm_dir.mkdir(parents=True, exist_ok=True)
+        warm_session = new_cash_session(warm_dir)
+        _run_once(args.notebook, "cold", -1, warm_dir, profile_path=None,
+                  session=warm_session)
+    elif args.mode == "warm-restart" and args.single_repeat is None:
         warm_dir = args.cache_root / "warm-shared"
         if warm_dir.exists():
             shutil.rmtree(warm_dir, ignore_errors=True)
@@ -224,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
                         entry.unlink()
                     elif entry.is_dir():
                         shutil.rmtree(entry, ignore_errors=True)
-        elif args.mode == "warm":
+        elif args.mode in WARM_MODES:
             cache_dir = args.cache_root / "warm-shared"
         else:
             cache_dir = None
@@ -235,7 +282,8 @@ def main(argv: list[str] | None = None) -> int:
             # overhead that distorts the wall-clock comparison.
             profile_path = args.results_dir / f"{stem}-{args.mode}-profile.html"
 
-        result = _run_once(args.notebook, args.mode, repeat, cache_dir, profile_path)
+        result = _run_once(args.notebook, args.mode, repeat, cache_dir,
+                           profile_path, session=warm_session)
         out = args.results_dir / f"{stem}-{args.mode}-{repeat}.json"
         write_results(out, result)
         print(f"[{args.mode}] repeat={repeat} cells={len(result.cells)} "

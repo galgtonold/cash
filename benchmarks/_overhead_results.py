@@ -18,6 +18,12 @@ class StatementMetric:
     cost_model_restore_seconds: float | None = None
     cost_model_type_name: str | None = None
     cost_model_family: str | None = None
+    # Why a statement did not cache. Without these a warm run that restores
+    # nothing is indistinguishable from one that had nothing worth restoring,
+    # which is exactly how the sweep got misread once.
+    uncacheable_reasons: list[str] = field(default_factory=list)
+    skipped_reason: str | None = None
+    storage: list[str] = field(default_factory=list)
 
 
 @dataclass

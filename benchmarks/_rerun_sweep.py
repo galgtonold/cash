@@ -38,12 +38,18 @@ def main() -> int:
             print(f"SKIP  {nb} (not found)", flush=True)
             failures.append(f"{nb}: not found")
             continue
-        for mode in ("off", "cold", "warm"):
+        for mode in ("off", "cold", "warm-session", "warm-restart"):
             t0 = time.perf_counter()
+            # Deliberately NOT passing --cache-root: the driver defaults to
+            # <results>/_caches/<notebook stem>, one cache per notebook. An
+            # earlier version of this script passed a single shared root, which
+            # put all ten workloads in one LRU where they evicted each other —
+            # warm runs then restored almost nothing and it looked like cash
+            # was failing to reuse anything.
             cmd = [
                 sys.executable, str(DRIVER), nb, "--mode", mode,
                 "--repeats", str(args.repeats),
-                "--results-dir", str(out), "--cache-root", str(out / "_caches"),
+                "--results-dir", str(out),
             ]
             try:
                 p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
