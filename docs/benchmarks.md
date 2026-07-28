@@ -114,9 +114,22 @@ per-statement bookkeeping and nothing is malfunctioning; the
 cannot make the decision itself free.
 
 The honest way to read that: not "35× slower", which sounds alarming and means
-very little, but "about 250 ms of overhead you have no reason to pay". If your
-notebook is made of fast cells, cash is not the tool for it — and `%cash_stats`
-will say so plainly rather than reporting a phantom win.
+very little, but "about 250 ms of overhead you have no reason to pay".
+
+**The other way it fails to pay is the opposite shape: results that are large
+but cheap to produce.** `09_yelp_reviews.ipynb` synthesises a two-million-row
+review table; in our sweep it takes 16.6 s uncached and **51.8 s with caching
+on**, a genuine 3× loss in both warm modes. Nothing is wrong — writing and
+reading back a few hundred megabytes simply costs more than regenerating it
+from a seeded RNG. Cash's [cost model](cost-model.md) declines to *persist*
+results like these, which is why the loss does not compound, but the work of
+sizing and hashing them still happens.
+
+The pattern behind both: caching pays when compute is expensive relative to
+the result's size. Cheap-and-small (`synthetic_micro`) and cheap-and-huge
+(`09_yelp_reviews`) are the two ways to be on the wrong side of that. If your
+notebook is either, cash is not the tool for it — and `%cash_stats` will say
+so plainly rather than reporting a phantom win.
 
 ## Measuring your own workload
 
@@ -164,6 +177,30 @@ in a live kernel and do not survive a restart.
 
 So `warm-restart` is the pessimistic bound and `warm-session` the optimistic
 one; your day is somewhere between. If you quote one number, say which.
+
+Across our reference suite the gap is wide wherever results are mostly
+sub-0.1 s — these are counts of statements restored rather than recomputed, on
+the same notebook in the same sweep:
+
+| notebook | warm-session | warm-restart |
+|---|---|---|
+| `cfd_simulation_demo` | 71 of 286 | 1 of 286 |
+| `financial_analysis_demo` | 65 of 141 | 16 of 141 |
+| `bench_cost_model_validation` | 13 of 44 | 5 of 44 |
+
+**A restore count is not a speedup.** `cfd_simulation_demo` restores 71
+statements against 1 and takes the same wall-clock time either way, because
+its cost is a single sequential solver loop that cash declines to cache at
+all. Restoring seventy cheap statements around an uncacheable ten-second loop
+saves nothing you can feel. Count restores to understand *what the tiers do*;
+look at wall clock to decide whether you care.
+
+**Treat end-to-end ratios from this suite as orders of magnitude.** The
+cash-off baseline for `synthetic_heavy` has measured between 3.9 s and 7.3 s
+across repeated sweeps of identical code on one machine — enough to move its
+warm-session ratio between roughly 20× and 45×. Nothing changed but the
+weather. This is the same reason the page leads with restore cost: that number
+is stable and it is the half cash actually determines.
 
 !!! note "Read the end-to-end sweep per notebook, not as one number"
     The reference notebooks differ enormously in how much of their work is
