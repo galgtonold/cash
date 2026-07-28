@@ -103,16 +103,36 @@ def run_notebook(
         # Drain the sink so each cell only owns its own statements.
         before = len(statement_sink)
         t0 = time.perf_counter()
-        shell.run_cell(cell.source)
+        exec_result = shell.run_cell(cell.source)
         t1 = time.perf_counter()
         cell_metrics = list(statement_sink[before:])
+        # run_cell swallows exceptions into the result object. A cell that
+        # dies still returns a timing, so an unrecorded error reads as a fast
+        # cell rather than a broken run.
+        exc = getattr(exec_result, "error_in_exec", None) or getattr(
+            exec_result, "error_before_exec", None)
         timings.append(CellTiming(
             index=cell.index,
             notebook_cell_index=cell.notebook_cell_index,
             wall_seconds=t1 - t0,
             source_chars=len(cell.source),
             statement_metrics=cell_metrics,
+            error=f"{type(exc).__name__}: {exc}" if exc is not None else None,
         ))
+
+    if cash_enabled and not statement_sink:
+        # Cash was asked for and processed nothing. The cells still ran, and
+        # the wall times still look plausible — which is exactly the danger:
+        # a run like this is a cash-off measurement wearing a cash-on label,
+        # and averaging it silently understates every mode it appears in.
+        # Fail loudly instead; a sweep that skips one notebook is recoverable,
+        # a sweep with an invisible hole in it is not.
+        raise RuntimeError(
+            f"cash was enabled but not one of {len(cells)} cells produced a "
+            f"statement metric. The cell transform was not active, so this "
+            f"run measured uncached execution. Refusing to report it as a "
+            f"cash run."
+        )
     return timings
 
 

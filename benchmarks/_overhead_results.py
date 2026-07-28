@@ -33,6 +33,10 @@ class CellTiming:
     wall_seconds: float
     source_chars: int
     statement_metrics: list[StatementMetric] = field(default_factory=list)
+    # Whether the cell raised. IPython captures exceptions rather than
+    # propagating them, so without this a notebook can fail from cell 0
+    # onwards and still produce a full set of plausible timings.
+    error: str | None = None
 
 
 @dataclass
