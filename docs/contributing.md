@@ -91,9 +91,21 @@ pytest tests/test_notebook/test_magics.py -v
 # Specific test
 pytest tests/test_notebook/test_magics.py::TestCashMagics::test_basic_caching -v
 
-# With coverage
-pytest tests/ --cov=cash --cov-report=term-missing
+# With coverage (pytest-cov is not a project dependency; use the
+# `coverage` tool the [tool.coverage.*] config in pyproject.toml targets)
+coverage run -m pytest tests/
+coverage report -m
 ```
+
+
+!!! warning "A bare `pytest tests/` needs more than `[dev]`"
+    `tests/docs/` stubs third-party modules by monkeypatching the real
+    ones, so those packages must be importable — without
+    `pip install -e ".[dev,docs-test]"` several doc pages fail on a real
+    import rather than skipping. CI never runs the suite bare; it uses
+    `--ignore=tests/test_notebook_integration --ignore=tests/test_wheel_gate
+    --ignore=tests/docs` for the fast job and a separately-provisioned job
+    for `tests/docs/`. Mirror that locally, or install both extras.
 
 ### Writing Tests
 
