@@ -18,9 +18,10 @@ model behind that decision.
 The decision reduces to your statement's **compute time**. There are two floors,
 and together they sort every statement into one of three outcomes:
 
+<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
+
 | Compute time | What cash does | Survives a kernel restart? |
 |---|---|---|
-<!-- claim: cash/config.py:CashConfig.min_execution_time_to_cache_seconds == 0.01, cash/backends/factory.py:_SMART_PERSIST_COMPUTE_FLOOR_S == 0.1 -->
 | **< 10 ms** | Nothing — recomputed every run (too cheap to be worth an entry) | — |
 | **10 ms – 0.1 s** | Cached in **RAM** — instant this session | No |
 | **> 0.1 s** *(and worth it)* | Cached in **RAM and on disk** | Yes |

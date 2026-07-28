@@ -81,11 +81,12 @@ This is the part that decides whether a shared backend actually pays off, and
 it differs between the two caching paths:
 
 <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @3dc65a7c, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @5f35e472 -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource @82f97a3d broad="the portability claim is a property of the whole source type" -->
+
 | What you cached | Hits on another machine? |
 |---|---|
 | `@cash.cache` function, pure compute | **Yes** — source and arguments are hashed by content |
 | `@cash.cache` function that reads files | **If the paths line up** — freshness is re-checked by content rather than timestamp, but against the file paths recorded when the entry was written (the absolute path among them). Identical layouts — a container image, a shared mount, CI — hit; a checkout under a different home directory can't resolve the recorded path, revalidates as stale, and recomputes |
-<!-- claim: cash/remote_source.py:RemoteFileDataSource @82f97a3d broad="the portability claim is a property of the whole source type" -->
 | `@cash.cache` function that reads **object storage** | **Yes** — the recorded dependency is the object's ETag/version, a fact about the object rather than about one filesystem, so there are no paths to line up |
 | Notebook statement, pure compute | **Yes** — the statement key carries no notebook path or cell id, *provided* none of its inputs descend from a file-reading statement (the file component rides down the lineage chain) |
 | Notebook statement that **reads a file** | **No** — the file's path, mtime and size are folded into the statement's lineage, and a fresh checkout has different timestamps. Every statement downstream inherits that through its inputs |
