@@ -89,20 +89,34 @@ the part that varies.
 
 The honest other direction:
 
-- **The first run is slower.** Cash pays to fill the cache before it can pay you
-  back — around 1.3× on a big-frame ETL. The win is on iteration and restart,
-  never on first execution.
-- **Roughly 5–30 ms per cached statement** on a cold run: lineage computation,
-  cache-key hashing, and the write.
-- **On trivially cheap cells, cash is a net loss.** In our own sweep a notebook
-  of sub-second cells (`benchmarks/synthetic_micro.ipynb`) ran about **35×
-  slower** with caching on — 7.5 ms of work became 261 ms. Nothing is malfunctioning there — per-statement
-  bookkeeping simply outweighs microsecond statements. The
-  [cost model](cost-model.md) declines to persist such results, but it cannot
-  make the bookkeeping free.
+**The first run is slower**, because cash has to fill the cache before it can
+pay you back. The cost is not a multiplier — it is roughly **5–30 ms per cached
+statement** for lineage and cache-key hashing, plus the write, which scales with
+your result size. Those are the terms to think in:
 
-If your notebook is made of fast cells, cash is not the tool for it — and
-`%cash_stats` will say so plainly rather than reporting a phantom win.
+- On a notebook of small results, the overhead is the per-statement figure and
+  little else. Tens of milliseconds across a cell you wait seconds for is not
+  something you will notice.
+- On a notebook of large results, the write dominates, and it is the same
+  serialisation cost as the restore-cost table above — read it in reverse. A
+  100 MB DataFrame costs about a sixth of a second to write, once.
+
+Quoting a single "first run is N× slower" number would be the same mistake as
+quoting a speedup: the ratio is set by how cheap your compute is, not by how
+expensive cash is.
+
+**Where it genuinely doesn't pay: notebooks made of very fast statements.** Our
+own negative control (`benchmarks/synthetic_micro.ipynb`) is 100 statements of
+microsecond work. With caching on it goes from 7.5 ms to 261 ms — a quarter of
+a second added, on a notebook that finishes instantly either way. That is the
+per-statement bookkeeping and nothing is malfunctioning; the
+[cost model](cost-model.md) correctly declines to store any of it, but it
+cannot make the decision itself free.
+
+The honest way to read that: not "35× slower", which sounds alarming and means
+very little, but "about 250 ms of overhead you have no reason to pay". If your
+notebook is made of fast cells, cash is not the tool for it — and `%cash_stats`
+will say so plainly rather than reporting a phantom win.
 
 ## Measuring your own workload
 
@@ -134,14 +148,36 @@ The `benchmarks/` directory holds the harness:
 - `benchmarks/_rerun_sweep.py` — the full notebook sweep, all modes.
 - `benchmarks/compare_modes.py` — reads a sweep's results into a per-cell table.
 
-!!! note "The end-to-end notebook sweep is not currently a fair measure"
-    The reference notebooks in `benchmarks/` are built around per-object RNG
-    generators (`np.random.default_rng(...)`), whose stream position cash does
-    not track. Warm runs of that suite therefore restore very little for reasons
-    unrelated to how cash performs on ordinary work, and its end-to-end ratios
-    should not be read as representative in either direction. The restore-cost
-    matrix above does not have that problem — it measures serialisation
-    directly.
+### The two warm modes
+
+"Re-running" means two different things, and they give different numbers:
+
+| mode | models | what can come back |
+|---|---|---|
+| `warm-session` | same kernel, run the cells again | RAM **and** disk |
+| `warm-restart` | kernel restarted, or a fresh process | disk only |
+
+The distinction is the [cost model's](cost-model.md) tiering. A result whose
+compute time is under ~0.1s is kept in memory and never written to disk —
+cheap to recompute, not worth the write. Those values survive re-running a cell
+in a live kernel and do not survive a restart.
+
+So `warm-restart` is the pessimistic bound and `warm-session` the optimistic
+one; your day is somewhere between. If you quote one number, say which.
+
+!!! note "Read the end-to-end sweep per notebook, not as one number"
+    The reference notebooks differ enormously in how much of their work is
+    cacheable at all, so averaging them produces a figure that describes no
+    workload. `synthetic_heavy` restores nearly everything; `synthetic_micro`
+    restores nothing *by design* (it is the negative control — every statement
+    is below the cost-model floor); and the solver notebooks are dominated by
+    sequential loops that accumulate with `.append()`, which cash declines to
+    cache and says so.
+
+    Each run's JSON records `uncacheable_reasons` per statement, so a notebook
+    that restores little will tell you why rather than leaving you to guess.
+    Check that field before reading an end-to-end ratio as a statement about
+    cash.
 
 Restore costs depend on hardware and storage speed, so treat the table as shape
 and order of magnitude, and run the harness on your own machine for figures you
