@@ -104,6 +104,22 @@ For health checks rather than per-call diagnostics, you want aggregates.
 <!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @851d8352 -->
 Prints a session-wide summary: cells executed, statements computed / restored / skipped, hit rate, and a time ledger of gross saved, cash overhead, and net saved. The net line is the honest headline, and it is **not** gross minus overhead: it credits only savings this session *verified* by recomputing the same statement, minus the measured overhead. Gross is printed beside it and labelled *(estimated)*, because it values each restore at what the entry cost when first written and nothing re-measures that. The consequence is deliberate understatement — an overstatement would be the bug — and a real loss prints as one ("cash cost you Xs this session"). `%cash_stats json` returns the same numbers as a dict (including `total_overhead`, `net_time_saved`, and `net_time_saved_upper_bound`); `%cash_stats reset` zeros the counters.
 
+!!! warning "It only sees decorator hits on the *default* Cash instance"
+    `%cash_stats` drains the per-instance decorator call log of the notebook's
+    own `Cash` (or the module-level `cash.cache` singleton). A hit on a
+    separately-constructed instance — `c = cash.Cash()`, the pattern several
+    guides on this site use for `register_hasher`, custom backends and
+    `file_depends_on` — is **not** counted. Measured, same workload both ways:
+
+    | decorator | `cache_info()['total_time_saved']` | `%cash_stats` gross |
+    |---|---|---|
+    | `@cash.cache` (global) | 0.401 s | 0.401 s |
+    | `@c.cache` on `c = cash.Cash()` | 0.403 s | **0.0 s** |
+
+    Both genuinely hit the cache. If you use a custom instance, trust
+    `cache_info()` and `explain()` for that function; `%cash_stats` will
+    understate your session.
+
 ### On a decorated function — `cache_info()`
 
 Each `@cash.cache` wrapper carries a per-function counter:
