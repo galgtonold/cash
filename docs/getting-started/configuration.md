@@ -252,15 +252,15 @@ those files directly.
 
 **What gets rebuilt**: the function distinguishes "hot" fields (debug,
 smart-persistence policy knobs) from "backend-affecting" fields
-(cache_dir, max_cache_size, max_memory_entries, flush_interval,
-backend, tiers, all connection details). Hot fields just update the
+(cache_dir, compress, max_cache_size, max_memory_entries,
+flush_interval, backend, tiers, all connection details). Hot fields just update the
 dataclass. Backend-affecting fields drain the old backend's pending
 writes via `shutdown()`, build a fresh backend from the new config,
 and swap it in.
 
 ## Notebook-only knobs
 
-Two settings apply only to the IPython integration and are toggled via
+Three settings apply only to the IPython integration and are toggled via
 magic commands, not the config layer:
 
 ### `%cash_debug` — debug output on/off

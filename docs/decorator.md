@@ -124,7 +124,8 @@ def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 <!-- claim: cash/core.py:Cash._hash_callable_source @a63f1105, cash/core.py:Cash._ensure_closure_analyzed @adbb1f94 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
-are picked up automatically. Per-call overhead is ~5-30μs. Helpers are resolved
+are picked up automatically. Overhead is ~5-30μs *per helper*, paid once for each helper in the
+transitive call graph on every call. Helpers are resolved
 within the module; name cross-module dependencies with
 [`depends_on=`](#depends_on-explicit-dependency-graph).
 
@@ -170,9 +171,11 @@ side-effect accumulators, and folding them in would invalidate the
 function on its own output. A read global whose value can't be hashed
 warns once rather than failing the call.
 
-Globals read inside a nested scope count too. A generator expression,
-comprehension, or `lambda` compiles to its own code object, so detection
-recurses into them:
+Globals read inside a nested scope count too. A generator expression or
+`lambda` always compiles to its own code object, and detection recurses into
+it. List/set/dict comprehensions did too before Python 3.12; PEP 709 now
+inlines them into the enclosing scope, where their global reads are picked up
+directly — either way the global is tracked:
 
 ```python
 THRESHOLD = 10

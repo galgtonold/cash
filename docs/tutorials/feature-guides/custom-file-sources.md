@@ -226,7 +226,7 @@ def load_model():
 ```
 
 <!-- claim: cash/data_source.py:FileDataSource @4099fc64 broad="the mtime-at-init behaviour is a property of the whole class" -->
-Under the hood, `_register_func` wraps each path in a `FileDataSource` and folds it into the function's static dependency list. `FileDataSource.has_changed()` re-reads the file's mtime on every lookup; a change propagates into the cache key and forces a miss.
+Under the hood, `_register_func` wraps each path in a `FileDataSource` and folds it into the function's static dependency list. `FileDataSource.state_token()` re-reads the file's mtime on every lookup; a change propagates into the cache key and forces a miss.
 
 A subtle behavior worth knowing: `FileDataSource.__init__` snapshots the mtime *at decoration time*. If the file doesn't exist yet when the decorator runs, the snapshot is `0.0` (the `OSError` fallback in `_get_mtime`). That's fine — the next stat sees the real mtime and triggers a miss for the first real run. But it means `file_depends_on` on a not-yet-created file does *not* fail loudly; you have to remember it's there.
 

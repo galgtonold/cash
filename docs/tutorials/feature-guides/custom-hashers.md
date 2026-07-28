@@ -142,7 +142,7 @@ Cash ships with module-level fingerprinting for the dataframe ecosystem. These a
 <!-- claim: cash/core.py:Cash._try_builtin_type_hash @09adf0d5 broad="the table enumerates every type the builtin dispatcher recognises" -->
 | Type | Hash strategy | Source |
 |---|---|---|
-| `pandas.DataFrame`, `pandas.Series` | `pd.util.hash_pandas_object(value).values.tobytes()` then SHA-256 | `_try_hash_pandas` |
+| `pandas.DataFrame`, `pandas.Series` | Schema (column / series / index names) **and** `pd.util.hash_pandas_object(value).values.tobytes()`, SHA-256'd together — so a column rename invalidates even with identical row values | `_try_hash_pandas` |
 | `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype, at any size | `_try_hash_numpy` |
 | `polars.DataFrame`, `Series`, `LazyFrame` | `hash_rows()`, `hash()`, or `explain()` output then SHA-256 | `_try_hash_polars` |
 | `pyarrow.Table`, `RecordBatch` | Schema + row count + every column buffer (full content, any size) | `_try_hash_pyarrow` |

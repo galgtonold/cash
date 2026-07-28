@@ -506,6 +506,7 @@ When several annotations apply to a single statement (stacked above, on the line
 | `no_cache` | logical OR |
 | `allow_random` | logical OR |
 | `cache_fit` | logical OR |
+| `cache_calls` | logical OR |
 | `ttl` | "other wins if set" — order-sensitive |
 
 That means:
@@ -557,10 +558,23 @@ The literal `@cash:` is case-sensitive (the regex isn't compiled with `IGNORECAS
 
 ```python
 # @cash:ttl=               # WRONG — silently ignored
-# @cash:ttl=5m             # WRONG — silently ignored ("5m" isn't all digits)
-# @cash:ttl=-30            # WRONG — minus sign isn't a digit
+# @cash:ttl=-30            # WRONG — minus sign isn't a digit, silently ignored
 model = train()
 ```
+
+!!! danger "A unit suffix is silently *truncated*, not rejected"
+    The value pattern is `(\d+)`, and it is not anchored to the end of the
+    directive — so it matches the leading digits and drops the rest:
+
+    ```python
+    # @cash:ttl=5m          # parses as ttl=5  -- FIVE SECONDS, not five minutes
+    # @cash:ttl=2h          # parses as ttl=2  -- two seconds
+    ```
+
+    There is no warning. If you write `ttl=5m` meaning five minutes you get a
+    value 60× smaller than you intended, and the only symptom is a cache that
+    keeps missing. **TTL is always in seconds and takes digits only** — write
+    `# @cash:ttl=300`.
 
 Use a plain integer in seconds: `# @cash:ttl=300`.
 

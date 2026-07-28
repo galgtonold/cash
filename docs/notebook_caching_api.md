@@ -27,7 +27,8 @@ tuning a model, building a pipeline cell by cell. The payoff grows with:
 
 It's less useful for a notebook of sub-second cells with no restarts — cash's
 per-cell bookkeeping can outweigh what it saves. `%cash_stats` reports **net**
-time saved (gross minus cash's own overhead) precisely so you can tell.
+time saved — the savings this session re-verified, minus cash's own overhead —
+precisely so you can tell.
 
 For caching individual functions in a module or script instead, reach for the
 [`@cash.cache` decorator](decorator.md). The two share one engine and

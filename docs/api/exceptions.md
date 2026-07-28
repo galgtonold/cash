@@ -1,6 +1,11 @@
 # Exceptions & warnings
 
-The complete hierarchy of things Cash raises or warns about.
+The exceptions and warnings Cash exports from the top-level `cash` module.
+
+A few internal warnings live on their own submodule and are not re-exported —
+`CashNotebookDiscoveryWarning` (raised when Jupyter path discovery fails and
+upstream tracking degrades) is importable from
+`cash.notebook.server_discovery`, not from `cash`.
 
 ## Imports
 

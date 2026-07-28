@@ -61,7 +61,7 @@ Each statement is cached independently. Change the `dropna` logic and only that 
     and binds it to a name, so it caches the same way in either position. Same
     underlying rule as `sort_values(inplace=True)` below; it is just easier to
     miss, because a subscript store doesn't *look* like a mutation. On a real
-    ETL it is worth having: a tester measured roughly a fifth of their runtime
+    ETL it is worth having: in testing it accounted for a meaningful share of runtime
     going to columns recomputing under exactly this idiom.
 
     It only matters for expensive columns. `df['flag'] = 0` is not worth restructuring.

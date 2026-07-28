@@ -98,5 +98,8 @@ database alongside the cache. Drives the analytics dashboard
       members:
         - __init__
         - record_event
-        - get_function_stats
-        - get_session_summary
+        - get_session_stats
+        - get_stats_for_session
+        - get_global_stats
+        - get_daily_savings
+        - flush

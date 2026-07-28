@@ -288,7 +288,7 @@ for e in entities:          # several statements per iteration, >50 of them,
     out.append(rec)         # mutated in place
 ```
 
-When it does happen the badge says so (`Storage uncacheable · Reason: In-place mutation on: out`) and gives the fix, so you are not misled about *whether* it cached — but nothing tells you which threshold you crossed.
+When it does happen the badge says so — the HTML badge's row detail shows a **Storage** field reading `uncacheable` and a separate **Reason** field naming `In-place mutation on: out`, and `%cash_badge print` appends the same reason to the row — so you are not misled about *whether* it cached. But nothing tells you which threshold you crossed.
 
 **What to do:** either cache the call instead of the statement — `# @cash:cache-calls` on the loop header caches `fetch(e)` and lets the append re-run, see [the directive](annotations.md#cashcache-calls-alias-cachecalls) — or assign the result instead of appending to it. A comprehension is cached as a single value at any length, and sidesteps the question entirely:
 

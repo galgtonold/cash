@@ -23,7 +23,9 @@ The shape of every statement's journey is the same:
 
 <!-- claim: cash/notebook/ipython/magics.py:CashMagics._execute_cell @6944c822, cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell @c077a8d1 -->
 `CashMagics` stands in front of IPython's `run_cell`, and hands the cell to
-`CellExecutor.execute_cell()`, which runs the eight-step pipeline below:
+`CellExecutor.execute_cell()`. Steps 2-7 below are that method's own
+seven phases; step 1 (interception) and step 8 (badge render) happen in
+`CashMagics` around it:
 
 ```mermaid
 flowchart TD

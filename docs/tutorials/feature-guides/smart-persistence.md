@@ -108,7 +108,13 @@ cash.configure(smart_persistence=False)           # fall back to the default pol
 ```
 
 <!-- claim: cash/__init__.py:configure @7169eecd -->
-`cash.configure(smart_persistence=...)` is **not** in the `BACKEND_AFFECTING` set that `cash.configure` consults, so changing it at runtime updates the dataclass but does not rebuild the active backend's policy closure. To make a runtime change stick, restart the process or reconstruct the `Cash` instance.
+Neither `smart_persistence` nor `min_cache_savings_pct` is in the
+`BACKEND_AFFECTING` set that `cash.configure` consults, so changing either at
+runtime updates the dataclass but does not rebuild the active backend's policy
+closure — `TieredBackend` reads both once, at construction. To make a runtime
+change stick on the decorator path, restart the process or reconstruct the
+`Cash` instance. (The notebook's own promotion gate re-reads the config live,
+so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 

@@ -206,10 +206,12 @@ Set the badge display mode for subsequent cached cells. See
 <!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @851d8352 -->
 
 Show session-wide cache statistics: counts, hit rate, compute time, and the
-savings broken out as **gross saved**, **cash overhead**, and **net saved**
-(net = gross − overhead), plus tracked variables. Reporting net keeps the
-headline honest: cash's own per-cell overhead is subtracted from the gross
-recompute it avoided, and a session whose overhead outweighs its hits reads as
+savings broken out as **gross saved**, **cash overhead**, and **net saved**,
+plus tracked variables. The headline net is `verified saved − overhead` — the
+subset of savings *this* session re-measured itself, not the full gross, so a
+stale first-run timing can never inflate it. (`gross − overhead` is reported
+separately as an upper bound.) Reporting net keeps the headline honest:
+cash's own per-cell overhead is subtracted from the recompute it avoided, and a session whose overhead outweighs its hits reads as
 a plain "cash cost you Xs this session" rather than a phantom win. The command
 deliberately avoids walking the backend so it stays cheap on large on-disk
 caches.
@@ -326,8 +328,10 @@ variables are no longer in the namespace.
   found.
 - `--fix` — Call `backend.delete(key)` on every corrupted entry.
 
-**Requires:** A backend that implements `list_entries`. Other backends print
-an info message and return.
+**Note:** every built-in backend implements `list_entries`, so this works
+everywhere out of the box. A custom third-party backend that cannot list its
+entries makes the command print `[Error] Error accessing backend: ...` and
+return.
 
 **Example:**
 
