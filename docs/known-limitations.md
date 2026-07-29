@@ -352,7 +352,25 @@ The statement-level cache still misses on the reorder and the loop still re-exec
 
 ### Editing without saving
 
-Editing a cell in VS Code without saving the notebook file can make the cell-ID match fail, which skips the upstream check and misses the cache for statements that did not change. Values stay correct. **What to do:** save the notebook.
+Cash reads the cells it did *not* execute from the saved `.ipynb` on disk, so an
+edit you haven't saved is invisible to it. This affects **JupyterLab (including
+Binder) and VS Code alike** — not just one editor. Two ways it shows up:
+
+- **The upstream repair doesn't fire.** Edit a config cell, then run a downstream
+  cell without saving: cash reads the old value, concludes nothing upstream
+  changed, and restores the previous answer while your screen shows the new code.
+- In VS Code the cell-ID match can also fail, which skips the upstream check and
+  *misses* the cache for statements that did not change.
+
+Values stay correct in the sense that you get what your kernel actually holds —
+the same thing plain Jupyter would give you. What you lose is the safety net:
+cash's upstream check is only ever as current as the file it read.
+
+**What to do:** save the notebook (`Ctrl+S` / `Cmd+S`) after editing a cell you
+aren't about to run. Autosave exists in JupyterLab but runs on a timer, so a
+quick edit-then-run lands inside the window. **Google Colab is exempt** — there
+cash reads cells live from the frontend via `get_ipynb`, so there is nothing to
+save.
 
 ### Others
 

@@ -98,6 +98,24 @@ is stale but `features` is not, and repairs exactly that:
 - `score(features, THRESHOLD)` re-runs, once, with the new threshold,
 - Cell 3 prints the new number.
 
+!!! warning "Save the notebook first — cash reads upstream cells from the file on disk"
+    This is the one thing that will make the walk-back above appear not to work.
+    Cash reads the cells it didn't execute from the **saved `.ipynb`**, not from
+    your editor's in-memory buffer. Change `THRESHOLD` to 15, run Cell 3 without
+    saving, and cash still reads `10` — so it concludes nothing upstream changed,
+    the repair never fires, and Cell 3 prints the *old* number while your screen
+    shows the new one.
+
+    **Press `Ctrl+S` (`Cmd+S` on macOS) after editing an upstream cell.**
+    JupyterLab does autosave, but on a timer — a quick edit-then-run lands inside
+    that window, which is exactly when you're most likely to hit this.
+
+    Nothing is corrupted when it happens: you get the value your kernel actually
+    holds, which is the same thing plain Jupyter would give you. What you lose is
+    the safety net — cash's upstream check is only ever as current as the file it
+    read. **Google Colab is the exception**: there cash reads cells live from the
+    frontend, so there is nothing to save.
+
 You get the same result you'd get from *Run All*, at the cost of the one cheap
 statement that actually changed. That's the difference between caching *cells* and
 tracking lineage *between statements*: the unit of repair is the statement, and cash
