@@ -335,6 +335,7 @@ def compute_cache_key(
     outputs: set[str] | None = None,
     occurrence_index: int = 0,
     rng_fingerprint: str | None = None,
+    namespace: str = "stmt",
 ) -> CacheKeyResult:
     """Compute the cache key for a statement.
 
@@ -360,6 +361,12 @@ def compute_cache_key(
         When the same statement appears multiple times (e.g., ``c.increment()``
         repeated 3 times), each occurrence gets a unique index (0, 1, 2) to
         ensure distinct cache keys. Defaults to 0 (first occurrence).
+    namespace : str, optional
+        Key-space prefix. ``"stmt"`` (default) for statements; ``"call"`` for
+        sub-statement call units. Namespacing rather than a second builder
+        keeps ADR-007's single-source-of-truth invariant: one place computes
+        the combined hash, and the prefix only decides which space it lands
+        in. ``write_provenance_key``'s ``writeprov:`` is the same pattern.
 
     Returns
     -------
@@ -444,7 +451,7 @@ def compute_cache_key(
         f"{occurrence_component}{rng_component}{callee_component}"
     )
     combined_hash = hashlib.sha256(combined_hash_str.encode('utf-8')).hexdigest()
-    cache_key = f"stmt:{combined_hash}"
+    cache_key = f"{namespace}:{combined_hash}"
 
     if debug:
         debug_print_fn(
