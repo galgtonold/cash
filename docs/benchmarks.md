@@ -117,19 +117,18 @@ The honest way to read that: not "35× slower", which sounds alarming and means
 very little, but "about 250 ms of overhead you have no reason to pay".
 
 **The other way it fails to pay is the opposite shape: results that are large
-but cheap to produce.** `09_yelp_reviews.ipynb` synthesises a two-million-row
-review table; in our sweep it takes 16.6 s uncached and **51.8 s with caching
-on**, a genuine 3× loss in both warm modes. Nothing is wrong — writing and
-reading back a few hundred megabytes simply costs more than regenerating it
-from a seeded RNG. Cash's [cost model](cost-model.md) declines to *persist*
-results like these, which is why the loss does not compound, but the work of
-sizing and hashing them still happens.
+but cheap to produce.** A few hundred megabytes that took a second to generate
+costs more to write and read back than to recompute, so there is nothing for
+caching to win. Cash's [cost model](cost-model.md) declines to *persist*
+results like these — which is what stops the loss compounding — but the work
+of sizing and hashing them still happens.
 
 The pattern behind both: caching pays when compute is expensive relative to
-the result's size. Cheap-and-small (`synthetic_micro`) and cheap-and-huge
-(`09_yelp_reviews`) are the two ways to be on the wrong side of that. If your
-notebook is either, cash is not the tool for it — and `%cash_stats` will say
-so plainly rather than reporting a phantom win.
+the result's size. Cheap-and-small and cheap-and-huge are the two ways to be
+on the wrong side of that. If your notebook is either, cash is not the tool
+for it — and `%cash_stats` will say so plainly rather than reporting a phantom
+win. Measure your own case with [`%cash_benchmark`](magics.md#cash_benchmark)
+rather than trusting a figure from someone else's machine.
 
 ## Measuring your own workload
 
