@@ -68,6 +68,14 @@ class CallSite:
     #: name's lineage -- ``compute(next(it))`` being the case that makes this
     #: a correctness requirement rather than a tuning knob. See Task 3.
     computed_arg_positions: tuple[int, ...] = ()
+    #: True when the call uses ``*args``/``**kwargs`` unpacking. The runtime
+    #: half (``CallUnit``) must refuse to key such a call at all: the live
+    #: arity it sees (the flattened ``(*args, *kwargs.values())`` it is
+    #: actually called with) can differ from ``len(computed_arg_positions)``,
+    #: which is a STATIC count from the AST -- hashing only the positions that
+    #: count predicts would silently ignore any unpacked elements beyond it.
+    #: See CAS-243 review C2.
+    has_unpacking: bool = False
 
 
 def _is_storable(result) -> bool:
@@ -120,13 +128,28 @@ class CallCache:
 
     def __init__(self, cash_instance, ctx_provider: Callable[[], CacheKeyContext] | None = None):
         self._cash = cash_instance
-        # Keyed by (id(fn), site_index) and pinned by the value tuple: a
-        # function's id can be reused after garbage collection (the original is
-        # held alongside the wrapper to keep it alive and to detect a recycled
-        # id), and the SAME function at two different call sites needs two
-        # distinct wrappers -- each closes over its own CallSite, so collapsing
-        # them onto one entry would serve one site's cached value at the other.
-        self._wrappers: dict[tuple[int, int], tuple[types.FunctionType, object]] = {}
+        # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
+        # called once per STATEMENT, so `site_index` (an index into that
+        # statement's own site list) is reused across every statement that
+        # rewrites at least one call: index 0 means something different on
+        # every statement. Keying on the index let editing a cell reuse the
+        # PREVIOUS statement's wrapper -- same fn, index 0 -- serving its
+        # source/free_names/computed_arg_positions after the callee's own
+        # argument expression had changed (CAS-243 review C1; reproduced as
+        # `out.append(compute(a + 100))` silently returning `out.append(compute(a))`'s
+        # cached value). `CallSite` is a frozen, hashable dataclass of
+        # `(source, free_names, occurrence_index, computed_arg_positions,
+        # has_unpacking)`, so keying on the site itself self-invalidates on
+        # any of those changing -- while an UNCHANGED cell re-executing still
+        # gets a wrapper hit, because `wrap_eligible_calls` builds a NEW
+        # CallSite object each time but an EQUAL one (frozen dataclasses hash
+        # and compare by value), so the wrapper-reuse optimisation
+        # (`test_wrapper_is_reused_for_the_same_function`) is preserved rather
+        # than lost to a blanket `_wrappers.clear()` in `set_sites`. A
+        # function's id can also be reused after garbage collection, so the
+        # original is pinned alongside the wrapper in the value tuple to keep
+        # it alive and detect a recycled id.
+        self._wrappers: dict[tuple[int, CallSite | None], tuple[types.FunctionType, object]] = {}
         #: Log keys of functions this instance actually wrapped. The badge uses
         #: it to tell an intercepted call from a hand-decorated one — both land
         #: in the same call log, and undifferentiated the section appears out of
@@ -195,14 +218,17 @@ class CallCache:
         if getattr(fn, '_is_file_tracker_patch', False):
             return fn
 
-        entry = self._wrappers.get((id(fn), site_index))
-        if entry is not None and entry[0] is fn:
-            return entry[1]
-
         try:
             site = self._sites[site_index]
         except (IndexError, TypeError):
             site = None
+
+        # Keyed on the SITE, not the index -- see the long comment on
+        # `_wrappers` in `__init__` for why the index alone is unsafe.
+        cache_key = (id(fn), site)
+        entry = self._wrappers.get(cache_key)
+        if entry is not None and entry[0] is fn:
+            return entry[1]
 
         try:
             if site is not None:
@@ -224,7 +250,7 @@ class CallCache:
                 wrapper = self._cash.cache(fn, cache_if=_is_storable)
         except Exception:  # noqa: BLE001 - a caching wrapper is never worth an error
             return fn
-        self._wrappers[(id(fn), site_index)] = (fn, wrapper)
+        self._wrappers[cache_key] = (fn, wrapper)
         self.wrapped_names.add(self._log_key(fn))
         return wrapper
 
@@ -289,6 +315,7 @@ def wrap_eligible_calls(
                     free_names=frozenset(_names_read(call)),
                     occurrence_index=index,
                     computed_arg_positions=_computed_arg_positions(call),
+                    has_unpacking=_call_has_unpacking(call),
                 )
             )
             call.func = ast.Call(
@@ -301,21 +328,38 @@ def wrap_eligible_calls(
     return new_tree, sites
 
 
+def _call_has_unpacking(call: ast.Call) -> bool:
+    """True when *call* uses ``*args``/``**kwargs`` unpacking.
+
+    An ``ast.Starred`` positional (``f(*xs)``) or a keyword with ``arg=None``
+    (``f(**kw)``) means the number of arguments actually passed at runtime is
+    not knowable from the AST -- ``len(call.args) + len(call.keywords)``
+    counts *expressions* in the call, not values. Shared by
+    :func:`_computed_arg_positions` (which fails closed to "every position"
+    on this case, since it cannot compute reliable positions past an
+    unpacking) and :class:`CallSite` construction (whose ``has_unpacking``
+    flag tells the runtime half to refuse the site outright rather than trust
+    that static, possibly-wrong count -- see CAS-243 review C2).
+    """
+    return any(isinstance(a, ast.Starred) for a in call.args) or any(
+        kw.arg is None for kw in call.keywords
+    )
+
+
 def _computed_arg_positions(call: ast.Call) -> tuple[int, ...]:
     """Positions, in ``(*args, *kwargs.values())`` order, of non-``ast.Name``
     arguments -- the ones whose evaluated value (not a name's lineage) must be
     hashed into the cache key.
 
-    ``*args``/``**kwargs`` unpacking (an ``ast.Starred`` positional, or a
-    keyword with ``arg=None``) makes the position of any later argument
+    ``*args``/``**kwargs`` unpacking makes the position of any later argument
     unreliable to compute here, since the unpacked collection's length is not
-    known statically. Fail closed: record every position as computed, so a
-    later task treats the whole call as needing evaluated-value hashing rather
-    than under-keying it.
+    known statically. Fail closed: record every position as computed. (The
+    runtime half does not actually attempt to hash these -- ``CallSite.
+    has_unpacking`` makes it refuse the whole site instead; this fallback
+    value only matters if something ever reads ``computed_arg_positions``
+    without checking ``has_unpacking`` first.)
     """
-    if any(isinstance(a, ast.Starred) for a in call.args) or any(
-        kw.arg is None for kw in call.keywords
-    ):
+    if _call_has_unpacking(call):
         return tuple(range(len(call.args) + len(call.keywords)))
     positions = []
     for i, arg in enumerate(call.args):

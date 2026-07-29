@@ -1664,13 +1664,42 @@ class StatementProcessor:
             # here means an eligible-but-uncacheable site is never wrapped in
             # the first place, so a doomed key is never even attempted.
             def gate(call: ast.Call) -> bool:
-                return call_site_is_cacheable(
-                    call,
-                    user_ns=self.shell.user_ns,
-                    annotation=annotation,
-                    is_stateful_call=self._check_callable_stateful,
-                    scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
-                )[0]
+                # `call_site_is_cacheable` runs the full `decide_cacheability`
+                # / `analyze_statement` / `scan_for_forbidden_functions` stack
+                # against a bare `ast.Expr(Call)` sub-expression -- a shape the
+                # analyzer has never been exercised against before this gate
+                # existed. The outer `try` below only ever guarded a copy and
+                # an unparse, so it only catches (SyntaxError, ValueError,
+                # TypeError, AttributeError); anything else escaping THIS
+                # function would surface as the user's own traceback on their
+                # statement (CAS-243 review I1). Fail closed instead: an
+                # exception here means "don't wrap", exactly like a `False`
+                # verdict, never "crash the cell".
+                try:
+                    return call_site_is_cacheable(
+                        call,
+                        user_ns=self.shell.user_ns,
+                        annotation=annotation,
+                        # The runtime lineage table genuinely exists at this
+                        # call site (unlike the AST-only rewrite-time case
+                        # `call_site_is_cacheable`'s docstring justifies
+                        # omission for) -- passing it lets the missing-lineage
+                        # reason source apply here too, tightening the gate to
+                        # the same standard the statement itself is judged by
+                        # (CAS-243 review I2).
+                        variable_lineage=self.variable_lineage,
+                        is_stateful_call=self._check_callable_stateful,
+                        scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                    )[0]
+                except Exception:  # noqa: BLE001 - fail closed to "don't wrap"
+                    # Not `ast.unparse(call)` in this message: that can itself
+                    # raise, and doing so here would defeat the very fix this
+                    # except exists to provide.
+                    logger.debug(
+                        "%s cache-calls gate raised; leaving a call site unwrapped",
+                        _LOG_PROCESSOR,
+                    )
+                    return False
             rewritten, sites = wrap_eligible_calls(
                 tree if tree is not None else ast.parse(code), gate=gate,
             )

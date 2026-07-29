@@ -12,7 +12,6 @@ from __future__ import annotations
 import time
 
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallUnit
 
 
 def _site(source="slow(x)", names=("slow", "x")):
@@ -94,6 +93,48 @@ def test_a_computed_argument_is_hashed_into_the_key(call_unit_harness):
     assert wrapped(9) == 18
     assert wrapped(5) == 10
     assert calls == [5, 9], "two distinct computed-argument values must not collapse to one key"
+
+
+def test_unpacking_call_is_never_cached(call_unit_harness):
+    """CAS-243 review C2: ``*args``/``**kwargs`` unpacking makes the live
+    arity dynamic, so ``computed_arg_positions`` (a STATIC, fail-closed-to-
+    "every position" count from the AST) cannot be trusted to match the
+    RUNTIME flattened argument list. Reproduced end to end before the fix:
+    ``compute(*make_pair())`` hashed only the first unpacked element,
+    ``len(arg_digests) == len(computed_arg_positions)`` (both 1) passed the
+    mismatch check "by accident", and a second, genuinely different
+    ``make_pair()`` result was served the first call's cached value. The fix
+    refuses the whole site outright via ``CallSite.has_unpacking``.
+    """
+    calls = []
+
+    def compute(*args):
+        calls.append(args)
+        time.sleep(0.05)
+        return sum(args)
+
+    # `compute(*pair)`: one static position (the Starred expression itself),
+    # but two live arguments once unpacked -- exactly the shape that fooled
+    # the naive count check.
+    site = CallSite(
+        source="compute(*pair)",
+        free_names=frozenset({"compute", "pair"}),
+        occurrence_index=0,
+        computed_arg_positions=(0,),
+        has_unpacking=True,
+    )
+    unit = call_unit_harness(lineage={}, user_ns={"compute": compute})
+    wrapped = unit.wrap(compute, site)
+
+    # The first unpacked element is IDENTICAL across both calls (1) and only
+    # the second differs (2 vs 3) -- the naive "hash only the statically-known
+    # positions" bug hashes position 0 alone, so it cannot tell these two
+    # calls apart at all and serves the second one the first's cached value
+    # (3, wrong) instead of computing its own (4).
+    assert wrapped(1, 2) == 3
+    assert wrapped(1, 3) == 4, "a second, different unpacked call was served a stale value"
+    assert calls == [(1, 2), (1, 3)], "an unpacking call must never be treated as a cache hit"
+    assert unit.call_log == [], "an unpacking call must not even be recorded as an attempted key"
 
 
 def test_a_mismatched_digest_count_runs_uncached(call_unit_harness):

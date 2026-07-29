@@ -20,7 +20,7 @@ import pytest
 import cash
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.badge_renderer.renderers.text import render_text
-from cash.notebook.call_interception import CallCache
+from cash.notebook.call_interception import CallCache, CallSite
 
 
 # ---------------------------------------------------------------- CallCache
@@ -30,11 +30,19 @@ def call_cache(tmp_path):
     return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
+def _site(source="compute(x)", names=("compute", "x")):
+    return CallSite(
+        source=source, free_names=frozenset(names), occurrence_index=0,
+        computed_arg_positions=(0,),
+    )
+
+
 def test_wrapped_names_records_what_it_intercepted(call_cache):
     """The processor needs a key it can match drained log entries against."""
     def compute(x):
         return x + 1
 
+    call_cache.set_sites([_site()])
     assert call_cache.wrapped_names == set()
     call_cache.resolve(compute)
     assert any(n.endswith("compute") for n in call_cache.wrapped_names), (
@@ -44,6 +52,7 @@ def test_wrapped_names_records_what_it_intercepted(call_cache):
 
 def test_passed_through_callables_are_not_recorded(call_cache):
     """Only what was actually wrapped counts, or the badge over-claims."""
+    call_cache.set_sites([_site(source="len(a)", names=("len", "a"))])
     call_cache.resolve(len)
     call_cache.resolve(None)
     assert call_cache.wrapped_names == set()
@@ -57,6 +66,7 @@ def test_already_decorated_functions_are_not_recorded(call_cache, tmp_path):
     def compute(x):
         return x + 1
 
+    call_cache.set_sites([_site()])
     call_cache.resolve(compute)
     assert call_cache.wrapped_names == set()
 

@@ -159,6 +159,29 @@ def test_computed_arg_positions_fail_closed_under_unpacking():
     assert sites[0].computed_arg_positions == (0, 1, 2)
 
 
+def test_has_unpacking_is_set_for_star_args():
+    """CAS-243 review C2: the runtime half (``CallUnit``) needs to know a call
+    unpacked its arguments so it can refuse to key it (a static position count
+    cannot be trusted against a dynamic runtime arity) -- that decision has to
+    be made HERE, at rewrite time, since nothing downstream can recover
+    "was this call written with a ``*``" from the live arguments alone.
+    """
+    tree = ast.parse("out.append(compute(*xs, k=1, **kw))")
+    _, sites = wrap_eligible_calls(tree)
+    assert sites[0].has_unpacking is True
+
+
+def test_has_unpacking_is_false_without_unpacking():
+    """Positive control: an ordinary call, including one with computed
+    (non-Name) arguments, must not be flagged -- or every computed-argument
+    call would be refused outright and Task 3's hybrid keying would be dead
+    code.
+    """
+    tree = ast.parse("out.append(compute(f(x), a, b=g(y), c=z))")
+    _, sites = wrap_eligible_calls(tree)
+    assert sites[0].has_unpacking is False
+
+
 def test_computed_arg_positions_all_bare_names_is_empty():
     """The common case, and the one a regression is least likely to be
     caught in by eye: every argument is a bare name, so nothing needs its

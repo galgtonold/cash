@@ -18,6 +18,22 @@ The decorator has the same hole when a user writes ``@cash.cache`` by hand
 (confirmed by the same probe) — that is filed separately. This guards the path
 that applies caching *without the user asking*, which is the one that owes a
 higher duty of care.
+
+**Deliberately still exercising the no-site decorator-fallback branch of
+``resolve()``, unlike every other ``test_call_interception_*`` file** (a CAS-
+243 review, round 2, asked all of them to register a real site and reconsider
+whether the fallback still earns its keep — this file's answer is "yes, kept,
+on purpose, for now"). ``CallUnit``'s post-execution refusals
+(``CallUnit._storable``) are still a stub returning ``True`` -- Task 6's job,
+not this one's -- so a call routed through a REAL site does not apply this
+guard yet and these tests would fail (matching
+``tests/test_notebook_integration/test_cache_calls_figure_guard.py``'s
+tracked, ``strict=True`` xfail for the same reason). Registering a site here
+would mean marking every test in this file xfail instead of the one
+integration test that already covers it, so the no-site fallback path is kept
+under deliberate test here until Task 6 lands ``CallUnit``'s own guard --
+at which point this file should be migrated to real sites like its siblings,
+and the integration xfail removed.
 """
 from __future__ import annotations
 

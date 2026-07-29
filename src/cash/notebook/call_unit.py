@@ -275,6 +275,20 @@ class CallUnit:
         return _invoke
 
     def _build_key(self, site: CallSite, args: tuple, kwargs: dict) -> str | None:
+        if site.has_unpacking:
+            # `*args`/`**kwargs` unpacking means the call's live arity is not
+            # statically known. `site.computed_arg_positions` is a STATIC
+            # count (every position, fail-closed -- see
+            # `_computed_arg_positions`), which need not match the RUNTIME
+            # flattened `(*args, *kwargs.values())` length: `compute(*pair())`
+            # has one static position but the pair unpacks to two live
+            # arguments, and indexing only position 0 would hash the first
+            # element and silently ignore the rest (CAS-243 review C2 --
+            # reproduced as a second, DIFFERENT pair() result being served the
+            # first call's cached value). Refuse the whole site rather than
+            # mint a key that looks discriminated but isn't; an uncached call
+            # is merely slow.
+            return None
         try:
             arg_digests = self._arg_digests(site, args, kwargs)
             return call_cache_key(
