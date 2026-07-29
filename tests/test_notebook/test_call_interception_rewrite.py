@@ -113,5 +113,64 @@ def test_distinct_sources_each_start_at_occurrence_zero():
     assert [s.occurrence_index for s in sites] == [0, 0]
 
 
+def test_computed_arg_positions_mixed_positional_and_keyword():
+    """Task 3 hashes the *evaluated value* of each computed position directly
+    into the cache key. A wrong index here -- an off-by-one in the keyword
+    offset, say -- would hash the wrong argument's value, or miss one
+    entirely, and silently serve a stale result under a key that looks fine.
+
+    ``x`` and ``v`` are bare names (their value comes from lineage, not this
+    mechanism); ``y=f(z)`` and ``w=3`` are not, so only their positions
+    -- 1 (the first keyword) and 2 (the second) -- must be recorded.
+    """
+    tree = ast.parse("out.append(compute(x, y=f(z), w=3, v=name))")
+    _, sites = wrap_eligible_calls(tree)
+
+    assert sites[0].source == "compute(x, y=f(z), w=3, v=name)"
+    assert sites[0].computed_arg_positions == (1, 2)
+
+
+def test_computed_arg_positions_positional_expression_and_keyword_expression():
+    """Same correctness stakes as above, pinned from the other end: the first
+    positional argument (index 0) is itself a call and must be flagged, the
+    second positional (index 1, a bare name) must not, and the keyword
+    offset must land on ``len(args)`` -- here 2 -- not ``len(args) - 1`` or
+    ``len(args) + 1``.
+    """
+    tree = ast.parse("out.append(compute(f(x), a, b=g(y), c=z))")
+    _, sites = wrap_eligible_calls(tree)
+
+    assert sites[0].source == "compute(f(x), a, b=g(y), c=z)"
+    assert sites[0].computed_arg_positions == (0, 2)
+
+
+def test_computed_arg_positions_fail_closed_under_unpacking():
+    """``*xs`` makes the position of every argument after it unknowable
+    statically -- the unpacked collection's length isn't visible to the AST.
+    The fail-closed rule must flag *every* slot, not just the ones after the
+    star: weakening this to "only the ambiguous tail" would under-key Task
+    3's hash for the positions it still trusted, and a bug there is a wrong
+    cache key nobody notices until two different calls collide on one entry.
+    """
+    tree = ast.parse("out.append(compute(*xs, k=1, **kw))")
+    _, sites = wrap_eligible_calls(tree)
+
+    assert sites[0].source == "compute(*xs, k=1, **kw)"
+    assert sites[0].computed_arg_positions == (0, 1, 2)
+
+
+def test_computed_arg_positions_all_bare_names_is_empty():
+    """The common case, and the one a regression is least likely to be
+    caught in by eye: every argument is a bare name, so nothing needs its
+    evaluated value hashed and the tuple must come back empty, not populated
+    with names that already have their own lineage.
+    """
+    tree = ast.parse("out.append(compute(x, y, z=w))")
+    _, sites = wrap_eligible_calls(tree)
+
+    assert sites[0].source == "compute(x, y, z=w)"
+    assert sites[0].computed_arg_positions == ()
+
+
 if __name__ == "__main__":
     unittest.main()
