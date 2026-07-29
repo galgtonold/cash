@@ -335,8 +335,52 @@ class CallUnit:
         return digests
 
     def _storable(self, result, args, kwargs) -> bool:
-        """Post-execution refusals. See Task 6 -- stubbed True here."""
-        return True
+        """Refuse values whose *identity* is load-bearing.
+
+        Two families, both of which the statement path already refuses in its
+        own vocabulary:
+
+        1. **The result IS one of the arguments.** ``def f(d): d['k']=1;
+           return d`` -- a hit would hand back a deserialised copy, so
+           ``a = f(d)`` gives ``a is not d`` where Python guarantees identity.
+           The statement path's alias rule only reaches a bare bind
+           (``b = a``); CAS-170 records the computed-RHS version as
+           structurally unfixable per-statement. At the call node the live
+           arguments are in hand, so it is one ``is`` check.
+
+        2. **Identity-coupled library objects** -- a matplotlib Figure/Axes is
+           only correct while it IS the object pyplot's registry points at.
+           The RAM tier deep-copies on store and ``Figure.__setstate__``
+           re-registers the COPY as the current figure, so a later bare
+           ``plt.savefig()`` writes the cache's snapshot. Refusing here lands
+           BEFORE the write, which is what stops the copy being made at all.
+
+        A caching optimisation must never be why user code fails. The two
+        ``is`` loops above cannot themselves raise -- identity comparison
+        never does -- so the only place this can fail is the
+        ``identity_coupled_reason`` call, guarded below. Refusing to store is
+        free (the call just runs uncached next time); wrongly storing is not
+        (it is exactly the silent-wrong-answer / hijacked-identity bug this
+        method exists to prevent), which argues for failing toward ``False``.
+        But ``identity_coupled_reason`` is pure MRO-qualname introspection --
+        by design it never imports matplotlib and has no I/O -- so this
+        except is a belt no realistic value should ever reach; returning
+        ``True`` here mirrors the already-shipped fallback in
+        ``call_interception._is_storable`` (same delegation, same except
+        clause) so a call's storability does not silently depend on which of
+        the two dispatch paths happened to route it.
+        """
+        for arg in args:
+            if result is arg:
+                return False
+        for arg in kwargs.values():
+            if result is arg:
+                return False
+        try:
+            from .cacheability_decision import identity_coupled_reason
+            return identity_coupled_reason("<intercepted call>", result) is None
+        except Exception:  # noqa: BLE001 - never let the predicate break the call
+            return True
 
     def _lookup(self, key: str) -> tuple[bool, Any, float]:
         """``(hit, value, recorded_execution_time)`` -- one backend read.

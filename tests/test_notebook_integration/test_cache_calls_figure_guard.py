@@ -49,16 +49,6 @@ def _run(nb_runner, tmp_path, loop_src, tag):
     return obj.read_bytes() == glb.read_bytes(), out
 
 
-@pytest.mark.xfail(
-    reason="CAS-243 Task 5: CallUnit._storable is a deliberate stub returning "
-    "True (post-execution refusals -- including this identity-coupled-result "
-    "guard -- are Task 6's job, not reimplemented ahead of it here). The "
-    "decorator-fallback path (CallCache.resolve with no registered site) "
-    "still applies _is_storable/identity_coupled_reason and is unaffected; "
-    "only a call routed through a real CallSite lost the guard. Remove this "
-    "marker once Task 6 lands CallUnit's own post-execution refusal.",
-    strict=True,
-)
 def test_intercepted_figure_call_does_not_hijack_pyplot(nb_runner, tmp_path):
     same, out = _run(
         nb_runner, tmp_path,
