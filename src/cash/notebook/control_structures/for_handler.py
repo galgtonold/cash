@@ -298,6 +298,22 @@ class ForLoopHandler:
         )
 
         bindings = bind_target_values(node.target, iteration_value, self.shell.user_ns)
+        # `loop_var_digests` collects the SAME hash computed just below for
+        # `variable_lineage`, THIS iteration's binding only -- pushed through
+        # `loop_vars_scope` (not written into `variable_lineage`) so a call's
+        # key build can look it up without the staleness that dict carries.
+        # `variable_lineage` is a FLAT, never-popped dict: a nested loop
+        # reusing this iteration's target name would overwrite the entry
+        # for the rest of this iteration, with nothing to restore it once
+        # the inner loop ends. `loop_vars_scope`'s stack has real scope
+        # discipline (popped when this iteration's body finishes), so
+        # `call_unit._loop_var_digest` sources the digest from there instead
+        # -- see that function's docstring for the live repro that found
+        # this. The `variable_lineage` write below is UNCHANGED and still
+        # needed for its own, separate purpose (bare-Name argument
+        # resolution in the base cache key, `compute_cache_key`'s lineage
+        # ladder) -- this task does not touch that.
+        loop_var_digests: dict[str, str] = {}
         for name, val in bindings.items():
             try:
                 # The loop variable's hash IS the per-iteration cache-key
@@ -307,6 +323,7 @@ class ForLoopHandler:
                 from cash.notebook.object_hashing import compute_hash_full
                 h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else compute_hash_full(val)
                 self.statement_processor.variable_lineage[name] = h
+                loop_var_digests[name] = h
             except (TypeError, ValueError, AttributeError) as exc:
                 if self.debug:
                     logger.warning("[CONTROL] Failed to hash loop variable %s: %s", name, exc)
@@ -351,7 +368,10 @@ class ForLoopHandler:
         # caching optimisation be why user code fails) should hold at both
         # ends of this wire, not just inside `CallUnit`.
         loop_vars_scope = getattr(self.statement_processor, 'loop_vars_scope', None)
-        scope = loop_vars_scope(loop_vars) if loop_vars_scope is not None else contextlib.nullcontext()
+        scope = (
+            loop_vars_scope(loop_vars, loop_var_digests)
+            if loop_vars_scope is not None else contextlib.nullcontext()
+        )
         with scope:
             for body_idx, body_node in enumerate(node.body):
                 before_count = len(all_metrics)

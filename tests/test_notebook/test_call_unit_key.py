@@ -184,85 +184,92 @@ def test_loop_vars_use_the_full_hash_not_the_sampling_one():
     assert first != second
 
 
-def test_loop_vars_discriminate_via_precomputed_lineage_when_available():
+def test_loop_vars_discriminate_via_precomputed_digest_when_available():
     """Same sampled-equal-but-different pair as above, this time going
-    through the PRECOMPUTED-LINEAGE branch -- the path `for_handler.py`
+    through the PRECOMPUTED-DIGEST branch -- the path `for_handler.py`
     actually takes in production.
 
-    `for_handler.py._process_one_iteration` writes the loop variable's own
-    full hash into `variable_lineage[name]` (`h = val._cash_lineage_hash if
-    hasattr(...) else compute_hash_full(val)`) BEFORE any body statement of
-    that iteration runs. This test mirrors that: `ctx.variable_lineage['t']`
-    is set to `compute_hash_full(_LONG_A)` / `compute_hash_full(_LONG_B)`
-    directly (exactly what `for_handler.py` would have written), rather than
-    leaving `_loop_var_digest` to compute it itself. Discrimination must be
-    IDENTICAL to the fallback test above -- same two genuinely-different
-    values, same requirement that they produce different keys -- because
-    both branches are meant to answer the same question, one from a dict
-    lookup and one by computing it fresh.
+    `for_handler.py._process_one_iteration` computes the loop variable's own
+    full hash (`h = val._cash_lineage_hash if hasattr(...) else
+    compute_hash_full(val)`) at binding time and pushes it through
+    `loop_vars_scope` alongside the value, BEFORE any body statement of that
+    iteration runs. This test mirrors that: `call_cache_key`'s
+    `loop_var_digests={"t": ...}` is set to `compute_hash_full(_LONG_A)` /
+    `compute_hash_full(_LONG_B)` directly (exactly what `for_handler.py`
+    would have pushed), rather than leaving `_loop_var_digest` to compute it
+    itself. Discrimination must be IDENTICAL to the fallback test above --
+    same two genuinely-different values, same requirement that they produce
+    different keys -- because both branches are meant to answer the same
+    question, one from a dict lookup and one by computing it fresh.
 
     Mutation that must make this fail: `_loop_var_digest` reverted to ignore
-    `variable_lineage` and always call `compute_hash_full(value)` (i.e. the
-    state right after the FIRST review fix, before this one). That mutation
-    would not actually break this specific test on its own here (calling
-    `compute_hash_full` on the real values still discriminates) -- see
-    `test_loop_vars_prefer_precomputed_lineage_over_the_live_value` for the
-    test that specifically catches "ignoring variable_lineage".
+    `loop_var_digests` and always call `compute_hash_full(value)`. That
+    mutation would not actually break this specific test on its own here
+    (calling `compute_hash_full` on the real values still discriminates) --
+    see `test_loop_vars_prefer_precomputed_digest_over_the_live_value` for
+    the test that specifically catches "ignoring loop_var_digests".
+
+    NOT sourced from `ctx.variable_lineage` (an earlier version of this test
+    was): that dict is flat, keyed only by name, and never popped, so a
+    nested loop reusing a target name leaves a STALE entry for the rest of
+    the outer iteration -- found live via a real-kernel repro, see
+    `test_call_unit_loop_vars_real_kernel.py`'s nested-loop tests. This test
+    exercises `call_cache_key`'s own `loop_var_digests` parameter directly,
+    which is scope-correct by construction (the caller is responsible for
+    supplying the right dict; `StatementProcessor`'s push/pop stack is what
+    makes the PRODUCTION caller correct, not anything checked here).
     """
     from cash.notebook.object_hashing import compute_hash_full
 
-    ctx = _ctx(
-        {"t": compute_hash_full(_LONG_A)},
-        {"conn": object(), "fetch_next": len},
-    )
+    ctx = _ctx({}, {"conn": object(), "fetch_next": len})
     site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))
-    first = call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={"t": _LONG_A})
-
-    ctx2 = _ctx(
-        {"t": compute_hash_full(_LONG_B)},
-        {"conn": object(), "fetch_next": len},
+    first = call_cache_key(
+        site, ctx=ctx, arg_digests=[], loop_vars={"t": _LONG_A},
+        loop_var_digests={"t": compute_hash_full(_LONG_A)},
     )
-    second = call_cache_key(site, ctx=ctx2, arg_digests=[], loop_vars={"t": _LONG_B})
+    second = call_cache_key(
+        site, ctx=ctx, arg_digests=[], loop_vars={"t": _LONG_B},
+        loop_var_digests={"t": compute_hash_full(_LONG_B)},
+    )
 
     assert first != second
 
 
-def test_loop_vars_prefer_precomputed_lineage_over_the_live_value():
+def test_loop_vars_prefer_precomputed_digest_over_the_live_value():
     """The dict-lookup path must actually be TAKEN when available, not just
     "not break" when it happens to agree with re-hashing.
 
     Two calls here pass the IDENTICAL live value (so a rehash of `value`
     would produce the SAME digest both times) but DIFFERENT
-    `variable_lineage['t']` strings. If `_loop_var_digest` used the
-    precomputed lineage as designed, the keys differ, because the lineage
-    entry -- not the live value -- is what gets hashed into the key. If it
-    silently ignored `variable_lineage` and rehashed `value` instead (the
-    exact regression `test_loop_vars_discriminate_via_precomputed_lineage_when_available`
+    `loop_var_digests['t']` strings. If `_loop_var_digest` used the
+    precomputed digest as designed, the keys differ, because the digest --
+    not the live value -- is what gets hashed into the key. If it silently
+    ignored `loop_var_digests` and rehashed `value` instead (the exact
+    regression `test_loop_vars_discriminate_via_precomputed_digest_when_available`
     above cannot catch on its own, since real values there also happen to
     discriminate), this test fails: both calls would collapse onto the same
-    key despite deliberately-different recorded lineage.
+    key despite deliberately-different supplied digests.
 
-    This is not a realistic notebook shape (`for_handler.py` never writes an
-    incorrect lineage entry) -- it is a targeted probe of the lookup-vs-
-    rehash CHOICE itself, isolated from whether the live value also happens
-    to discriminate.
+    This is not a realistic notebook shape (`for_handler.py` never supplies
+    an incorrect digest) -- it is a targeted probe of the lookup-vs-rehash
+    CHOICE itself, isolated from whether the live value also happens to
+    discriminate.
     """
     same_value = object()
     site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))
-    # SAME `user_ns` object shared by both contexts -- `conn` and
-    # `fetch_next` must be identical across `ctx_a`/`ctx_b`, or a difference
-    # in THEIR lineage resolution (not `t`'s) would confound the result. Only
-    # `variable_lineage['t']` differs between the two.
-    ns = {"conn": object(), "fetch_next": len}
+    ctx = _ctx({}, {"conn": object(), "fetch_next": len})
 
-    ctx_a = _ctx({"t": "lineage-hash-AAAA"}, ns)
-    ctx_b = _ctx({"t": "lineage-hash-BBBB"}, ns)
-
-    first = call_cache_key(site, ctx=ctx_a, arg_digests=[], loop_vars={"t": same_value})
-    second = call_cache_key(site, ctx=ctx_b, arg_digests=[], loop_vars={"t": same_value})
+    first = call_cache_key(
+        site, ctx=ctx, arg_digests=[], loop_vars={"t": same_value},
+        loop_var_digests={"t": "digest-AAAA"},
+    )
+    second = call_cache_key(
+        site, ctx=ctx, arg_digests=[], loop_vars={"t": same_value},
+        loop_var_digests={"t": "digest-BBBB"},
+    )
     assert first != second, (
-        "identical live value, different recorded lineage -- the lineage "
-        "entry was not consulted"
+        "identical live value, different supplied digest -- the digest "
+        "was not consulted"
     )
 
 

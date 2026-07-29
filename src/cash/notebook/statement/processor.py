@@ -434,6 +434,28 @@ class StatementProcessor:
         # top. Empty outside any loop, which is the correct "no discriminator
         # to add" answer for a bare statement.
         self._call_unit_loop_vars: list[dict[str, Any]] = []
+        # Parallel stack, pushed/popped in lockstep with ``_call_unit_loop_vars``
+        # by the SAME ``loop_vars_scope`` call: ``{name: full_hash}`` for
+        # whichever loop-target names ``for_handler.py`` bound THIS push (its
+        # own names only -- deliberately NOT pre-merged with an ancestor
+        # loop's digests, unlike ``_call_unit_loop_vars``). Exists so
+        # ``call_unit._loop_var_digest`` can look a digest up instead of
+        # recomputing ``compute_hash_full`` on every intercepted call --
+        # ``for_handler.py`` already computes this exact hash once per
+        # iteration for ``variable_lineage``, and this reuses it.
+        #
+        # NOT sourced from ``variable_lineage`` itself: that dict is flat,
+        # keyed only by name, and never popped -- a nested loop reusing an
+        # outer loop's target name (``for t in A: for t in B: pass; call(...)``)
+        # leaves ``variable_lineage[name]`` holding the INNER loop's last
+        # value for the rest of the OUTER iteration, and a call after the
+        # inner loop ends reads that stale entry. First-run wrongness, found
+        # live via a real-kernel repro. This stack has the scope discipline
+        # ``variable_lineage`` lacks -- it is popped when an iteration's body
+        # finishes, restoring whatever level was beneath it -- so
+        # :meth:`current_loop_var_digests` can never see a name's digest
+        # outlive the scope that produced it.
+        self._call_unit_loop_var_digests: list[dict[str, str]] = []
 
         self.analytics_manager = AnalyticsManager()
 
@@ -524,8 +546,13 @@ class StatementProcessor:
         return self.function_tracker
 
     @contextmanager
-    def loop_vars_scope(self, loop_vars: dict[str, Any]) -> Generator[None, None, None]:
-        """Push *loop_vars* for the duration of one loop iteration's body.
+    def loop_vars_scope(
+        self,
+        loop_vars: dict[str, Any],
+        loop_var_digests: dict[str, str] | None = None,
+    ) -> Generator[None, None, None]:
+        """Push *loop_vars* (and, alongside, *loop_var_digests*) for the
+        duration of one loop iteration's body.
 
         Called by ``ForLoopHandler._process_one_iteration`` around the whole
         body-statement loop for one iteration -- not per statement -- so a
@@ -538,13 +565,24 @@ class StatementProcessor:
 
         ``finally`` guarantees the pop happens even when a body statement
         raises -- a loop body that errors out must not leave a stale entry on
-        the stack for whatever runs next in the same kernel.
+        either stack for whatever runs next in the same kernel. Both stacks
+        are pushed and popped together so they can never desync -- there is
+        no way to push one without the other.
+
+        *loop_var_digests* is optional (defaults to ``{}``) so every call
+        site that only cares about values -- direct tests, anything that
+        predates this parameter -- keeps working unchanged; a missing digest
+        for a given name just means :meth:`current_loop_var_digests` has
+        nothing for it, and ``call_unit._loop_var_digest`` falls through to
+        computing one fresh.
         """
         self._call_unit_loop_vars.append(loop_vars)
+        self._call_unit_loop_var_digests.append(loop_var_digests or {})
         try:
             yield
         finally:
             self._call_unit_loop_vars.pop()
+            self._call_unit_loop_var_digests.pop()
 
     def current_loop_vars(self) -> dict[str, Any]:
         """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
@@ -556,6 +594,35 @@ class StatementProcessor:
         -- degrading to today's behaviour, not an error.
         """
         return self._call_unit_loop_vars[-1] if self._call_unit_loop_vars else {}
+
+    def current_loop_var_digests(self) -> dict[str, str]:
+        """Precomputed ``{name: full_hash}`` for every loop-var name visible
+        at this point in execution, or ``{}`` outside any loop.
+
+        Unlike :meth:`current_loop_vars` (which returns only the TOP of its
+        stack, because ``for_handler.py`` already pre-merges an ancestor
+        loop's values into each push via ``build_iteration_context``), this
+        merges ACROSS ``_call_unit_loop_var_digests``'s whole stack --
+        outermost first, so an inner loop's own entry for a reused name wins.
+        Each level holds only the digests ``for_handler.py`` bound at THAT
+        specific push (deliberately not pre-merged there -- see the
+        constructor comment on ``_call_unit_loop_var_digests``), so merging
+        here is what lets a call inside a nested loop still resolve an
+        OUTER loop's variable to a real digest instead of falling through to
+        a fresh hash. The stack only ever holds CURRENTLY ACTIVE scopes
+        (a finished iteration's level is popped by ``loop_vars_scope`` before
+        control returns to whatever runs next), so nothing merged in here can
+        be stale.
+
+        Read by the ``# @cash:cache-calls`` sub-call key build
+        (``call_unit.CallUnit``) as its ``loop_var_digests_provider``. ``{}``
+        is always a safe answer -- ``call_unit._loop_var_digest`` treats a
+        missing entry as "compute it fresh," never as an error.
+        """
+        merged: dict[str, str] = {}
+        for level in self._call_unit_loop_var_digests:
+            merged.update(level)
+        return merged
 
     def _get_cash_instance(self) -> Any | None:
         """Return the Cash instance for decorator call tracking.
@@ -1754,6 +1821,7 @@ class StatementProcessor:
                     # above), but the loop this call sits in pushes/pops its
                     # vars fresh on every iteration.
                     loop_vars_provider=self.current_loop_vars,
+                    loop_var_digests_provider=self.current_loop_var_digests,
                 )
                 self._call_cache_owner = cash_instance
             self._call_cache.set_sites(sites)

@@ -132,6 +132,7 @@ class CallCache:
         cash_instance,
         ctx_provider: Callable[[], CacheKeyContext] | None = None,
         loop_vars_provider: Callable[[], dict[str, Any]] | None = None,
+        loop_var_digests_provider: Callable[[], dict[str, str]] | None = None,
     ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
@@ -174,6 +175,7 @@ class CallCache:
             cash_instance,
             ctx_provider or self._default_ctx,
             loop_vars_provider or self._default_loop_vars,
+            loop_var_digests_provider or self._default_loop_var_digests,
         )
 
     def _default_ctx(self) -> CacheKeyContext:
@@ -198,6 +200,17 @@ class CallCache:
         statement processor's loop-var stack. ``{}`` here is what
         ``call_cache_key`` already treats as "outside a loop" -- correct,
         merely undiscriminated.
+        """
+        return {}
+
+    @staticmethod
+    def _default_loop_var_digests() -> dict[str, str]:
+        """Fallback used only when no live processor state was wired in.
+
+        Same reasoning as :meth:`_default_loop_vars`. ``{}`` here is what
+        ``call_cache_key``'s ``_loop_var_digest`` already treats as "no
+        precomputed digest" -- it falls through to a fresh
+        ``compute_hash_full`` of the value, correct, merely undiscounted.
         """
         return {}
 

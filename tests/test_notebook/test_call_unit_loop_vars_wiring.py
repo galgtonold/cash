@@ -202,6 +202,81 @@ def test_loop_vars_scope_nests_innermost_wins():
         assert proc.current_loop_vars() == {'outer': 1}, (
             "popping the inner loop's vars did not restore the outer loop's"
         )
+
+
+# --------------------------------------------------------- loop_var_digests stack
+#
+# The round-3 review fix (reading a loop var's digest from `variable_lineage`)
+# was correct on the discrimination question but wrong on scope: that dict is
+# flat, keyed only by name, and never popped, so a nested loop reusing an
+# outer loop's target name left a STALE entry for the rest of the outer
+# iteration. The replacement threads the digest through THIS stack instead --
+# pushed/popped in lockstep with the value stack above, by the same
+# `loop_vars_scope` call -- which has the scope discipline `variable_lineage`
+# lacks. These tests cover the stack mechanics directly; the end-to-end
+# correctness proof (a real nested loop, a real hidden-state call, a real
+# kernel) lives in `test_call_unit_loop_vars_real_kernel.py`'s
+# `test_nested_loop_reusing_the_target_name_*` / `test_sibling_loops_*` tests.
+
+def test_loop_var_digests_scope_pops_in_lockstep_with_loop_vars():
+    """The digests stack must be exception-safe too, popped by the SAME
+    `finally` that pops the values stack -- not a second, independent
+    mechanism that could desync from it.
+
+    Mutation that must make this fail: in `loop_vars_scope`'s `finally`,
+    drop the `self._call_unit_loop_var_digests.pop()` line (keep the values
+    pop). Verified by hand: with that change this test's final assertion
+    fails (`current_loop_var_digests()` still returns `{'t': 'digest-A'}`
+    instead of `{}` after the exception propagates out of the `with` block).
+    """
+    proc = _bare_statement_processor()
+    assert proc.current_loop_var_digests() == {}
+
+    with pytest.raises(ValueError):
+        with proc.loop_vars_scope({'t': 1}, {'t': 'digest-A'}):
+            assert proc.current_loop_var_digests() == {'t': 'digest-A'}
+            raise ValueError("body statement blew up")
+
+    assert proc.current_loop_var_digests() == {}, (
+        "loop_var_digests_scope leaked a stack entry across an exception"
+    )
+
+
+def test_loop_var_digests_reused_name_resolves_to_the_current_scope():
+    """The exact stack-discipline property the real-kernel repro exercises,
+    reproduced directly against the stack (no notebook, no kernel boot): an
+    inner scope reusing the SAME name as an outer scope must not leak its
+    digest into the outer scope once popped.
+
+    Mutation that must make this fail: `current_loop_var_digests` reverted
+    to `self._call_unit_loop_var_digests[-1] if ... else {}` (top-of-stack
+    only, mirroring `current_loop_vars`'s VALUE-stack implementation) instead
+    of merging across the whole stack -- this happens to still pass THIS
+    specific test (the inner scope is already fully popped by the time of
+    the final assertion, so top-of-stack and merge agree here), which is
+    exactly why the assertion INSIDE the `with proc.loop_vars_scope(...)`
+    block below is load-bearing: swap `'t': 'inner-digest'` for a check that
+    an OUTER name (not reused by the inner scope) is still resolvable while
+    the inner scope is active, and a top-of-stack-only implementation fails
+    it.
+    """
+    proc = _bare_statement_processor()
+    with proc.loop_vars_scope({'t': 1, 'outer_only': 99}, {'t': 'outer-digest', 'outer_only': 'outer-only-digest'}):
+        assert proc.current_loop_var_digests() == {
+            't': 'outer-digest', 'outer_only': 'outer-only-digest',
+        }
+        with proc.loop_vars_scope({'t': 2}, {'t': 'inner-digest'}):
+            # Inner scope's OWN reused name shadows the outer's.
+            assert proc.current_loop_var_digests()['t'] == 'inner-digest'
+            # An OUTER-only name (not reused/re-pushed by the inner scope)
+            # must still resolve -- proves this is a MERGE across the whole
+            # stack, not a top-of-stack-only lookup that would lose it.
+            assert proc.current_loop_var_digests()['outer_only'] == 'outer-only-digest'
+        # Inner scope popped -- 't' must resolve back to the OUTER's digest,
+        # not linger at the inner's.
+        assert proc.current_loop_var_digests()['t'] == 'outer-digest', (
+            "the inner scope's digest for a reused name leaked past its pop"
+        )
     assert proc.current_loop_vars() == {}
 
 

@@ -191,3 +191,133 @@ def test_sampled_equal_loop_var_values_match_the_no_cash_oracle(nb_runner, tmp_p
     nb_runner.run_all()
 
     assert "OUT [1, 2]" in nb_runner.get_output(3)
+
+
+# --------------------------------------------------------- reused loop-target names
+#
+# A SECOND cost-vs-correctness bug found in review, distinct from the
+# sampling one above: the fix for THAT bug looked the loop var's digest up in
+# `variable_lineage`, a flat dict keyed only by name and never popped.
+# `for_handler.py` writes it once per iteration, so a nested (or sequential
+# sibling) loop reusing an outer loop's target name overwrites the entry --
+# and nothing restores it once the inner/sibling loop finishes. A call in the
+# OUTER loop's body, positioned after the reuse, read the INNER loop's last
+# value instead of the outer loop's current one. First-run wrongness, no
+# pre-existing cache required -- the shipped fix instead carries the digest
+# through `StatementProcessor`'s `loop_vars_scope` push/pop stack, which has
+# the scope discipline `variable_lineage` lacks.
+
+
+def _reused_name_defs(log):
+    return (
+        "import time, pathlib\n"
+        f"LOG = pathlib.Path(r'{log}')\n"
+        "counter = {'n': 0}\n"
+        "conn = 'db-connection'\n"
+        "def fetch_next(conn):\n"
+        "    counter['n'] += 1\n"
+        "    with LOG.open('a') as fh:\n"
+        "        fh.write('x\\n')\n"
+        f"    time.sleep({_SLEEP})\n"
+        "    return counter['n']\n"
+    )
+
+
+# The outer loop's body is TWO statements (the inner `for`, then the
+# append) -- never eligible for `cacheable_accumulator_loop`'s single-unit
+# fast path (which requires the body to be EXACTLY one bare `acc.append(...)`
+# statement), so this always reaches the real per-iteration path regardless
+# of whether the seed sits in the same cell.
+_NESTED_REUSE_LOOP = (
+    "outer_results = []\n"
+    "# @cash:cache-calls\n"
+    "for t in ['A', 'B']:\n"
+    "    for t in [1, 2]:\n"
+    "        pass\n"
+    "    outer_results.append(fetch_next(conn))\n"
+    "print('OUT', outer_results)\n"
+)
+
+
+def test_nested_loop_reusing_the_target_name_gets_correct_values(nb_runner, tmp_path):
+    """``for t in ['A','B']: for t in [1,2]: pass; outer_results.append(fetch_next(conn))``.
+
+    The inner loop's body is a no-op (``pass``); it exists purely to reuse
+    ``t`` and get popped again before the call runs.
+
+    Both outer iterations bind ``t`` fresh at the top of THEIR OWN
+    ``_process_one_iteration`` (outer ``t='A'`` then, later, ``t='B'``), but
+    by the time the call executes, the inner loop has ALREADY run to
+    completion and overwritten ``variable_lineage['t']`` with its own last
+    value (``hash(2)``) in the pre-fix (``variable_lineage``-sourced)
+    design. Both outer iterations therefore looked that entry up AFTER the
+    inner loop clobbered it, both got the identical ``hash(2)`` digest for
+    ``t``, and both calls collapsed onto ONE key -- serving outer iteration
+    1's cached value (``1``) to outer iteration 2 as well: ``[1, 1]``.
+    ``fetch_next``'s counter genuinely advances only once. The fix (a
+    push/pop stack instead of a flat dict) restores the outer's own digest
+    the moment the inner loop's pushes are popped, giving the correct
+    ``[1, 2]``.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _NESTED_REUSE_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    output = nb_runner.get_output(2)
+    assert "OUT [1, 2]" in output, output
+    assert _n(log) == 2, (
+        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
+    )
+
+
+def test_nested_loop_reusing_the_target_name_matches_the_no_cash_oracle(nb_runner, tmp_path):
+    """Independent confirmation that ``[1, 2]`` is correct -- cash off entirely."""
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _NESTED_REUSE_LOOP])
+    nb_runner.start_kernel(with_cash=False)
+    nb_runner.run_all()
+
+    assert "OUT [1, 2]" in nb_runner.get_output(2)
+
+
+# Sibling variant: the reused name comes from TWO SEQUENTIAL inner loops (not
+# one nested inside the other), with the call after the second -- same
+# staleness class, different timing. Under the pre-fix design,
+# `variable_lineage['t']` would be left holding the SECOND sibling loop's
+# last value (`hash(20)`) rather than the outer loop's current one.
+_SIBLING_REUSE_LOOP = (
+    "sibling_results = []\n"
+    "# @cash:cache-calls\n"
+    "for t in ['A', 'B']:\n"
+    "    for t in [1, 2]:\n"
+    "        pass\n"
+    "    for t in [10, 20]:\n"
+    "        pass\n"
+    "    sibling_results.append(fetch_next(conn))\n"
+    "print('OUT', sibling_results)\n"
+)
+
+
+def test_sibling_loops_reusing_the_target_name_get_correct_values(nb_runner, tmp_path):
+    """Two SEQUENTIAL inner loops both reusing ``t``, call after the second."""
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _SIBLING_REUSE_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    output = nb_runner.get_output(2)
+    assert "OUT [1, 2]" in output, output
+    assert _n(log) == 2, (
+        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
+    )
+
+
+def test_sibling_loops_reusing_the_target_name_match_the_no_cash_oracle(nb_runner, tmp_path):
+    """Independent confirmation that ``[1, 2]`` is correct -- cash off entirely."""
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _SIBLING_REUSE_LOOP])
+    nb_runner.start_kernel(with_cash=False)
+    nb_runner.run_all()
+
+    assert "OUT [1, 2]" in nb_runner.get_output(2)

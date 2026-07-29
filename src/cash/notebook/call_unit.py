@@ -92,7 +92,7 @@ def call_site_is_cacheable(
     )
 
 
-def _loop_var_digest(name: str, value: object, variable_lineage: Mapping[str, str]) -> str:
+def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, str]) -> str:
     """The discriminating hash for one loop-var entry -- full, never sampled,
     and a dict lookup whenever possible instead of a fresh content hash.
 
@@ -114,42 +114,60 @@ def _loop_var_digest(name: str, value: object, variable_lineage: Mapping[str, st
     wrong in the direction of "assume unmutated." A loop var IS the
     per-iteration discriminator; it has no such slack.
 
-    **Why prefer `variable_lineage`, not just "full hash it here."** A fresh
+    **Why prefer `loop_var_digests`, not just "full hash it here."** A fresh
     `compute_hash_full(value)` call here is correct but was measured too
     expensive for what it buys: a 200k-row DataFrame costs 0.15ms sampled vs
     19ms full; a 5M-float ndarray 0.03ms vs 14.7ms; a 1M-int list 0.01ms vs
     12.4ms. Against `_COST_FLOOR_S` (10ms, the bar a call's own execution
     time must clear to be worth caching at all), the KEY for a large loop var
     can cost more than the call being decided about. It is also PER CALL, not
-    per iteration -- `_current_loop_vars()` is read fresh inside
-    `CallUnit._build_key`, which runs once per intercepted call, so an
-    iteration with N cached calls against the same large loop var would pay
-    the full hash N times over.
+    per iteration -- the digest is read fresh inside `CallUnit._build_key`,
+    which runs once per intercepted call, so an iteration with N cached calls
+    against the same large loop var would pay the full hash N times over.
 
     `for_handler.py` already pays this exact cost, once per iteration, for a
-    different reason: `_process_one_iteration` writes `h =
+    different reason: `_process_one_iteration` computes `h =
     val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else
-    compute_hash_full(val)` into `variable_lineage[name]` before any body
-    statement in that iteration runs. That is the SAME digest this function
-    would otherwise recompute -- looking it up first turns the common case
-    back into a dict lookup, restoring the design's actual selling point for
-    this leg (see the module docstring's "bare-Name arguments resolve
-    through the lineage ladder" point), with IDENTICAL discrimination,
-    because it is the same full hash, shared instead of repeated.
+    compute_hash_full(val)` for every loop-target binding, at the moment it
+    binds the value, before any body statement in that iteration runs. That
+    is the SAME digest this function would otherwise recompute -- reusing it
+    turns the common case back into a dict lookup, restoring the design's
+    actual selling point for this leg (see the module docstring's "bare-Name
+    arguments resolve through the lineage ladder" point), with IDENTICAL
+    discrimination, because it is the same full hash, shared instead of
+    repeated.
 
-    **The fallback.** A name absent from `variable_lineage` (a loop var whose
-    binding didn't go through `for_handler.py`'s own write -- not reachable
-    from the shipped `for_handler.py` today, but this function has no way to
-    enforce that of every present or future caller) computes
-    `compute_hash_full(value)` directly. This MUST stay the full hash. Do not
-    "simplify" it to `compute_hash` -- that would silently reintroduce the
-    exact sampled-collision bug this function exists to prevent, only for
-    callers that happen to miss the fast path, which is a worse failure mode
-    than never having the fast path at all (wrong occasionally and quietly,
-    instead of slow always).
+    **Why `loop_var_digests`, a value pushed through `loop_vars_scope`, and
+    NOT `ctx.variable_lineage`.** A first version of this fix (now reverted)
+    looked the digest up in `variable_lineage` instead -- cheap the same way,
+    but WRONG: `variable_lineage` is a flat dict keyed only by name, written
+    by `for_handler.py` once per iteration and never popped. A nested loop
+    reusing the outer loop's target name overwrites the entry for the whole
+    remainder of the outer iteration, and nothing restores it when the inner
+    loop finishes -- `for t in A: for t in B: pass; call(...)` reads the
+    INNER loop's last `t` for a call that runs after the inner loop has
+    already ended, back in the OUTER iteration. First-run wrongness, found
+    live via a real-kernel repro. `loop_var_digests` instead travels through
+    `StatementProcessor.loop_vars_scope`'s push/pop stack -- the SAME stack
+    `loop_vars` (values) already uses, which correctly nests because it is
+    popped when an iteration's body finishes, restoring whatever level was
+    beneath it. Sourcing the digest from that stack, rather than from a
+    dict with no scope discipline, is what fixes the staleness without
+    reintroducing the cost this whole leg exists to avoid.
+
+    **The fallback.** A name absent from `loop_var_digests` (a loop var whose
+    binding didn't go through `for_handler.py`'s own per-iteration push, or
+    one bound by an ancestor loop several levels up whose own digest wasn't
+    carried this far down -- see `StatementProcessor.current_loop_var_digests`)
+    computes `compute_hash_full(value)` directly. This MUST stay the full
+    hash. Do not "simplify" it to `compute_hash` -- that would silently
+    reintroduce the exact sampled-collision bug this function exists to
+    prevent, only for callers that happen to miss the fast path, which is a
+    worse failure mode than never having the fast path at all (wrong
+    occasionally and quietly, instead of slow always).
     """
-    lineage_hash = variable_lineage.get(name)
-    return lineage_hash if lineage_hash is not None else compute_hash_full(value)
+    digest = loop_var_digests.get(name)
+    return digest if digest is not None else compute_hash_full(value)
 
 
 def call_cache_key(
@@ -158,6 +176,7 @@ def call_cache_key(
     ctx: CacheKeyContext,
     arg_digests: list[str],
     loop_vars: dict[str, object],
+    loop_var_digests: Mapping[str, str] | None = None,
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
@@ -240,6 +259,16 @@ def call_cache_key(
 
     Note: ``rng_fingerprint`` is deliberately not threaded through — it is
     dead plumbing with no producer anywhere in the codebase.
+
+    **loop_var_digests** (optional) short-circuits the per-loop-var hashing
+    :func:`_loop_var_digest` would otherwise do from scratch: a precomputed,
+    already-correctly-scoped ``{name: full_hash}`` map, sourced from
+    ``StatementProcessor``'s ``loop_vars_scope`` push/pop stack rather than
+    the flat, never-popped ``variable_lineage`` dict (see
+    :func:`_loop_var_digest`'s docstring for why that distinction is
+    load-bearing, not cosmetic). Omitting it (``None``, the default) is
+    always CORRECT, only slower — every entry falls through to a fresh
+    ``compute_hash_full(value)`` call, same as before this parameter existed.
     """
     base = compute_cache_key(
         site.source,
@@ -274,10 +303,13 @@ def call_cache_key(
     parts = [f"{len(arg_digests)}"]
     parts.extend(arg_digests)
     # See `_loop_var_digest`'s docstring: full hash (never sampled) for
-    # correctness, preferring the precomputed `variable_lineage` entry (a
-    # dict lookup) over a fresh `compute_hash_full` call for cost.
+    # correctness, preferring a precomputed `loop_var_digests` entry (a dict
+    # lookup) over a fresh `compute_hash_full` call for cost -- and NOT
+    # `ctx.variable_lineage`, whose lack of scope discipline is what caused
+    # the nested-loop staleness bug this parameter exists to fix.
+    resolved_digests: Mapping[str, str] = loop_var_digests or {}
     parts.extend(
-        f"{name}={_loop_var_digest(name, value, ctx.variable_lineage)}"
+        f"{name}={_loop_var_digest(name, value, resolved_digests)}"
         for name, value in sorted(filtered_loop_vars.items())
     )
     return "call:" + hashlib.sha256(
@@ -360,6 +392,7 @@ class CallUnit:
         cash_instance,
         ctx_provider: Callable[[], CacheKeyContext],
         loop_vars_provider: Callable[[], dict[str, object]] | None = None,
+        loop_var_digests_provider: Callable[[], Mapping[str, str]] | None = None,
     ):
         self._cash = cash_instance
         self._ctx_provider = ctx_provider
@@ -370,6 +403,13 @@ class CallUnit:
         # answer this class gave when `loop_vars={}` was hardcoded in
         # `_build_key`.
         self._loop_vars_provider = loop_vars_provider or (lambda: {})
+        # See `call_cache_key`'s `loop_var_digests` section and
+        # `_loop_var_digest`'s docstring. `None` here is always CORRECT
+        # (every entry falls through to a fresh `compute_hash_full`), only
+        # slower -- so, same as `_loop_vars_provider` above, every existing
+        # direct `CallUnit` construction that predates this parameter keeps
+        # working unchanged.
+        self._loop_var_digests_provider = loop_var_digests_provider or (lambda: {})
         self.call_log: list[dict] = []
         #: Cache keys of sites known to mutate an argument or consume RNG,
         #: discovered by observing a MISS (see `wrap`). Permanent for the life
@@ -652,6 +692,7 @@ class CallUnit:
                 ctx=self._ctx_provider(),
                 arg_digests=arg_digests,
                 loop_vars=self._current_loop_vars(),
+                loop_var_digests=self._current_loop_var_digests(),
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
@@ -674,6 +715,27 @@ class CallUnit:
             logger.debug("call unit: loop_vars_provider failed for this call")
             return {}
         return loop_vars if isinstance(loop_vars, dict) else {}
+
+    def _current_loop_var_digests(self) -> Mapping[str, str]:
+        """The live enclosing loop's precomputed loop-var digests, or ``{}``.
+
+        Wired to ``StatementProcessor.current_loop_var_digests`` (see that
+        class's ``_call_unit_loop_var_digests`` stack -- pushed/popped in
+        lockstep with ``_call_unit_loop_vars``, by the same
+        ``loop_vars_scope`` call) via ``CallCache``'s
+        ``loop_var_digests_provider``. Guarded independently of
+        ``_build_key``'s own try/except, same reasoning as
+        ``_current_loop_vars``: a provider failure degrades to "no
+        precomputed digest available" ``{}``, which ``_loop_var_digest``
+        treats as "fall through to a fresh `compute_hash_full`" -- slower,
+        never wrong -- not to refusing the key entirely.
+        """
+        try:
+            digests = self._loop_var_digests_provider()
+        except Exception:  # noqa: BLE001 - degrade, don't refuse the whole key
+            logger.debug("call unit: loop_var_digests_provider failed for this call")
+            return {}
+        return digests if isinstance(digests, Mapping) else {}
 
     def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict) -> list[str]:
         """Content hashes of the live arguments at ``site.computed_arg_positions``.
