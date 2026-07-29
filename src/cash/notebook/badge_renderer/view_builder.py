@@ -33,6 +33,7 @@ from .view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
+    build_sub_unit_groups,
 )
 
 # Statuses that don't represent a "ran" or "restored" data operation. They
@@ -660,6 +661,11 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         )
         for c in raw_decorator
     )
+    # Per-call-site grouping of the same raw events (CAS-243), for the
+    # "Sub-calls" drawer section — see SubUnitGroup for why site rather
+    # than callee. Only events with intercepted=True contribute; a
+    # hand-decorated call has no call site and stays out of this list.
+    sub_units = tuple(build_sub_unit_groups(raw_decorator))
 
     changed_modules = m.get("changed_modules") or {}
     if isinstance(changed_modules, dict):
@@ -689,6 +695,7 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
+        sub_units=sub_units,
         body_statements=_tup_str(m.get("body_statements")),
         cache_key_short=cache_key_short,
         miss_reason=m.get("miss_reason") or None,

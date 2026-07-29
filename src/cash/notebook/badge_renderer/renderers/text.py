@@ -152,6 +152,21 @@ def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
     return _row_line(pseudo, is_upstream=is_upstream)
 
 
+def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
+    """One line per call SITE inside *row* (CAS-243 intercepted sub-calls).
+
+    Mirrors the cell-level ``[via @cash:cache-calls]`` line's job at
+    statement granularity: grouped by ``(call_source, occurrence_index)``,
+    not by callee -- see ``SubUnitGroup`` for why. Nothing when the
+    statement made no intercepted calls.
+    """
+    return [
+        f"{pad}    sub-call {g.call_source}: "
+        f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
+        for g in row.sub_units
+    ]
+
+
 #: Leaf item types that render as exactly one line at their parent's level.
 #: Anything else is a *group* and gets one extra indent step when it appears
 #: inside a control body or a loop body.
@@ -184,7 +199,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     """
     pad = _INDENT * indent
     if isinstance(item, StatementRow):
-        return [pad + _row_line(item, is_upstream=is_upstream)]
+        return [pad + _row_line(item, is_upstream=is_upstream), *_sub_unit_lines(item, pad)]
     if isinstance(item, ForLoopGroup):
         out: list[str] = []
         for sub in _loop_body(item):
@@ -207,7 +222,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
             )
         return out
     if isinstance(item, ControlGroupSingle):
-        return [pad + _row_line(item.row, is_upstream=is_upstream)]
+        return [pad + _row_line(item.row, is_upstream=is_upstream), *_sub_unit_lines(item.row, pad)]
     if isinstance(item, SkippedBucket):
         out = []
         for sub in item.items:

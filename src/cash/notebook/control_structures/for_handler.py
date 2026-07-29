@@ -32,6 +32,39 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _stamp_call_events_loop_header(m: dict, loop_header: str) -> None:
+    """Propagate *m*'s ``loop_header``/``loop_header_chain`` onto its call events.
+
+    ``m['decorator_calls']`` may hold intercepted (``# @cash:cache-calls``)
+    sub-call events (CAS-243). Those need the identical loop-nesting stamp
+    the enclosing metric just got, or the badge view-builder has nothing to
+    key nesting on and renders them as siblings of the loop instead of
+    inside it. Mirrors the caller's own first-writer-wins / prepend rules
+    exactly so the two can never disagree.
+
+    Defensive by construction: a malformed event (not a dict) is skipped
+    rather than raising -- this must never break statement execution.
+    """
+    for event in m.get("decorator_calls") or ():
+        if not isinstance(event, dict):
+            continue
+        if "loop_header" not in event:
+            event["loop_header"] = loop_header
+        echain = event.setdefault("loop_header_chain", [])
+        if not echain or echain[0] != loop_header:
+            echain.insert(0, loop_header)
+
+
+def _stamp_call_events_body_index(m: dict, body_idx: int) -> None:
+    """Propagate *m*'s ``body_index_chain`` onto its call events. See above."""
+    for event in m.get("decorator_calls") or ():
+        if not isinstance(event, dict):
+            continue
+        echain = event.setdefault("body_index_chain", [])
+        if not echain or echain[0] != body_idx:
+            echain.insert(0, body_idx)
+
+
 class ForLoopHandler:
     """Per-iteration caching for ``for`` loops.
 
@@ -214,6 +247,14 @@ class ForLoopHandler:
                 chain = m.setdefault("loop_header_chain", [])
                 if not chain or chain[0] != loop_header:
                     chain.insert(0, loop_header)
+                # A statement's intercepted (``# @cash:cache-calls``) sub-call
+                # events need this SAME stamp, or the view-builder has no way
+                # to tell they belong inside this loop and renders them as
+                # siblings instead (CAS-243 task 9). ``event`` is a dict
+                # inside ``m['decorator_calls']`` -- stamped in lockstep with
+                # ``m`` itself, same first-writer-wins / prepend rules, so
+                # nesting can never disagree between the two.
+                _stamp_call_events_loop_header(m, loop_header)
 
             return ControlStructureResult(
                 success=True,
@@ -314,6 +355,10 @@ class ForLoopHandler:
                     chain.insert(0, body_idx)
                 if "body_index" not in m:
                     m["body_index"] = body_idx
+                # Same stamp, same reason, onto this statement's intercepted
+                # sub-call events (CAS-243 task 9) -- see the loop_header
+                # stamp above for why.
+                _stamp_call_events_body_index(m, body_idx)
             if was_computed:
                 iteration_cached = False
         return iteration_cached

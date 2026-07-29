@@ -1118,6 +1118,28 @@ def _rowtip_html(row: StatementRow) -> str:
         hits = sum(1 for c in row.decorator_calls if c.status is BadgeStatus.RESTORED)
         n = len(row.decorator_calls)
         dl_parts.append(f"<dt>@cache</dt><dd>{hits}/{n} cache hits</dd>")
+    if row.sub_units:
+        # Per-call-SITE breakdown of the intercepted (``# @cash:cache-calls``)
+        # sub-calls this statement made -- see SubUnitGroup for why grouping
+        # is by site rather than callee. One summary line, then one line per
+        # site with its own hit ratio and cache-key prefix (the same-prefix-
+        # across-runs signal the statement row already gives for itself).
+        su_hits = sum(1 for g in row.sub_units for c in g.calls if c.status is BadgeStatus.RESTORED)
+        su_n = sum(len(g.calls) for g in row.sub_units)
+        sites = " · ".join(_esc(g.call_source) for g in row.sub_units[:3])
+        dl_parts.append(f"<dt>Sub-calls</dt><dd>{su_hits}/{su_n} hit · {sites}</dd>")
+        for g in row.sub_units:
+            g_hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
+            detail = f"{g_hits}/{len(g.calls)} hit"
+            if g.key_prefix:
+                detail += f" · <code>{_esc(g.key_prefix)}</code>"
+            if g.condensed:
+                detail += " · condensed"
+            if g.miss_reason:
+                detail += f" · {_esc(g.miss_reason)}"
+            dl_parts.append(
+                f"<dt class='cash-subunit'>{_esc(g.call_source)}</dt><dd>{detail}</dd>"
+            )
     if row.changed_functions:
         dl_parts.append(f"<dt>Fn changed</dt><dd>{_esc(', '.join(row.changed_functions))}</dd>")
     if row.changed_modules:

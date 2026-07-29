@@ -113,6 +113,12 @@ class StatementRow:
     # draw/fit with no frozen seed — its cached value is a frozen replay.
     random_effect: str | None = None
     random_unseeded: bool = False
+    # Per-call-SITE groups of intercepted (``# @cash:cache-calls``) sub-calls
+    # made from inside this statement (CAS-243 call-unit caching). Distinct
+    # from ``decorator_calls`` above: that field is flat and keyed on nothing
+    # in particular, which is fine for the "@cache: N/M hits" summary but
+    # wrong for debugging — see :class:`SubUnitGroup` for why site matters.
+    sub_units: tuple["SubUnitGroup", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -227,6 +233,87 @@ class DecoratorCallGroup:
     # reader needs to know where it came from, and whether their directive
     # engaged. Defaults False so pre-existing metrics keep reading as decorated.
     intercepted: bool = False
+
+
+@dataclass(frozen=True)
+class SubUnitGroup:
+    """All calls at ONE intercepted call site.
+
+    Grouped by call SITE (``call_source`` + ``occurrence_index``) rather
+    than by callee, unlike :class:`DecoratorCallGroup`: the same function
+    called from two different places is two independent cache lines —
+    different arguments, different hit/miss history, quite possibly a
+    different cache key. Merging them by ``func_name`` alone hides exactly
+    what a reader is trying to debug when they open the drawer.
+
+    ``key_prefix`` mirrors ``StatementRow.cache_key_short``: the same
+    prefix across re-runs means cash landed in the same slot for this call,
+    which is the single most useful field for confirming a sub-call cached
+    the way you expect. ``miss_reason`` carries per-site miss attribution
+    when the runtime supplies one; it is ``None`` when not (yet) available
+    rather than a fabricated guess.
+    """
+
+    call_source: str
+    occurrence_index: int
+    calls: tuple[DecoratorCall, ...]
+    condensed: bool
+    key_prefix: str
+    miss_reason: str | None = None
+
+
+# Matches DecoratorCallGroup's condense threshold (``_CONDENSE_THRESHOLD`` in
+# view_builder.py) — both mechanisms condense a call list into one collapsed
+# summary row above the same trip count, so the two behaviours read as one
+# convention rather than two coincidentally-similar numbers.
+_CONDENSE_ABOVE = 3
+
+
+def build_sub_unit_groups(events: Any) -> list[SubUnitGroup]:
+    """Group intercepted-call events by ``(call_source, occurrence_index)``.
+
+    Only events with ``intercepted`` truthy are considered — those are the
+    ones :class:`~cash.notebook.call_unit.CallUnit` emits for a
+    ``# @cash:cache-calls`` sub-call. A hand-decorated ``@cash.cache`` call
+    has no call site to group by here; it stays in the flat
+    ``decorator_calls`` / :class:`DecoratorCallGroup` machinery.
+
+    Defensive against malformed/legacy event dicts (missing keys, wrong
+    types) — this feeds the badge, which must never raise into user code.
+    """
+    buckets: dict[tuple[str, int], list[dict]] = {}
+    for e in events or ():
+        if not isinstance(e, dict) or not e.get("intercepted"):
+            continue
+        try:
+            occ = int(e.get("occurrence_index", 0) or 0)
+        except (TypeError, ValueError):
+            occ = 0
+        source = str(e.get("call_source", "?"))
+        buckets.setdefault((source, occ), []).append(e)
+
+    groups: list[SubUnitGroup] = []
+    for (source, occ), evs in buckets.items():
+        calls = tuple(
+            DecoratorCall(
+                func_name=str(e.get("func_name", "?")),
+                status=BadgeStatus.RESTORED if e.get("cache_hit") else BadgeStatus.COMPUTED,
+                time_s=float(
+                    (e.get("time_saved") if e.get("cache_hit") else e.get("execution_time"))
+                    or 0.0
+                ),
+            )
+            for e in evs
+        )
+        groups.append(SubUnitGroup(
+            call_source=source,
+            occurrence_index=occ,
+            calls=calls,
+            condensed=len(calls) > _CONDENSE_ABOVE,
+            key_prefix=str(evs[0].get("cache_key") or "")[:13],
+            miss_reason=next((e.get("miss_reason") for e in evs if e.get("miss_reason")), None),
+        ))
+    return groups
 
 
 @dataclass(frozen=True)
@@ -356,6 +443,8 @@ __all__ = [
     "SkippedBucket",
     "DecoratorCall",
     "DecoratorCallGroup",
+    "SubUnitGroup",
+    "build_sub_unit_groups",
     "OverheadEntry",
     "OverheadBreakdown",
     "SectionItem",
