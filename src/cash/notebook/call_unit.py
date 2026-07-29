@@ -19,7 +19,10 @@ other.
 """
 
 import ast
+import functools
 import hashlib
+import logging
+import time as _time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -30,7 +33,9 @@ from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.object_hashing import compute_hash
 
-__all__ = ["call_cache_key", "call_site_is_cacheable"]
+logger = logging.getLogger(__name__)
+
+__all__ = ["call_cache_key", "call_site_is_cacheable", "CallUnit"]
 
 
 def call_site_is_cacheable(
@@ -212,3 +217,173 @@ def call_cache_key(
     return "call:" + hashlib.sha256(
         (base + "|" + "|".join(parts)).encode("utf-8")
     ).hexdigest()
+
+
+#: Below this, a call is not worth a key, a store, or a timer -- mirrors the
+#: statement path's ``min_execution_time_to_cache_seconds`` floor
+#: (``statement/processor.py:_store_in_cache``, default 0.01s). This is what
+#: makes an allow-list of "trivial builtins" unnecessary: ``len()`` can never
+#: clear it.
+_COST_FLOOR_S = 0.010
+
+
+class CallUnit:
+    """Caches one intercepted call against the statement backend.
+
+    This is the runtime counterpart to :func:`call_cache_key`: it builds the
+    live inputs that function needs (``arg_digests`` from the actual
+    arguments, ``ctx`` from the live processor state), and does the backend
+    round-trip -- the same ``backend.get``/``backend.set`` calls the statement
+    path uses (:mod:`cash.backends._base`), not a separate KV store.
+
+    **This must never be why user code breaks.** Every failure path -- key
+    build, lookup, store -- falls through to calling the original function.
+    """
+
+    def __init__(self, cash_instance, ctx_provider: Callable[[], CacheKeyContext]):
+        self._cash = cash_instance
+        self._ctx_provider = ctx_provider
+        self.call_log: list[dict] = []
+
+    def wrap(self, fn, site: CallSite):
+        func_name = self._func_name(fn)
+
+        @functools.wraps(fn)
+        def _invoke(*args, **kwargs):
+            key = self._build_key(site, args, kwargs)
+            if key is None:
+                # Either the key build raised, or `call_cache_key` itself
+                # refused (arg-digest count mismatch, by design). Either way
+                # this call is not safely keyable right now -- run it
+                # uncached rather than risk a collapsed, wrong key.
+                return fn(*args, **kwargs)
+
+            hit, value, recorded_cost = self._lookup(key)
+            if hit:
+                self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
+                return value
+
+            started = _time.perf_counter()
+            result = fn(*args, **kwargs)
+            elapsed = _time.perf_counter() - started
+
+            if elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
+                self._store(key, result, elapsed)
+            self._record(func_name, site, key, cache_hit=False, elapsed=elapsed)
+            return result
+
+        return _invoke
+
+    def _build_key(self, site: CallSite, args: tuple, kwargs: dict) -> str | None:
+        try:
+            arg_digests = self._arg_digests(site, args, kwargs)
+            return call_cache_key(
+                site,
+                ctx=self._ctx_provider(),
+                arg_digests=arg_digests,
+                # TODO(CAS-243): the enclosing iteration context's non-dunder
+                # entries (`for_handler.py:278`'s `loop_vars`) are not reachable
+                # from here. `_process_one_iteration` computes them and threads
+                # them down to the statement body via source-text markers and
+                # `self.shell.user_ns`, neither of which carries live loop-var
+                # VALUES into an exec'd call's closure -- there is no
+                # user_ns/thread-local/module-global carrying "the current
+                # iteration's loop variable" today. Passing `{}` unconditionally
+                # is therefore correct-but-degraded for `fetch_next(conn)`-shaped
+                # hidden-state calls inside a loop (no argument expression exists
+                # to hash and the lineage never moves) -- see the "loop_vars"
+                # section of `call_cache_key`'s docstring. A real fix needs a
+                # stack-shaped attribute on the statement processor, set/reset by
+                # `for_handler.py` around each body statement's execution, and
+                # read here through `ctx_provider`'s owner. Flagged, not faked.
+                loop_vars={},
+            )
+        except Exception:  # noqa: BLE001 - never let keying break the call
+            logger.debug("call unit: key build failed for %s", site.source)
+            return None
+
+    def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict) -> list[str]:
+        """Content hashes of the live arguments at ``site.computed_arg_positions``.
+
+        Positions are in ``(*args, *kwargs.values())`` order, matching how
+        :func:`_computed_arg_positions` numbered them at rewrite time. A
+        position beyond the live call's arity (the wrapped function called with
+        a different shape than the site predicted) is simply not appended --
+        the resulting length mismatch is caught by ``call_cache_key`` itself,
+        which refuses rather than mint a key with a discriminator missing.
+        """
+        combined = (*args, *kwargs.values())
+        digests = []
+        for pos in site.computed_arg_positions:
+            if pos >= len(combined):
+                continue
+            digests.append(compute_hash(combined[pos]))
+        return digests
+
+    def _storable(self, result, args, kwargs) -> bool:
+        """Post-execution refusals. See Task 6 -- stubbed True here."""
+        return True
+
+    def _lookup(self, key: str) -> tuple[bool, Any, float]:
+        """``(hit, value, recorded_execution_time)`` -- one backend read.
+
+        ``backend.get`` returns ``(metadata, value)`` (``cash.backends._base``);
+        ``metadata is None`` is the key-presence test the statement path itself
+        uses (``CacheFreshnessChecker.check_cache``), since a stored ``None``
+        value is still a legitimate hit.
+        """
+        try:
+            metadata, value = self._cash.backend.get(key)
+        except Exception:  # noqa: BLE001
+            return False, None, 0.0
+        if metadata is None:
+            return False, None, 0.0
+        try:
+            cost = float(metadata.get("execution_time", 0.0))
+        except (TypeError, ValueError, AttributeError):
+            cost = 0.0
+        return True, value, cost
+
+    def _store(self, key: str, value, elapsed: float) -> None:
+        """Write through ``backend.set(key, value, metadata)`` -- the same
+        two-positional-argument shape the statement path uses
+        (``_store_in_cache``), not a merged single-dict entry.
+        """
+        try:
+            self._cash.backend.set(
+                key, value, {"execution_time": elapsed, "timestamp": _time.time()},
+            )
+        except Exception:  # noqa: BLE001
+            logger.debug("call unit: store failed for %s", key)
+
+    def _func_name(self, fn) -> str:
+        """Mirrors ``CallCache._log_key`` so ``_mark_intercepted_calls`` (which
+        matches drained ``decorator_calls`` entries against
+        ``CallCache.wrapped_names`` by this same string) keeps working.
+        """
+        try:
+            return self._cash._get_func_key(fn)
+        except Exception:  # noqa: BLE001
+            return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
+
+    def _record(self, func_name, site: CallSite, key, *, cache_hit, elapsed, time_saved=0.0) -> None:
+        """Emit the SAME event shape ``drain_decorator_calls`` returns.
+
+        Keeping the contract identical is what lets the badge, the ``@cache``
+        row and ``%cash_stats`` keep working on this log unmodified.
+        """
+        self.call_log.append({
+            "func_name": func_name,
+            "cache_hit": cache_hit,
+            "execution_time": elapsed,
+            "time_saved": time_saved,
+            "args_hash": "",
+            "cache_key": key,
+            "timestamp": _time.time(),
+            "call_source": site.source,
+            "occurrence_index": site.occurrence_index,
+        })
+
+    def drain(self) -> list[dict]:
+        events, self.call_log = self.call_log, []
+        return events

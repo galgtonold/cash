@@ -316,6 +316,7 @@ from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
 from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
+from ..call_unit import call_site_is_cacheable
 from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
 from ..cacheability import (
@@ -1544,6 +1545,23 @@ class StatementProcessor:
             return
         self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
 
+    def _drain_call_unit_events(self) -> list:
+        """CallUnit's own call log, merged into ``decorator_calls`` (CAS-243).
+
+        ``CallCache.resolve`` routes an intercepted call's caching through
+        ``CallUnit`` rather than ``Cash``'s decorator-call log, so
+        ``drain_decorator_calls()`` alone no longer sees it. Pulled in
+        separately here rather than inside :meth:`_get_cash_instance`'s try
+        block above, so a failure in one drain never suppresses the other.
+        """
+        if self._call_cache is None:
+            return []
+        try:
+            return self._call_cache.drain_call_log()
+        except (AttributeError, TypeError, RuntimeError):
+            logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
+            return []
+
     def _mark_intercepted_calls(self, decorator_calls: list) -> None:
         """Flag drained log entries that cash wrapped itself (CAS-243).
 
@@ -1636,8 +1654,25 @@ class StatementProcessor:
         if cash_instance is None:
             return code, tree
         try:
+            # The object-level half of the gate (CAS-243 Task 4/5): a call that
+            # is structurally eligible (its free variables don't read the
+            # statement's own target) can still be uncacheable for every reason
+            # a statement can be -- a forbidden call, an untracked input, a
+            # user-ns shape ``decide_cacheability`` refuses. Judging it by the
+            # SAME rules as the statement containing it (rather than not judging
+            # it at all) is what ``call_site_is_cacheable`` exists for; wiring it
+            # here means an eligible-but-uncacheable site is never wrapped in
+            # the first place, so a doomed key is never even attempted.
+            def gate(call: ast.Call) -> bool:
+                return call_site_is_cacheable(
+                    call,
+                    user_ns=self.shell.user_ns,
+                    annotation=annotation,
+                    is_stateful_call=self._check_callable_stateful,
+                    scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                )[0]
             rewritten, sites = wrap_eligible_calls(
-                tree if tree is not None else ast.parse(code)
+                tree if tree is not None else ast.parse(code), gate=gate,
             )
             if not sites:
                 self._warn_cache_calls_noop(code)
@@ -1649,7 +1684,16 @@ class StatementProcessor:
             if code.rstrip().endswith(';'):
                 new_code += ';'
             if self._call_cache is None or self._call_cache_owner is not cash_instance:
-                self._call_cache = CallCache(cash_instance)
+                self._call_cache = CallCache(
+                    cash_instance,
+                    ctx_provider=lambda: CacheKeyContext(
+                        variable_lineage=self.variable_lineage,
+                        user_ns=self.shell.user_ns,
+                        function_tracker=self.function_tracker,
+                        compute_hash_fn=self.compute_hash,
+                        debug=self.debug,
+                    ),
+                )
                 self._call_cache_owner = cash_instance
             self._call_cache.set_sites(sites)
             self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
@@ -1690,9 +1734,11 @@ class StatementProcessor:
             cash_instance = self._get_cash_instance()
             if cash_instance is not None:
                 decorator_calls = cash_instance.drain_decorator_calls()
-                self._mark_intercepted_calls(decorator_calls)
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
+        decorator_calls.extend(self._drain_call_unit_events())
+        if decorator_calls:
+            self._mark_intercepted_calls(decorator_calls)
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr
@@ -1749,9 +1795,11 @@ class StatementProcessor:
             cash_instance = self._get_cash_instance()
             if cash_instance is not None:
                 decorator_calls = cash_instance.drain_decorator_calls()
-                self._mark_intercepted_calls(decorator_calls)
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
+        decorator_calls.extend(self._drain_call_unit_events())
+        if decorator_calls:
+            self._mark_intercepted_calls(decorator_calls)
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr

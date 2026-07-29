@@ -35,6 +35,8 @@ from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from .cache_key import CacheKeyContext
+
 __all__ = [
     "eligible_call_nodes", "wrap_eligible_calls", "CallCache", "CallSite", "HELPER_NAME",
 ]
@@ -116,12 +118,15 @@ class CallCache:
     failure to build a wrapper, hands the original callable back.
     """
 
-    def __init__(self, cash_instance):
+    def __init__(self, cash_instance, ctx_provider: Callable[[], CacheKeyContext] | None = None):
         self._cash = cash_instance
-        # Keyed by id() and pinned by the value tuple: a function's id can be
-        # reused after garbage collection, so the original is held alongside
-        # the wrapper to keep it alive and to detect a recycled id.
-        self._wrappers: dict[int, tuple[types.FunctionType, object]] = {}
+        # Keyed by (id(fn), site_index) and pinned by the value tuple: a
+        # function's id can be reused after garbage collection (the original is
+        # held alongside the wrapper to keep it alive and to detect a recycled
+        # id), and the SAME function at two different call sites needs two
+        # distinct wrappers -- each closes over its own CallSite, so collapsing
+        # them onto one entry would serve one site's cached value at the other.
+        self._wrappers: dict[tuple[int, int], tuple[types.FunctionType, object]] = {}
         #: Log keys of functions this instance actually wrapped. The badge uses
         #: it to tell an intercepted call from a hand-decorated one — both land
         #: in the same call log, and undifferentiated the section appears out of
@@ -129,12 +134,42 @@ class CallCache:
         #: functions are recorded, so the badge cannot over-claim.
         self.wrapped_names: set[str] = set()
         #: The current cell's rewrite-time site table, set by the processor
-        #: right before execution via :meth:`set_sites`. ``site_index`` is
-        #: accepted and ignored until Task 5 wires site-addressed keying in.
+        #: right before execution via :meth:`set_sites`.
         self._sites: list[CallSite] = []
+        # Local import: call_unit.py imports CallSite/_names_read from this
+        # module, so a module-level import here would be a circular import at
+        # load time. Deferred to first construction instead.
+        from .call_unit import CallUnit
+        self._call_unit = CallUnit(cash_instance, ctx_provider or self._default_ctx)
+
+    def _default_ctx(self) -> CacheKeyContext:
+        """Fallback used only when no live processor state was wired in.
+
+        The production call site (``statement/processor.py``) always supplies a
+        real ``ctx_provider`` bound to the executing cell's ``user_ns`` and
+        ``variable_lineage``. This empty context is exercised only by
+        ``resolve()`` calls that never registered a site (see below) -- direct,
+        non-production use of ``CallCache`` -- where it is harmless: lineage
+        resolution degrades to id-based hashing rather than a dict lookup, and
+        nothing is served incorrectly.
+        """
+        return CacheKeyContext(variable_lineage={}, user_ns={})
 
     def set_sites(self, sites: list[CallSite]) -> None:
         self._sites = sites
+
+    def drain_call_log(self) -> list[dict]:
+        """Events :class:`~cash.notebook.call_unit.CallUnit` recorded since the
+        last drain, in the same shape ``Cash.drain_decorator_calls`` returns.
+
+        An intercepted call routed through :meth:`resolve`'s real-site branch
+        no longer calls ``self._cash.cache`` at all, so nothing about it lands
+        in the ``Cash`` instance's own decorator-call log any more -- the
+        processor must pull this in and merge it with
+        ``drain_decorator_calls()`` or the badge, the ``@cache`` row and
+        ``%cash_stats`` silently stop seeing intercepted calls.
+        """
+        return self._call_unit.drain()
 
     def resolve(self, fn, site_index: int = 0):
         """Return *fn* or a cached counterpart. Never raises."""
@@ -160,15 +195,36 @@ class CallCache:
         if getattr(fn, '_is_file_tracker_patch', False):
             return fn
 
-        entry = self._wrappers.get(id(fn))
+        entry = self._wrappers.get((id(fn), site_index))
         if entry is not None and entry[0] is fn:
             return entry[1]
 
         try:
-            wrapper = self._cash.cache(fn, cache_if=_is_storable)
+            site = self._sites[site_index]
+        except (IndexError, TypeError):
+            site = None
+
+        try:
+            if site is not None:
+                # The real path (CAS-243 Task 5): key and store through the
+                # statement backend via the call's own CallSite.
+                wrapper = self._call_unit.wrap(fn, site)
+            else:
+                # No site registered for this index -- CallCache is being used
+                # outside the ``_code_and_tree_for_execution`` rewrite pipeline
+                # (e.g. called directly, as every pre-Task-5 unit test does).
+                # In production ``set_sites`` is always called with a non-empty
+                # list before ``__cash_call__`` is ever bound into ``user_ns``
+                # (``_code_and_tree_for_execution`` returns early when
+                # ``wrap_eligible_calls`` finds nothing), so this branch is not
+                # reachable from real notebook execution. Keep the previously-
+                # shipped decorator-based wrapping here rather than passing the
+                # callee through unwrapped: an unrecognised shape must degrade
+                # to a slower-but-correct cache, not to silently losing caching.
+                wrapper = self._cash.cache(fn, cache_if=_is_storable)
         except Exception:  # noqa: BLE001 - a caching wrapper is never worth an error
             return fn
-        self._wrappers[id(fn)] = (fn, wrapper)
+        self._wrappers[(id(fn), site_index)] = (fn, wrapper)
         self.wrapped_names.add(self._log_key(fn))
         return wrapper
 
