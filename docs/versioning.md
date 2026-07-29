@@ -41,6 +41,6 @@ replacement, wherever that's feasible. Removals are called out in the
 ## Pinning
 
 Pin cash the way you'd pin any dependency you rely on in production — e.g.
-`cash-lib~=0.1.1` to take patch fixes but not an automatic `0.2` — and upgrade
+`cash-lib~=0.2.0` to take patch fixes but not an automatic `0.3` — and upgrade
 deliberately, reading the CHANGELOG and running `%cash_repair --full` as part of
 the bump.

@@ -5,6 +5,115 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-07-29
+
+Two features: cash can now track objects in remote storage the way it has always
+tracked local files, and `# @cash:cache-calls` caches the expensive call inside a
+statement for the two shapes statement-level caching structurally cannot help
+with.
+
+### Added
+
+**Remote objects are tracked like local files**
+
+- `RemoteFileDataSource` tracks an `s3://`, `gs://` or `http(s)://` object by the
+  validator its store already maintains — ETag, version id, GCS generation — so
+  editing the object invalidates the cache. It costs one metadata request, and a
+  hit skips the download entirely. Because the token comes from the store rather
+  than the local filesystem, it is **identical on every machine**, so a cache
+  shared between machines actually travels — which a path and an mtime can never
+  do. `http(s)://` needs no extra dependency; other schemes resolve through
+  `fsspec`.
+- **Remote reads are tracked automatically, on by default.** Before this,
+  `pd.read_parquet("s3://bucket/key")` inside a `@cash.cache` function recorded
+  *no* dependency at all — the URL was mangled through local-path resolution and
+  dropped — so the function kept hitting after the object changed. Tracking
+  usually *reduces* network traffic: it only engages for code that already reads
+  from the network, and it trades a metadata request for a transfer that may be
+  hundreds of megabytes.
+- The same now holds for **notebook statements**, not just decorated functions. A
+  statement reading a remote object re-validates it on lookup, and its downstream
+  consumers invalidate through lineage. Previously the read contributed nothing
+  and the statement hit forever.
+- A **version-pinned URL** (`?versionId=`, `#generation=`) is recognised as
+  immutable and costs no request at all — the pin *is* the token. Immutability is
+  never inferred from a path shape, whose failure mode would be the worst
+  available: never invalidating, silently, forever.
+- **Freshness checks report their own cost.** A remote check is a network round
+  trip that lands on the *hit* path — exactly where the badge reports a saving
+  and nothing used to report what establishing it cost. The badge's overhead
+  breakdown now carries a `remote` line with the source count, and cash warns
+  once when validation stops being a good trade: either relative (it cost more
+  than half the compute it saved) or absolute (seconds of metadata requests is
+  unusable in a notebook even when it is net-positive on paper).
+- New config `remote_revalidate_max_age_seconds` (default `0` — revalidate on
+  every hit, the only setting that cannot serve stale data). It exists for
+  auto-tracked reads, where you never construct the source and so have nowhere to
+  put a per-source `max_age`. Raising it trades correctness for latency for the
+  window's duration.
+- **Failure is closed.** An unreachable store yields a never-before-seen token so
+  the call recomputes, rather than a constant token that would let the second
+  failure serve what the first one stored. Warns once per URL and failure kind. A
+  missing `fsspec` is raised rather than hidden behind a silent forever-recompute.
+  Cash also warns when size is the only validator a store offers, since a
+  same-size edit would be invisible.
+
+**`# @cash:cache-calls` — cache the expensive call, not the statement**
+
+- An opt-in directive for the two shapes statement-level caching cannot help
+  with:
+  - `out.append(compute(x))` was skip-cached because the append is a mutation, so
+    it re-ran in full every time;
+  - `s += compute(x)` cached, but keyed on the running prefix, so reordering the
+    input re-ran the whole tail.
+
+  In both, the expensive thing is the call and the cheap thing is the wrapper
+  around it. For the append this is also *more* correct than before — the
+  mutation genuinely happens on every run instead of being surrendered.
+- Interception happens **in place at the call node**, never by hoisting into a
+  temporary, so short-circuiting (`f() or g()`), ternaries, comprehension scopes
+  and `*`/`**` unpacking all keep working — Python still decides whether the call
+  is reached.
+- Intercepted calls are **labelled on the badge** (`compute() [via
+  @cash:cache-calls]: 2/3 cached`) in both the HTML and text renderers, so you
+  can confirm the directive engaged. Hits are credited in `%cash_stats` as usual.
+- When the directive **cannot apply** — a call that reads the statement's own
+  target *is* the fold — cash raises `CashCacheIneffectiveWarning` naming the
+  statement and the rule, once per statement, instead of silently caching
+  nothing.
+- Bound methods are passed through deliberately. Caching a method puts `self` in
+  the key, which needs the author's judgement (an unpicklable receiver silently
+  fails to cache; a heavy `self.df` is pickled on every call) — see the
+  caching-class-methods guide.
+
+### Fixed
+
+- **Kernel pseudo-filesystem reads (`/proc`, `/sys`, `/dev`) are never recorded
+  as cache dependencies.** On Linux, cash's own periodic memory check reads
+  `/proc/meminfo` *during* a cached call, so the read was attributed to your
+  result. That file reports live memory, so its contents change on every read:
+  the entry was found on lookup and thrown away as stale, every single time —
+  the cache storing, hitting and discarding in a loop, silently, forever. Most
+  visible for calls that write several entries at once, such as a chunked
+  iterator.
+- **`@cash.stateful` is now honoured by `# @cash:cache-calls`.** It is the
+  documented way to say "never cache this function", and the statement path
+  respected it while the call path did not — so a stateful callee was cached and
+  returned a **stale value on the first run**: two calls to a counter in a loop
+  gave `[1, 1]` where plain Python gives `[1, 2]`. `# @cash:no-cache` now also
+  wins over `cache-calls`, rather than the call being cached anyway.
+- **A matplotlib `Figure` from an intercepted call is no longer cached.** The RAM
+  tier deep-copies on store and `Figure.__setstate__` re-registers the *copy* as
+  pyplot's current figure, so a later bare `plt.savefig()` wrote the cache's
+  snapshot instead of the figure you drew — a genuinely wrong PNG, on the first
+  run. The statement path already refused this; the call path now refuses it too.
+- **Cash's own file-tracking shims are never intercepted.** Its tracking wrappers
+  around `open` and `pd.read_csv` are plain functions, so `cache-calls` tried to
+  cache one — and `open('audit.log', 'a').write(...)` raised and wrote nothing.
+  File-change invalidation was never affected.
+- An RNG pill (`seed` / `random` / `UNSEEDED`) on a statement badge no longer
+  pushes the timing chip onto a second line.
+
 ## [0.1.1] - 2026-07-24
 
 The first public release. `0.1.0` was published to Test PyPI only; an
