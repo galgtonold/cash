@@ -31,12 +31,40 @@ the live object is in hand, not here.
 import ast
 import copy
 import types
+from collections import Counter
+from dataclasses import dataclass
 
-__all__ = ["eligible_call_nodes", "wrap_eligible_calls", "CallCache", "HELPER_NAME"]
+__all__ = [
+    "eligible_call_nodes", "wrap_eligible_calls", "CallCache", "CallSite", "HELPER_NAME",
+]
 
 #: Name bound in ``user_ns`` that resolves a callee to its cached counterpart.
 #: Dunder-prefixed so it cannot collide with a user's own names.
 HELPER_NAME = "__cash_call__"
+
+
+@dataclass(frozen=True)
+class CallSite:
+    """Everything the runtime needs about one intercepted call, computed once.
+
+    Built at rewrite time so the thunk never re-parses or re-unparses on the
+    hot path: a loop body calling this 10,000 times would otherwise pay an
+    ``ast.unparse`` per iteration.
+
+    ``occurrence_index`` counts *identical sources within the cell*, matching
+    the statement path's rule (``compute_cache_key``'s ``occ`` component). Two
+    spellings of the same call are different sources and each start at 0.
+    """
+
+    source: str
+    free_names: frozenset[str]
+    occurrence_index: int
+    #: Positions (in ``(*args, *kwargs.values())`` order) of arguments that are
+    #: NOT a bare ``ast.Name``. Those are the ones whose *evaluated value* must
+    #: be hashed into the key, because their value is not a function of any
+    #: name's lineage -- ``compute(next(it))`` being the case that makes this
+    #: a correctness requirement rather than a tuning knob. See Task 3.
+    computed_arg_positions: tuple[int, ...] = ()
 
 
 def _is_storable(result) -> bool:
@@ -99,8 +127,15 @@ class CallCache:
         #: nowhere for someone who decorated nothing. Only genuinely wrapped
         #: functions are recorded, so the badge cannot over-claim.
         self.wrapped_names: set[str] = set()
+        #: The current cell's rewrite-time site table, set by the processor
+        #: right before execution via :meth:`set_sites`. ``site_index`` is
+        #: accepted and ignored until Task 5 wires site-addressed keying in.
+        self._sites: list[CallSite] = []
 
-    def resolve(self, fn):
+    def set_sites(self, sites: list[CallSite]) -> None:
+        self._sites = sites
+
+    def resolve(self, fn, site_index: int = 0):
         """Return *fn* or a cached counterpart. Never raises."""
         if not isinstance(fn, types.FunctionType):
             return fn
@@ -150,36 +185,77 @@ class CallCache:
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
 
-def wrap_eligible_calls(tree: ast.Module) -> tuple[ast.Module, int]:
-    """Return ``(rewritten_copy, n_wrapped)``; *tree* is left untouched.
+def wrap_eligible_calls(tree: ast.Module) -> tuple[ast.Module, list[CallSite]]:
+    """Return ``(rewritten_copy, sites)``; *tree* is left untouched.
 
-    Each eligible call has its **callee expression** wrapped::
+    Each eligible call has its **callee expression** wrapped, and is handed the
+    index of its own :class:`CallSite`::
 
-        compute(x)  ->  __cash_call__(compute)(x)
+        compute(x)  ->  __cash_call__(compute, 0)(x)
 
     The argument list is not rewritten at all, so ``*args``/``**kwargs``,
     keyword arguments and evaluation order need no special handling — and,
     critically, the call stays exactly where it was in the expression. A
-    short-circuited ``g()`` in ``f() or g()`` is still only reached when ``f()``
-    is falsy; hoisting it into a temporary would have run it unconditionally.
+    short-circuited ``g()`` in ``f() or g()`` is still only reached when
+    ``f()`` is falsy; hoisting it into a temporary would have run it
+    unconditionally.
 
     The copy matters: the caller keeps using the original tree for analysis and
     cache keying, and rewriting in place would desync the runtime's source from
-    the upstream simulator's.
+    the upstream simulator's. That is what keeps ADR-007 satisfied without the
+    simulator needing to know interception exists.
     """
     new_tree = copy.deepcopy(tree)
-    count = 0
+    sites: list[CallSite] = []
+    seen: Counter[str] = Counter()
     for stmt in new_tree.body:
         for call in eligible_call_nodes(stmt):
+            source = ast.unparse(call)
+            index = seen[source]
+            seen[source] += 1
+            sites.append(
+                CallSite(
+                    source=source,
+                    free_names=frozenset(_names_read(call)),
+                    occurrence_index=index,
+                    computed_arg_positions=_computed_arg_positions(call),
+                )
+            )
             call.func = ast.Call(
                 func=ast.Name(id=HELPER_NAME, ctx=ast.Load()),
-                args=[call.func],
+                args=[call.func, ast.Constant(value=len(sites) - 1)],
                 keywords=[],
             )
-            count += 1
-    if count:
+    if sites:
         ast.fix_missing_locations(new_tree)
-    return new_tree, count
+    return new_tree, sites
+
+
+def _computed_arg_positions(call: ast.Call) -> tuple[int, ...]:
+    """Positions, in ``(*args, *kwargs.values())`` order, of non-``ast.Name``
+    arguments -- the ones whose evaluated value (not a name's lineage) must be
+    hashed into the cache key.
+
+    ``*args``/``**kwargs`` unpacking (an ``ast.Starred`` positional, or a
+    keyword with ``arg=None``) makes the position of any later argument
+    unreliable to compute here, since the unpacked collection's length is not
+    known statically. Fail closed: record every position as computed, so a
+    later task treats the whole call as needing evaluated-value hashing rather
+    than under-keying it.
+    """
+    if any(isinstance(a, ast.Starred) for a in call.args) or any(
+        kw.arg is None for kw in call.keywords
+    ):
+        return tuple(range(len(call.args) + len(call.keywords)))
+    positions = []
+    for i, arg in enumerate(call.args):
+        if not isinstance(arg, ast.Name):
+            positions.append(i)
+    offset = len(call.args)
+    for i, kw in enumerate(call.keywords):
+        if not isinstance(kw.value, ast.Name):
+            positions.append(offset + i)
+    return tuple(positions)
 
 
 #: Statement shapes the free-variable rule is sound for. Everything else --

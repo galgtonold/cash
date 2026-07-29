@@ -19,13 +19,13 @@ decides whether the call is reached, exactly as before.
 import ast
 import unittest
 
-from cash.notebook.call_interception import HELPER_NAME, wrap_eligible_calls
+from cash.notebook.call_interception import CallSite, HELPER_NAME, wrap_eligible_calls
 
 
-def _rewrite(src: str) -> tuple[str, int]:
+def _rewrite(src: str) -> tuple[str, list[CallSite]]:
     tree = ast.parse(src)
-    new_tree, count = wrap_eligible_calls(tree)
-    return ast.unparse(new_tree), count
+    new_tree, sites = wrap_eligible_calls(tree)
+    return ast.unparse(new_tree), sites
 
 
 class TestRewrite(unittest.TestCase):
@@ -35,39 +35,39 @@ class TestRewrite(unittest.TestCase):
         self.assertTrue(HELPER_NAME.startswith("__cash"))
 
     def test_accumulator_fold(self):
-        out, n = _rewrite("s += compute(x)")
-        self.assertEqual(out, "s += __cash_call__(compute)(x)")
-        self.assertEqual(n, 1)
+        out, sites = _rewrite("s += compute(x)")
+        self.assertEqual(out, "s += __cash_call__(compute, 0)(x)")
+        self.assertEqual(len(sites), 1)
 
     def test_append(self):
-        out, n = _rewrite("out.append(compute(x))")
-        self.assertEqual(out, "out.append(__cash_call__(compute)(x))")
-        self.assertEqual(n, 1)
+        out, sites = _rewrite("out.append(compute(x))")
+        self.assertEqual(out, "out.append(__cash_call__(compute, 0)(x))")
+        self.assertEqual(len(sites), 1)
 
     def test_ineligible_statement_is_untouched(self):
-        out, n = _rewrite("s = merge(s, x)")
+        out, sites = _rewrite("s = merge(s, x)")
         self.assertEqual(out, "s = merge(s, x)")
-        self.assertEqual(n, 0)
+        self.assertEqual(len(sites), 0)
 
     def test_argument_unpacking_survives(self):
         """Arguments are not rewritten, so *args/**kwargs need no special case."""
-        out, n = _rewrite("out.append(compute(*xs, k=1, **kw))")
-        self.assertEqual(out, "out.append(__cash_call__(compute)(*xs, k=1, **kw))")
-        self.assertEqual(n, 1)
+        out, sites = _rewrite("out.append(compute(*xs, k=1, **kw))")
+        self.assertEqual(out, "out.append(__cash_call__(compute, 0)(*xs, k=1, **kw))")
+        self.assertEqual(len(sites), 1)
 
     def test_short_circuit_is_preserved(self):
         """The load-bearing case: `g` stays under the `or`, not hoisted above it."""
-        out, n = _rewrite("out.append(f() or g())")
+        out, sites = _rewrite("out.append(f() or g())")
         self.assertEqual(
-            out, "out.append(__cash_call__(f)() or __cash_call__(g)())"
+            out, "out.append(__cash_call__(f, 0)() or __cash_call__(g, 1)())"
         )
-        self.assertEqual(n, 2)
+        self.assertEqual(len(sites), 2)
 
     def test_method_call_callee_is_wrapped_whole(self):
         """A bound method is a callable like any other; wrap the whole callee."""
-        out, n = _rewrite("s += model.predict(x)")
-        self.assertEqual(out, "s += __cash_call__(model.predict)(x)")
-        self.assertEqual(n, 1)
+        out, sites = _rewrite("s += model.predict(x)")
+        self.assertEqual(out, "s += __cash_call__(model.predict, 0)(x)")
+        self.assertEqual(len(sites), 1)
 
     def test_original_tree_is_not_mutated(self):
         """The caller keeps using the original tree for analysis and keying.
@@ -85,6 +85,32 @@ class TestRewrite(unittest.TestCase):
         tree = ast.parse("out.append(compute(x))")
         new_tree, _ = wrap_eligible_calls(tree)
         compile(new_tree, "<test>", "exec")  # must not raise
+
+
+def test_rewrite_emits_site_index_and_table():
+    tree = ast.parse("out.append(compute(x))")
+    rewritten, sites = wrap_eligible_calls(tree)
+
+    assert len(sites) == 1
+    assert sites[0].source == "compute(x)"
+    assert sites[0].free_names == frozenset({"compute", "x"})
+    assert sites[0].occurrence_index == 0
+    assert "__cash_call__(compute, 0)(x)" in ast.unparse(rewritten)
+
+
+def test_identical_call_sites_get_distinct_occurrence_indices():
+    tree = ast.parse("a = compute(x)\nb = compute(x)")
+    _, sites = wrap_eligible_calls(tree)
+
+    assert [s.occurrence_index for s in sites] == [0, 1]
+    assert sites[0].source == sites[1].source == "compute(x)"
+
+
+def test_distinct_sources_each_start_at_occurrence_zero():
+    tree = ast.parse("a = compute(x)\nb = other(x)")
+    _, sites = wrap_eligible_calls(tree)
+
+    assert [s.occurrence_index for s in sites] == [0, 0]
 
 
 if __name__ == "__main__":

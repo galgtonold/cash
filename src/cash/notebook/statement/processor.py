@@ -1605,7 +1605,8 @@ class StatementProcessor:
 
         Under ``# @cash:cache-calls`` (CAS-243) each eligible call has its
         callee wrapped so it resolves to a cached counterpart at call time —
-        ``compute(x)`` becomes ``__cash_call__(compute)(x)``. That fixes the two
+        ``compute(x)`` becomes ``__cash_call__(compute, 0)(x)``, where ``0`` is
+        the index of this call's :class:`CallSite`. That fixes the two
         shapes statement-level caching structurally cannot: an expensive call
         inside an in-place mutation (skip-cached, so never reused) and one
         inside an accumulator fold (cached, but keyed on the running prefix, so
@@ -1635,10 +1636,10 @@ class StatementProcessor:
         if cash_instance is None:
             return code, tree
         try:
-            rewritten, count = wrap_eligible_calls(
+            rewritten, sites = wrap_eligible_calls(
                 tree if tree is not None else ast.parse(code)
             )
-            if not count:
+            if not sites:
                 self._warn_cache_calls_noop(code)
                 return code, tree
             new_code = ast.unparse(rewritten)
@@ -1650,6 +1651,7 @@ class StatementProcessor:
             if self._call_cache is None or self._call_cache_owner is not cash_instance:
                 self._call_cache = CallCache(cash_instance)
                 self._call_cache_owner = cash_instance
+            self._call_cache.set_sites(sites)
             self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
             return new_code, rewritten
         except (SyntaxError, ValueError, TypeError, AttributeError):
