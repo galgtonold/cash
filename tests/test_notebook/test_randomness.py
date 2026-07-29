@@ -847,10 +847,20 @@ class TestPositionalRngCarrierArguments:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness("price(np.random.default_rng(), 5)", detector)
-        assert len(w) == 1
-        assert issubclass(w[0].category, CashRandomnessWarning)
-        assert "rng.standard_normal()" in str(w[0].message)
-        assert "@cash:allow-random" in str(w[0].message)
+        # Count only the category under test. ``simplefilter("always")`` records
+        # EVERY warning raised inside the block, including ones from libraries
+        # this test has no opinion about, so asserting on the total made the
+        # assertion depend on what else happened to warn first in the process --
+        # it read 3 on ubuntu-3.13 while passing everywhere else.
+        randomness = [x for x in w if issubclass(x.category, CashRandomnessWarning)]
+        # Report what was actually captured if this ever trips again: a bare
+        # count tells you nothing about which warning is the unexpected one.
+        assert len(randomness) == 1, (
+            "expected exactly one CashRandomnessWarning, captured: "
+            + repr([(x.category.__name__, str(x.message)[:120]) for x in w])
+        )
+        assert "rng.standard_normal()" in str(randomness[0].message)
+        assert "@cash:allow-random" in str(randomness[0].message)
 
     def test_allow_random_suppresses_the_positional_warning(self):
         """The documented opt-out has to cover the newly-detected form."""
@@ -863,7 +873,9 @@ class TestPositionalRngCarrierArguments:
             check_and_warn_randomness(
                 "price(np.random.default_rng(), 5)", detector, suppress_warning=True,
             )
-        assert len(w) == 0
+        # Same reason as above: an unrelated library warning inside the block
+        # must not read as "the opt-out failed".
+        assert [x for x in w if issubclass(x.category, CashRandomnessWarning)] == []
 
     def test_randomness_never_changes_cacheability(self):
         """The advisory-only contract: detection must not make a statement
