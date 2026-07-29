@@ -172,6 +172,57 @@ def test_computed_arg_positions_all_bare_names_is_empty():
     assert sites[0].computed_arg_positions == ()
 
 
+def test_gate_rejecting_every_call_wraps_nothing():
+    """A gate that refuses every call must behave exactly like no eligible
+    call existed: no ``CallSite`` recorded, and the tree left byte-identical
+    to the ungated parse. Catches an inverted ``gate(call)``/``not gate(call)``
+    condition (which would wrap everything instead) and a dropped/no-op
+    ``continue`` (which would let the rejected call fall through into the
+    wrap below it anyway).
+    """
+    tree = ast.parse("out.append(compute(x))")
+    new_tree, sites = wrap_eligible_calls(tree, gate=lambda call: False)
+    assert sites == []
+    out = ast.unparse(new_tree)
+    assert "__cash_call__" not in out
+    assert out == ast.unparse(tree)
+
+
+def test_gate_accepting_every_call_matches_no_gate():
+    """A gate that accepts everything must be indistinguishable from omitting
+    the gate entirely. Pins the other direction of an inverted condition:
+    if ``not gate(call)`` were flipped to ``gate(call)``, an always-``True``
+    gate would reject every call instead of none, and this would fail where
+    the rejecting test above would not (that one only exercises the
+    always-``False`` side).
+    """
+    tree = ast.parse("out.append(compute(x) + other(y))")
+    gated_tree, gated_sites = wrap_eligible_calls(tree, gate=lambda call: True)
+    ungated_tree, ungated_sites = wrap_eligible_calls(tree)
+    assert ast.unparse(gated_tree) == ast.unparse(ungated_tree)
+    assert gated_sites == ungated_sites
+
+
+def test_selective_gate_wraps_only_the_accepted_call():
+    """The case a uniform (all-True or all-False) gate cannot catch: two calls
+    in the SAME statement, one accepted and one rejected. A uniform gate test
+    can pass with the right *count* even if a bug misattributes each call's
+    decision to a different node -- both calls get the same verdict either
+    way, so a swap is invisible. Here the two calls get different verdicts,
+    so wrapping the wrong one (or wrapping both because ``continue`` silently
+    stopped skipping) changes both the emitted source and which ``CallSite``
+    survives, not just how many there are.
+    """
+    tree = ast.parse("out.append(compute(x) + other(y))")
+    new_tree, sites = wrap_eligible_calls(
+        tree, gate=lambda call: getattr(call.func, "id", None) == "compute"
+    )
+    out = ast.unparse(new_tree)
+    assert out == "out.append(__cash_call__(compute, 0)(x) + other(y))"
+    assert len(sites) == 1
+    assert sites[0].source == "compute(x)"
+
+
 def test_calls_inside_a_while_body_are_never_intercepted():
     """LOAD-BEARING, and it is a deduction rather than a measured fact.
 
