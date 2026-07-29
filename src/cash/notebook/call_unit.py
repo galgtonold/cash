@@ -22,6 +22,7 @@ import ast
 import functools
 import hashlib
 import logging
+import sys
 import time as _time
 from collections.abc import Callable, Mapping
 from typing import Any
@@ -228,6 +229,38 @@ def call_cache_key(
 _COST_FLOOR_S = 0.010
 
 
+class _ForwardingTee:
+    """Records everything written while forwarding untouched to the real stream.
+
+    Used by :meth:`CallUnit._call_capturing_output` to capture a callee's own
+    stdout/stderr for later replay on a cache hit, without disturbing the
+    statement's own ambient capture: *real_stream* IS that ambient capture's
+    current stdout/stderr object during a miss, so every write still reaches
+    it exactly as before this class existed. Deliberately not the processor's
+    own ``_TeeWriter`` (``statement/processor.py``) -- this module sits
+    beneath the processor in the import graph and must not depend on it.
+    """
+    __slots__ = ("_real", "_chunks")
+
+    def __init__(self, real_stream: Any) -> None:
+        self._real = real_stream
+        self._chunks: list[str] = []
+
+    def write(self, s: str) -> int:
+        self._real.write(s)
+        self._chunks.append(s)
+        return len(s)
+
+    def flush(self) -> None:
+        self._real.flush()
+
+    def getvalue(self) -> str:
+        return "".join(self._chunks)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._real, name)
+
+
 class CallUnit:
     """Caches one intercepted call against the statement backend.
 
@@ -274,8 +307,20 @@ class CallUnit:
                 # it plain -- never look it up, never store over it.
                 return fn(*args, **kwargs)
 
-            hit, value, recorded_cost = self._lookup(key)
+            hit, value, recorded_cost, metadata = self._lookup(key)
             if hit:
+                # Replay the ORIGINAL execution's observations into the
+                # statement's ambient capture (FileAccessTracker, live
+                # stdout/stderr). The call itself does not run on a hit, so
+                # without this replay the tracker records no read and the
+                # live stream sees no print -- the enclosing statement's own
+                # entry would then be rewritten (on ITS next miss) from a
+                # degraded observation that is missing both. Mirrors
+                # ``core.py``'s ``_propagate_file_deps_to_active_tracker``,
+                # the ``@cash.cache`` decorator's defence against the same
+                # failure mode.
+                self._replay_deps(metadata)
+                self._replay_output(metadata)
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 return value
 
@@ -289,10 +334,16 @@ class CallUnit:
             # rewritten from a degraded observation. Both checks below fail
             # CLOSED -- refuse the site outright rather than serve a value
             # whose side effects will not re-happen.
+            #
+            # File deps and stdout/stderr are recorded around the call so a
+            # LATER hit can replay them (above). RNG is deliberately not
+            # recorded here -- Task 6b already refuses any call that consumed
+            # it (CAS-254 tracks a proper fix).
             rng_before = capture_rng_state()
             arg_hashes_before = self._hash_args(args, kwargs)
+            before_files, before_remote = self._tracker_snapshot()
             started = _time.perf_counter()
-            result = fn(*args, **kwargs)
+            result, stdout_text, stderr_text = self._call_capturing_output(fn, args, kwargs)
             elapsed = _time.perf_counter() - started
 
             if rng_modules_changed(rng_before, capture_rng_state()):
@@ -311,11 +362,129 @@ class CallUnit:
                 # a hit would silently skip.
                 self._refused.add(key)
             elif elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
-                self._store(key, result, elapsed)
+                after_files, after_remote = self._tracker_snapshot()
+                self._store(
+                    key, result, elapsed,
+                    file_deps=after_files - before_files,
+                    remote_deps=after_remote - before_remote,
+                    stdout=stdout_text,
+                    stderr=stderr_text,
+                )
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed)
             return result
 
         return _invoke
+
+    def _call_capturing_output(self, fn, args: tuple, kwargs: dict) -> tuple[Any, str, str]:
+        """Run *fn*, returning ``(result, stdout_text, stderr_text)``.
+
+        Tees ``sys.stdout``/``sys.stderr`` through a recorder that still
+        forwards every byte to the stream that was live going in -- which,
+        during a real statement execution, IS the statement's own ambient
+        capture (a ``StringIO``, a ``_TeeWriter``, or the real terminal
+        outside any capture). So a genuine miss looks exactly as it did
+        before this method existed: the callee's output reaches the
+        statement's capture "for free", untouched.
+        The recording exists only so a LATER hit (:meth:`_replay_output`) has
+        something to write back onto the live stream -- otherwise that
+        output is simply gone, since the callee does not run at all on a hit.
+        """
+        old_stdout, old_stderr = sys.stdout, sys.stderr
+        tee_out = _ForwardingTee(old_stdout)
+        tee_err = _ForwardingTee(old_stderr)
+        sys.stdout, sys.stderr = tee_out, tee_err
+        try:
+            result = fn(*args, **kwargs)
+        finally:
+            sys.stdout, sys.stderr = old_stdout, old_stderr
+        return result, tee_out.getvalue(), tee_err.getvalue()
+
+    def _tracker_snapshot(self) -> tuple[frozenset[str], frozenset[str]]:
+        """``(local paths, remote urls)`` the ambient ``FileAccessTracker``
+        (if any) has recorded so far this statement.
+
+        Reads the SAME tracker the statement's own ``_execute_statement``
+        entered (``FileAccessTracker.__enter__`` publishes it via the
+        ``_active_tracker`` ContextVar) -- there is no separate tracker of
+        our own. Best-effort like every other channel here: no active
+        tracker (e.g. a unit test calling ``CallUnit.wrap`` directly, outside
+        any statement) yields empty sets rather than raising.
+        """
+        try:
+            from cash.notebook.file_tracker import _active_tracker
+            tracker = _active_tracker.get()
+        except Exception:  # noqa: BLE001 - tracking is best-effort
+            return frozenset(), frozenset()
+        if tracker is None:
+            return frozenset(), frozenset()
+        try:
+            return (
+                frozenset(tracker.get_accessed_files()),
+                frozenset(tracker.get_accessed_remote_urls()),
+            )
+        except Exception:  # noqa: BLE001
+            return frozenset(), frozenset()
+
+    def _replay_deps(self, metadata: Mapping[str, Any]) -> None:
+        """Re-declare a hit entry's recorded file/remote deps as though THIS
+        call had just read them, onto the statement's ambient tracker.
+
+        Attribution AND propagation: the call unit already validated these
+        deps before serving the hit (they are checked as part of the
+        entry's own freshness -- a stale file behind ``key`` simply misses,
+        same as the statement path), and the enclosing statement still needs
+        them registered because its own cached value transitively depends on
+        the same files. Without this, a statement that only reaches a file
+        through a now-cached sub-call would lose that dependency the moment
+        the sub-call started hitting -- exactly the CAS-243 regression this
+        task exists to close.
+        """
+        snap = metadata.get("auto_file_deps")
+        if not snap:
+            return
+        try:
+            from cash.notebook.file_tracker import _active_tracker
+            tracker = _active_tracker.get()
+        except Exception:  # noqa: BLE001 - tracking is best-effort
+            return
+        if tracker is None:
+            return
+        for path, recorded in snap.items():
+            try:
+                # A remote entry must go back onto the remote channel --
+                # routed to ``_add_tracked`` it would enter the file set, be
+                # stat'ed, and be dropped, same reasoning as
+                # ``core.py``'s ``_propagate_file_deps_to_active_tracker``.
+                if isinstance(recorded, dict) and recorded.get("remote"):
+                    tracker._add_tracked_remote(path)
+                else:
+                    tracker._add_tracked(path)
+            except Exception:  # noqa: BLE001
+                logger.debug("call unit: could not replay dep %r", path)
+
+    def _replay_output(self, metadata: Mapping[str, Any]) -> None:
+        """Write a hit entry's recorded stdout/stderr onto the LIVE stream.
+
+        The callee did not run this time, so its prints never happened;
+        writing the recorded text to ``sys.stdout``/``sys.stderr`` puts it
+        back wherever the statement's ambient capture currently points (a
+        buffer during a real run, the real terminal in a bare unit test),
+        which is what reconstructs ``print(a); f(x); print(b)``'s
+        interleaving without the statement path needing to know sub-call
+        caching exists at all.
+        """
+        stdout_text = metadata.get("stdout") or ""
+        stderr_text = metadata.get("stderr") or ""
+        if stdout_text:
+            try:
+                sys.stdout.write(stdout_text)
+            except Exception:  # noqa: BLE001
+                logger.debug("call unit: could not replay stdout")
+        if stderr_text:
+            try:
+                sys.stderr.write(stderr_text)
+            except Exception:  # noqa: BLE001
+                logger.debug("call unit: could not replay stderr")
 
     def _hash_args(self, args: tuple, kwargs: dict) -> tuple:
         """Content hashes of the live arguments, for mutation detection.
@@ -481,35 +650,117 @@ class CallUnit:
         except Exception:  # noqa: BLE001 - never let the predicate break the call
             return True
 
-    def _lookup(self, key: str) -> tuple[bool, Any, float]:
-        """``(hit, value, recorded_execution_time)`` -- one backend read.
+    def _lookup(self, key: str) -> tuple[bool, Any, float, dict]:
+        """``(hit, value, recorded_execution_time, metadata)`` -- one backend read.
 
         ``backend.get`` returns ``(metadata, value)`` (``cash.backends._base``);
         ``metadata is None`` is the key-presence test the statement path itself
         uses (``CacheFreshnessChecker.check_cache``), since a stored ``None``
-        value is still a legitimate hit.
+        value is still a legitimate hit. *metadata* is returned too (rather
+        than just the cost pulled out of it) so the caller can replay the
+        file/remote/stdout/stderr channels this entry recorded -- see
+        :meth:`_replay_deps` / :meth:`_replay_output`. Backends round-trip
+        metadata as an opaque plain ``dict`` (see ``CacheMetadata``'s
+        docstring in ``backends/_base.py``); a non-mapping value is treated
+        defensively as empty rather than trusted.
+
+        **A key match alone is not enough to call this a hit.** A call's
+        cache KEY carries source + argument/loop-var lineage -- never file
+        content -- so a stored entry whose recorded file read has since
+        changed on disk would otherwise be served forever, regardless of
+        this task's dependency-propagation fix: propagating a dependency the
+        call itself never re-checks would just make the STATEMENT re-declare
+        a staleness nobody underneath it ever notices. ``_auto_file_deps_fresh``
+        re-validates it, exactly mirroring ``Cash._auto_file_deps_fresh``
+        (``core.py``) -- a stale entry is treated as a miss like any other,
+        so it falls through to a genuine recompute (and gets overwritten
+        under the same key) rather than being replayed.
         """
         try:
             metadata, value = self._cash.backend.get(key)
         except Exception:  # noqa: BLE001
-            return False, None, 0.0
+            return False, None, 0.0, {}
         if metadata is None:
-            return False, None, 0.0
+            return False, None, 0.0, {}
+        if not isinstance(metadata, Mapping):
+            metadata = {}
+        if not self._auto_file_deps_fresh(metadata):
+            return False, None, 0.0, {}
         try:
             cost = float(metadata.get("execution_time", 0.0))
         except (TypeError, ValueError, AttributeError):
             cost = 0.0
-        return True, value, cost
+        return True, value, cost, metadata
 
-    def _store(self, key: str, value, elapsed: float) -> None:
+    @staticmethod
+    def _auto_file_deps_fresh(metadata: Mapping[str, Any]) -> bool:
+        """Mirrors ``Cash._auto_file_deps_fresh`` (``core.py``) for a call
+        entry's own recorded dependencies.
+
+        Same snapshot shape (``{path: {'mtime', 'size'[, 'hash']}}`` for a
+        local file, ``{'remote': True, ...}`` for a remote read -- see
+        :mod:`cash.notebook.file_dep_snapshot`) and the same freshness
+        helper, so the two subsystems cannot drift on what "fresh" means.
+        Absent/empty ``auto_file_deps`` (a call that read no files) is
+        vacuously fresh, same as the decorator's version.
+        """
+        snap = metadata.get("auto_file_deps") or {}
+        if not snap:
+            return True
+        try:
+            from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+        except Exception:  # noqa: BLE001 - never let a broken import fail-open a hit
+            return False
+        for path, recorded in snap.items():
+            try:
+                is_fresh, _reason = file_dep_is_fresh(path, recorded)
+            except Exception:  # noqa: BLE001 - fail closed: cannot prove fresh
+                return False
+            if not is_fresh:
+                return False
+        return True
+
+    def _store(
+        self, key: str, value, elapsed: float, *,
+        file_deps: frozenset[str] = frozenset(),
+        remote_deps: frozenset[str] = frozenset(),
+        stdout: str = "",
+        stderr: str = "",
+    ) -> None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
         (``_store_in_cache``), not a merged single-dict entry.
+
+        ``file_deps``/``remote_deps`` are snapshotted (mtime/size/hash, or a
+        remote validator token) into ONE ``auto_file_deps`` dict -- the exact
+        field name and shape ``Cash``'s own decorator writes
+        (``_snapshot_tracked_deps`` in ``core.py``) -- rather than two bare
+        path lists. A bare list has nothing for :meth:`_auto_file_deps_fresh`
+        to compare against; the snapshot is what makes this call's OWN hit
+        path able to notice the file it read has since changed, not just
+        propagate a dependency nobody re-checks.
+        ``stdout``/``stderr`` are omitted when empty, same as
+        ``auto_file_deps`` -- an ordinary cached call (no file reads, no
+        output) keeps writing the same sparse two-key entry as before.
+        Existing consumers that iterate backend metadata (``%cash_stats``,
+        the explorer, eviction) already tolerate that sparse shape, and gain
+        no new required field when these stay absent.
         """
+        metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time()}
+        if file_deps or remote_deps:
+            try:
+                from cash.notebook.file_dep_snapshot import snapshot_dependencies
+                snap = snapshot_dependencies(file_deps, remote_deps)
+            except Exception:  # noqa: BLE001 - never let dep snapshotting break the store
+                snap = None
+            if snap:
+                metadata["auto_file_deps"] = snap
+        if stdout:
+            metadata["stdout"] = stdout
+        if stderr:
+            metadata["stderr"] = stderr
         try:
-            self._cash.backend.set(
-                key, value, {"execution_time": elapsed, "timestamp": _time.time()},
-            )
+            self._cash.backend.set(key, value, metadata)
         except Exception:  # noqa: BLE001
             logger.debug("call unit: store failed for %s", key)
 
