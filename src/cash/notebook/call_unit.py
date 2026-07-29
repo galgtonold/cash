@@ -292,9 +292,21 @@ class CallUnit:
     build, lookup, store -- falls through to calling the original function.
     """
 
-    def __init__(self, cash_instance, ctx_provider: Callable[[], CacheKeyContext]):
+    def __init__(
+        self,
+        cash_instance,
+        ctx_provider: Callable[[], CacheKeyContext],
+        loop_vars_provider: Callable[[], dict[str, object]] | None = None,
+    ):
         self._cash = cash_instance
         self._ctx_provider = ctx_provider
+        # See `call_cache_key`'s `loop_vars` section. `None` (rather than
+        # requiring every caller to pass one) keeps every existing direct
+        # construction of `CallUnit` -- tests included -- working exactly as
+        # before: "no loop context available" degrading to `{}`, the same
+        # answer this class gave when `loop_vars={}` was hardcoded in
+        # `_build_key`.
+        self._loop_vars_provider = loop_vars_provider or (lambda: {})
         self.call_log: list[dict] = []
         #: Cache keys of sites known to mutate an argument or consume RNG,
         #: discovered by observing a MISS (see `wrap`). Permanent for the life
@@ -576,26 +588,29 @@ class CallUnit:
                 site,
                 ctx=self._ctx_provider(),
                 arg_digests=arg_digests,
-                # TODO(CAS-243): the enclosing iteration context's non-dunder
-                # entries (`for_handler.py:278`'s `loop_vars`) are not reachable
-                # from here. `_process_one_iteration` computes them and threads
-                # them down to the statement body via source-text markers and
-                # `self.shell.user_ns`, neither of which carries live loop-var
-                # VALUES into an exec'd call's closure -- there is no
-                # user_ns/thread-local/module-global carrying "the current
-                # iteration's loop variable" today. Passing `{}` unconditionally
-                # is therefore correct-but-degraded for `fetch_next(conn)`-shaped
-                # hidden-state calls inside a loop (no argument expression exists
-                # to hash and the lineage never moves) -- see the "loop_vars"
-                # section of `call_cache_key`'s docstring. A real fix needs a
-                # stack-shaped attribute on the statement processor, set/reset by
-                # `for_handler.py` around each body statement's execution, and
-                # read here through `ctx_provider`'s owner. Flagged, not faked.
-                loop_vars={},
+                loop_vars=self._current_loop_vars(),
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
             return None
+
+    def _current_loop_vars(self) -> dict[str, object]:
+        """The live enclosing loop's non-dunder iteration vars, or ``{}``.
+
+        Wired to ``StatementProcessor.current_loop_vars`` (see that class's
+        ``_call_unit_loop_vars`` stack, pushed/popped by
+        ``ForLoopHandler._process_one_iteration`` around each iteration's body)
+        via ``CallCache``'s ``loop_vars_provider``. Guarded independently of
+        ``_build_key``'s own try/except: a provider failure should degrade to
+        "no loop discriminator" ``{}`` -- same as running outside a loop --
+        not to refusing the key (and therefore the call's caching) entirely.
+        """
+        try:
+            loop_vars = self._loop_vars_provider()
+        except Exception:  # noqa: BLE001 - degrade, don't refuse the whole key
+            logger.debug("call unit: loop_vars_provider failed for this call")
+            return {}
+        return loop_vars if isinstance(loop_vars, dict) else {}
 
     def _arg_digests(self, site: CallSite, args: tuple, kwargs: dict) -> list[str]:
         """Content hashes of the live arguments at ``site.computed_arg_positions``.

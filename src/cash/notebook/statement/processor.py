@@ -422,6 +422,18 @@ class StatementProcessor:
         # resolving callees against a dead backend.
         self._call_cache: Any | None = None
         self._call_cache_owner: Any | None = None
+        # Stack-shaped: the non-dunder half of the enclosing for-loop's
+        # iteration context, pushed/popped by ``for_handler.py`` around each
+        # iteration's body statements (see ``ForLoopHandler._process_one_iteration``)
+        # and read by an intercepted call's key build
+        # (``call_unit.call_cache_key``'s ``loop_vars``) via
+        # :meth:`current_loop_vars`. A stack rather than a single slot because
+        # loop bodies nest -- an inner loop's own push already carries the
+        # outer context forward (``build_iteration_context`` merges
+        # ``parent_context``), so ``current_loop_vars`` only ever needs the
+        # top. Empty outside any loop, which is the correct "no discriminator
+        # to add" answer for a bare statement.
+        self._call_unit_loop_vars: list[dict[str, Any]] = []
 
         self.analytics_manager = AnalyticsManager()
 
@@ -510,6 +522,40 @@ class StatementProcessor:
         Must be shared with UpstreamChecker for cache key stability.
         """
         return self.function_tracker
+
+    @contextmanager
+    def loop_vars_scope(self, loop_vars: dict[str, Any]) -> Generator[None, None, None]:
+        """Push *loop_vars* for the duration of one loop iteration's body.
+
+        Called by ``ForLoopHandler._process_one_iteration`` around the whole
+        body-statement loop for one iteration -- not per statement -- so a
+        nested control structure (``if``/``try``) or a nested ``for`` inside
+        the body still sees the enclosing iteration's vars via
+        :meth:`current_loop_vars` for every statement it eventually reaches.
+        A nested ``for`` pushes its own (already-merged, per
+        ``build_iteration_context``) context on top; popping unwinds back to
+        this one, so the stack always matches the current lexical nesting.
+
+        ``finally`` guarantees the pop happens even when a body statement
+        raises -- a loop body that errors out must not leave a stale entry on
+        the stack for whatever runs next in the same kernel.
+        """
+        self._call_unit_loop_vars.append(loop_vars)
+        try:
+            yield
+        finally:
+            self._call_unit_loop_vars.pop()
+
+    def current_loop_vars(self) -> dict[str, Any]:
+        """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
+
+        Read by the ``# @cash:cache-calls`` sub-call key build
+        (``call_unit.CallUnit``) as its ``loop_vars_provider``, so a call keyed
+        with no other discriminator (hidden state behind a bare ``Name``, e.g.
+        ``fetch_next(conn)``) still varies per iteration. ``{}`` outside a loop
+        -- degrading to today's behaviour, not an error.
+        """
+        return self._call_unit_loop_vars[-1] if self._call_unit_loop_vars else {}
 
     def _get_cash_instance(self) -> Any | None:
         """Return the Cash instance for decorator call tracking.
@@ -1701,6 +1747,13 @@ class StatementProcessor:
                         compute_hash_fn=self.compute_hash,
                         debug=self.debug,
                     ),
+                    # `self.current_loop_vars` (bound method, not a lambda
+                    # capturing a snapshot) so it re-reads `_call_unit_loop_vars`
+                    # at INVOKE time -- the `CallCache` instance is reused across
+                    # statement executions (guarded by `_call_cache_owner`
+                    # above), but the loop this call sits in pushes/pops its
+                    # vars fresh on every iteration.
+                    loop_vars_provider=self.current_loop_vars,
                 )
                 self._call_cache_owner = cash_instance
             self._call_cache.set_sites(sites)

@@ -34,6 +34,7 @@ import types
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from .cache_key import CacheKeyContext
 
@@ -126,7 +127,12 @@ class CallCache:
     failure to build a wrapper, hands the original callable back.
     """
 
-    def __init__(self, cash_instance, ctx_provider: Callable[[], CacheKeyContext] | None = None):
+    def __init__(
+        self,
+        cash_instance,
+        ctx_provider: Callable[[], CacheKeyContext] | None = None,
+        loop_vars_provider: Callable[[], dict[str, Any]] | None = None,
+    ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
         # called once per STATEMENT, so `site_index` (an index into that
@@ -164,7 +170,11 @@ class CallCache:
         # module, so a module-level import here would be a circular import at
         # load time. Deferred to first construction instead.
         from .call_unit import CallUnit
-        self._call_unit = CallUnit(cash_instance, ctx_provider or self._default_ctx)
+        self._call_unit = CallUnit(
+            cash_instance,
+            ctx_provider or self._default_ctx,
+            loop_vars_provider or self._default_loop_vars,
+        )
 
     def _default_ctx(self) -> CacheKeyContext:
         """Fallback used only when no live processor state was wired in.
@@ -178,6 +188,18 @@ class CallCache:
         nothing is served incorrectly.
         """
         return CacheKeyContext(variable_lineage={}, user_ns={})
+
+    @staticmethod
+    def _default_loop_vars() -> dict[str, Any]:
+        """Fallback used only when no live processor state was wired in.
+
+        Same reasoning as :meth:`_default_ctx`: the production call site
+        always supplies a real ``loop_vars_provider`` bound to the executing
+        statement processor's loop-var stack. ``{}`` here is what
+        ``call_cache_key`` already treats as "outside a loop" -- correct,
+        merely undiscriminated.
+        """
+        return {}
 
     def set_sites(self, sites: list[CallSite]) -> None:
         self._sites = sites

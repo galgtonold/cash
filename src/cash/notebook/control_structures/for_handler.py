@@ -332,35 +332,44 @@ class ForLoopHandler:
         # uses chain[depth] when sorting items inside a specific for-loop
         # level. ``body_index`` itself is the *innermost* index (the
         # tail of the chain).
-        for body_idx, body_node in enumerate(node.body):
-            before_count = len(all_metrics)
-            if is_control_structure(body_node):
-                was_computed = self._execute_loop_body_nested_control(
-                    body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
-                    raw_cell, loop_annotation,
-                )
-            else:
-                was_computed = self._execute_loop_body_statement(
-                    body_node, iteration_context, ttl, silent, all_metrics,
-                    raw_cell, loop_annotation,
-                )
-            for m in all_metrics[before_count:]:
-                if not isinstance(m, dict):
-                    continue
-                chain = m.setdefault("body_index_chain", [])
-                # Prepend this loop's body_idx (outermost wins by being
-                # at index 0). Innermost handler runs first and ends up
-                # at the chain tail; outer handlers prepend their idx.
-                if not chain or chain[0] != body_idx:
-                    chain.insert(0, body_idx)
-                if "body_index" not in m:
-                    m["body_index"] = body_idx
-                # Same stamp, same reason, onto this statement's intercepted
-                # sub-call events (CAS-243 task 9) -- see the loop_header
-                # stamp above for why.
-                _stamp_call_events_body_index(m, body_idx)
-            if was_computed:
-                iteration_cached = False
+        # Pushed once for the WHOLE iteration's body, not per statement: an
+        # intercepted (`# @cash:cache-calls`) sub-call needs the CURRENT
+        # iteration's loop-var values as a key discriminator wherever it sits
+        # -- a plain body statement, or nested inside an `if`/`try` reached via
+        # `_execute_loop_body_nested_control` below -- so one push covering the
+        # whole body loop reaches every statement this iteration executes,
+        # including a nested `for`'s own (further-nested) push on top of it.
+        # `loop_vars_scope`'s `finally` pops even if a body statement raises.
+        with self.statement_processor.loop_vars_scope(loop_vars):
+            for body_idx, body_node in enumerate(node.body):
+                before_count = len(all_metrics)
+                if is_control_structure(body_node):
+                    was_computed = self._execute_loop_body_nested_control(
+                        body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
+                        raw_cell, loop_annotation,
+                    )
+                else:
+                    was_computed = self._execute_loop_body_statement(
+                        body_node, iteration_context, ttl, silent, all_metrics,
+                        raw_cell, loop_annotation,
+                    )
+                for m in all_metrics[before_count:]:
+                    if not isinstance(m, dict):
+                        continue
+                    chain = m.setdefault("body_index_chain", [])
+                    # Prepend this loop's body_idx (outermost wins by being
+                    # at index 0). Innermost handler runs first and ends up
+                    # at the chain tail; outer handlers prepend their idx.
+                    if not chain or chain[0] != body_idx:
+                        chain.insert(0, body_idx)
+                    if "body_index" not in m:
+                        m["body_index"] = body_idx
+                    # Same stamp, same reason, onto this statement's intercepted
+                    # sub-call events (CAS-243 task 9) -- see the loop_header
+                    # stamp above for why.
+                    _stamp_call_events_body_index(m, body_idx)
+                if was_computed:
+                    iteration_cached = False
         return iteration_cached
 
     def _process_body_statement(
