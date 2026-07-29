@@ -18,13 +18,70 @@ it, rather than by a stricter analysis that fires on one spelling and not the
 other.
 """
 
+import ast
 import hashlib
+from collections.abc import Callable, Mapping
+from typing import Any
 
+from cash.notebook.annotations import CacheAnnotation
+from cash.notebook.cacheability import analyze_statement
+from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
-from cash.notebook.call_interception import CallSite
+from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.object_hashing import compute_hash
 
-__all__ = ["call_cache_key"]
+__all__ = ["call_cache_key", "call_site_is_cacheable"]
+
+
+def call_site_is_cacheable(
+    call_node: ast.Call,
+    *,
+    user_ns: Mapping[str, Any],
+    annotation: CacheAnnotation | None,
+    is_stateful_call: Callable[[str], bool],
+    scan_forbidden: Callable[[str, Mapping[str, Any], ast.Module | None], list[str]],
+    variable_lineage: Mapping[str, str] | None = None,
+) -> tuple[bool, list[str]]:
+    """Judge one call node by the statement path's own rules.
+
+    The call is wrapped as a one-statement module so :func:`analyze_statement`
+    and *scan_forbidden* see exactly what they see for a statement, and the
+    decision is delegated to :func:`decide_cacheability` -- the same function
+    the statement path calls. A sub-unit is judged by the rules that govern
+    the statement containing it, not by a stricter or looser analysis that
+    happens to fire on one spelling and not the other.
+
+    ``outputs=set()`` is the one deliberate adaptation. ``decide_cacheability``
+    computes ``pure_mutations = top_level_mutated_vars - outputs``; a call
+    binds nothing, so an empty *outputs* means ANY detected mutation refuses.
+    That is the fail-closed direction and must not be "fixed" by inventing
+    outputs for a call site.
+
+    ``variable_lineage`` gates whether the *missing-lineage* reason source is
+    even asked. Passing it applies that source using the real inputs read by
+    the call. Omitting it (the AST-only half decided at rewrite time, before
+    any runtime lineage table exists) asks ``decide_cacheability`` with an
+    empty ``inputs`` set instead of a fabricated lineage table -- missing
+    lineage is never a reachable reason in that mode. This is not "skipping a
+    check cash normally makes": a rewrite-time call site has no reads to
+    check against yet, and lineage is asked again, for real, wherever the
+    runtime half of this feature evaluates the call.
+    """
+    tree = ast.Module(body=[ast.Expr(value=call_node)], type_ignores=[])
+    code = ast.unparse(call_node)
+    inputs = _names_read(call_node) if variable_lineage is not None else set()
+    return decide_cacheability(
+        code=code,
+        tree=tree,
+        inputs=inputs,
+        outputs=set(),
+        annotation=annotation,
+        analysis=analyze_statement(code, tree, user_ns),
+        user_ns=user_ns,
+        variable_lineage=variable_lineage if variable_lineage is not None else {},
+        is_stateful_call=is_stateful_call,
+        scan_forbidden=scan_forbidden,
+    )
 
 
 def call_cache_key(

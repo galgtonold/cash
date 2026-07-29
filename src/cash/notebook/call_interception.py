@@ -32,6 +32,7 @@ import ast
 import copy
 import types
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 
 __all__ = [
@@ -185,7 +186,11 @@ class CallCache:
             return f"{getattr(fn, '__module__', '?')}.{getattr(fn, '__qualname__', '?')}"
 
 
-def wrap_eligible_calls(tree: ast.Module) -> tuple[ast.Module, list[CallSite]]:
+def wrap_eligible_calls(
+    tree: ast.Module,
+    *,
+    gate: Callable[[ast.Call], bool] | None = None,
+) -> tuple[ast.Module, list[CallSite]]:
     """Return ``(rewritten_copy, sites)``; *tree* is left untouched.
 
     Each eligible call has its **callee expression** wrapped, and is handed the
@@ -204,12 +209,21 @@ def wrap_eligible_calls(tree: ast.Module) -> tuple[ast.Module, list[CallSite]]:
     cache keying, and rewriting in place would desync the runtime's source from
     the upstream simulator's. That is what keeps ADR-007 satisfied without the
     simulator needing to know interception exists.
+
+    ``gate``, when given, is consulted for every structurally-eligible call and
+    must return ``True`` for the call to actually be wrapped. It is an
+    ADDITIONAL filter, not a replacement for the free-variable rule enforced by
+    :func:`eligible_call_nodes` — that structural rule still runs first, and a
+    site the gate rejects is simply never wrapped, i.e. left calling the
+    original callee directly, at no runtime cost.
     """
     new_tree = copy.deepcopy(tree)
     sites: list[CallSite] = []
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
         for call in eligible_call_nodes(stmt):
+            if gate is not None and not gate(call):
+                continue
             source = ast.unparse(call)
             index = seen[source]
             seen[source] += 1
