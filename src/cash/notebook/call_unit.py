@@ -22,6 +22,7 @@ import hashlib
 
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite
+from cash.notebook.object_hashing import compute_hash
 
 __all__ = ["call_cache_key"]
 
@@ -30,10 +31,10 @@ def call_cache_key(
     site: CallSite,
     *,
     ctx: CacheKeyContext,
-    arg_digests: list[str] | None = None,
-    repeat_index: int = 0,
-) -> str:
-    """The cache key for one intercepted call.
+    arg_digests: list[str],
+    loop_vars: dict[str, object],
+) -> str | None:
+    """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
     Delegates to the canonical builder (:func:`compute_cache_key`, ADR-007's
     only key assembler) with the *call's* source and free names in place of
@@ -58,20 +59,52 @@ def call_cache_key(
     collapse every iteration onto one entry and serve iteration 1's value for
     all of them, wrong on the first run with no cache pre-existing.
 
-    **repeat_index** is a per-(call site, key) execution counter within one
-    cell run. It closes the remaining channel: hidden state behind a bare
-    Name (``fetch_next(conn)``), where no argument expression exists to hash.
-    Reorder reuse is unaffected — iterations discriminated by argument
-    lineage produce distinct keys, so each is seen once and each counts 0.
+    Both *arg_digests* and *loop_vars* are REQUIRED, with no default. A
+    default would let a caller silently omit the only discriminator a call
+    has, producing a collapsed key with no error and no failing test — exactly
+    the bug this function exists to prevent.
+
+    ``computed_arg_positions`` records exactly which argument positions are
+    NOT bare Names, so ``len(arg_digests)`` must equal
+    ``len(site.computed_arg_positions)``. A mismatch means the caller has lost
+    the only discriminator those arguments have, and minting a key anyway
+    would risk a collapsed, wrong one — so this refuses (returns ``None``)
+    rather than guess. A caching optimisation must never be why user code
+    fails: an uncached call is merely slow, a wrong cached value is silently
+    incorrect. Task 5's thunk must treat ``None`` as "run uncached".
+
+    **loop_vars** are the non-dunder entries of the enclosing iteration
+    context (``for_handler.py:278``) — the loop variable's *value*, empty
+    outside a loop. They close the remaining channel: hidden state behind a
+    bare Name (``fetch_next(conn)``), where no argument expression exists to
+    hash and the lineage never moves. Three properties, and all three are
+    needed:
+
+    * they discriminate iterations, which is what the omitted iteration
+      context used to do;
+    * they are order-independent — item ``5``'s value is ``5`` whatever
+      position it occupies — unlike ``__iterable_lineage__``, which changes
+      for every iteration on a reorder and is the whole of CAS-242;
+    * they are stable across runs, so restoring the earlier iterations and
+      re-running only the tail keys correctly. A per-run execution counter
+      was specified in an earlier draft (``repeat_index``) and fails exactly
+      here: it restarts at 0 each run, so under partial tail re-execution the
+      new iteration keys ``rpt0`` and is served run 1's *first* value — wrong,
+      in the workflow this feature exists for. It has been removed.
+
+    Note that duplicate loop items collapse to one key, and that is CORRECT —
+    same callee, same inputs, no dependency cash cannot see. The statement
+    path already collapses them: ``compute_context_hash`` yields one hash for
+    three identical iteration contexts, so this matches shipped behaviour.
 
     **What is deliberately NOT here: the iteration context.** ``for_handler``
     prepends ``# __iteration_context__: <hash>`` to each body statement, and
     that context carries ``__iterable_lineage__`` — so reordering a loop's
     iterable changes the source hash of *every* iteration and re-runs the
-    whole tail. That is CAS-242. A call keyed on its own source and its own
-    free variables has no such comment to inherit, which is precisely why
-    this fixes it. **Do not "fix" a cache miss by adding the iteration
-    context here.**
+    whole tail. That is CAS-242. A call keyed on its own source, its own free
+    variables, and the loop variable's *value* (not the iterable's lineage)
+    has no such comment to inherit, which is precisely why this fixes it.
+    **Do not "fix" a cache miss by adding the iteration context here.**
 
     Note: ``rng_fingerprint`` is deliberately not threaded through — it is
     dead plumbing with no producer anywhere in the codebase.
@@ -83,9 +116,24 @@ def call_cache_key(
         occurrence_index=site.occurrence_index,
         namespace="call",
     ).cache_key
-    if not arg_digests and not repeat_index:
+    # Refuse rather than mint a key we cannot justify. `computed_arg_positions`
+    # records exactly which arguments are NOT bare Names, so a caller that
+    # supplies the wrong number of digests has lost the only discriminator
+    # those arguments have -- and a collapsed key is a first-run wrong answer,
+    # while an uncached call is merely slow.
+    if len(arg_digests) != len(site.computed_arg_positions):
+        return None
+
+    if not arg_digests and not loop_vars:
         return base
-    extra = ":".join(arg_digests or []) + f":rpt{repeat_index}"
+    # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
+    # and `":".join(["a:b"])` are the same string, so an undelimited join
+    # would let two different calls collide on one key.
+    parts = [f"{len(arg_digests)}"]
+    parts.extend(arg_digests)
+    parts.extend(
+        f"{name}={compute_hash(value)}" for name, value in sorted(loop_vars.items())
+    )
     return "call:" + hashlib.sha256(
-        (base + ":" + extra).encode("utf-8")
+        (base + "|" + "|".join(parts)).encode("utf-8")
     ).hexdigest()

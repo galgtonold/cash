@@ -172,5 +172,25 @@ def test_computed_arg_positions_all_bare_names_is_empty():
     assert sites[0].computed_arg_positions == ()
 
 
+def test_calls_inside_a_while_body_are_never_intercepted():
+    """LOAD-BEARING, and it is a deduction rather than a measured fact.
+
+    `while`/`with` are executed as single cacheable units with no
+    per-iteration decomposition, and `eligible_call_nodes` only searches
+    _SIMPLE_STATEMENTS -- so a while body's statements never reach the
+    interceptor, and therefore never arrive without a loop variable to
+    discriminate them.
+
+    If this ever becomes false (see CAS-255, which proposes decomposing while
+    loops), the key collapses for any call whose arguments are all bare Names:
+    every iteration builds one key and iterations 2..N are served iteration
+    1's value. Do not "fix" this test by updating the assertion -- it is the
+    tripwire for that ticket.
+    """
+    tree = ast.parse("while queue:\n    out.append(compute(queue.pop()))")
+    _, sites = wrap_eligible_calls(tree)
+    assert sites == []
+
+
 if __name__ == "__main__":
     unittest.main()
