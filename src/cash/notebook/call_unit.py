@@ -77,8 +77,15 @@ def call_cache_key(
     context (``for_handler.py:278``) — the loop variable's *value*, empty
     outside a loop. They close the remaining channel: hidden state behind a
     bare Name (``fetch_next(conn)``), where no argument expression exists to
-    hash and the lineage never moves. Three properties, and all three are
-    needed:
+    hash and the lineage never moves. That "non-dunder" restriction is
+    enforced HERE, not merely documented and trusted to the caller: any
+    dunder-prefixed entry in *loop_vars* is filtered out before hashing.
+    ``for_handler``'s iteration context carries a dunder half too
+    (``__iterable_lineage__``, the whole iterable's lineage — the CAS-242
+    culprit) alongside the loop variable's value, and if a caller ever passed
+    that whole context through unfiltered it would be hashed in like any
+    other entry and CAS-242 would be back. Three properties, and all three
+    are needed:
 
     * they discriminate iterations, which is what the omitted iteration
       context used to do;
@@ -124,7 +131,17 @@ def call_cache_key(
     if len(arg_digests) != len(site.computed_arg_positions):
         return None
 
-    if not arg_digests and not loop_vars:
+    # Dunder keys are filtered HERE, not trusted to the caller. `loop_vars` is
+    # documented as the non-dunder entries of the iteration context, and the
+    # dunder half is `__iterable_lineage__` -- the whole iterable's lineage,
+    # which changes for every iteration on a reorder. If it ever reached this
+    # function unfiltered it would be hashed in like any other entry and
+    # CAS-242 would be back. Enforce the contract rather than documenting it.
+    filtered_loop_vars = {
+        name: value for name, value in loop_vars.items() if not name.startswith("__")
+    }
+
+    if not arg_digests and not filtered_loop_vars:
         return base
     # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
     # and `":".join(["a:b"])` are the same string, so an undelimited join
@@ -132,7 +149,8 @@ def call_cache_key(
     parts = [f"{len(arg_digests)}"]
     parts.extend(arg_digests)
     parts.extend(
-        f"{name}={compute_hash(value)}" for name, value in sorted(loop_vars.items())
+        f"{name}={compute_hash(value)}"
+        for name, value in sorted(filtered_loop_vars.items())
     )
     return "call:" + hashlib.sha256(
         (base + "|" + "|".join(parts)).encode("utf-8")

@@ -22,16 +22,6 @@ def test_key_is_namespaced_to_call():
     assert key.startswith("call:")
 
 
-def test_same_argument_lineage_gives_same_key_regardless_of_call_order():
-    """Reordering the iterable must not change any item's key."""
-    ctx_a = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
-    ctx_b = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
-    assert (
-        call_cache_key(_site(), ctx=ctx_a, arg_digests=[], loop_vars={})
-        == call_cache_key(_site(), ctx=ctx_b, arg_digests=[], loop_vars={})
-    )
-
-
 def test_different_argument_lineage_gives_different_key():
     a = call_cache_key(_site(), ctx=_ctx({"x": "hash-of-5"}, {"x": 5, "compute": len}), arg_digests=[], loop_vars={})
     b = call_cache_key(_site(), ctx=_ctx({"x": "hash-of-9"}, {"x": 9, "compute": len}), arg_digests=[], loop_vars={})
@@ -83,18 +73,27 @@ def test_loop_vars_discriminate_iterations_with_no_varying_argument():
     assert len(keys) == 3
 
 
-def test_loop_vars_are_order_independent():
-    """Reordering the iterable must not change any item's key.
+def test_reordering_the_iterable_preserves_every_items_key():
+    """Simulate one loop in two orders; every item must keep its key.
 
-    The loop variable's VALUE for item 5 is 5 whatever position it occupies,
-    so a reorder produces the same key per item -- unlike the iteration
-    context, whose `__iterable_lineage__` changes for every iteration and is
-    exactly why reordering currently re-runs the tail (CAS-242).
+    NOT `f(same args) == f(same args)` -- that is a tautology for any
+    deterministic function and cannot fail. `call_cache_key` has no positional
+    input to vary, so the only way to test order-independence honestly is to
+    build the keys a whole loop would produce in two different orders and
+    compare the SETS. This fails the moment anything positional enters the key.
     """
-    ctx = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
-    at_position_0 = call_cache_key(_site(), ctx=ctx, arg_digests=[], loop_vars={"x": 5})
-    at_position_2 = call_cache_key(_site(), ctx=ctx, arg_digests=[], loop_vars={"x": 5})
-    assert at_position_0 == at_position_2
+    def keys_for(order):
+        return {
+            call_cache_key(
+                _site(),
+                ctx=_ctx({"x": f"hash-of-{v}"}, {"x": v, "compute": len}),
+                arg_digests=[],
+                loop_vars={"x": v},
+            )
+            for v in order
+        }
+
+    assert keys_for([1, 10, 5]) == keys_for([5, 10, 1])
 
 
 def test_duplicate_loop_items_collapse_to_one_key():
@@ -138,31 +137,24 @@ def test_mismatched_arg_digest_count_refuses_to_cache():
     assert call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={}) is None
 
 
-def test_iteration_context_is_not_folded_into_the_key():
-    """F2: the headline constraint, pinned so a refactor can't reintroduce CAS-242.
+def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
+    """The CAS-242 channel this feature actually creates.
 
-    ``for_handler.py`` folds a loop's ``__iterable_lineage__`` into the
-    STATEMENT key by prepending a ``# __iteration_context__: <hash>`` comment
-    to the statement's source before it ever reaches ``compute_cache_key`` --
-    so reordering the iterable changes every iteration's source hash. That
-    is CAS-242.
+    `loop_vars` is documented as "the non-dunder entries", but documenting a
+    contract is not enforcing it: if `__iterable_lineage__` ever reaches this
+    function it would be hashed in like any other entry, and reordering would
+    re-run the tail again -- the exact bug the omission exists to fix.
 
-    ``call_cache_key`` has no parameter for an iteration context and never
-    sees such a comment: ``site.source`` is the call's own source, fixed at
-    rewrite time, and ``site.free_names`` can never contain a dunder
-    pseudo-variable like ``__iterable_lineage__`` (real Python source cannot
-    reference it as a bare name). This asserts the corresponding invariant on
-    the one channel that reaches ``compute_cache_key`` at all: two contexts
-    identical except that one's ``variable_lineage`` additionally carries an
-    ``__iterable_lineage__``-shaped entry (as if something tried to smuggle
-    it in) must still produce a byte-identical key, because that entry is
-    never a member of ``site.free_names`` and so is never looked up.
+    Filter dunder keys INSIDE `call_cache_key` rather than trusting the
+    caller, and pin it here. Asserting that `__iterable_lineage__` is absent
+    from `ctx.variable_lineage` does NOT test this -- `compute_cache_key` only
+    reads lineage for names in `site.free_names`, which can never contain a
+    dunder, so such a test passes for a reason that predates this feature.
     """
-    ctx_a = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
-    ctx_b = _ctx(
-        {"x": "hash-of-5", "__iterable_lineage__": "some-other-iterables-hash"},
-        {"x": 5, "compute": len},
+    ctx = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
+    clean = call_cache_key(_site(), ctx=ctx, arg_digests=[], loop_vars={"x": 5})
+    polluted = call_cache_key(
+        _site(), ctx=ctx, arg_digests=[],
+        loop_vars={"x": 5, "__iterable_lineage__": "whole-iterable-hash"},
     )
-    key_a = call_cache_key(_site(), ctx=ctx_a, arg_digests=[], loop_vars={"x": 5})
-    key_b = call_cache_key(_site(), ctx=ctx_b, arg_digests=[], loop_vars={"x": 5})
-    assert key_a == key_b
+    assert clean == polluted
