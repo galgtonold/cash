@@ -92,6 +92,66 @@ def call_site_is_cacheable(
     )
 
 
+def _loop_var_digest(name: str, value: object, variable_lineage: Mapping[str, str]) -> str:
+    """The discriminating hash for one loop-var entry -- full, never sampled,
+    and a dict lookup whenever possible instead of a fresh content hash.
+
+    **Why full, never sampled.** `compute_hash` (the sampling hash used
+    elsewhere in this module, e.g. `_hash_args`) reduces any list/tuple over
+    200 elements to its first 5 + last 5 (`object_hashing._hash_collection`).
+    Two long loop items that agree on both ends but differ in the middle hash
+    EQUAL under it while being genuinely different values -- so a loop var
+    hashed with `compute_hash` can collapse two iterations onto one key, and
+    the second is served the first's cached value. First-run wrongness, no
+    pre-existing cache required -- the exact failure `loop_vars` exists to
+    prevent, just reached through this leg instead of the missing-loop_vars
+    one. `for_handler.py` already learned this lesson for the loop
+    variable's own lineage (`_process_one_iteration`): "a sampled hash keyed
+    two iterations over arrays that agreed in the sample onto ONE entry -
+    wrong result on the first run." `_hash_args`'s sampling stays as-is on
+    purpose -- it is a per-call mutation smoke test on a possibly-large live
+    argument, a documented, coarser trade that is fine to get occasionally
+    wrong in the direction of "assume unmutated." A loop var IS the
+    per-iteration discriminator; it has no such slack.
+
+    **Why prefer `variable_lineage`, not just "full hash it here."** A fresh
+    `compute_hash_full(value)` call here is correct but was measured too
+    expensive for what it buys: a 200k-row DataFrame costs 0.15ms sampled vs
+    19ms full; a 5M-float ndarray 0.03ms vs 14.7ms; a 1M-int list 0.01ms vs
+    12.4ms. Against `_COST_FLOOR_S` (10ms, the bar a call's own execution
+    time must clear to be worth caching at all), the KEY for a large loop var
+    can cost more than the call being decided about. It is also PER CALL, not
+    per iteration -- `_current_loop_vars()` is read fresh inside
+    `CallUnit._build_key`, which runs once per intercepted call, so an
+    iteration with N cached calls against the same large loop var would pay
+    the full hash N times over.
+
+    `for_handler.py` already pays this exact cost, once per iteration, for a
+    different reason: `_process_one_iteration` writes `h =
+    val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else
+    compute_hash_full(val)` into `variable_lineage[name]` before any body
+    statement in that iteration runs. That is the SAME digest this function
+    would otherwise recompute -- looking it up first turns the common case
+    back into a dict lookup, restoring the design's actual selling point for
+    this leg (see the module docstring's "bare-Name arguments resolve
+    through the lineage ladder" point), with IDENTICAL discrimination,
+    because it is the same full hash, shared instead of repeated.
+
+    **The fallback.** A name absent from `variable_lineage` (a loop var whose
+    binding didn't go through `for_handler.py`'s own write -- not reachable
+    from the shipped `for_handler.py` today, but this function has no way to
+    enforce that of every present or future caller) computes
+    `compute_hash_full(value)` directly. This MUST stay the full hash. Do not
+    "simplify" it to `compute_hash` -- that would silently reintroduce the
+    exact sampled-collision bug this function exists to prevent, only for
+    callers that happen to miss the fast path, which is a worse failure mode
+    than never having the fast path at all (wrong occasionally and quietly,
+    instead of slow always).
+    """
+    lineage_hash = variable_lineage.get(name)
+    return lineage_hash if lineage_hash is not None else compute_hash_full(value)
+
+
 def call_cache_key(
     site: CallSite,
     *,
@@ -213,21 +273,11 @@ def call_cache_key(
     # would let two different calls collide on one key.
     parts = [f"{len(arg_digests)}"]
     parts.extend(arg_digests)
-    # `compute_hash_full`, NOT the sampling `compute_hash`. `for_handler.py`
-    # already learned this lesson for the loop VARIABLE'S OWN lineage
-    # (`_process_one_iteration`, two lines above where it builds
-    # `iteration_context`): "a sampled hash keyed two iterations over arrays
-    # that agreed in the sample onto ONE entry - wrong result on the first
-    # run." The same failure applies here for the identical reason -- two
-    # long loop items that agree on `compute_hash`'s sampled head/tail
-    # collapse onto one key, and iteration 2 is served iteration 1's value,
-    # wrong on the first run with no pre-existing cache. Unlike `_hash_args`
-    # (deliberately sampling-hashed elsewhere in this module, because it runs
-    # per-call on possibly-large arguments purely to detect mutation, a
-    # coarser trade that is documented and intentional there), a loop var IS
-    # the per-iteration discriminator and must be exact.
+    # See `_loop_var_digest`'s docstring: full hash (never sampled) for
+    # correctness, preferring the precomputed `variable_lineage` entry (a
+    # dict lookup) over a fresh `compute_hash_full` call for cost.
     parts.extend(
-        f"{name}={compute_hash_full(value)}"
+        f"{name}={_loop_var_digest(name, value, ctx.variable_lineage)}"
         for name, value in sorted(filtered_loop_vars.items())
     )
     return "call:" + hashlib.sha256(
