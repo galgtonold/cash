@@ -474,8 +474,10 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             from ..server_discovery import _in_colab
             if not _in_colab():
                 print("[Tip] Cash reads upstream cells from the saved notebook file.")
-                print("   Save (Ctrl+S) after editing upstream cells, or enable auto-save:")
-                print('   Settings -> "files.autoSave": "afterDelay"')
+                print("   Save (Ctrl+S) after editing a cell you are not about to run:")
+                print("   an unsaved edit is invisible, so the upstream check skips it")
+                print("   and you get the previous answer for the new code.")
+                print('   JupyterLab autosaves on a timer; VS Code: "files.autoSave".')
         if self._debug:
             print(f"TTL: {ttl if ttl is not None else 'None'}")
 
