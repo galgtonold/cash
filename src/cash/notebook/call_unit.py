@@ -32,6 +32,7 @@ from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.object_hashing import compute_hash
+from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
 
@@ -244,6 +245,15 @@ class CallUnit:
         self._cash = cash_instance
         self._ctx_provider = ctx_provider
         self.call_log: list[dict] = []
+        #: Cache keys of sites known to mutate an argument or consume RNG,
+        #: discovered by observing a MISS (see `wrap`). Permanent for the life
+        #: of this `CallUnit` (one notebook session): once a site is known to
+        #: have an effect this feature cannot replay, it must never be served
+        #: or written again, on any later call -- including one wrapped by a
+        #: fresh `wrap()` call for the same site (`CallCache.resolve` re-wraps
+        #: per statement execution), which is why this lives on `self` and not
+        #: on `_invoke`'s closure.
+        self._refused: set[str] = set()
 
     def wrap(self, fn, site: CallSite):
         func_name = self._func_name(fn)
@@ -258,21 +268,75 @@ class CallUnit:
                 # uncached rather than risk a collapsed, wrong key.
                 return fn(*args, **kwargs)
 
+            if key in self._refused:
+                # A previous miss on this exact site proved its effects
+                # cannot be replayed (argument mutation or an RNG draw). Run
+                # it plain -- never look it up, never store over it.
+                return fn(*args, **kwargs)
+
             hit, value, recorded_cost = self._lookup(key)
             if hit:
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 return value
 
+            # The call runs inside the STATEMENT's ambient capture
+            # (FileAccessTracker, RNG capture, output capture), which wraps
+            # the whole statement's exec. On a genuine miss that capture
+            # records this call's effects as its own, for free, and
+            # everything is correct. The broken case is a later run where the
+            # STATEMENT misses and re-executes but the CALL hits: the call's
+            # effects do not re-happen, so the statement's own capture is
+            # rewritten from a degraded observation. Both checks below fail
+            # CLOSED -- refuse the site outright rather than serve a value
+            # whose side effects will not re-happen.
+            rng_before = capture_rng_state()
+            arg_hashes_before = self._hash_args(args, kwargs)
             started = _time.perf_counter()
             result = fn(*args, **kwargs)
             elapsed = _time.perf_counter() - started
 
-            if elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
+            if rng_modules_changed(rng_before, capture_rng_state()):
+                # RNG is a consumed linear resource -- what matters is stream
+                # POSITION, not membership. A hit leaves the global stream
+                # where it was, so every downstream draw would diverge from
+                # the uncached oracle. Replaying it properly needs a
+                # sub-statement position anchor that does not exist yet
+                # (CAS-254); v1 refuses instead of guessing.
+                self._refused.add(key)
+            elif self._hash_args(args, kwargs) != arg_hashes_before:
+                # The callee mutated a live argument in place and returned
+                # something else (`df.dropna(inplace=True); return len(df)`).
+                # Task 6's identity check only catches `return arg` -- this
+                # catches "mutated but returned a *different* object", which
+                # a hit would silently skip.
+                self._refused.add(key)
+            elif elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
                 self._store(key, result, elapsed)
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed)
             return result
 
         return _invoke
+
+    def _hash_args(self, args: tuple, kwargs: dict) -> tuple:
+        """Content hashes of the live arguments, for mutation detection.
+
+        Uses the sampling hash (`compute_hash`) deliberately, not
+        `compute_hash_full`: it is the same one the statement path's own
+        content observation uses, and for a large frame a full hash per call
+        would cost more than the call being cached is worth. Sampling can
+        miss a mutation outside the sampled regions -- that is a known,
+        accepted trade (a same-size in-place edit outside the sampled bytes
+        is invisible here), and it errs toward CACHING, which is exactly why
+        the identity check in `_storable` stays as a second line of defence
+        for the one shape it fully covers (`return arg`).
+        """
+        out = []
+        for value in (*args, *kwargs.values()):
+            try:
+                out.append(compute_hash(value))
+            except Exception:  # noqa: BLE001 - unhashable -> cannot prove unmutated
+                out.append(None)
+        return tuple(out)
 
     def _build_key(self, site: CallSite, args: tuple, kwargs: dict) -> str | None:
         if site.has_unpacking:
