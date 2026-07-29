@@ -137,6 +137,44 @@ def test_mismatched_arg_digest_count_refuses_to_cache():
     assert call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={}) is None
 
 
+def test_loop_vars_use_the_full_hash_not_the_sampling_one():
+    """Two long loop-var values that agree on `compute_hash`'s sampled
+    head/tail must still produce DIFFERENT keys.
+
+    `for_handler.py`'s `_process_one_iteration` learned this exact lesson for
+    the loop variable's own lineage two lines above where it builds
+    `iteration_context`: "a sampled hash keyed two iterations over arrays
+    that agreed in the sample onto ONE entry - wrong result on the first
+    run." `compute_hash` samples any list/tuple over 200 elements down to
+    head-5/tail-5 (`object_hashing._hash_collection`); two 300-element tuples
+    that agree on both ends but differ in the middle are `compute_hash`-equal
+    while being genuinely different values. If `call_cache_key` hashed
+    `loop_vars` with `compute_hash` instead of `compute_hash_full`, this test
+    would fail: both calls below would collapse onto the SAME key, and in a
+    real loop iteration 2 would be served iteration 1's cached value --
+    first-run wrongness, no pre-existing cache required.
+    """
+    middle_a = (0,) * 290
+    middle_b = (1,) * 290
+    long_a = (1, 2, 3, 4, 5) + middle_a + (10, 11, 12, 13, 14)
+    long_b = (1, 2, 3, 4, 5) + middle_b + (10, 11, 12, 13, 14)
+
+    from cash.notebook.object_hashing import compute_hash, compute_hash_full
+    assert compute_hash(long_a) == compute_hash(long_b), (
+        "test setup is broken -- these two tuples must be SAMPLED-equal"
+    )
+    assert compute_hash_full(long_a) != compute_hash_full(long_b), (
+        "test setup is broken -- these two tuples must be genuinely different"
+    )
+
+    ctx = _ctx({"conn": "aaa"}, {"conn": object(), "fetch_next": len})
+    site = _site(source="fetch_next(conn)", names=("fetch_next", "conn"))
+
+    first = call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={"t": long_a})
+    second = call_cache_key(site, ctx=ctx, arg_digests=[], loop_vars={"t": long_b})
+    assert first != second
+
+
 def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
     """The CAS-242 channel this feature actually creates.
 

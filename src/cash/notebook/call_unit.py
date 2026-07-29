@@ -33,7 +33,7 @@ from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
 from cash.notebook.file_tracker import FileAccessTracker
-from cash.notebook.object_hashing import compute_hash, is_identity_fallback_hash
+from cash.notebook.object_hashing import compute_hash, compute_hash_full, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
@@ -213,8 +213,21 @@ def call_cache_key(
     # would let two different calls collide on one key.
     parts = [f"{len(arg_digests)}"]
     parts.extend(arg_digests)
+    # `compute_hash_full`, NOT the sampling `compute_hash`. `for_handler.py`
+    # already learned this lesson for the loop VARIABLE'S OWN lineage
+    # (`_process_one_iteration`, two lines above where it builds
+    # `iteration_context`): "a sampled hash keyed two iterations over arrays
+    # that agreed in the sample onto ONE entry - wrong result on the first
+    # run." The same failure applies here for the identical reason -- two
+    # long loop items that agree on `compute_hash`'s sampled head/tail
+    # collapse onto one key, and iteration 2 is served iteration 1's value,
+    # wrong on the first run with no pre-existing cache. Unlike `_hash_args`
+    # (deliberately sampling-hashed elsewhere in this module, because it runs
+    # per-call on possibly-large arguments purely to detect mutation, a
+    # coarser trade that is documented and intentional there), a loop var IS
+    # the per-iteration discriminator and must be exact.
     parts.extend(
-        f"{name}={compute_hash(value)}"
+        f"{name}={compute_hash_full(value)}"
         for name, value in sorted(filtered_loop_vars.items())
     )
     return "call:" + hashlib.sha256(

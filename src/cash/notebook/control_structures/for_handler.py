@@ -340,7 +340,19 @@ class ForLoopHandler:
         # whole body loop reaches every statement this iteration executes,
         # including a nested `for`'s own (further-nested) push on top of it.
         # `loop_vars_scope`'s `finally` pops even if a body statement raises.
-        with self.statement_processor.loop_vars_scope(loop_vars):
+        #
+        # `getattr(..., None)` guarded rather than called directly: this is
+        # the file where a caching optimisation, if it broke, would break the
+        # USER'S LOOP rather than merely its caching -- a `statement_processor`
+        # without this method would otherwise raise `AttributeError` out of
+        # `process()`, and `cell_executor.py` re-raises that as the user's own
+        # error, so their loop would not run at all. Unreachable today (one
+        # construction site, `magics.py`), but requirement 5 (never let a
+        # caching optimisation be why user code fails) should hold at both
+        # ends of this wire, not just inside `CallUnit`.
+        loop_vars_scope = getattr(self.statement_processor, 'loop_vars_scope', None)
+        scope = loop_vars_scope(loop_vars) if loop_vars_scope is not None else contextlib.nullcontext()
+        with scope:
             for body_idx, body_node in enumerate(node.body):
                 before_count = len(all_metrics)
                 if is_control_structure(body_node):

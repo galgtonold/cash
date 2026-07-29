@@ -97,3 +97,97 @@ def test_hidden_state_call_hits_cache_on_rerun(nb_runner, tmp_path):
     output = nb_runner.get_output(2)
     assert "RESULTS [(1, 1), (2, 2), (3, 3)]" in output, output
     assert _n(log) == 3, "compute() re-ran on an unchanged rerun of the loop cell"
+
+
+# --------------------------------------------------------- sampled-equal loop vars
+#
+# `call_cache_key` hashes `loop_vars` VALUES with `compute_hash_full`, not the
+# sampling `compute_hash`. `object_hashing._hash_collection` reduces any
+# list/tuple over 200 elements to its first 5 + last 5 elements; two 300-
+# element tuples that agree on both ends but differ in the middle are
+# `compute_hash`-equal while being genuinely different values. `for_handler.py`
+# already learned this exact lesson for the loop variable's own LINEAGE, two
+# lines above where it builds `iteration_context`
+# (`_process_one_iteration`): "a sampled hash keyed two iterations over
+# arrays that agreed in the sample onto ONE entry - wrong result on the first
+# run." Before this fix, `loop_vars` repeated that mistake -- newly live
+# (rather than merely present) the moment `loop_vars` stopped being `{}` in
+# production.
+
+# Above `_hash_collection`'s 200-element sampling threshold (object_hashing.py).
+_SAMPLED_TAIL = (10, 11, 12, 13, 14)
+_SAMPLED_HEAD = (1, 2, 3, 4, 5)
+
+
+def _long_tuple(fill):
+    return _SAMPLED_HEAD + (fill,) * 290 + _SAMPLED_TAIL
+
+
+def _sampling_defs(log):
+    return (
+        "import time, pathlib\n"
+        f"LOG = pathlib.Path(r'{log}')\n"
+        "counter = {'n': 0}\n"
+        "conn = 'db-connection'\n"
+        "def fetch_next(conn):\n"
+        "    counter['n'] += 1\n"
+        "    with LOG.open('a') as fh:\n"
+        "        fh.write('x\\n')\n"
+        f"    time.sleep({_SLEEP})\n"
+        "    return counter['n']\n"
+        f"A = {_long_tuple(0)!r}\n"
+        f"B = {_long_tuple(1)!r}\n"
+    )
+
+
+# Seed cell separate from the loop cell (like `test_cache_calls_directive.py`'s
+# append tests) so `results = []` is NOT the loop's immediately-preceding
+# sibling statement within the SAME cell -- that would make the loop eligible
+# for `cacheable_accumulator_loop`'s narrow single-unit fast path
+# (`control_structures/processor.py`), which routes the whole loop through
+# ONE cache entry and never reaches per-iteration decomposition (and so never
+# reaches `loop_vars` at all). Only `t` is a loop target here -- deliberately
+# no `enumerate()`/index variable, which would itself discriminate the key
+# (small ints hash trivially, no sampling involved) and mask the exact bug
+# under test.
+_SAMPLING_SEED = "results = []\n"
+_SAMPLING_LOOP = (
+    "# @cash:cache-calls\n"
+    "for t in [A, B]:\n"
+    "    results.append(fetch_next(conn))\n"
+    "print('OUT', results)\n"
+)
+
+
+def test_sampled_equal_loop_var_values_still_get_distinct_keys(nb_runner, tmp_path):
+    """The bug: `A` and `B` are `compute_hash`-equal (sampled) but genuinely
+    different (`compute_hash_full`-different). `fetch_next(conn)` has no
+    other discriminator (`conn` is constant, no computed argument), so if
+    `loop_vars` hashed with the sampling `compute_hash`, iteration 2 (loop
+    var `B`) would collide with iteration 1's key (loop var `A`) and be
+    served iteration 1's cached ``1`` -- ``OUT [1, 1]`` instead of the
+    correct ``OUT [1, 2]``, wrong on the first run with no pre-existing
+    cache.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_sampling_defs(log), _SAMPLING_SEED, _SAMPLING_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    output = nb_runner.get_output(3)
+    assert "OUT [1, 2]" in output, output
+    assert _n(log) == 2, (
+        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
+    )
+
+
+def test_sampled_equal_loop_var_values_match_the_no_cash_oracle(nb_runner, tmp_path):
+    """Independent confirmation that ``[1, 2]`` is the correct answer, not an
+    assumption -- the identical code, run with cash off entirely.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_sampling_defs(log), _SAMPLING_SEED, _SAMPLING_LOOP])
+    nb_runner.start_kernel(with_cash=False)
+    nb_runner.run_all()
+
+    assert "OUT [1, 2]" in nb_runner.get_output(3)
