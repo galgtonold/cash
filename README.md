@@ -1,4 +1,4 @@
-# Cash — stop re-running notebooks that haven't changed
+# Cash — stop re-running work that hasn't changed
 
 [![PyPI version](https://img.shields.io/pypi/v/cash-lib.svg)](https://pypi.org/project/cash-lib/)
 [![Downloads](https://img.shields.io/pypi/dm/cash-lib.svg)](https://pypi.org/project/cash-lib/)
@@ -15,7 +15,7 @@ import cash
 %cash_on
 ```
 
-That's it. The next time you re-run the notebook, every statement that hasn't changed is **restored from cache** instead of recomputed.
+That's it. The next time you re-run the notebook, every statement that hasn't changed is **restored from cache** instead of recomputed. Outside notebooks, the same engine wraps any function as `@cash.cache`.
 
 📺 **Watch the 90-second demo** — Cash caching a real notebook, end to end:
 
@@ -26,6 +26,15 @@ https://github.com/user-attachments/assets/3f376660-aeb5-4794-89cc-532a04f82f32
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/galgtonold/cash/blob/main/examples/try_cash_colab.ipynb) [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/galgtonold/cash/main?labpath=examples/try_cash_binder.ipynb)
 
 **[Read the docs →](https://cash-lib.readthedocs.io/en/latest/)**
+
+---
+
+## Two ways to use cash
+
+Pick the path that matches how you write code — both ride the same engine:
+
+- **In a notebook** — add `%cash_on` and every cell caches itself, statement-level, with a badge above each cell. For interactive work in Jupyter, Colab, or VS Code.
+- **In a script** — wrap a function with `@cash.cache` and it caches by its arguments and its own source. For modules, pipelines, and batch jobs.
 
 ---
 
@@ -54,6 +63,8 @@ Optional extras: `pip install "cash-lib[all]"` (pandas, polars, redis, s3, …).
 
 ## Quick start
 
+### In a notebook
+
 **Cell 1** — turn it on:
 
 ```python
@@ -77,7 +88,7 @@ Re-run the notebook:
 
 Cash shows a badge above each cell summarizing what it did — see [Reading the Cash badge](https://cash-lib.readthedocs.io/en/latest/badges/).
 
-## Beyond notebooks
+### In a script
 
 `@cash.cache` caches any Python function across processes, with the same dependency- and file-awareness. Impure functions (LLM calls, HTTP, file writes) are flagged by default, since their side effects only run on the first call.
 
