@@ -31,7 +31,7 @@ from cash.notebook.cacheability import analyze_statement
 from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
-from cash.notebook.object_hashing import compute_hash
+from cash.notebook.object_hashing import compute_hash, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 
 logger = logging.getLogger(__name__)
@@ -323,19 +323,54 @@ class CallUnit:
         Uses the sampling hash (`compute_hash`) deliberately, not
         `compute_hash_full`: it is the same one the statement path's own
         content observation uses, and for a large frame a full hash per call
-        would cost more than the call being cached is worth. Sampling can
-        miss a mutation outside the sampled regions -- that is a known,
-        accepted trade (a same-size in-place edit outside the sampled bytes
-        is invisible here), and it errs toward CACHING, which is exactly why
-        the identity check in `_storable` stays as a second line of defence
-        for the one shape it fully covers (`return arg`).
+        would cost more than the call being cached is worth.
+
+        Two DIFFERENT ways this can under-report a mutation, and they get
+        different treatment:
+
+        1. **Sampling.** `compute_hash` samples large objects (ndarray: first
+           100 elements, DataFrame: first 5 rows, collections >200: head/tail).
+           A same-size in-place edit outside the sampled region is invisible
+           here. This is a known, accepted trade -- it errs toward CACHING for
+           objects that still hash BY CONTENT, and the identity check in
+           `_storable` stays as a second line of defence for the one shape it
+           fully covers (`return arg`).
+
+        2. **Identity fallback.** `compute_hash`'s tier 3
+           (`object_hashing.identity_hash`) hashes `id(obj)`, not the object's
+           data, once pickling itself has failed (a `threading.Lock`, a socket,
+           an open file, anything with an unpicklable `__reduce__`). `id(obj)`
+           is invariant across an in-place mutation of that SAME object, so
+           this is not "a coarser content hash" the way sampling is -- it is
+           BLIND to every mutation of that argument, always, for the entire
+           unpicklable-object class. Comparing two such hashes before/after a
+           call would silently read as "unchanged" even when the callee
+           mutated the object, which directly contradicts "fail closed": a
+           value flagged via `is_identity_fallback_hash` is therefore replaced
+           with a fresh, single-use sentinel (`object()`) instead of the hash
+           string. Two distinct `object()` instances are never `==`, so the
+           before/after tuple comparison in `wrap` always reads as "changed"
+           for that argument -- i.e. "cannot prove this argument is clean" is
+           treated the same as "proved it changed", which is the fail-closed
+           direction the task requires.
         """
         out = []
         for value in (*args, *kwargs.values()):
             try:
-                out.append(compute_hash(value))
-            except Exception:  # noqa: BLE001 - unhashable -> cannot prove unmutated
+                h = compute_hash(value)
+            except Exception:  # noqa: BLE001 - belt: compute_hash's own tier-3
+                # fallback (`identity_hash`) hashes `id(obj)`, which cannot
+                # itself raise, so this except is not expected to be live in
+                # practice. Kept because "cannot prove unmutated" is exactly
+                # what a `None` here already means to the caller, and it costs
+                # nothing to keep the same fail-closed answer if that ever
+                # stops being true.
                 out.append(None)
+                continue
+            if is_identity_fallback_hash(value, h):
+                out.append(object())
+            else:
+                out.append(h)
         return tuple(out)
 
     def _build_key(self, site: CallSite, args: tuple, kwargs: dict) -> str | None:

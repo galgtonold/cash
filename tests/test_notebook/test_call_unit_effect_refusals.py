@@ -155,6 +155,54 @@ def test_mutation_refusal_is_permanent_across_wrap_calls(call_unit_harness):
     assert payload["dirty"] is False
 
 
+def test_a_callee_that_mutates_an_unpicklable_argument_is_never_cached(call_unit_harness):
+    """`compute_hash` never raises -- its tier-3 fallback for an object that
+    fails pickling (holds a `threading.Lock`, a socket, an open file, ...) is
+    `sha256(str(id(obj)))`: an IDENTITY hash, invariant across an in-place
+    mutation of that same object. Naively diffing two such hashes reads a
+    genuine mutation as "unchanged", which is not the "misses a mutation
+    outside a sampled byte range" trade `compute_hash`'s sampling already
+    makes for large picklable objects (`test_a_callee_that_mutates_its_argument
+    _is_never_cached` above) -- it is blind to EVERY mutation, always, for the
+    whole unpicklable-object class, and would silently violate "fail closed".
+
+    Mutation-that-breaks-this-test: in `CallUnit._hash_args`, replace
+    `out.append(object() if is_identity_fallback_hash(value, h) else h)`
+    (i.e. drop the `is_identity_fallback_hash` check and always append `h`).
+    The before/after hash tuples then compare equal (id-based hash of the
+    SAME object, unchanged by mutation) even though `carrier.value` really
+    did change, so the second call is served from cache: `calls == [1]` and
+    `carrier.value` stays `101` instead of advancing to `201`.
+    """
+    import threading
+
+    calls = []
+
+    class Carrier:
+        def __init__(self):
+            self.lock = threading.Lock()   # unpicklable -> forces the id-based tier
+            self.value = 1
+
+    def bump(c):
+        calls.append(1)
+        time.sleep(0.05)
+        c.value += 100
+        return "ok"          # the return value is unrelated to what mutated
+
+    carrier = Carrier()
+    unit = call_unit_harness(lineage={"c": "hash-c"}, user_ns={"c": carrier, "bump": bump})
+    site = _site(source="f(c)", names=("f", "c"))
+
+    unit.wrap(bump, site)(carrier)
+    unit.wrap(bump, site)(carrier)
+
+    # Asserting only on the return value ("ok" both times, cached or not)
+    # would pass even when the second call was served from cache and the
+    # mutation was skipped -- exactly the bug this test exists to catch.
+    assert calls == [1, 1], "must recompute -- an unpicklable argument's content is unprovable"
+    assert carrier.value == 201
+
+
 def test_a_refused_call_is_never_stored_through_the_production_dispatch_path(tmp_path):
     """Exercises the refusal through `CallCache.resolve` + `set_sites` --
     the production entry point (`statement/processor.py` resolves a callee

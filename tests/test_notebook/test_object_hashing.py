@@ -4,9 +4,11 @@ Migrated from `test_magics_coverage.py` when the functions moved out of
 `CashMagics` into their own module. The companion size-estimator
 (``estimate_object_size``) is exercised by ``test_size_estimator.py``.
 """
+import hashlib
+
 import pytest
 
-from cash.notebook.object_hashing import compute_hash
+from cash.notebook.object_hashing import compute_hash, identity_hash, is_identity_fallback_hash
 
 
 # ============================================================================
@@ -72,6 +74,29 @@ class TestComputeHash:
         lock = threading.Lock()
         h = compute_hash(lock)
         assert isinstance(h, str)
+
+    def test_unpicklable_object_hash_is_the_identity_fallback(self):
+        """Pins tier 3's exact formula (`sha256(str(id(obj)))`), not merely
+        "some hash came back" -- so a callee like `CallUnit._hash_args`
+        (CAS-243) that has to tell a real content hash apart from this
+        id-based one via `is_identity_fallback_hash` cannot silently stop
+        working if this formula ever changes without `is_identity_fallback_hash`
+        changing to match.
+        """
+        import threading
+        lock = threading.Lock()
+        h = compute_hash(lock)
+        assert h == hashlib.sha256(str(id(lock)).encode('utf-8')).hexdigest()
+        assert h == identity_hash(lock)
+        assert is_identity_fallback_hash(lock, h)
+
+    def test_a_real_content_hash_is_not_flagged_as_identity_fallback(self):
+        """Positive control: an ordinary, picklable object's `compute_hash`
+        result must NOT be mistaken for the identity fallback -- otherwise
+        every object would be (wrongly) treated as unprovable.
+        """
+        assert not is_identity_fallback_hash(42, compute_hash(42))
+        assert not is_identity_fallback_hash([1, 2, 3], compute_hash([1, 2, 3]))
 
     def test_hash_large_list_samples(self):
         """Lists with >200 items hash by length + head/tail sample, not full pickle."""
