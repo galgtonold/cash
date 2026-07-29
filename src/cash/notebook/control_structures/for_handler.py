@@ -321,9 +321,45 @@ class ForLoopHandler:
                 # arrays that agreed in the sample onto ONE entry - wrong
                 # result on the first run. Hash full content here.
                 from cash.notebook.object_hashing import compute_hash_full
-                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else compute_hash_full(val)
+                full = compute_hash_full(val)
+                # `variable_lineage[name]` and `loop_var_digests[name]`
+                # WANT DIFFERENT THINGS and must not be conflated -- a lesson
+                # learned the hard way (CAS-243 review, round 5): `val`'s own
+                # `_cash_lineage_hash`, when present, may itself have been
+                # derived from a SAMPLED hash -- `update_mutated_variable_lineages`
+                # (control_structures/helpers.py) computes a mutated
+                # accumulator's new lineage from `statement_processor.compute_hash(val)`
+                # (the sampling hash) and `LineageStore.record` stamps that
+                # onto `val._cash_lineage_hash`. Two content-different
+                # DataFrames that agree on the sampled portion (a DataFrame's
+                # `compute_hash` samples shape + dtypes + `head(5)` --
+                # `object_hashing.py`'s `_hash_dataframe_or_series` -- so two that
+                # differ only past row 5 hash equal there) then carry the
+                # SAME `_cash_lineage_hash` -- so if this loop
+                # variable is later bound to each of them in turn (`for df in
+                # [df_a, df_b]:`), preferring that attribute for the CALL KEY
+                # would collapse iteration 2 onto iteration 1's cached value.
+                # Reproduced live in a real kernel: `SL2 [1, 1]` instead of
+                # the oracle's `[1, 2]`. This is round 1's lesson one layer
+                # further out -- a sampled hash is never sound as a key
+                # discriminator, even smuggled in through an attribute rather
+                # than passed directly.
+                #
+                # `variable_lineage` wants PROVENANCE (did this binding come
+                # from the same upstream computation as before?), where
+                # `_cash_lineage_hash` is the right, deliberately-cheaper
+                # answer and has been for as long as this line has existed.
+                # `loop_var_digests` wants CONTENT (are two iterations'
+                # bindings the same VALUE?), which only `compute_hash_full`
+                # can answer soundly -- so it is computed directly from `val`,
+                # never through the attribute. Cost is unchanged: still one
+                # full hash per iteration (not per call, and not per call
+                # multiplied by however many cached calls read this loop
+                # var), just no longer skippable via the attribute shortcut
+                # for THIS consumer specifically.
+                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else full
                 self.statement_processor.variable_lineage[name] = h
-                loop_var_digests[name] = h
+                loop_var_digests[name] = full
             except (TypeError, ValueError, AttributeError) as exc:
                 if self.debug:
                     logger.warning("[CONTROL] Failed to hash loop variable %s: %s", name, exc)

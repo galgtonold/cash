@@ -321,3 +321,117 @@ def test_sibling_loops_reusing_the_target_name_match_the_no_cash_oracle(nb_runne
     nb_runner.run_all()
 
     assert "OUT [1, 2]" in nb_runner.get_output(2)
+
+
+# --------------------------------------------------------- sampled _cash_lineage_hash
+#
+# A THIRD bug found in review, distinct from the two above: `for_handler.py`
+# prefers a loop variable's own `val._cash_lineage_hash` when present, over
+# computing `compute_hash_full(val)` fresh. That attribute is not always a
+# full-content hash -- `update_mutated_variable_lineages`
+# (`control_structures/helpers.py`) derives a MUTATED accumulator's lineage
+# from the SAMPLING `compute_hash` and `LineageStore.record` stamps that
+# result onto the object as `_cash_lineage_hash`. Two DataFrames that agree
+# on shape, dtypes, and `head(5)` (what `compute_hash` samples for a
+# DataFrame) but differ further down hash EQUAL under that sampled lineage
+# while being genuinely different values -- so if this loop variable is later
+# bound to each of them in turn, preferring the attribute for the CALL KEY
+# collapses iteration 2 onto iteration 1's cached value. Same lesson as the
+# sampling bug two sections up, one layer further out: it arrives through an
+# attribute instead of being passed directly, but a sampled hash is still
+# never sound as a key discriminator.
+#
+# The fix: `for_handler.py` computes `loop_var_digests[name]` from
+# `compute_hash_full(val)` directly, never through `_cash_lineage_hash`.
+# `variable_lineage[name]` keeps preferring the attribute -- that write wants
+# PROVENANCE (did this binding come from the same upstream computation?),
+# which is what `_cash_lineage_hash` is FOR; the call key wants CONTENT
+# (are two iterations' bindings the same value?), which only a full hash
+# answers soundly. Conflating the two consumers is what let a sampled hash
+# back in.
+
+
+def _sampled_lineage_defs(log):
+    return (
+        "import time, pathlib\n"
+        "import pandas as pd\n"
+        f"LOG = pathlib.Path(r'{log}')\n"
+        "counter = {'n': 0}\n"
+        "conn = 'db-connection'\n"
+        "def fetch_next(conn):\n"
+        "    counter['n'] += 1\n"
+        "    with LOG.open('a') as fh:\n"
+        "        fh.write('x\\n')\n"
+        f"    time.sleep({_SLEEP})\n"
+        "    return counter['n']\n"
+        "df_a = pd.DataFrame({'x': range(300)})\n"
+        "df_b = pd.DataFrame({'x': range(300)})\n"
+    )
+
+
+# Mutates BOTH df_a and df_b inside the SAME for-loop (one iteration), via
+# plain subscript assignment (`df['x'] = ...`) -- the standard, easily-
+# detected in-place-mutation shape (mirrors `results[k] = v` elsewhere in
+# this file). Both mutations sharing ONE loop's source text and iterable
+# matters: `update_mutated_variable_lineages` combines `loop_code_hash`
+# (from the loop's own text) with each variable's own sampled `value_hash`,
+# so both DataFrames must go through the IDENTICAL loop code for their
+# resulting `_cash_lineage_hash` values to collide when their sampled
+# content also agrees. `_vals_b` differs from `_vals_a` ONLY at index 10 --
+# well past `head(5)`, so shape/dtypes/`head(5)` (what `compute_hash`
+# samples for a DataFrame) stay identical between the two.
+_MUTATE_BOTH_DATAFRAMES = (
+    "for _ in range(1):\n"
+    "    df_a['x'] = list(range(300))\n"
+    "    _vals_b = list(range(300))\n"
+    "    _vals_b[10] = -999999\n"
+    "    df_b['x'] = _vals_b\n"
+)
+
+# Two-statement body (`n = len(df)` then the append), never eligible for
+# `cacheable_accumulator_loop`'s single-unit fast path.
+_SAMPLED_LINEAGE_LOOP = (
+    "SL2 = []\n"
+    "# @cash:cache-calls\n"
+    "for df in [df_a, df_b]:\n"
+    "    n = len(df)\n"
+    "    SL2.append(fetch_next(conn))\n"
+    "print('SL2', SL2, 'runs', counter['n'])\n"
+)
+
+
+def test_sampled_cash_lineage_hash_on_loop_var_still_gets_distinct_keys(nb_runner, tmp_path):
+    """``df_a``/``df_b`` are ``compute_hash``-equal (sampled -- same shape,
+    dtypes, ``head(5)``) but ``compute_hash_full``-different (row 10) AFTER
+    both are mutated inside one shared for-loop, which is what stamps a
+    matching, sampled-derived ``_cash_lineage_hash`` onto each. ``fetch_next``
+    has no other discriminator (``conn`` is constant), so if the loop-vars
+    leg preferred that attribute, iteration 2 (``df_b``) would collide with
+    iteration 1's key (``df_a``) and be served iteration 1's cached ``1`` --
+    ``SL2 [1, 1]`` instead of the correct ``SL2 [1, 2]``, wrong on the first
+    run with no pre-existing cache.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        _sampled_lineage_defs(log), _MUTATE_BOTH_DATAFRAMES, _SAMPLED_LINEAGE_LOOP,
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    output = nb_runner.get_output(3)
+    assert "SL2 [1, 2]" in output, output
+    assert _n(log) == 2, (
+        f"expected exactly 2 real fetch_next() executions, got {_n(log)}"
+    )
+
+
+def test_sampled_cash_lineage_hash_on_loop_var_matches_the_no_cash_oracle(nb_runner, tmp_path):
+    """Independent confirmation that ``[1, 2]`` is correct -- cash off entirely."""
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        _sampled_lineage_defs(log), _MUTATE_BOTH_DATAFRAMES, _SAMPLED_LINEAGE_LOOP,
+    ])
+    nb_runner.start_kernel(with_cash=False)
+    nb_runner.run_all()
+
+    assert "SL2 [1, 2]" in nb_runner.get_output(3)
