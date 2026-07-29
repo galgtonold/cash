@@ -134,12 +134,19 @@ class TestFileBackendGetMetadata:
     def test_respects_ttl(self, tmp_path):
         """Expired entries return None from get_metadata."""
         import time
-        backend = FileBackend(cache_dir=str(tmp_path / "cache"), default_ttl=1)
+
+        # Age the entry by backdating created_at instead of sleeping past a
+        # 1s TTL. Expiry is `time.time() - created_at > ttl`, so this drives
+        # the same branch without depending on how promptly the process is
+        # scheduled -- the sleeping version asserted a 1s-TTL entry was still
+        # alive immediately after writing it, and a loaded CI runner can spend
+        # that second between the two calls (win-3.11 went red on v0.2.0).
+        backend = FileBackend(cache_dir=str(tmp_path / "cache"), default_ttl=3600)
         backend.set("key1", "value")
         meta = backend.get_metadata("key1")
         assert meta is not None
 
-        time.sleep(1.1)
-        meta = backend.get_metadata("key1")
+        backend.set("key2", "value", metadata={"created_at": time.time() - 7200})
+        meta = backend.get_metadata("key2")
         assert meta is None
         backend.clear()

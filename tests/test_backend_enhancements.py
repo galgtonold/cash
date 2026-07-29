@@ -6,6 +6,34 @@ from cash.backends import FileBackend
 from cash.backends.sqlite_backend import SQLiteBackend
 
 
+def _backdate_sqlite_entry(db: SQLiteBackend, key: str, seconds: float) -> None:
+    """Age an entry by ``seconds`` without sleeping.
+
+    Expiry is ``time.time() - created_at > ttl``, so moving ``created_at`` into
+    the past exercises the real branch while staying independent of wall clock
+    and machine load.
+
+    SQLite needs the row edited directly: unlike the file backend, which honours
+    a caller-supplied ``created_at`` via ``setdefault``, ``SQLiteBackend._store``
+    assigns ``metadata['created_at'] = now`` unconditionally and checks expiry
+    against the column, so there is no seam to pass a timestamp through.
+
+    ``set()`` INSERTs in the background, so drain the pending write first --
+    ``get()`` waits for it -- or the UPDATE can run before the row exists and
+    silently match nothing, leaving the entry un-aged and the test asserting
+    the opposite of what it means to. That raced at ``-n 16`` while passing at
+    ``-n0``, hence the rowcount check: a future race fails loudly here rather
+    than as a confusing expiry assertion further down.
+    """
+    db.get(key)
+    cur = db._conn.execute(
+        'UPDATE cache_entries SET created_at = created_at - ? WHERE key = ?',
+        (seconds, key),
+    )
+    db._conn.commit()
+    assert cur.rowcount == 1, f"no row to backdate for {key!r}"
+
+
 class TestFileBackendTTL:
     """Test TTL expiration in FileBackend."""
 
@@ -24,19 +52,27 @@ class TestFileBackendTTL:
         assert meta['ttl'] == 60
 
     def test_ttl_expiration(self, tmp_path):
-        fb = FileBackend(str(tmp_path / 'cache'), default_ttl=1)
+        # Age the entry by backdating created_at rather than sleeping past a
+        # short TTL: expiry is `time.time() - created_at > ttl`, so a stored
+        # timestamp exercises the same branch with no wall-clock dependency.
+        # The sleeping version asserted an entry written 1s ago was still
+        # alive, which is really an assertion about scheduler latency -- it
+        # failed on a loaded CI runner (win-3.11, v0.2.0).
+        fb = FileBackend(str(tmp_path / 'cache'), default_ttl=3600)
         fb.set('key1', 'value1')
         meta, val = fb.get('key1')
         assert val == 'value1'
-        # Wait for expiration
-        time.sleep(1.1)
-        meta, val = fb.get('key1')
+
+        fb.set('key2', 'value2', metadata={'created_at': time.time() - 7200})
+        meta, val = fb.get('key2')
         assert val is None
 
     def test_per_entry_ttl_overrides_default(self, tmp_path):
         fb = FileBackend(str(tmp_path / 'cache'), default_ttl=100)
-        fb.set('key1', 'value1', metadata={'ttl': 1})
-        time.sleep(1.1)
+        # Old enough for the per-entry ttl=1 but far short of the default 100,
+        # so this fails if the per-entry value is ignored.
+        fb.set('key1', 'value1',
+               metadata={'ttl': 1, 'created_at': time.time() - 10})
         meta, val = fb.get('key1')
         assert val is None  # Short TTL expired
 
@@ -49,8 +85,7 @@ class TestFileBackendTTL:
 
     def test_expired_entry_gets_deleted(self, tmp_path):
         fb = FileBackend(str(tmp_path / 'cache'), default_ttl=1)
-        fb.set('key1', 'value1')
-        time.sleep(1.1)
+        fb.set('key1', 'value1', metadata={'created_at': time.time() - 10})
         fb.get('key1')  # Triggers deletion
         # Verify files are cleaned up
         entries = fb.list_entries()
@@ -138,11 +173,11 @@ class TestSQLiteBackend:
         db.shutdown()
 
     def test_ttl_expiration(self, tmp_path):
-        db = SQLiteBackend(str(tmp_path / 'cache.db'), default_ttl=1)
+        db = SQLiteBackend(str(tmp_path / 'cache.db'), default_ttl=3600)
         db.set('k1', 'v1')
         meta, val = db.get('k1')
         assert val == 'v1'
-        time.sleep(1.1)
+        _backdate_sqlite_entry(db, 'k1', 7200)
         meta, val = db.get('k1')
         assert val is None
         db.shutdown()
@@ -150,7 +185,7 @@ class TestSQLiteBackend:
     def test_per_entry_ttl(self, tmp_path):
         db = SQLiteBackend(str(tmp_path / 'cache.db'))
         db.set('k1', 'v1', metadata={'ttl': 1})
-        time.sleep(1.1)
+        _backdate_sqlite_entry(db, 'k1', 10)
         meta, val = db.get('k1')
         assert val is None
         db.shutdown()

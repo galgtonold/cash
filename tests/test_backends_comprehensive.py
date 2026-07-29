@@ -181,13 +181,15 @@ class TestFileBackendAdvanced:
 
     def test_ttl_expiration(self, tmp_path):
         """TTL-based expiration in FileBackend."""
-        b = FileBackend(str(tmp_path / "cache"), default_ttl=1)
+        # Backdated created_at rather than a sleep: same expiry branch
+        # (`time.time() - created_at > ttl`), no wall-clock dependency.
+        b = FileBackend(str(tmp_path / "cache"), default_ttl=3600)
         b.set("k1", "v1", {"key": "k1"})
         _, val = b.get("k1")
         assert val == "v1"
 
-        time.sleep(1.1)
-        _, val = b.get("k1")
+        b.set("k2", "v2", {"key": "k2", "created_at": time.time() - 7200})
+        _, val = b.get("k2")
         assert val is None  # Expired
         b.shutdown()
 
