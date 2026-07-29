@@ -141,15 +141,29 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     return f"  {tag}: {code}  ({row.time_s:.2f}s)"
 
 
-def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
-    pseudo = StatementRow(
+def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
+    """A ``StatementRow`` view of *it*, for reuse of the row-rendering helpers.
+
+    Carries ``sub_units`` through (CAS-243 task 9) -- an iteration's
+    intercepted sub-calls otherwise never reach ``_sub_unit_lines``, since a
+    loop-body statement is an ``IterationRow``, not a ``StatementRow``.
+    """
+    return StatementRow(
         status=it.status,
         code=it.code,
         time_s=it.time_s,
         saved_time_s=it.saved_time_s,
         storage_tiers=it.storage_tiers,
+        sub_units=it.sub_units,
     )
-    return _row_line(pseudo, is_upstream=is_upstream)
+
+
+def _iteration_lines(it: IterationRow, pad: str, *, is_upstream: bool) -> list[str]:
+    """The iteration's own line plus one ``sub-call ...`` line per call site,
+    nested at the SAME indent the loop's other body lines use -- not as
+    siblings of the loop (CAS-243 task 9)."""
+    pseudo = _iteration_pseudo_row(it)
+    return [pad + _row_line(pseudo, is_upstream=is_upstream), *_sub_unit_lines(pseudo, pad)]
 
 
 def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
@@ -204,10 +218,8 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
         out: list[str] = []
         for sub in _loop_body(item):
             if isinstance(sub, LoopStatement):
-                out.extend(
-                    pad + _iteration_line(it, is_upstream=is_upstream)
-                    for it in sub.iterations
-                )
+                for it in sub.iterations:
+                    out.extend(_iteration_lines(it, pad, is_upstream=is_upstream))
             else:
                 out.extend(
                     _item_lines(sub, is_upstream=is_upstream, indent=indent + 1)

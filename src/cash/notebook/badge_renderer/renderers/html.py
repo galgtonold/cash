@@ -56,6 +56,7 @@ from ..view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
+    SubUnitGroup,
     iter_iterations,
 )
 from ._pytoken import highlight_python
@@ -1352,6 +1353,43 @@ def _iter_drilldown_html(
     return f'<div class="c3-iter-table">{"".join(rows)}</div>'
 
 
+def _loop_stmt_sub_units_html(sub_units: tuple[SubUnitGroup, ...]) -> str:
+    """Sub-calls block for a loop-body statement's collapsed aggregate row.
+
+    Sits INSIDE the same toggle-revealed area as ``_iter_drilldown_html``
+    (nested under the loop body row, not a sibling of the loop) -- CAS-243
+    task 9. *sub_units* here is already aggregated across every iteration
+    (see ``view_builder``'s ``LoopStatement.sub_units``), so this shows one
+    line per call SITE for the whole statement, not per iteration.
+    """
+    if not sub_units:
+        return ""
+    hits = sum(1 for g in sub_units for c in g.calls if c.status is BadgeStatus.RESTORED)
+    n = sum(len(g.calls) for g in sub_units)
+    rows = []
+    for g in sub_units:
+        g_hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
+        detail = f"{g_hits}/{len(g.calls)} hit"
+        if g.key_prefix:
+            detail += f" · <code>{_esc(g.key_prefix)}</code>"
+        if g.condensed:
+            detail += " · condensed"
+        if g.miss_reason:
+            detail += f" · {_esc(g.miss_reason)}"
+        rows.append(
+            f'<div class="c3-iter-row cash-subunit">'
+            f'<span class="c3-iter-key">{_esc(g.call_source)}</span>'
+            f'<span class="c3-iter-key">{detail}</span>'
+            f"</div>"
+        )
+    return (
+        '<div class="c3-iter-table c3-subunit-table">'
+        f'<div class="c3-iter-row c3-subunit-summary">Sub-calls: {hits}/{n} hit</div>'
+        + "".join(rows)
+        + "</div>"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Loop / control / skipped renderers
 # ---------------------------------------------------------------------------
@@ -1580,7 +1618,10 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
             # Show every iteration when the count fits comfortably in a
             # cell; cap to the first N + a "… +M more" row beyond that.
             cap = 0 if stmt_total <= _ITER_INLINE_LIMIT else _ITER_INLINE_LIMIT
-            expansion = _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap)
+            expansion = (
+                _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap)
+                + _loop_stmt_sub_units_html(item.sub_units)
+            )
             body_rid = _uid("rx")
             body_pieces.append(
                 f'<div class="c3-rowx c3-loop-body">'

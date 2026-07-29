@@ -136,6 +136,13 @@ class IterationRow:
     Stored as a tuple of ``(name, value)`` pairs (not a dict) so the whole
     node remains hashable. Renderers iterate in order.
     """
+    # Per-call-SITE groups of this iteration's intercepted sub-calls (CAS-243
+    # task 9) — same field, same purpose as ``StatementRow.sub_units``. A
+    # loop-body statement renders as an ``IterationRow``, not a
+    # ``StatementRow`` (see ``view_builder._iteration_row``), so it needs
+    # its own copy of this field or a sub-call made inside a loop body is
+    # silently dropped rather than merely misplaced.
+    sub_units: tuple["SubUnitGroup", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,13 @@ class LoopStatement:
 
     base_code: str
     iterations: tuple[IterationRow, ...]
+    # Per-call-site sub-call groups AGGREGATED across every iteration (CAS-243
+    # task 9) -- built from the union of all iterations' raw ``decorator_calls``
+    # events, re-grouped by ``(call_source, occurrence_index)``. Renderers that
+    # show this statement as one collapsed aggregate row (the HTML renderer's
+    # loop-body row) show this instead of per-iteration ``IterationRow.sub_units``,
+    # which stay available for renderers (text) that keep iterations separate.
+    sub_units: tuple["SubUnitGroup", ...] = ()
 
 
 @dataclass(frozen=True)

@@ -301,36 +301,10 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
     # call_unit.py) or the call is never recorded at all regardless of
     # whether it was intercepted (confirmed: without the sleep, zero events
     # were logged even though the directive engaged with no warning).
-    code = """
-import time
-def compute(x):
-    time.sleep(0.02)
-    return x + 1
-
-results = {}
-# @cash:cache-calls
-for t in [1, 2, 3]:
-    results[t] = compute(t)
-"""
     magics_obj, shell, backend = magics_fixture
-
-    captured_metrics_lists: list[list] = []
-    original_render = magics_obj._render_interactive_badge
-
-    def _spy(metrics_list, *args, **kwargs):
-        captured_metrics_lists.append(list(metrics_list))
-        return original_render(metrics_list, *args, **kwargs)
-
-    magics_obj._render_interactive_badge = _spy
-
-    magics_obj.cash("", code.strip())
+    all_metrics = _run_real_for_loop_and_capture_metrics(magics_obj, shell, _LOOP_CODE)
     assert shell.user_ns['results'] == {1: 2, 2: 3, 3: 4}
-    assert captured_metrics_lists, "badge render was never called"
 
-    # The final render (after all statements ran) carries every statement's
-    # complete metric dict -- earlier calls are the per-step RUNNING renders
-    # with a partial list.
-    all_metrics = max(captured_metrics_lists, key=len)
     body_stmts = [m for m in all_metrics if '# __iteration_context__:' in m.get('code', '')]
     assert body_stmts, "expected per-iteration body metrics"
 
@@ -354,3 +328,101 @@ for t in [1, 2, 3]:
         assert e['loop_header'] == owner['loop_header']
         assert e['loop_header_chain'] == owner['loop_header_chain']
         assert e['body_index_chain'] == owner.get('body_index_chain')
+
+
+def _run_real_for_loop_and_capture_metrics(magics_obj, shell, code: str) -> list:
+    """Run *code* through the real ``%%cash`` pipeline and return the raw
+    ``metrics_list`` the LAST badge render saw (every statement's complete
+    ``ProcessResult`` dict, decorator_calls/loop_header included).
+
+    Shared by the stamping test above and the render-level test below --
+    both need the exact same real, un-mocked pipeline output.
+    """
+    captured_metrics_lists: list[list] = []
+    original_render = magics_obj._render_interactive_badge
+
+    def _spy(metrics_list, *args, **kwargs):
+        captured_metrics_lists.append(list(metrics_list))
+        return original_render(metrics_list, *args, **kwargs)
+
+    magics_obj._render_interactive_badge = _spy
+    magics_obj.cash("", code.strip())
+    assert captured_metrics_lists, "badge render was never called"
+    return max(captured_metrics_lists, key=len)
+
+
+# Same shape as the stamping test above -- see its comments for why NOT
+# ``out.append(compute(t))`` (accumulator fast-path) and why ``compute``
+# sleeps (CallUnit's cost floor).
+_LOOP_CODE = """
+import time
+def compute(x):
+    time.sleep(0.02)
+    return x + 1
+
+results = {}
+# @cash:cache-calls
+for t in [1, 2, 3]:
+    results[t] = compute(t)
+"""
+
+
+def test_real_for_loop_renders_sub_calls_nested_under_the_loop(magics_fixture):
+    """Render-level counterpart to the stamping test above.
+
+    A loop-body statement renders through ``IterationRow`` via
+    ``view_builder._iteration_row()``, NOT through
+    ``_statement_row_from_metric`` -- the only function ``build_sub_unit_groups``
+    was originally wired into. So stamping the raw events correctly (proven
+    above by asserting on the metrics dicts) is necessary but NOT sufficient
+    for the badge to show anything: a first version of this fix had the
+    stamps present on every event and STILL rendered no "Sub-calls" section
+    at all for a loop body, because ``IterationRow`` had no ``sub_units``
+    field and nothing populated one. This test would have caught that --
+    it calls the real renderers on the real pipeline's output, not just
+    inspects the metrics dicts.
+    """
+    magics_obj, shell, backend = magics_fixture
+    all_metrics = _run_real_for_loop_and_capture_metrics(magics_obj, shell, _LOOP_CODE)
+    assert shell.user_ns['results'] == {1: 2, 2: 3, 3: 4}
+
+    badge = build_interactive_badge(all_metrics)
+    html = render_html(badge)
+    text = render_text(badge)
+
+    # HTML: ``_loop_stmt_sub_units_html`` (view_builder's aggregated
+    # LoopStatement.sub_units) is only ever called from inside
+    # ``_for_loop_group_html``'s per-body-statement block -- its markup
+    # cannot be emitted from anywhere else in the renderer, so its presence
+    # together with the loop-body row IS the nesting proof: this is not the
+    # row-level ``<dt>Sub-calls</dt>`` drawer (that one only exists for a
+    # bare ``StatementRow``, which a loop-body statement is not).
+    assert "c3-loop-body" in html, "expected the loop to render at all"
+    assert "c3-subunit-table" in html, (
+        "expected the loop-nested Sub-calls block, not the row-level one"
+    )
+    assert "<dt>Sub-calls</dt>" not in html, (
+        "loop-body sub-calls rendered via the WRONG (row-level) drawer path"
+    )
+    assert "Sub-calls" in html
+    assert "compute(t)" in html
+
+    # TEXT: a sub-call line must immediately follow the iteration's own
+    # line, indented one step deeper than it -- proving it reads as nested
+    # under that specific iteration/loop, not as a detached sibling line
+    # dropped elsewhere in the output.
+    lines = text.splitlines()
+    sub_call_idxs = [i for i, ln in enumerate(lines) if "sub-call compute(t)" in ln]
+    assert sub_call_idxs, f"no sub-call line in text output:\n{text}"
+    for i in sub_call_idxs:
+        assert i > 0, "a sub-call line must follow a statement line, not open the output"
+        prev = lines[i - 1]
+        sub_indent = len(lines[i]) - len(lines[i].lstrip(" "))
+        prev_indent = len(prev) - len(prev.lstrip(" "))
+        assert sub_indent > prev_indent, (
+            f"sub-call line is not nested deeper than its statement line:\n"
+            f"{prev!r}\n{lines[i]!r}"
+        )
+        assert "results[" in prev, (
+            f"line before a sub-call line is not the owning iteration's row:\n{prev!r}"
+        )
