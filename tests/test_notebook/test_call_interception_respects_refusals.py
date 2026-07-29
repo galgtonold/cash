@@ -67,8 +67,11 @@ def test_stateful_callee_is_not_recorded_as_intercepted(call_cache):
         return 1
 
     call_cache.set_sites([_site(source="next_id()", names=("next_id",), computed_arg_positions=())])
-    call_cache.resolve(next_id)
-    assert call_cache.wrapped_names == set()
+    resolved = call_cache.resolve(next_id)
+    resolved()
+    assert call_cache.drain_call_log() == [], (
+        "a refused @stateful callee produced an intercepted-call event"
+    )
 
 
 def test_ordinary_callee_still_wrapped(call_cache):

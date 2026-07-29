@@ -1562,27 +1562,6 @@ class StatementProcessor:
             logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
             return []
 
-    def _mark_intercepted_calls(self, decorator_calls: list) -> None:
-        """Flag drained log entries that cash wrapped itself (CAS-243).
-
-        A ``# @cash:cache-calls`` call and a hand-decorated one land in the same
-        log and the same badge section — correctly, it is the same cache. But
-        undifferentiated, the section materialises out of nowhere for a user who
-        decorated nothing, and a user who *did* write the directive has no way
-        to confirm it engaged, which its own docs tell them to check.
-
-        Matched by the log key the interceptor recorded when it wrapped the
-        function, so a name it never wrapped is never claimed.
-        """
-        if not decorator_calls or self._call_cache is None:
-            return
-        wrapped = self._call_cache.wrapped_names
-        if not wrapped:
-            return
-        for call in decorator_calls:
-            if isinstance(call, dict) and call.get('func_name') in wrapped:
-                call['intercepted'] = True
-
     def _warn_cache_calls_noop(self, code: str) -> None:
         """Say so when ``# @cash:cache-calls`` matched nothing.
 
@@ -1766,8 +1745,6 @@ class StatementProcessor:
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
         decorator_calls.extend(self._drain_call_unit_events())
-        if decorator_calls:
-            self._mark_intercepted_calls(decorator_calls)
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr
@@ -1827,8 +1804,6 @@ class StatementProcessor:
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
         decorator_calls.extend(self._drain_call_unit_events())
-        if decorator_calls:
-            self._mark_intercepted_calls(decorator_calls)
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr

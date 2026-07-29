@@ -21,6 +21,7 @@ import cash
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.badge_renderer.renderers.text import render_text
 from cash.notebook.call_interception import CallCache, CallSite
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
 # ---------------------------------------------------------------- CallCache
@@ -37,29 +38,38 @@ def _site(source="compute(x)", names=("compute", "x")):
     )
 
 
-def test_wrapped_names_records_what_it_intercepted(call_cache):
-    """The processor needs a key it can match drained log entries against."""
+def test_wrapped_calls_are_recorded_as_intercepted(call_cache):
+    """Every event a genuinely-wrapped call produces must carry the flag the
+    badge reads -- set at the source now, not reconciled by name afterwards.
+    """
     def compute(x):
+        import time
+        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)  # above the cost-model floor
         return x + 1
 
     call_cache.set_sites([_site()])
-    assert call_cache.wrapped_names == set()
-    call_cache.resolve(compute)
-    assert any(n.endswith("compute") for n in call_cache.wrapped_names), (
-        f"expected compute's qualified name, got {call_cache.wrapped_names}"
-    )
+    wrapped = call_cache.resolve(compute)
+    wrapped(5)
+
+    events = call_cache.drain_call_log()
+    assert events, "the wrapped call produced no drained event"
+    assert all(e["intercepted"] is True for e in events), events
 
 
-def test_passed_through_callables_are_not_recorded(call_cache):
-    """Only what was actually wrapped counts, or the badge over-claims."""
+def test_passed_through_callables_produce_no_event(call_cache):
+    """Only what was actually wrapped logs anything, or the badge over-claims."""
     call_cache.set_sites([_site(source="len(a)", names=("len", "a"))])
     call_cache.resolve(len)
     call_cache.resolve(None)
-    assert call_cache.wrapped_names == set()
+    assert call_cache.drain_call_log() == []
 
 
-def test_already_decorated_functions_are_not_recorded(call_cache, tmp_path):
-    """A hand-decorated call must keep reading as hand-decorated."""
+def test_already_decorated_functions_produce_no_call_cache_event(call_cache, tmp_path):
+    """A hand-decorated call must keep reading as hand-decorated: resolving it
+    through ``call_cache`` must not wrap it, so nothing lands in the
+    call-unit log this ``call_cache`` drains -- calling it is accounted for
+    by the decorator's own log instead (a separate mechanism entirely).
+    """
     other = cash.Cash(cache_dir=str(tmp_path / "other"))
 
     @other.cache
@@ -67,8 +77,9 @@ def test_already_decorated_functions_are_not_recorded(call_cache, tmp_path):
         return x + 1
 
     call_cache.set_sites([_site()])
-    call_cache.resolve(compute)
-    assert call_cache.wrapped_names == set()
+    resolved = call_cache.resolve(compute)
+    resolved(5)
+    assert call_cache.drain_call_log() == []
 
 
 # ------------------------------------------------------------- rendering

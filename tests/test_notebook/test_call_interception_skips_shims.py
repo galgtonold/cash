@@ -51,8 +51,11 @@ def test_the_open_shim_is_passed_through(call_cache):
         if not getattr(shim, "_is_file_tracker_patch", False):
             pytest.skip("no open shim installed in this configuration")
         call_cache.set_sites([_site_for(shim)])
+        # Identity, not merely equality: only a genuinely-wrapped callee could
+        # ever produce an intercepted-call event, so this alone proves the
+        # shim never gets a chance to.
         assert call_cache.resolve(shim) is shim
-        assert call_cache.wrapped_names == set()
+        assert call_cache.drain_call_log() == []
 
 
 def test_every_installed_shim_is_passed_through(call_cache):

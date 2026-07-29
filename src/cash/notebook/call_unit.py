@@ -778,9 +778,10 @@ class CallUnit:
             logger.debug("call unit: store failed for %s", key)
 
     def _func_name(self, fn) -> str:
-        """Mirrors ``CallCache._log_key`` so ``_mark_intercepted_calls`` (which
-        matches drained ``decorator_calls`` entries against
-        ``CallCache.wrapped_names`` by this same string) keeps working.
+        """The name this call's events display under in the badge and stats.
+
+        Delegates to ``Cash._get_func_key`` for a stable ``module.qualname``
+        rather than rebuilding the rule here.
         """
         try:
             return self._cash._get_func_key(fn)
@@ -792,6 +793,12 @@ class CallUnit:
 
         Keeping the contract identical is what lets the badge, the ``@cache``
         row and ``%cash_stats`` keep working on this log unmodified.
+
+        ``intercepted`` is set to ``True`` unconditionally: every event this
+        class emits is, by construction, one ``CallCache.resolve`` routed
+        through the interception path. There is no name-reconciliation step
+        to keep in sync with the badge any more (see the note on
+        ``CallCache.__init__`` where ``wrapped_names`` used to live).
         """
         self.call_log.append({
             "func_name": func_name,
@@ -803,6 +810,7 @@ class CallUnit:
             "timestamp": _time.time(),
             "call_source": site.source,
             "occurrence_index": site.occurrence_index,
+            "intercepted": True,
         })
 
     def drain(self) -> list[dict]:
