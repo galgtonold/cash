@@ -32,6 +32,7 @@ from cash.notebook.cacheability import analyze_statement
 from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
+from cash.notebook.file_tracker import FileAccessTracker
 from cash.notebook.object_hashing import compute_hash, is_identity_fallback_hash
 from cash.notebook.randomness import capture_rng_state, rng_modules_changed
 
@@ -239,6 +240,15 @@ class _ForwardingTee:
     it exactly as before this class existed. Deliberately not the processor's
     own ``_TeeWriter`` (``statement/processor.py``) -- this module sits
     beneath the processor in the import graph and must not depend on it.
+
+    **Known gap, not fixed here**: ``sys.stdout.buffer`` (the underlying
+    binary stream some libraries write raw bytes to directly, bypassing the
+    text layer) is forwarded untouched by ``__getattr__`` and is NOT
+    recorded -- a callee writing through it produces no replay text on a
+    later hit. Recording binary writes would need a second, byte-oriented
+    tee wired through ``.buffer`` specifically; text ``write``/``writelines``
+    (what ``print`` and the overwhelming majority of callees use) are the
+    channels this class covers.
     """
     __slots__ = ("_real", "_chunks")
 
@@ -250,6 +260,14 @@ class _ForwardingTee:
         self._real.write(s)
         self._chunks.append(s)
         return len(s)
+
+    def writelines(self, lines) -> None:
+        # Not delegated to ``__getattr__``: routing straight to
+        # ``self._real.writelines`` would bypass ``_chunks`` entirely, so a
+        # callee using ``sys.stdout.writelines([...])`` (or a library that
+        # does under the hood) produced empty replay text on a later hit.
+        for line in lines:
+            self.write(line)
 
     def flush(self) -> None:
         self._real.flush()
@@ -339,11 +357,33 @@ class CallUnit:
             # LATER hit can replay them (above). RNG is deliberately not
             # recorded here -- Task 6b already refuses any call that consumed
             # it (CAS-254 tracks a proper fix).
+            #
+            # A NESTED tracker, not a before/after diff against the ambient
+            # (statement-wide) one -- ``core.py:1870`` is what this task was
+            # told to copy, and it wraps the DECORATED CALL in its own fresh
+            # ``FileAccessTracker(propagate_to_parent=True)``, not a diff
+            # against the caller's tracker. That distinction is load-bearing:
+            # ``_active_tracker.get()`` is shared for the whole statement (or,
+            # inside a loop, the whole loop-as-one-unit execution), so a diff
+            # against it goes silently wrong the moment the SAME path is read
+            # twice in one tracker window -- ``hdr = read(p); total =
+            # expensive(k)``, or two loop iterations both reading the same
+            # file. The second read's "after" set already contains the path
+            # from the first, so ``after - before`` is EMPTY: the entry
+            # stores no dependency at all, and ``_auto_file_deps_fresh`` is
+            # vacuously true forever. A fresh, per-call tracker has no such
+            # baseline to collide with -- its own set IS this call's reads,
+            # full stop -- and ``propagate_to_parent=True`` still surfaces
+            # every read to the enclosing statement's tracker immediately, so
+            # the miss-path "recorded for free" behaviour is unchanged.
             rng_before = capture_rng_state()
             arg_hashes_before = self._hash_args(args, kwargs)
-            before_files, before_remote = self._tracker_snapshot()
             started = _time.perf_counter()
-            result, stdout_text, stderr_text = self._call_capturing_output(fn, args, kwargs)
+            call_tracker = FileAccessTracker(
+                getattr(fn, '__globals__', None), propagate_to_parent=True,
+            )
+            with call_tracker:
+                result, stdout_text, stderr_text = self._call_capturing_output(fn, args, kwargs)
             elapsed = _time.perf_counter() - started
 
             if rng_modules_changed(rng_before, capture_rng_state()):
@@ -362,11 +402,10 @@ class CallUnit:
                 # a hit would silently skip.
                 self._refused.add(key)
             elif elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
-                after_files, after_remote = self._tracker_snapshot()
                 self._store(
                     key, result, elapsed,
-                    file_deps=after_files - before_files,
-                    remote_deps=after_remote - before_remote,
+                    file_deps=frozenset(call_tracker.get_accessed_files()),
+                    remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
                     stdout=stdout_text,
                     stderr=stderr_text,
                 )
@@ -398,32 +437,6 @@ class CallUnit:
         finally:
             sys.stdout, sys.stderr = old_stdout, old_stderr
         return result, tee_out.getvalue(), tee_err.getvalue()
-
-    def _tracker_snapshot(self) -> tuple[frozenset[str], frozenset[str]]:
-        """``(local paths, remote urls)`` the ambient ``FileAccessTracker``
-        (if any) has recorded so far this statement.
-
-        Reads the SAME tracker the statement's own ``_execute_statement``
-        entered (``FileAccessTracker.__enter__`` publishes it via the
-        ``_active_tracker`` ContextVar) -- there is no separate tracker of
-        our own. Best-effort like every other channel here: no active
-        tracker (e.g. a unit test calling ``CallUnit.wrap`` directly, outside
-        any statement) yields empty sets rather than raising.
-        """
-        try:
-            from cash.notebook.file_tracker import _active_tracker
-            tracker = _active_tracker.get()
-        except Exception:  # noqa: BLE001 - tracking is best-effort
-            return frozenset(), frozenset()
-        if tracker is None:
-            return frozenset(), frozenset()
-        try:
-            return (
-                frozenset(tracker.get_accessed_files()),
-                frozenset(tracker.get_accessed_remote_urls()),
-            )
-        except Exception:  # noqa: BLE001
-            return frozenset(), frozenset()
 
     def _replay_deps(self, metadata: Mapping[str, Any]) -> None:
         """Re-declare a hit entry's recorded file/remote deps as though THIS

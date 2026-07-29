@@ -116,6 +116,86 @@ def test_replay_deps_registers_a_local_path_on_the_ambient_tracker(call_unit_har
         assert "C:/data/input.csv" in tracker.get_accessed_files()
 
 
+def test_two_reads_of_the_same_path_in_one_tracker_window_both_stay_correct(call_unit_harness, tmp_path):
+    """Regression (coordinator review, round 2): a delta against the AMBIENT
+    tracker silently loses a dependency the moment the same path is read
+    twice inside one ``FileAccessTracker`` window.
+
+    The original implementation computed ``after - before`` against
+    ``_active_tracker.get()`` -- the SHARED tracker for the whole statement
+    (or, inside a loop, the whole loop-as-one-unit execution: this is the
+    call unit's PRIMARY use case, and the exact shape
+    ``call_interception.py``'s own module docstring uses as its running
+    example, ``s += compute(x)``). The first call in a window puts the path
+    into that shared set; a SECOND call reading the SAME path then computes
+    an EMPTY delta against it, even though it genuinely read the file this
+    time -- so its own entry stores no ``auto_file_deps`` at all, and
+    ``_auto_file_deps_fresh`` (``if not snap: return True``) is vacuously
+    fresh forever.
+
+    **Why this is immune to the ``open()``-side-effect masking documented in
+    the module docstring above.** That masking only hides a DISABLED REPLAY
+    on a call whose ``auto_file_deps`` snapshot was already recorded
+    correctly -- the freshness re-check's own ``open()`` call re-registers a
+    dependency that already exists in the metadata. Here the bug is
+    upstream of that: under the old delta-based code the second call's
+    ``auto_file_deps`` is never written in the first place (``_store``'s
+    ``if file_deps or remote_deps:`` guard sees an empty set and skips it
+    entirely), so ``_auto_file_deps_fresh`` returns ``True`` on the
+    ``if not snap`` fast path *before* it ever calls ``file_dep_is_fresh`` /
+    ``open()``. No real file read happens during the stale lookup, so there
+    is no side effect to mask the bug -- the second call simply serves the
+    wrong number.
+
+    One-line mutation that resurrects the bug: in ``wrap``, replace
+    ``call_tracker.get_accessed_files()`` / ``get_accessed_remote_urls()``
+    (the fresh, per-call tracker's own sets) with a before/after diff against
+    ``_active_tracker.get()`` -- i.e. revert to the pre-fix delta. Applied
+    and observed: after the file changes, the SECOND call in the shared
+    window (``k=20``) still returns the stale ``200`` instead of the
+    recomputed ``2000``, while the first call (``k=10``) correctly recomputes
+    -- verified below, then reverted.
+    """
+    data_path = tmp_path / "data.csv"
+    data_path.write_text("10")
+    calls: list[int] = []
+
+    def expensive(k):
+        calls.append(k)
+        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)
+        return int(data_path.read_text()) * k
+
+    unit = call_unit_harness(lineage={}, user_ns={"expensive": expensive})
+    site = CallSite(
+        source="expensive(k)", free_names=frozenset({"expensive", "k"}),
+        occurrence_index=0, computed_arg_positions=(0,),
+    )
+    wrapped = unit.wrap(expensive, site)
+
+    # ONE shared FileAccessTracker window covering BOTH calls -- the shape a
+    # loop body actually executes under (each iteration's statement runs
+    # inside the SAME tracker instance the loop-as-one-unit fast path
+    # entered once for the whole loop), and equally the shape of a single
+    # statement that reads a path directly and also calls a cached function
+    # that reads it again (``hdr = read(p); total = expensive(k)``).
+    with FileAccessTracker():
+        assert wrapped(10) == 100   # first read of data.csv this window
+        assert wrapped(20) == 200   # second read of the SAME path
+    assert calls == [10, 20]
+
+    # The file changes. Re-run both calls, again sharing one window, as a
+    # re-executed loop tail would.
+    data_path.write_text("100")
+    with FileAccessTracker():
+        result0 = wrapped(10)
+        result1 = wrapped(20)
+    assert [result0, result1] == [1000, 2000], (
+        "a call whose file dependency changed was served a stale value "
+        "because an earlier call in the SAME tracker window had already "
+        f"read the same path: got {[result0, result1]}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Channel 2: accessed_remote -- explicitly called out in the brief as the
 # channel a first draft skipped entirely. Routed through CallCache.resolve +
@@ -230,3 +310,25 @@ def test_call_hit_replays_stdout_reconstructing_interleaving(call_unit_harness, 
     assert out2 == "before2\ninside=5\nafter2\n", (
         "the callee's stdout was not replayed on a cache hit"
     )
+
+
+def test_forwarding_tee_records_writelines_not_just_write():
+    """Minor (coordinator review): ``__getattr__`` used to delegate
+    ``writelines`` straight to the real stream, bypassing ``_chunks`` -- a
+    callee using ``sys.stdout.writelines([...])`` produced empty replay text
+    on a later hit instead of its actual output.
+
+    One-line mutation: delete the ``writelines`` method (falling back to
+    ``__getattr__``'s passthrough). Applied and observed:
+    ``tee.getvalue()`` is ``""`` instead of ``"ab"`` -- verified below, then
+    reverted.
+    """
+    import io
+
+    from cash.notebook.call_unit import _ForwardingTee
+
+    real = io.StringIO()
+    tee = _ForwardingTee(real)
+    tee.writelines(["a", "b"])
+    assert tee.getvalue() == "ab"
+    assert real.getvalue() == "ab"
