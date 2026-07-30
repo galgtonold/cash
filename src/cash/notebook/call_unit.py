@@ -92,6 +92,24 @@ def call_site_is_cacheable(
     )
 
 
+def _is_dunder_loop_var(name: str) -> bool:
+    """True if *name*'s own bare portion is dunder-prefixed (CAS-257).
+
+    Handles both shapes `loop_vars` can arrive in: a bare name (`"x"` --
+    every direct caller/test that predates CAS-257's depth-keying, e.g.
+    `test_call_unit_key.py`'s hand-built dicts) and a depth-prefixed one
+    (`"0:x"` -- the production path,
+    `StatementProcessor.current_loop_vars_for_call_key`). A depth-prefixed
+    dunder (`"0:__iterable_lineage__"`) no longer starts with `"__"` itself
+    once the prefix is on -- checking the combined string, as this used to,
+    would silently stop catching it and turn the enforced CAS-242 guard back
+    into a merely documented one. Splitting off the depth at the first colon
+    before checking is what keeps the guard live for both shapes.
+    """
+    _, _, bare = name.partition(":")
+    return (bare or name).startswith("__")
+
+
 def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, str]) -> str:
     """The discriminating hash for one loop-var entry -- full, never sampled,
     and a dict lookup whenever possible instead of a fresh content hash.
@@ -248,7 +266,7 @@ def call_cache_key(
     path already collapses them: ``compute_context_hash`` yields one hash for
     three identical iteration contexts, so this matches shipped behaviour.
 
-    **Entry names are opaque strings here (CAS-257 defect 1).** In
+    **Entry names carry an optional depth prefix (CAS-257 defect 1).** In
     production, ``loop_vars``/``loop_var_digests`` arrive from
     ``StatementProcessor.current_loop_vars_for_call_key`` /
     ``current_loop_var_digests_for_call_key``, whose entries are keyed
@@ -256,10 +274,15 @@ def call_cache_key(
     nested loop (``for q in A: for q in B: acc.append(pull(handle))``) would
     otherwise occupy one slot for two different loops' values, silently
     losing the outer scope's discrimination for any call sitting *inside*
-    the reuse. This function does not care about the format: it sorts,
-    hashes, and looks entries up by whatever string it is given, so the
-    depth prefix is invisible here — it only has to agree between the two
-    dicts, which the shared provider guarantees.
+    the reuse. Sorting, hashing, and the ``arg_digests``/``loop_var_digests``
+    lookups below treat this as an opaque string either way — it only has to
+    agree between the two dicts, which the shared provider guarantees. The
+    ONE place the prefix is not opaque is the dunder filter immediately
+    below (``_is_dunder_loop_var``): a depth-prefixed dunder
+    (``"0:__iterable_lineage__"``) no longer starts with ``"__"`` itself, so
+    that filter has to look past the prefix rather than at the whole string,
+    or the CAS-242 guard it enforces would silently stop firing for the
+    production shape.
 
     **What is deliberately NOT here: the iteration context.** ``for_handler``
     prepends ``# __iteration_context__: <hash>`` to each body statement, and
@@ -334,8 +357,14 @@ def call_cache_key(
     # which changes for every iteration on a reorder. If it ever reached this
     # function unfiltered it would be hashed in like any other entry and
     # CAS-242 would be back. Enforce the contract rather than documenting it.
+    #
+    # `_is_dunder_loop_var`, not a bare `name.startswith("__")` -- a
+    # depth-prefixed key (`"0:__iterable_lineage__"`, CAS-257's production
+    # shape) no longer starts with `"__"` itself, so a bare check here would
+    # silently stop enforcing this exact guard for the only caller that
+    # actually reaches it today.
     filtered_loop_vars = {
-        name: value for name, value in loop_vars.items() if not name.startswith("__")
+        name: value for name, value in loop_vars.items() if not _is_dunder_loop_var(name)
     }
 
     if not arg_digests and not filtered_loop_vars and not site.stmt_identity:

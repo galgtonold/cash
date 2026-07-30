@@ -396,3 +396,31 @@ def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
         loop_vars={"x": 5, "__iterable_lineage__": "whole-iterable-hash"},
     )
     assert clean == polluted
+
+
+def test_a_depth_prefixed_dunder_entry_in_loop_vars_cannot_reach_the_key():
+    """The same CAS-242 channel, in the shape production actually sends it in
+    since CAS-257: `loop_vars` entries are keyed ``"{depth}:{name}"``
+    (`StatementProcessor.current_loop_vars_for_call_key`), so a leaked dunder
+    would arrive as `"0:__iterable_lineage__"`, which does NOT itself start
+    with `"__"`.
+
+    `test_a_dunder_entry_in_loop_vars_cannot_reach_the_key` above pins the
+    bare-name shape; this pins the depth-prefixed one specifically, because a
+    naive `name.startswith("__")` filter -- correct for the bare shape --
+    goes silently blind the moment a depth prefix is in front of it, turning
+    an ENFORCED invariant back into a merely DOCUMENTED one for exactly the
+    caller that matters.
+
+    Mutation that must make this fail: revert `call_cache_key`'s filter from
+    `_is_dunder_loop_var(name)` back to `name.startswith("__")`. Verified by
+    hand: with that reversion `polluted != clean` -- the depth-prefixed
+    dunder is no longer stripped and reaches the hash.
+    """
+    ctx = _ctx({"x": "hash-of-5"}, {"x": 5, "compute": len})
+    clean = call_cache_key(_site(), ctx=ctx, arg_digests=[], loop_vars={"0:x": 5})
+    polluted = call_cache_key(
+        _site(), ctx=ctx, arg_digests=[],
+        loop_vars={"0:x": 5, "0:__iterable_lineage__": "whole-iterable-hash"},
+    )
+    assert clean == polluted

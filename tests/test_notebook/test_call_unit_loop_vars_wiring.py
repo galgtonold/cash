@@ -378,6 +378,52 @@ def test_depth_prefix_is_positional_not_order_dependent():
     )
 
 
+def test_depth_keyed_scope_keeps_a_value_with_no_matching_digest():
+    """A value with no matching digest must keep its key slot, not vanish.
+
+    SYNTHETIC reachability test, not a production repro: `for_handler.py`
+    always builds `loop_vars` and `loop_var_digests` from the SAME
+    `bindings` dict at the same push, so today a value entry can never
+    actually lack a digest -- this pushes a scope directly through
+    `loop_vars_scope` with a value ('extra') that has no digest counterpart,
+    a shape only reachable by hand-constructing the stack like this, to pin
+    the CORRECT degrade-gracefully behaviour against a regression, not to
+    claim this is a live bug.
+
+    An earlier version of `_depth_keyed_loop_scope` iterated only the
+    DIGEST level and looked the matching value up in the values level --
+    the mirror-image guard of the one that direction needs. That drops a
+    name silently the moment a value has no digest: `filtered_loop_vars` in
+    `call_cache_key` would never see it, so it could never discriminate two
+    iterations that differ ONLY in that value -- a silent, first-run wrong
+    collapse, not a mere cost regression (`_loop_var_digest`'s whole
+    fallback design exists so a MISSING digest costs a fresh hash, never a
+    dropped discriminator). This test pins the fixed shape: the value keeps
+    its `'0:extra'` slot in `current_loop_vars_for_call_key()`, with nothing
+    written to `current_loop_var_digests_for_call_key()` for it -- exactly
+    matching `_loop_var_digest`'s documented "no digest -> compute one
+    fresh" contract instead of removing the discriminator outright.
+
+    Mutation that must make this fail: revert `_depth_keyed_loop_scope` to
+    iterate `dig_level.items()` (the digest level only) and look the value
+    up via `if name in val_level`, dropping any name absent from the digest
+    level instead of the union of both levels' names. Verified by hand: with
+    that reversion `current_loop_vars_for_call_key()` returns `{}` --
+    `'0:extra'` is gone from both dicts, not merely missing its digest.
+    """
+    proc = _bare_statement_processor()
+    with proc.loop_vars_scope({'q': 1, 'extra': 'no-digest-for-me'}, {'q': 'digest-q'}):
+        values = proc.current_loop_vars_for_call_key()
+        digests = proc.current_loop_var_digests_for_call_key()
+
+    assert values == {'0:q': 1, '0:extra': 'no-digest-for-me'}, (
+        "the value-only entry must keep its slot, not be dropped"
+    )
+    assert digests == {'0:q': 'digest-q'}, (
+        "no digest should be invented for the value-only entry"
+    )
+
+
 # --------------------------------------------------------- for_handler.py's own guard
 
 class _ShellStub:

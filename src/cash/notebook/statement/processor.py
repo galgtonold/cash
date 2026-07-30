@@ -572,9 +572,19 @@ class StatementProcessor:
         *loop_var_digests* is optional (defaults to ``{}``) so every call
         site that only cares about values -- direct tests, anything that
         predates this parameter -- keeps working unchanged; a missing digest
-        for a given name just means :meth:`current_loop_var_digests` has
-        nothing for it, and ``call_unit._loop_var_digest`` falls through to
-        computing one fresh.
+        for a given name just means the read side has nothing for it, and
+        ``call_unit._loop_var_digest`` falls through to computing one fresh.
+
+        That read side is :meth:`_depth_keyed_loop_scope` (via
+        :meth:`current_loop_vars_for_call_key` /
+        :meth:`current_loop_var_digests_for_call_key`) for the ONLY
+        production consumer, ``CallCache`` -- NOT
+        :meth:`current_loop_var_digests`, which this docstring used to name
+        here. That method still exists and is still correct on its own
+        documented (bare-name) contract, but nothing wires it into a call's
+        key anymore since CAS-257 defect 1; naming it as *the* consumer here
+        would be a stale claim about which code path actually reads a
+        missing entry.
         """
         self._call_unit_loop_vars.append(loop_vars)
         self._call_unit_loop_var_digests.append(loop_var_digests or {})
@@ -673,31 +683,48 @@ class StatementProcessor:
         comment) -- so a level's digest keyset is exactly its OWN loop-target
         names, and (because both stacks are pushed together, from the same
         ``bindings``, by the same ``loop_vars_scope`` call) the matching
-        values stack level is guaranteed to hold an entry for every one of
-        those same names too, pre-merged or not. Walking the digest stack to
-        decide which names belong to which depth, and reading the value from
-        the values stack at that same depth, is enough -- no change to what
-        gets pushed.
+        values stack level normally holds an entry for every one of those
+        same names too, pre-merged or not.
+
+        **A missing digest must never delete the value.** An earlier version
+        of this method walked only the digest level and looked the matching
+        value up in the values level, dropping a name silently whenever it
+        had a value but no digest. That direction is dangerous where the
+        mirror-image guard (a digest with no value, harmless -- nothing ever
+        reads a digest-only entry) is not: a value entry with nothing to
+        discriminate it should still occupy its key and fall back to a fresh
+        hash, exactly like :func:`call_unit._loop_var_digest`'s documented
+        fallback for a plain, un-keyed ``loop_var_digests`` miss -- not
+        vanish from the key entirely and silently under-discriminate two
+        iterations onto one. So this walks the UNION of both levels' names
+        at each depth: a name present in only one level still gets an entry
+        in that level's dict, with nothing written to the other. Production
+        cannot reach the missing-digest case today (``for_handler.py``
+        always builds both from the same ``bindings`` dict at the same push),
+        but the key build must not depend on that holding forever -- a
+        caching optimisation must never be why user code fails, including by
+        silently caching a WRONG value because a name it should have
+        discriminated on quietly disappeared.
 
         Dunder entries (``__iterable_lineage__``) can never appear here:
         ``for_handler.py`` strips them before either stack is pushed, so
         there is simply nothing dunder-shaped for either dict to carry. Note
-        that ``call_cache_key``'s own defensive ``name.startswith("__")``
-        filter would NOT catch one if it ever did leak in through this path
-        -- a depth-prefixed key like ``"0:__iterable_lineage__"`` no longer
-        starts with ``"__"``. The safety here is that the input is clean
-        going in, not that the filter downstream would rescue it.
+        that ``call_cache_key``'s own defensive dunder filter matches on the
+        name SEGMENT AFTER the ``"depth:"`` prefix specifically because a
+        depth-prefixed key like ``"0:__iterable_lineage__"`` no longer starts
+        with ``"__"`` itself -- see that function's docstring.
         """
         values: dict[str, Any] = {}
         digests: dict[str, str] = {}
         for depth, (val_level, dig_level) in enumerate(
             zip(self._call_unit_loop_vars, self._call_unit_loop_var_digests)
         ):
-            for name, digest in dig_level.items():
+            for name in val_level.keys() | dig_level.keys():
                 key = f"{depth}:{name}"
-                digests[key] = digest
                 if name in val_level:
                     values[key] = val_level[name]
+                if name in dig_level:
+                    digests[key] = dig_level[name]
         return values, digests
 
     def current_loop_vars_for_call_key(self) -> dict[str, Any]:
