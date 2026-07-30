@@ -244,9 +244,10 @@ Unlike the mutation cases above, this one is **not** isolated-re-run only — it
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @3f828077 -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to a `# @cash:cache-calls` sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
-<!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable" -->
+<!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; # @cash:cache-calls is what makes pull(handle) itself the cached, keyed unit" -->
 ```python
 handle = 'conn-object'          # calling pull() carries no per-iteration signal of its own
+# @cash:cache-calls
 for q in [[1], [1]]:            # two iterations, EQUAL at binding time
     q.append(len(accm))         # mutated here, before the next line runs
     accm.append(pull(handle))   # keyed on q's value as BOUND, not as mutated
@@ -255,18 +256,34 @@ for q in [[1], [1]]:            # two iterations, EQUAL at binding time
 Both iterations bind `q` to an equal value (`[1]`), so both get the same discriminator even though the body has since made them different — the second iteration is served the first's cached result instead of a fresh call.
 
 <!-- claim: cash/notebook/call_unit.py:_loop_var_digest @57ad1115 -->
-This is true of a plain cached statement in the loop exactly as it is of an intercepted call: both read the same value, frozen at the same moment, so neither is a special case of the other.
+This is true of a plain cached statement in the loop exactly as it is of an intercepted call: `v = pull(handle)` on its own line, with no directive at all, collapses the same way, because both channels read the same value, frozen at the same moment. Neither spelling is a special case of the other.
 
-**What to do:** don't mutate a loop variable before it (or something derived from it) is the thing that has to discriminate the iteration — bind the final, already-mutated value instead of mutating in place:
+**What to do:** the fix is not "mutate vs. rebind" — a body-local rebind is exactly as invisible as an in-place mutation:
 
-<!-- test:skip reason="illustrative: pairs with the loop above" -->
+<!-- test:skip reason="illustrative: rebinding q instead of mutating it looks like a fix but is not -- q is still a body-local variable, not a loop target" -->
 ```python
-for i, base in enumerate([[1], [1]]):
-    q = base + [i]               # q is final before anything reads it
+# @cash:cache-calls
+for q in [[1], [1]]:
+    q = q + [len(accm)]          # rebound, not mutated -- STILL wrong, identically
     accm.append(pull(handle))
 ```
 
-or mark the affected statement `# @cash:no-cache` if binding a final value isn't practical.
+<!-- claim: cash/notebook/control_structures/processor.py:extract_target_names @f3f92993 -->
+That's because the per-iteration cache key is built from `for`-loop **target names only** (`extract_target_names`, run once against the loop header), captured at the moment those names are bound. An ordinary body-local variable never reaches that key, however it's assigned — mutated, rebound, or read from an outer container makes no difference, because the mechanism never looks at the body at all.
+
+The fix is to introduce the discriminating value as a **genuine additional loop target** instead. `enumerate` is the simplest way when the natural per-iteration signal is the iteration's own position — which it is here, since `len(accm)` grows by exactly one appended item per iteration:
+
+<!-- test:skip reason="illustrative: pairs with the loop above; enumerate's `i` is a real for-loop target, unlike q" -->
+```python
+# @cash:cache-calls
+for i, base in enumerate([[1], [1]]):
+    q = base + [i]
+    accm.append(pull(handle))
+```
+
+`i` is bound directly by the `for` statement, so — unlike `q` — it *is* captured into the digest at binding time, and correctly differs across iterations.
+
+**To diagnose your own case:** only names bound directly by a `for` statement's target reach the per-iteration cache key. If the value that has to discriminate two iterations lives anywhere else — a body-local variable, however it's produced — it will not reach that key, and no amount of rebinding it earlier in the body changes that. If there's no natural value to promote into the loop's target (`enumerate`, `zip` with a counter, or restructuring the iterable itself), mark the affected statement or call `# @cash:no-cache` instead.
 
 ---
 
