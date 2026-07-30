@@ -97,6 +97,55 @@ def test_accumulator_fold_reuses_only_the_unchanged_prefix(nb_runner, tmp_path):
     assert rerun("[1, 10, 5]") == 0, "returning to a cached ordering still recomputed"
 
 
+def test_accumulator_fold_reordering_is_free_by_default(nb_runner, tmp_path):
+    """The undirected twin of the test above -- no directive anywhere.
+
+    Matches known-limitations.md's NEW headline table: append still costs
+    one call (a genuinely new value), but every reorder after that costs
+    ZERO -- call-level caching (on by default, CAS-243) makes ``compute(x)``
+    order-independent, even though the *statement*'s own prefix-keyed cache
+    entry still misses on every one of these edits. Without this test,
+    known-limitations.md's new table and quickstart's rewritten claim that
+    reordering is free by default are pinned by nothing (the file only had
+    the opt-out variant before).
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        _helpers(log),
+        "s = 0\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert "SUM 13" in nb_runner.get_output(2)
+    assert _calls(log) == 2, "baseline did not run both iterations"
+
+    def rerun(lst):
+        before = _calls(log)
+        nb_runner.set_cell_source(
+            2, f"s = 0\nfor x in {lst}:\n    s += compute(x)\nprint('SUM', s)"
+        )
+        nb_runner.run_cell(2)
+        return _calls(log) - before
+
+    # Appending: still one genuinely new value, one call -- same as the
+    # opt-out case, since `10` was never a new value either way.
+    assert rerun("[1, 10, 5]") == 1, "append cost more than the new item"
+    assert "SUM 19" in nb_runner.get_output(2)
+
+    # Swapping the tail: the statement misses (prefix chain broke), but
+    # BOTH compute(1) and compute(10) were already called with these exact
+    # arguments -- zero new calls, not 2.
+    assert rerun("[1, 5, 10]") == 0, "swapping the tail cost calls by default"
+
+    # A different FIRST element: same reasoning -- 5 and 10 are still
+    # cached values, only the identity of "first" changed.
+    assert rerun("[5, 10, 1]") == 0, "changing the head cost calls by default"
+
+    # A sequence whose every value was seen before costs nothing, same as
+    # the opt-out case.
+    assert rerun("[1, 10, 5]") == 0, "a fully-seen ordering still recomputed"
+
+
 def test_without_an_accumulator_reordering_is_free(nb_runner, tmp_path):
     """The contrast that makes the entry honest: it is the fold, not the loop."""
     log = tmp_path / "calls.log"
@@ -154,4 +203,43 @@ def test_subscript_store_caches_in_a_loop_but_append_does_not(nb_runner, tmp_pat
     assert append_calls == 2, (
         f"the append loop restored ({append_calls} calls); the quickstart warns "
         "readers off append for exactly this reason and would now be wrong"
+    )
+
+
+def test_subscript_store_and_undirected_append_both_reuse_by_default(nb_runner, tmp_path):
+    """The undirected twin of the test above.
+
+    Quickstart's rewritten warning box says a `.append()` loop "still skips
+    the slow part" by default even though the append itself keeps
+    re-executing. Without a directive anywhere, this pins that: the append
+    loop now costs ZERO calls on a re-run, same as the store loop -- the
+    only difference between the two shapes left is which one the STATEMENT
+    itself restores versus re-executes, not whether `compute()` gets called
+    again.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        _helpers(log),
+        "prices = {}\nout = []",
+        "for t in [1, 2]:\n    prices[t] = compute(t)",   # store: caches
+        "for t in [1, 2]:\n    out.append(compute(t))",   # append: still cached by default
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _calls(log) == 4, "baseline did not run both loops"
+
+    before = _calls(log)
+    nb_runner.run_cell(3)
+    store_calls = _calls(log) - before
+    before = _calls(log)
+    nb_runner.run_cell(4)
+    append_calls = _calls(log) - before
+
+    assert store_calls == 0, (
+        f"the subscript-store loop re-ran ({store_calls} calls); it is the "
+        "quickstart's loop-caching example and must restore"
+    )
+    assert append_calls == 0, (
+        f"the undirected append loop re-ran compute() ({append_calls} calls); "
+        "quickstart claims it is cached by default now and would be wrong"
     )

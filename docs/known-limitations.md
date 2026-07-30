@@ -388,7 +388,7 @@ Only a genuinely new value costs a call; any reordering of values cash has alrea
 ```python { .nb-cell }
 s = 0
 # @cash:no-cache-calls
-for x in [5, 10, 1]:     # reordered: BOTH the statement AND compute(x) miss. 2s.
+for x in [5, 10, 1]:     # reordered: BOTH the statement AND compute(x) miss. 3s.
     s += compute(x)
 ```
 

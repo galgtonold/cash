@@ -635,6 +635,25 @@ model = train()
 
 The parser walks backward from the statement looking for annotations *above* it (and forward into compound-statement bodies). An annotation on a sibling line *below* a top-level statement binds to the next statement, not the one above it.
 
+### `# @cash:cache-calls` left over from before this feature was default-on
+
+<!-- test:skip reason="illustrative: `compute`, `out`, `x` are the reader's own" -->
+```python
+# @cash:cache-calls
+out.append(compute(x))   # NOT wrong, but not doing anything either
+```
+
+This parses fine — it isn't a typo, and it doesn't error. It just doesn't do
+anything: call-level caching is unconditional now (see [Call-level
+caching](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)),
+so the directive that used to switch it on has nothing left to switch. If a
+notebook written before this changed still has it lying around, it's
+harmless and safe to leave, or delete — either way `compute(x)` above is
+still cached, with or without the comment. This is the one directive on this
+page whose presence or absence provably makes **no difference** to behavior;
+every other entry in this section is a case where the annotation you wrote
+silently isn't the one that took effect.
+
 ### Blank line between annotation and statement
 
 ```python
@@ -665,31 +684,43 @@ This is about *which statements the directive reaches*, not cache granularity. G
 leading comment block** — the very first lines of the cell, before any real
 code — to every top-level statement in that cell. That is a *different*
 mechanism from the control-structure header inheritance above, and the two
-don't compose the way you might expect:
+don't compose the way you might expect. `out` below is built in an **earlier**
+cell (its own cache entry, not part of this example — mutating it in place
+across cells is the ordinary, common shape this section is about, not the
+same-cell whole-unit caching a container built and appended to in ONE cell can
+trigger):
 
-<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own" -->
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own; measured on the equivalent shape below" -->
 ```python
+# cell 1
+out = []
+```
+
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own; measured on the equivalent shape below" -->
+```python
+# cell 2 -- TRAP
 # @cash:no-cache-calls
-out = []                          # <- reached by the cell-header mechanism
+dummy = 1                          # <- reached by the cell-header mechanism
 for x in items:
     out.append(compute(x))        # <- NOT reached: this loop's own header
                                    #    annotation is resolved separately, by
                                    #    scanning locally upward from `for`,
-                                   #    and that scan stops at `out = []`
+                                   #    and that scan stops at `dummy = 1`
 ```
 
 The loop's own annotation is resolved by a **local backward scan starting at
 the `for` line**, not by consulting the cell header — so it stops the moment
-it hits `out = []`, the same as it would stop at any other code line. The
-cell-header opt-out reached `out = []` (a plain top-level statement) but
-never reached the loop at all.
+it hits `dummy = 1`, the same as it would stop at any other code line. The
+cell-header opt-out reached `dummy = 1` (a plain top-level statement) but
+never reached the loop at all — measured, this loop's `compute(x)` calls stay
+intercepted, exactly as if the directive weren't there.
 
 **What to do:** put the opt-out directly above the statement or loop you mean
 to cover, with nothing in between:
 
-<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own" -->
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own; measured on the equivalent shape below" -->
 ```python
-out = []
+# cell 2 -- FIX
 # @cash:no-cache-calls
 for x in items:
     out.append(compute(x))        # now covered
@@ -697,6 +728,17 @@ for x in items:
 
 Or, if the intent really is "nothing in this cell should be intercepted",
 make the loop the first thing in the cell so the two mechanisms coincide.
+
+Measured on the exact shape above (`compute` sleeping past the cost floor,
+`out` built in cell 1, cell 2 re-run after each variant): the TRAP cell costs
+**zero** calls on a re-run — interception silently won, the opt-out never
+engaged — the FIX costs the **full count again** every re-run, and a THIRD
+cell with no directive at all, right after the FIX, costs zero calls just
+like the TRAP does, for the opposite reason: interception is the default, so
+"no directive" and "an opt-out that silently failed to attach" are
+indistinguishable from the call count alone. The badge is what tells them
+apart — check for the `[intercepted]` tag, not just whether a re-run cost
+anything.
 
 ### Annotation in a string literal
 

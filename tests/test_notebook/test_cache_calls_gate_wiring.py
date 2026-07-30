@@ -180,3 +180,47 @@ def test_the_gate_is_given_variable_lineage(magics_fixture, monkeypatch):
     # And it isn't an accidentally-empty table either: `x` was assigned above
     # and read by this very call, so its lineage must actually be in it.
     assert "x" in captured_kwargs["variable_lineage"]
+
+
+def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch):
+    """``# @cash:no-cache`` must short-circuit BEFORE the gate is ever built,
+    not merely produce the same observable result because
+    ``decide_cacheability``'s own no-cache short-circuit happens to refuse
+    the call downstream too (CAS-243 task 10 review I3).
+
+    There are genuinely two independent enforcement layers for "no-cache
+    wins over interception": the outer clause in
+    ``_code_and_tree_for_execution`` (this task's own code, checked here),
+    and ``cacheability_decision.decide_cacheability``'s pre-existing
+    ``annotation.no_cache`` short-circuit, reached transitively through
+    ``call_site_is_cacheable``. An integration test that only counts
+    ``compute()`` executions cannot tell them apart -- both produce the
+    identical byte-for-byte outcome (nothing wrapped, nothing cached), so a
+    regression that deletes JUST the outer clause is invisible to a call-count
+    assertion; the inner layer silently absorbs it. Spying on
+    ``call_site_is_cacheable`` itself is the only way to observe that the
+    outer clause did its job by never letting ``wrap_eligible_calls`` reach
+    the gate at all, rather than reaching it and having it refuse.
+    """
+    import cash.notebook.statement.processor as processor_module
+
+    captured_calls = []
+    real = processor_module.call_site_is_cacheable
+
+    def _spy(call, **kwargs):
+        captured_calls.append(call)
+        return real(call, **kwargs)
+
+    monkeypatch.setattr(processor_module, "call_site_is_cacheable", _spy)
+
+    magics, shell, _, _ = magics_fixture
+    magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
+    magics.cash("", "# @cash:no-cache\nout.append(compute(x))")
+
+    assert captured_calls == [], (
+        "the gate was invoked for a no-cache statement -- "
+        "_code_and_tree_for_execution's outer no_cache clause must return "
+        "before wrap_eligible_calls ever calls the gate, not rely on "
+        "decide_cacheability's downstream no-cache check to save it: "
+        f"{captured_calls!r}"
+    )
