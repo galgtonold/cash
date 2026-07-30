@@ -411,15 +411,12 @@ class StatementProcessor:
         # Source hashes of entropy-reseed statements already warned about, so the
         # "seed(None) does not make everything below it fresh" note fires once.
         self._warned_entropy_reseed: set[str] = set()
-        # Statements whose ``# @cash:cache-calls`` matched nothing, so the
-        # "this directive did nothing" note fires once per statement rather
-        # than once per loop iteration.
-        self._warned_cache_calls_noop: set[str] = set()
 
-        # Sub-expression caching (CAS-243), built on first use under
-        # ``# @cash:cache-calls``. Held with the Cash instance it wraps so a
-        # ``reset_session()`` that swaps the instance rebuilds it rather than
-        # resolving callees against a dead backend.
+        # Sub-expression caching (CAS-243), built on first use. Interception
+        # is the default; ``# @cash:no-cache-calls`` is the escape hatch. Held
+        # with the Cash instance it wraps so a ``reset_session()`` that swaps
+        # the instance rebuilds it rather than resolving callees against a
+        # dead backend.
         self._call_cache: Any | None = None
         self._call_cache_owner: Any | None = None
         # Stack-shaped: the non-dunder half of the enclosing for-loop's
@@ -1801,45 +1798,12 @@ class StatementProcessor:
             logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
             return []
 
-    def _warn_cache_calls_noop(self, code: str) -> None:
-        """Say so when ``# @cash:cache-calls`` matched nothing.
-
-        The eligibility rule is not guessable — a call that reads the
-        statement's own target is declined because it *is* the fold — so the
-        failure mode is silence: the directive is written, nothing is cached,
-        and nothing distinguishes that from a cache that merely missed.
-
-        Keyed on the source with the per-iteration discriminator stripped, so a
-        1000-iteration loop warns once rather than a thousand times, matching
-        the persist-amplification and entropy-reseed notes.
-        """
-        import warnings
-
-        stmt_id = self._strip_control_markers(code)
-        if stmt_id in self._warned_cache_calls_noop:
-            return
-        self._warned_cache_calls_noop.add(stmt_id)
-        first_line = next(
-            (ln for ln in stmt_id.splitlines() if ln.strip() and not ln.lstrip().startswith('#')),
-            stmt_id.strip(),
-        )
-        warnings.warn(
-            f"@cash:cache-calls on {first_line.strip()!r} matched no cacheable "
-            "call, so nothing was cached. A call is only extractable when it "
-            "does not read the statement's own assignment/mutation target -- "
-            "`s = merge(s, x)` reads `s`, so it IS the fold and has no "
-            "order-independent value to cache. Remove the directive, or "
-            "restructure so the expensive call takes only its own inputs.",
-            CashCacheIneffectiveWarning,
-            stacklevel=2,
-        )
-
     def _code_and_tree_for_execution(
         self, code: str, tree: ast.Module | None, annotation: Any | None
     ) -> tuple[str, ast.Module | None]:
         """The ``(code, tree)`` to execute, with eligible calls routed via cache.
 
-        Under ``# @cash:cache-calls`` (CAS-243) each eligible call has its
+        Interception is the DEFAULT (CAS-243): each eligible call has its
         callee wrapped so it resolves to a cached counterpart at call time —
         ``compute(x)`` becomes ``__cash_call__(compute, 0)(x)``, where ``0`` is
         the index of this call's :class:`CallSite`. That fixes the two
@@ -1856,17 +1820,20 @@ class StatementProcessor:
         discarded for ``s += compute(x)`` — the accumulator fold, which is half
         the point of the feature.
 
-        Returns the inputs unchanged when the directive is absent, when nothing
-        is eligible, or on any failure: a caching optimisation must never be the
-        reason a statement stops running.
+        Returns the inputs unchanged when opted out, when nothing is eligible,
+        or on any failure: a caching optimisation must never be the reason a
+        statement stops running.
         """
-        if annotation is None or not getattr(annotation, 'cache_calls', False):
-            return code, tree
-        # ``# @cash:no-cache`` is an explicit instruction about this statement,
-        # and caching the expensive call inside it honours the letter while
-        # breaking the intent. no-cache wins, exactly as it wins over
-        # ``persist``.
-        if getattr(annotation, 'no_cache', False):
+        # Two things switch interception off: ``# @cash:no-cache-calls`` (the
+        # targeted escape hatch) and ``# @cash:no-cache`` (which is an
+        # instruction about the WHOLE statement — caching the expensive call
+        # inside it honours the letter while breaking the intent, so no-cache
+        # wins, exactly as it already wins over ``persist``). Absent an
+        # annotation at all, neither opt-out is set, so interception proceeds.
+        if annotation is not None and (
+            getattr(annotation, 'no_cache_calls', False)
+            or getattr(annotation, 'no_cache', False)
+        ):
             return code, tree
         cash_instance = self._get_cash_instance()
         if cash_instance is None:
@@ -1922,7 +1889,9 @@ class StatementProcessor:
                 tree if tree is not None else ast.parse(code), gate=gate,
             )
             if not sites:
-                self._warn_cache_calls_noop(code)
+                # Under default-on, "nothing here was eligible" is the
+                # ordinary case (most statements have no expensive sub-call),
+                # not a mistake worth a warning.
                 return code, tree
             new_code = ast.unparse(rewritten)
             # ``ast.unparse`` drops a trailing ';', which _execute_statement

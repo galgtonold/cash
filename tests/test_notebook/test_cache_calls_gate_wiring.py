@@ -13,17 +13,24 @@ statement. Without the gate wired in, an intercepted call skipped that
 judgment entirely: the call still got wrapped into
 ``__cash_call__(time.time, 0)()`` (a harmless no-op here, since ``time.time``
 is a builtin and ``CallCache.resolve``'s own type check passes it straight
-through) -- but the processor believed it had found something cacheable and
-stayed silent, instead of telling the user their directive did nothing.
+through) -- but the processor believed it had found something cacheable when
+it had not.
 
-Not exercised via ``nb_runner`` (no real kernel needed): this is a warning on
-the synchronous statement path, and ``CashMagics`` + a mock shell reaches
-``_code_and_tree_for_execution`` directly, matching the pattern
-``test_cache_calls_noop_warning.py`` already uses for the AST-only case.
+Interception is on by default now (CAS-243 task 10), so the earlier "warns
+when nothing is eligible" signal (``test_cache_calls_noop_warning.py``, since
+deleted -- silence is the ordinary case under default-on, not a mistake worth
+a warning) no longer exists to assert on. The two tests below instead spy on
+``wrap_eligible_calls`` and assert directly on the ``sites`` it returns: zero
+sites for the forbidden call, one for the genuinely eligible one. That is a
+more direct check of "did the gate actually refuse this" than the warning
+ever was.
+
+Not exercised via ``nb_runner`` (no real kernel needed): this is the
+synchronous statement path, and ``CashMagics`` + a mock shell reaches
+``_code_and_tree_for_execution`` directly.
 """
 from __future__ import annotations
 
-import warnings
 from unittest.mock import MagicMock
 
 import pytest
@@ -31,7 +38,6 @@ from traitlets.config import Configurable
 
 from cash.backends import InMemoryBackend
 from cash.core import Cash
-from cash.exceptions import CashCacheIneffectiveWarning
 from cash.notebook.ipython.magics import CashMagics
 
 
@@ -59,34 +65,51 @@ def magics_fixture():
     shell.user_ns.clear()
 
 
-def test_a_forbidden_call_warns_even_though_it_is_structurally_eligible(magics_fixture):
+def _spy_on_wrap_eligible_calls(monkeypatch):
+    """Patch ``wrap_eligible_calls`` to pass through but record the sites it
+    returned, so a test can assert on how many call sites survived the gate.
+    """
+    import cash.notebook.statement.processor as processor_module
+
+    captured = {}
+    real = processor_module.wrap_eligible_calls
+
+    def _spy(tree, *, gate):
+        rewritten, sites = real(tree, gate=gate)
+        captured["sites"] = sites
+        return rewritten, sites
+
+    monkeypatch.setattr(processor_module, "wrap_eligible_calls", _spy)
+    return captured
+
+
+def test_a_forbidden_call_is_never_wrapped_even_though_it_is_structurally_eligible(magics_fixture, monkeypatch):
     """``time.time()`` reads nothing of ``out`` -- structurally eligible -- but
     ``decide_cacheability`` forbids it for an ordinary statement, and the gate
-    must apply that same refusal here: no site survives, so this is
-    indistinguishable, from the user's side, from "nothing was eligible."
+    must apply that same refusal here: no site survives.
     """
+    captured = _spy_on_wrap_eligible_calls(monkeypatch)
     magics, shell, _, _ = magics_fixture
     magics.cash("", "import time\nout = []")
 
-    with pytest.warns(CashCacheIneffectiveWarning, match="cache-calls"):
-        magics.cash("", "# @cash:cache-calls\nout.append(time.time())")
+    magics.cash("", "out.append(time.time())")
+
+    assert captured["sites"] == [], "a forbidden call must not survive the gate"
 
 
-def test_an_ordinary_eligible_call_does_not_warn(magics_fixture):
+def test_an_ordinary_eligible_call_is_wrapped(magics_fixture, monkeypatch):
     """Positive control for the test above, using the SAME statement shape
     (``out.append(...)``) so only the callee's cacheability differs.
     """
+    captured = _spy_on_wrap_eligible_calls(monkeypatch)
     magics, shell, _, _ = magics_fixture
     magics.cash("", "def compute(x):\n    return x + 1\nout = []\nx = 1")
 
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        magics.cash("", "# @cash:cache-calls\nout.append(compute(x))")
+    magics.cash("", "out.append(compute(x))")
 
-    offenders = [w for w in caught
-                 if issubclass(w.category, CashCacheIneffectiveWarning)
-                 and "cache-calls" in str(w.message)]
-    assert not offenders, f"warned despite a genuinely cacheable call: {[str(w.message) for w in offenders]}"
+    assert len(captured["sites"]) == 1, (
+        f"a genuinely cacheable call was not wrapped: {captured['sites']!r}"
+    )
 
 
 def test_a_gate_exception_fails_closed_instead_of_crashing_the_cell(magics_fixture, monkeypatch):

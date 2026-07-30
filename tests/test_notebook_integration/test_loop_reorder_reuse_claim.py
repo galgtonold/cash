@@ -1,5 +1,16 @@
 """Guard for the loop-reuse claims in ``docs/known-limitations.md``.
 
+Both behaviours below are guarded with ``# @cash:no-cache-calls`` on the loop
+header. That is deliberate, not incidental: call-level caching (CAS-243) is
+on by DEFAULT now (task 10), and it is precisely the fix for both documented
+limitations here -- an intercepted ``compute(x)`` is order-independent, so a
+reordered accumulator fold no longer re-runs the tail, and an intercepted
+call inside ``out.append(...)`` is reused across an unchanged rerun instead
+of always recomputing. Left undirected, this file would no longer be
+measuring the limitation it exists to pin; it would be measuring the fix.
+The opt-out keeps this file honest about the baseline behaviour a user who
+switches interception off (or a call site the gate refuses) still hits.
+
 Two documented behaviours, both easy to break and neither covered by a timing
 test (wall-clock cannot separate "recomputed" from "restored but slow" — every
 assertion here counts calls):
@@ -57,7 +68,7 @@ def test_accumulator_fold_reuses_only_the_unchanged_prefix(nb_runner, tmp_path):
     log = tmp_path / "calls.log"
     nb_runner.create_notebook([
         _helpers(log),
-        "s = 0\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
+        "s = 0\n# @cash:no-cache-calls\nfor x in [1, 10]:\n    s += compute(x)\nprint('SUM', s)",
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
@@ -67,7 +78,7 @@ def test_accumulator_fold_reuses_only_the_unchanged_prefix(nb_runner, tmp_path):
     def rerun(lst):
         before = _calls(log)
         nb_runner.set_cell_source(
-            2, f"s = 0\nfor x in {lst}:\n    s += compute(x)\nprint('SUM', s)"
+            2, f"s = 0\n# @cash:no-cache-calls\nfor x in {lst}:\n    s += compute(x)\nprint('SUM', s)"
         )
         nb_runner.run_cell(2)
         return _calls(log) - before
@@ -112,13 +123,18 @@ def test_subscript_store_caches_in_a_loop_but_append_does_not(nb_runner, tmp_pat
     the warning next to it says ``append`` does not, so that must re-run. Both
     directions matter — asserting only one would let the example rot into the
     shape the warning tells readers to avoid.
+
+    The append loop carries ``# @cash:no-cache-calls``: left undirected, the
+    now-default call-level cache would reuse ``compute(t)`` across the rerun
+    and the quickstart's warning would stop being true for a reader who
+    hasn't opted out of anything.
     """
     log = tmp_path / "calls.log"
     nb_runner.create_notebook([
         _helpers(log),
         "prices = {}\nout = []",
         "for t in [1, 2]:\n    prices[t] = compute(t)",   # store: caches
-        "for t in [1, 2]:\n    out.append(compute(t))",   # append: re-executes
+        "# @cash:no-cache-calls\nfor t in [1, 2]:\n    out.append(compute(t))",   # append: re-executes
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
