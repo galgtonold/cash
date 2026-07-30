@@ -624,6 +624,105 @@ class StatementProcessor:
             merged.update(level)
         return merged
 
+    def _depth_keyed_loop_scope(self) -> tuple[dict[str, Any], dict[str, str]]:
+        """``(values, digests)`` for the call-unit key build, each entry keyed
+        by ``"{depth}:{name}"`` rather than bare ``name`` (CAS-257 defect 1).
+
+        **The bug this exists to fix.** ``current_loop_vars()`` returns only
+        the TOP of ``_call_unit_loop_vars`` -- correct for a call AFTER a
+        name-reusing inner loop (the inner scope is already popped by then),
+        but wrong for a call INSIDE one: while both scopes are active, the
+        inner push's own value for a REUSED name (``build_iteration_context``
+        pre-merges the parent forward, so the inner level's dict already has
+        the outer's OTHER names too, but its OWN name entry overwrites the
+        parent's) is the only one reachable -- the outer iteration has no
+        slot in the key at all. Two different outer iterations that share
+        the same inner sequence (``for q in ['p','r']: for q in [7,8]:
+        acc.append(pull(handle))`` -- outer 'p'/'r' collapse whenever the
+        inner cycles through the same 7/8 both times) are then
+        indistinguishable: cash serves ``[1, 2, 1, 2]`` where the cash-off
+        oracle gives ``[1, 2, 3, 4]``.
+        ``current_loop_var_digests()`` already merges across the WHOLE
+        digest stack (each level holding only its OWN bound names, never
+        pre-merged), so a reused name's OUTER digest is still individually
+        present in the stack -- merging it via ``dict.update`` in name order
+        just happens to let the innermost active level win, silently
+        discarding the outer one. Both dicts need every active depth's
+        entry to survive at once, not just whichever the merge order leaves
+        standing.
+
+        **Why depth, not iteration order.** ``_call_unit_loop_vars`` /
+        ``_call_unit_loop_var_digests`` are stacks whose length at any
+        instant is exactly the LEXICAL nesting depth of whatever is
+        currently executing -- push on entering an iteration's body, pop on
+        leaving it (``loop_vars_scope``). That depth is a property of WHERE
+        in the source a call sits relative to its enclosing loops, not of
+        WHICH iteration is running or in what order the iterable was
+        walked. A reordered outer iterable still produces the exact same
+        stack depths for the exact same call site on every run, and a
+        rerun of one already-cached iteration pushes to the exact same
+        depth it did originally -- see this method's callers
+        (``StatementProcessor.current_loop_vars``/``current_loop_var_digests``
+        are UNCHANGED by this method: it is a separate read path so the
+        pre-existing, test-pinned contract of those two keeps returning
+        exactly what it always has).
+
+        **Why this doesn't need for_handler.py to push anything new.** Each
+        digest level already holds only the names ``for_handler.py`` bound
+        at THAT push (see ``_call_unit_loop_var_digests``'s constructor
+        comment) -- so a level's digest keyset is exactly its OWN loop-target
+        names, and (because both stacks are pushed together, from the same
+        ``bindings``, by the same ``loop_vars_scope`` call) the matching
+        values stack level is guaranteed to hold an entry for every one of
+        those same names too, pre-merged or not. Walking the digest stack to
+        decide which names belong to which depth, and reading the value from
+        the values stack at that same depth, is enough -- no change to what
+        gets pushed.
+
+        Dunder entries (``__iterable_lineage__``) can never appear here:
+        ``for_handler.py`` strips them before either stack is pushed, so
+        there is simply nothing dunder-shaped for either dict to carry. Note
+        that ``call_cache_key``'s own defensive ``name.startswith("__")``
+        filter would NOT catch one if it ever did leak in through this path
+        -- a depth-prefixed key like ``"0:__iterable_lineage__"`` no longer
+        starts with ``"__"``. The safety here is that the input is clean
+        going in, not that the filter downstream would rescue it.
+        """
+        values: dict[str, Any] = {}
+        digests: dict[str, str] = {}
+        for depth, (val_level, dig_level) in enumerate(
+            zip(self._call_unit_loop_vars, self._call_unit_loop_var_digests)
+        ):
+            for name, digest in dig_level.items():
+                key = f"{depth}:{name}"
+                digests[key] = digest
+                if name in val_level:
+                    values[key] = val_level[name]
+        return values, digests
+
+    def current_loop_vars_for_call_key(self) -> dict[str, Any]:
+        """Depth-and-name-keyed loop-var values for the call-unit key build.
+
+        Used ONLY as the ``loop_vars_provider`` wired into ``CallCache`` --
+        NOT a replacement for :meth:`current_loop_vars`, whose bare-name,
+        top-of-stack contract stays exactly as it was (other callers and
+        ``test_call_unit_loop_vars_wiring.py`` pin that behaviour directly).
+        See :meth:`_depth_keyed_loop_scope` for why this needs its own read
+        path rather than changing that one.
+        """
+        values, _ = self._depth_keyed_loop_scope()
+        return values
+
+    def current_loop_var_digests_for_call_key(self) -> dict[str, str]:
+        """Depth-and-name-keyed loop-var digests for the call-unit key build.
+
+        The digest counterpart to :meth:`current_loop_vars_for_call_key` --
+        see that method and :meth:`_depth_keyed_loop_scope` for the full
+        reasoning. Not a replacement for :meth:`current_loop_var_digests`.
+        """
+        _, digests = self._depth_keyed_loop_scope()
+        return digests
+
     def _get_cash_instance(self) -> Any | None:
         """Return the Cash instance for decorator call tracking.
 
@@ -1814,14 +1913,22 @@ class StatementProcessor:
                         compute_hash_fn=self.compute_hash,
                         debug=self.debug,
                     ),
-                    # `self.current_loop_vars` (bound method, not a lambda
-                    # capturing a snapshot) so it re-reads `_call_unit_loop_vars`
-                    # at INVOKE time -- the `CallCache` instance is reused across
-                    # statement executions (guarded by `_call_cache_owner`
-                    # above), but the loop this call sits in pushes/pops its
-                    # vars fresh on every iteration.
-                    loop_vars_provider=self.current_loop_vars,
-                    loop_var_digests_provider=self.current_loop_var_digests,
+                    # `self.current_loop_vars_for_call_key` (bound method, not
+                    # a lambda capturing a snapshot) so it re-reads
+                    # `_call_unit_loop_vars` at INVOKE time -- the `CallCache`
+                    # instance is reused across statement executions (guarded
+                    # by `_call_cache_owner` above), but the loop this call
+                    # sits in pushes/pops its vars fresh on every iteration.
+                    #
+                    # The `_for_call_key` (depth-and-name-keyed) variants, NOT
+                    # `current_loop_vars`/`current_loop_var_digests` themselves
+                    # (CAS-257 defect 1): a call INSIDE a loop that reuses an
+                    # ancestor's target name needs BOTH scopes' entries to
+                    # survive at once, not just whichever the bare-name merge
+                    # leaves standing -- see `_depth_keyed_loop_scope`'s
+                    # docstring for the full reasoning.
+                    loop_vars_provider=self.current_loop_vars_for_call_key,
+                    loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
                 )
                 self._call_cache_owner = cash_instance
             self._call_cache.set_sites(sites)

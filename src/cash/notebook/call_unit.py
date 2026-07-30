@@ -248,6 +248,19 @@ def call_cache_key(
     path already collapses them: ``compute_context_hash`` yields one hash for
     three identical iteration contexts, so this matches shipped behaviour.
 
+    **Entry names are opaque strings here (CAS-257 defect 1).** In
+    production, ``loop_vars``/``loop_var_digests`` arrive from
+    ``StatementProcessor.current_loop_vars_for_call_key`` /
+    ``current_loop_var_digests_for_call_key``, whose entries are keyed
+    ``"{depth}:{name}"`` rather than bare ``name`` — a name reused by a
+    nested loop (``for q in A: for q in B: acc.append(pull(handle))``) would
+    otherwise occupy one slot for two different loops' values, silently
+    losing the outer scope's discrimination for any call sitting *inside*
+    the reuse. This function does not care about the format: it sorts,
+    hashes, and looks entries up by whatever string it is given, so the
+    depth prefix is invisible here — it only has to agree between the two
+    dicts, which the shared provider guarantees.
+
     **What is deliberately NOT here: the iteration context.** ``for_handler``
     prepends ``# __iteration_context__: <hash>`` to each body statement, and
     that context carries ``__iterable_lineage__`` — so reordering a loop's

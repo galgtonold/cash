@@ -280,6 +280,104 @@ def test_loop_var_digests_reused_name_resolves_to_the_current_scope():
     assert proc.current_loop_vars() == {}
 
 
+# --------------------------------------------------------- depth-keyed call-key scope (CAS-257 defect 1)
+#
+# `current_loop_vars()`/`current_loop_var_digests()` above are pinned to
+# their EXACT pre-existing contract -- top-of-stack for values, bare-name
+# merge-with-innermost-winning for digests -- and stay that way: other
+# callers (and the tests above) read them directly and must not see any
+# behaviour change. The CAS-257 fix lives in a SEPARATE read path,
+# `_depth_keyed_loop_scope` (exposed via `current_loop_vars_for_call_key` /
+# `current_loop_var_digests_for_call_key`), which `StatementProcessor` now
+# wires into `CallCache` INSTEAD of the two methods above. These tests cover
+# that path directly, at the stack level -- no notebook, no kernel -- mirroring
+# the section above; the end-to-end proof (a real nested loop, a call INSIDE
+# the reuse, a real kernel, a cash-off oracle) lives in
+# `test_call_unit_loop_vars_real_kernel.py`'s
+# `test_call_inside_a_name_reusing_inner_loop_*` tests.
+
+def test_depth_keyed_scope_gives_a_reused_name_two_distinct_slots():
+    """The exact shape CAS-257 defect 1 reports: ``for q in A: for q in B:
+    <call>`` -- while BOTH scopes are simultaneously active (the call sits
+    INSIDE the inner loop, not after it), the outer 'q' and the inner 'q'
+    must occupy two different (depth, name) slots, not collide onto one
+    bare 'q' the way `current_loop_vars()`/`current_loop_var_digests()`
+    already do (see the sections above -- that collision is exactly what
+    they are pinned to keep doing, for everything BUT this path).
+
+    Mutation that must make this fail: revert
+    `current_loop_vars_for_call_key`/`current_loop_var_digests_for_call_key`
+    to delegate straight to `current_loop_vars`/`current_loop_var_digests`
+    (undoing the CAS-257 fix). Verified by hand: with that reversion both
+    calls return `{'q': 7}` / `{'q': 'digest-inner'}` -- only the inner
+    scope survives -- and the assertions below fail (`'0:q'` is missing
+    entirely from either dict).
+    """
+    proc = _bare_statement_processor()
+    with proc.loop_vars_scope({'q': 'p'}, {'q': 'digest-outer'}):
+        with proc.loop_vars_scope({'q': 7}, {'q': 'digest-inner'}):
+            values = proc.current_loop_vars_for_call_key()
+            digests = proc.current_loop_var_digests_for_call_key()
+            assert values == {'0:q': 'p', '1:q': 7}
+            assert digests == {'0:q': 'digest-outer', '1:q': 'digest-inner'}
+
+
+def test_depth_keyed_scope_pop_restores_the_single_outer_slot():
+    """Once the inner scope pops, only the outer's depth-0 slot remains --
+    the mirror image of the collision test above, proving the fix does not
+    leak an inner entry past its own pop (the same discipline
+    `test_loop_var_digests_reused_name_resolves_to_the_current_scope`
+    already requires of the un-keyed digest stack).
+    """
+    proc = _bare_statement_processor()
+    with proc.loop_vars_scope({'q': 'p'}, {'q': 'digest-outer'}):
+        with proc.loop_vars_scope({'q': 7}, {'q': 'digest-inner'}):
+            pass
+        assert proc.current_loop_vars_for_call_key() == {'0:q': 'p'}
+        assert proc.current_loop_var_digests_for_call_key() == {'0:q': 'digest-outer'}
+    assert proc.current_loop_vars_for_call_key() == {}
+    assert proc.current_loop_var_digests_for_call_key() == {}
+
+
+def test_depth_prefix_is_positional_not_order_dependent():
+    """Depth is WHERE a call sits in the loop nesting (the stack's length at
+    the moment of the push), not WHICH iteration or in what sequence the
+    iterable was walked. So the SAME call site contributes an entry under
+    the SAME depth-keyed name regardless of which value is bound there --
+    only the value/digest attached to that name varies. This is the
+    property `test_loop_reorder_reuse_claim.py` / the CAS-257 write-up rely
+    on to rule out reintroducing CAS-242 (reordering an iterable must not
+    change a call's key beyond the value it actually reads): a depth-keyed
+    name is never a stand-in for iteration order or an execution counter.
+
+    Two INDEPENDENT top-level scopes below (the second opens only after the
+    first has fully popped) simulate two different outer-loop iterations,
+    as if the iterable had been walked in a different order, or the loop
+    had simply advanced -- either way, the call site's own nesting depth is
+    unchanged, so both must resolve to the identical name '0:q'.
+
+    Mutation that must make this fail: key by a running push COUNTER instead
+    of stack depth (never decremented on pop) -- the second scope below would
+    then land on '1:q' instead of '0:q' merely because a scope ran before it,
+    which is exactly the per-run execution-counter mistake `call_cache_key`'s
+    own docstring already rejects for `arg_digests` (the removed
+    `repeat_index` design). Verified by hand: with such a counter this test's
+    `set(...) == {'0:q'}` assertions fail for the second scope (`{'1:q'}`
+    instead), even though it is the SAME call site.
+    """
+    proc = _bare_statement_processor()
+    with proc.loop_vars_scope({'q': 'p'}, {'q': 'digest-p'}):
+        first = proc.current_loop_var_digests_for_call_key()
+    with proc.loop_vars_scope({'q': 'r'}, {'q': 'digest-r'}):
+        second = proc.current_loop_var_digests_for_call_key()
+
+    assert set(first) == {'0:q'}
+    assert set(second) == {'0:q'}
+    assert first['0:q'] != second['0:q'], (
+        "different values at the same depth must still discriminate"
+    )
+
+
 # --------------------------------------------------------- for_handler.py's own guard
 
 class _ShellStub:

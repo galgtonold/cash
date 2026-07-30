@@ -435,3 +435,84 @@ def test_sampled_cash_lineage_hash_on_loop_var_matches_the_no_cash_oracle(nb_run
     nb_runner.run_all()
 
     assert "SL2 [1, 2]" in nb_runner.get_output(3)
+
+
+# --------------------------------------------------------- reused name, call INSIDE the reuse (CAS-257 defect 1)
+#
+# A THIRD variant of the reused-name shape, distinct from both sections
+# above: there, the call sits AFTER the inner loop that reuses the outer
+# target name -- by the time it runs, the inner loop's own pushes onto
+# `_call_unit_loop_vars`/`_call_unit_loop_var_digests` have already been
+# popped, so only the outer scope is active and its digest resolves cleanly.
+# Here the call sits INSIDE the inner loop, so BOTH scopes are
+# simultaneously active on the stack at the moment the key is built.
+# `current_loop_vars()` returns only the stack's TOP (the inner scope's own,
+# already-pre-merged-with-parent dict -- see that method's docstring), and
+# `current_loop_var_digests()` merges the whole digest stack by BARE name,
+# innermost winning -- both means the reused name 'q' resolves to only the
+# INNER scope's value/digest; the outer iteration has no slot in the key at
+# all. Two different outer iterations that both see the same inner sequence
+# are therefore indistinguishable: pre-fix, this collapsed 4 genuinely
+# distinct (outer, inner) pairs onto 2 keys.
+_NESTED_REUSE_INSIDE_LOOP = (
+    "acc_inside = []\n"
+    "# @cash:cache-calls\n"
+    "for q in ['p', 'r']:\n"
+    "    for q in [7, 8]:\n"
+    "        acc_inside.append(fetch_next(conn))\n"
+    "print('INSIDE', acc_inside)\n"
+)
+
+
+def test_call_inside_a_name_reusing_inner_loop_gets_correct_values(nb_runner, tmp_path):
+    """``for q in ['p','r']: for q in [7,8]: acc_inside.append(fetch_next(conn))``.
+
+    Pre-fix: both outer iterations see the identical inner cycle (7 then 8),
+    and with the reused name 'q' resolving to only the inner scope's
+    value/digest, both outer passes mint the SAME two keys -- iteration 3
+    (outer='r', inner=7) hits iteration 1's entry (outer='p', inner=7), and
+    iteration 4 hits iteration 2's. ``acc_inside`` reads ``[1, 2, 1, 2]``
+    with only 2 real ``fetch_next()`` calls, instead of 4 genuinely distinct
+    calls giving ``[1, 2, 3, 4]``.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _NESTED_REUSE_INSIDE_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    output = nb_runner.get_output(2)
+    assert "INSIDE [1, 2, 3, 4]" in output, output
+    assert _n(log) == 4, (
+        f"expected exactly 4 real fetch_next() executions, got {_n(log)}"
+    )
+
+
+def test_call_inside_a_name_reusing_inner_loop_matches_the_no_cash_oracle(nb_runner, tmp_path):
+    """Independent confirmation that ``[1, 2, 3, 4]`` is correct -- cash off entirely."""
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _NESTED_REUSE_INSIDE_LOOP])
+    nb_runner.start_kernel(with_cash=False)
+    nb_runner.run_all()
+
+    assert "INSIDE [1, 2, 3, 4]" in nb_runner.get_output(2)
+
+
+def test_call_inside_a_name_reusing_inner_loop_reuses_cache_on_rerun(nb_runner, tmp_path):
+    """Re-running the identical loop cell must replay the same four values
+    from cache -- zero further real calls. Establishes that the depth-keyed
+    slots this fix introduces are stable ACROSS RUNS, not merely distinct
+    within one: depth is the stack length at the moment of each push, which
+    is fixed by this statement's lexical loop nesting and identical on every
+    execution of it, so the same (depth, name) pair is produced -- and looked
+    up in the cache -- on the rerun as on the first run.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([_reused_name_defs(log), _NESTED_REUSE_INSIDE_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _n(log) == 4
+
+    nb_runner.run_cell(2)
+    output = nb_runner.get_output(2)
+    assert "INSIDE [1, 2, 3, 4]" in output, output
+    assert _n(log) == 4, "fetch_next() re-ran on an unchanged rerun of the loop cell"
