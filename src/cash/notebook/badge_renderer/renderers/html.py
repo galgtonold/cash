@@ -1120,7 +1120,7 @@ def _rowtip_html(row: StatementRow) -> str:
         n = len(row.decorator_calls)
         dl_parts.append(f"<dt>@cache</dt><dd>{hits}/{n} cache hits</dd>")
     if row.sub_units:
-        # Per-call-SITE breakdown of the intercepted (``# @cash:cache-calls``)
+        # Per-call-SITE breakdown of the intercepted (on by default, CAS-243)
         # sub-calls this statement made -- see SubUnitGroup for why grouping
         # is by site rather than callee. One summary line, then one line per
         # site with its own hit ratio and cache-key prefix (the same-prefix-
@@ -1822,11 +1822,16 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
 # Decorator section
 # ---------------------------------------------------------------------------
 
-#: Tag shown on a call cash wrapped itself under ``# @cash:cache-calls``, as
-#: opposed to one the user decorated. Same cache, but the reader needs to know
-#: which mechanism put it there — and whether their directive engaged.
-_INTERCEPTED_TAG = "@cache-calls"
-_INTERCEPTED_TITLE = "cached by # @cash:cache-calls, not by a decorator"
+#: Tag shown on a call cash wrapped itself via call interception (CAS-243,
+#: on by default), as opposed to one the user decorated with ``@cash.cache``.
+#: Same cache, but the reader needs to know which mechanism put it there.
+#:
+#: Deliberately NOT named after a directive: interception is unconditional
+#: (no ``# @cash:cache-calls`` needed to make this label appear), and a tag
+#: spelling ``cache-calls`` would also substring-match the opt-out
+#: ``# @cash:no-cache-calls`` in any test or log scrape that greps for it.
+_INTERCEPTED_TAG = "@intercepted"
+_INTERCEPTED_TITLE = "cached automatically via call interception -- disable with @cash:no-cache-calls"
 
 
 def _cache_tag_html(intercepted: bool) -> str:

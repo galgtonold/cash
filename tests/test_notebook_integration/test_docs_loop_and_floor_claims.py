@@ -40,22 +40,36 @@ def _n(log):
     return len(log.read_text().splitlines()) if log.exists() else 0
 
 
-def _recomputed_after(nb_runner, tmp_path, tag, edited):
-    """`compute` calls caused by changing the list to *edited*."""
+def _recomputed_after(nb_runner, tmp_path, tag, edited, directive=""):
+    """`compute` calls caused by changing the list to *edited*.
+
+    *directive* (e.g. ``"# @cash:no-cache-calls\\n"``) goes directly above the
+    loop header, in the loop's OWN cell, so it scopes to that statement with
+    nothing between it and the ``for`` line to break the backward scan.
+    """
     log = tmp_path / (tag + ".log")
     nb_runner.create_notebook([
-        _COUNTER.format(log=log), "stats = {}", _LOOP.format(lst=_BASE),
+        _COUNTER.format(log=log), "stats = {}", directive + _LOOP.format(lst=_BASE),
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert _n(log) == 3, "baseline did not run all three iterations"
-    nb_runner.set_cell_source(3, _LOOP.format(lst=edited))
+    nb_runner.set_cell_source(3, directive + _LOOP.format(lst=edited))
     nb_runner.run_cell(3)
     return _n(log) - 3
 
 
-def test_reuse_is_a_prefix_property(nb_runner, tmp_path):
-    """The table on notebook-path.md, row for row."""
+def test_reuse_is_a_prefix_property_by_default(nb_runner, tmp_path):
+    """The table on notebook-path.md, row for row -- the CURRENT default.
+
+    Call-level caching (on by default, CAS-243) makes ``compute(ticker)``
+    hit regardless of which iteration it's attached to, even though the
+    STATEMENT itself (keyed on the dict as previous iterations left it) still
+    re-executes for every iteration from the edit onward. So editing the
+    FIRST entry now costs exactly one `compute` call, not three -- the
+    prefix chain is still real at the statement level, but it stopped being
+    what the reader pays for.
+    """
     assert _recomputed_after(
         nb_runner, tmp_path, "same", _BASE) == 0, "an unchanged re-run recomputed"
     assert _recomputed_after(
@@ -63,9 +77,35 @@ def test_reuse_is_a_prefix_property(nb_runner, tmp_path):
     assert _recomputed_after(
         nb_runner, tmp_path, "last", "['AAPL', 'MSFT', 'NVDA']") == 1
     assert _recomputed_after(
-        nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']") == 3, (
-        "editing the FIRST entry must re-run all three -- if this drops to 1, "
-        "the prefix chain is gone and notebook-path.md should be simplified"
+        nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']") == 1, (
+        "editing the FIRST entry should cost exactly ONE compute() call under "
+        "the default -- if this rises to 3, call-level caching stopped "
+        "reaching this call site and notebook-path.md's default-case table "
+        "is wrong"
+    )
+
+
+def test_reuse_is_a_prefix_property_with_no_cache_calls(nb_runner, tmp_path):
+    """The historical claim, preserved under the opt-out.
+
+    With call-level caching switched off for this statement, reuse really is
+    a strict prefix property again -- editing the first entry re-runs all
+    three `compute` calls. This is also the positive control for the test
+    above: without it, a bug that made call-level caching unconditionally
+    reach every statement (ignoring `no-cache-calls`) would still pass.
+    """
+    directive = "# @cash:no-cache-calls\n"
+    assert _recomputed_after(
+        nb_runner, tmp_path, "same", _BASE, directive) == 0, "an unchanged re-run recomputed"
+    assert _recomputed_after(
+        nb_runner, tmp_path, "append", "['AAPL', 'MSFT', 'GOOGL', 'NVDA']", directive) == 1
+    assert _recomputed_after(
+        nb_runner, tmp_path, "last", "['AAPL', 'MSFT', 'NVDA']", directive) == 1
+    assert _recomputed_after(
+        nb_runner, tmp_path, "first", "['AMZN', 'MSFT', 'GOOGL']", directive) == 3, (
+        "editing the FIRST entry must re-run all three compute() calls under "
+        "no-cache-calls -- if this drops to 1, the opt-out stopped disabling "
+        "call-level caching"
     )
 
 

@@ -125,20 +125,46 @@ The payoff is **partial cache hits** — but *which* ones you get depends on the
 body, and it is worth knowing before you rely on it.
 
 `stats[ticker] = compute(ticker)` writes into `stats`, so each iteration reads
-the dict the previous ones built. That makes reuse a **prefix** property:
-appending a ticker, or editing the last one, costs a single `compute`, while
-changing the **first** re-runs all three. Measured on this exact loop:
+the dict the previous ones built. That makes reuse of the **statement's own
+cache entry** a prefix property: appending a ticker, or editing the last one,
+leaves the earlier iterations' statement keys untouched, while changing the
+**first** entry changes every iteration's statement key from that point on,
+because each one's key incorporates the dict as the previous iteration left
+it.
 
-| Change to the list | `compute` calls |
-|---|---|
-| re-run unchanged | 0 |
-| append `'NVDA'` | 1 |
-| edit the last entry | 1 |
-| edit the **first** entry | 3 |
+That's still true, and it always will be — a prefix chain is what a fold
+*is*. What's no longer true is that a changed statement key means a repeated
+`compute()` call. By default, cash also caches the **call inside** the
+statement (`compute(ticker)` here, not the assignment around it — see [Call-level
+caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)),
+and a call cache keys on arguments, not on execution history. So a re-executed
+statement whose call has already been made with the same argument resolves
+that call from cache instead of actually running it. Measured on this exact
+loop, with the current default:
+
+| Change to the list | Statements re-executed | `compute()` calls |
+|---|---|---|
+| re-run unchanged | 0 | 0 |
+| append `'NVDA'` | 1 | 1 |
+| edit the last entry | 1 | 1 |
+| edit the **first** entry | 3 | 1 |
+
+Editing the first entry still re-executes all three statements — `stats`'
+prefix chain is real and the assignment itself still has to run three times
+to reproduce it — but only the genuinely new ticker (`AMZN` replacing `AAPL`)
+costs an actual `compute()` call. `MSFT` and `GOOGL` were called with these
+exact arguments before, so the call cache serves them without invoking
+`compute` again, regardless of which iteration they're attached to this time.
+
+Turn call-level caching off (`# @cash:no-cache-calls`) and you get the
+`compute()` calls column back matching the "statements re-executed" column —
+the historical, pre-default-on shape where editing the first entry costs
+three calls, not one.
 
 A body that doesn't accumulate has no such chain — with `price =
 compute(ticker)` each iteration depends only on its own loop variable, so any
-one of them can change on its own and the rest still hit. See
+one of them can change on its own and the rest still hit, at the statement
+level as well as the call level. See
 [Reordering a loop's items](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
 <!-- claim: cash/notebook/control_structures/if_handler.py:IfHandler.process @7cb54870, cash/notebook/control_structures/try_handler.py:TryHandler.process @c03cc7e0 -->

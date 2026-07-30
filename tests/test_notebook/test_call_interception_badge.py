@@ -1,15 +1,20 @@
 """An intercepted call must be legible as such on the badge (CAS-243).
 
-Intercepted calls land in the same "N calls, M cached" region as hand-decorated
-ones, which is the right place — it is the same cache. But undifferentiated it
-misleads in both directions:
+Interception is on by DEFAULT (task 10) — no directive needed to trigger it,
+``# @cash:no-cache-calls`` is the opt-out. Intercepted calls land in the same
+"N calls, M cached" region as hand-decorated ones, which is the right place —
+it is the same cache. But undifferentiated it misleads in both directions:
 
 - a user who decorated nothing sees a ``@cash.cache`` section appear and cannot
   tell where it came from;
-- a user who wrote ``# @cash:cache-calls`` has no way to confirm it engaged,
-  which the directive's own docs tell them to do.
+- a user relying on interception (which is unconditional now) has no way to
+  confirm it actually engaged for a given call.
 
-So the group carries the distinction and the renderers show it.
+So the group carries the distinction and the renderers show it, tagged
+``@intercepted`` -- deliberately NOT named after a directive, since (a)
+nothing needs to be written to trigger it and (b) a tag spelled
+``cache-calls`` would substring-collide with ``no-cache-calls`` in any
+grep/assertion over badge text.
 """
 from __future__ import annotations
 
@@ -103,8 +108,8 @@ def _metrics(intercepted: bool):
 def test_text_badge_marks_an_intercepted_group():
     text = render_text(build_interactive_badge(_metrics(intercepted=True)))
     assert "compute()" in text, text
-    assert "cache-calls" in text, (
-        f"an intercepted group must name the directive that produced it:\n{text}"
+    assert "[intercepted]" in text, (
+        f"an intercepted group must be labelled as such:\n{text}"
     )
 
 
@@ -112,7 +117,7 @@ def test_text_badge_leaves_a_decorated_group_unmarked():
     """Positive control: the marker must not appear for ordinary decorated calls."""
     text = render_text(build_interactive_badge(_metrics(intercepted=False)))
     assert "compute()" in text, text
-    assert "cache-calls" not in text, (
+    assert "[intercepted]" not in text, (
         f"a hand-decorated group was mislabelled as intercepted:\n{text}"
     )
 
@@ -127,7 +132,7 @@ def _html(intercepted: bool, n_calls: int = 2) -> str:
 
 def test_html_badge_marks_an_intercepted_group():
     """A notebook shows HTML badges by default, so the marker must reach there too."""
-    assert "@cache-calls" in _html(intercepted=True), (
+    assert "@intercepted" in _html(intercepted=True), (
         "the HTML badge does not distinguish an intercepted call"
     )
 
@@ -139,13 +144,13 @@ def test_html_badge_marks_an_intercepted_group_when_condensed():
     call renders its own row and never sees the group, so marking only the
     condensed branch would leave short loops unlabelled.
     """
-    assert "@cache-calls" in _html(intercepted=True, n_calls=5)
+    assert "@intercepted" in _html(intercepted=True, n_calls=5)
 
 
 def test_html_badge_leaves_decorated_groups_unmarked():
     """Positive control, both paths."""
-    assert "@cache-calls" not in _html(intercepted=False, n_calls=2)
-    assert "@cache-calls" not in _html(intercepted=False, n_calls=5)
+    assert "@intercepted" not in _html(intercepted=False, n_calls=2)
+    assert "@intercepted" not in _html(intercepted=False, n_calls=5)
 
 
 def test_absent_flag_reads_as_decorated():
@@ -154,4 +159,4 @@ def test_absent_flag_reads_as_decorated():
     for call in metrics[0]["decorator_calls"]:
         del call["intercepted"]
     text = render_text(build_interactive_badge(metrics))
-    assert "cache-calls" not in text, text
+    assert "[intercepted]" not in text, text

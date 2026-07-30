@@ -242,12 +242,11 @@ data = my_reader.load('sensor.bin')    # RESTORED — the old contents
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @3f828077 -->
-Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to a `# @cash:cache-calls` sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
+Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
-<!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; # @cash:cache-calls is what makes pull(handle) itself the cached, keyed unit" -->
+<!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->
 ```python
 handle = 'conn-object'          # calling pull() carries no per-iteration signal of its own
-# @cash:cache-calls
 for q in [[1], [1]]:            # two iterations, EQUAL at binding time
     q.append(len(accm))         # mutated here, before the next line runs
     accm.append(pull(handle))   # keyed on q's value as BOUND, not as mutated
@@ -262,7 +261,6 @@ This is true of a plain cached statement in the loop exactly as it is of an inte
 
 <!-- test:skip reason="illustrative: rebinding q instead of mutating it looks like a fix but is not -- q is still a body-local variable, not a loop target" -->
 ```python
-# @cash:cache-calls
 for q in [[1], [1]]:
     q = q + [len(accm)]          # rebound, not mutated -- STILL wrong, identically
     accm.append(pull(handle))
@@ -275,7 +273,6 @@ The fix is to introduce the discriminating value as a **genuine additional loop 
 
 <!-- test:skip reason="illustrative: pairs with the loop above; enumerate's `i` is a real for-loop target, unlike q" -->
 ```python
-# @cash:cache-calls
 for i, base in enumerate([[1], [1]]):
     q = base + [i]
     accm.append(pull(handle))
@@ -314,7 +311,9 @@ The one worth planning around. If you have N cells that each read a file, modify
 
 ### A long `for`-append loop can stop caching
 
-Cash normally caches a loop **per iteration**, so a warm re-run restores every one. A *long* loop can instead be cached as a **single unit** — per-statement bookkeeping stops paying for itself. That switch is reasonable on its own, but a loop that appends into a list is an in-place mutation, which cash will not cache as a whole unit, so the two combine and you get no caching at all.
+Cash normally caches a loop **per iteration**, so a warm re-run restores every one. A *long* loop can instead be cached as a **single unit** — per-statement bookkeeping stops paying for itself. That switch is reasonable on its own, but a loop that appends into a list is an in-place mutation, which cash will not cache as a whole unit, so the two combine and you get no *statement-level* caching at all.
+
+That is a narrower claim than it used to be. By default, cash also caches the expensive **call inside** the statement (`fetch(e)` below, not the `append` around it) — see [Call-level caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls) — so a single-unit append loop still isn't a total loss: the call itself keeps hitting even though the loop's own bookkeeping does not. `# @cash:no-cache-calls` turns that off and gets you back to "no caching at all" if you need to reproduce it, or the call site simply isn't eligible (it reads the loop's own accumulator, say).
 
 <!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._should_execute_loop_as_single_unit @ad980fd0, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_ITERATIONS_FOR_SINGLE_UNIT == 50, cash/notebook/control_structures/for_handler.py:ForLoopHandler._PER_STMT_OVERHEAD_SEC == 0.008, cash/notebook/control_structures/for_handler.py:ForLoopHandler._MIN_OVERHEAD_SEC == 1.0 -->
 Three conditions must hold together before the switch happens, which is why many append loops never hit it:
@@ -340,7 +339,7 @@ for e in entities:          # several statements per iteration, >50 of them,
 
 When it does happen the badge says so — the HTML badge's row detail shows a **Storage** field reading `uncacheable` and a separate **Reason** field naming `In-place mutation on: out`, and `%cash_badge print` appends the same reason to the row — so you are not misled about *whether* it cached. But nothing tells you which threshold you crossed.
 
-**What to do:** either cache the call instead of the statement — `# @cash:cache-calls` on the loop header caches `fetch(e)` and lets the append re-run, see [the directive](annotations.md#cashcache-calls-alias-cachecalls) — or assign the result instead of appending to it. A comprehension is cached as a single value at any length, and sidesteps the question entirely:
+**What to do:** by default there is nothing to do — cash already caches `fetch(e)` and lets the append re-run, with no directive needed, see [Call-level caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls). If you've disabled that (`# @cash:no-cache-calls`) or `fetch` isn't eligible, assign the result instead of appending to it — a comprehension is cached as a single value at any length, and sidesteps the question entirely:
 
 <!-- test:skip reason="illustrative: the comprehension rewrite of the loop above" -->
 ```python
@@ -353,7 +352,10 @@ If you are unsure which side of the line a particular loop is on, do not infer i
 
 ### Reordering a loop's items re-runs the tail
 
-A loop body that folds into a **running accumulator** (`total += f(x)`, `acc = acc + f(x)`) reads the accumulator as an input, so iteration *k*'s cache key encodes every iteration before it. Reuse therefore survives *appending* to the list but stops at the first position where the sequence diverges — everything from there on is a different key and re-runs, even if the same values appear later in a different order.
+**This is now the exception, not the default** — read the callout after the
+first table before assuming it applies to your loop. A loop body that folds into a **running accumulator** (`total += f(x)`, `acc = acc + f(x)`) reads the accumulator as an input, so iteration *k*'s **statement-level** cache key encodes every iteration before it. That much is still true, unconditionally — the fold's own key is a prefix property and always will be, no matter what you do with the call inside it.
+
+What changed: by default, cash *also* caches the expensive call inside the fold, and a call cache keys on arguments, not on execution history — so it is order-independent by construction. The statement still misses and the loop still re-executes on a reorder, but the **work** doesn't repeat, because `compute(x)` hits its own entry regardless of position. No directive needed:
 
 <!-- test:skip reason="illustrative: `compute` stands in for the reader's own slow function" -->
 ```python { .nb-cell }
@@ -362,7 +364,18 @@ for x in [1, 10, 5]:        # compute() sleeps 1s
     s += compute(x)
 ```
 
-Measured on exactly that cell:
+Measured on exactly that cell, with the current default:
+
+| Change to the list | `compute()` calls | Cost |
+|---|---|---|
+| `[1, 10]` → `[1, 10, 5]` (append) | just the new one | 1 s |
+| `[1, 10, 5]` → `[1, 5, 10]` (swap the last two) | 0 | 0 s |
+| `[1, 10, 5]` → `[5, 10, 1]` (new first element) | 0 | 0 s |
+| back to `[1, 10, 5]` | 0 | 0 s |
+
+Only a genuinely new value costs a call; any reordering of values cash has already seen costs nothing, regardless of position. See [Call-level caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls) for what qualifies — the same eligibility rule (the call must not read the statement's own fold target) applies here.
+
+**If you disable it** (`# @cash:no-cache-calls`), or the call isn't eligible, you get the *statement*-level table this section used to describe unconditionally — the historical, pre-default-on shape:
 
 | Change to the list | Iterations re-run | Cost |
 |---|---|---|
@@ -371,21 +384,17 @@ Measured on exactly that cell:
 | `[1, 10, 5]` → `[5, 10, 1]` (new first element) | all 3 | 3 s |
 | back to `[1, 10, 5]` | none — those keys are still cached | 0 s |
 
-This is the fold, not the loop: drop the accumulator (`y = compute(x)`, or a comprehension) and reordering is fully cached, because each iteration then depends only on its own loop variable.
-
-**What to do:** cache the *call* rather than the statement around it — a call cache keys on arguments, not on execution history, so it is order-independent by construction. One directive does it in place:
-
 <!-- test:skip reason="illustrative: pairs with the loop above; `compute` is the reader's own" -->
 ```python { .nb-cell }
 s = 0
-# @cash:cache-calls
-for x in [5, 10, 1]:     # reordered: the per-iteration entries still miss,
-    s += compute(x)      # but every compute(x) hits. 0s.
+# @cash:no-cache-calls
+for x in [5, 10, 1]:     # reordered: BOTH the statement AND compute(x) miss. 2s.
+    s += compute(x)
 ```
 
-See [`# @cash:cache-calls`](annotations.md#cashcache-calls-alias-cachecalls) for what qualifies. Adding a genuinely new value still costs exactly one call.
+This is the fold, not the loop: drop the accumulator (`y = compute(x)`, or a comprehension) and reordering was always fully cached even at the statement level, because each iteration then depends only on its own loop variable — that part of this entry never needed the default flip.
 
-The same effect is available by hand if you'd rather decorate the function — `@cash.cache` keys the same way and composes with `%cash_on`:
+The same order-independent effect is also available by hand if you'd rather decorate the function directly — `@cash.cache` keys the same way and composes with `%cash_on`, and does not depend on the default:
 
 <!-- test:skip reason="illustrative: pairs with the loop above; `compute` is the reader's own" -->
 ```python { .nb-cell }
@@ -397,8 +406,6 @@ s = 0
 for x in [5, 10, 1]:     # reordered: the fold's per-iteration cache misses,
     s += compute(x)      # but every compute() call still hits. 0s.
 ```
-
-The statement-level cache still misses on the reorder and the loop still re-executes — but each `compute(x)` hits its own entry, so the *work* is not repeated. Adding a genuinely new value costs exactly one call.
 
 ### Editing without saving
 

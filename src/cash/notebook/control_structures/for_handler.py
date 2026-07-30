@@ -35,8 +35,8 @@ logger = logging.getLogger(__name__)
 def _stamp_call_events_loop_header(m: dict, loop_header: str) -> None:
     """Propagate *m*'s ``loop_header``/``loop_header_chain`` onto its call events.
 
-    ``m['decorator_calls']`` may hold intercepted (``# @cash:cache-calls``)
-    sub-call events (CAS-243). Those need the identical loop-nesting stamp
+    ``m['decorator_calls']`` may hold intercepted (on by default, CAS-243)
+    sub-call events. Those need the identical loop-nesting stamp
     the enclosing metric just got, or the badge view-builder has nothing to
     key nesting on and renders them as siblings of the loop instead of
     inside it. Mirrors the caller's own first-writer-wins / prepend rules
@@ -247,7 +247,7 @@ class ForLoopHandler:
                 chain = m.setdefault("loop_header_chain", [])
                 if not chain or chain[0] != loop_header:
                     chain.insert(0, loop_header)
-                # A statement's intercepted (``# @cash:cache-calls``) sub-call
+                # A statement's intercepted (on by default) sub-call
                 # events need this SAME stamp, or the view-builder has no way
                 # to tell they belong inside this loop and renders them as
                 # siblings instead (CAS-243 task 9). ``event`` is a dict
@@ -386,7 +386,7 @@ class ForLoopHandler:
         # level. ``body_index`` itself is the *innermost* index (the
         # tail of the chain).
         # Pushed once for the WHOLE iteration's body, not per statement: an
-        # intercepted (`# @cash:cache-calls`) sub-call needs the CURRENT
+        # intercepted (on by default) sub-call needs the CURRENT
         # iteration's loop-var values as a key discriminator wherever it sits
         # -- a plain body statement, or nested inside an `if`/`try` reached via
         # `_execute_loop_body_nested_control` below -- so one push covering the

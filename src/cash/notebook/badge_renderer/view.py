@@ -113,7 +113,7 @@ class StatementRow:
     # draw/fit with no frozen seed — its cached value is a frozen replay.
     random_effect: str | None = None
     random_unseeded: bool = False
-    # Per-call-SITE groups of intercepted (``# @cash:cache-calls``) sub-calls
+    # Per-call-SITE groups of intercepted (on by default, CAS-243) sub-calls
     # made from inside this statement (CAS-243 call-unit caching). Distinct
     # from ``decorator_calls`` above: that field is flat and keyed on nothing
     # in particular, which is fine for the "@cache: N/M hits" summary but
@@ -242,10 +242,10 @@ class DecoratorCallGroup:
     func_name: str
     calls: tuple[DecoratorCall, ...]
     condensed: bool
-    # True when cash wrapped this callee itself under ``# @cash:cache-calls``
-    # rather than the user decorating it. Same cache, same section — but the
-    # reader needs to know where it came from, and whether their directive
-    # engaged. Defaults False so pre-existing metrics keep reading as decorated.
+    # True when cash wrapped this callee itself via call interception
+    # (on by default, CAS-243) rather than the user decorating it. Same
+    # cache, same section — but the reader needs to know where it came from.
+    # Defaults False so pre-existing metrics keep reading as decorated.
     intercepted: bool = False
 
 
@@ -287,8 +287,9 @@ def build_sub_unit_groups(events: Any) -> list[SubUnitGroup]:
     """Group intercepted-call events by ``(call_source, occurrence_index)``.
 
     Only events with ``intercepted`` truthy are considered — those are the
-    ones :class:`~cash.notebook.call_unit.CallUnit` emits for a
-    ``# @cash:cache-calls`` sub-call. A hand-decorated ``@cash.cache`` call
+    ones :class:`~cash.notebook.call_unit.CallUnit` emits for an
+    intercepted sub-call (on by default; ``# @cash:no-cache-calls`` turns it
+    off). A hand-decorated ``@cash.cache`` call
     has no call site to group by here; it stays in the flat
     ``decorator_calls`` / :class:`DecoratorCallGroup` machinery.
 

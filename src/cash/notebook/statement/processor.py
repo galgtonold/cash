@@ -594,7 +594,7 @@ class StatementProcessor:
     def current_loop_vars(self) -> dict[str, Any]:
         """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
 
-        Read by the ``# @cash:cache-calls`` sub-call key build
+        Read by the intercepted (on by default) sub-call key build
         (``call_unit.CallUnit``) as its ``loop_vars_provider``, so a call keyed
         with no other discriminator (hidden state behind a bare ``Name``, e.g.
         ``fetch_next(conn)``) still varies per iteration. ``{}`` outside a loop
@@ -621,7 +621,7 @@ class StatementProcessor:
         control returns to whatever runs next), so nothing merged in here can
         be stale.
 
-        Read by the ``# @cash:cache-calls`` sub-call key build
+        Read by the intercepted (on by default) sub-call key build
         (``call_unit.CallUnit``) as its ``loop_var_digests_provider``. ``{}``
         is always a safe answer -- ``call_unit._loop_var_digest`` treats a
         missing entry as "compute it fresh," never as an error.

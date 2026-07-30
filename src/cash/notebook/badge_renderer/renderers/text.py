@@ -169,7 +169,7 @@ def _iteration_lines(it: IterationRow, pad: str, *, is_upstream: bool) -> list[s
 def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
     """One line per call SITE inside *row* (CAS-243 intercepted sub-calls).
 
-    Mirrors the cell-level ``[via @cash:cache-calls]`` line's job at
+    Mirrors the cell-level ``[intercepted]`` line's job at
     statement granularity: grouped by ``(call_source, occurrence_index)``,
     not by callee -- see ``SubUnitGroup`` for why. Nothing when the
     statement made no intercepted calls.
@@ -262,7 +262,11 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
         short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name
         # Name the mechanism for a call cash wrapped itself: the user decorated
         # nothing, so an unlabelled entry reads as someone else's doing.
-        via = " [via @cash:cache-calls]" if g.intercepted else ""
+        # Deliberately not named after a directive -- interception is
+        # unconditional (CAS-243 default-on), and spelling this
+        # ``cache-calls`` would substring-collide with the opt-out
+        # ``no-cache-calls`` in any grep/assertion over badge text.
+        via = " [intercepted]" if g.intercepted else ""
         lines.append(f"    {short}(){via}: {cached}/{total} cached ({time_s:.3f}s)")
     return lines
 

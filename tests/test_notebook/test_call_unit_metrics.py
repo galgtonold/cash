@@ -63,7 +63,7 @@ def test_a_cache_hit_is_also_marked_intercepted(call_unit_harness):
 def test_call_unit_events_reach_the_text_badge_as_intercepted(call_unit_harness):
     """End-to-end through the exact renderer the processor feeds: a call-unit
     event, unmodified apart from the ``intercepted`` flag CallUnit itself set,
-    must render with the ``cache-calls`` marker -- proving the badge no longer
+    must render with the ``[intercepted]`` marker -- proving the badge no longer
     needs (or gets) a separate reconciliation pass to show this.
     """
     def slow(v):
@@ -84,6 +84,6 @@ def test_call_unit_events_reach_the_text_badge_as_intercepted(call_unit_harness)
         "is_upstream": False,
     }]
     text = render_text(build_interactive_badge(metrics))
-    assert "cache-calls" in text, (
+    assert "[intercepted]" in text, (
         f"a call-unit event was not rendered as intercepted:\n{text}"
     )

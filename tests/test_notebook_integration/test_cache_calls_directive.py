@@ -73,12 +73,10 @@ def test_no_cache_calls_directive_turns_interception_off(nb_runner, tmp_path):
     regardless of what the directive says.
 
     Note where the directive sits: ``@cash:`` directives attach to the
-    statement *below* them, so it has to be on the loop header, not indented
-    inside the body -- placed inside the body it would attach to the
-    ``out.append(...)`` statement itself, which is exactly what we want here,
-    but placed above ``out = []`` instead it would scope to the wrong
-    statement and silently measure an intercepted (cached) run. Putting it on
-    the ``for`` line is what actually reaches the statement doing the call.
+    statement *below* them, so it has to be directly on the loop header. Put
+    it above ``out = []`` instead and it scopes to the wrong statement,
+    silently measuring an intercepted (cached) run. Putting it on the ``for``
+    line is what actually reaches the statement doing the call.
     """
     log = tmp_path / "calls.log"
     nb_runner.create_notebook([
@@ -92,6 +90,33 @@ def test_no_cache_calls_directive_turns_interception_off(nb_runner, tmp_path):
 
     nb_runner.run_cell(3)
     assert _n(log) == 4, "no-cache-calls did not disable interception"
+
+
+def test_no_cache_wins_over_interception(nb_runner, tmp_path):
+    """``# @cash:no-cache`` is an instruction about the WHOLE statement, and
+    must win over call-level interception even though nobody wrote
+    ``no-cache-calls``. Caching the expensive call inside a no-cache
+    statement would honour the letter ("this call gets a fresh value") while
+    breaking the intent ("nothing about this statement should be cached") --
+    the same reasoning that already makes no-cache win over ``persist``.
+
+    Same shape and assertion style as
+    ``test_no_cache_calls_directive_turns_interception_off`` above, with
+    ``no-cache`` in place of ``no-cache-calls`` on the loop header: a rerun
+    must cost the full 2 calls again, not 0.
+    """
+    log = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        _helpers(log),
+        "out = []",
+        "# @cash:no-cache\nfor t in [1, 2]:\n    out.append(compute(t))",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _n(log) == 2
+
+    nb_runner.run_cell(3)
+    assert _n(log) == 4, "no-cache did not win over interception"
 
 
 def test_no_cache_calls_from_the_cell_header_covers_every_statement(nb_runner, tmp_path):
@@ -148,7 +173,7 @@ def test_badge_names_the_mechanism_that_cached_the_call(nb_runner, tmp_path):
     badge = nb_runner.get_output(4)
 
     assert "compute()" in badge, badge
-    assert "cache-calls" in badge, (
+    assert "[intercepted]" in badge, (
         f"the badge does not say the call was cached by interception:\n{badge}"
     )
 
