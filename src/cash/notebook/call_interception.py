@@ -77,6 +77,43 @@ class CallSite:
     #: count predicts would silently ignore any unpacked elements beyond it.
     #: See CAS-243 review C2.
     has_unpacking: bool = False
+    #: ``ast.unparse`` of the statement that CONTAINS this call -- computed
+    #: once per enclosing statement, before any call inside it is rewritten
+    #: (CAS-256). ``call_cache_key``'s base key is built from the call's OWN
+    #: source and free names, which says nothing about which statement the
+    #: call sits in: two different statements whose call text and free names
+    #: happen to agree (``vals[step] = fetch_next(conn)`` in one loop,
+    #: ``other[step] = fetch_next(conn)`` in another, same loop items) shared
+    #: one base key and the second was served the first's cached values --
+    #: wrong on the first run, no pre-existing cache required. Folding this in
+    #: fixes it.
+    #:
+    #: **Why ``ast.unparse``, not the raw statement source string.** A
+    #: control-structure body statement arrives with a
+    #: ``# __iteration_context__: <hash>`` comment PREPENDED to its source
+    #: text (``for_handler.py``), and that context hash is derived in part
+    #: from ``__iterable_lineage__`` -- the whole iterable's lineage, which
+    #: changes for every iteration on a reorder (CAS-242). If that raw text
+    #: reached this field, reordering a loop's items would change every
+    #: iteration's statement identity and re-run the whole tail -- the exact
+    #: bug ``loop_vars`` (not the iteration-context comment) exists to fix
+    #: correctly. ``ast.unparse`` re-serialises the parsed AST, which never
+    #: contained the comment in the first place (comments are not AST nodes),
+    #: so it is stable across iterations and across reorders while still
+    #: distinguishing genuinely different statements. This is also the same
+    #: comment-free convention the upstream simulator already uses to key a
+    #: statement (``upstream/virtual_lineage.py``'s ``ast.unparse(node)``).
+    #:
+    #: Default ``""`` (not folded into the key at all -- see
+    #: ``call_cache_key``) so every pre-existing direct ``CallSite``
+    #: construction, including every unit test that predates this field,
+    #: keeps building the exact key it built before. A caching optimisation
+    #: must never be why user code fails: if the enclosing statement's
+    #: identity cannot be obtained (see :func:`wrap_eligible_calls`'s
+    #: ``try/except`` around the ``ast.unparse`` call), this degrades to
+    #: today's behaviour -- the pre-existing collision risk -- rather than
+    #: raising.
+    stmt_identity: str = ""
 
 
 def _is_storable(result) -> bool:
@@ -146,16 +183,25 @@ class CallCache:
         # `out.append(compute(a + 100))` silently returning `out.append(compute(a))`'s
         # cached value). `CallSite` is a frozen, hashable dataclass of
         # `(source, free_names, occurrence_index, computed_arg_positions,
-        # has_unpacking)`, so keying on the site itself self-invalidates on
-        # any of those changing -- while an UNCHANGED cell re-executing still
-        # gets a wrapper hit, because `wrap_eligible_calls` builds a NEW
-        # CallSite object each time but an EQUAL one (frozen dataclasses hash
-        # and compare by value), so the wrapper-reuse optimisation
-        # (`test_wrapper_is_reused_for_the_same_function`) is preserved rather
-        # than lost to a blanket `_wrappers.clear()` in `set_sites`. A
-        # function's id can also be reused after garbage collection, so the
-        # original is pinned alongside the wrapper in the value tuple to keep
-        # it alive and detect a recycled id.
+        # has_unpacking, stmt_identity)`, so keying on the site itself
+        # self-invalidates on any of those changing -- while an UNCHANGED cell
+        # re-executing still gets a wrapper hit, because `wrap_eligible_calls`
+        # builds a NEW CallSite object each time but an EQUAL one (frozen
+        # dataclasses hash and compare by value), so the wrapper-reuse
+        # optimisation (`test_wrapper_is_reused_for_the_same_function`) is
+        # preserved rather than lost to a blanket `_wrappers.clear()` in
+        # `set_sites`. A function's id can also be reused after garbage
+        # collection, so the original is pinned alongside the wrapper in the
+        # value tuple to keep it alive and detect a recycled id.
+        #
+        # `stmt_identity` (CAS-256) joining this tuple is deliberate, not
+        # incidental: two statements that previously built an EQUAL CallSite
+        # (same call text, same free names, same occurrence index) now build
+        # DIFFERENT ones, so each statement gets its own wrapper instead of
+        # silently sharing one minted for the other. That re-scoping is
+        # exactly what fixes the underlying key collision -- a shared wrapper
+        # closes over one `site`, and a wrapper reused across statements would
+        # still build the collapsed key `stmt_identity` exists to prevent.
         self._wrappers: dict[tuple[int, CallSite | None], tuple[types.FunctionType, object]] = {}
         # NOTE: there is deliberately no name-reconciliation here any more.
         # This class used to rebuild ``module.qualname`` via
@@ -325,7 +371,22 @@ def wrap_eligible_calls(
     sites: list[CallSite] = []
     seen: Counter[str] = Counter()
     for stmt in new_tree.body:
-        for call in eligible_call_nodes(stmt):
+        calls = eligible_call_nodes(stmt)
+        if not calls:
+            continue
+        # Computed ONCE per enclosing statement, before any call inside it is
+        # rewritten below -- so it reflects the statement exactly as it read
+        # before this pass touched it, and is identical whether the statement
+        # contains one eligible call or several. See `CallSite.stmt_identity`
+        # for why `ast.unparse` (comment-free, so the loop's own
+        # `# __iteration_context__:` prefix never reaches it) and why a
+        # failure here degrades to `""` -- "not folded into the key" -- rather
+        # than aborting the whole rewrite.
+        try:
+            stmt_identity = ast.unparse(stmt)
+        except Exception:  # noqa: BLE001 - degrade, never let keying break the call
+            stmt_identity = ""
+        for call in calls:
             if gate is not None and not gate(call):
                 continue
             source = ast.unparse(call)
@@ -338,6 +399,7 @@ def wrap_eligible_calls(
                     occurrence_index=index,
                     computed_arg_positions=_computed_arg_positions(call),
                     has_unpacking=_call_has_unpacking(call),
+                    stmt_identity=stmt_identity,
                 )
             )
             call.func = ast.Call(

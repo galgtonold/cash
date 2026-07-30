@@ -246,6 +246,91 @@ def test_selective_gate_wraps_only_the_accepted_call():
     assert sites[0].source == "compute(x)"
 
 
+def test_stmt_identity_is_the_unparsed_enclosing_statement():
+    """CAS-256: `CallSite.stmt_identity` must reflect the STATEMENT that
+    contains the call, not just the call itself -- that is the whole fix.
+    """
+    tree = ast.parse("vals[step] = fetch_next(conn)")
+    _, sites = wrap_eligible_calls(tree)
+    assert sites[0].stmt_identity == "vals[step] = fetch_next(conn)"
+
+
+def test_two_statements_with_identical_call_text_get_different_stmt_identity():
+    """The exact CAS-256 collision shape: two statements whose CALL text and
+    free names agree (`fetch_next(conn)` in both) must still get DIFFERENT
+    `stmt_identity`, because the statements around the call differ.
+
+    Mutation that must make this fail: in `wrap_eligible_calls`, hoist
+    `stmt_identity` computation above the `for stmt in new_tree.body:` loop
+    (computing it once for the whole tree instead of once per statement) --
+    or any change that derives it from something shared across statements
+    rather than each statement's own AST node.
+    """
+    tree = ast.parse(
+        "vals[step] = fetch_next(conn)\nother[step] = fetch_next(conn)\n"
+    )
+    _, sites = wrap_eligible_calls(tree)
+    assert len(sites) == 2
+    assert sites[0].source == sites[1].source == "fetch_next(conn)"
+    assert sites[0].stmt_identity != sites[1].stmt_identity
+    assert sites[0].stmt_identity == "vals[step] = fetch_next(conn)"
+    assert sites[1].stmt_identity == "other[step] = fetch_next(conn)"
+
+
+def test_same_statement_reparsed_twice_gets_the_same_stmt_identity():
+    """The per-iteration/rerun reuse property, at the interceptor level.
+
+    `for_handler.py` re-parses the SAME body-statement source fresh on every
+    loop iteration (a new `ast.Module`, a new AST object each time) -- so
+    `stmt_identity` must be a function of the statement's TEXT, not of the
+    particular AST/tree object instance, or every iteration and every rerun
+    would mint a distinct identity and nothing would ever be reused.
+
+    Mutation that must make this fail: change `stmt_identity =
+    ast.unparse(stmt)` to `stmt_identity = ast.unparse(stmt) + str(id(stmt))`
+    -- a plausible-looking bug (tagging the identity with "which AST object
+    is this") that breaks reuse across parses of byte-identical source, which
+    is exactly what every loop iteration and every cell rerun does.
+    """
+    source = "vals[step] = fetch_next(conn)"
+    _, sites_a = wrap_eligible_calls(ast.parse(source))
+    _, sites_b = wrap_eligible_calls(ast.parse(source))
+    assert sites_a[0].stmt_identity == sites_b[0].stmt_identity
+
+
+def test_stmt_identity_excludes_an_injected_iteration_context_comment():
+    """The documented trap (CAS-242): `for_handler.py` prepends
+    `# __iteration_context__: <hash>` to a loop body statement's source
+    before parsing it, and that hash is derived in part from the whole
+    iterable's lineage -- which changes on every reorder. If that comment
+    text ever reached `stmt_identity`, reordering a loop's items would change
+    every iteration's key and re-run the whole tail (CAS-242, the bug this
+    whole feature exists to fix). `ast.unparse` re-serialises the AST, which
+    never contained the comment (comments are not AST nodes) -- confirmed
+    here by parsing code WITH the comment prepended and checking the hash
+    text is nowhere in the resulting identity.
+    """
+    context_hash = "deadbeefcafef00d"
+    code_with_comment = (
+        f"# __iteration_context__: {context_hash}\nvals[step] = fetch_next(conn)"
+    )
+    tree = ast.parse(code_with_comment)
+    _, sites = wrap_eligible_calls(tree)
+    assert sites[0].stmt_identity == "vals[step] = fetch_next(conn)"
+    assert context_hash not in sites[0].stmt_identity
+
+
+def test_multiple_calls_in_one_statement_share_stmt_identity():
+    """`stmt_identity` is a property of the STATEMENT, computed once -- two
+    calls inside the same statement must not disagree about which statement
+    they're in.
+    """
+    tree = ast.parse("out.append(f() or g())")
+    _, sites = wrap_eligible_calls(tree)
+    assert len(sites) == 2
+    assert sites[0].stmt_identity == sites[1].stmt_identity == "out.append(f() or g())"
+
+
 def test_calls_inside_a_while_body_are_never_intercepted():
     """LOAD-BEARING, and it is a deduction rather than a measured fact.
 

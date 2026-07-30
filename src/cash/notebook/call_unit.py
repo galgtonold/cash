@@ -260,6 +260,36 @@ def call_cache_key(
     Note: ``rng_fingerprint`` is deliberately not threaded through — it is
     dead plumbing with no producer anywhere in the codebase.
 
+    **stmt_identity (CAS-256).** The base key above is built from the call's
+    OWN source and free names alone, which is silent about which *statement*
+    the call sits in. Two different statements whose call text and free names
+    happen to agree collapse onto the same base key::
+
+        # cell 2
+        for step in ['a', 'b', 'c']:
+            vals[step] = fetch_next(conn)      # -> [('a',1), ('b',2), ('c',3)]
+
+        # cell 3
+        for step in ['a', 'b', 'c']:
+            other[step] = fetch_next(conn)     # served cell 2's values -- WRONG
+
+    Both loops call ``fetch_next(conn)`` with the same free names, the same
+    occurrence index (0, each statement starts its own count), and the same
+    per-iteration ``loop_vars`` (``step`` takes the same three values) -- so
+    without a statement-level discriminator the second loop's every iteration
+    hits the first's cache entries. First-run wrongness, no pre-existing cache
+    required. ``site.stmt_identity`` (``CallSite``'s docstring has the full
+    reasoning for why it is ``ast.unparse`` of the enclosing statement, not
+    its raw source text) closes this: it is folded in here as one more
+    discriminating component, hashed and delimited exactly like the
+    ``arg_digests``/``loop_vars`` components below rather than concatenated
+    into ``base``'s own source string, so it cannot collide with them under
+    string-join ambiguity. Empty (``""``, the default -- a ``CallSite`` built
+    before this field existed, or one where ``wrap_eligible_calls`` could not
+    unparse the enclosing statement) contributes nothing, which is exactly
+    today's pre-existing behaviour: never a NEW failure mode, only a fix that
+    can fail to apply.
+
     **loop_var_digests** (optional) short-circuits the per-loop-var hashing
     :func:`_loop_var_digest` would otherwise do from scratch: a precomputed,
     already-correctly-scoped ``{name: full_hash}`` map, sourced from
@@ -295,7 +325,7 @@ def call_cache_key(
         name: value for name, value in loop_vars.items() if not name.startswith("__")
     }
 
-    if not arg_digests and not filtered_loop_vars:
+    if not arg_digests and not filtered_loop_vars and not site.stmt_identity:
         return base
     # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
     # and `":".join(["a:b"])` are the same string, so an undelimited join
@@ -312,6 +342,14 @@ def call_cache_key(
         f"{name}={_loop_var_digest(name, value, resolved_digests)}"
         for name, value in sorted(filtered_loop_vars.items())
     )
+    # The enclosing statement's identity (CAS-256, see this function's own
+    # docstring section above and `CallSite.stmt_identity`). Hashed rather
+    # than appended raw so an unbounded statement source cannot itself defeat
+    # the `|`-delimiting the other parts already rely on.
+    if site.stmt_identity:
+        parts.append(
+            "stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest()
+        )
     return "call:" + hashlib.sha256(
         (base + "|" + "|".join(parts)).encode("utf-8")
     ).hexdigest()

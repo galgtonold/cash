@@ -4,12 +4,16 @@ from cash.notebook.call_interception import CallSite
 from cash.notebook.call_unit import call_cache_key
 
 
-def _site(source="compute(x)", names=("compute", "x"), occ=0, computed_arg_positions=()):
+def _site(
+    source="compute(x)", names=("compute", "x"), occ=0, computed_arg_positions=(),
+    stmt_identity="",
+):
     return CallSite(
         source=source,
         free_names=frozenset(names),
         occurrence_index=occ,
         computed_arg_positions=computed_arg_positions,
+        stmt_identity=stmt_identity,
     )
 
 
@@ -271,6 +275,104 @@ def test_loop_vars_prefer_precomputed_digest_over_the_live_value():
         "identical live value, different supplied digest -- the digest "
         "was not consulted"
     )
+
+
+def test_different_stmt_identity_gives_different_key():
+    """CAS-256: the collision this whole field exists to break.
+
+    Two `CallSite`s with IDENTICAL source, free names, occurrence index, and
+    loop_vars -- the exact shape `vals[step] = fetch_next(conn)` and
+    `other[step] = fetch_next(conn)` produce, since both statements' call text
+    and free names agree -- must still mint different keys once their
+    `stmt_identity` differs, or the second statement is served the first's
+    cached values (CAS-256's reported bug, reproduced end-to-end in
+    `test_notebook_integration/test_call_unit_statement_identity.py`).
+
+    Mutation that must make this fail: drop the `if site.stmt_identity:
+    parts.append(...)` block in `call_cache_key` (or the guard in the
+    preceding `if not arg_digests and not filtered_loop_vars and not
+    site.stmt_identity: return base`). Verified by hand: with either
+    reverted, this assertion fails (`a == b`).
+    """
+    ctx = _ctx({"conn": "aaa"}, {"conn": object(), "fetch_next": len})
+    a = call_cache_key(
+        _site(source="fetch_next(conn)", names=("fetch_next", "conn"),
+              stmt_identity="vals[step] = fetch_next(conn)"),
+        ctx=ctx, arg_digests=[], loop_vars={"step": "a"},
+    )
+    b = call_cache_key(
+        _site(source="fetch_next(conn)", names=("fetch_next", "conn"),
+              stmt_identity="other[step] = fetch_next(conn)"),
+        ctx=ctx, arg_digests=[], loop_vars={"step": "a"},
+    )
+    assert a != b
+
+
+def test_same_stmt_identity_gives_the_same_key():
+    """The other half of the same property: two SEPARATELY-CONSTRUCTED
+    `CallSite`s that agree on EVERY field including `stmt_identity` --
+    simulating two separate `wrap_eligible_calls` passes over the same
+    enclosing statement, e.g. two different iterations of one loop, or two
+    reruns of one cell, each re-parsing the same source into a fresh AST and
+    building a fresh (but equal) `CallSite` -- must still collapse onto the
+    same key. Without this, folding in `stmt_identity` would have traded the
+    CAS-256 cross-statement collision for a new per-run/per-iteration miss on
+    every unchanged statement.
+
+    Deliberately TWO separate `_site(...)` calls, not one object reused for
+    both `call_cache_key` calls: reusing one object cannot distinguish
+    "hashes `stmt_identity`'s VALUE" from "hashes something identity-based
+    about the site object itself" (e.g. `id(site)`), since both would agree
+    trivially when it is the same Python object both times. Two independently
+    built, field-equal objects close that gap.
+
+    Mutation that must make this fail: in `call_cache_key`, hash
+    `str(id(site))` instead of `site.stmt_identity`. Verified by hand: with
+    that change, `first != second` (two distinct `CallSite` objects have
+    distinct ids even though every field agrees).
+    """
+    ctx = _ctx({"conn": "aaa"}, {"conn": object(), "fetch_next": len})
+    def _make_site():
+        return _site(
+            source="fetch_next(conn)", names=("fetch_next", "conn"),
+            stmt_identity="vals[step] = fetch_next(conn)",
+        )
+    first = call_cache_key(_make_site(), ctx=ctx, arg_digests=[], loop_vars={"step": "a"})
+    second = call_cache_key(_make_site(), ctx=ctx, arg_digests=[], loop_vars={"step": "a"})
+    assert first == second
+
+
+def test_empty_stmt_identity_matches_pre_feature_key():
+    """Backward compatibility: a `CallSite` that never sets `stmt_identity`
+    (every direct construction predating CAS-256, including every other test
+    in this file, and every real production `CallSite` where
+    `wrap_eligible_calls` could not unparse the enclosing statement) must
+    build the EXACT key it built before this field existed -- not merely "a"
+    key, the SAME one, since `base` itself must stay untouched by an absent
+    discriminator.
+
+    `CallSite` is constructed DIRECTLY here (not through this file's `_site`
+    helper), because the helper itself always passes `stmt_identity`
+    explicitly (defaulting to `""`) -- so going through it can never exercise
+    `CallSite`'s OWN dataclass default at all, and would pass even if that
+    default silently changed.
+
+    Mutation that must make this fail: change `CallSite.stmt_identity`'s
+    default from `""` to any non-empty string. Verified by hand: with a
+    non-empty default, `omitted` gets a real (nonzero) statement component
+    folded into its key while `explicit_empty` does not, so they diverge.
+    """
+    ctx = _ctx({"x": "aaa"}, {"x": 1, "compute": len})
+    omitted = CallSite(
+        source="compute(x)", free_names=frozenset({"compute", "x"}), occurrence_index=0,
+    )
+    explicit_empty = CallSite(
+        source="compute(x)", free_names=frozenset({"compute", "x"}), occurrence_index=0,
+        stmt_identity="",
+    )
+    with_omitted = call_cache_key(omitted, ctx=ctx, arg_digests=[], loop_vars={"x": 1})
+    with_explicit_empty = call_cache_key(explicit_empty, ctx=ctx, arg_digests=[], loop_vars={"x": 1})
+    assert with_omitted == with_explicit_empty
 
 
 def test_a_dunder_entry_in_loop_vars_cannot_reach_the_key():
