@@ -237,6 +237,39 @@ data = my_reader.load('sensor.bin')    # RESTORED — the old contents
 
 ---
 
+## A loop variable mutated before it's read collides with an earlier iteration
+
+Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
+
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @3f828077 -->
+Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to a `# @cash:cache-calls` sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
+
+<!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable" -->
+```python
+handle = 'conn-object'          # calling pull() carries no per-iteration signal of its own
+for q in [[1], [1]]:            # two iterations, EQUAL at binding time
+    q.append(len(accm))         # mutated here, before the next line runs
+    accm.append(pull(handle))   # keyed on q's value as BOUND, not as mutated
+```
+
+Both iterations bind `q` to an equal value (`[1]`), so both get the same discriminator even though the body has since made them different — the second iteration is served the first's cached result instead of a fresh call.
+
+<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @57ad1115 -->
+This is true of a plain cached statement in the loop exactly as it is of an intercepted call: both read the same value, frozen at the same moment, so neither is a special case of the other.
+
+**What to do:** don't mutate a loop variable before it (or something derived from it) is the thing that has to discriminate the iteration — bind the final, already-mutated value instead of mutating in place:
+
+<!-- test:skip reason="illustrative: pairs with the loop above" -->
+```python
+for i, base in enumerate([[1], [1]]):
+    q = base + [i]               # q is final before anything reads it
+    accm.append(pull(handle))
+```
+
+or mark the affected statement `# @cash:no-cache` if binding a final value isn't practical.
+
+---
+
 ## Errors you may see
 
 ### `AmbiguousCellError`
