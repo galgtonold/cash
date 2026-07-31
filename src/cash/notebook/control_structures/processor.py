@@ -227,6 +227,7 @@ class ControlStructureProcessor:
         parent_context: dict[str, Any] | None = None,
         raw_cell: str | None = None,
         inherited_annotation: 'CacheAnnotation | None' = None,
+        prev_node: ast.stmt | None = None,
     ) -> ControlStructureResult:
         """
         Process a control structure node.
@@ -247,6 +248,14 @@ class ControlStructureProcessor:
                 (tests constructing handlers with mock deps) working unchanged.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
+            prev_node: The immediately-preceding top-level statement in the same
+                cell, or ``None``. Threaded down to ``ForLoopHandler`` (CAS-259
+                follow-up), which needs the ``out = []`` seed that sits right
+                before the loop to compute ``force_outputs`` for its cost-based
+                single-unit branch — see ``cacheability.cacheable_accumulator_loop``
+                and ``for_handler.py``'s single-unit branch for why. Additive and
+                default-``None`` so nested / direct callers (which have no notion
+                of a preceding sibling) are unchanged.
 
         Returns:
             ControlStructureResult with metrics
@@ -261,6 +270,7 @@ class ControlStructureProcessor:
                 )
             return self._for_handler.process(
                 node, ttl, silent, parent_context, raw_cell, inherited_annotation,
+                prev_node,
             )
         if isinstance(node, ast.If):
             return self._if_handler.process(

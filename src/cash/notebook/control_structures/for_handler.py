@@ -127,6 +127,7 @@ class ForLoopHandler:
         parent_context: dict[str, Any] | None,
         raw_cell: str | None = None,
         inherited_annotation=None,
+        prev_node: ast.stmt | None = None,
     ):
         """
         Process a for loop with per-iteration caching.
@@ -147,6 +148,15 @@ class ForLoopHandler:
         overhead exceeds the likely computation cost (e.g., tight numeric
         loops with many iterations of cheap array operations), the loop is
         executed as a single cacheable unit instead of per-iteration.
+
+        *prev_node* is the loop's immediately-preceding top-level sibling in
+        the same cell, or ``None`` — passed through so the single-unit branch
+        can compute ``force_outputs`` for a pure accumulator-loop shape (CAS-259
+        follow-up: without it, that branch is refused outright by the
+        in-place-mutation detector, since nothing suppresses that refusal for
+        a matching ``out = []`` / ``out.append(f(e))`` loop). ``None`` by
+        default so nested / direct callers with no notion of a preceding
+        sibling are unaffected.
         """
         from .processor import (
             ControlStructureResult,
@@ -203,8 +213,32 @@ class ForLoopHandler:
                 # Single-unit mode makes the loop ONE cache entry, so the unit
                 # annotation (whole range) is the right scope — a body directive
                 # has no finer entry to attach to here.
+                #
+                # A pure accumulator loop's body (``out.append(f(e))``) reads as
+                # an in-place mutation to the per-statement analyzer, which
+                # would otherwise refuse to cache this whole unit outright --
+                # CAS-259 shipped without this and every large/cheap
+                # accumulator loop got ZERO caching from either mechanism
+                # (decomposition never runs here; the single unit was refused).
+                # force_outputs, computed from the narrow shape detector,
+                # suppresses exactly that refusal reason (and captures the
+                # leaked loop variable) so the chosen single-unit path is
+                # actually cacheable. ``None`` for every other single-unit
+                # loop, which keeps their behaviour unchanged.
+                from ..cacheability import cacheable_accumulator_loop
+                force_outputs = None
+                acc_loop = cacheable_accumulator_loop(node, prev_node)
+                if acc_loop is not None:
+                    acc, loop_vars, _iter_node, _expr_call = acc_loop
+                    force_outputs = {acc, *loop_vars}
+                    if self.debug:
+                        logger.debug(
+                            "[CONTROL] Single-unit accumulator loop -> "
+                            "force_outputs=%s", force_outputs,
+                        )
                 return self.dispatcher._execute_as_single_unit(
                     node, ttl, silent, raw_cell, inherited_annotation,
+                    force_outputs=force_outputs,
                 )
 
             # all iterations.

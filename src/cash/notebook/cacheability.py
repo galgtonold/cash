@@ -36,6 +36,7 @@ __all__ = [
     "standalone_method_call_receivers",
     "assigned_method_call_receivers",
     "selfref_reassignment_targets",
+    "cacheable_accumulator_loop",
     "selfref_inplace_write_vars",
     "params_mutated_in_function",
     "standalone_call_arg_targets",
@@ -3295,6 +3296,177 @@ def selfref_reassignment_targets(node: ast.AST) -> frozenset[str]:
             ):
                 return frozenset({target_name})
     return frozenset()
+
+
+# ---------------------------------------------------------------------------
+# Accumulator-loop shape detection
+# ---------------------------------------------------------------------------
+#
+# CAS-259 history: this used to be consulted directly by a dispatcher in
+# ``control_structures/processor.py`` that routed a matching loop through the
+# statement cache as one unit BEFORE the cost-based
+# ``_should_execute_loop_as_single_unit`` check ever ran -- so every
+# accumulator loop, however cheap, skipped per-iteration decomposition and
+# interception. CAS-259 deleted that dispatch. That was too broad a deletion:
+# a CAS-259 follow-up review (measured on a 150-iteration, 4.6s-body loop)
+# found that above the cost check's own single-unit threshold (>50
+# iterations, >1s estimated overhead), NEITHER mechanism caches anymore --
+# decomposition never runs (the cost check chose single-unit), and the
+# chosen single-unit branch is refused outright by the statement cache's
+# in-place-mutation detector, because nothing was suppressing that refusal.
+# ``force_outputs`` (passed by ``ForLoopHandler`` at its single-unit branch,
+# ``for_handler.py``) is what suppresses it -- so this detector is consulted
+# again, but now from INSIDE the cost path, purely to compute that
+# ``force_outputs`` set. It is no longer a dispatch decision of its own: the
+# cost check alone decides single-unit vs. decompose in both directions.
+
+# Accumulator method -> the empty-seed kind(s) that legitimately seed it.
+# ``append``/``extend`` grow a list; ``add`` grows a set; ``update`` grows a
+# dict OR a set (both define ``update``), so it accepts either seed.
+_ACCUMULATOR_SEED_KINDS: dict[str, frozenset[str]] = {
+    'append': frozenset({'list'}),
+    'extend': frozenset({'list'}),
+    'add': frozenset({'set'}),
+    'update': frozenset({'dict', 'set'}),
+}
+
+
+def _empty_seed_kind(node: ast.expr) -> str | None:
+    """Container kind a FRESH-EMPTY seed expression *node* produces, or ``None``.
+
+    Recognises only the empty seed forms: ``[]`` / ``list()`` -> ``'list'``,
+    ``{}`` / ``dict()`` -> ``'dict'``, ``set()`` -> ``'set'``. A non-empty
+    literal (``[0]``, ``{1}``, ``{'k': 1}``) or any computed expression returns
+    ``None`` so a pre-seeded accumulator is never matched.
+    """
+    if isinstance(node, ast.List) and not node.elts:
+        return 'list'
+    if isinstance(node, ast.Dict) and not node.keys:
+        return 'dict'
+    if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+            and not node.args and not node.keywords):
+        return {'list': 'list', 'dict': 'dict', 'set': 'set'}.get(node.func.id)
+    return None
+
+
+def _simple_loop_target_names(target: ast.expr) -> list[str] | None:
+    """Loop-target names when *target* is a bare ``Name`` or a (possibly nested)
+    tuple/list of bare ``Name``s, else ``None``.
+
+    Returns ``None`` the moment a leaf is not a bare ``Name`` — a starred target
+    (``for a, *rest in ...``), a subscript, or an attribute — because
+    capturing/restoring the leaked loop variable(s) on a cache hit requires
+    enumerating EVERY name the loop binds. Bailing keeps the namespace on a hit
+    byte-identical to running the real loop.
+    """
+    if isinstance(target, ast.Name):
+        return [target.id]
+    if isinstance(target, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for elt in target.elts:
+            sub = _simple_loop_target_names(elt)
+            if sub is None:
+                return None
+            names.extend(sub)
+        return names
+    return None
+
+
+def _expr_has_side_effects_or_foreign_mutation(expr: ast.expr, acc: str) -> bool:
+    """True if the append-argument *expr* writes files or mutates any variable
+    other than the accumulator *acc*.
+
+    Reuses the module's own file-write scanner (:class:`_SideEffectVisitor`) and
+    mutation scanner (:class:`_MutationVisitor`) so the accumulator fast path
+    refuses exactly the inline effects the per-statement pipeline would refuse —
+    ``acc.append(f.write(x))``, ``acc.append(other.pop())``. Effects hidden
+    inside a called function's body are not visible here; those are caught by the
+    pipeline's ``@stateful`` / forbidden-function scan (the loop still routes
+    through :func:`decide_cacheability`), matching the semantics of the
+    byte-identical comprehension form.
+    """
+    se = _SideEffectVisitor()
+    se.visit(expr)
+    if se.effects:
+        return True
+    mv = _MutationVisitor()
+    mv.visit(expr)
+    return any(m.variable != acc for m in mv.mutations)
+
+
+def cacheable_accumulator_loop(
+    for_node: ast.For, prev_node: ast.stmt | None,
+) -> tuple[str, tuple[str, ...], ast.expr, ast.Call] | None:
+    """Detect the NARROW cacheable accumulator-loop shape.
+
+    Returns ``(acc, loop_vars, iterable_node, expr_call)`` when *for_node* is a
+    pure accumulator loop seeded by its immediately-preceding sibling
+    *prev_node*, else ``None``. A pure accumulator loop (``out = []`` then
+    ``for e in it: out.append(f(e))``) is byte-identical to a comprehension yet
+    is refused caching today because the ``append`` reads as an in-place
+    mutation; matching this shape lets the caller compute the ``force_outputs``
+    that make the whole loop cacheable as one unit, capturing BOTH the
+    accumulator and the leaked loop variable as outputs.
+
+    ALL of the following are required; anything else returns ``None`` so the
+    caller falls back to today's per-iteration behaviour:
+
+    1. ``for_node.body`` is EXACTLY one bare ``Expr(Call(Attribute(Name(acc),
+       meth, ...)))`` with ``meth in {'append','extend','add','update'}`` and no
+       ``for``/``else`` clause.
+    2. *prev_node* is ``acc = <fresh empty seed>`` whose seed kind matches the
+       method (``[]``/``list()`` for append/extend, ``set()`` for add,
+       ``{}``/``dict()``/``set()`` for update). A non-empty or prior-cell seed is
+       rejected — caching a partial accumulator would drop or double its prefix.
+    3. No ``break``/``continue`` (guaranteed by (1); re-checked defensively).
+    4. The append argument(s) write no files and mutate no variable but *acc*.
+    5. The loop target is a bare ``Name`` or a tuple/list of bare ``Name``s.
+    """
+    # (2) The preceding sibling must be ``acc = <empty seed>`` — a single bare
+    # Name target bound to a fresh-empty container.
+    if not (isinstance(prev_node, ast.Assign) and len(prev_node.targets) == 1
+            and isinstance(prev_node.targets[0], ast.Name)):
+        return None
+    acc = prev_node.targets[0].id
+    seed_kind = _empty_seed_kind(prev_node.value)
+    if seed_kind is None:
+        return None
+
+    # (1) Body is exactly one bare-Expr accumulator-method call on ``acc``, with
+    # no for/else clause.
+    if for_node.orelse or len(for_node.body) != 1:
+        return None
+    stmt = for_node.body[0]
+    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+        return None
+    call = stmt.value
+    if not (isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)
+            and call.func.value.id == acc):
+        return None
+    meth = call.func.attr
+    seeds_for_method = _ACCUMULATOR_SEED_KINDS.get(meth)
+    if seeds_for_method is None or seed_kind not in seeds_for_method:
+        return None
+
+    # (5) Loop target is a simple Name / tuple of Names.
+    loop_vars = _simple_loop_target_names(for_node.target)
+    if not loop_vars:
+        return None
+
+    # (3) No break/continue (the one-Expr body cannot contain them, but a nested
+    # comprehension/lambda could technically parse; re-check to be safe).
+    for child in ast.walk(stmt):
+        if isinstance(child, (ast.Break, ast.Continue)):
+            return None
+
+    # (4) The append argument(s) must be side-effect-free and mutate nothing but
+    # ``acc`` — a file write or a foreign mutation makes the loop uncacheable.
+    for arg in (*call.args, *(kw.value for kw in call.keywords)):
+        if _expr_has_side_effects_or_foreign_mutation(arg, acc):
+            return None
+
+    return acc, tuple(loop_vars), for_node.iter, call
 
 
 def analyze_statement(

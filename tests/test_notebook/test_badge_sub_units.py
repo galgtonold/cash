@@ -286,16 +286,19 @@ def test_real_for_loop_stamps_call_events_with_loop_header(magics_fixture):
     proves for_handler actually calls it for real intercepted events, not
     just for the metric dict itself.
     """
-    # Deliberately NOT ``out.append(compute(t))`` -- that single-Expr-body
-    # shape matches ``cacheable_accumulator_loop``'s narrow fast path
-    # (control_structures/processor.py), which routes the WHOLE loop through
-    # single-unit caching and never reaches per-iteration decomposition at
-    # all (confirmed by running the accumulator shape here first: it produced
-    # zero ``__iteration_context__`` metrics -- single-unit mode has no
-    # per-iteration concept to stamp). A subscript-assignment body
-    # (``results[t] = compute(t)``) is an ``ast.Assign``, not a bare
-    # ``Expr(Call)``, so it falls through to the real ``ForLoopHandler``
-    # per-iteration path where the loop stamps are actually applied.
+    # Historically NOT ``out.append(compute(t))`` -- that single-Expr-body
+    # shape used to match a dispatch (``cacheable_accumulator_loop``, called
+    # directly from ``control_structures/processor.py``) that routed the
+    # WHOLE loop through single-unit caching REGARDLESS of size, never
+    # reaching per-iteration decomposition at all. CAS-259 (2026-07-31) fixed
+    # that: the shape is now consulted only from INSIDE
+    # ``ForLoopHandler``'s cost-based single-unit branch, so a small loop
+    # like this one (3 items, well under the ~50-iteration threshold) always
+    # decomposes per-iteration regardless of body shape -- the append form
+    # would produce ``__iteration_context__`` metrics here too now. Kept as a
+    # subscript-assignment body (``results[t] = compute(t)``) anyway, since
+    # it's a genuinely different ``ast.Assign`` shape from the bare
+    # ``Expr(Call)`` append form and there's no reason to narrow coverage.
     #
     # ``compute`` must also clear CallUnit's own ``_COST_FLOOR_S`` (10ms,
     # call_unit.py) or the call is never recorded at all regardless of

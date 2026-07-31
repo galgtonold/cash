@@ -141,12 +141,18 @@ def _sampling_defs(log):
 
 
 # Seed cell separate from the loop cell (like `test_cache_calls_directive.py`'s
-# append tests) so `results = []` is NOT the loop's immediately-preceding
-# sibling statement within the SAME cell -- that would make the loop eligible
-# for `cacheable_accumulator_loop`'s narrow single-unit fast path
-# (`control_structures/processor.py`), which routes the whole loop through
-# ONE cache entry and never reaches per-iteration decomposition (and so never
-# reaches `loop_vars` at all). Only `t` is a loop target here -- deliberately
+# append tests). Historically this also mattered for a different reason: a
+# same-cell `results = []` immediately before the loop used to make it
+# eligible for `cacheable_accumulator_loop`'s dispatch
+# (`control_structures/processor.py`), which routed the whole loop through
+# ONE cache entry REGARDLESS of size and never reached per-iteration
+# decomposition. CAS-259 (2026-07-31) removed that dispatch; the shape is now
+# only consulted from inside `ForLoopHandler`'s cost-based single-unit
+# branch, and this loop (2 iterations, `[A, B]`) is far under the
+# ~50-iteration threshold that branch requires -- so even a same-cell seed
+# would decompose here today. Keeping the seed in its own cell is no longer
+# load-bearing for THIS reason, but is kept anyway to match the sibling
+# append tests' convention. Only `t` is a loop target here -- deliberately
 # no `enumerate()`/index variable, which would itself discriminate the key
 # (small ints hash trivially, no sampling involved) and mask the exact bug
 # under test.

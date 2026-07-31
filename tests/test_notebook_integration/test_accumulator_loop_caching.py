@@ -20,27 +20,32 @@ itself, so the real work is still skipped on an unchanged rerun.
 The correctness gates this file pins, post-CAS-259:
   * #1 the call is cached (interception hit, counted from OUTSIDE the
     kernel), result byte-identical to a no-cash run;
-  * #2 / #3 a REAL kernel restart — and here the picture genuinely changed.
-    The disk tier itself is not the issue: ``CallUnit._store`` writes through
-    the exact same ``backend.set(key, value, metadata)`` the statement path
-    uses. The gap is that ``CallUnit._store`` never consults the ``persist``
-    annotation and always writes the same sparse, fixed metadata
-    (``execution_time``/``timestamp``) regardless of what directive sits on
-    the enclosing statement — cache *policy* (this branch's Task 5 report
-    already documented the same gap for TTL and the size/cost model) doesn't
-    propagate down to call units, so ``persist`` never reaches the write that
-    would make it durable. The removed whole-unit fast path used to give this
-    shape ``@cash:persist`` disk survival "for free" by routing it through the
-    ordinary (policy-aware) statement cache; now that the append statement is
-    genuinely a mutation again, the call that only interception caches is
-    written without the durable metadata and does NOT survive a restart. The
-    RESULT stays correct (a full, correct recompute — not corruption or a
-    stale value); these two tests were rewritten to pin exactly that ("correct
-    but fully recomputed", not "restored"). This is a known, accepted
-    consequence of CAS-259 surfaced during its own test triage, not something
-    this suite is hiding — see the CAS-259 task report for the follow-up
-    question it raises (should ``persist`` — and TTL, and the size model —
-    propagate from the statement path down into ``CallUnit``?);
+  * #2 / #3 a REAL kernel restart — and here the picture genuinely changed,
+    though NARROWER than it first looked. The disk tier itself is not the
+    issue: ``CallUnit._store`` writes through the exact same
+    ``backend.set(key, value, metadata)`` the statement path uses, and
+    ``TieredBackend`` promotes an entry to disk either when its metadata sets
+    ``force_persist`` OR when the entry clears the backend's own generic
+    compute-cost floor (~1s) regardless of any annotation. An EXPENSIVE
+    intercepted call (e.g. a 1.2s ``slow``) survives a restart today, with or
+    without ``@cash:persist`` — confirmed against a real kernel. What is
+    actually lost is narrower: ``CallUnit._store`` never consults the
+    ``persist`` annotation and always writes the same sparse, fixed metadata
+    (``execution_time``/``timestamp``), so it can never set
+    ``force_persist`` — cache *policy* (this branch's Task 5 report already
+    documented the same gap for TTL and the size/cost model) doesn't
+    propagate down to call units. For a call CHEAP enough to also miss the
+    generic floor (this file's ``slow`` sleeps 0.03s, deliberately below it),
+    ``@cash:persist`` can no longer override that and force it durable, so it
+    does NOT survive a restart. The RESULT stays correct either way (a full,
+    correct recompute — not corruption or a stale value); these two tests
+    were rewritten to pin exactly that ("correct but fully recomputed", not
+    "restored") for the cheap/sub-floor case specifically. This is a known,
+    accepted consequence of CAS-259 surfaced during its own test triage, not
+    something this suite is hiding — see the CAS-259 task report for the
+    follow-up question it raises (should ``persist`` — and TTL, and the size
+    model — propagate from the statement path down into ``CallUnit``, so it
+    can override the floor for cheap calls too?);
   * #4 a loop with a genuine side effect is NOT cached and re-fires every run
     (the wrong-result guard — unaffected by CAS-259, side effects still
     refuse via the normal per-statement pipeline);
@@ -137,6 +142,55 @@ def test_accumulator_loop_caches(nb_runner, tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# #1b THE regression guard, added after a review caught it live: above the
+#     cost check's own single-unit threshold (>50 iterations, >1s estimated
+#     overhead), decomposition never runs at all -- so caching for this shape
+#     depends ENTIRELY on the chosen single-unit branch itself being
+#     cacheable. CAS-259 originally shipped without wiring ``force_outputs``
+#     back into that branch (``for_handler.py``'s single-unit branch), so
+#     every large/cheap accumulator loop was refused outright by the
+#     in-place-mutation detector and got ZERO caching from EITHER mechanism
+#     -- strictly worse than the pre-CAS-259 baseline, which cached it fine.
+#     This test's absence is the entire reason that shipped; see the CAS-259
+#     task report for the measured before/after.
+# ---------------------------------------------------------------------------
+
+def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
+    """150 iterations x 1 body statement -> 150*1*0.008 = 1.2s estimated
+    overhead, clearing BOTH the >50-iteration and >1s-overhead cost-check
+    thresholds -> the cost check chooses the single-unit branch, not
+    decomposition. An isolated re-run must still skip ALL real work."""
+    counter = tmp_path / "calls.log"
+    nb_runner.create_notebook([
+        SETUP,
+        _slow_def(counter),
+        "items = list(range(150))",
+        "out = []\nfor e in items:\n    out.append(slow(e))",
+        "print(f'len={len(out)} last={out[-1]}')",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    cold = _n(counter)
+    assert cold == 150, f"baseline did not run all 150 iterations: {cold} calls"
+    assert "len=150 last=1490" in nb_runner.get_output(5), nb_runner.get_output(5)
+
+    # Isolated re-run of the loop cell must skip ALL real work, counted from
+    # OUTSIDE the kernel so a badge-text change alone can't fake this
+    # passing. This is the single-unit path (unlike test #1's 5-item loop,
+    # which decomposes and relies on call interception instead) -- so the
+    # badge must show a genuine RESTORED whole-unit entry, not
+    # `[intercepted]` sub-calls.
+    nb_runner.run_cell(4)
+    out = nb_runner.get_output(4)
+    warm = _n(counter) - cold
+    assert warm == 0, f"large accumulator loop did not cache: {warm} real calls, badge={out!r}"
+    assert "RESTORED" in out, f"badge does not show a whole-unit restore: {out!r}"
+
+    nb_runner.run_cell(5)
+    assert "len=150 last=1490" in nb_runner.get_output(5), nb_runner.get_output(5)
+
+
+# ---------------------------------------------------------------------------
 # #2 CAS-259 consequence: a REAL kernel restart no longer restores this shape
 #    from disk. The disk tier is fine; ``persist`` (like TTL and the
 #    size/cost model, per this branch's Task 5 report) just doesn't
@@ -173,11 +227,17 @@ def test_accumulator_loop_recomputes_correctly_after_restart(nb_runner, tmp_path
 
     nb_runner.run_cell(4)
     warm = _n(counter) - cold
-    # A fresh kernel process cannot see the old process's RAM-only
-    # interception cache, and the append statement re-executes regardless —
-    # so all 5 calls genuinely re-run. Asserted explicitly (not just
-    # "don't crash") so a future change that silently alters this either
-    # direction gets caught rather than passing unnoticed.
+    # NOT because interception is RAM-only -- it isn't; CallUnit writes
+    # through the same backend.set() the statement path uses, and an
+    # EXPENSIVE intercepted call (e.g. 1.2s) survives a restart just fine
+    # (TieredBackend promotes to disk once its generic ~1s compute floor is
+    # cleared, `@cash:persist` or not). ``slow`` here sleeps only 0.03s --
+    # deliberately cheap -- and CallUnit's metadata carries neither
+    # `force_persist` (the `persist` annotation never reaches CallUnit._store)
+    # nor a cost-model family, so it falls through to that generic floor and
+    # does NOT clear it. So all 5 calls genuinely re-run. Asserted explicitly
+    # (not just "don't crash") so a future change that silently alters this
+    # either direction gets caught rather than passing unnoticed.
     assert warm == 5, f"expected all 5 calls to re-run post-restart, got {warm}"
 
     nb_runner.run_cell(5)

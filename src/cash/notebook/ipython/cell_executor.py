@@ -1075,6 +1075,7 @@ class CellExecutor:
                     ctrl_result = self._control_structure_processor.process(
                         node, ttl=self._magics._global_ttl, silent=True,
                         raw_cell=raw_cell,
+                        prev_node=tree.body[i - 1] if i > 0 else None,
                     )
                     buffered_result_outputs = self._collect_ctrl_outputs(
                         ctrl_result, is_last, all_metrics, buffered_result_outputs,
@@ -1189,6 +1190,7 @@ class CellExecutor:
                         ctrl_result = self._control_structure_processor.process(
                             node, ttl=self._magics._global_ttl, silent=True,
                             raw_cell=raw_cell,
+                            prev_node=tree.body[i - 1] if i > 0 else None,
                         )
                     buffered_result_outputs = self._collect_ctrl_outputs(
                         ctrl_result, is_last, all_metrics, buffered_result_outputs,
