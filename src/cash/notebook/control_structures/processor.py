@@ -227,7 +227,6 @@ class ControlStructureProcessor:
         parent_context: dict[str, Any] | None = None,
         raw_cell: str | None = None,
         inherited_annotation: 'CacheAnnotation | None' = None,
-        prev_node: ast.stmt | None = None,
     ) -> ControlStructureResult:
         """
         Process a control structure node.
@@ -248,12 +247,6 @@ class ControlStructureProcessor:
                 (tests constructing handlers with mock deps) working unchanged.
             inherited_annotation: Directives from enclosing structures, already
                 resolved, to merge into everything within this one.
-            prev_node: The immediately-preceding top-level statement in the same
-                cell, or ``None``. Used ONLY to detect the accumulator-loop fast
-                path, which needs the ``out = []`` seed that sits right
-                before the loop. Additive and default-``None`` so nested / direct
-                callers (which have no notion of a preceding sibling) are
-                unchanged.
 
         Returns:
             ControlStructureResult with metrics
@@ -265,30 +258,6 @@ class ControlStructureProcessor:
                     logger.debug("[CONTROL] Loop contains break/continue, executing as single unit")
                 return self._execute_as_single_unit(
                     node, ttl, silent, raw_cell, inherited_annotation,
-                )
-            # Accumulator-loop fast path: a pure ``out = []`` +
-            # ``for e in it: out.append(f(e))`` is byte-identical to a
-            # comprehension yet is refused caching today because the append reads
-            # as an in-place mutation. When the narrow shape matches, route the
-            # WHOLE loop through the statement cache as ONE unit, forcing the
-            # accumulator AND the leaked loop variable(s) into the outputs so both
-            # are captured on a miss and restored on a hit (namespace identical to
-            # running the real loop). Everything else — side effects, @stateful
-            # calls, forbidden functions, missing lineage — still refuses via the
-            # normal single-unit pipeline (forcing outputs only suppresses the
-            # accumulator's own mutation reason).
-            from ..cacheability import cacheable_accumulator_loop
-            acc_loop = cacheable_accumulator_loop(node, prev_node)
-            if acc_loop is not None:
-                acc, loop_vars, _iter_node, _expr_call = acc_loop
-                if self.debug:
-                    logger.debug(
-                        "[CONTROL] Accumulator loop -> single cacheable unit "
-                        "(acc=%s, loop_vars=%s)", acc, loop_vars,
-                    )
-                return self._execute_as_single_unit(
-                    node, ttl, silent, raw_cell, inherited_annotation,
-                    force_outputs={acc, *loop_vars},
                 )
             return self._for_handler.process(
                 node, ttl, silent, parent_context, raw_cell, inherited_annotation,
