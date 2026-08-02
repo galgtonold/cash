@@ -28,14 +28,15 @@ a builtin, not a function at all — is an object-level question answered where
 the live object is in hand, not here.
 
 **Caveat for large loops.** The ``out.append(compute(x))`` example above only
-reaches this module when the loop is decomposed per-iteration. Above roughly
-125 iterations for a one-statement body,
-``for_handler._should_execute_loop_as_single_unit`` routes the whole loop to
-the single-unit fast path instead — the threshold is a *product*
-(``n_iterations * body_stmts * 0.008s >= 1.0s``), not the
-``_MIN_ITERATIONS_FOR_SINGLE_UNIT = 50`` constant read on its own, which
-understates it by 2.5x. Calls inside a single-unit loop never reach the
-interceptor.
+reaches this module when the loop is decomposed per-iteration.
+``for_handler._should_execute_loop_as_single_unit`` routes a large-enough loop
+to the single-unit fast path instead, gated by
+``_MIN_ITERATIONS_FOR_SINGLE_UNIT``, ``_PER_STMT_OVERHEAD_SEC``, and
+``_MIN_OVERHEAD_SEC`` in that module. Calls inside a single-unit loop never
+reach the interceptor at all. For the precise threshold, see
+``docs/known-limitations.md``'s "A long for-append loop can stop caching"
+section, whose numbers are pinned to those constants by a claim-anchor test
+(``tests/docs/test_claim_anchors.py``).
 """
 
 import ast
