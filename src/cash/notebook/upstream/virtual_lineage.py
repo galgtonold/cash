@@ -1307,9 +1307,35 @@ class VirtualLineage:
         """
         Simulate execution of a control structure as a single unit.
 
-        Control structures are no longer decomposed per-iteration/per-branch.
-        The entire control structure is treated as one statement for simulation
-        purposes, matching the runtime behavior in ControlStructureProcessor.
+        The entire control structure is treated as one statement for
+        simulation purposes: ``stmt_code = ast.unparse(node)``, one key, one
+        lineage update for everything the structure writes.
+
+        **This does NOT always match the runtime.** The simulator models every
+        loop as one unit; ``ControlStructureProcessor`` only executes one as a
+        unit when ``ForLoopHandler._should_execute_loop_as_single_unit`` says
+        so (roughly ``n >= 125`` for a one-statement body). Below that the
+        runtime decomposes per-iteration and writes per-iteration entries,
+        while this method still models the whole loop.
+
+        That divergence is deliberate and load-bearing, not an oversight to
+        "fix" by decomposing here:
+
+        * What the simulator owes its callers is the loop's **effect on
+          lineage** -- which variables it writes and what they now depend on --
+          so downstream consumers invalidate correctly. Modelling the whole
+          loop gets that right for both dispatch modes.
+        * Reproducing per-iteration keys would mean re-deriving each
+          iteration's ``__iteration_context__`` discriminator without running
+          the loop, which requires the iteration VALUES the simulator does not
+          have.
+
+        The practical consequence, worth knowing before reasoning about loop
+        cache keys: for a decomposed loop the key computed here corresponds to
+        no entry the runtime ever writes, so it simply misses. That is why an
+        unrelated upstream edit can mark such a loop for re-planning while
+        costing zero real recomputation -- the statement cache absorbs it
+        (CAS-262).
         """
         if vars_mutated_by_loops is None:
             vars_mutated_by_loops = set()
