@@ -21,6 +21,7 @@ and exercise it without going through ``ControlStructureProcessor.process()``.
 import ast
 import contextlib
 import logging
+import time as _time
 from typing import TYPE_CHECKING, Any
 
 from . import helpers as _helpers
@@ -92,6 +93,53 @@ class ForLoopHandler:
 
     # Minimum estimated overhead (in seconds) to trigger single-unit mode.
     _MIN_OVERHEAD_SEC = 1.0
+
+    # -- Runtime promotion (CAS-261 step 2) ---------------------------------
+    #
+    # The three constants above are a STATIC guess: they multiply an assumed
+    # per-statement cost by an iteration count, having never seen the loop
+    # run. That leaves a band where the guess says "decompose" and reality
+    # says otherwise -- n below the single-unit threshold, every call below
+    # ``call_unit._COST_FLOOR_S``, so neither mechanism caches anything while
+    # per-iteration machinery is still charged for every pass. Measured at
+    # n=124 on a warm rerun, against a cash-off arm:
+    #
+    #     body 0.1ms  ->  22ms off vs 215ms on   (9.8x SLOWER)
+    #     body 2.5ms  -> 320ms off vs 617ms on   (1.9x slower)
+    #
+    # Promotion measures the first few iterations for real and, if the loop
+    # turns out to live in that band, runs its REMAINDER as one single unit.
+    #
+    # Why a tail and not the whole loop: the decision can only be made after
+    # observing some iterations, and by then those have run. The tail is
+    # EXECUTED through ``_execute_as_single_unit`` -- the same path a natively
+    # dispatched single unit takes -- rather than synthesised from the head's
+    # per-iteration records, so stdout, mutation detection, the cacheability
+    # gate and the key all come from the trusted path instead of being
+    # reproduced by hand.
+
+    # Iterations to measure before deciding. Kept SMALL deliberately: the head
+    # re-runs on every warm pass, and per-iteration overhead is the very thing
+    # promotion exists to remove, so a large probe would retain the cost it is
+    # trying to eliminate (k=10 measured ~25ms warm on a 0.1ms body, against
+    # 22ms for cash-off -- i.e. no gain at all; k=5 roughly halves that).
+    _PROMOTION_PROBE_ITERS = 5
+
+    # An iteration costing at or above this is one whose call clears
+    # ``call_unit._COST_FLOOR_S`` (3ms) once the ~2.2ms of measured
+    # decomposition overhead is subtracted, so per-call caching already
+    # covers it -- and covers it BETTER, because per-call reuse is
+    # incremental (append one item, re-run one call) where a whole-loop unit
+    # is all-or-nothing (its key covers the whole iterable). Promoting such a
+    # loop would silently trade a better mechanism for a worse one, which is
+    # what ``test_expensive_body_is_not_promoted`` guards.
+    _PROMOTION_MAX_ITER_SEC = 0.006
+
+    # Projected remaining loop cost below which promotion is not worth a
+    # store. Deliberately near the measured overhead penalty (~190-300ms at
+    # n=124) rather than far above it: the cost being recovered here is
+    # mostly per-iteration machinery, not the body's own work.
+    _PROMOTION_MIN_REMAINING_SEC = 0.1
 
     # Builtin callables that PRODUCE an iterable without side effects, so the
     # single-unit fast path may re-evaluate the loop header a second time
@@ -249,8 +297,23 @@ class ForLoopHandler:
                 logger.debug("[CONTROL] Iterable lineage: %s...",
                              iterable_lineage[:20] if iterable_lineage else 'None')
 
-            for iteration_value in iterable:
+            # Runtime promotion (CAS-261 step 2): measure the first few
+            # iterations, and if this loop turns out to be in the band where
+            # neither the single-unit heuristic nor per-call caching covers
+            # it, run the REMAINDER as one single unit. ``promo_n`` is None
+            # for any loop that is ineligible, which costs nothing further.
+            promo_n = self._promotion_eligible(node, iterable)
+            probe_elapsed = 0.0
+            promoted_at: int | None = None
+
+            for idx, iteration_value in enumerate(iterable):
+                if (promo_n is not None
+                        and idx == self._PROMOTION_PROBE_ITERS
+                        and self._should_promote_tail(probe_elapsed, idx, promo_n)):
+                    promoted_at = idx
+                    break
                 total_iterations += 1
+                _iter_started = _time.perf_counter()
                 if self._process_one_iteration(
                     node, iteration_value, iterable_lineage, target_names,
                     ttl, silent, all_metrics, parent_context,
@@ -259,6 +322,46 @@ class ForLoopHandler:
                     cached_iterations += 1
                 else:
                     computed_iterations += 1
+                probe_elapsed += _time.perf_counter() - _iter_started
+
+            if promoted_at is not None:
+                # The accumulator shape is detected from the BODY here, not
+                # from a preceding fresh seed: a tail's accumulator is
+                # populated by its own head. See
+                # ``accumulator_loop_body_shape`` for why that is sound.
+                from ..cacheability import accumulator_loop_body_shape
+                force_outputs = None
+                shape = accumulator_loop_body_shape(node)
+                if shape is not None:
+                    acc, loop_vars = shape
+                    force_outputs = {acc, *loop_vars}
+                if self.debug:
+                    logger.debug(
+                        "[PROMOTE] running iterations [%d:] as one unit "
+                        "(force_outputs=%s)", promoted_at, force_outputs,
+                    )
+                tail_result = self.dispatcher._execute_as_single_unit(
+                    self._tail_node(node, promoted_at), ttl, silent, raw_cell,
+                    inherited_annotation, force_outputs=force_outputs,
+                )
+                if not tail_result.success:
+                    # Never leave the loop half-executed: fall back to running
+                    # the remainder per-iteration, exactly as an unpromoted
+                    # loop would have.
+                    logger.debug("[PROMOTE] tail unit failed; finishing per-iteration")
+                    for iteration_value in iterable[promoted_at:]:
+                        total_iterations += 1
+                        if self._process_one_iteration(
+                            node, iteration_value, iterable_lineage, target_names,
+                            ttl, silent, all_metrics, parent_context,
+                            raw_cell, loop_annotation,
+                        ):
+                            cached_iterations += 1
+                        else:
+                            computed_iterations += 1
+                else:
+                    all_metrics.extend(tail_result.metrics)
+                    total_iterations += promo_n - promoted_at
 
             # After all iterations, update lineage for mutated variables
             _helpers.update_lineage_after_execution(
@@ -609,6 +712,95 @@ class ForLoopHandler:
     # ------------------------------------------------------------------
     # Fast-loop heuristic
     # ------------------------------------------------------------------
+
+    def _promotion_eligible(self, node: ast.For, iterable) -> int | None:
+        """Return the iteration count if this loop may be promoted, else ``None``.
+
+        Checked BEFORE any iteration runs, so an ineligible loop pays nothing
+        beyond these predicates. Every exclusion here is load-bearing:
+
+        * **No ``len()``** — a generator or un-sized iterator cannot be sliced
+          for the tail, and re-iterating it would drain an exhausted source.
+          The single-unit path excludes these for the same reason.
+        * **Not sliceable** — the tail's source is ``<iter expr>[k:]``. Sized
+          but unsliceable containers (``set``, ``dict``) cannot form it.
+        * **Header unsafe to re-evaluate** — the tail re-evaluates the loop
+          header, exactly as the single-unit path does; reuse of that path's
+          own guard keeps one rule rather than two that can drift.
+        * **``break``/``continue``** — splitting is not semantics-preserving:
+          a ``break`` in the head must skip the tail entirely. Such loops are
+          already routed to a whole single unit and never decompose, so this
+          is belt-and-braces rather than reachable today.
+        * **``for ... else``** — ``else`` runs only if the loop completed
+          without ``break``; a split loop has no single completion point.
+        * **File I/O in the body** — needs per-iteration dependency tracking,
+          the same reason the single-unit heuristic excludes it.
+        """
+        if node.orelse:
+            return None
+        try:
+            n = len(iterable)
+        except TypeError:
+            return None
+        if n <= self._PROMOTION_PROBE_ITERS:
+            return None
+        try:
+            iterable[0:0]
+        except Exception:  # noqa: BLE001 - any failure means "not sliceable"
+            return None
+        if not self._iter_header_safe_to_reevaluate(node.iter, iterable):
+            return None
+        if self._has_file_io_calls(node.body):
+            return None
+        for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
+            if isinstance(sub, (ast.Break, ast.Continue)):
+                return None
+        return n
+
+    def _should_promote_tail(self, elapsed: float, done: int, n: int) -> bool:
+        """Decide from MEASURED cost whether the remainder is worth one unit.
+
+        ``elapsed`` is wall time for the first ``done`` iterations, so it
+        includes per-iteration decomposition overhead as well as the body --
+        which is correct, because that overhead is most of what promotion
+        recovers for a cheap body.
+        """
+        if done <= 0:
+            return False
+        per_iter = elapsed / done
+        if per_iter >= self._PROMOTION_MAX_ITER_SEC:
+            return False
+        remaining = (n - done) * per_iter
+        promote = remaining >= self._PROMOTION_MIN_REMAINING_SEC
+        if self.debug:
+            logger.debug(
+                "[PROMOTE] per_iter=%.2fms remaining=%.0fms (n=%d done=%d) -> %s",
+                per_iter * 1000, remaining * 1000, n, done, promote,
+            )
+        return promote
+
+    @staticmethod
+    def _tail_node(node: ast.For, start: int) -> ast.For:
+        """Build ``for <target> in <original iter expr>[start:]: <body>``.
+
+        Derived from the ORIGINAL iterable expression rather than from the
+        materialised remaining items. Binding a temp name to those items
+        would key the tail on a content digest of live data; slicing the
+        expression keeps the tail's source a pure function of ``(node,
+        start)`` and its inputs the same variables the undivided loop read.
+        """
+        tail = ast.For(
+            target=node.target,
+            iter=ast.Subscript(
+                value=node.iter,
+                slice=ast.Slice(lower=ast.Constant(value=start)),
+                ctx=ast.Load(),
+            ),
+            body=list(node.body),
+            orelse=[],
+            type_comment=None,
+        )
+        return ast.fix_missing_locations(ast.copy_location(tail, node))
 
     def _iter_header_safe_to_reevaluate(self, iter_node: ast.AST, iterable) -> bool:
         """Whether the loop header may be safely evaluated a second time.

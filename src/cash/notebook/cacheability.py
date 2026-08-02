@@ -3394,6 +3394,58 @@ def _expr_has_side_effects_or_foreign_mutation(expr: ast.expr, acc: str) -> bool
     return any(m.variable != acc for m in mv.mutations)
 
 
+def accumulator_loop_body_shape(
+    for_node: ast.For,
+) -> tuple[str, tuple[str, ...]] | None:
+    """Detect the accumulator shape from the BODY alone, ignoring any seed.
+
+    Returns ``(acc, loop_vars)`` or ``None``. This is
+    :func:`cacheable_accumulator_loop` minus its requirement (2), the
+    fresh-empty-seed check on the immediately-preceding sibling.
+
+    **Why dropping (2) is safe here and not there.** Requirement (2) exists
+    because caching a loop that appends to an ALREADY-POPULATED accumulator
+    would drop or double its prefix — the entry has no way to know what the
+    accumulator held going in. The one caller of this function is the promoted
+    tail (``for_handler``), where the accumulator is populated *by the tail's
+    own head*, which re-runs deterministically immediately before it on every
+    pass. The prefix is therefore reproduced rather than assumed, and the
+    tail's cache key includes the accumulator's post-head lineage — so a head
+    that produced anything different simply misses instead of restoring over
+    it.
+
+    Do NOT reach for this anywhere the prefix is not re-derived that way; use
+    :func:`cacheable_accumulator_loop`, which refuses the case outright.
+
+    Deliberately a sibling rather than a refactor of the existing detector:
+    that function's exact shape gate is depended on by a large body of
+    integration tests, and the duplication here is cheaper than the risk of
+    changing its behaviour by generalising it.
+    """
+    if for_node.orelse or len(for_node.body) != 1:
+        return None
+    stmt = for_node.body[0]
+    if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)):
+        return None
+    call = stmt.value
+    if not (isinstance(call.func, ast.Attribute)
+            and isinstance(call.func.value, ast.Name)):
+        return None
+    acc = call.func.value.id
+    if call.func.attr not in _ACCUMULATOR_SEED_KINDS:
+        return None
+    loop_vars = _simple_loop_target_names(for_node.target)
+    if not loop_vars:
+        return None
+    for child in ast.walk(stmt):
+        if isinstance(child, (ast.Break, ast.Continue)):
+            return None
+    for arg in (*call.args, *(kw.value for kw in call.keywords)):
+        if _expr_has_side_effects_or_foreign_mutation(arg, acc):
+            return None
+    return acc, tuple(loop_vars)
+
+
 def cacheable_accumulator_loop(
     for_node: ast.For, prev_node: ast.stmt | None,
 ) -> tuple[str, tuple[str, ...], ast.expr, ast.Call] | None:
