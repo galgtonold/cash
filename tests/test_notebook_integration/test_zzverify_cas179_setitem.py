@@ -118,16 +118,24 @@ def test_assign_caches_across_12_unchanged_runalls(nb_runner, tmp_path):
 # If the ticket is right, setitem recomputes here and .assign() does not.
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    reason="CAS-179, narrow surviving half: an in-place setitem onto a frame "
-           "created in an UPSTREAM cell re-runs its RHS on an isolated "
-           "single-cell re-run, where the .assign() rebind in the same position "
-           "restores. Setitem onto a frame built in the SAME cell "
-           "(test_setitem_on_a_copy_isolated_rerun) caches fine, so setitem is "
-           "not itself uncacheable -- the trigger is mutating an upstream "
-           "object. May be by-design (the in-place-mutation rebuild rule).",
-    strict=False)
 def test_setitem_isolated_rerun(nb_runner, tmp_path):
+    """CAS-179's narrow surviving half -- FIXED, marker lifted 2026-08-02.
+
+    This was xfail: an in-place setitem onto a frame created in an UPSTREAM
+    cell re-ran its RHS on an isolated single-cell re-run, where the
+    ``.assign()`` rebind in the same position restored. Setitem onto a frame
+    built in the SAME cell always cached fine, so setitem was never itself
+    uncacheable -- the trigger was mutating an upstream object.
+
+    Closed incidentally by the CAS-243 call-unit work, not by a targeted fix.
+    Attribution was measured by swapping only ``src/``: xpassed at the branch
+    head, xfailed on the pre-merge ``main``. Verified stable over three
+    consecutive runs before the marker came off.
+
+    It sat as a silent XPASS through two full sweeps because ``xfail_strict``
+    was off. That is the concrete reason strict is now the default -- see
+    ``pyproject.toml``.
+    """
     cold, warm, tail, badge = _warm_isolated(
         nb_runner, tmp_path, "df['b'] = expensive(N)", READ_DF)
     assert EXPECT in tail, tail

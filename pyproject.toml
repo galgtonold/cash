@@ -183,6 +183,21 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 timeout = 30
 asyncio_mode = "auto"
+# An xfail that starts passing is a FAILURE, not a quiet "x" in the output.
+#
+# This suite records known-open bugs as xfails, so an xfail that begins to pass
+# is news: either a bug got fixed and its ticket should close, or a test stopped
+# testing what it claims. With the default (false) that event is invisible --
+# CAS-179 was fixed by unrelated work and sat as a silent XPASS through two full
+# 832-file sweeps, found only by reading a summary line by hand. The previous
+# mitigation was "remember to run `pytest --runxfail` over the xfail set after
+# lineage/cache work", which is exactly the kind of discipline that gets skipped.
+#
+# Tests whose outcome is genuinely nondeterministic or environment-dependent opt
+# out per-marker with an explicit `strict=False` and a reason (see CAS-61's
+# alias tests and CAS-64's runtime-dependent assert). That makes each exception
+# a visible, argued choice rather than the silent default for everything.
+xfail_strict = true
 # Parallel by default: integration tests each spawn a fresh Jupyter kernel and
 # spend ~90% of wall-clock blocked on kernel boot/IPC, so a serial run pins one
 # core and leaves the rest idle. For interactive debugging (pdb, -s) disable
