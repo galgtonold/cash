@@ -161,6 +161,11 @@ for ticker in ["AAPL", "MSFT", "GOOG"]:
     you can — either one caches the *statement* itself and sidesteps the
     question entirely.
 
+    That guarantee is for loops sized like the one above. A long loop (roughly
+    125+ iterations for a one-line body) switches to whole-loop caching, and
+    calls inside it never reach the interceptor either — see
+    [A long for-append loop can stop caching](../known-limitations.md#a-long-for-append-loop-can-stop-caching).
+
 Two more things worth knowing before you lean on loop caching: a *statement*
 that accumulates (`s += f(x)`, not a bare call) has reuse that follows the
 *order* of the items — but that historical limitation is exactly what the

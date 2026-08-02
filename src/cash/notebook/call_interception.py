@@ -26,6 +26,16 @@ rule that admits ``f(x)`` excludes the mutation. There is no special case for
 particular callee is worth intercepting at runtime — already ``@cash.cache``-d,
 a builtin, not a function at all — is an object-level question answered where
 the live object is in hand, not here.
+
+**Caveat for large loops.** The ``out.append(compute(x))`` example above only
+reaches this module when the loop is decomposed per-iteration. Above roughly
+125 iterations for a one-statement body,
+``for_handler._should_execute_loop_as_single_unit`` routes the whole loop to
+the single-unit fast path instead — the threshold is a *product*
+(``n_iterations * body_stmts * 0.008s >= 1.0s``), not the
+``_MIN_ITERATIONS_FOR_SINGLE_UNIT = 50`` constant read on its own, which
+understates it by 2.5x. Calls inside a single-unit loop never reach the
+interceptor.
 """
 
 import ast
