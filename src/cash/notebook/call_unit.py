@@ -293,9 +293,6 @@ def call_cache_key(
     has no such comment to inherit, which is precisely why this fixes it.
     **Do not "fix" a cache miss by adding the iteration context here.**
 
-    Note: ``rng_fingerprint`` is deliberately not threaded through — it is
-    dead plumbing with no producer anywhere in the codebase.
-
     **stmt_identity (CAS-256).** The base key above is built from the call's
     OWN source and free names alone, which is silent about which *statement*
     the call sits in. Two different statements whose call text and free names
