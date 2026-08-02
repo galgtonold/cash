@@ -730,14 +730,7 @@ def test_shape_d_oracle_no_caching(nb_runner, tmp_path):
 # Sub-break-even guard: cash must not make a cheap loop SLOWER
 # ===========================================================================
 
-# 20 is chosen so runtime promotion (CAS-261 step 2) is STRUCTURALLY unable to
-# fire here, rather than merely unlikely to. Promotion needs
-# ``per_iter < _PROMOTION_MAX_ITER_SEC`` (6ms) AND
-# ``(n - 5) * per_iter >= _PROMOTION_MIN_REMAINING_SEC`` (0.1s); at n=20 the
-# second requires per_iter >= 6.67ms, which contradicts the first. Any n >= 22
-# makes the two satisfiable at once, so this guard would become a race between
-# machine speed and the thresholds -- green here, flaky on a slower box.
-_N_TINY = 20
+_N_TINY = 60
 
 
 def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
@@ -761,14 +754,12 @@ def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
     would false-fail under parallel load the way ``test_cfd_loop_overhead``
     does, and would be measuring the machine rather than the policy.
 
-    Interaction with CAS-261 step 2 (runtime promotion), which has landed:
-    promotion caches this band by running the loop's remainder as ONE unit,
-    which is the correct fix and does not contradict this test. The two are
-    kept apart structurally rather than by tuning -- see ``_N_TINY`` for why
-    n=20 makes promotion unsatisfiable here. What this guard pins is
-    unchanged and still true under promotion: these calls must never be
-    stored INDIVIDUALLY, because N per-call stores cost N hits while one unit
-    costs one.
+    NOTE for CAS-261 step 2: whole-loop promotion will legitimately turn this
+    into 0 warm calls, restored as ONE unit -- that is the correct fix for
+    this band, and it does not contradict this test's point. When it lands,
+    change the assertion to "restored as a single unit"; do NOT simply delete
+    it, because the thing being guarded (never store these calls
+    individually) stays true either way.
     """
     counter = tmp_path / "calls.log"
     # sleep=0 -> the body is just a file append, far below the 3ms floor.
