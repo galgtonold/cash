@@ -136,7 +136,7 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     `compute_hash_full(value)` call here is correct but was measured too
     expensive for what it buys: a 200k-row DataFrame costs 0.15ms sampled vs
     19ms full; a 5M-float ndarray 0.03ms vs 14.7ms; a 1M-int list 0.01ms vs
-    12.4ms. Against `_COST_FLOOR_S` (10ms, the bar a call's own execution
+    12.4ms. Against `_COST_FLOOR_S` (3ms, the bar a call's own execution
     time must clear to be worth caching at all), the KEY for a large loop var
     can cost more than the call being decided about. It is also PER CALL, not
     per iteration -- the digest is read fresh inside `CallUnit._build_key`,
@@ -394,12 +394,30 @@ def call_cache_key(
     ).hexdigest()
 
 
-#: Below this, a call is not worth a key, a store, or a timer -- mirrors the
-#: statement path's ``min_execution_time_to_cache_seconds`` floor
-#: (``statement/processor.py:_store_in_cache``, default 0.01s). This is what
-#: makes an allow-list of "trivial builtins" unnecessary: ``len()`` can never
-#: clear it.
-_COST_FLOOR_S = 0.010
+#: Below this, a call is not worth a key, a store, or a timer.
+#:
+#: This started as a mirror of the statement path's
+#: ``min_execution_time_to_cache_seconds`` (``statement/processor.py:
+#: _store_in_cache``, default 0.01s) -- inherited, not measured. The two paths
+#: do not have the same overhead, and mirroring made this one over-conservative
+#: by ~3x: a whole band of loops cleared neither this floor nor the single-unit
+#: threshold and so cached nothing at all (CAS-261).
+#:
+#: 3ms is derived from measurement, not from the statement path. End-to-end,
+#: n=124 (see ``zzmeas_cas261_*``): store ~0.7ms/call, hit ~1.2ms/call, so a
+#: call pays for itself once its body clears ~1.2ms. Measured warm rerun vs
+#: cash-off at this n: 0.1ms body 8x SLOWER, 1ms 1.25x slower, 2ms 1.3x faster,
+#: 5ms 5x faster. 3ms keeps ~2.5x margin over the break-even for slower
+#: machines while covering the reported band.
+#:
+#: Unchanged by the lower value: an allow-list of "trivial builtins" is still
+#: unnecessary, since ``len()`` cannot clear 3ms either.
+#:
+#: Bodies BELOW this floor are not left uncovered -- they are the promotion
+#: case, where one whole-loop unit amortises over every iteration instead of
+#: N per-call entries (CAS-261 step 2). This constant is the boundary between
+#: the two mechanisms, which is why no band should fall between them.
+_COST_FLOOR_S = 0.003
 
 
 class _ForwardingTee:

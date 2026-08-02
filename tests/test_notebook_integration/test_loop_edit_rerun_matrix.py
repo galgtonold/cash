@@ -24,21 +24,20 @@ cache hit. Using one here to COUNT executions is not an endorsement of that
 gap; it is the least-invasive way to get a ground truth number that survives
 being read by a value-blind cache.
 
-Design note discovered while building this: ``compute()`` must NOT read a
-plain module-global free variable (e.g. ``return v * factor`` with `factor`
-defined in another cell). Measured directly: an otherwise-identical shape
-went from 0 real calls on an unchanged rerun to 3 (every call, every time),
-regardless of which edit was applied -- call-level caching (CAS-243) simply
-never cached calls to a callee with that shape of free-variable read, in
-either direction (store or restore). That is a real, reproducible behaviour
-(compute() closing over `factor` vs. baking the multiplier directly into the
-function body is the one-line difference), but it is a DIFFERENT gap from the
-three this module targets and would have confounded every case if left in
-place -- it deserves its own investigation, not a footnote inside this one.
-The negative-control "edit a real dependency" case therefore redefines
-``compute()`` itself (the function the loop actually calls), which every
-existing convention in this suite already relies on for exactly this
-purpose, rather than introducing a free-variable read.
+Retracted design note (kept as a record, because the retraction is the
+lesson). An earlier draft of this module reported that ``compute()`` must not
+read a plain module-global free variable -- that ``return v * factor`` with
+`factor` in another cell defeated call-level caching entirely, every call,
+every time. **That was re-measured on 2026-08-02 and is false.** Four
+configurations (global in its own cell vs. beside the ``def``, crossed with
+the single-statement and two-statement loop shapes) all gave 0 real calls on
+an unchanged rerun and exactly 1 on an append -- identical to a callee with
+no free-variable read at all. The original observation came from an
+uncommitted scratch draft that carried a confounder.
+
+The negative control still redefines ``compute()`` itself rather than editing
+a variable it reads, which is the existing convention in this suite -- but for
+convention's sake, not because the alternative is broken.
 
 Shapes (seed placement matters -- see "hoisting" below)
 ---------------------------------------------------------
@@ -61,12 +60,22 @@ CAS-259 (fixed on this branch, commit 61d920d) and CAS-261 (still open) sit on
 opposite sides of one boundary: ``for_handler._should_execute_loop_as_single_
 unit`` treats a loop as one big cacheable unit once ``n * body_stmts * 0.008s
 >= 1.0s`` (n >= 125 for a 1-statement body); below that it decomposes, and
-``call_unit._COST_FLOOR_S`` (10ms) only *stores* a call that individually took
-that long. A loop can be under BOTH floors at once -- decomposed (so no
-whole-unit caching) yet each call too cheap to store individually (so no
-per-call caching either) -- while its aggregate cost is well worth caching.
-CAS-261's own measured reproduction is n=124 iterations at 5ms/call (0.62s
-total): 0 warm calls before CAS-259 touched anything, 124 warm calls after.
+``call_unit._COST_FLOOR_S`` only *stores* a call that individually took that
+long. A loop can be under BOTH floors at once -- decomposed (so no whole-unit
+caching) yet each call too cheap to store individually (so no per-call caching
+either) -- while its aggregate cost is well worth caching. CAS-261's own
+measured reproduction is n=124 iterations at 5ms/call (0.62s total): 0 warm
+calls before CAS-259 touched anything, 124 warm calls after.
+
+**Status: CAS-261 step 1 landed.** ``_COST_FLOOR_S`` was 10ms -- inherited
+from the statement path's floor rather than measured -- and is now **3ms**,
+derived from end-to-end measurement (store ~0.7ms/call, hit ~1.2ms/call, so
+break-even is a ~1.2ms body). The four shape-A-large cases below were
+``xfail(strict=True)`` against CAS-261 and now pass outright: the n=100 at
+5ms band went from 100 warm calls to 0. What remains open is the band BELOW
+the break-even (many iterations of a sub-millisecond body), where per-call
+caching cannot pay for itself at any N and the fix is promotion to a
+whole-loop unit -- CAS-261 step 2, designed but not built.
 
 The task brief suggested "large (150 items, cheap body)" for this variant.
 Measured directly: n=150 at 5ms/call clears the single-unit threshold
@@ -89,31 +98,34 @@ CAS-262 confound, found while calibrating this module
 ---------------------------------------------------------
 The existing xfailed probe for CAS-262 (``test_zzprobe_codeleads.py::
 test_unrelated_upstream_edit_reruns_loop``) uses a bare-expression loop body
-(``results.append(i * i)``, no function call). Measured directly here: with a
-CALLABLE body, call-level caching independently absorbs the loop's real work
-even in configurations where the *statement* still gets marked stale --
-several adjacent-seed and hoisted-seed configurations that were expected to
-plausibly reproduce CAS-262 (by shape, per the ticket's own attribution
-table) instead measured 0 real calls on an unrelated-edit case. The ONE
-configuration in this module where an unrelated edit costs real recomputation
-is shape A's large/uncached-size variant -- and there it is indistinguishable
-from CAS-261: the SAME configuration already fails to cache a plain unchanged
-rerun, so "the unrelated edit re-ran everything" and "nothing was ever cached
-in the first place" cannot be told apart by a real-call count. This module's
-unrelated-edit case is therefore attributed to CAS-261 everywhere it fails,
-never solely to CAS-262 -- see the report for the full reasoning and for why
-that narrows, rather than contradicts, CAS-262's stated scope.
+(``results.append(i * i)``, no function call). Every unrelated-edit case in
+this module measures 0 real calls, so none of them reproduces CAS-262.
 
-xfail policy
-------------
-A failure that matches CAS-261's or CAS-262's own described mechanism is
-marked ``xfail(strict=True)`` naming the ticket, with the measured numbers in
-the reason, so a fix shows up loudly as an unexpected XPASS. A failure that
-does not match either ticket is left as a plain, failing assertion -- not
-xfailed, not silenced, not "fixed" here. Per the task brief: a matrix of
-tests that cannot fail is worse than no matrix, and an unattributed red test
-is the flag that sends the next investigation to the right place instead of
-requiring another hand audit.
+An earlier reading attributed that to call-level caching (CAS-243) absorbing
+the re-execution whenever the callee is cacheable. **That mechanism is
+wrong.** Re-measured with a monotonic counter: a loop whose callee is BELOW
+``_COST_FLOOR_S`` -- never stored at the call level, so call caching cannot
+be helping -- still shows 0 recomputation after an unrelated upstream edit
+(6 real calls cold, 6 after the edit; had the body re-executed it would read
+12). Statement-level restore is what absorbs it.
+
+CAS-262 itself still fails on HEAD under ``--runxfail``, so it is real: it is
+over-invalidation at the PLANNING level, detected by inspecting
+``UPSTREAM_DEBUG`` output. This module counts WORK. Both instruments are
+valid and they answer different questions -- which is precisely how CAS-262
+came to be filed at a severity ("an edit to an unrelated cell costs a full
+loop re-run") that measurement does not support. The ticket now carries that
+scope correction and was lowered High -> Medium.
+
+Failure policy
+--------------
+A failure that does not match a known ticket's described mechanism is left as
+a plain, failing assertion -- not xfailed, not silenced, not "fixed" here. A
+matrix of tests that cannot fail is worse than no matrix, and an unattributed
+red test is the flag that sends the next investigation to the right place
+instead of requiring another hand audit. There are currently no xfails in
+this module: the four that recorded CAS-261's band were lifted when step 1
+landed.
 
 ``get_output`` / ``run_cell`` on ``nb_runner`` are 1-based cell indices.
 """
@@ -121,11 +133,14 @@ import pytest
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
-# Above call_unit._COST_FLOOR_S (10ms) so shapes A-small/B/C/D exercise
-# real per-call caching rather than the "too cheap to store" floor.
+# Well above call_unit._COST_FLOOR_S so shapes A-small/B/C/D exercise real
+# per-call caching rather than the "too cheap to store" floor.
 _SLEEP_SMALL = 0.3
-# Below call_unit._COST_FLOOR_S; n=100 is below the single-unit threshold
-# (n>=125 for a 1-stmt body) -- this is CAS-261's uncached band.
+# 5ms: CAS-261's reported band. Under the 10ms floor this stored nothing (100
+# warm calls); under the measured 3ms floor it caches (0 warm calls). n=100
+# also stays below the single-unit threshold (n>=125 for a 1-stmt body), so
+# this exercises per-CALL caching, not whole-loop caching -- including after
+# the append case takes it to 101.
 _SLEEP_LARGE = 0.005
 _N_LARGE = 100
 
@@ -139,9 +154,13 @@ SMALL_BASE = "[1, 2, 3]"
 SMALL_APPEND = "[1, 2, 3, 4]"
 SMALL_REORDER = "[3, 1, 2]"
 
-LARGE_BASE = f"list(range({_N_LARGE}))"
-LARGE_APPEND = f"list(range({_N_LARGE + 1}))"
-LARGE_REORDER = f"[1, 0] + list(range(2, {_N_LARGE}))"
+# Ranges start at 1, never 0: `compute(0)` returns `0 * 10`, which CPython
+# interns to the argument object itself, tripping the call unit's
+# arg-identity refusal -- one permanently-uncached call that mimics a caching
+# bug. See _compute_def's docstring.
+LARGE_BASE = f"list(range(1, {_N_LARGE + 1}))"
+LARGE_APPEND = f"list(range(1, {_N_LARGE + 2}))"
+LARGE_REORDER = f"[2, 1] + list(range(3, {_N_LARGE + 1}))"
 
 
 def _n(path):
@@ -150,6 +169,18 @@ def _n(path):
 
 
 def _compute_def(counter, sleep, mult=10):
+    """Item sets must not contain ``0`` -- see the LARGE_* definitions.
+
+    ``return v * mult`` on ``v = 0`` yields ``0``, which CPython interns to
+    the very same object as the argument. The call unit's arg-identity guard
+    correctly refuses to cache a callee that returns its own argument, so
+    that ONE call re-ran on every warm rerun forever and looked exactly like
+    a caching bug -- it cost a full bisect to attribute.
+
+    Fixed by starting the ranges at 1 rather than by changing this payload:
+    shapes C and D assert on exact printed values, so altering the return
+    here silently rewrites what those tests are checking.
+    """
     return (
         "def compute(v):\n"
         f"    open(r'{counter}', 'a').write('X')\n"
@@ -332,16 +363,6 @@ def test_shape_a_small_oracle_no_caching(nb_runner, tmp_path):
 # Shape A, LARGE (n=100, 5ms/call, ADJACENT seed) -- CAS-261's uncached band
 # ===========================================================================
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-261: n=100 at 5ms/call is below BOTH the single-unit threshold "
-        "(n>=125) and call_unit's 10ms store floor. Measured on HEAD "
-        "(a465608): 100/100 real calls on a plain unchanged rerun -- nothing "
-        "is ever stored, so the 'restored' rerun is actually a full "
-        "recompute. strict=True: must XPASS loudly once CAS-261 is fixed."
-    ),
-)
 def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
     """Mutation: raising call_unit._COST_FLOOR_S above 5ms would make this
     fail even harder (more of the small-shape tests would join it);
@@ -360,15 +381,6 @@ def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
     assert warm == 0, f"unchanged rerun re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE})"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-261: same uncached band -- nothing was ever stored for the 100 "
-        "baseline items, so appending one more cannot reuse any of them "
-        "either. Measured on HEAD (a465608): 101/101 real calls (full "
-        "recompute), not the 1 real reuse would cost."
-    ),
-)
 def test_shape_a_large_append(nb_runner, tmp_path):
     """Same underlying mechanism as the unchanged-rerun case above -- see
     that test's mutation note."""
@@ -386,15 +398,6 @@ def test_shape_a_large_append(nb_runner, tmp_path):
     assert warm == 1, f"append re-ran {warm} calls, expected 1 (only the new item)"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-261: same uncached band -- nothing to reuse regardless of "
-        "order. Measured on HEAD (a465608): 100/100 real calls (full "
-        "recompute) instead of the 0 a truly order-independent call cache "
-        "would cost."
-    ),
-)
 def test_shape_a_large_reorder(nb_runner, tmp_path):
     """Same underlying mechanism as the unchanged-rerun case above."""
     counter = tmp_path / "calls.log"
@@ -411,18 +414,6 @@ def test_shape_a_large_reorder(nb_runner, tmp_path):
     assert warm == 0, f"reorder re-ran {warm} calls, expected 0"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-261, NOT independent evidence of CAS-262: this exact "
-        "configuration already fails to cache a plain unchanged rerun (see "
-        "test_shape_a_large_unchanged_rerun, also 100/100), so a full "
-        "recompute here cannot be told apart from 'nothing was ever cached "
-        "in the first place.' Measured on HEAD (a465608): 100/100 real "
-        "calls. See the module docstring and task report for why this is "
-        "attributed to CAS-261 rather than CAS-262."
-    ),
-)
 def test_shape_a_large_unrelated_edit(nb_runner, tmp_path):
     """Same underlying mechanism as the unchanged-rerun case above."""
     counter = tmp_path / "calls.log"
@@ -733,3 +724,69 @@ def test_shape_d_oracle_no_caching(nb_runner, tmp_path):
     nb_runner.run_cell(LOOP_CELL_HOISTED)
     warm = _n(counter) - cold
     assert warm == 3, f"oracle only re-ran {warm} calls on unchanged rerun; expected 3"
+
+
+# ===========================================================================
+# Sub-break-even guard: cash must not make a cheap loop SLOWER
+# ===========================================================================
+
+_N_TINY = 60
+
+
+def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
+    """A call cheaper than the break-even must NOT be cached per-call.
+
+    This is the guard the suite never had, and its absence is why CAS-261's
+    proposed fix looked right on paper. That fix was "if a site is hit N times
+    and N x elapsed clears a floor, store it, even when each call is
+    individually sub-floor." It cannot work: storing N calls saves N x body
+    but costs N x hit, so the ratio is PER CALL and aggregate size never
+    enters it. Measured end-to-end at n=124 with the floor forced to 0:
+
+        body 0.1ms -> 166ms warm vs 21ms cash-off   (8x SLOWER)
+        body 1ms   -> 166ms warm vs 133ms cash-off  (1.25x slower)
+        body 2ms   -> 200ms warm vs 257ms cash-off  (1.3x faster)
+
+    So per-call caching below ~1.2ms is a pessimisation no N can rescue, and
+    ``_COST_FLOOR_S`` is what prevents it. This test pins that protection.
+
+    Asserted as counted executions, not wall-clock: a timing assertion here
+    would false-fail under parallel load the way ``test_cfd_loop_overhead``
+    does, and would be measuring the machine rather than the policy.
+
+    NOTE for CAS-261 step 2: whole-loop promotion will legitimately turn this
+    into 0 warm calls, restored as ONE unit -- that is the correct fix for
+    this band, and it does not contradict this test's point. When it lands,
+    change the assertion to "restored as a single unit"; do NOT simply delete
+    it, because the thing being guarded (never store these calls
+    individually) stays true either way.
+    """
+    counter = tmp_path / "calls.log"
+    # sleep=0 -> the body is just a file append, far below the 3ms floor.
+    cells = [SETUP, UNRELATED, _compute_def(counter, 0),
+             f"out = []\nfor t in list(range(1, {_N_TINY + 1})):\n"
+             f"    out.append(compute(t))\nprint('OUT', len(out))"]
+    nb_runner.create_notebook(cells)
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    cold = _n(counter)
+    assert cold == _N_TINY, f"baseline did not run all {_N_TINY} items: {cold}"
+
+    nb_runner.run_cell(4)
+    warm = _n(counter) - cold
+
+    # Deliberately a range, not `== _N_TINY`. The store decision is itself
+    # timing-derived, so an occasional call genuinely does clear 3ms -- the
+    # first one usually does, since it pays the counter file's creation cost.
+    # Measured here: 59/60. That is the policy working, not failing.
+    #
+    # The range still discriminates sharply, which is the point: with the
+    # floor removed (the rejected "aggregate elapsed" fix) essentially every
+    # call is stored and this reads ~0-1, nowhere near the bound.
+    assert warm >= _N_TINY - 5, (
+        f"sub-break-even calls are being cached individually ({warm}/"
+        f"{_N_TINY} re-ran; expected nearly all of them). Storing these costs "
+        "more than recomputing them -- check whether _COST_FLOOR_S was "
+        "lowered below the measured ~1.2ms break-even, or whether a store "
+        "decision stopped consulting it."
+    )
