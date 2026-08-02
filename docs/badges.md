@@ -125,7 +125,23 @@ A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused
 <iframe class="cash-badge" src="/_badges/not_cached_side_effect.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
 <!-- claim: cash/notebook/badge_renderer/view_builder.py:map_status @4b2a5f04 -->
-**Why:** The statement writes to a file, sends a network request, mutates a database, or prints/plots — Cash never caches statements with observable side effects because restoring from cache would skip the side effect.
+**Why:** The statement writes to a file, sends a network request, mutates a database, or prints/plots — Cash does not cache *statements* with observable side effects, because restoring from cache would skip the side effect.
+
+!!! note "This badge is about the statement, not everything inside it"
+
+    By default Cash still caches an expensive **call inside** such a statement
+    — see [Call-level
+    caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls).
+    A call's stdout is captured and replayed on a hit, and files it reads are
+    tracked as dependencies. Effects Cash *cannot* replay — mutating an
+    argument, drawing from an RNG — make a call ineligible, so it re-runs.
+    Effects Cash cannot **see** are a documented limitation: a callee that
+    mutates a global it was never handed is not detected ([Mutating global
+    state inside a
+    function](known-limitations.md#mutating-global-state-inside-a-function)).
+
+    `# @cash:no-cache-calls` turns call-level caching off for a statement or
+    cell; `# @cash:no-cache` covers the statement *and* everything in it.
 
 **Fix:** Split the side effect off into its own statement and let the *value-producing* statement above it cache. If the side effect *is* the point of the cell, leave it uncached and use `@cash:no-cache` to suppress the warning.
 

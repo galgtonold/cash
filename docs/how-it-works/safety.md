@@ -116,10 +116,17 @@ the two. The control structure owns its body's mutation lineage instead.
     `data.append(4)` costs microseconds; getting object identity wrong costs
     a silently wrong notebook.
 
-    This does mean an accumulator loop (`out = []` then
-    `for e in it: out.append(slow(e))`) never caches. Cash says so in the badge
-    and points at the rewrite that does: `out = [slow(e) for e in it]` assigns
-    its result, so it has an output and caches like any other statement.
+    This does mean the accumulator *statement* itself (`out = []` then
+    `for e in it: out.append(slow(e))`) never caches — there is no output to
+    cache, only a mutation. The loop is not a total loss, though: by default
+    Cash caches the expensive **call inside** it (`slow(e)`, not the `append`
+    around it), so re-running the loop reuses every element it has already
+    computed. See [Call-level
+    caching](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls).
+
+    Cash says so in the badge and points at the rewrite that caches the loop
+    as a whole: `out = [slow(e) for e in it]` assigns its result, so it has an
+    output and caches like any other statement.
 
 ### A bare `model.fit(X, y)`
 
