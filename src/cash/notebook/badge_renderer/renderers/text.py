@@ -141,15 +141,44 @@ def _row_line(row: StatementRow, *, is_upstream: bool) -> str:
     return f"  {tag}: {code}  ({row.time_s:.2f}s)"
 
 
-def _iteration_line(it: IterationRow, *, is_upstream: bool) -> str:
-    pseudo = StatementRow(
+def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
+    """A ``StatementRow`` view of *it*, for reuse of the row-rendering helpers.
+
+    Carries ``sub_units`` through (CAS-243 task 9) -- an iteration's
+    intercepted sub-calls otherwise never reach ``_sub_unit_lines``, since a
+    loop-body statement is an ``IterationRow``, not a ``StatementRow``.
+    """
+    return StatementRow(
         status=it.status,
         code=it.code,
         time_s=it.time_s,
         saved_time_s=it.saved_time_s,
         storage_tiers=it.storage_tiers,
+        sub_units=it.sub_units,
     )
-    return _row_line(pseudo, is_upstream=is_upstream)
+
+
+def _iteration_lines(it: IterationRow, pad: str, *, is_upstream: bool) -> list[str]:
+    """The iteration's own line plus one ``sub-call ...`` line per call site,
+    nested at the SAME indent the loop's other body lines use -- not as
+    siblings of the loop (CAS-243 task 9)."""
+    pseudo = _iteration_pseudo_row(it)
+    return [pad + _row_line(pseudo, is_upstream=is_upstream), *_sub_unit_lines(pseudo, pad)]
+
+
+def _sub_unit_lines(row: StatementRow, pad: str) -> list[str]:
+    """One line per call SITE inside *row* (CAS-243 intercepted sub-calls).
+
+    Mirrors the cell-level ``[intercepted]`` line's job at
+    statement granularity: grouped by ``(call_source, occurrence_index)``,
+    not by callee -- see ``SubUnitGroup`` for why. Nothing when the
+    statement made no intercepted calls.
+    """
+    return [
+        f"{pad}    sub-call {g.call_source}: "
+        f"{sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)}/{len(g.calls)} hit"
+        for g in row.sub_units
+    ]
 
 
 #: Leaf item types that render as exactly one line at their parent's level.
@@ -184,15 +213,13 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
     """
     pad = _INDENT * indent
     if isinstance(item, StatementRow):
-        return [pad + _row_line(item, is_upstream=is_upstream)]
+        return [pad + _row_line(item, is_upstream=is_upstream), *_sub_unit_lines(item, pad)]
     if isinstance(item, ForLoopGroup):
         out: list[str] = []
         for sub in _loop_body(item):
             if isinstance(sub, LoopStatement):
-                out.extend(
-                    pad + _iteration_line(it, is_upstream=is_upstream)
-                    for it in sub.iterations
-                )
+                for it in sub.iterations:
+                    out.extend(_iteration_lines(it, pad, is_upstream=is_upstream))
             else:
                 out.extend(
                     _item_lines(sub, is_upstream=is_upstream, indent=indent + 1)
@@ -207,7 +234,7 @@ def _item_lines(item: SectionItem, *, is_upstream: bool, indent: int = 0) -> lis
             )
         return out
     if isinstance(item, ControlGroupSingle):
-        return [pad + _row_line(item.row, is_upstream=is_upstream)]
+        return [pad + _row_line(item.row, is_upstream=is_upstream), *_sub_unit_lines(item.row, pad)]
     if isinstance(item, SkippedBucket):
         out = []
         for sub in item.items:
@@ -235,7 +262,11 @@ def _decorator_lines(sections: tuple[Section, ...]) -> list[str]:
         short = g.func_name.split(".")[-1] if "." in g.func_name else g.func_name
         # Name the mechanism for a call cash wrapped itself: the user decorated
         # nothing, so an unlabelled entry reads as someone else's doing.
-        via = " [via @cash:cache-calls]" if g.intercepted else ""
+        # Deliberately not named after a directive -- interception is
+        # unconditional (CAS-243 default-on), and spelling this
+        # ``cache-calls`` would substring-collide with the opt-out
+        # ``no-cache-calls`` in any grep/assertion over badge text.
+        via = " [intercepted]" if g.intercepted else ""
         lines.append(f"    {short}(){via}: {cached}/{total} cached ({time_s:.3f}s)")
     return lines
 

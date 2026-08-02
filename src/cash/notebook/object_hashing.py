@@ -57,13 +57,54 @@ def _hash_collection(obj: Any) -> str:
     return hashlib.sha256(combined.encode('utf-8')).hexdigest()
 
 
+def identity_hash(obj: Any) -> str:
+    """``compute_hash``'s tier-3 fallback formula, factored out so a caller can
+    recognise when a hash it received IS this fallback (see
+    ``is_identity_fallback_hash``) rather than a real content hash.
+
+    Deliberately id-based, not content-based: this is the tier ``compute_hash``
+    reaches only once pickling itself has failed, so there is no content
+    signal left to hash. It "always succeeds" in the sense that ``id()`` never
+    raises -- not in the sense that it reflects the object's content. An
+    object hashed this way that is mutated in place produces the SAME hash
+    before and after, because ``id()`` does not change under mutation.
+    """
+    return hashlib.sha256(str(id(obj)).encode('utf-8')).hexdigest()
+
+
+def is_identity_fallback_hash(obj: Any, hash_value: str) -> bool:
+    """True when *hash_value* -- assumed to be ``compute_hash(obj)``'s result
+    for THIS *obj* -- is the tier-3 identity fallback rather than a real
+    content hash.
+
+    Exists for callers that need to know whether a ``compute_hash`` result
+    can be trusted to change when the object's *content* changes -- e.g.
+    before/after mutation detection (``CallUnit._hash_args``). Content-hashed
+    results reflect the object's data; an identity-hashed result reflects only
+    ``id(obj)``, which is invariant across an in-place mutation, so a caller
+    diffing two ``compute_hash`` snapshots across a mutation would otherwise
+    see no change and wrongly conclude the object was untouched.
+
+    Recomputes ``identity_hash(obj)`` and compares against *hash_value*
+    rather than re-deriving "did compute_hash take the fallback path" some
+    other way, so this can never drift out of sync with what ``compute_hash``
+    actually did -- it asks the same question ``compute_hash`` answered,
+    using the same formula, not a parallel guess at it. A genuine content hash
+    coincidentally colliding with ``sha256(str(id(obj)))`` is a second-preimage
+    event on SHA-256 and not a practical concern.
+    """
+    return hash_value == identity_hash(obj)
+
+
 def compute_hash(obj: Any) -> str:
     """Compute a hash for an object using type-specific methods with explicit fallbacks.
 
     Strategy order:
     1. Type-specific fast hash (DataFrame/ndarray/collections)
     2. Generic pickle hash
-    3. Identity hash (always succeeds)
+    3. Identity hash (always succeeds) -- see ``identity_hash`` /
+       ``is_identity_fallback_hash`` for why this tier is content-BLIND, not
+       merely a cruder content hash.
     """
     type_name = type(obj).__name__
 
@@ -87,7 +128,7 @@ def compute_hash(obj: Any) -> str:
     except (TypeError, pickle.PicklingError):
         pass
 
-    return hashlib.sha256(str(id(obj)).encode('utf-8')).hexdigest()
+    return identity_hash(obj)
 
 
 def compute_hash_full(obj: Any) -> str:

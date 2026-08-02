@@ -11,7 +11,8 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:ttl=N` | — | non-negative int (seconds) | Override the default TTL for this statement. |
 | `# @cash:allow-random` | `allowrandom` | no | Suppress the unseeded-randomness warning for this statement. Advisory only — see [below](#cashallow-random-alias-allowrandom). |
 | `# @cash:cache-fit` | `cachefit` | no | Opt a bare `estimator.fit(X, y)` in to caching. Off by default — see [below](#cashcache-fit-alias-cachefit). |
-| `# @cash:cache-calls` | `cachecalls` | no | Cache the expensive **call inside** the statement rather than the statement. Off by default — see [below](#cashcache-calls-alias-cachecalls). |
+| `# @cash:no-cache-calls` | `nocachecalls` | no | Turn off caching the expensive **call inside** a statement. **On by default** — see [below](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls). |
+| `# @cash:cache-calls` | `cachecalls` | no | Legacy. Parses without error but does nothing — call-level caching no longer needs opting in. |
 
 A minimal example:
 
@@ -211,26 +212,44 @@ An unseeded opted-in fit warns that the cached model is a frozen replay (the
 `.fit()`'s internal randomness is invisible to the AST scanner);
 [`# @cash:allow-random`](#cashallow-random-alias-allowrandom) suppresses it.
 
-### `# @cash:cache-calls` (alias: `cachecalls`)
+### Call-level caching (default) and `# @cash:no-cache-calls` (alias: `nocachecalls`)
 
-Moves the cache **one level down**, from the statement to the expensive call
-inside it. Use it when the statement is a cheap wrapper around slow work —
-which is exactly when statement-level caching cannot help:
+Cash caches **one level down** by default, from the statement to the
+expensive call inside it, not just the statement itself. This is on
+automatically — no directive needed — which is exactly what makes it help in
+the one place statement-level caching structurally cannot: a cheap wrapper
+around slow work.
 
 <!-- test:skip reason="illustrative: `compute` and `items` are the reader's own" -->
 ```python { .nb-cell }
-# @cash:cache-calls
 for x in items:
     results.append(compute(x))     # compute(x) is cached; the append re-runs
+```
+
+No annotation appears above that loop. Prior to this being the default, the
+same effect required an explicit `# @cash:cache-calls` on the header; that
+spelling still parses (so an old notebook doesn't error) but does nothing —
+see [Common mistakes](#common-mistakes) if you're migrating a notebook that
+still has it lying around and wondering why it's a no-op now.
+
+If you need to turn this off — for a statement whose callee has side effects
+the analyzer can't see, or while debugging a caching-related surprise —
+`# @cash:no-cache-calls` is the escape hatch:
+
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own" -->
+```python { .nb-cell }
+# @cash:no-cache-calls
+for x in items:
+    results.append(compute(x))     # compute(x) re-executes every run, like before this feature existed
 ```
 
 Two shapes benefit, and neither can be fixed at statement level:
 
 - **A call inside an in-place mutation.** `results.append(compute(x))` mutates an
   object that already exists, so cash refuses to cache the statement — there is
-  no snapshot that would reproduce an append. With the directive, `compute(x)` is
-  cached and the append still executes, which is both faster *and* more faithful:
-  the mutation genuinely happens on every run.
+  no snapshot that would reproduce an append. By default `compute(x)` is
+  cached anyway and the append still executes, which is both faster *and* more
+  faithful: the mutation genuinely happens on every run.
 - **A call inside an accumulator fold.** `s += compute(x)` reads `s`, so each
   iteration's key encodes every iteration before it and reordering the list
   re-runs everything after the first change. A call cache keys on arguments, not
@@ -262,39 +281,57 @@ and two logically-identical instances miss each other. Self-mutating methods
 (`counter.next()`, `cursor.fetchone()`) would be frozen outright. Decorate the
 method yourself, with a `register_hasher` for its type, when you want that.
 
-**If nothing is eligible, cash says so.** A directive that matches no call emits
-a `CashCacheIneffectiveWarning` naming the statement, once — not once per loop
-iteration. Silence would be indistinguishable from a cache that merely missed.
+**If nothing is eligible, nothing happens.** No warning, no error, no badge note
+— for most statements there is no expensive sub-call to find, and that is the
+overwhelmingly common case under default-on. (An earlier, opt-in version of
+this feature warned when a directive matched nothing; that warning no longer
+exists, because "matched nothing" stopped being a signal the user did
+anything wrong the moment interception became unconditional.)
 
-The directive attaches to the statement below it and the backward scan stops at
-the first non-comment line, so on a loop put it on the **header**:
+`# @cash:no-cache-calls` attaches to the statement below it, and the backward
+scan stops at the first non-comment line — same rules as every other
+directive. To turn interception off for a whole loop rather than one
+statement, put it on the **header**:
 
 <!-- test:skip reason="illustrative: contrasts directive placement" -->
 ```python { .nb-cell }
 s = 0
-# @cash:cache-calls                 <- on the header: reaches the body
+# @cash:no-cache-calls              <- on the header: reaches the body
 for x in items:
     s += compute(x)
 ```
 
-Hits show up on the badge alongside decorated calls — it is the same cache — but
-labelled with the directive that produced them, so you can confirm it engaged and
-aren't left wondering where a `@cash.cache` section came from when you decorated
-nothing:
+It also propagates from a cell's **leading comment block** — the very first
+lines of the cell, before any code — to every top-level statement in that
+cell, the same way [`# @cash:no-cache`](#cashno-cache-alias-nocache) does.
+That matters more now than it used to: under the old opt-in directive,
+forgetting it just meant a statement missed out on a speed-up. Under
+default-on, the failure direction inverts — forgetting the *opt-out* on one
+statement in a cell where you meant to disable it for all of them means that
+one statement stays intercepted, which can matter if its callee is one you
+don't trust interception's purity judgement on (see the warning below).
+
+Hits show up on the badge alongside decorated calls — it is the same cache —
+but tagged so you can tell an intercepted call from one you hand-decorated
+with `@cash.cache`:
 
 ```text
   @cash.cache:
-    compute() [via @cash:cache-calls]: 2/3 cached (0.402s)
+    compute() [intercepted]: 2/3 cached (0.402s)
 ```
 
-!!! warning "Opt-in for a reason"
+!!! warning "On by default — know the risk"
     Cash's statement path judges a statement's callees only against the
     forbidden-function scan and explicit `@stateful` marks. Routing a call
     through the cache applies the *stricter* decorator gate — but it also means
-    statements cash previously declined for an unrelated reason (the mutation)
-    are purity-judged for the first time. If `compute` has side effects the
-    analyzer can't see, a cached call will skip them. Opt in per statement, and
-    check the badge shows the hits you expect.
+    statements cash previously declined to cache for an unrelated reason (the
+    mutation) are purity-judged for the first time, **automatically, for every
+    statement**, not just ones you opted in. If `compute` has side effects the
+    analyzer can't see, a cached call will skip them **without you asking it
+    to**. This risk is not smaller than it was when the feature was opt-in —
+    only the default moved. Check the badge shows the hits you expect, and
+    reach for `# @cash:no-cache-calls` (per statement or per cell) the moment a
+    callee's purity is something you're not sure of.
 
 ### The two warnings
 
@@ -506,7 +543,8 @@ When several annotations apply to a single statement (stacked above, on the line
 | `no_cache` | logical OR |
 | `allow_random` | logical OR |
 | `cache_fit` | logical OR |
-| `cache_calls` | logical OR |
+| `cache_calls` | logical OR (parsed but inert — see [above](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)) |
+| `no_cache_calls` | logical OR |
 | `ttl` | "other wins if set" — order-sensitive |
 
 That means:
@@ -514,6 +552,7 @@ That means:
 - Boolean flags are sticky: once `persist=True` shows up in the block, the whole block is `persist=True`.
 - **`ttl` order matters**: the *last* `ttl=` the parser sees wins. The forward walk runs after the backward walk, so an in-body `ttl=` overrides a header `ttl=`.
 - Mixing `persist` and `no-cache` is allowed, but `no-cache` short-circuits cacheability at [`cacheability_decision.py` — `decide_cacheability`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/cacheability_decision.py), so `persist` becomes a no-op.
+- `no-cache` also wins over call-level interception: caching the expensive call inside a no-cache statement would honour the letter while breaking the intent, the same reasoning that makes it win over `persist`. You never need to write `no-cache-calls` alongside `no-cache` — the statement-level directive already covers it.
 
 Examples:
 
@@ -596,6 +635,25 @@ model = train()
 
 The parser walks backward from the statement looking for annotations *above* it (and forward into compound-statement bodies). An annotation on a sibling line *below* a top-level statement binds to the next statement, not the one above it.
 
+### `# @cash:cache-calls` left over from before this feature was default-on
+
+<!-- test:skip reason="illustrative: `compute`, `out`, `x` are the reader's own" -->
+```python
+# @cash:cache-calls
+out.append(compute(x))   # NOT wrong, but not doing anything either
+```
+
+This parses fine — it isn't a typo, and it doesn't error. It just doesn't do
+anything: call-level caching is unconditional now (see [Call-level
+caching](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls)),
+so the directive that used to switch it on has nothing left to switch. If a
+notebook written before this changed still has it lying around, it's
+harmless and safe to leave, or delete — either way `compute(x)` above is
+still cached, with or without the comment. This is the one directive on this
+page whose presence or absence provably makes **no difference** to behavior;
+every other entry in this section is a case where the annotation you wrote
+silently isn't the one that took effect.
+
 ### Blank line between annotation and statement
 
 ```python
@@ -619,6 +677,68 @@ for i in range(10):
 ```
 
 This is about *which statements the directive reaches*, not cache granularity. Granularity is unchanged: a `for`/`if` body is still cached per statement (and a `for` per iteration), while `while`/`with` execute as a single unit — see [Scoping inside control structures](#scoping-inside-control-structures).
+
+### A cell-header opt-out does not reach past an intervening statement
+
+`# @cash:no-cache` and `# @cash:no-cache-calls` also propagate from a **cell's
+leading comment block** — the very first lines of the cell, before any real
+code — to every top-level statement in that cell. That is a *different*
+mechanism from the control-structure header inheritance above, and the two
+don't compose the way you might expect. `out` below is built in an **earlier**
+cell (its own cache entry, not part of this example — mutating it in place
+across cells is the ordinary, common shape this section is about, not the
+same-cell whole-unit caching a container built and appended to in ONE cell can
+trigger):
+
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own; measured on the equivalent shape below" -->
+```python
+# cell 1
+out = []
+```
+
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own; measured on the equivalent shape below" -->
+```python
+# cell 2 -- TRAP
+# @cash:no-cache-calls
+dummy = 1                          # <- reached by the cell-header mechanism
+for x in items:
+    out.append(compute(x))        # <- NOT reached: this loop's own header
+                                   #    annotation is resolved separately, by
+                                   #    scanning locally upward from `for`,
+                                   #    and that scan stops at `dummy = 1`
+```
+
+The loop's own annotation is resolved by a **local backward scan starting at
+the `for` line**, not by consulting the cell header — so it stops the moment
+it hits `dummy = 1`, the same as it would stop at any other code line. The
+cell-header opt-out reached `dummy = 1` (a plain top-level statement) but
+never reached the loop at all — measured, this loop's `compute(x)` calls stay
+intercepted, exactly as if the directive weren't there.
+
+**What to do:** put the opt-out directly above the statement or loop you mean
+to cover, with nothing in between:
+
+<!-- test:skip reason="illustrative: `compute` and `items` are the reader's own; measured on the equivalent shape below" -->
+```python
+# cell 2 -- FIX
+# @cash:no-cache-calls
+for x in items:
+    out.append(compute(x))        # now covered
+```
+
+Or, if the intent really is "nothing in this cell should be intercepted",
+make the loop the first thing in the cell so the two mechanisms coincide.
+
+Measured on the exact shape above (`compute` sleeping past the cost floor,
+`out` built in cell 1, cell 2 re-run after each variant): the TRAP cell costs
+**zero** calls on a re-run — interception silently won, the opt-out never
+engaged — the FIX costs the **full count again** every re-run, and a THIRD
+cell with no directive at all, right after the FIX, costs zero calls just
+like the TRAP does, for the opposite reason: interception is the default, so
+"no directive" and "an opt-out that silently failed to attach" are
+indistinguishable from the call count alone. The badge is what tells them
+apart — check for the `[intercepted]` tag, not just whether a re-run cost
+anything.
 
 ### Annotation in a string literal
 

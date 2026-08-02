@@ -147,16 +147,31 @@ for ticker in ["AAPL", "MSFT", "GOOG"]:
 ```
 
 !!! warning "Collect with an assignment or a store, not `.append()`"
-    A subscript store like the one above caches per iteration. A
-    `results.append(...)` does **not** — cash has no snapshot that would
-    reproduce an append, so that body re-executes on every run. Build the list
-    with a comprehension (`results = [fetch_and_model(t) for t in tickers]`) or
-    store into a dict by key.
+    A subscript store like the one above caches the **statement** per iteration.
+    A `results.append(...)` statement does **not** — cash has no snapshot that
+    would reproduce an append, so that statement always re-executes.
 
-Two more things worth knowing before you lean on loop caching: iteration reuse
-follows the *order* of the items when the body accumulates (appending to the list
-is free; reordering re-runs the tail), and a long loop can switch to whole-loop
-caching. Both are measured in
+    That no longer means the *work* is repeated, though: by default cash also
+    caches the expensive **call inside** the statement (`fetch_and_model(ticker)`
+    here, not the `append` around it), so a `.append()` loop still skips
+    redoing the slow part on a re-run — only the cheap append itself happens
+    again. `# @cash:no-cache-calls` turns that off, if you need the call to
+    genuinely re-run too. Prefer a comprehension
+    (`results = [fetch_and_model(t) for t in tickers]`) or a dict store when
+    you can — either one caches the *statement* itself and sidesteps the
+    question entirely.
+
+    That guarantee is for loops sized like the one above. A long loop (roughly
+    125+ iterations for a one-line body) switches to whole-loop caching, and
+    calls inside it never reach the interceptor either — see
+    [A long for-append loop can stop caching](../known-limitations.md#a-long-for-append-loop-can-stop-caching).
+
+Two more things worth knowing before you lean on loop caching: a *statement*
+that accumulates (`s += f(x)`, not a bare call) has reuse that follows the
+*order* of the items — but that historical limitation is exactly what the
+default call-level caching above already dissolves for eligible calls
+(reordering costs nothing, not "just the tail"), and a long loop can switch
+to whole-loop caching. Both are measured in
 [Known limitations](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 See [The notebook path](../how-it-works/notebook-path.md) for how partial hits work.
 

@@ -16,7 +16,8 @@ class CacheAnnotation:
     ttl: int | None = None   # Override TTL in seconds
     allow_random: bool = False  # Suppress randomness warnings
     cache_fit: bool = False     # Opt in to caching a bare ``estimator.fit(X, y)``
-    cache_calls: bool = False   # Opt in to caching CALLS inside the statement
+    cache_calls: bool = False   # No-op: call-interception is the default (CAS-243)
+    no_cache_calls: bool = False  # Opt OUT of caching CALLS inside the statement
 
     def merge(self, other: CacheAnnotation) -> CacheAnnotation:
         """Merge with another annotation (other takes precedence for ttl)."""
@@ -26,13 +27,15 @@ class CacheAnnotation:
             ttl=other.ttl if other.ttl is not None else self.ttl,
             allow_random=self.allow_random or other.allow_random,
             cache_fit=self.cache_fit or other.cache_fit,
-            cache_calls=self.cache_calls or other.cache_calls
+            cache_calls=self.cache_calls or other.cache_calls,
+            no_cache_calls=self.no_cache_calls or other.no_cache_calls
         )
 
     def has_directives(self) -> bool:
         """Check if any directives are set."""
         return (self.persist or self.no_cache or self.ttl is not None
-                or self.allow_random or self.cache_fit or self.cache_calls)
+                or self.allow_random or self.cache_fit or self.cache_calls
+                or self.no_cache_calls)
 
 # Regex patterns for annotation parsing ([\w-]+ allows hyphens in directive names)
 # Whitespace is tolerated after the colon and around ``=`` so both the
@@ -63,7 +66,12 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
     if directive == 'cache-fit' or directive == 'cachefit':
         return CacheAnnotation(cache_fit=True)
     if directive == 'cache-calls' or directive == 'cachecalls':
+        # Call-interception is the default now (CAS-243); this directive is
+        # kept parseable so notebooks written under the opt-in era don't
+        # error, but it has no effect.
         return CacheAnnotation(cache_calls=True)
+    if directive == 'no-cache-calls' or directive == 'nocachecalls':
+        return CacheAnnotation(no_cache_calls=True)
     if directive == 'ttl' and value is not None:
         try:
             return CacheAnnotation(ttl=int(value))
@@ -120,9 +128,9 @@ def parse_annotations_in_range(
 def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
     """The cell-scoped directives from the cell's LEADING comment block.
 
-    Only ``no-cache`` propagates from the header to the whole cell. That
-    asymmetry is deliberate, and it is about which way each directive is safe to
-    be wrong:
+    Only ``no-cache`` and ``no-cache-calls`` propagate from the header to the
+    whole cell. That asymmetry is deliberate, and it is about which way each
+    directive is safe to be wrong:
 
     * ``no-cache`` is a SAFETY opt-out. A user writes it because caching this
       cell would be *incorrect* — timestamps, side effects, live values. Applying
@@ -130,6 +138,13 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
       explicitly marked do-not-cache, producing exactly the stale
       values the user was trying to prevent. Over-applying it merely costs speed,
       so it fails safe cell-wide.
+    * ``no-cache-calls`` is the same shape of opt-out, one level down: call
+      interception is on by default (CAS-243), and under default-on the
+      placement trap inverts -- someone who needs to disable it for a whole
+      cell should not have to annotate every statement in it. Applying it to
+      only the first statement would leave statements 2..n intercepted despite
+      an explicit cell-wide "don't". Over-applying it merely costs speed, so it
+      fails safe cell-wide too.
     * ``persist`` / ``ttl`` are PERFORMANCE hints, and over-applying them is the
       expensive direction: a header ``persist`` spread across a loop that grows a
       frame snapshots every intermediate width — measured at 13x cache
@@ -150,8 +165,8 @@ def leading_cell_annotation(source_lines: list[str]) -> CacheAnnotation:
         ann = parse_annotation_line(line)
         if ann:
             header = header.merge(ann)
-    # Propagate the safety opt-out only.
-    return CacheAnnotation(no_cache=header.no_cache)
+    # Propagate the safety opt-outs only.
+    return CacheAnnotation(no_cache=header.no_cache, no_cache_calls=header.no_cache_calls)
 
 
 def get_statement_annotations(

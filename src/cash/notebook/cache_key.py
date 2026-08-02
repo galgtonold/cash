@@ -334,7 +334,7 @@ def compute_cache_key(
     ctx: CacheKeyContext,
     outputs: set[str] | None = None,
     occurrence_index: int = 0,
-    rng_fingerprint: str | None = None,
+    namespace: str = "stmt",
 ) -> CacheKeyResult:
     """Compute the cache key for a statement.
 
@@ -360,6 +360,12 @@ def compute_cache_key(
         When the same statement appears multiple times (e.g., ``c.increment()``
         repeated 3 times), each occurrence gets a unique index (0, 1, 2) to
         ensure distinct cache keys. Defaults to 0 (first occurrence).
+    namespace : str, optional
+        Key-space prefix. ``"stmt"`` (default) for statements; ``"call"`` for
+        sub-statement call units. Namespacing rather than a second builder
+        keeps ADR-007's single-source-of-truth invariant: one place computes
+        the combined hash, and the prefix only decides which space it lands
+        in. ``write_provenance_key``'s ``writeprov:`` is the same pattern.
 
     Returns
     -------
@@ -423,28 +429,20 @@ def compute_cache_key(
     # distinct keys (first occurrence is ``occ0``).
     occurrence_component = f":occ{occurrence_index}"
 
-    # A draw's result is determined by the RNG state it consumes, which no
-    # other component sees: the source is stable and the RNG module is not a
-    # tracked input. Without this, re-seeding upstream leaves the key identical
-    # and cash replays the previous seed's numbers. Omitted entirely
-    # when absent, so keys for non-drawing statements are byte-identical to
-    # their pre-existing values and no existing entry is invalidated.
-    rng_component = f":rng{rng_fingerprint}" if rng_fingerprint else ""
-
     # Globals the called functions reach for at CALL time, including any bound
     # BELOW this statement — which the input-lineage path structurally cannot
-    # see, because it is built when the ``def`` runs and only looks upward
-    #. Same omit-when-empty rule as the RNG component above: a
-    # statement that calls no user-defined function keeps a byte-identical key.
+    # see, because it is built when the ``def`` runs and only looks upward.
+    # Omitted entirely when absent, so a statement that calls no user-defined
+    # function keeps a byte-identical key.
     callee_deps = called_function_dependencies(sorted_inputs, user_ns, variable_lineage)
     callee_component = f":callees:{':'.join(callee_deps)}" if callee_deps else ""
 
     combined_hash_str = (
         f"{source_hash}:{':'.join(input_hashes)}{func_component}{module_component}"
-        f"{occurrence_component}{rng_component}{callee_component}"
+        f"{occurrence_component}{callee_component}"
     )
     combined_hash = hashlib.sha256(combined_hash_str.encode('utf-8')).hexdigest()
-    cache_key = f"stmt:{combined_hash}"
+    cache_key = f"{namespace}:{combined_hash}"
 
     if debug:
         debug_print_fn(

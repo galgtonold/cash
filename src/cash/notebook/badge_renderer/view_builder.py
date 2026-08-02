@@ -33,6 +33,7 @@ from .view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
+    build_sub_unit_groups,
 )
 
 # Statuses that don't represent a "ran" or "restored" data operation. They
@@ -660,6 +661,11 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         )
         for c in raw_decorator
     )
+    # Per-call-site grouping of the same raw events (CAS-243), for the
+    # "Sub-calls" drawer section — see SubUnitGroup for why site rather
+    # than callee. Only events with intercepted=True contribute; a
+    # hand-decorated call has no call site and stays out of this list.
+    sub_units = tuple(build_sub_unit_groups(raw_decorator))
 
     changed_modules = m.get("changed_modules") or {}
     if isinstance(changed_modules, dict):
@@ -689,6 +695,7 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         changed_functions=_tup_str(m.get("changed_functions")),
         changed_modules=changed_modules_tup,
         decorator_calls=dec_calls,
+        sub_units=sub_units,
         body_statements=_tup_str(m.get("body_statements")),
         cache_key_short=cache_key_short,
         miss_reason=m.get("miss_reason") or None,
@@ -707,6 +714,11 @@ def _iteration_row(m: dict[str, Any]) -> IterationRow:
         saved_time_s=float(m.get("saved_time", 0.0) or 0.0),
         storage_tiers=_tup_str(m.get("storage")),
         loop_bindings=bindings,
+        # Same per-call-site grouping as ``_statement_row_from_metric`` (CAS-243
+        # task 9) — a loop-body statement's intercepted sub-calls otherwise
+        # never reach the badge at all, since it renders as an IterationRow,
+        # not a StatementRow.
+        sub_units=tuple(build_sub_unit_groups(m.get("decorator_calls") or [])),
     )
 
 
@@ -760,9 +772,18 @@ def _section_item_from_grouped(item: dict[str, Any]) -> SectionItem:
         body_list: list[Any] = []
         for _, item_kind, sub in ordered:
             if item_kind == "stmt":
+                stmt_metrics = sub.get("metrics", [])
+                # Aggregate sub-calls across ALL iterations of this body
+                # statement (CAS-243 task 9) -- the HTML renderer shows this
+                # statement as one collapsed row, so it needs one combined
+                # view rather than per-iteration groups.
+                raw_calls_all_iters = [
+                    c for m in stmt_metrics for c in (m.get("decorator_calls") or [])
+                ]
                 ls = LoopStatement(
                     base_code=str(sub.get("base_code", "")),
-                    iterations=tuple(_iteration_row(m) for m in sub.get("metrics", [])),
+                    iterations=tuple(_iteration_row(m) for m in stmt_metrics),
+                    sub_units=tuple(build_sub_unit_groups(raw_calls_all_iters)),
                 )
                 stmts_list.append(ls)
                 body_list.append(ls)

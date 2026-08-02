@@ -56,6 +56,7 @@ from ..view import (
     SectionKind,
     SkippedBucket,
     StatementRow,
+    SubUnitGroup,
     iter_iterations,
 )
 from ._pytoken import highlight_python
@@ -1118,6 +1119,28 @@ def _rowtip_html(row: StatementRow) -> str:
         hits = sum(1 for c in row.decorator_calls if c.status is BadgeStatus.RESTORED)
         n = len(row.decorator_calls)
         dl_parts.append(f"<dt>@cache</dt><dd>{hits}/{n} cache hits</dd>")
+    if row.sub_units:
+        # Per-call-SITE breakdown of the intercepted (on by default, CAS-243)
+        # sub-calls this statement made -- see SubUnitGroup for why grouping
+        # is by site rather than callee. One summary line, then one line per
+        # site with its own hit ratio and cache-key prefix (the same-prefix-
+        # across-runs signal the statement row already gives for itself).
+        su_hits = sum(1 for g in row.sub_units for c in g.calls if c.status is BadgeStatus.RESTORED)
+        su_n = sum(len(g.calls) for g in row.sub_units)
+        sites = " · ".join(_esc(g.call_source) for g in row.sub_units[:3])
+        dl_parts.append(f"<dt>Sub-calls</dt><dd>{su_hits}/{su_n} hit · {sites}</dd>")
+        for g in row.sub_units:
+            g_hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
+            detail = f"{g_hits}/{len(g.calls)} hit"
+            if g.key_prefix:
+                detail += f" · <code>{_esc(g.key_prefix)}</code>"
+            if g.condensed:
+                detail += " · condensed"
+            if g.miss_reason:
+                detail += f" · {_esc(g.miss_reason)}"
+            dl_parts.append(
+                f"<dt class='cash-subunit'>{_esc(g.call_source)}</dt><dd>{detail}</dd>"
+            )
     if row.changed_functions:
         dl_parts.append(f"<dt>Fn changed</dt><dd>{_esc(', '.join(row.changed_functions))}</dd>")
     if row.changed_modules:
@@ -1328,6 +1351,43 @@ def _iter_drilldown_html(
             f"</div>"
         )
     return f'<div class="c3-iter-table">{"".join(rows)}</div>'
+
+
+def _loop_stmt_sub_units_html(sub_units: tuple[SubUnitGroup, ...]) -> str:
+    """Sub-calls block for a loop-body statement's collapsed aggregate row.
+
+    Sits INSIDE the same toggle-revealed area as ``_iter_drilldown_html``
+    (nested under the loop body row, not a sibling of the loop) -- CAS-243
+    task 9. *sub_units* here is already aggregated across every iteration
+    (see ``view_builder``'s ``LoopStatement.sub_units``), so this shows one
+    line per call SITE for the whole statement, not per iteration.
+    """
+    if not sub_units:
+        return ""
+    hits = sum(1 for g in sub_units for c in g.calls if c.status is BadgeStatus.RESTORED)
+    n = sum(len(g.calls) for g in sub_units)
+    rows = []
+    for g in sub_units:
+        g_hits = sum(1 for c in g.calls if c.status is BadgeStatus.RESTORED)
+        detail = f"{g_hits}/{len(g.calls)} hit"
+        if g.key_prefix:
+            detail += f" · <code>{_esc(g.key_prefix)}</code>"
+        if g.condensed:
+            detail += " · condensed"
+        if g.miss_reason:
+            detail += f" · {_esc(g.miss_reason)}"
+        rows.append(
+            f'<div class="c3-iter-row cash-subunit">'
+            f'<span class="c3-iter-key">{_esc(g.call_source)}</span>'
+            f'<span class="c3-iter-key">{detail}</span>'
+            f"</div>"
+        )
+    return (
+        '<div class="c3-iter-table c3-subunit-table">'
+        f'<div class="c3-iter-row c3-subunit-summary">Sub-calls: {hits}/{n} hit</div>'
+        + "".join(rows)
+        + "</div>"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1558,7 +1618,10 @@ def _for_loop_group_html(g: ForLoopGroup, max_time: float) -> str:
             # Show every iteration when the count fits comfortably in a
             # cell; cap to the first N + a "… +M more" row beyond that.
             cap = 0 if stmt_total <= _ITER_INLINE_LIMIT else _ITER_INLINE_LIMIT
-            expansion = _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap)
+            expansion = (
+                _iter_drilldown_html(iters, g.loop_var_names, max_rows=cap)
+                + _loop_stmt_sub_units_html(item.sub_units)
+            )
             body_rid = _uid("rx")
             body_pieces.append(
                 f'<div class="c3-rowx c3-loop-body">'
@@ -1759,11 +1822,16 @@ def _skipped_bucket_html(sb: SkippedBucket, max_time: float) -> str:
 # Decorator section
 # ---------------------------------------------------------------------------
 
-#: Tag shown on a call cash wrapped itself under ``# @cash:cache-calls``, as
-#: opposed to one the user decorated. Same cache, but the reader needs to know
-#: which mechanism put it there — and whether their directive engaged.
-_INTERCEPTED_TAG = "@cache-calls"
-_INTERCEPTED_TITLE = "cached by # @cash:cache-calls, not by a decorator"
+#: Tag shown on a call cash wrapped itself via call interception (CAS-243,
+#: on by default), as opposed to one the user decorated with ``@cash.cache``.
+#: Same cache, but the reader needs to know which mechanism put it there.
+#:
+#: Deliberately NOT named after a directive: interception is unconditional
+#: (no ``# @cash:cache-calls`` needed to make this label appear), and a tag
+#: spelling ``cache-calls`` would also substring-match the opt-out
+#: ``# @cash:no-cache-calls`` in any test or log scrape that greps for it.
+_INTERCEPTED_TAG = "@intercepted"
+_INTERCEPTED_TITLE = "cached automatically via call interception -- disable with @cash:no-cache-calls"
 
 
 def _cache_tag_html(intercepted: bool) -> str:

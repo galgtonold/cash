@@ -1,15 +1,20 @@
 """An intercepted call must be legible as such on the badge (CAS-243).
 
-Intercepted calls land in the same "N calls, M cached" region as hand-decorated
-ones, which is the right place — it is the same cache. But undifferentiated it
-misleads in both directions:
+Interception is on by DEFAULT (task 10) — no directive needed to trigger it,
+``# @cash:no-cache-calls`` is the opt-out. Intercepted calls land in the same
+"N calls, M cached" region as hand-decorated ones, which is the right place —
+it is the same cache. But undifferentiated it misleads in both directions:
 
 - a user who decorated nothing sees a ``@cash.cache`` section appear and cannot
   tell where it came from;
-- a user who wrote ``# @cash:cache-calls`` has no way to confirm it engaged,
-  which the directive's own docs tell them to do.
+- a user relying on interception (which is unconditional now) has no way to
+  confirm it actually engaged for a given call.
 
-So the group carries the distinction and the renderers show it.
+So the group carries the distinction and the renderers show it, tagged
+``@intercepted`` -- deliberately NOT named after a directive, since (a)
+nothing needs to be written to trigger it and (b) a tag spelled
+``cache-calls`` would substring-collide with ``no-cache-calls`` in any
+grep/assertion over badge text.
 """
 from __future__ import annotations
 
@@ -20,7 +25,8 @@ import pytest
 import cash
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.badge_renderer.renderers.text import render_text
-from cash.notebook.call_interception import CallCache
+from cash.notebook.call_interception import CallCache, CallSite
+from tests.conftest import ABOVE_PERSISTENCE_FLOOR_S
 
 
 # ---------------------------------------------------------------- CallCache
@@ -30,35 +36,55 @@ def call_cache(tmp_path):
     return CallCache(cash.Cash(cache_dir=str(tmp_path / "cc")))
 
 
-def test_wrapped_names_records_what_it_intercepted(call_cache):
-    """The processor needs a key it can match drained log entries against."""
-    def compute(x):
-        return x + 1
-
-    assert call_cache.wrapped_names == set()
-    call_cache.resolve(compute)
-    assert any(n.endswith("compute") for n in call_cache.wrapped_names), (
-        f"expected compute's qualified name, got {call_cache.wrapped_names}"
+def _site(source="compute(x)", names=("compute", "x")):
+    return CallSite(
+        source=source, free_names=frozenset(names), occurrence_index=0,
+        computed_arg_positions=(0,),
     )
 
 
-def test_passed_through_callables_are_not_recorded(call_cache):
-    """Only what was actually wrapped counts, or the badge over-claims."""
+def test_wrapped_calls_are_recorded_as_intercepted(call_cache):
+    """Every event a genuinely-wrapped call produces must carry the flag the
+    badge reads -- set at the source now, not reconciled by name afterwards.
+    """
+    def compute(x):
+        import time
+        time.sleep(ABOVE_PERSISTENCE_FLOOR_S)  # above the cost-model floor
+        return x + 1
+
+    call_cache.set_sites([_site()])
+    wrapped = call_cache.resolve(compute)
+    wrapped(5)
+
+    events = call_cache.drain_call_log()
+    assert events, "the wrapped call produced no drained event"
+    assert all(e["intercepted"] is True for e in events), events
+
+
+def test_passed_through_callables_produce_no_event(call_cache):
+    """Only what was actually wrapped logs anything, or the badge over-claims."""
+    call_cache.set_sites([_site(source="len(a)", names=("len", "a"))])
     call_cache.resolve(len)
     call_cache.resolve(None)
-    assert call_cache.wrapped_names == set()
+    assert call_cache.drain_call_log() == []
 
 
-def test_already_decorated_functions_are_not_recorded(call_cache, tmp_path):
-    """A hand-decorated call must keep reading as hand-decorated."""
+def test_already_decorated_functions_produce_no_call_cache_event(call_cache, tmp_path):
+    """A hand-decorated call must keep reading as hand-decorated: resolving it
+    through ``call_cache`` must not wrap it, so nothing lands in the
+    call-unit log this ``call_cache`` drains -- calling it is accounted for
+    by the decorator's own log instead (a separate mechanism entirely).
+    """
     other = cash.Cash(cache_dir=str(tmp_path / "other"))
 
     @other.cache
     def compute(x):
         return x + 1
 
-    call_cache.resolve(compute)
-    assert call_cache.wrapped_names == set()
+    call_cache.set_sites([_site()])
+    resolved = call_cache.resolve(compute)
+    resolved(5)
+    assert call_cache.drain_call_log() == []
 
 
 # ------------------------------------------------------------- rendering
@@ -82,8 +108,8 @@ def _metrics(intercepted: bool):
 def test_text_badge_marks_an_intercepted_group():
     text = render_text(build_interactive_badge(_metrics(intercepted=True)))
     assert "compute()" in text, text
-    assert "cache-calls" in text, (
-        f"an intercepted group must name the directive that produced it:\n{text}"
+    assert "[intercepted]" in text, (
+        f"an intercepted group must be labelled as such:\n{text}"
     )
 
 
@@ -91,7 +117,7 @@ def test_text_badge_leaves_a_decorated_group_unmarked():
     """Positive control: the marker must not appear for ordinary decorated calls."""
     text = render_text(build_interactive_badge(_metrics(intercepted=False)))
     assert "compute()" in text, text
-    assert "cache-calls" not in text, (
+    assert "[intercepted]" not in text, (
         f"a hand-decorated group was mislabelled as intercepted:\n{text}"
     )
 
@@ -106,7 +132,7 @@ def _html(intercepted: bool, n_calls: int = 2) -> str:
 
 def test_html_badge_marks_an_intercepted_group():
     """A notebook shows HTML badges by default, so the marker must reach there too."""
-    assert "@cache-calls" in _html(intercepted=True), (
+    assert "@intercepted" in _html(intercepted=True), (
         "the HTML badge does not distinguish an intercepted call"
     )
 
@@ -118,13 +144,13 @@ def test_html_badge_marks_an_intercepted_group_when_condensed():
     call renders its own row and never sees the group, so marking only the
     condensed branch would leave short loops unlabelled.
     """
-    assert "@cache-calls" in _html(intercepted=True, n_calls=5)
+    assert "@intercepted" in _html(intercepted=True, n_calls=5)
 
 
 def test_html_badge_leaves_decorated_groups_unmarked():
     """Positive control, both paths."""
-    assert "@cache-calls" not in _html(intercepted=False, n_calls=2)
-    assert "@cache-calls" not in _html(intercepted=False, n_calls=5)
+    assert "@intercepted" not in _html(intercepted=False, n_calls=2)
+    assert "@intercepted" not in _html(intercepted=False, n_calls=5)
 
 
 def test_absent_flag_reads_as_decorated():
@@ -133,4 +159,4 @@ def test_absent_flag_reads_as_decorated():
     for call in metrics[0]["decorator_calls"]:
         del call["intercepted"]
     text = render_text(build_interactive_badge(metrics))
-    assert "cache-calls" not in text, text
+    assert "[intercepted]" not in text, text

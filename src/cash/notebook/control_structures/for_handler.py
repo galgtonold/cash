@@ -32,6 +32,39 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _stamp_call_events_loop_header(m: dict, loop_header: str) -> None:
+    """Propagate *m*'s ``loop_header``/``loop_header_chain`` onto its call events.
+
+    ``m['decorator_calls']`` may hold intercepted (on by default, CAS-243)
+    sub-call events. Those need the identical loop-nesting stamp
+    the enclosing metric just got, or the badge view-builder has nothing to
+    key nesting on and renders them as siblings of the loop instead of
+    inside it. Mirrors the caller's own first-writer-wins / prepend rules
+    exactly so the two can never disagree.
+
+    Defensive by construction: a malformed event (not a dict) is skipped
+    rather than raising -- this must never break statement execution.
+    """
+    for event in m.get("decorator_calls") or ():
+        if not isinstance(event, dict):
+            continue
+        if "loop_header" not in event:
+            event["loop_header"] = loop_header
+        echain = event.setdefault("loop_header_chain", [])
+        if not echain or echain[0] != loop_header:
+            echain.insert(0, loop_header)
+
+
+def _stamp_call_events_body_index(m: dict, body_idx: int) -> None:
+    """Propagate *m*'s ``body_index_chain`` onto its call events. See above."""
+    for event in m.get("decorator_calls") or ():
+        if not isinstance(event, dict):
+            continue
+        echain = event.setdefault("body_index_chain", [])
+        if not echain or echain[0] != body_idx:
+            echain.insert(0, body_idx)
+
+
 class ForLoopHandler:
     """Per-iteration caching for ``for`` loops.
 
@@ -94,6 +127,7 @@ class ForLoopHandler:
         parent_context: dict[str, Any] | None,
         raw_cell: str | None = None,
         inherited_annotation=None,
+        prev_node: ast.stmt | None = None,
     ):
         """
         Process a for loop with per-iteration caching.
@@ -114,6 +148,15 @@ class ForLoopHandler:
         overhead exceeds the likely computation cost (e.g., tight numeric
         loops with many iterations of cheap array operations), the loop is
         executed as a single cacheable unit instead of per-iteration.
+
+        *prev_node* is the loop's immediately-preceding top-level sibling in
+        the same cell, or ``None`` — passed through so the single-unit branch
+        can compute ``force_outputs`` for a pure accumulator-loop shape (CAS-259
+        follow-up: without it, that branch is refused outright by the
+        in-place-mutation detector, since nothing suppresses that refusal for
+        a matching ``out = []`` / ``out.append(f(e))`` loop). ``None`` by
+        default so nested / direct callers with no notion of a preceding
+        sibling are unaffected.
         """
         from .processor import (
             ControlStructureResult,
@@ -170,8 +213,32 @@ class ForLoopHandler:
                 # Single-unit mode makes the loop ONE cache entry, so the unit
                 # annotation (whole range) is the right scope — a body directive
                 # has no finer entry to attach to here.
+                #
+                # A pure accumulator loop's body (``out.append(f(e))``) reads as
+                # an in-place mutation to the per-statement analyzer, which
+                # would otherwise refuse to cache this whole unit outright --
+                # CAS-259 shipped without this and every large/cheap
+                # accumulator loop got ZERO caching from either mechanism
+                # (decomposition never runs here; the single unit was refused).
+                # force_outputs, computed from the narrow shape detector,
+                # suppresses exactly that refusal reason (and captures the
+                # leaked loop variable) so the chosen single-unit path is
+                # actually cacheable. ``None`` for every other single-unit
+                # loop, which keeps their behaviour unchanged.
+                from ..cacheability import cacheable_accumulator_loop
+                force_outputs = None
+                acc_loop = cacheable_accumulator_loop(node, prev_node)
+                if acc_loop is not None:
+                    acc, loop_vars, _iter_node, _expr_call = acc_loop
+                    force_outputs = {acc, *loop_vars}
+                    if self.debug:
+                        logger.debug(
+                            "[CONTROL] Single-unit accumulator loop -> "
+                            "force_outputs=%s", force_outputs,
+                        )
                 return self.dispatcher._execute_as_single_unit(
                     node, ttl, silent, raw_cell, inherited_annotation,
+                    force_outputs=force_outputs,
                 )
 
             # all iterations.
@@ -214,6 +281,14 @@ class ForLoopHandler:
                 chain = m.setdefault("loop_header_chain", [])
                 if not chain or chain[0] != loop_header:
                     chain.insert(0, loop_header)
+                # A statement's intercepted (on by default) sub-call
+                # events need this SAME stamp, or the view-builder has no way
+                # to tell they belong inside this loop and renders them as
+                # siblings instead (CAS-243 task 9). ``event`` is a dict
+                # inside ``m['decorator_calls']`` -- stamped in lockstep with
+                # ``m`` itself, same first-writer-wins / prepend rules, so
+                # nesting can never disagree between the two.
+                _stamp_call_events_loop_header(m, loop_header)
 
             return ControlStructureResult(
                 success=True,
@@ -257,6 +332,22 @@ class ForLoopHandler:
         )
 
         bindings = bind_target_values(node.target, iteration_value, self.shell.user_ns)
+        # `loop_var_digests` collects the SAME hash computed just below for
+        # `variable_lineage`, THIS iteration's binding only -- pushed through
+        # `loop_vars_scope` (not written into `variable_lineage`) so a call's
+        # key build can look it up without the staleness that dict carries.
+        # `variable_lineage` is a FLAT, never-popped dict: a nested loop
+        # reusing this iteration's target name would overwrite the entry
+        # for the rest of this iteration, with nothing to restore it once
+        # the inner loop ends. `loop_vars_scope`'s stack has real scope
+        # discipline (popped when this iteration's body finishes), so
+        # `call_unit._loop_var_digest` sources the digest from there instead
+        # -- see that function's docstring for the live repro that found
+        # this. The `variable_lineage` write below is UNCHANGED and still
+        # needed for its own, separate purpose (bare-Name argument
+        # resolution in the base cache key, `compute_cache_key`'s lineage
+        # ladder) -- this task does not touch that.
+        loop_var_digests: dict[str, str] = {}
         for name, val in bindings.items():
             try:
                 # The loop variable's hash IS the per-iteration cache-key
@@ -264,8 +355,45 @@ class ForLoopHandler:
                 # arrays that agreed in the sample onto ONE entry - wrong
                 # result on the first run. Hash full content here.
                 from cash.notebook.object_hashing import compute_hash_full
-                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else compute_hash_full(val)
+                full = compute_hash_full(val)
+                # `variable_lineage[name]` and `loop_var_digests[name]`
+                # WANT DIFFERENT THINGS and must not be conflated -- a lesson
+                # learned the hard way (CAS-243 review, round 5): `val`'s own
+                # `_cash_lineage_hash`, when present, may itself have been
+                # derived from a SAMPLED hash -- `update_mutated_variable_lineages`
+                # (control_structures/helpers.py) computes a mutated
+                # accumulator's new lineage from `statement_processor.compute_hash(val)`
+                # (the sampling hash) and `LineageStore.record` stamps that
+                # onto `val._cash_lineage_hash`. Two content-different
+                # DataFrames that agree on the sampled portion (a DataFrame's
+                # `compute_hash` samples shape + dtypes + `head(5)` --
+                # `object_hashing.py`'s `_hash_dataframe_or_series` -- so two that
+                # differ only past row 5 hash equal there) then carry the
+                # SAME `_cash_lineage_hash` -- so if this loop
+                # variable is later bound to each of them in turn (`for df in
+                # [df_a, df_b]:`), preferring that attribute for the CALL KEY
+                # would collapse iteration 2 onto iteration 1's cached value.
+                # Reproduced live in a real kernel: `SL2 [1, 1]` instead of
+                # the oracle's `[1, 2]`. This is round 1's lesson one layer
+                # further out -- a sampled hash is never sound as a key
+                # discriminator, even smuggled in through an attribute rather
+                # than passed directly.
+                #
+                # `variable_lineage` wants PROVENANCE (did this binding come
+                # from the same upstream computation as before?), where
+                # `_cash_lineage_hash` is the right, deliberately-cheaper
+                # answer and has been for as long as this line has existed.
+                # `loop_var_digests` wants CONTENT (are two iterations'
+                # bindings the same VALUE?), which only `compute_hash_full`
+                # can answer soundly -- so it is computed directly from `val`,
+                # never through the attribute. Cost is unchanged: still one
+                # full hash per iteration (not per call, and not per call
+                # multiplied by however many cached calls read this loop
+                # var), just no longer skippable via the attribute shortcut
+                # for THIS consumer specifically.
+                h = val._cash_lineage_hash if hasattr(val, '_cash_lineage_hash') else full
                 self.statement_processor.variable_lineage[name] = h
+                loop_var_digests[name] = full
             except (TypeError, ValueError, AttributeError) as exc:
                 if self.debug:
                     logger.warning("[CONTROL] Failed to hash loop variable %s: %s", name, exc)
@@ -291,31 +419,59 @@ class ForLoopHandler:
         # uses chain[depth] when sorting items inside a specific for-loop
         # level. ``body_index`` itself is the *innermost* index (the
         # tail of the chain).
-        for body_idx, body_node in enumerate(node.body):
-            before_count = len(all_metrics)
-            if is_control_structure(body_node):
-                was_computed = self._execute_loop_body_nested_control(
-                    body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
-                    raw_cell, loop_annotation,
-                )
-            else:
-                was_computed = self._execute_loop_body_statement(
-                    body_node, iteration_context, ttl, silent, all_metrics,
-                    raw_cell, loop_annotation,
-                )
-            for m in all_metrics[before_count:]:
-                if not isinstance(m, dict):
-                    continue
-                chain = m.setdefault("body_index_chain", [])
-                # Prepend this loop's body_idx (outermost wins by being
-                # at index 0). Innermost handler runs first and ends up
-                # at the chain tail; outer handlers prepend their idx.
-                if not chain or chain[0] != body_idx:
-                    chain.insert(0, body_idx)
-                if "body_index" not in m:
-                    m["body_index"] = body_idx
-            if was_computed:
-                iteration_cached = False
+        # Pushed once for the WHOLE iteration's body, not per statement: an
+        # intercepted (on by default) sub-call needs the CURRENT
+        # iteration's loop-var values as a key discriminator wherever it sits
+        # -- a plain body statement, or nested inside an `if`/`try` reached via
+        # `_execute_loop_body_nested_control` below -- so one push covering the
+        # whole body loop reaches every statement this iteration executes,
+        # including a nested `for`'s own (further-nested) push on top of it.
+        # `loop_vars_scope`'s `finally` pops even if a body statement raises.
+        #
+        # `getattr(..., None)` guarded rather than called directly: this is
+        # the file where a caching optimisation, if it broke, would break the
+        # USER'S LOOP rather than merely its caching -- a `statement_processor`
+        # without this method would otherwise raise `AttributeError` out of
+        # `process()`, and `cell_executor.py` re-raises that as the user's own
+        # error, so their loop would not run at all. Unreachable today (one
+        # construction site, `magics.py`), but requirement 5 (never let a
+        # caching optimisation be why user code fails) should hold at both
+        # ends of this wire, not just inside `CallUnit`.
+        loop_vars_scope = getattr(self.statement_processor, 'loop_vars_scope', None)
+        scope = (
+            loop_vars_scope(loop_vars, loop_var_digests)
+            if loop_vars_scope is not None else contextlib.nullcontext()
+        )
+        with scope:
+            for body_idx, body_node in enumerate(node.body):
+                before_count = len(all_metrics)
+                if is_control_structure(body_node):
+                    was_computed = self._execute_loop_body_nested_control(
+                        body_node, ttl, silent, iteration_context, context_hash, loop_vars, all_metrics,
+                        raw_cell, loop_annotation,
+                    )
+                else:
+                    was_computed = self._execute_loop_body_statement(
+                        body_node, iteration_context, ttl, silent, all_metrics,
+                        raw_cell, loop_annotation,
+                    )
+                for m in all_metrics[before_count:]:
+                    if not isinstance(m, dict):
+                        continue
+                    chain = m.setdefault("body_index_chain", [])
+                    # Prepend this loop's body_idx (outermost wins by being
+                    # at index 0). Innermost handler runs first and ends up
+                    # at the chain tail; outer handlers prepend their idx.
+                    if not chain or chain[0] != body_idx:
+                        chain.insert(0, body_idx)
+                    if "body_index" not in m:
+                        m["body_index"] = body_idx
+                    # Same stamp, same reason, onto this statement's intercepted
+                    # sub-call events (CAS-243 task 9) -- see the loop_header
+                    # stamp above for why.
+                    _stamp_call_events_body_index(m, body_idx)
+                if was_computed:
+                    iteration_cached = False
         return iteration_cached
 
     def _process_body_statement(

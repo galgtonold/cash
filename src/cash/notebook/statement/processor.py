@@ -316,6 +316,7 @@ from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
 from ..annotations import CacheAnnotation
 from ..call_interception import HELPER_NAME, CallCache, wrap_eligible_calls
+from ..call_unit import call_site_is_cacheable
 from ..compiled_source import is_cash_filename, register_cell_source
 from ..function_tracker import FunctionTracker
 from ..cacheability import (
@@ -410,17 +411,48 @@ class StatementProcessor:
         # Source hashes of entropy-reseed statements already warned about, so the
         # "seed(None) does not make everything below it fresh" note fires once.
         self._warned_entropy_reseed: set[str] = set()
-        # Statements whose ``# @cash:cache-calls`` matched nothing, so the
-        # "this directive did nothing" note fires once per statement rather
-        # than once per loop iteration.
-        self._warned_cache_calls_noop: set[str] = set()
 
-        # Sub-expression caching (CAS-243), built on first use under
-        # ``# @cash:cache-calls``. Held with the Cash instance it wraps so a
-        # ``reset_session()`` that swaps the instance rebuilds it rather than
-        # resolving callees against a dead backend.
+        # Sub-expression caching (CAS-243), built on first use. Interception
+        # is the default; ``# @cash:no-cache-calls`` is the escape hatch. Held
+        # with the Cash instance it wraps so a ``reset_session()`` that swaps
+        # the instance rebuilds it rather than resolving callees against a
+        # dead backend.
         self._call_cache: Any | None = None
         self._call_cache_owner: Any | None = None
+        # Stack-shaped: the non-dunder half of the enclosing for-loop's
+        # iteration context, pushed/popped by ``for_handler.py`` around each
+        # iteration's body statements (see ``ForLoopHandler._process_one_iteration``)
+        # and read by an intercepted call's key build
+        # (``call_unit.call_cache_key``'s ``loop_vars``) via
+        # :meth:`current_loop_vars`. A stack rather than a single slot because
+        # loop bodies nest -- an inner loop's own push already carries the
+        # outer context forward (``build_iteration_context`` merges
+        # ``parent_context``), so ``current_loop_vars`` only ever needs the
+        # top. Empty outside any loop, which is the correct "no discriminator
+        # to add" answer for a bare statement.
+        self._call_unit_loop_vars: list[dict[str, Any]] = []
+        # Parallel stack, pushed/popped in lockstep with ``_call_unit_loop_vars``
+        # by the SAME ``loop_vars_scope`` call: ``{name: full_hash}`` for
+        # whichever loop-target names ``for_handler.py`` bound THIS push (its
+        # own names only -- deliberately NOT pre-merged with an ancestor
+        # loop's digests, unlike ``_call_unit_loop_vars``). Exists so
+        # ``call_unit._loop_var_digest`` can look a digest up instead of
+        # recomputing ``compute_hash_full`` on every intercepted call --
+        # ``for_handler.py`` already computes this exact hash once per
+        # iteration for ``variable_lineage``, and this reuses it.
+        #
+        # NOT sourced from ``variable_lineage`` itself: that dict is flat,
+        # keyed only by name, and never popped -- a nested loop reusing an
+        # outer loop's target name (``for t in A: for t in B: pass; call(...)``)
+        # leaves ``variable_lineage[name]`` holding the INNER loop's last
+        # value for the rest of the OUTER iteration, and a call after the
+        # inner loop ends reads that stale entry. First-run wrongness, found
+        # live via a real-kernel repro. This stack has the scope discipline
+        # ``variable_lineage`` lacks -- it is popped when an iteration's body
+        # finishes, restoring whatever level was beneath it -- so
+        # :meth:`current_loop_var_digests` can never see a name's digest
+        # outlive the scope that produced it.
+        self._call_unit_loop_var_digests: list[dict[str, str]] = []
 
         self.analytics_manager = AnalyticsManager()
 
@@ -509,6 +541,211 @@ class StatementProcessor:
         Must be shared with UpstreamChecker for cache key stability.
         """
         return self.function_tracker
+
+    @contextmanager
+    def loop_vars_scope(
+        self,
+        loop_vars: dict[str, Any],
+        loop_var_digests: dict[str, str] | None = None,
+    ) -> Generator[None, None, None]:
+        """Push *loop_vars* (and, alongside, *loop_var_digests*) for the
+        duration of one loop iteration's body.
+
+        Called by ``ForLoopHandler._process_one_iteration`` around the whole
+        body-statement loop for one iteration -- not per statement -- so a
+        nested control structure (``if``/``try``) or a nested ``for`` inside
+        the body still sees the enclosing iteration's vars via
+        :meth:`current_loop_vars` for every statement it eventually reaches.
+        A nested ``for`` pushes its own (already-merged, per
+        ``build_iteration_context``) context on top; popping unwinds back to
+        this one, so the stack always matches the current lexical nesting.
+
+        ``finally`` guarantees the pop happens even when a body statement
+        raises -- a loop body that errors out must not leave a stale entry on
+        either stack for whatever runs next in the same kernel. Both stacks
+        are pushed and popped together so they can never desync -- there is
+        no way to push one without the other.
+
+        *loop_var_digests* is optional (defaults to ``{}``) so every call
+        site that only cares about values -- direct tests, anything that
+        predates this parameter -- keeps working unchanged; a missing digest
+        for a given name just means the read side has nothing for it, and
+        ``call_unit._loop_var_digest`` falls through to computing one fresh.
+
+        That read side is :meth:`_depth_keyed_loop_scope` (via
+        :meth:`current_loop_vars_for_call_key` /
+        :meth:`current_loop_var_digests_for_call_key`) for the ONLY
+        production consumer, ``CallCache`` -- NOT
+        :meth:`current_loop_var_digests`, which this docstring used to name
+        here. That method still exists and is still correct on its own
+        documented (bare-name) contract, but nothing wires it into a call's
+        key anymore since CAS-257 defect 1; naming it as *the* consumer here
+        would be a stale claim about which code path actually reads a
+        missing entry.
+        """
+        self._call_unit_loop_vars.append(loop_vars)
+        self._call_unit_loop_var_digests.append(loop_var_digests or {})
+        try:
+            yield
+        finally:
+            self._call_unit_loop_vars.pop()
+            self._call_unit_loop_var_digests.pop()
+
+    def current_loop_vars(self) -> dict[str, Any]:
+        """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
+
+        Read by the intercepted (on by default) sub-call key build
+        (``call_unit.CallUnit``) as its ``loop_vars_provider``, so a call keyed
+        with no other discriminator (hidden state behind a bare ``Name``, e.g.
+        ``fetch_next(conn)``) still varies per iteration. ``{}`` outside a loop
+        -- degrading to today's behaviour, not an error.
+        """
+        return self._call_unit_loop_vars[-1] if self._call_unit_loop_vars else {}
+
+    def current_loop_var_digests(self) -> dict[str, str]:
+        """Precomputed ``{name: full_hash}`` for every loop-var name visible
+        at this point in execution, or ``{}`` outside any loop.
+
+        Unlike :meth:`current_loop_vars` (which returns only the TOP of its
+        stack, because ``for_handler.py`` already pre-merges an ancestor
+        loop's values into each push via ``build_iteration_context``), this
+        merges ACROSS ``_call_unit_loop_var_digests``'s whole stack --
+        outermost first, so an inner loop's own entry for a reused name wins.
+        Each level holds only the digests ``for_handler.py`` bound at THAT
+        specific push (deliberately not pre-merged there -- see the
+        constructor comment on ``_call_unit_loop_var_digests``), so merging
+        here is what lets a call inside a nested loop still resolve an
+        OUTER loop's variable to a real digest instead of falling through to
+        a fresh hash. The stack only ever holds CURRENTLY ACTIVE scopes
+        (a finished iteration's level is popped by ``loop_vars_scope`` before
+        control returns to whatever runs next), so nothing merged in here can
+        be stale.
+
+        Read by the intercepted (on by default) sub-call key build
+        (``call_unit.CallUnit``) as its ``loop_var_digests_provider``. ``{}``
+        is always a safe answer -- ``call_unit._loop_var_digest`` treats a
+        missing entry as "compute it fresh," never as an error.
+        """
+        merged: dict[str, str] = {}
+        for level in self._call_unit_loop_var_digests:
+            merged.update(level)
+        return merged
+
+    def _depth_keyed_loop_scope(self) -> tuple[dict[str, Any], dict[str, str]]:
+        """``(values, digests)`` for the call-unit key build, each entry keyed
+        by ``"{depth}:{name}"`` rather than bare ``name`` (CAS-257 defect 1).
+
+        **The bug this exists to fix.** ``current_loop_vars()`` returns only
+        the TOP of ``_call_unit_loop_vars`` -- correct for a call AFTER a
+        name-reusing inner loop (the inner scope is already popped by then),
+        but wrong for a call INSIDE one: while both scopes are active, the
+        inner push's own value for a REUSED name (``build_iteration_context``
+        pre-merges the parent forward, so the inner level's dict already has
+        the outer's OTHER names too, but its OWN name entry overwrites the
+        parent's) is the only one reachable -- the outer iteration has no
+        slot in the key at all. Two different outer iterations that share
+        the same inner sequence (``for q in ['p','r']: for q in [7,8]:
+        acc.append(pull(handle))`` -- outer 'p'/'r' collapse whenever the
+        inner cycles through the same 7/8 both times) are then
+        indistinguishable: cash serves ``[1, 2, 1, 2]`` where the cash-off
+        oracle gives ``[1, 2, 3, 4]``.
+        ``current_loop_var_digests()`` already merges across the WHOLE
+        digest stack (each level holding only its OWN bound names, never
+        pre-merged), so a reused name's OUTER digest is still individually
+        present in the stack -- merging it via ``dict.update`` in name order
+        just happens to let the innermost active level win, silently
+        discarding the outer one. Both dicts need every active depth's
+        entry to survive at once, not just whichever the merge order leaves
+        standing.
+
+        **Why depth, not iteration order.** ``_call_unit_loop_vars`` /
+        ``_call_unit_loop_var_digests`` are stacks whose length at any
+        instant is exactly the LEXICAL nesting depth of whatever is
+        currently executing -- push on entering an iteration's body, pop on
+        leaving it (``loop_vars_scope``). That depth is a property of WHERE
+        in the source a call sits relative to its enclosing loops, not of
+        WHICH iteration is running or in what order the iterable was
+        walked. A reordered outer iterable still produces the exact same
+        stack depths for the exact same call site on every run, and a
+        rerun of one already-cached iteration pushes to the exact same
+        depth it did originally -- see this method's callers
+        (``StatementProcessor.current_loop_vars``/``current_loop_var_digests``
+        are UNCHANGED by this method: it is a separate read path so the
+        pre-existing, test-pinned contract of those two keeps returning
+        exactly what it always has).
+
+        **Why this doesn't need for_handler.py to push anything new.** Each
+        digest level already holds only the names ``for_handler.py`` bound
+        at THAT push (see ``_call_unit_loop_var_digests``'s constructor
+        comment) -- so a level's digest keyset is exactly its OWN loop-target
+        names, and (because both stacks are pushed together, from the same
+        ``bindings``, by the same ``loop_vars_scope`` call) the matching
+        values stack level normally holds an entry for every one of those
+        same names too, pre-merged or not.
+
+        **A missing digest must never delete the value.** An earlier version
+        of this method walked only the digest level and looked the matching
+        value up in the values level, dropping a name silently whenever it
+        had a value but no digest. That direction is dangerous where the
+        mirror-image guard (a digest with no value, harmless -- nothing ever
+        reads a digest-only entry) is not: a value entry with nothing to
+        discriminate it should still occupy its key and fall back to a fresh
+        hash, exactly like :func:`call_unit._loop_var_digest`'s documented
+        fallback for a plain, un-keyed ``loop_var_digests`` miss -- not
+        vanish from the key entirely and silently under-discriminate two
+        iterations onto one. So this walks the UNION of both levels' names
+        at each depth: a name present in only one level still gets an entry
+        in that level's dict, with nothing written to the other. Production
+        cannot reach the missing-digest case today (``for_handler.py``
+        always builds both from the same ``bindings`` dict at the same push),
+        but the key build must not depend on that holding forever -- a
+        caching optimisation must never be why user code fails, including by
+        silently caching a WRONG value because a name it should have
+        discriminated on quietly disappeared.
+
+        Dunder entries (``__iterable_lineage__``) can never appear here:
+        ``for_handler.py`` strips them before either stack is pushed, so
+        there is simply nothing dunder-shaped for either dict to carry. Note
+        that ``call_cache_key``'s own defensive dunder filter matches on the
+        name SEGMENT AFTER the ``"depth:"`` prefix specifically because a
+        depth-prefixed key like ``"0:__iterable_lineage__"`` no longer starts
+        with ``"__"`` itself -- see that function's docstring.
+        """
+        values: dict[str, Any] = {}
+        digests: dict[str, str] = {}
+        for depth, (val_level, dig_level) in enumerate(
+            zip(self._call_unit_loop_vars, self._call_unit_loop_var_digests)
+        ):
+            for name in val_level.keys() | dig_level.keys():
+                key = f"{depth}:{name}"
+                if name in val_level:
+                    values[key] = val_level[name]
+                if name in dig_level:
+                    digests[key] = dig_level[name]
+        return values, digests
+
+    def current_loop_vars_for_call_key(self) -> dict[str, Any]:
+        """Depth-and-name-keyed loop-var values for the call-unit key build.
+
+        Used ONLY as the ``loop_vars_provider`` wired into ``CallCache`` --
+        NOT a replacement for :meth:`current_loop_vars`, whose bare-name,
+        top-of-stack contract stays exactly as it was (other callers and
+        ``test_call_unit_loop_vars_wiring.py`` pin that behaviour directly).
+        See :meth:`_depth_keyed_loop_scope` for why this needs its own read
+        path rather than changing that one.
+        """
+        values, _ = self._depth_keyed_loop_scope()
+        return values
+
+    def current_loop_var_digests_for_call_key(self) -> dict[str, str]:
+        """Depth-and-name-keyed loop-var digests for the call-unit key build.
+
+        The digest counterpart to :meth:`current_loop_vars_for_call_key` --
+        see that method and :meth:`_depth_keyed_loop_scope` for the full
+        reasoning. Not a replacement for :meth:`current_loop_var_digests`.
+        """
+        _, digests = self._depth_keyed_loop_scope()
+        return digests
 
     def _get_cash_instance(self) -> Any | None:
         """Return the Cash instance for decorator call tracking.
@@ -1544,68 +1781,32 @@ class StatementProcessor:
             return
         self._miss_guard.observe(source_hash, cache_key, hit=cached_data is not None)
 
-    def _mark_intercepted_calls(self, decorator_calls: list) -> None:
-        """Flag drained log entries that cash wrapped itself (CAS-243).
+    def _drain_call_unit_events(self) -> list:
+        """CallUnit's own call log, merged into ``decorator_calls`` (CAS-243).
 
-        A ``# @cash:cache-calls`` call and a hand-decorated one land in the same
-        log and the same badge section — correctly, it is the same cache. But
-        undifferentiated, the section materialises out of nowhere for a user who
-        decorated nothing, and a user who *did* write the directive has no way
-        to confirm it engaged, which its own docs tell them to check.
-
-        Matched by the log key the interceptor recorded when it wrapped the
-        function, so a name it never wrapped is never claimed.
+        ``CallCache.resolve`` routes an intercepted call's caching through
+        ``CallUnit`` rather than ``Cash``'s decorator-call log, so
+        ``drain_decorator_calls()`` alone no longer sees it. Pulled in
+        separately here rather than inside :meth:`_get_cash_instance`'s try
+        block above, so a failure in one drain never suppresses the other.
         """
-        if not decorator_calls or self._call_cache is None:
-            return
-        wrapped = self._call_cache.wrapped_names
-        if not wrapped:
-            return
-        for call in decorator_calls:
-            if isinstance(call, dict) and call.get('func_name') in wrapped:
-                call['intercepted'] = True
-
-    def _warn_cache_calls_noop(self, code: str) -> None:
-        """Say so when ``# @cash:cache-calls`` matched nothing.
-
-        The eligibility rule is not guessable — a call that reads the
-        statement's own target is declined because it *is* the fold — so the
-        failure mode is silence: the directive is written, nothing is cached,
-        and nothing distinguishes that from a cache that merely missed.
-
-        Keyed on the source with the per-iteration discriminator stripped, so a
-        1000-iteration loop warns once rather than a thousand times, matching
-        the persist-amplification and entropy-reseed notes.
-        """
-        import warnings
-
-        stmt_id = self._strip_control_markers(code)
-        if stmt_id in self._warned_cache_calls_noop:
-            return
-        self._warned_cache_calls_noop.add(stmt_id)
-        first_line = next(
-            (ln for ln in stmt_id.splitlines() if ln.strip() and not ln.lstrip().startswith('#')),
-            stmt_id.strip(),
-        )
-        warnings.warn(
-            f"@cash:cache-calls on {first_line.strip()!r} matched no cacheable "
-            "call, so nothing was cached. A call is only extractable when it "
-            "does not read the statement's own assignment/mutation target -- "
-            "`s = merge(s, x)` reads `s`, so it IS the fold and has no "
-            "order-independent value to cache. Remove the directive, or "
-            "restructure so the expensive call takes only its own inputs.",
-            CashCacheIneffectiveWarning,
-            stacklevel=2,
-        )
+        if self._call_cache is None:
+            return []
+        try:
+            return self._call_cache.drain_call_log()
+        except (AttributeError, TypeError, RuntimeError):
+            logger.debug("%s Failed to drain call-unit log", _LOG_PROCESSOR)
+            return []
 
     def _code_and_tree_for_execution(
         self, code: str, tree: ast.Module | None, annotation: Any | None
     ) -> tuple[str, ast.Module | None]:
         """The ``(code, tree)`` to execute, with eligible calls routed via cache.
 
-        Under ``# @cash:cache-calls`` (CAS-243) each eligible call has its
+        Interception is the DEFAULT (CAS-243): each eligible call has its
         callee wrapped so it resolves to a cached counterpart at call time —
-        ``compute(x)`` becomes ``__cash_call__(compute)(x)``. That fixes the two
+        ``compute(x)`` becomes ``__cash_call__(compute, 0)(x)``, where ``0`` is
+        the index of this call's :class:`CallSite`. That fixes the two
         shapes statement-level caching structurally cannot: an expensive call
         inside an in-place mutation (skip-cached, so never reused) and one
         inside an accumulator fold (cached, but keyed on the running prefix, so
@@ -1619,27 +1820,78 @@ class StatementProcessor:
         discarded for ``s += compute(x)`` — the accumulator fold, which is half
         the point of the feature.
 
-        Returns the inputs unchanged when the directive is absent, when nothing
-        is eligible, or on any failure: a caching optimisation must never be the
-        reason a statement stops running.
+        Returns the inputs unchanged when opted out, when nothing is eligible,
+        or on any failure: a caching optimisation must never be the reason a
+        statement stops running.
         """
-        if annotation is None or not getattr(annotation, 'cache_calls', False):
-            return code, tree
-        # ``# @cash:no-cache`` is an explicit instruction about this statement,
-        # and caching the expensive call inside it honours the letter while
-        # breaking the intent. no-cache wins, exactly as it wins over
-        # ``persist``.
-        if getattr(annotation, 'no_cache', False):
+        # Two things switch interception off: ``# @cash:no-cache-calls`` (the
+        # targeted escape hatch) and ``# @cash:no-cache`` (which is an
+        # instruction about the WHOLE statement — caching the expensive call
+        # inside it honours the letter while breaking the intent, so no-cache
+        # wins, exactly as it already wins over ``persist``). Absent an
+        # annotation at all, neither opt-out is set, so interception proceeds.
+        if annotation is not None and (
+            getattr(annotation, 'no_cache_calls', False)
+            or getattr(annotation, 'no_cache', False)
+        ):
             return code, tree
         cash_instance = self._get_cash_instance()
         if cash_instance is None:
             return code, tree
         try:
-            rewritten, count = wrap_eligible_calls(
-                tree if tree is not None else ast.parse(code)
+            # The object-level half of the gate (CAS-243 Task 4/5): a call that
+            # is structurally eligible (its free variables don't read the
+            # statement's own target) can still be uncacheable for every reason
+            # a statement can be -- a forbidden call, an untracked input, a
+            # user-ns shape ``decide_cacheability`` refuses. Judging it by the
+            # SAME rules as the statement containing it (rather than not judging
+            # it at all) is what ``call_site_is_cacheable`` exists for; wiring it
+            # here means an eligible-but-uncacheable site is never wrapped in
+            # the first place, so a doomed key is never even attempted.
+            def gate(call: ast.Call) -> bool:
+                # `call_site_is_cacheable` runs the full `decide_cacheability`
+                # / `analyze_statement` / `scan_for_forbidden_functions` stack
+                # against a bare `ast.Expr(Call)` sub-expression -- a shape the
+                # analyzer has never been exercised against before this gate
+                # existed. The outer `try` below only ever guarded a copy and
+                # an unparse, so it only catches (SyntaxError, ValueError,
+                # TypeError, AttributeError); anything else escaping THIS
+                # function would surface as the user's own traceback on their
+                # statement (CAS-243 review I1). Fail closed instead: an
+                # exception here means "don't wrap", exactly like a `False`
+                # verdict, never "crash the cell".
+                try:
+                    return call_site_is_cacheable(
+                        call,
+                        user_ns=self.shell.user_ns,
+                        annotation=annotation,
+                        # The runtime lineage table genuinely exists at this
+                        # call site (unlike the AST-only rewrite-time case
+                        # `call_site_is_cacheable`'s docstring justifies
+                        # omission for) -- passing it lets the missing-lineage
+                        # reason source apply here too, tightening the gate to
+                        # the same standard the statement itself is judged by
+                        # (CAS-243 review I2).
+                        variable_lineage=self.variable_lineage,
+                        is_stateful_call=self._check_callable_stateful,
+                        scan_forbidden=CodeAnalyzer.scan_for_forbidden_functions,
+                    )[0]
+                except Exception:  # noqa: BLE001 - fail closed to "don't wrap"
+                    # Not `ast.unparse(call)` in this message: that can itself
+                    # raise, and doing so here would defeat the very fix this
+                    # except exists to provide.
+                    logger.debug(
+                        "%s cache-calls gate raised; leaving a call site unwrapped",
+                        _LOG_PROCESSOR,
+                    )
+                    return False
+            rewritten, sites = wrap_eligible_calls(
+                tree if tree is not None else ast.parse(code), gate=gate,
             )
-            if not count:
-                self._warn_cache_calls_noop(code)
+            if not sites:
+                # Under default-on, "nothing here was eligible" is the
+                # ordinary case (most statements have no expensive sub-call),
+                # not a mistake worth a warning.
                 return code, tree
             new_code = ast.unparse(rewritten)
             # ``ast.unparse`` drops a trailing ';', which _execute_statement
@@ -1648,8 +1900,34 @@ class StatementProcessor:
             if code.rstrip().endswith(';'):
                 new_code += ';'
             if self._call_cache is None or self._call_cache_owner is not cash_instance:
-                self._call_cache = CallCache(cash_instance)
+                self._call_cache = CallCache(
+                    cash_instance,
+                    ctx_provider=lambda: CacheKeyContext(
+                        variable_lineage=self.variable_lineage,
+                        user_ns=self.shell.user_ns,
+                        function_tracker=self.function_tracker,
+                        compute_hash_fn=self.compute_hash,
+                        debug=self.debug,
+                    ),
+                    # `self.current_loop_vars_for_call_key` (bound method, not
+                    # a lambda capturing a snapshot) so it re-reads
+                    # `_call_unit_loop_vars` at INVOKE time -- the `CallCache`
+                    # instance is reused across statement executions (guarded
+                    # by `_call_cache_owner` above), but the loop this call
+                    # sits in pushes/pops its vars fresh on every iteration.
+                    #
+                    # The `_for_call_key` (depth-and-name-keyed) variants, NOT
+                    # `current_loop_vars`/`current_loop_var_digests` themselves
+                    # (CAS-257 defect 1): a call INSIDE a loop that reuses an
+                    # ancestor's target name needs BOTH scopes' entries to
+                    # survive at once, not just whichever the bare-name merge
+                    # leaves standing -- see `_depth_keyed_loop_scope`'s
+                    # docstring for the full reasoning.
+                    loop_vars_provider=self.current_loop_vars_for_call_key,
+                    loop_var_digests_provider=self.current_loop_var_digests_for_call_key,
+                )
                 self._call_cache_owner = cash_instance
+            self._call_cache.set_sites(sites)
             self.shell.user_ns[HELPER_NAME] = self._call_cache.resolve
             return new_code, rewritten
         except (SyntaxError, ValueError, TypeError, AttributeError):
@@ -1688,9 +1966,9 @@ class StatementProcessor:
             cash_instance = self._get_cash_instance()
             if cash_instance is not None:
                 decorator_calls = cash_instance.drain_decorator_calls()
-                self._mark_intercepted_calls(decorator_calls)
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
+        decorator_calls.extend(self._drain_call_unit_events())
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr
@@ -1747,9 +2025,9 @@ class StatementProcessor:
             cash_instance = self._get_cash_instance()
             if cash_instance is not None:
                 decorator_calls = cash_instance.drain_decorator_calls()
-                self._mark_intercepted_calls(decorator_calls)
         except (AttributeError, TypeError, RuntimeError):
             logger.debug("%s Failed to drain decorator call log", _LOG_PROCESSOR)
+        decorator_calls.extend(self._drain_call_unit_events())
 
         metrics['stdout'] = captured.stdout
         metrics['stderr'] = captured.stderr
