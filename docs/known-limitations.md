@@ -168,6 +168,26 @@ capture of the global's *whole* value gives `[2]` where `[1, 2, 3]` is correct,
 and per-call restores interleaved with the iterations that genuinely run give
 `[1, 2, 2, 3]`. Until the loop owns this, the write is skipped on a hit.
 
+**The visible consequence is worse than a skipped write.** Because nothing
+tracks the global inside a loop, re-running an *earlier* loop cell does not
+discard a *later* one's contributions:
+
+<!-- test:skip reason="illustrative: cross-cell loop re-run, needs a real kernel" -->
+```python
+for x in [1, 2, 3]:        # cell A
+    out.append(step(x))
+
+for x in [111, 10]:        # cell B
+    total += step(x)
+
+# re-run cell A -> LOG still holds cell B's entries
+```
+
+Written inline the same mutation gives `[1, 2, 3]` there, which is what a clean
+top-to-bottom run up to cell A produces. So state from a cell that had not run
+yet survives, which is ordinary out-of-order notebook work rather than an
+exotic case.
+
 Note that `@stateful` does **not** rescue the loop case: it forces the call to
 re-execute, but the call still reads an already-advanced global.
 

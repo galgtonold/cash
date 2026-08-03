@@ -348,6 +348,65 @@ def test_a_loop_body_captures_the_callee_global_too(nb_runner, tmp_path):
     assert _globals(nb_runner) == {"inline": "[1, 2, 3]", "in_callee": "[1, 2, 3]"}
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "CAS-265, the sharper symptom: re-running an EARLIER loop cell leaves a "
+        "LATER loop cell's callee-writes in the global. Reported live while "
+        "validating the demo. Same root cause as the sibling xfail -- nothing "
+        "tracks the global inside a loop body, so there is no reset target -- "
+        "but worse than 'the write is skipped on a hit': stale data from a cell "
+        "that top-to-bottom had not run yet survives. Flips when CAS-265 lands."
+    ),
+)
+def test_rerunning_an_earlier_loop_discards_a_later_loops_writes(nb_runner, tmp_path):
+    """Measured, both spellings in one notebook::
+
+                           inline                  in-callee
+        after run_all      [1, 2, 3, 111, 10]      [1, 2, 3, 111, 10]
+        re-ran cell A      [1, 2, 3]               [1, 2, 3, 111, 10]   <- wrong
+
+    Inline is the contract and it is unambiguous here: re-running cell A rewinds
+    to A's cell-entry state and re-applies only A's appends, which is what a
+    clean top-to-bottom run up to A would produce.
+    """
+    cf, cp, ci = (tmp_path / f"{n}.log" for n in ("f", "p", "i"))
+    defs = _defs(cp, cf, ci) + (
+        "LOG_I = []\n"
+        "def inline_pure(v):\n"
+        f"    _busy({_BODY_MS})\n"
+        "    return v * 10\n"
+    )
+    a_inline = ("for x in [1, 2, 3]:\n"
+                "    LOG_I.append(x)\n"
+                "    oi.append(inline_pure(x))\n")
+    a_callee = "for x in [1, 2, 3]:\n    of.append(compute_f(x))\n"
+    b_inline = ("for x in [111, 10]:\n"
+                "    LOG_I.append(x)\n"
+                "    oi.append(inline_pure(x))\n")
+    b_callee = "for x in [111, 10]:\n    of.append(compute_f(x))\n"
+    nb_runner.create_notebook([
+        SETUP, defs, "oi = []\nof = []\n", a_inline, a_callee, b_inline, b_callee,
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    both = {"inline": "[1, 2, 3, 111, 10]", "in_callee": "[1, 2, 3, 111, 10]"}
+    live = {"inline": _peek(nb_runner, "globals().get('LOG_I')"),
+            "in_callee": _peek(nb_runner, "globals().get('CALLS_F')")}
+    assert live == both, f"cold run is not the expected starting point: {live}"
+
+    nb_runner.run_cells([4, 5])          # the EARLIER pair only
+
+    after = {"inline": _peek(nb_runner, "globals().get('LOG_I')"),
+             "in_callee": _peek(nb_runner, "globals().get('CALLS_F')")}
+    assert after["inline"] == "[1, 2, 3]", (
+        f"the inline yardstick itself moved: {after['inline']}"
+    )
+    assert after["in_callee"] == after["inline"], (
+        "re-running the earlier loop left the later loop's callee-writes behind"
+    )
+
+
 def test_oracle_the_harness_measures_real_work(nb_runner, tmp_path):
     """Cash off: every re-run executes everything. Pins the counters, so a zero
     above means reuse rather than a broken instrument."""
