@@ -19,16 +19,19 @@ other.
 """
 
 import ast
+import copy as _copy
 import functools
 import hashlib
+import inspect as _inspect
 import logging
 import sys
 import time as _time
 from collections.abc import Callable, Mapping
+from types import ModuleType as _ModuleType
 from typing import Any
 
 from cash.notebook.annotations import CacheAnnotation
-from cash.notebook.cacheability import analyze_statement
+from cash.notebook.cacheability import analyze_statement, callee_source_global_mutations
 from cash.notebook.cacheability_decision import decide_cacheability
 from cash.notebook.cache_key import CacheKeyContext, compute_cache_key
 from cash.notebook.call_interception import CallSite, _names_read
@@ -188,6 +191,78 @@ def _loop_var_digest(name: str, value: object, loop_var_digests: Mapping[str, st
     return digest if digest is not None else compute_hash_full(value)
 
 
+#: ``fn.__code__ -> names the body mutates``, before the live-namespace filter.
+#:
+#: Keyed on the CODE OBJECT, not on a hash of the source, and that is a
+#: performance decision with a correctness argument attached.
+#:
+#: * **Performance.** Reaching a source hash means calling
+#:   ``inspect.getsource`` first, and that is the whole cost of this analysis:
+#:   measured 74us for a pure callee and 84us for a mutating one, per call,
+#:   against a 3ms cost floor -- ~2.5% of the bar a call has to clear to be
+#:   worth caching at all, paid on every intercepted call including hits, for a
+#:   result that is ``()`` for nearly all of them. Keying on the code object
+#:   skips ``getsource`` entirely on the second and later calls.
+#: * **Correctness.** A code object is strictly finer than its source: one code
+#:   object has exactly one body, and redefining a function in a notebook cell
+#:   produces a NEW one, so an edit can never be served the old verdict. It also
+#:   sidesteps the question a source hash raises -- identical source meaning
+#:   different things in different scopes -- which was answerable here (the
+#:   verdict is purely syntactic: "is this name a parameter, a plain local, or
+#:   free?" is read off the function's own AST with no reference to a namespace)
+#:   but is better not relied upon.
+#: * **Why a plain dict is safe.** It holds a strong reference to each key, so a
+#:   code object in here cannot be collected and have its ``id`` reused by a
+#:   different one -- the failure an ``id()``-keyed memo would have. Growth is
+#:   bounded by the number of distinct function versions in a session, i.e. by
+#:   how often the user edits a cell, and a code object is a few hundred bytes.
+_GLOBAL_MUTATION_CACHE: dict[Any, tuple[str, ...]] = {}
+
+
+def callee_mutated_globals(fn) -> tuple[str, ...]:
+    """Names in *fn*'s own globals that calling *fn* mutates in place (CAS-260).
+
+    The call-unit half of the statement path's
+    ``StatementProcessor._callee_mutated_globals``, and deliberately the SAME
+    underlying analysis (``cacheability._free_vars_mutated_in_function``) so the
+    two paths cannot drift on what counts as a callee's write. The difference is
+    only where the source comes from: there, a name resolved against the user
+    namespace; here, the live function object already in hand.
+
+    Returned sorted, so the key component built from it is order-stable.
+
+    Memoised on the callee's code object -- see ``_GLOBAL_MUTATION_CACHE`` for
+    why that key and not a source hash.
+
+    Never raises. A callee whose source cannot be read (a C builtin, an
+    ``exec``'d string, a partial) yields ``()``, which means "no globals to
+    capture" -- the pre-existing behaviour, i.e. the write is silently skipped
+    on a hit exactly as it is today. That is fail-OPEN, and it is the
+    deliberate choice: this feature must never be why user code breaks, and a
+    callee cash cannot read is not made safer by refusing to cache it.
+    """
+    globals_dict = getattr(fn, "__globals__", None)
+    if not isinstance(globals_dict, dict):
+        return ()
+    memo_key = getattr(fn, "__code__", None)
+    cached = _GLOBAL_MUTATION_CACHE.get(memo_key) if memo_key is not None else None
+    if cached is None:
+        try:
+            cached = tuple(sorted(callee_source_global_mutations(_inspect.getsource(fn))))
+        except Exception:  # noqa: BLE001 - analysis must never break a call
+            cached = ()
+        if memo_key is not None:
+            _GLOBAL_MUTATION_CACHE[memo_key] = cached
+    # Filtered per call, not memoised: a name is only capturable while it is
+    # actually bound and is not a module. `import` order or a `del` can change
+    # that between calls, and the memo above is about the SOURCE, not the
+    # namespace.
+    return tuple(
+        n for n in cached
+        if n in globals_dict and not isinstance(globals_dict[n], _ModuleType)
+    )
+
+
 def call_cache_key(
     site: CallSite,
     *,
@@ -195,6 +270,7 @@ def call_cache_key(
     arg_digests: list[str],
     loop_vars: dict[str, object],
     loop_var_digests: Mapping[str, str] | None = None,
+    global_digests: Mapping[str, str] | None = None,
 ) -> str | None:
     """The cache key for one intercepted call, or ``None`` to refuse caching it.
 
@@ -332,6 +408,24 @@ def call_cache_key(
     load-bearing, not cosmetic). Omitting it (``None``, the default) is
     always CORRECT, only slower — every entry falls through to a fresh
     ``compute_hash_full(value)`` call, same as before this parameter existed.
+
+    **global_digests (CAS-260)** pins the PRE-call state of every global the
+    callee writes, ``{name: full_hash}``. Without it the entry's restored
+    post-state would be served over a prefix that never produced it: two calls
+    that agree on arguments but enter with a different accumulator get the same
+    key, and the second is handed the first's absolute end state. That is the
+    partial-accumulator hazard ``cacheability.cacheable_accumulator_loop``'s
+    requirement (2) refuses outright, and that CAS-261's split tail had to
+    satisfy by keying on the accumulator's post-head lineage.
+
+    ``None``/empty is the shape for every call whose callee writes no globals,
+    which is nearly all of them, and it contributes nothing — so an entry
+    written before this parameter existed keys identically. Unlike
+    ``arg_digests`` there is no count to cross-check against the site, because
+    the watch list comes from the CALLEE's source rather than the call's: the
+    one caller that populates it (:class:`CallUnit`) derives it from the same
+    :func:`callee_mutated_globals` result it uses to capture, so the two cannot
+    disagree about which names are covered.
     """
     base = compute_cache_key(
         site.source,
@@ -364,7 +458,8 @@ def call_cache_key(
         name: value for name, value in loop_vars.items() if not _is_dunder_loop_var(name)
     }
 
-    if not arg_digests and not filtered_loop_vars and not site.stmt_identity:
+    if (not arg_digests and not filtered_loop_vars and not site.stmt_identity
+            and not global_digests):
         return base
     # Length-prefixed and `|`-delimited deliberately: `":".join(["a", "b"])`
     # and `":".join(["a:b"])` are the same string, so an undelimited join
@@ -385,6 +480,11 @@ def call_cache_key(
     # docstring section above and `CallSite.stmt_identity`). Hashed rather
     # than appended raw so an unbounded statement source cannot itself defeat
     # the `|`-delimiting the other parts already rely on.
+    # The PRE-call state of the globals this callee writes (CAS-260). Prefixed
+    # `g:` so a global named like a loop variable cannot occupy the same slot
+    # as that loop var's component under the shared `|`-join.
+    if global_digests:
+        parts.extend(f"g:{name}={digest}" for name, digest in sorted(global_digests.items()))
     if site.stmt_identity:
         parts.append(
             "stmt=" + hashlib.sha256(site.stmt_identity.encode("utf-8")).hexdigest()
@@ -521,7 +621,31 @@ class CallUnit:
 
         @functools.wraps(fn)
         def _invoke(*args, **kwargs):
-            key = self._build_key(site, args, kwargs)
+            # CAS-260: globals this callee writes. Resolved per call rather
+            # than once per `wrap`, because the underlying source analysis is
+            # memoised (`callee_mutated_globals`) while the "is it bound, is it
+            # a module" filter genuinely depends on the live namespace. Empty
+            # for nearly every callee, and every branch below short-circuits on
+            # empty, so an ordinary call pays one memo lookup.
+            #
+            # NOT inside a loop iteration. The statement path skip-caches a
+            # statement whose callee writes a global, so at CELL level every
+            # writer runs in order and each call restores its own post-state --
+            # the chain composes. Inside a loop it does not: measured, three
+            # iterations after a restart, with this gate removed::
+            #
+            #     LOOP_F == [1, 2, 2, 3]   then  [1, 2, 2, 3, 3]   (2 then 1 real calls)
+            #
+            # Some iterations are served and some run, and an absolute snapshot
+            # restored between two real executions doubles an entry. Making the
+            # statement always re-execute does NOT fix it, which was the
+            # hypothesis this gate was removed to test. The loop owns its
+            # body's writes (CAS-265).
+            mutated_globals = () if self._current_loop_vars() else callee_mutated_globals(fn)
+            key = self._build_key(
+                site, args, kwargs,
+                self._global_digests(fn, mutated_globals) if mutated_globals else None,
+            )
             if key is None:
                 # Either the key build raised, or `call_cache_key` itself
                 # refused (arg-digest count mismatch, by design). Either way
@@ -549,6 +673,7 @@ class CallUnit:
                 # failure mode.
                 self._replay_deps(metadata)
                 self._replay_output(metadata)
+                self._restore_globals(fn, mutated_globals, metadata)
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 return value
 
@@ -612,13 +737,29 @@ class CallUnit:
                 # a hit would silently skip.
                 self._refused.add(key)
             elif elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
-                self._store(
-                    key, result, elapsed,
-                    file_deps=frozenset(call_tracker.get_accessed_files()),
-                    remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
-                    stdout=stdout_text,
-                    stderr=stderr_text,
-                )
+                # CAS-260: the callee's writes to its own globals, captured as
+                # an END STATE. Snapshotting the final value needs no ordering
+                # and no idempotence, which is why this is tractable where
+                # replaying the individual mutations is not.
+                #
+                # `None` means "cannot capture this soundly" -- an unpicklable
+                # value, or one whose hash falls back to identity so a later
+                # pre-state comparison could not tell it had changed. Refuse
+                # the SITE rather than store an entry whose restore would be
+                # wrong, matching the RNG and argument-mutation refusals above:
+                # an uncached call is merely slow.
+                captured = self._capture_globals(fn, mutated_globals)
+                if captured is None:
+                    self._refused.add(key)
+                else:
+                    self._store(
+                        key, result, elapsed,
+                        file_deps=frozenset(call_tracker.get_accessed_files()),
+                        remote_deps=frozenset(call_tracker.get_accessed_remote_urls()),
+                        stdout=stdout_text,
+                        stderr=stderr_text,
+                        callee_globals=captured,
+                    )
             self._record(func_name, site, key, cache_hit=False, elapsed=elapsed)
             return result
 
@@ -765,7 +906,133 @@ class CallUnit:
                 out.append(h)
         return tuple(out)
 
-    def _build_key(self, site: CallSite, args: tuple, kwargs: dict) -> str | None:
+    @staticmethod
+    def _global_digests(fn, names: tuple[str, ...]) -> dict[str, str]:
+        """PRE-call content hashes of the globals *fn* writes, for the key.
+
+        ``compute_hash_full``, never the sampling ``compute_hash``, for the
+        same reason :func:`_loop_var_digest` documents at length: this IS the
+        discriminator. ``compute_hash`` reduces a collection over 200 elements
+        to its first and last five, so two different accumulator states that
+        agree at both ends would key IDENTICALLY -- and an accumulator is
+        precisely the shape that grows in the middle. That is first-run
+        wrongness, not a missed optimisation.
+
+        The cost this admits is real and bounded by how rare the case is: a
+        callee that writes a global at all is uncommon, and the hash is over
+        the accumulator, not over the arguments. ``_hash_args``' sampling trade
+        is fine where it lives (a coarse per-call mutation smoke test on a
+        possibly-huge live argument, allowed to be wrong toward "assume
+        unmutated"); it is not fine here.
+
+        A name that cannot be hashed at all is omitted, which makes the key
+        LESS discriminating -- so :meth:`_capture_globals` independently
+        refuses to store any entry whose capture is not sound, and the pair of
+        them fails closed.
+        """
+        globals_dict = getattr(fn, "__globals__", None) or {}
+        digests: dict[str, str] = {}
+        for name in names:
+            try:
+                digests[name] = compute_hash_full(globals_dict[name])
+            except Exception:  # noqa: BLE001 - a missing digest only widens the key
+                logger.debug("call unit: could not digest global %r", name)
+        return digests
+
+    @staticmethod
+    def _capture_globals(fn, names: tuple[str, ...]) -> dict[str, Any] | None:
+        """Post-call values of the globals *fn* writes, or ``None`` to refuse.
+
+        ``None`` is returned when any watched name cannot be captured soundly:
+
+        * **absent** — it was there when the watch list was filtered and is not
+          now, so this call's effect on it cannot be described;
+        * **identity-fallback hash** — ``compute_hash`` fell through to
+          ``sha256(str(id(obj)))`` because the object does not pickle (a lock,
+          a socket, an open file). ``id`` is invariant across an in-place
+          mutation, so a later key comparison on this name is BLIND, always,
+          for that whole class. Storing an entry whose pre-state cannot be
+          told apart is exactly the partial-accumulator hazard.
+
+        Returning ``None`` costs a permanently-uncached site. Storing anyway
+        would cost a silently wrong restore, and this method exists to prefer
+        the former.
+
+        **Deep-copied, not referenced.** The whole point of this capture is a
+        POST-CALL snapshot, and the object being snapshotted is by construction
+        one that gets mutated in place -- so keeping a reference does not
+        capture a state at all, it captures a live handle that keeps changing.
+        The RAM tier stores metadata as given, so a later call mutating the
+        same object silently rewrites an already-stored entry's recorded
+        "post-state". Measured::
+
+            cell 3   a = next_seq()            stores N -> [1]
+            cell 5   seen.append(next_seq())   mutates the SAME list to [2]
+            rerun    cell 3 hits, restores N -> [2]   (not [1])
+
+        which then re-keyed cell 5's call against a pre-state that had never
+        existed, so it missed forever -- and the two spellings diverged
+        (CAS-246's guard caught it). A copy failure is treated like any other
+        "cannot capture this soundly": refuse.
+        """
+        if not names:
+            return {}
+        globals_dict = getattr(fn, "__globals__", None) or {}
+        captured: dict[str, Any] = {}
+        for name in names:
+            if name not in globals_dict:
+                return None
+            value = globals_dict[name]
+            try:
+                if is_identity_fallback_hash(value, compute_hash(value)):
+                    return None
+                captured[name] = _copy.deepcopy(value)
+            except Exception:  # noqa: BLE001 - cannot prove it is capturable
+                return None
+        return captured
+
+    def _restore_globals(self, fn, names: tuple[str, ...], metadata: Mapping[str, Any]) -> None:
+        """Land a hit entry's recorded post-call globals back into *fn*'s own
+        namespace, so the callee's write survives a call it did not make.
+
+        The counterpart of :meth:`_replay_output` for state rather than text,
+        and the call-level twin of what the statement path does by listing the
+        same names in its ``outputs``.
+
+        A rebind, not an in-place transfer. That matches the statement path's
+        default restore (``StatementRestorer._write_restored_value`` only
+        transfers in place for an explicitly-listed estimator-fit receiver), so
+        the two spellings of the same code land the value the same way. An
+        alias taken BEFORE the restore therefore keeps pointing at the old
+        object — a real limitation, and the same one the statement path has
+        always had for every restored variable.
+
+        Only names in *names* are written. The entry could carry a stale name
+        from a since-edited callee, and honouring it would resurrect a variable
+        the current source never mentions.
+        """
+        if not names:
+            return
+        recorded = metadata.get("callee_globals")
+        if not isinstance(recorded, Mapping) or not recorded:
+            return
+        globals_dict = getattr(fn, "__globals__", None)
+        if not isinstance(globals_dict, dict):
+            return
+        for name in names:
+            if name in recorded:
+                # A COPY, for the mirror of the reason `_capture_globals`
+                # copies: handing back the stored object would make the live,
+                # about-to-be-mutated variable and the cache entry the same
+                # object, so the next call would rewrite the entry it was just
+                # served from.
+                try:
+                    globals_dict[name] = _copy.deepcopy(recorded[name])
+                except Exception:  # noqa: BLE001 - a restore must never crash
+                    logger.debug("call unit: could not restore global %r", name)
+
+    def _build_key(self, site: CallSite, args: tuple, kwargs: dict,
+                   global_digests: Mapping[str, str] | None = None) -> str | None:
         if site.has_unpacking:
             # `*args`/`**kwargs` unpacking means the call's live arity is not
             # statically known. `site.computed_arg_positions` is a STATIC
@@ -788,6 +1055,7 @@ class CallUnit:
                 arg_digests=arg_digests,
                 loop_vars=self._current_loop_vars(),
                 loop_var_digests=self._current_loop_var_digests(),
+                global_digests=global_digests,
             )
         except Exception:  # noqa: BLE001 - never let keying break the call
             logger.debug("call unit: key build failed for %s", site.source)
@@ -974,6 +1242,7 @@ class CallUnit:
         remote_deps: frozenset[str] = frozenset(),
         stdout: str = "",
         stderr: str = "",
+        callee_globals: Mapping[str, Any] | None = None,
     ) -> None:
         """Write through ``backend.set(key, value, metadata)`` -- the same
         two-positional-argument shape the statement path uses
@@ -1007,6 +1276,15 @@ class CallUnit:
             metadata["stdout"] = stdout
         if stderr:
             metadata["stderr"] = stderr
+        # CAS-260. Omitted when empty, like every other optional channel here,
+        # so an ordinary cached call keeps writing the same sparse entry. Rides
+        # in metadata rather than in the VALUE deliberately: changing the value
+        # shape would make every entry written before this existed deserialise
+        # into the wrong thing under an unchanged key, which is a silent wrong
+        # answer rather than a miss. `stdout` already establishes that metadata
+        # carries payload-sized data here.
+        if callee_globals:
+            metadata["callee_globals"] = dict(callee_globals)
         try:
             self._cash.backend.set(key, value, metadata)
         except Exception:  # noqa: BLE001

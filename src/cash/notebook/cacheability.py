@@ -42,6 +42,8 @@ __all__ = [
     "standalone_call_arg_targets",
     "function_arg_mutations",
     "function_global_mutations",
+    "called_function_global_mutations",
+    "callee_source_global_mutations",
     "stateful_self_functions",
     "stateful_closure_vars",
     "partial_arg_mutations",
@@ -1627,6 +1629,142 @@ def function_global_mutations(tree: ast.Module | None, resolve_source) -> frozen
         if fdef is None:
             continue
         out |= _free_vars_mutated_in_function(fdef)
+    return frozenset(out)
+
+
+def called_function_global_mutations(tree, resolve_source) -> frozenset[str]:
+    """Module globals mutated in place by ANY function called in *tree*
+    (CAS-260) — the capture-and-restore watch list.
+
+    Sibling of :func:`function_global_mutations`, and the difference is the
+    whole point: that one walks :func:`standalone_call_arg_targets`, i.e. only
+    a top-level bare-``Expr`` call (``bump()``), because a *reset* target only
+    makes sense for a call made for its effect. Capture-and-restore has to
+    cover the spellings where the call's VALUE is used as well::
+
+        x = compute(y)              # statement path
+        out.append(compute(y))      # call path (CAS-243)
+
+    Both are ``ast.Call`` nodes anywhere in the statement, which is exactly
+    what :func:`_called_function_names` already collects, so this is that
+    walk plus the same per-callee :func:`_free_vars_mutated_in_function`
+    analysis. A rule that fired for one spelling and not the other is the
+    CAS-145 defect this project has already paid for.
+
+    **Why the caller must still filter.** This is pure AST: it names what the
+    callee's source mutates, and says nothing about whether that name is a
+    live, capturable notebook variable. A name that is a module, or absent
+    from the namespace entirely (the callee's own module-level global, not the
+    notebook's), must be dropped by the caller before it reaches an output
+    set — capturing it would either serialise a module or invent a variable.
+
+    **Calls inside a loop or branch body are deliberately NOT included.** A
+    control structure is one unit to the upstream simulation and to the
+    accumulator machinery, so its body's writes are the loop's to own, not any
+    single body statement's. Three narrower placements were measured on::
+
+        for t in [1, 2, 3]:
+            of.append(loop_f(t))       # loop_f appends to a global LOOP_F
+
+        per-iteration capture      LOOP_F == [2]           one iteration's
+                                                           ABSOLUTE post-state,
+                                                           restored over the
+                                                           accumulation
+        per-iteration skip-cache   LOOP_F == [2]           the planner replays
+                                                           only the last writer
+        per-call restore           LOOP_F == [1, 2, 2, 3]  restores interleaved
+                                                           with the iterations
+                                                           that genuinely ran
+
+    All three are WORSE than the pre-existing behaviour, where the write is
+    merely skipped and the value stays where the last real execution left it.
+    Notably the third survives making the body statement always re-execute,
+    which was the hypothesis under which the exclusion was briefly lifted.
+    Owning this at the loop level is CAS-265; until then, one rule -- the loop
+    owns its body -- applied at every site that consults this.
+
+    Not interprocedural, matching :func:`function_global_mutations`: a global
+    mutated only by a helper the callee calls is not detected. That is a
+    fail-open gap (the write is silently skipped on a hit, exactly as today),
+    not a new failure mode, and it keeps this identical to the analysis the
+    checker has already shipped.
+    """
+    if tree is None:
+        return frozenset()
+    out: set[str] = set()
+    for name in _cell_level_called_function_names(tree):
+        fdef = _resolve_function_def(name, resolve_source)
+        if fdef is not None:
+            out |= _free_vars_mutated_in_function(fdef)
+    return frozenset(out)
+
+
+def callee_source_global_mutations(source: str) -> frozenset[str]:
+    """Globals a single function's own SOURCE mutates in place.
+
+    The same per-callee analysis :func:`called_function_global_mutations`
+    applies, entered one level lower: given the text of one ``def``, name the
+    free variables its body writes. Exists so the call unit -- which holds a
+    live function object and resolves its source through ``inspect``, not
+    through a name in the user namespace -- can share this analysis rather than
+    reach past the module boundary for a private helper. The two paths agreeing
+    on what counts as a callee's write is the point (CAS-145: a rule that fires
+    for one spelling and not another is a defect this project has paid for).
+
+    Returns an empty set for anything that is not a single function
+    definition, and never raises.
+    """
+    try:
+        parsed = ast.parse(textwrap.dedent(source))
+    except (SyntaxError, ValueError, RecursionError):
+        return frozenset()
+    node = parsed.body[0] if parsed.body else None
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return frozenset()
+    try:
+        return _free_vars_mutated_in_function(node)
+    except (ValueError, RecursionError):
+        return frozenset()
+
+
+#: Statement nodes whose bodies a control-structure handler owns, not the
+#: statement path. Mirrors what ``statement/processor.py`` marks with
+#: ``# __iteration_context__:`` / ``# control_context:``.
+_CONTROL_STATEMENTS = (
+    ast.For, ast.AsyncFor, ast.While, ast.If, ast.With, ast.AsyncWith, ast.Try,
+)
+
+
+def _cell_level_called_function_names(tree) -> frozenset[str]:
+    """``name(...)`` callees reachable WITHOUT entering a control structure.
+
+    :func:`_called_function_names` walks everything; this stops at a ``for`` /
+    ``while`` / ``if`` / ``with`` / ``try``, so a call in the body of one is not
+    reported. The control structure's own header expressions ARE walked --
+    ``for t in gen(): ...`` reads ``gen()`` once, outside any iteration, so it
+    belongs to the cell.
+    """
+    out: set[str] = set()
+
+    def walk(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, _CONTROL_STATEMENTS):
+                # The header (`iter`, `test`, `items`) still belongs to the
+                # cell; only the bodies are the control structure's.
+                for field, value in ast.iter_fields(child):
+                    if field in ('body', 'orelse', 'finalbody', 'handlers'):
+                        continue
+                    for sub in (value if isinstance(value, list) else [value]):
+                        if isinstance(sub, ast.AST):
+                            if isinstance(sub, ast.Call) and isinstance(sub.func, ast.Name):
+                                out.add(sub.func.id)
+                            walk(sub)
+                continue
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                out.add(child.func.id)
+            walk(child)
+
+    walk(tree)
     return frozenset(out)
 
 

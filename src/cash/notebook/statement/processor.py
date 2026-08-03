@@ -182,6 +182,25 @@ def _config_float(config: Any, attr: str, default: float) -> float:
         return default
 
 
+def _is_control_body(code: str) -> bool:
+    """True when *code* is one statement out of a loop or branch BODY, not a
+    statement the user wrote at cell level.
+
+    ``for_handler`` / the control-structure processor dispatch a body statement
+    here individually, with an injected marker comment carrying the iteration
+    or branch context. The upstream simulation, in contrast, treats the whole
+    loop or branch as ONE unit -- so any per-statement bookkeeping that names a
+    variable (lineage bumps, mutation routing, callee-global capture) has to be
+    withheld here and owned by the control structure instead, or the two
+    engines disagree about who wrote what.
+
+    Named rather than repeated inline: the same test now gates three separate
+    decisions, and three copies of a marker string is three chances for one of
+    them to silently stop matching.
+    """
+    return '# __iteration_context__:' in code or '# control_context:' in code
+
+
 class _TeeWriter:
     """A writer that sends output to both a real stream and a list buffer.
 
@@ -325,6 +344,7 @@ from ..cacheability import (
     StatementAnalysis,
     analyze_statement,
     assigned_method_call_receivers,
+    called_function_global_mutations,
     function_arg_mutations,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -848,6 +868,17 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
+        # Globals a CALLEE mutates (CAS-260). Routed exactly like an INLINE
+        # in-place mutation (``mut_pre_route`` below): the name joins
+        # ``outputs`` so its lineage is bumped, and the statement is
+        # SKIP-CACHED so the mutation actually re-happens.
+        # Not for a control-structure BODY statement: the loop is ONE unit to
+        # the upstream simulation, and bumping/skip-caching per iteration makes
+        # the planner replay only the last writer (measured: LOOP_F == [2]
+        # instead of [1, 2, 3]). The loop owns its body's writes -- CAS-265.
+        callee_globals = (
+            set() if _is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        )
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
         # Caller-forced outputs (accumulator-loop fast path): capture
         # and restore these on top of the AST-discovered outputs, and mark them
@@ -858,6 +889,28 @@ class StatementProcessor:
         # which an accumulator never is).
         if force_outputs:
             outputs = outputs | force_outputs
+        # CAS-260: the callee's writes join ``outputs`` so their lineage is
+        # bumped (a downstream consumer of the accumulator must re-key), and the
+        # statement is skip-cached below so the write actually happens.
+        #
+        # NOT captured and restored. An earlier version of this did exactly
+        # that -- store the global's post-statement value, restore it on a hit
+        # -- and it is unsound the moment a global has more than ONE writer,
+        # because an absolute end state does not compose with a prefix that was
+        # itself skipped. Measured, two calls to the same appending helper in
+        # one cell, cold run::
+        #
+        #     expected  ['ok:3.3', 'cleanup', 'err:zero_div', 'cleanup']
+        #     observed  ['err:zero_div', 'cleanup']
+        #
+        # The first writer's contribution is simply gone. ``force_outputs``
+        # above CAN restore an accumulator, but only under
+        # ``cacheable_accumulator_loop``'s conditions -- fresh empty seed, a
+        # single accumulator call -- which are precisely the guarantees that
+        # make one writer's snapshot sufficient. Copying that mechanism without
+        # its preconditions is what broke.
+        if callee_globals:
+            outputs = outputs | callee_globals
         # Expose the cache key on metrics so the badge can show a short
         # prefix in the row-detail "Key" field. Lets users see at a glance
         # when two runs of the same statement land in the same vs. a
@@ -892,7 +945,7 @@ class StatementProcessor:
         # here would bump the receiver with a per-statement source the simulation
         # never reproduces -> cross-cell desync. Skip them; the control structure
         # owns its body's mutation lineage.
-        if '# __iteration_context__:' in code or '# control_context:' in code:
+        if _is_control_body(code):
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
             est_fit: set[str] = set()
             # ...with ONE exception: a draw on a live Figure/Axes.
@@ -946,6 +999,22 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
+            )
+        # CAS-260, and deliberately the SAME treatment the inline spelling of
+        # the identical mutation gets immediately above: the statement
+        # re-executes so the callee's write to a global really happens.
+        #
+        # The expensive work is NOT lost. Sub-statement caching (CAS-243) still
+        # serves the call inside this statement, keyed on the mutated global's
+        # own pre-call state, so what re-executes is the glue around it. That
+        # split is CAS-243's whole thesis -- the statement does not need to
+        # cache, because the call does -- and it is what makes always
+        # re-executing affordable here.
+        if callee_globals:
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"Callee mutates: {', '.join(sorted(callee_globals))} "
+                "(global lineage bumped; statement re-executes, call still cached)"
             )
         # a draw inside a loop/branch body. Skip the CACHE without
         # touching ``outputs`` -- the statement must re-execute so the artists
@@ -1079,7 +1148,20 @@ class StatementProcessor:
         except SyntaxError:
             _parsed_tree = None
 
+        # CAS-260, same seam as the sync path -- see ``process_statement`` for
+        # the reasoning. Present here too so a top-level-await statement gets
+        # the identical treatment; the upstream simulation does not know which
+        # statements ran through the await path.
+        # Not for a control-structure BODY statement: the loop is ONE unit to
+        # the upstream simulation, and bumping/skip-caching per iteration makes
+        # the planner replay only the last writer (measured: LOOP_F == [2]
+        # instead of [1, 2, 3]). The loop owns its body's writes -- CAS-265.
+        callee_globals = (
+            set() if _is_control_body(code) else self._callee_mutated_globals(_parsed_tree)
+        )
         inputs, outputs, source_hash, cache_key, analysis_time, hash_time = self._analyze_and_hash(code, occurrence_index=occurrence_index, tree=_parsed_tree)
+        if callee_globals:
+            outputs = outputs | callee_globals
         metrics['cache_key'] = cache_key
 
         early_result, skip_cache = self._check_redundant_import(
@@ -1090,7 +1172,7 @@ class StatementProcessor:
 
         statement_analysis = analyze_statement(code, _parsed_tree, self.shell.user_ns)
 
-        if '# __iteration_context__:' in code or '# control_context:' in code:
+        if _is_control_body(code):
             mut_pre_route, mut_observe, mut_assumed, mut_record = set(), set(), set(), False
             est_fit: set[str] = set()
             # ...with ONE exception: a draw on a live Figure/Axes.
@@ -1144,6 +1226,22 @@ class StatementProcessor:
             metrics['uncacheable_reasons'].append(
                 f"In-place mutation on: {', '.join(sorted(skip_pre_route))} "
                 "(receiver lineage bumped; statement re-executes)"
+            )
+        # CAS-260, and deliberately the SAME treatment the inline spelling of
+        # the identical mutation gets immediately above: the statement
+        # re-executes so the callee's write to a global really happens.
+        #
+        # The expensive work is NOT lost. Sub-statement caching (CAS-243) still
+        # serves the call inside this statement, keyed on the mutated global's
+        # own pre-call state, so what re-executes is the glue around it. That
+        # split is CAS-243's whole thesis -- the statement does not need to
+        # cache, because the call does -- and it is what makes always
+        # re-executing affordable here.
+        if callee_globals:
+            skip_cache = True
+            metrics['uncacheable_reasons'].append(
+                f"Callee mutates: {', '.join(sorted(callee_globals))} "
+                "(global lineage bumped; statement re-executes, call still cached)"
             )
         # a draw inside a loop/branch body. Skip the CACHE without
         # touching ``outputs`` -- the statement must re-execute so the artists
@@ -2440,6 +2538,51 @@ class StatementProcessor:
                     continue
         return None
 
+    def _callee_mutated_globals(self, tree: ast.Module | None) -> set[str]:
+        """Notebook globals a callee writes, to capture and restore (CAS-260).
+
+        ``CALLS.append(v)`` written INLINE in the cell is tracked, captured and
+        restored like any other mutated variable. Written inside ``compute``
+        and called as ``x = compute(v)`` it was silently dropped: the callee's
+        body is not the statement's source, so nothing surfaced ``CALLS`` as an
+        output. Measured on a kernel restart, where the seed re-runs and the
+        statement hits::
+
+            CALLS_I.append(1); ai = compute_i(1)   ->  CALLS_I == [1]   (inline)
+            af = compute_f(1)                      ->  CALLS_F == []    (in-callee)
+
+        Same mutation, same value, two spellings, two answers. This closes it
+        by naming the callee's writes and handing them to the statement's own
+        capture/restore machinery — identification, not replay. Replaying an
+        arbitrary sequence of mutations has no handle (ADR-017 replays exactly
+        one side effect, an RNG seed, and only because a seed has a known
+        replay); restoring an END STATE needs no sequence, no ordering and no
+        idempotence, which is why this is tractable where replay is not.
+
+        Filtered to what can actually be captured:
+
+        * absent from the namespace — the callee's own module-level global,
+          not a notebook variable. Capturing it would invent a variable;
+        * a module — never a value to serialise, mirroring
+          ``_classify_method_mutations`` and ``_function_arg_mutation_receivers``.
+
+        The complement of :meth:`_function_arg_mutation_receivers`, which
+        handles the same problem one scope over: a callee mutating its
+        ARGUMENT. Between them a called function's two channels into
+        caller-visible state are both surfaced as outputs.
+        """
+        if tree is None:
+            return set()
+        try:
+            names = called_function_global_mutations(tree, self._resolve_live_function_source)
+        except (SyntaxError, ValueError, RecursionError):
+            return set()
+        ns = self.shell.user_ns
+        return {
+            n for n in names
+            if n in ns and not isinstance(ns[n], types.ModuleType)
+        }
+
     def _function_arg_mutation_receivers(
         self, tree: ast.Module | None, outputs: set[str],
     ) -> set[str]:
@@ -3535,7 +3678,6 @@ class StatementProcessor:
             code: Python source code to analyze.
             occurrence_index: Index for disambiguating duplicate code blocks.
             tree: Optional pre-parsed AST to avoid redundant parsing.
-
         Raises:
             CacheKeyComputationError: If the cache key cannot be computed.
         """

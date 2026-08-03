@@ -254,9 +254,14 @@ def scen_edit_base_no_rerun_intermediate(r):
 
 
 def scen_hidden_global_mutation(r):
-    """DOCUMENTED limitation + non-vacuity canary: a function mutates a global;
-    re-running its caller alone reads an already-advanced global. Top-to-bottom
-    says R 1; cash re-executes and reads 2."""
+    """A function mutates a global; re-running its caller alone must still agree
+    with a clean top-to-bottom run.
+
+    Was a documented-limitation canary (cash re-executed and read an
+    already-advanced global, printing 2 where top-to-bottom says 1). CAS-260
+    closed it at cell level: ``c`` is now surfaced as an output of ``res =
+    tick()``, so its pre-state pins the key and its post-state is restored on a
+    hit. Kept in the passing set as the regression guard for that."""
     _start(r, [
         PRE,
         "c = {'n': 0}\ndef tick():\n    c['n'] += 1\n    return c['n']",
@@ -365,6 +370,12 @@ SCENARIOS = [
     scen_multihop_inplace_reconstruction,
     scen_alias_reflects_upstream_edit,
     scen_expensive_consumer_upstream_edit,
+    # Promoted from CANARY_SCENARIOS: a callee's write to a global is captured
+    # and restored at cell level now (CAS-260), so this matches the oracle
+    # rather than diverging from it. The loop-body half of that limitation is
+    # still open and is pinned by
+    # ``test_callee_global_capture.py::test_a_loop_body_captures_the_callee_global_too``.
+    scen_hidden_global_mutation,
 ]
 
 # Documented-limitation canaries. Each reproduces a limitation explicitly listed
@@ -374,7 +385,6 @@ SCENARIOS = [
 # non-vacuity proof: they demonstrate the oracle DOES catch a real divergence, so
 # the green passes above are meaningful rather than trivially matching.
 CANARY_SCENARIOS = [
-    scen_hidden_global_mutation,       # docs: "Mutating global state inside a function"
     scen_class_var_accumulator,        # docs: "Class variables shared across cells"
     scen_alias_double_apply_own_rerun, # docs: "Mutating an object created in an earlier cell" / alias
 ]

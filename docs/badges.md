@@ -132,13 +132,15 @@ A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused
     By default Cash still caches an expensive **call inside** such a statement
     — see [Call-level
     caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls).
-    A call's stdout is captured and replayed on a hit, and files it reads are
-    tracked as dependencies. Effects Cash *cannot* replay — mutating an
-    argument, drawing from an RNG — make a call ineligible, so it re-runs.
-    Effects Cash cannot **see** are a documented limitation: a callee that
-    mutates a global it was never handed is not detected ([Mutating global
-    state inside a
-    function](known-limitations.md#mutating-global-state-inside-a-function)).
+    A call's stdout is captured and replayed on a hit, files it reads are
+    tracked as dependencies, and globals its body writes are captured and
+    restored with it (which is also why a statement calling such a helper is
+    itself left uncached — it re-executes so the write really happens, while
+    the call inside it still caches). Effects Cash *cannot* replay — mutating
+    an argument, drawing from an RNG — make a call ineligible, so it re-runs.
+    The one write it still misses is a global mutated from inside a callee **in
+    a loop body** ([Mutating global state inside a function — inside a
+    loop](known-limitations.md#mutating-global-state-inside-a-function-inside-a-loop)).
 
     `# @cash:no-cache-calls` turns call-level caching off for a statement or
     cell; `# @cash:no-cache` covers the statement *and* everything in it.

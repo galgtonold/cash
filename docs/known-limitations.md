@@ -120,27 +120,60 @@ Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`
 
 **What to do:** mutate through the original name (`x.append(99)`), or rebind rather than mutate (`x = x + [99]`).
 
-### Mutating global state inside a function
+### Mutating global state inside a function — inside a loop
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f6bf4ab2 -->
+<!-- claim: cash/notebook/cacheability.py:called_function_global_mutations @ce3be880 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
-that mutates `df`). What it still cannot see is a function mutating a **global**
-(non-argument) it wasn't handed:
+that mutates `df`). It also tracks a function mutating a **global** it wasn't
+handed, at cell level, in every spelling of the call:
 
 <!-- test:skip reason="illustrative: hidden global mutation, needs an isolated cell re-run" -->
 ```python
 c = {'n': 0}                    # cell 1
 def tick():
-    c['n'] += 1                 # mutates a global cash cannot attribute
+    c['n'] += 1                 # a global, mutated from inside the callee
     return c['n']
 
-r = tick()                      # cell 2 — re-run alone: prints 2, not 1
+r = tick()                      # cell 2 — re-runs and restarts agree with a
+                                # clean top-to-bottom run
 ```
 
-This is a fundamental limit of analysing impure functions statically. Note that `@stateful` does **not** rescue it: it forces the call to re-execute, but the call still reads an already-advanced global.
+Cash does not *replay* the `+= 1`. It treats the statement exactly as it treats
+the same mutation written inline: the statement is **not cached**, so it
+re-executes and the write really happens. The expensive part is still cached —
+the *call* inside the statement is served from cache and its effect on `c` is
+restored with it — so what re-runs is the glue, not the work. Re-running cell 2
+alone, or restarting the kernel and running everything, both land where a clean
+top-to-bottom run lands.
 
-**What to do:** pass the state in and return it out, rather than mutating a global.
+**What it still cannot do is the same write from inside a loop body:**
+
+<!-- test:skip reason="illustrative: the loop-body half, still open" -->
+```python
+LOG = []
+def step(v):
+    LOG.append(v)               # not captured while the call is in a loop body
+    return v * 10
+
+out = []
+for t in items:                 # LOG is left where the last real execution
+    out.append(step(t))         # put it, rather than being restored
+```
+
+A loop is one unit to cash, so its body's writes belong to the loop rather than
+to any single iteration. Both narrower placements were measured and both
+corrupt the accumulation rather than merely leaving it stale — a per-iteration
+capture of the global's *whole* value gives `[2]` where `[1, 2, 3]` is correct,
+and per-call restores interleaved with the iterations that genuinely run give
+`[1, 2, 2, 3]`. Until the loop owns this, the write is skipped on a hit.
+
+Note that `@stateful` does **not** rescue the loop case: it forces the call to
+re-execute, but the call still reads an already-advanced global.
+
+**What to do:** for the loop case, pass the state in and return it out, rather
+than mutating a global — or accumulate at cell level (`LOG.append(t)` written in
+the loop body directly, which *is* tracked).
 
 ### Mutating an object created in an earlier cell
 

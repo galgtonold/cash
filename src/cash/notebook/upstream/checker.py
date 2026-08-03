@@ -28,7 +28,7 @@ from ..cacheability import (
     crossref_reassigned_vars,
     subscript_view_bindings,
     function_arg_mutations,
-    function_global_mutations,
+    called_function_global_mutations,
     stateful_self_functions,
     stateful_closure_vars,
     partial_arg_mutations,
@@ -346,24 +346,44 @@ class UpstreamChecker:
                 ) - nocache_vars
                 current_cell_mutated |= func_arg_muts
                 current_cell_method_receivers |= func_arg_muts
+            # Everything that needs the notebook-wide function sources and is
+            # keyed on ANY call in the cell (captured or bare), rather than on a
+            # bare-``Expr`` call the way the argument-mutation block above is.
+            if _called_function_names(ast.parse(cell_code)):
+                func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
                 # A called function that mutates a module GLOBAL / free variable
                 # in place (``def bump(): global g; g += 1`` + ``bump()``) leaves
                 # the global accumulating on an isolated re-run because nothing in
                 # the cell text names it. Attribute the mutation back to the
                 # global and add it to the cell's inputs so the reset loop (which
                 # iterates required_inputs) restores its producer's base (A).
-                func_global_muts = function_global_mutations(
-                    ast.parse(cell_code), func_sources.get
+                #
+                # ``called_function_global_mutations``, and gated on ANY call
+                # rather than on a bare-``Expr`` one (CAS-260). The reset is what
+                # makes the statement's own cache converge: the statement now
+                # keys on the global's PRE-state, so without a reset the value it
+                # produced becomes the next run's key, which misses, which
+                # produces a third state -- a cell that re-executes forever and
+                # accumulates forever. Measured on ``af = compute_f(1)`` where
+                # ``compute_f`` appends to ``CALLS_F``, re-running the cell::
+                #
+                #     inline    CALLS_I  [1] -> [1]       -> [1]       0 calls
+                #     narrow    CALLS_F  [1] -> [1, 1]    -> [1, 1, 1] 1 call each
+                #     broad     CALLS_F  [1] -> [1]       -> [1]       0 calls
+                #
+                # The narrow gate is not a smaller version of the fix, it is the
+                # half that makes the other half diverge.
+                func_global_muts = called_function_global_mutations(
+                    ast.parse(cell_code), func_sources_all.get
                 ) - nocache_vars
                 current_cell_mutated |= func_global_muts
                 required_inputs = required_inputs | func_global_muts
-            # A called function (captured OR bare) that carries mutable state on
-            # its own object -- a mutated mutable-default arg (``def collect(x,
-            # acc=[]): acc.append(x)``) or a function-attribute counter -- keeps
-            # accumulating across calls. Force-reset the function so its ``def``
-            # re-runs and recreates fresh state on an isolated re-run (B).
-            if _called_function_names(ast.parse(cell_code)):
-                func_sources_all = self._notebook_function_sources(cell_code, notebook_path)
+                # A called function that carries mutable state on its own object
+                # -- a mutated mutable-default arg (``def collect(x, acc=[]):
+                # acc.append(x)``) or a function-attribute counter -- keeps
+                # accumulating across calls. Force-reset the function so its
+                # ``def`` re-runs and recreates fresh state on an isolated
+                # re-run (B).
                 current_cell_stateful_funcs = set(
                     stateful_self_functions(ast.parse(cell_code), func_sources_all.get)
                 ) - nocache_vars

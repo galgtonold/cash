@@ -27,6 +27,7 @@ from ..cacheability import (
     KNOWN_PURE_METHODS,
     RECEIVER_READONLY_WRITE_METHODS,
     assigned_method_call_receivers,
+    called_function_global_mutations,
     function_arg_mutations,
     standalone_call_arg_targets,
     standalone_method_call_receivers,
@@ -49,6 +50,7 @@ from ..randomness import (
     hidden_write_lineage,
 )
 from ..statement.derivation_edges import bump_derived_lineages
+from ..statement.processor import _is_control_body
 from ._types import (
     IncrementalStartResult as _IncrementalStartResult,
     RestoreCollector,
@@ -214,6 +216,42 @@ class VirtualLineage:
                 except (OSError, TypeError):
                     continue
         return None
+
+    def _callee_mutated_globals(self, stmt_code: str, tree: ast.Module | None) -> set[str]:
+        """Simulation half of CAS-260: the globals a callee writes.
+
+        Byte-for-byte the same derivation as
+        ``StatementProcessor._callee_mutated_globals`` — same
+        :func:`called_function_global_mutations` walk, same namespace filter —
+        differing only in how the callee's source is found
+        (:meth:`_resolve_sim_function_source` reads stashed cell text, the
+        runtime reads the live object). That pairing is the one this module
+        already uses for argument-mutation analysis, so it is not a new
+        asymmetry.
+
+        This has to exist. The runtime folds these names into the statement's
+        key inputs; a simulation that did not would compute a DIFFERENT key for
+        every statement calling a global-mutating helper, and ADR-007's whole
+        point is that the two engines mint identical keys. The failure would
+        not look like a crash — the simulation would simply never find the
+        entry the runtime wrote, and reschedule work that was already cached.
+
+        Control-structure bodies are excluded on the runtime's own rule (see
+        :func:`~cash.notebook.statement.processor._is_control_body`): the
+        simulation treats a loop as one unit, so a body statement must not
+        claim the accumulator here either.
+        """
+        if tree is None or _is_control_body(stmt_code):
+            return set()
+        try:
+            names = called_function_global_mutations(tree, self._resolve_sim_function_source)
+        except (SyntaxError, ValueError, RecursionError):
+            return set()
+        ns = self.shell.user_ns
+        return {
+            n for n in names
+            if n in ns and not isinstance(ns[n], types.ModuleType)
+        }
 
     def _mutation_receivers(self, stmt_code: str, tree: ast.Module) -> set[str]:
         """Receivers of standalone method calls in *tree* that mutate, per the
@@ -1930,6 +1968,12 @@ class VirtualLineage:
                 )
                 for var in hidden_writes:
                     virtual_lineage[var] = hidden_write_lineage(seed_key)
+
+            # CAS-260: the globals a CALLEE writes join ``outputs`` so the
+            # simulated lineage is bumped with the same source-based formula
+            # the runtime uses. The runtime ALSO skip-caches such a statement;
+            # that half is runtime-only, exactly like ``mut_pre_route``.
+            outputs = outputs | self._callee_mutated_globals(stmt_code, mutation_tree)
 
             if not outputs:
                 return set(), 0.0, False, {}

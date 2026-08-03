@@ -22,6 +22,7 @@ from cash.notebook.cacheability import (
     crossref_reassigned_vars,
     subscript_view_bindings,
     function_arg_mutations,
+    called_function_global_mutations,
     function_global_mutations,
     stateful_self_functions,
     stateful_closure_vars,
@@ -1273,6 +1274,75 @@ class TestFunctionGlobalMutations:
     def test_param_mutation_excluded(self):
         # a param mutation is CAS-58's job, not a global
         assert self._f("arg(d)") == frozenset()
+
+
+class TestCalledFunctionGlobalMutations:
+    """``called_function_global_mutations`` is the CAS-260 watch list: the same
+    per-callee analysis as ``function_global_mutations``, over EVERY call in the
+    statement rather than only a top-level bare-``Expr`` one.
+
+    The difference is the whole reason it exists. Capture-and-restore has to
+    cover the spellings where the call's value is used -- ``x = compute(y)`` and
+    ``out.append(compute(y))`` -- and a rule that fired for one spelling and not
+    the other is the CAS-145 defect this project has already paid for. Every
+    ``test_*_spelling`` below is a case ``function_global_mutations`` returns
+    empty for.
+    """
+
+    SRCS = TestFunctionGlobalMutations.SRCS | {
+        'compute': "def compute(v):\n    CALLS.append(v)\n    return v * 10",
+    }
+
+    def _f(self, code):
+        return called_function_global_mutations(ast.parse(code), self.SRCS.get)
+
+    def _narrow(self, code):
+        return function_global_mutations(ast.parse(code), self.SRCS.get)
+
+    def test_bare_call_spelling(self):
+        # The one shape the narrow version already covered -- kept so a
+        # regression that traded one spelling for another is visible here.
+        assert self._f("add()") == {'items'}
+        assert self._narrow("add()") == {'items'}
+
+    def test_assignment_spelling(self):
+        assert self._f("x = compute(1)") == {'CALLS'}
+        assert self._narrow("x = compute(1)") == frozenset()
+
+    def test_append_spelling(self):
+        assert self._f("out.append(compute(1))") == {'CALLS'}
+        assert self._narrow("out.append(compute(1))") == frozenset()
+
+    def test_nested_in_another_call_spelling(self):
+        assert self._f("print('C', compute(1))") == {'CALLS'}
+        assert self._narrow("print('C', compute(1))") == frozenset()
+
+    def test_comprehension_spelling(self):
+        assert self._f("vals = [compute(i) for i in range(3)]") == {'CALLS'}
+
+    def test_several_callees_union(self):
+        assert self._f("x = compute(1)\nbump()") == {'CALLS', 'g'}
+
+    def test_pure_callee_contributes_nothing(self):
+        assert self._f("x = pure()") == frozenset()
+
+    def test_local_accumulator_is_not_a_global(self):
+        # ``acc = []`` then ``acc.append`` is the callee's own local: mutating
+        # it cannot reach caller-visible state, so capturing it would invent a
+        # variable.
+        assert self._f("x = local()") == frozenset()
+
+    def test_param_mutation_is_not_a_global(self):
+        # A mutated ARGUMENT is the other channel, owned by
+        # ``function_arg_mutations`` / the call unit's ``_hash_args``. Claiming
+        # it here would double-count it.
+        assert self._f("x = arg(d)") == frozenset()
+
+    def test_unresolvable_callee_is_silent(self):
+        assert self._f("x = mystery(1)") == frozenset()
+
+    def test_no_tree_is_empty(self):
+        assert called_function_global_mutations(None, self.SRCS.get) == frozenset()
 
 
 class TestStatefulSelfFunctions:
