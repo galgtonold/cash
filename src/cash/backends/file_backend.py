@@ -86,6 +86,30 @@ CACHE_FORMAT_VERSION = 1
 _VERSION_FILENAME = "CACHE_VERSION"
 
 
+#: What reading a cache entry's metadata can raise, and why every one of them
+#: means the same thing: this entry is not readable HERE, so treat it as absent.
+#:
+#: ``pickle.load`` fails for far more reasons than a corrupt file. The one that
+#: bit in practice was ``ModuleNotFoundError`` -- an entry written by an
+#: environment that had numpy, read by one that does not, because a metadata
+#: field held a ``numpy.int64`` instead of a plain ``int``. A narrow
+#: ``(OSError, pickle.PickleError)`` guard let that escape out of ``%cash_on``
+#: and killed the user's cell.
+#:
+#: ``get()`` (the VALUE read path) already encodes this policy, listing
+#: AttributeError/ImportError/EOFError with the comment "the entry is
+#: unrestorable here - report it absent so callers recompute". The metadata
+#: paths simply never learned it. This is that lesson, applied consistently.
+#:
+#: Deliberately ``Exception`` rather than a tuple of the known ones. These
+#: sites SCAN every entry in the cache, so one poisoned file must never take
+#: the process down whatever the cause -- and metadata can now legitimately
+#: contain user objects (a callee's captured globals), whose ``__setstate__``
+#: can raise anything at all. A skipped entry costs a recompute; an escaped
+#: exception costs the session.
+UNREADABLE_ENTRY = Exception
+
+
 class FileBackend(CacheBackend):
     """File-based cache backend.
 
@@ -236,7 +260,7 @@ class FileBackend(CacheBackend):
                 if os.path.exists(data_path):
                     total_size += os.path.getsize(data_path)
 
-            except (OSError, pickle.PickleError):
+            except UNREADABLE_ENTRY:
                 logger.debug("Skipping unreadable metadata file %s during init", meta_path, exc_info=True)
         self._current_size_bytes = total_size
 
@@ -310,7 +334,8 @@ class FileBackend(CacheBackend):
                     return None
 
             return metadata
-        except (OSError, pickle.PickleError):
+        except UNREADABLE_ENTRY:
+            logger.debug("Unreadable metadata for key %s; treating as absent", key, exc_info=True)
             return None
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
@@ -748,7 +773,7 @@ class FileBackend(CacheBackend):
                 with open(meta_path, 'rb') as f:
                     metadata = pickle.load(f)
                     entries.append(metadata)
-            except (OSError, pickle.PickleError):
+            except UNREADABLE_ENTRY:
                 logger.debug("Skipping unreadable metadata file %s in list_entries", meta_path, exc_info=True)
         return entries
 
@@ -768,6 +793,6 @@ class FileBackend(CacheBackend):
                     if os.path.exists(data_path):
                         os.remove(data_path)
                     count += 1
-            except (OSError, pickle.PickleError):
+            except UNREADABLE_ENTRY:
                 logger.debug("Skipping unreadable metadata file %s during cleanup", meta_path, exc_info=True)
         return count

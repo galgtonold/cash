@@ -151,18 +151,24 @@ class InMemoryBackend(CacheBackend):
             return 0
         seen.add(obj_id)
 
+        # int() on every return, without exception. `mem.sum()` below returns a
+        # `numpy.int64`, and this value is written into entry metadata as
+        # `size` -- so a numpy scalar there makes the metadata file unreadable
+        # in any environment without numpy, forever. That is not hypothetical:
+        # it escaped from `%cash_on` as a ModuleNotFoundError. The annotation
+        # already said `-> int`; this makes it true.
         try:
             # Prefer nbytes for numpy/pandas
             if hasattr(obj, 'nbytes'):
-                return obj.nbytes
+                return int(obj.nbytes)
             if hasattr(obj, 'memory_usage'):
                 # pandas DataFrame/Series
                 # OPTIMIZATION: Use deep=False for speed (deep=True scans all object columns)
                 try:
                     mem = obj.memory_usage(deep=False)
                     if hasattr(mem, 'sum'):
-                        return mem.sum()
-                    return mem
+                        return int(mem.sum())
+                    return int(mem)
                 except (TypeError, AttributeError):
                     # Fallback to sys.getsizeof below when memory_usage is unavailable
                     pass
