@@ -114,6 +114,9 @@ class VirtualLineage:
         self.set_tracking_state(tracking_state)
 
         # Simulator-owned caches.
+        # Resolved on first loop-split lookup; None means 'not yet
+        # resolved', not 'no splits'. See ``_loop_split_k``.
+        self._split_store = None
         self._ast_cache: dict[str, ast.Module] = {}
         self._ast_cache_max_size: int = 200
         self._simulation_cache: list[_SimulationCacheEntry] = []
@@ -1342,7 +1345,76 @@ class VirtualLineage:
         if loop_target_vars is None:
             loop_target_vars = set()
 
-        # Treat the entire control structure as a single statement
+        # A loop with a recorded split verdict is modelled as TWO statements.
+        #
+        # This is the mechanism, not a parity nicety: the re-execution planner
+        # runs the statements simulated here, so splitting this model is what
+        # actually makes the runtime execute a head and a tail. Splitting only
+        # in the runtime leaves the planner re-running the whole loop against
+        # entries written for halves -- a silent stale value, and the cause of
+        # three reverted attempts. See ``notebook/loop_split.py``.
+        split_k = self._loop_split_k(node)
+        if split_k is not None:
+            from ..loop_split import split_nodes
+            try:
+                halves = split_nodes(node, split_k)
+            except ValueError:          # for/else -- not splittable
+                halves = ()
+            if halves:
+                if self.debug:
+                    logger.debug(
+                        "[UPSTREAM_DEBUG] loop split at k=%d -> simulating "
+                        "head and tail separately", split_k)
+                for half in halves:
+                    self._simulate_one_control_unit(
+                        half, virtual_lineage, virtual_modules, simulation_trace,
+                        stmt_lookup_times, vars_mutated_by_loops, loop_target_vars)
+                return
+
+        self._simulate_one_control_unit(
+            node, virtual_lineage, virtual_modules, simulation_trace,
+            stmt_lookup_times, vars_mutated_by_loops, loop_target_vars)
+
+    def _loop_split_k(self, node: ast.AST) -> int | None:
+        """Persisted split point for *node*, or ``None`` if it is not split.
+
+        Best-effort: any failure to resolve the store reads as "not split",
+        which is the pre-split behaviour. A simulator that cannot find the
+        store must never start guessing -- a split it invents would be one
+        the runtime never recorded.
+        """
+        if not isinstance(node, ast.For):
+            return None
+        try:
+            from ..loop_split import is_split_half, loop_source_hash, store_for_backend
+            if is_split_half(node):
+                return None            # never split a half; that recurses
+            if self._split_store is None:
+                backend = self.cash_instance.backend if self.cash_instance else None
+                self._split_store = store_for_backend(backend)
+                if self._split_store is None:
+                    return None
+            return self._split_store.get(loop_source_hash(node))
+        except Exception:  # noqa: BLE001 - never let a lookup break simulation
+            logger.debug("[UPSTREAM_DEBUG] loop split lookup failed", exc_info=True)
+            return None
+
+    def _simulate_one_control_unit(
+        self,
+        node: ast.AST,
+        virtual_lineage: dict[str, str],
+        virtual_modules: set[str],
+        simulation_trace: list[tuple],
+        stmt_lookup_times: dict[str, float],
+        vars_mutated_by_loops: set[str],
+        loop_target_vars: set[str],
+    ) -> None:
+        """Simulate ONE control structure as a single statement.
+
+        Split out of :meth:`_simulate_control_structure` so a split loop can
+        run it twice -- the second half seeing the virtual lineage the first
+        produced, exactly as two source-level statements would.
+        """
         stmt_code = ast.unparse(node)
 
         inputs, _ = CodeAnalyzer.analyze_code_block(stmt_code)

@@ -21,6 +21,7 @@ and exercise it without going through ``ControlStructureProcessor.process()``.
 import ast
 import contextlib
 import logging
+import time as _time
 from typing import TYPE_CHECKING, Any
 
 from . import helpers as _helpers
@@ -92,6 +93,42 @@ class ForLoopHandler:
 
     # Minimum estimated overhead (in seconds) to trigger single-unit mode.
     _MIN_OVERHEAD_SEC = 1.0
+
+    # -- Learning a loop split (CAS-261 step 2) -----------------------------
+    #
+    # The constants above are a STATIC guess -- an assumed per-statement cost
+    # times an iteration count, decided without seeing the loop run. That
+    # leaves a band where the guess says "decompose" and reality disagrees: n
+    # below the single-unit threshold, every call below
+    # ``call_unit._COST_FLOOR_S``, so neither mechanism caches anything while
+    # per-iteration machinery is charged on every pass. Measured at n=124 on
+    # a warm rerun against a cash-off arm, cash was SLOWER than not using
+    # cash: 0.1ms body 22ms off vs 215ms on; 2.5ms body 320ms vs 617ms.
+    #
+    # This handler's whole role is to MEASURE such a loop and record a
+    # verdict. It deliberately splits nothing: the split is applied by
+    # ``upstream/virtual_lineage.py``, because the re-execution planner runs
+    # the statements the simulator modelled. A runtime-side split is both
+    # unnecessary and, on its own, a stale-value bug -- see
+    # ``notebook/loop_split.py`` for the measurement.
+
+    # Iterations measured before judging, and the split point thereafter.
+    # Small on purpose: the head re-runs on every warm pass and per-iteration
+    # overhead is exactly what the split removes, so a long head keeps the
+    # cost it is meant to eliminate (k=10 measured ~25ms warm on a 0.1ms body
+    # against 22ms for cash-off -- no gain at all; k=5 roughly halves it).
+    _SPLIT_PROBE_ITERS = 5
+
+    # At or above this, a call clears ``call_unit._COST_FLOOR_S`` once the
+    # ~2.2ms of measured decomposition overhead is subtracted, so per-call
+    # caching already covers it -- and covers it BETTER, being incremental
+    # (append one item, re-run one call) where a single unit is
+    # all-or-nothing. Splitting such a loop trades a better mechanism for a
+    # worse one.
+    _SPLIT_MAX_ITER_SEC = 0.006
+
+    # Projected remaining cost below which a split is not worth a store.
+    _SPLIT_MIN_REMAINING_SEC = 0.1
 
     # Builtin callables that PRODUCE an iterable without side effects, so the
     # single-unit fast path may re-evaluate the loop header a second time
@@ -192,6 +229,25 @@ class ForLoopHandler:
             target_code = ast.unparse(node.target)
             loop_header = f"for {target_code} in {iter_code}:"
 
+            # A loop with a recorded verdict is split HERE too, not only in
+            # the simulator. The two cover different entry points and must
+            # agree, which they do by reading the same persisted ``k``:
+            #
+            # * the simulator's split is what the re-execution planner
+            #   dispatches when an upstream edit re-plans this cell;
+            # * this branch is what splits a DIRECT re-run of the cell, which
+            #   never goes through the planner at all.
+            #
+            # Splitting in only one of them is the bug that reverted three
+            # earlier attempts -- runtime-only left the planner re-running the
+            # whole loop against entries written for halves (stale value),
+            # simulator-only left a plain re-run paying full decomposition.
+            _verdict_k = self._recorded_split_k(node, iterable)
+            if _verdict_k is not None:
+                return self._run_split(node, _verdict_k, ttl, silent,
+                                       parent_context, raw_cell,
+                                       inherited_annotation)
+
             # Fast-loop heuristic: if per-iteration decomposition would be too
             # expensive relative to the computation, execute as a single unit.
             #
@@ -249,8 +305,14 @@ class ForLoopHandler:
                 logger.debug("[CONTROL] Iterable lineage: %s...",
                              iterable_lineage[:20] if iterable_lineage else 'None')
 
-            for iteration_value in iterable:
+            # Measure the first few iterations so this loop can be judged for
+            # splitting on a LATER run. Nothing is split here.
+            _probe_n = self._split_eligible(node, iterable)
+            _probe_elapsed = 0.0
+
+            for _idx, iteration_value in enumerate(iterable):
                 total_iterations += 1
+                _iter_started = _time.perf_counter()
                 if self._process_one_iteration(
                     node, iteration_value, iterable_lineage, target_names,
                     ttl, silent, all_metrics, parent_context,
@@ -259,6 +321,11 @@ class ForLoopHandler:
                     cached_iterations += 1
                 else:
                     computed_iterations += 1
+                if _probe_n is not None and _idx < self._SPLIT_PROBE_ITERS:
+                    _probe_elapsed += _time.perf_counter() - _iter_started
+
+            if _probe_n is not None:
+                self._record_split_verdict(node, _probe_elapsed, _probe_n)
 
             # After all iterations, update lineage for mutated variables
             _helpers.update_lineage_after_execution(
@@ -609,6 +676,158 @@ class ForLoopHandler:
     # ------------------------------------------------------------------
     # Fast-loop heuristic
     # ------------------------------------------------------------------
+
+    def _split_store(self):
+        """Shared split store, or ``None`` if unresolvable (means: learn nothing)."""
+        if getattr(self, "_split_store_cache", "unset") != "unset":
+            return self._split_store_cache
+        from ..loop_split import store_for_backend
+        cash_instance = getattr(self.statement_processor, "cash_instance", None)
+        self._split_store_cache = store_for_backend(
+            getattr(cash_instance, "backend", None))
+        return self._split_store_cache
+
+    def _split_eligible(self, node: ast.For, iterable) -> int | None:
+        """Iteration count if this loop could be split, else ``None``.
+
+        Checked before measuring, so an ineligible loop pays only these
+        predicates. Each exclusion is load-bearing:
+
+        * **Already a half** -- splitting a half recurses.
+        * **No** ``len()`` -- a generator cannot be sliced for the tail, and
+          re-iterating it drains an exhausted source.
+        * **Not sliceable** -- the tail's source is ``<iter expr>[k:]``;
+          ``set``/``dict`` are sized but cannot form it.
+        * **Header unsafe to re-evaluate** -- both halves evaluate it. Reuses
+          the single-unit path's own guard, so there is one rule rather than
+          two that can drift.
+        * ``break``/``continue`` -- head+tail is NOT equivalent when a break
+          in the head must skip the tail.
+        * ``for ... else`` -- ``else`` has one completion point; a split has
+          none.
+        * **File I/O in the body** -- needs per-iteration dep tracking.
+        """
+        from ..loop_split import is_split_half
+        if node.orelse or is_split_half(node):
+            return None
+        try:
+            n = len(iterable)
+        except TypeError:
+            return None
+        if n <= self._SPLIT_PROBE_ITERS:
+            return None
+        try:
+            iterable[0:0]
+        except Exception:  # noqa: BLE001 - any failure means not sliceable
+            return None
+        if not self._iter_header_safe_to_reevaluate(node.iter, iterable):
+            return None
+        if self._has_file_io_calls(node.body):
+            return None
+        for sub in ast.walk(ast.Module(body=list(node.body), type_ignores=[])):
+            if isinstance(sub, (ast.Break, ast.Continue)):
+                return None
+        return n
+
+    def _should_split(self, elapsed: float, done: int, n: int) -> bool:
+        """Judge from MEASURED cost whether the remainder is worth one unit.
+
+        *elapsed* covers ``done`` iterations including per-iteration
+        decomposition overhead -- correct, because that overhead is most of
+        what a split recovers for a cheap body.
+        """
+        if done <= 0:
+            return False
+        per_iter = elapsed / done
+        if per_iter >= self._SPLIT_MAX_ITER_SEC:
+            return False
+        split = (n - done) * per_iter >= self._SPLIT_MIN_REMAINING_SEC
+        if self.debug:
+            logger.debug("[LOOP_SPLIT] per_iter=%.2fms remaining=%.0fms n=%d -> %s",
+                         per_iter * 1000, (n - done) * per_iter * 1000, n, split)
+        return split
+
+    def _record_split_verdict(self, node: ast.For, elapsed: float, n: int) -> None:
+        """Record that this loop should be split on later runs.
+
+        Recording only -- the split is applied by the simulator; this handler
+        never executes one.
+        """
+        if not self._should_split(elapsed, self._SPLIT_PROBE_ITERS, n):
+            return
+        store = self._split_store()
+        if store is None:
+            return
+        try:
+            from ..loop_split import loop_source_hash
+            store.record(loop_source_hash(node), self._SPLIT_PROBE_ITERS)
+            if self.debug:
+                logger.debug("[LOOP_SPLIT] recorded k=%d; splits from next run",
+                             self._SPLIT_PROBE_ITERS)
+        except Exception:  # noqa: BLE001 - learning must never break execution
+            logger.debug("[LOOP_SPLIT] could not record a verdict", exc_info=True)
+
+    def _recorded_split_k(self, node: ast.For, iterable) -> int | None:
+        """Persisted ``k`` for this loop, or ``None`` if it must not be split.
+
+        Eligibility is re-checked against the LIVE iterable even when a
+        verdict exists: the verdict was recorded for this loop's source, but
+        the value bound to its iterable can change between runs (a list
+        becoming a generator, say), and a tail is only derivable for a sized,
+        sliceable one.
+        """
+        store = self._split_store()
+        if store is None:
+            return None
+        if self._split_eligible(node, iterable) is None:
+            return None
+        try:
+            from ..loop_split import loop_source_hash
+            return store.get(loop_source_hash(node))
+        except Exception:  # noqa: BLE001 - a lookup must never break the loop
+            logger.debug("[LOOP_SPLIT] verdict lookup failed", exc_info=True)
+            return None
+
+    def _run_split(self, node, k, ttl, silent, parent_context, raw_cell,
+                   inherited_annotation):
+        """Execute a split loop as head + tail.
+
+        Halves come from ``loop_split.split_nodes`` -- the same derivation the
+        simulator uses -- so both sides run the same two statements. The head
+        recurses through :meth:`process` (and is itself unsplittable, being a
+        half); the tail takes the ordinary single-unit path.
+        """
+        from ..cacheability import accumulator_loop_body_shape
+        from ..loop_split import split_nodes
+        from .processor import ControlStructureResult
+
+        try:
+            head, tail = split_nodes(node, k)
+        except ValueError:
+            return None
+
+        # A tail's accumulator is populated by its own head, so the shape is
+        # read from the BODY rather than requiring a fresh preceding seed.
+        force_outputs = None
+        shape = accumulator_loop_body_shape(node)
+        if shape is not None:
+            acc, loop_vars = shape
+            force_outputs = {acc, *loop_vars}
+        if self.debug:
+            logger.debug("[LOOP_SPLIT] executing split at k=%d (force_outputs=%s)",
+                         k, force_outputs)
+
+        head_res = self.process(head, ttl, silent, parent_context, raw_cell,
+                                inherited_annotation)
+        tail_res = self.dispatcher._execute_as_single_unit(
+            tail, ttl, silent, raw_cell, inherited_annotation,
+            force_outputs=force_outputs,
+        )
+        return ControlStructureResult(
+            success=bool(head_res.success and tail_res.success),
+            metrics=list(head_res.metrics) + list(tail_res.metrics),
+            total_iterations=getattr(head_res, "total_iterations", 0) or 0,
+        )
 
     def _iter_header_safe_to_reevaluate(self, iter_node: ast.AST, iterable) -> bool:
         """Whether the loop header may be safely evaluated a second time.
