@@ -569,6 +569,36 @@ class _ForwardingTee:
         return getattr(self._real, name)
 
 
+#: Returned by :func:`_unwrap_callee_globals` when an entry claims to carry a
+#: callee's captured globals but does not have the shape to prove it. A unique
+#: sentinel rather than ``None``, because ``None`` is a perfectly good cached
+#: value and must stay distinguishable from a broken entry.
+_UNWRAP_FAILED = object()
+
+
+def _unwrap_callee_globals(value, metadata: Mapping[str, Any]):
+    """Split a stored value into ``(result, captured_globals)``.
+
+    Entries that captured a callee's writes to globals store
+    ``(result, {name: value})`` and set a plain ``has_callee_globals`` bool in
+    metadata; every other entry stores the bare result. The flag makes the
+    shape self-describing rather than something the reader has to guess from
+    the value's type -- a cached call that legitimately returns a 2-tuple would
+    otherwise be indistinguishable from a wrapped one.
+
+    Returns ``(_UNWRAP_FAILED, None)`` when the flag is set and the shape does
+    not match. That can only mean a corrupt or hand-edited entry, and handing
+    back the tuple as though it were the result would be a silently wrong
+    value where a miss merely costs a recompute.
+    """
+    if not metadata.get("has_callee_globals"):
+        return value, None
+    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], Mapping):
+        return value[0], value[1]
+    logger.debug("call unit: entry claims captured globals but has the wrong shape")
+    return _UNWRAP_FAILED, None
+
+
 class CallUnit:
     """Caches one intercepted call against the statement backend.
 
@@ -661,6 +691,13 @@ class CallUnit:
 
             hit, value, recorded_cost, metadata = self._lookup(key)
             if hit:
+                value, captured_globals = _unwrap_callee_globals(value, metadata)
+                if value is _UNWRAP_FAILED:
+                    # The entry says it carries captured globals and does not.
+                    # Treat it as absent rather than hand back a tuple where a
+                    # value belongs -- a miss costs a recompute, this would be
+                    # a silently wrong value.
+                    return fn(*args, **kwargs)
                 # Replay the ORIGINAL execution's observations into the
                 # statement's ambient capture (FileAccessTracker, live
                 # stdout/stderr). The call itself does not run on a hit, so
@@ -673,7 +710,7 @@ class CallUnit:
                 # failure mode.
                 self._replay_deps(metadata)
                 self._replay_output(metadata)
-                self._restore_globals(fn, mutated_globals, metadata)
+                self._restore_globals(fn, mutated_globals, captured_globals)
                 self._record(func_name, site, key, cache_hit=True, elapsed=0.0, time_saved=recorded_cost)
                 return value
 
@@ -991,7 +1028,7 @@ class CallUnit:
                 return None
         return captured
 
-    def _restore_globals(self, fn, names: tuple[str, ...], metadata: Mapping[str, Any]) -> None:
+    def _restore_globals(self, fn, names: tuple[str, ...], recorded: Mapping[str, Any] | None) -> None:
         """Land a hit entry's recorded post-call globals back into *fn*'s own
         namespace, so the callee's write survives a call it did not make.
 
@@ -1013,7 +1050,6 @@ class CallUnit:
         """
         if not names:
             return
-        recorded = metadata.get("callee_globals")
         if not isinstance(recorded, Mapping) or not recorded:
             return
         globals_dict = getattr(fn, "__globals__", None)
@@ -1277,14 +1313,27 @@ class CallUnit:
         if stderr:
             metadata["stderr"] = stderr
         # CAS-260. Omitted when empty, like every other optional channel here,
-        # so an ordinary cached call keeps writing the same sparse entry. Rides
-        # in metadata rather than in the VALUE deliberately: changing the value
-        # shape would make every entry written before this existed deserialise
-        # into the wrong thing under an unchanged key, which is a silent wrong
-        # answer rather than a miss. `stdout` already establishes that metadata
-        # carries payload-sized data here.
+        # so an ordinary cached call keeps writing the same sparse entry.
+        #
+        # The payload rides on the VALUE; metadata gets only a plain bool.
+        # Metadata is eagerly unpickled for EVERY entry at startup
+        # (`FileBackend._init_stats`, to build LRU stats) and held in
+        # `_metadata_cache` for the process lifetime -- so a user object there
+        # is deserialised whether or not it is ever used, and kept forever. A
+        # survey of 5859 real metadata files found 31 of 33 fields are plain
+        # builtins; the two that were not are a cash-owned serializer class and
+        # a `numpy.int64` that leaked in as `size` and made those files
+        # unreadable in any environment without numpy. This field must not be
+        # the third.
+        #
+        # An earlier version put it in metadata to avoid changing the value
+        # shape under an unchanged key. That objection is void: the `g:` key
+        # component appears exactly when there are globals to capture, so an
+        # entry carrying this payload has a key no earlier version could mint.
+        # There is no old entry to collide with.
         if callee_globals:
-            metadata["callee_globals"] = dict(callee_globals)
+            metadata["has_callee_globals"] = True
+            value = (value, dict(callee_globals))
         try:
             self._cash.backend.set(key, value, metadata)
         except Exception:  # noqa: BLE001

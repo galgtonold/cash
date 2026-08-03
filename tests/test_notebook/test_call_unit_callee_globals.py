@@ -12,7 +12,13 @@ import pytest
 
 from cash.notebook.cache_key import CacheKeyContext
 from cash.notebook.call_interception import CallSite
-from cash.notebook.call_unit import CallUnit, call_cache_key, callee_mutated_globals
+from cash.notebook.call_unit import (
+    _UNWRAP_FAILED,
+    CallUnit,
+    _unwrap_callee_globals,
+    call_cache_key,
+    callee_mutated_globals,
+)
 
 
 def _make(source, name, extra_globals=None):
@@ -232,7 +238,7 @@ class TestCaptureAndRestore:
     def test_restore_writes_the_recorded_value_back(self):
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
         unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, ("CALLS",), {"callee_globals": {"CALLS": [1, 2, 3]}})
+        unit._restore_globals(fn, ("CALLS",), {"CALLS": [1, 2, 3]})
         assert ns["CALLS"] == [1, 2, 3]
 
     def test_restore_ignores_a_name_the_current_callee_no_longer_writes(self):
@@ -240,7 +246,7 @@ class TestCaptureAndRestore:
         would resurrect a variable the current source never mentions."""
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
         unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, (), {"callee_globals": {"GONE": [9]}})
+        unit._restore_globals(fn, (), {"GONE": [9]})
         assert "GONE" not in ns
 
     def test_capture_snapshots_rather_than_referencing(self):
@@ -274,11 +280,11 @@ class TestCaptureAndRestore:
         variable and the cache entry the same object, so the next call would
         rewrite the entry it was just served from."""
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": []})
-        entry = {"callee_globals": {"CALLS": [1]}}
+        entry = {"CALLS": [1]}
         unit = CallUnit.__new__(CallUnit)
         unit._restore_globals(fn, ("CALLS",), entry)
         ns["CALLS"].append(2)
-        assert entry["callee_globals"]["CALLS"] == [1], (
+        assert entry["CALLS"] == [1], (
             "mutating the restored variable reached back into the cache entry"
         )
 
@@ -293,7 +299,7 @@ class TestCaptureAndRestore:
     def test_restore_without_a_recorded_entry_is_a_no_op(self):
         fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": [7]})
         unit = CallUnit.__new__(CallUnit)
-        unit._restore_globals(fn, ("CALLS",), {})
+        unit._restore_globals(fn, ("CALLS",), None)
         assert ns["CALLS"] == [7]
 
 
@@ -323,5 +329,48 @@ def test_digests_use_the_full_hash_not_the_sampled_one():
 def test_restore_tolerates_a_malformed_entry(bad):
     fn, ns = _make("def f():\n    pass\n", "f", {"CALLS": [7]})
     unit = CallUnit.__new__(CallUnit)
-    unit._restore_globals(fn, ("CALLS",), {"callee_globals": bad})
+    unit._restore_globals(fn, ("CALLS",), bad)
     assert ns["CALLS"] == [7]
+
+
+class TestPayloadLivesOnTheValueNotInMetadata:
+    """CAS-260: the captured globals ride on the VALUE, with only a plain bool
+    in metadata.
+
+    Metadata is eagerly unpickled for every entry at startup
+    (``FileBackend._init_stats``) and held for the process lifetime, so a user
+    object there is deserialised whether or not it is used, and kept forever. A
+    survey of 5859 real metadata files found 31 of 33 fields are plain
+    builtins; this must not become the third exception.
+    """
+
+    def test_an_ordinary_entry_is_unwrapped_untouched(self):
+        assert _unwrap_callee_globals(42, {}) == (42, None)
+
+    def test_a_wrapped_entry_splits_into_result_and_globals(self):
+        result, globs = _unwrap_callee_globals((42, {"CALLS": [1]}),
+                                               {"has_callee_globals": True})
+        assert result == 42
+        assert globs == {"CALLS": [1]}
+
+    def test_a_cached_value_that_is_itself_a_2_tuple_is_not_mistaken_for_a_wrapper(self):
+        """Why the flag exists rather than sniffing the value's shape: a call
+        legitimately returning ``(x, {...})`` is indistinguishable from a
+        wrapped entry by type alone."""
+        value = (42, {"CALLS": [1]})
+        assert _unwrap_callee_globals(value, {}) == (value, None)
+
+    def test_a_flagged_entry_with_the_wrong_shape_is_refused(self):
+        """Corrupt or hand-edited. Handing the tuple back as the result would
+        be a silently wrong value; a miss merely costs a recompute."""
+        assert _unwrap_callee_globals(42, {"has_callee_globals": True})[0] is _UNWRAP_FAILED
+        assert _unwrap_callee_globals((1, 2, 3), {"has_callee_globals": True})[0] is _UNWRAP_FAILED
+        assert _unwrap_callee_globals((1, "no"), {"has_callee_globals": True})[0] is _UNWRAP_FAILED
+
+    def test_none_is_a_legitimate_cached_value_not_a_failure(self):
+        """``_UNWRAP_FAILED`` is a unique sentinel precisely so a stored
+        ``None`` stays distinguishable from a broken entry."""
+        assert _unwrap_callee_globals(None, {}) == (None, None)
+        result, globs = _unwrap_callee_globals((None, {"C": [1]}),
+                                               {"has_callee_globals": True})
+        assert result is None and globs == {"C": [1]}
