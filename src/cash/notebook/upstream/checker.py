@@ -302,7 +302,22 @@ class UpstreamChecker:
         try:
             _, current_cell_outputs = CodeAnalyzer.analyze_code_block(cell_code)
             current_cell_reassigned = CodeAnalyzer.reassigned_names(cell_code)
-            current_cell_mutated = set(analyze_statement(cell_code, None).all_mutated_vars)
+            # `resolve_source` folds in globals a CALLEE mutates, so the
+            # idempotent-rerun reset below covers them exactly as it covers an
+            # inline mutation (CAS-265). Resolved lazily: the notebook-wide
+            # source scan is only worth paying for when the cell calls
+            # something by bare name.
+            # One resolver for the mutation set. NOT for `current_cell_outputs`
+            # above: Phase 2 uses that set to decide a name is cell-WRITTEN
+            # rather than an input to restore, so declaring a callee-mutated
+            # global there disables the very reset that makes the statement's
+            # key converge (measured: [1, 1] where inline gives [1]).
+            _cell_resolver = None
+            if _called_function_names(ast.parse(cell_code)):
+                _cell_resolver = self._notebook_function_sources(
+                    cell_code, notebook_path).get
+            current_cell_mutated = set(analyze_statement(
+                cell_code, None, resolve_source=_cell_resolver).all_mutated_vars)
             # A `# @cash: no-cache` statement opts out of caching AND of the
             # idempotent-rerun input restoration: its self-modifying vars must
             # accumulate on re-run (the documented "always recompute" contract),
@@ -374,7 +389,8 @@ class UpstreamChecker:
                 # The narrow gate is not a smaller version of the fix, it is the
                 # half that makes the other half diverge.
                 func_global_muts = called_function_global_mutations(
-                    ast.parse(cell_code), func_sources_all.get
+                    ast.parse(cell_code), func_sources_all.get,
+                    include_control_bodies=True,
                 ) - nocache_vars
                 current_cell_mutated |= func_global_muts
                 required_inputs = required_inputs | func_global_muts

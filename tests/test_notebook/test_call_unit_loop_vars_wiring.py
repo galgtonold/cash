@@ -126,13 +126,29 @@ def test_hidden_state_call_gets_a_distinct_value_per_iteration(magics_fixture):
     )
 
 
-def test_hidden_state_call_reuses_cache_on_rerun(magics_fixture):
-    """Re-running the identical loop cell must replay the SAME three values
-    from cache, not recompute -- `counter['n']` must stop advancing.
+def test_hidden_state_loop_vars_still_discriminate_on_a_rerun(magics_fixture):
+    """A rerun must still mint three DISTINCT keys -- the reuse half of the
+    same bug: a wiring mistake that pushed the wrong (e.g. stale, or unpopped)
+    loop_vars could pass the single-run test above by accident while collapsing
+    on a rerun, giving `{1: 4, 2: 4, 3: 4}` from one shared entry.
 
-    This is the reuse half of the same bug: a wiring mistake that pushed the
-    wrong (e.g. stale, or unpopped) loop_vars could still pass the single-run
-    test above by accident while breaking a rerun.
+    It asserts distinctness, NOT that `counter['n']` stops advancing, because
+    `MockShell` cannot establish the latter. What holds a rerun to its first
+    run's values is the checker's idempotent-rerun self-write restoration
+    (`upstream/checker.py`), and `MockShell` has no notebook file, so the
+    checker is inert -- the test's own log prints "upstream dependency tracking
+    is disabled". Without it a rerun accumulates, which is simply what Python
+    does. So `{1: 4, 2: 5, 3: 6}` is the correct reading FOR THIS HARNESS.
+
+    That distinction is not academic. This test previously asserted
+    `{1: 1, 2: 2, 3: 3}` and passed only because all three iterations minted an
+    identical key, so the calls hit and nothing advanced -- it was reading a
+    false-hit as cache reuse. Once a callee-mutated global entered the key
+    (CAS-260/265) the keys stopped repeating, and the assertion failed while
+    the product was correct: the same notebook on a REAL kernel returns
+    `{1: 1, 2: 2, 3: 3}` on every rerun. The cross-run contract therefore lives
+    where a checker exists, in
+    `test_notebook_integration/test_callee_global_capture.py`.
     """
     magics_obj, shell, backend = magics_fixture
     magics_obj.cash("", _DEFS_CELL.strip())
@@ -141,12 +157,14 @@ def test_hidden_state_call_reuses_cache_on_rerun(magics_fixture):
     assert shell.user_ns['counter']['n'] == 3
 
     magics_obj.cash("", _LOOP_CELL.strip())
-    assert shell.user_ns['results'] == {1: 1, 2: 2, 3: 3}, (
-        "a rerun produced different values -- the per-iteration cache did "
-        "not reuse cleanly"
+    rerun = shell.user_ns['results']
+    assert len(set(rerun.values())) == 3, (
+        f"the rerun's three iterations collapsed onto shared entries ({rerun}) "
+        "-- loop_vars stopped discriminating across cells"
     )
-    assert shell.user_ns['counter']['n'] == 3, (
-        "fetch_next() ran again on the rerun instead of hitting cache"
+    assert rerun == {1: 4, 2: 5, 3: 6}, (
+        "with no checker to restore the self-write, a rerun accumulates; "
+        f"got {rerun}"
     )
 
 

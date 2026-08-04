@@ -98,12 +98,27 @@ def test_oracle_is_correct(tag, code, nb_runner, tmp_path):
 
 @pytest.mark.parametrize("tag,code", [("call_unit", _CALL_UNIT), ("statement", _STATEMENT)])
 def test_with_cash_both_spellings_collapse_identically(tag, code, nb_runner, tmp_path):
-    """cash ON: pin that BOTH spellings collapse the two iterations onto one
-    cached value, in the SAME way -- not that either is correct.
+    """cash ON: pin that BOTH spellings agree, and that they agree with the
+    cash-off oracle.
+
+    This asserted the COLLAPSE (`OUT [1, 1]`, one real call) until CAS-265, and
+    the file's docstring recorded that as a known-wrong shared answer: "Today
+    both are wrong relative to a cash-off oracle (both give [1, 1] where the
+    oracle gives [1, 2])".
+
+    That limitation is gone for this shape. `pull()` mutates the global `state`,
+    and cash now propagates a callee's global mutation into the calling
+    statement's analysis -- so the two iterations no longer key identically and
+    each really runs. The values match ``test_..._no_cash_oracle`` above.
+
+    What this test guards is unchanged and is NOT the specific value: the two
+    spellings must move together. A future change that alters one and not the
+    other reintroduces the CAS-145 asymmetry this file exists to catch, and
+    that is what a failure here means.
 
     A real-execution count (via the file-write log `pull()` makes on every
-    genuine call) proves the collapse is an actual cache hit and not, say,
-    an accidentally-uncached run that happened to print the same thing.
+    genuine call) proves the values come from real runs rather than from an
+    accidentally-uncached path that happened to print the right thing.
     """
     log = tmp_path / "m.log"
     nb_runner.create_notebook([_defs(log), code])
@@ -111,5 +126,9 @@ def test_with_cash_both_spellings_collapse_identically(tag, code, nb_runner, tmp
     nb_runner.run_all()
     out = nb_runner.get_output(2)
     runs = _runs(log)
-    assert "OUT [1, 1]" in out, f"{tag}: {out}"
-    assert runs == 1, f"{tag}: expected exactly 1 real pull() run (the collapse), got {runs}"
+    assert "OUT [1, 2]" in out, f"{tag}: {out}"
+    assert runs == 2, (
+        f"{tag}: expected 2 real pull() runs -- the two iterations are no longer "
+        f"collapsed onto one entry, since cash can see that pull() advances "
+        f"`state` -- got {runs}"
+    )

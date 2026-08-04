@@ -43,6 +43,7 @@ __all__ = [
     "function_arg_mutations",
     "function_global_mutations",
     "called_function_global_mutations",
+    "callee_mutated_globals_for_tree",
     "callee_source_global_mutations",
     "stateful_self_functions",
     "stateful_closure_vars",
@@ -1632,7 +1633,9 @@ def function_global_mutations(tree: ast.Module | None, resolve_source) -> frozen
     return frozenset(out)
 
 
-def called_function_global_mutations(tree, resolve_source) -> frozenset[str]:
+def called_function_global_mutations(
+    tree, resolve_source, include_control_bodies: bool = False,
+) -> frozenset[str]:
     """Module globals mutated in place by ANY function called in *tree*
     (CAS-260) — the capture-and-restore watch list.
 
@@ -1692,7 +1695,14 @@ def called_function_global_mutations(tree, resolve_source) -> frozenset[str]:
     if tree is None:
         return frozenset()
     out: set[str] = set()
-    for name in _cell_level_called_function_names(tree):
+    # The checker asks with ``include_control_bodies=True``: it acts per CELL,
+    # and its idempotent-rerun reset must cover everything the cell writes,
+    # including through a loop. The statement path asks without it -- it acts
+    # per STATEMENT, and a body statement claiming the whole accumulator was
+    # measured wrong (CAS-265).
+    names = (_called_function_names(tree) if include_control_bodies
+             else _cell_level_called_function_names(tree))
+    for name in names:
         fdef = _resolve_function_def(name, resolve_source)
         if fdef is not None:
             out |= _free_vars_mutated_in_function(fdef)
@@ -3657,10 +3667,104 @@ def cacheable_accumulator_loop(
     return acc, tuple(loop_vars), for_node.iter, call
 
 
+
+#: ``source text -> globals that function's body mutates in place``.
+#:
+#: The verdict is purely syntactic -- "is this name a parameter, a plain local,
+#: or free?" is read off the function's own AST with no reference to any
+#: namespace -- so keying on the source text alone is sound, and it is what
+#: keeps this affordable on the per-statement hot path.
+_CALLEE_GLOBALS_BY_SOURCE: dict[str, frozenset[str]] = {}
+
+
+def _globals_mutated_by_callees(names, resolve_source) -> frozenset[str]:
+    """Union of the globals each named callee mutates in place."""
+    out: set[str] = set()
+    for name in names:
+        try:
+            source = resolve_source(name)
+        except Exception:  # noqa: BLE001 - a resolver must never break analysis
+            continue
+        if not source:
+            continue
+        cached = _CALLEE_GLOBALS_BY_SOURCE.get(source)
+        if cached is None:
+            cached = callee_source_global_mutations(source)
+            _CALLEE_GLOBALS_BY_SOURCE[source] = cached
+        out |= cached
+    return frozenset(out)
+
+
+def _called_name_scopes(tree) -> tuple[frozenset[str], frozenset[str]]:
+    """``(all_called, top_level_called)`` bare-``Name`` callees.
+
+    Two walks, mirroring the two mutation visitors in
+    :func:`analyze_statement` exactly, so a mutation PROPAGATED from a callee
+    lands in the same two sets an inline one would: the full walk feeds
+    ``all_mutated_vars``, and the walk that skips nested function/class bodies
+    feeds ``top_level_mutated_vars``. A loop body is top level by this rule --
+    which is correct, and is why the inline spelling of the same mutation is
+    already surfaced there.
+    """
+    all_names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            all_names.add(node.func.id)
+    top_names: set[str] = set()
+    for child in ast.iter_child_nodes(tree):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in ast.walk(child):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                top_names.add(node.func.id)
+    return frozenset(all_names), frozenset(top_names)
+
+
+
+def callee_mutated_globals_for_tree(tree, resolve_source, user_ns=None) -> frozenset[str]:
+    """Globals mutated in place by any function called anywhere in *tree*.
+
+    The input/output half of CAS-265's propagation, and deliberately the SAME
+    per-callee analysis :func:`analyze_statement` uses for the mutation half --
+    one verdict feeding both, so a name can never be declared a mutation
+    without also being declared a read and a write.
+    """
+    if tree is None:
+        return frozenset()
+    names = _globals_mutated_by_callees(_called_name_scopes(tree)[0], resolve_source)
+    if user_ns is None:
+        return names
+    # Filter to names that are REAL notebook variables, mirroring
+    # ``StatementProcessor._callee_mutated_globals``. Without this the analysis
+    # invents variables: ``_free_vars_mutated_in_function`` reports every free
+    # name a callee writes, including CLOSURE cells, which live in a cell object
+    # and never appear in the namespace at all::
+    #
+    #     def make():
+    #         total = 0
+    #         def add(v):
+    #             nonlocal total
+    #             total += v
+    #         return add
+    #
+    #     final = add(15)   -> declared inputs/outputs ['add','history','total']
+    #
+    # Declaring `total` an output makes reconstruction try to PRODUCE it, which
+    # re-runs the statement -- measured, ``add(15)`` executed twice on a FIRST
+    # run and `final` came out 55 where 40 is correct. A module is excluded for
+    # the same reason it is everywhere else: never a value to serialise.
+    import types as _types
+    return frozenset(
+        n for n in names
+        if n in user_ns and not isinstance(user_ns[n], _types.ModuleType)
+    )
+
+
 def analyze_statement(
     code: str,
     tree: ast.Module | None,
     user_ns: Mapping[str, Any] | None = None,
+    resolve_source=None,
 ) -> StatementAnalysis:
     """Return a :class:`StatementAnalysis` for *code* using pure-AST analysis.
 
@@ -3675,6 +3779,22 @@ def analyze_statement(
               here; a :class:`SyntaxError` produces an empty analysis
               rather than raising.
         user_ns: Optional live namespace, used only for the module check above.
+        resolve_source: Optional ``name -> source`` for called functions. When
+            supplied, globals a CALLEE mutates in place are propagated into
+            the mutation sets as though the mutation had been written inline
+            at the call site (CAS-265).
+
+            This is the single seam that makes a callee's write visible to
+            every consumer at once -- the checker's idempotent-rerun reset
+            (``current_cell_mutated``), the loop handler's mutated-variable set
+            (and therefore the loop's outputs, which is what records a producer
+            for cross-cell reconstruction), and the cacheability decision's
+            ``pure_mutations``. Wiring those separately was tried and each one
+            alone makes the tree worse than leaving the write dropped.
+
+            Omitting it (``None``, the default) keeps pure-AST behaviour
+            exactly as before, so a caller with no way to resolve callee source
+            is unchanged rather than silently degraded.
     """
     if tree is None:
         try:
@@ -3699,6 +3819,16 @@ def analyze_statement(
             continue
         top_level_visitor.visit(node)
     top_level_mutated = frozenset(m.variable for m in top_level_visitor.mutations)
+
+    # CAS-265: a global mutated INSIDE a called function is invisible to the
+    # visitors above -- the mutation is not in this statement's source. Fold it
+    # in here, at the one place every consumer already reads, so the write is
+    # treated exactly as the inline spelling of it would be.
+    if resolve_source is not None:
+        all_called, top_called = _called_name_scopes(tree)
+        all_mutated = all_mutated | _globals_mutated_by_callees(all_called, resolve_source)
+        top_level_mutated = top_level_mutated | _globals_mutated_by_callees(
+            top_called, resolve_source)
 
     # Top-level vars grown by an accumulator method (append/extend/add/update) —
     # the only mutations that earn the comprehension guidance hint (b).

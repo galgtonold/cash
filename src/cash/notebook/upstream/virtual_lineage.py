@@ -1908,7 +1908,13 @@ class VirtualLineage:
                 virtual_modules = set()
 
             # Analyze statement
-            inputs, outputs = CodeAnalyzer.analyze_code_block(stmt_code)
+            # Mirrors the runtime's `_analyze_and_hash`: a global the CALLEE
+            # mutates is declared as both an input and an output here too,
+            # or the two engines disagree about what the statement reads and
+            # writes and ADR-007's identical-key rule breaks (CAS-265).
+            inputs, outputs = CodeAnalyzer.analyze_code_block(
+                stmt_code, resolve_source=self._resolve_sim_function_source,
+                user_ns=self.shell.user_ns)
 
             # Mirror the runtime: a top-level bare-Expr method call
             # (lst.append(x), bus.on(fn)) carries no Store target, so

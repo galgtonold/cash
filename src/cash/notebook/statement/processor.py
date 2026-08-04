@@ -3682,7 +3682,14 @@ class StatementProcessor:
             CacheKeyComputationError: If the cache key cannot be computed.
         """
         t1 = time.time()
-        inputs, outputs = CodeAnalyzer.analyze_code_block(code, tree=tree)
+        # `resolve_source`: a global the CALLEE mutates is declared as both an
+        # input and an output, exactly as the inline spelling declares it
+        # (CAS-265). The simulator passes its own equivalent resolver at the
+        # mirrored site, or the two engines disagree about what a statement
+        # reads and writes -- which is an ADR-007 key divergence.
+        inputs, outputs = CodeAnalyzer.analyze_code_block(
+            code, tree=tree, resolve_source=self._resolve_live_function_source,
+            user_ns=self.shell.user_ns)
         analysis_time = time.time() - t1
 
         t2 = time.time()

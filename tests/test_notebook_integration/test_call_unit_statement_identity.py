@@ -121,6 +121,77 @@ def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_p
     new AST object and therefore a new identity for every item, not just the
     changed ones. Verified by hand: with that mutation, the reorder below
     causes 3 new real calls instead of 0.
+
+    **The callee here is PURE, and that is load-bearing.** This test used
+    ``fetch_next``, which returns ``state['n']`` AFTER incrementing it -- so its
+    result depends on CALL ORDER, not on the item, and reusing the original
+    mapping after a reorder is simply wrong. Measured against a cash-off
+    oracle::
+
+        cash off   first     [('a',1), ('b',2), ('c',3)]
+                   reordered [('a',6), ('b',5), ('c',4)]   every value changes
+
+    Asserting zero re-runs with that callee therefore pinned a wrong answer,
+    which only looked right while cash was blind to ``state`` (CAS-265).
+    Order-independence is a real and valuable property, but only for a callee
+    whose value genuinely depends on its arguments -- so it is tested with one.
+    The stateful counterpart is the test below.
+    """
+    log = tmp_path / "calls.log"
+    pure_defs = (
+        "import time, pathlib\n"
+        f"LOG = pathlib.Path(r'{log}')\n"
+        "def fetch_pure(step):\n"
+        "    with LOG.open('a') as fh:\n"
+        "        fh.write('c\\n')\n"
+        f"    time.sleep({_SLEEP})\n"
+        "    return step * 2\n"
+    )
+    loop_code = (
+        "vals = {{}}\n"
+        "# @cash:cache-calls\n"
+        "for step in {order}:\n"
+        "    vals[step] = fetch_pure(step)\n"
+        "print('OUT', sorted(vals.items()))\n"
+    )
+    nb_runner.create_notebook([pure_defs, loop_code.format(order=[1, 2, 3])])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _n(log) == 3, "baseline did not run all three iterations"
+    first = nb_runner.get_output(2)
+
+    before = _n(log)
+    nb_runner.set_cell_source(2, loop_code.format(order=[3, 2, 1]))
+    nb_runner.run_cell(2)
+    assert _n(log) - before == 0, (
+        f"reordering re-ran cached calls ({_n(log) - before} new calls) -- "
+        "stmt_identity must be constant across a reorder, exactly like it is "
+        "across iterations"
+    )
+    assert nb_runner.get_output(2) == first, "a reorder changed a pure callee's values"
+
+
+def test_reorder_re_runs_a_stateful_callee_and_matches_the_oracle(nb_runner, tmp_path):
+    """The counterpart: when the callee's value depends on call ORDER, reuse
+    across a reorder would be WRONG, and cash must re-run.
+
+    ``fetch_next`` returns ``state['n']`` after incrementing, so reordering
+    genuinely changes every item's value. Cash sees the mutation of ``state``
+    (CAS-265) and keys each call on that global's pre-call state, so the
+    reordered run misses and recomputes instead of replaying a mapping that
+    never existed.
+
+    **The expected values are the TOP-TO-BOTTOM ones, not a naive re-execution.**
+    Cash's re-run contract is run-from-start: re-running this cell must land
+    where a clean run of the edited notebook lands, i.e. with ``state`` reset to
+    its cell-entry ``{'n': 0}`` and the new order counting up from there ::
+
+        fresh cash-off run of the REORDERED source   [('a',3), ('b',2), ('c',1)]
+        naive cash-off re-run in a live kernel       [('a',6), ('b',5), ('c',4)]
+
+    The second is what a plain kernel does because nothing rewinds the counter;
+    it is the right oracle for a FIRST run and the wrong one for a re-run. Cash
+    deliberately produces the first.
     """
     log = tmp_path / "calls.log"
     loop_code = (
@@ -133,15 +204,18 @@ def test_reorder_within_one_statement_still_reuses_cached_calls(nb_runner, tmp_p
     nb_runner.create_notebook([_defs(log), loop_code.format(order=['a', 'b', 'c'])])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert _n(log) == 3, "baseline did not run all three iterations"
+    assert "OUT [('a', 1), ('b', 2), ('c', 3)]" in nb_runner.get_output(2)
 
     before = _n(log)
     nb_runner.set_cell_source(2, loop_code.format(order=['c', 'b', 'a']))
     nb_runner.run_cell(2)
-    assert _n(log) - before == 0, (
-        f"reordering re-ran cached calls ({_n(log) - before} new calls) -- "
-        "stmt_identity must be constant across a reorder, exactly like it is "
-        "across iterations"
+    assert _n(log) - before == 3, (
+        f"a reorder must re-run a callee whose value depends on call order; "
+        f"got {_n(log) - before} new calls"
+    )
+    assert "OUT [('a', 3), ('b', 2), ('c', 1)]" in nb_runner.get_output(2), (
+        "the reordered values do not match a clean top-to-bottom run of the "
+        "edited source"
     )
 
 

@@ -657,21 +657,7 @@ class CallUnit:
             # a module" filter genuinely depends on the live namespace. Empty
             # for nearly every callee, and every branch below short-circuits on
             # empty, so an ordinary call pays one memo lookup.
-            #
-            # NOT inside a loop iteration. The statement path skip-caches a
-            # statement whose callee writes a global, so at CELL level every
-            # writer runs in order and each call restores its own post-state --
-            # the chain composes. Inside a loop it does not: measured, three
-            # iterations after a restart, with this gate removed::
-            #
-            #     LOOP_F == [1, 2, 2, 3]   then  [1, 2, 2, 3, 3]   (2 then 1 real calls)
-            #
-            # Some iterations are served and some run, and an absolute snapshot
-            # restored between two real executions doubles an entry. Making the
-            # statement always re-execute does NOT fix it, which was the
-            # hypothesis this gate was removed to test. The loop owns its
-            # body's writes (CAS-265).
-            mutated_globals = () if self._current_loop_vars() else callee_mutated_globals(fn)
+            mutated_globals = callee_mutated_globals(fn)
             key = self._build_key(
                 site, args, kwargs,
                 self._global_digests(fn, mutated_globals) if mutated_globals else None,

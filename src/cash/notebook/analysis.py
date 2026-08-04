@@ -644,13 +644,41 @@ class CodeAnalyzer:
         )
 
     @staticmethod
-    def analyze_code_block(code: str, tree: ast.Module | None = None) -> tuple[set[str], set[str]]:
+    def analyze_code_block(code: str, tree: ast.Module | None = None,
+                           resolve_source=None,
+                           user_ns=None) -> tuple[set[str], set[str]]:
         """
         Analyze a block of code to find input (read) and output (written) variables.
 
         Args:
             code: The source code to analyze.
             tree: Optional pre-parsed AST to avoid redundant parsing.
+            resolve_source: Optional ``name -> source`` for called functions.
+                When supplied, a global that a CALLEE mutates in place is
+                declared as an OUTPUT of the calling statement (CAS-265), so
+                the global gets a producer and a lineage that advances.
+
+                An output, and deliberately NOT also an input, even though the
+                inline spelling ``state['n'] += 1`` does read and write. Adding
+                the input edge makes sibling statements invalidate each other::
+
+                    r1 = increment()   # writes counter, and (wrongly) reads it
+                    r2 = increment()   # writes counter -> bumps its lineage
+                                       # -> r1's input changed -> r1 re-executes
+
+                Measured on that cell: the callee ran three times, ``counter``
+                reached 3, and ``r1``/``r2`` disagreed about which came first.
+                The re-run is scheduled by the upstream checker, not by the
+                statement processor, so it does not show up as a re-executed
+                statement -- only as a second trip through the call unit.
+
+                An earlier attempt propagated the mutation into
+                ``all_mutated_vars`` alone. That is enough to make the
+                idempotent-rerun reset FIRE, and not enough to give it anything
+                to reconstruct from: no producer recorded for the global. The
+                reset then rewound to the seed, and a second cell sharing the
+                global was served the first's values. The output edge is what
+                fixes that; the input edge only breaks siblings.
 
         Returns:
             A tuple of (input_vars, output_vars).
@@ -661,7 +689,17 @@ class CodeAnalyzer:
 
         visitor = _FlowVisitor()
         visitor.visit(tree)
-        return visitor.real_inputs, visitor.outputs
+        inputs, outputs = visitor.real_inputs, visitor.outputs
+        if resolve_source is not None:
+            try:
+                from .cacheability import callee_mutated_globals_for_tree
+                extra = callee_mutated_globals_for_tree(
+                    tree, resolve_source, user_ns)
+            except Exception:  # noqa: BLE001 - analysis must never break a cell
+                extra = frozenset()
+            if extra:
+                outputs = outputs | set(extra)
+        return inputs, outputs
 
     @staticmethod
     def reassigned_names(code: str, tree: ast.Module | None = None) -> set[str]:

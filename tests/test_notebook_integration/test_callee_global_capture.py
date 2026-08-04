@@ -314,20 +314,114 @@ def test_editing_the_callee_still_recomputes(nb_runner, tmp_path):
     assert _peek(nb_runner, "globals().get('af')") == "20", "served a stale value after an edit"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-265 (CAS-260's second half): inside a loop BODY the callee's global write is "
-        "still dropped. The capture is deliberately withheld for a control-body "
-        "statement -- the loop is ONE unit to the upstream simulation and to the "
-        "accumulator machinery, and a per-iteration capture of the global's "
-        "ABSOLUTE value clobbers the accumulation (measured: [2], one "
-        "iteration's snapshot, instead of [1, 2, 3]). Owning it at the loop "
-        "level is the remaining work; when that lands this test passes and the "
-        "marker comes off."
-    ),
+def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(
+        nb_runner, tmp_path):
+    """The callee-mutated global is an OUTPUT of the calling statement, never
+    also an input.
+
+    With the input edge, two sibling statements calling the same mutating
+    callee each declared a read of the global the other wrote, so the second
+    bumped its lineage and the checker re-executed the first::
+
+        r1 = increment()   -> counter 0->1, r1 = 1
+        r2 = increment()   -> counter 1->2, r2 = 2
+        r1 = increment()   -> counter 2->3, r1 = 3   (scheduled, not written)
+
+    leaving counter=3 with r1 later than r2. The re-run comes from the upstream
+    checker, so the statements each still execute exactly once -- the extra
+    work is only visible as a second trip through the call unit, which is what
+    the tick file counts here.
+    """
+    ci = tmp_path / "i.log"
+    nb_runner.create_notebook([
+        SETUP,
+        ("import os\n"
+         "def _tick_i():\n"
+         f"    fd = os.open(r'{ci}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+         "    os.write(fd, b'X')\n"
+         "    os.close(fd)\n"
+         "counter = 0\n"),
+        "def increment():\n"
+        "    global counter\n"
+        "    counter += 1\n"
+        "    _tick_i()\n"
+        "    return counter\n",
+        "r1 = increment()\nr2 = increment()\n",
+        # A downstream reader is required, not decoration: it is what makes the
+        # checker walk upstream and discover the (wrongly) stale sibling.
+        "summary = (counter, r1, r2)\n",
+    ])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+
+    assert _n(ci) == 2, "the callee body ran more than twice for two call sites"
+    assert _peek(nb_runner, "globals().get('counter')") == "2"
+    assert _peek(nb_runner, "globals().get('r1')") == "1"
+    assert _peek(nb_runner, "globals().get('r2')") == "2"
+
+
+_HIDDEN_STATE_DEFS = (
+    "import time\n"
+    "counter = {'n': 0}\n"
+    "conn = 'db-connection'\n"
+    "def fetch_next(conn):\n"
+    "    counter['n'] += 1\n"
+    "    time.sleep(0.02)\n"
+    "    return counter['n']\n"
+    "results = {}\n"
 )
+
+_HIDDEN_STATE_LOOP = ("# @cash:cache-calls\n"
+                      "for t in [1, 2, 3]:\n"
+                      "    results[t] = fetch_next(conn)\n")
+
+
+def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):
+    """Re-running the loop cell replays its first run's values -- the callee's
+    hidden `counter` must not keep advancing.
+
+    This is the cross-run half of the loop_vars wiring covered at unit level in
+    `test_notebook/test_call_unit_loop_vars_wiring.py`, and it lives here
+    because it cannot be established there: what holds a rerun to its first
+    run's values is the checker's idempotent-rerun self-write restoration, and
+    the `MockShell` fixture has no notebook file, so the checker is inert. The
+    unit file keeps the harness-independent half (three distinct keys).
+
+    Two details are load-bearing and a looser copy loses the coverage:
+
+    * `results = {}` and `counter` sit in the DEFS cell, so a rerun writes into
+      a PRE-EXISTING dict. Put `results = {}` inside the loop cell and it is
+      reinitialised every run, so the values look right for a reason that has
+      nothing to do with the cache -- that version passes even when broken.
+    * a subscript-assignment body, not `out.append(...)`, which matches the
+      accumulator single-unit fast path and never reaches per-iteration
+      decomposition.
+    """
+    LOOP_CELL = 3
+    nb_runner.create_notebook([SETUP, _HIDDEN_STATE_DEFS, _HIDDEN_STATE_LOOP])
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    assert _peek(nb_runner, "globals().get('results')") == "{1: 1, 2: 2, 3: 3}"
+    assert _peek(nb_runner, "globals().get('counter')") == "{'n': 3}"
+
+    for _ in range(2):
+        nb_runner.run_cell(LOOP_CELL)
+        assert _peek(nb_runner, "globals().get('results')") == "{1: 1, 2: 2, 3: 3}", (
+            "a rerun produced different values -- the loop did not replay"
+        )
+        assert _peek(nb_runner, "globals().get('counter')") == "{'n': 3}", (
+            "fetch_next() ran again on the rerun instead of replaying"
+        )
+
+
 def test_a_loop_body_captures_the_callee_global_too(nb_runner, tmp_path):
+    """CAS-265: the callee's write survives a hit inside a loop body too.
+
+    Was a strict xfail. Passes now that the mutation is propagated into the
+    shared analysis (so the loop declares the global and reconstruction has a
+    producer) and cash stopped recording its own cache reads as file
+    dependencies -- without the latter this converged one iteration per run.
+    """
     cp, cf, ci = (tmp_path / f"{n}.log" for n in ("p", "f", "i"))
     loop_inline = ("for t in [1, 2, 3]:\n"
                    "    CALLS_I.append(t)\n"
@@ -348,17 +442,6 @@ def test_a_loop_body_captures_the_callee_global_too(nb_runner, tmp_path):
     assert _globals(nb_runner) == {"inline": "[1, 2, 3]", "in_callee": "[1, 2, 3]"}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "CAS-265, the sharper symptom: re-running an EARLIER loop cell leaves a "
-        "LATER loop cell's callee-writes in the global. Reported live while "
-        "validating the demo. Same root cause as the sibling xfail -- nothing "
-        "tracks the global inside a loop body, so there is no reset target -- "
-        "but worse than 'the write is skipped on a hit': stale data from a cell "
-        "that top-to-bottom had not run yet survives. Flips when CAS-265 lands."
-    ),
-)
 def test_rerunning_an_earlier_loop_discards_a_later_loops_writes(nb_runner, tmp_path):
     """Measured, both spellings in one notebook::
 
