@@ -450,6 +450,10 @@ class StatementProcessor:
         # ``parent_context``), so ``current_loop_vars`` only ever needs the
         # top. Empty outside any loop, which is the correct "no discriminator
         # to add" answer for a bare statement.
+        # The TTL in force for the statement currently being processed, read
+        # at invoke time by the call units inside it (CAS-268). Refreshed on
+        # every statement; `None` means no TTL.
+        self._call_unit_ttl: int | None = None
         self._call_unit_loop_vars: list[dict[str, Any]] = []
         # Parallel stack, pushed/popped in lockstep with ``_call_unit_loop_vars``
         # by the SAME ``loop_vars_scope`` call: ``{name: full_hash}`` for
@@ -610,6 +614,15 @@ class StatementProcessor:
         finally:
             self._call_unit_loop_vars.pop()
             self._call_unit_loop_var_digests.pop()
+
+    def current_call_ttl(self) -> int | None:
+        """The TTL in force for the statement being processed (CAS-268).
+
+        Handed to `CallCache` as its `ttl_provider` as a BOUND METHOD, not a
+        lambda over a snapshot: one `CallCache` serves every statement, and
+        each statement publishes its own annotation before executing.
+        """
+        return self._call_unit_ttl
 
     def current_loop_vars(self) -> dict[str, Any]:
         """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
@@ -845,6 +858,10 @@ class StatementProcessor:
             on cache status.
         """
         effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
+        # Publish it for the calls inside this statement (CAS-268). Set on
+        # EVERY statement, so a previous statement's ttl can never leak into
+        # one that carries no annotation.
+        self._call_unit_ttl = effective_ttl
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
@@ -1125,6 +1142,10 @@ class StatementProcessor:
         ``_handle_cache_hit`` / ``_post_execute`` helpers.
         """
         effective_ttl, force_persist, skip_cache, allow_random, cache_fit = self._parse_annotation(annotation, ttl)
+        # Publish it for the calls inside this statement (CAS-268). Set on
+        # EVERY statement, so a previous statement's ttl can never leak into
+        # one that carries no annotation.
+        self._call_unit_ttl = effective_ttl
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
@@ -2000,6 +2021,7 @@ class StatementProcessor:
             if self._call_cache is None or self._call_cache_owner is not cash_instance:
                 self._call_cache = CallCache(
                     cash_instance,
+                    ttl_provider=self.current_call_ttl,
                     ctx_provider=lambda: CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,

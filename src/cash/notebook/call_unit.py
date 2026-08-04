@@ -618,9 +618,17 @@ class CallUnit:
         ctx_provider: Callable[[], CacheKeyContext],
         loop_vars_provider: Callable[[], dict[str, object]] | None = None,
         loop_var_digests_provider: Callable[[], Mapping[str, str]] | None = None,
+        ttl_provider: Callable[[], int | None] | None = None,
     ):
         self._cash = cash_instance
         self._ctx_provider = ctx_provider
+        # The TTL in force for the statement this call sits in (CAS-268).
+        # Read at INVOKE time, like `loop_vars_provider`, because one
+        # `CallCache` serves every statement and each brings its own
+        # annotation. `None` -- the default, and what every direct
+        # construction predating this parameter gets -- means "no TTL", which
+        # is the behaviour this class had when it ignored TTL entirely.
+        self._ttl_provider = ttl_provider or (lambda: None)
         # See `call_cache_key`'s `loop_vars` section. `None` (rather than
         # requiring every caller to pass one) keeps every existing direct
         # construction of `CallUnit` -- tests included -- working exactly as
@@ -1224,11 +1232,52 @@ class CallUnit:
             metadata = {}
         if not self._auto_file_deps_fresh(metadata):
             return False, None, 0.0, {}
+        if not self._ttl_fresh(metadata):
+            return False, None, 0.0, {}
         try:
             cost = float(metadata.get("execution_time", 0.0))
         except (TypeError, ValueError, AttributeError):
             cost = 0.0
         return True, value, cost, metadata
+
+    def _ttl_fresh(self, metadata: Mapping[str, Any]) -> bool:
+        """Mirrors ``CacheFreshnessChecker._invalidate_if_ttl_expired``
+        (``statement/freshness.py``) for a call entry (CAS-268).
+
+        Before this, ``call_unit.py`` contained no reference to ``ttl`` at all,
+        so call entries never expired. Once call interception became the
+        default (CAS-243) that quietly hollowed out the annotation: the
+        STATEMENT would expire and re-execute while the expensive call inside
+        it was still served from an entry with no expiry. Measured on
+        ``# @cash:ttl=0`` -- the spelling the docs give for data that must
+        never be served stale -- the work did not re-run at all until
+        ``# @cash:no-cache-calls`` was added as well.
+
+        Two details are copied deliberately rather than re-derived, because
+        both are load-bearing and both are easy to get subtly wrong:
+
+        * ``is not None``, not truthiness. ``ttl=0`` is a REQUEST ("expire
+          immediately"), not an absent setting -- the falsy-vs-``None`` slip is
+          exactly what CAS-221 was at the statement layer.
+        * ``ttl <= 0`` short-circuits without consulting the clock. A
+          same-tick re-read can measure ``age == 0.0`` on a coarse timer, and
+          ``0.0 > 0`` would hand back the very entry ``ttl=0`` exists to
+          reject.
+
+        An entry with no recorded ``timestamp`` reads as age-since-epoch, so it
+        expires under any TTL rather than being served forever -- the
+        fail-safe direction for a value the caller has asked to keep fresh.
+        """
+        ttl = self._ttl_provider()
+        if ttl is None:
+            return True
+        if ttl <= 0:
+            return False
+        try:
+            timestamp = float(metadata.get("timestamp") or 0)
+        except (TypeError, ValueError):
+            timestamp = 0.0
+        return (_time.time() - timestamp) <= ttl
 
     @staticmethod
     def _auto_file_deps_fresh(metadata: Mapping[str, Any]) -> bool:

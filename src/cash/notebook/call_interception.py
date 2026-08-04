@@ -181,6 +181,7 @@ class CallCache:
         ctx_provider: Callable[[], CacheKeyContext] | None = None,
         loop_vars_provider: Callable[[], dict[str, Any]] | None = None,
         loop_var_digests_provider: Callable[[], dict[str, str]] | None = None,
+        ttl_provider: Callable[[], int | None] | None = None,
     ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
@@ -233,6 +234,9 @@ class CallCache:
             ctx_provider or self._default_ctx,
             loop_vars_provider or self._default_loop_vars,
             loop_var_digests_provider or self._default_loop_var_digests,
+            # No fallback: absent a live processor there is no annotation in
+            # force, and `None` is precisely "no TTL" (CAS-268).
+            ttl_provider,
         )
 
     def _default_ctx(self) -> CacheKeyContext:
