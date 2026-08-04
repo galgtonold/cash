@@ -65,9 +65,15 @@ def compute(v):
     return v * 10
 """
 
-# `CALLS.clear()` at the top makes every subsequent `print` an exact count of
-# THIS run's real executions, not a running total -- the same idiom the
-# fold/reorder tests this file avoids duplicating already use.
+# `CALLS.clear()` at the top makes every subsequent `print` a stable per-run
+# view rather than a running total.
+#
+# It is NOT a count of real executions, and must not be read as one. `CALLS`
+# is a global written from inside `compute`'s body, so CAS-260/265 captures it
+# per call and restores it on a hit: a served call reproduces its append
+# without executing. That is the point of the feature -- the observable state
+# matches the uncached oracle either way -- and it means an execution count
+# needs an instrument OUTSIDE the cached region (see the rerun test below).
 #
 # Two-statement body (`v = compute(next(it))`, then `out.append(v)`) -- NOT
 # the brief's bare `out.append(compute(next(it)))`. See the module docstring:
@@ -116,25 +122,54 @@ def test_loop_carried_hidden_state_matches_the_no_cash_oracle(nb_runner):
     assert "OUT [0, 10, 20] CALLS [0, 1, 2]" in nb_runner.get_output(3)
 
 
-def test_loop_carried_hidden_state_reuses_on_an_unchanged_rerun(nb_runner):
+def test_loop_carried_hidden_state_reuses_on_an_unchanged_rerun(nb_runner, tmp_path):
     """Re-running the identical loop cell must replay from cache.
 
     ``it = iter(range(3))`` is itself part of the cell, so a fresh iterator is
-    built every run; a correct cache still serves ``OUT [0, 10, 20]`` with
-    zero further ``compute`` calls (``CALLS`` stays empty -- it was cleared at
-    the top of this run and nothing new was appended to it). A collapsed key
-    would instead calcify at the wrong ``[0, 0, 0]`` and replay THAT stably,
-    which the two tests above already rule out for the first run -- this one
-    checks that correctness survives a second execution, not just the first.
+    built every run; a correct cache still serves ``OUT [0, 10, 20]`` without
+    executing ``compute`` again. A collapsed key would instead calcify at the
+    wrong ``[0, 0, 0]`` and replay THAT stably, which the two tests above rule
+    out for the first run -- this one checks that correctness survives a
+    second execution, not just the first.
+
+    Reuse is proven by a counter OUTSIDE the cached region, not by ``CALLS``.
+    This test previously asserted ``CALLS []`` on the rerun, reading "the
+    callee's append is missing" as "the callee did not run". CAS-260/265 makes
+    that inference invalid in the direction of correctness: a served call now
+    restores the global its body wrote, so ``CALLS`` reads ``[0, 1, 2]`` on a
+    rerun -- byte-identical to the uncached oracle pinned by
+    ``test_loop_carried_hidden_state_matches_the_no_cash_oracle`` -- while the
+    work is still skipped. The old assertion required the cached run to
+    DIVERGE from the oracle, and would now be satisfied only by the bug.
+
+    ``os.open``/``os.write``, not ``builtins.open``, which ``FileAccessTracker``
+    patches -- a tracked file dependency changes every run, so the entry is
+    never fresh and the instrument silently disables what it measures.
     """
-    nb_runner.create_notebook(["import cash\n%cash_on\n", DEFS, LOOP])
+    ticks = tmp_path / "real.log"
+    defs_ticked = DEFS.replace(
+        "import time\n",
+        "import time, os\n"
+        "def _tick():\n"
+        f"    fd = os.open(r'{ticks}', os.O_WRONLY | os.O_APPEND | os.O_CREAT)\n"
+        "    os.write(fd, b'X')\n"
+        "    os.close(fd)\n",
+    ).replace("    CALLS.append(v)\n", "    CALLS.append(v)\n    _tick()\n")
+    assert "_tick()" in defs_ticked, "the instrument was not spliced into compute()"
+
+    nb_runner.create_notebook(["import cash\n%cash_on\n", defs_ticked, LOOP])
     nb_runner.start_kernel()
     nb_runner.run_all()
     assert "OUT [0, 10, 20] CALLS [0, 1, 2]" in nb_runner.get_output(3)
+    cold = ticks.read_bytes()
+    assert len(cold) == 3, f"the cold run did not execute compute() three times: {len(cold)}"
 
     nb_runner.run_cell(3)
     output = nb_runner.get_output(3)
-    assert "OUT [0, 10, 20]" in output, output
-    assert "CALLS []" in output, (
-        f"compute() re-ran on an unchanged rerun of the loop cell:\n{output}"
+    assert "OUT [0, 10, 20] CALLS [0, 1, 2]" in output, (
+        f"the rerun diverged from the uncached oracle:\n{output}"
+    )
+    rerun = len(ticks.read_bytes()) - len(cold)
+    assert rerun == 0, (
+        f"compute() ran {rerun} more time(s) on an unchanged rerun of the loop cell"
     )
