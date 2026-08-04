@@ -1260,7 +1260,59 @@ from cash import Cash
     def get_raw_output(self, cell_num: int) -> str:
         """Get the raw output from a cell (no filtering)."""
         return self.get_output(cell_num, filter_debug=False)
-    
+
+    def peek(self, expr: str) -> str:
+        """Evaluate *expr* in the live kernel and return its ``repr``.
+
+        Runs outside the notebook's cells with ``store_history=False``, so
+        nothing about it is cached, replayed, or added to the notebook.
+
+        **Use this when the claim is about kernel state; use ``get_output``
+        when the claim is about what the user sees.** Both are legitimate;
+        conflating them is the bug. A cached statement's stdout is REPLAYED on
+        a hit, so reading state through a printed cell reports what was on
+        screen when the entry was written, not what the variable holds now.
+        Measured during CAS-260: ``print('C', compute_c(1), CALLS_C)`` reported
+        ``[1]`` after a restart while the live value was ``[]``. The printed
+        reading made a broken arm look correct and sent one round of that
+        investigation down a false trail.
+
+        A bare name is wrapped as ``globals().get(name)`` automatically. That
+        is not politeness: a bare *undefined* name raises, which produces no
+        stdout, and "no output" would then read as a value rather than as a
+        lookup failure. Pass any non-identifier expression (``len(CALLS)``,
+        ``obj.attr``) and it is evaluated as written -- there the caller has
+        chosen to risk the raise.
+
+        Every output line is scanned for the marker rather than matching the
+        joined text, because a badge or a debug line shares the stdout channel
+        and would otherwise silently read as "no value".
+
+        Returns the marker-less ``repr`` string, or ``"?"`` when no marker was
+        found at all (a kernel error, or output that never arrived).
+
+        Note: depends on ``kc._async_execute_interactive``, private nbclient
+        API. An nbclient bump is what would break this.
+        """
+        if expr.isidentifier():
+            expr = f"globals().get({expr!r})"
+
+        seen: List[str] = []
+
+        def _hook(msg):
+            if msg['msg_type'] == 'stream' and msg['content'].get('name') == 'stdout':
+                seen.append(msg['content']['text'])
+
+        self._run_async(self.client.kc._async_execute_interactive(
+            f"print('__CASH_PEEK__', repr({expr}))",
+            store_history=False, output_hook=_hook,
+        ))
+        for line in "".join(seen).splitlines():
+            if '__CASH_PEEK__' in line:
+                return line.split('__CASH_PEEK__', 1)[1].strip()
+        return "?"
+
+
     def get_status(self) -> Dict[str, Any]:
         """
         Get machine-readable cash status from the last cell execution.

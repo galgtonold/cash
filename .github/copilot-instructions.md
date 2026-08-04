@@ -122,6 +122,37 @@ def test_programmatic(nb_runner):
     assert "Result: 20" in nb_runner.get_output(3)
 ```
 
+#### `get_output` vs `peek` — pick by what you are claiming
+
+Assert on **`get_output(cell)`** when the claim is about **what the user sees**.
+Assert on **`nb_runner.peek(expr)`** when the claim is about **kernel state**.
+Both are legitimate; conflating them is the bug.
+
+`get_output` returns text captured when that cell last ran, and a cached
+statement's stdout is *replayed on a hit* — so a printed value can report what
+was on screen when the entry was written rather than what the variable holds
+now. Measured during CAS-260: a printed reading made a broken arm look correct
+and sent a round of that investigation down a false trail; the out-of-band read
+reversed the conclusion.
+
+```python
+assert "Result: 20" in nb_runner.get_output(3)   # the user sees this
+assert nb_runner.peek("y") == "20"               # the kernel holds this
+assert nb_runner.peek("len(rows)") == "3"        # any expression works
+```
+
+`peek` runs outside the notebook's cells with `store_history=False`, so nothing
+about it is cached, replayed, or added to the notebook. A bare name is wrapped
+as `globals().get(name)`, so an undefined one reads as `"None"` rather than
+raising into silence.
+
+**Do not instrument a cached callee with a counter it writes itself** (a global
+list it appends to). Such a write is captured and restored on a hit, so the
+counter reads the same whether the call ran or was served, *and* it costs the
+call its reuse. Count executions with `os.open`/`os.write` — not
+`builtins.open`, which `FileAccessTracker` patches into a file dependency,
+changing the entry every run and silently disabling what you are measuring.
+
 ### Bug Reproduction Workflow
 When debugging notebook-related bugs:
 1. Create a reproduction test notebook

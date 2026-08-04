@@ -43,7 +43,8 @@ work and all of which are avoided below:
 * **A printed value is replayed stdout on a hit**, not a live read. Reading
   ``CALLS`` through ``print(...)`` in a notebook cell reports what was on
   screen the run the entry was written. Every assertion here reads out of band
-  via :func:`_peek`, and with ``globals().get(name)`` rather than a bare name.
+  via :meth:`NotebookTestRunner.peek`, which evaluates out of band and wraps a
+  bare name so an undefined one reads as ``None`` rather than as no output.
 * **``open(p, 'a')`` as an execution counter registers as a file DEPENDENCY**
   of the entry, so the file changes every run, the entry is never fresh, and
   the call re-runs forever -- the instrument silently disables what it
@@ -112,33 +113,10 @@ def _n(path):
     return len(path.read_bytes()) if path.exists() else 0
 
 
-def _peek(nb_runner, expr):
-    """Evaluate *expr* in the live kernel, outside the notebook's cells.
-
-    ``store_history=False``, so nothing about this execution is a notebook cell
-    and nothing about it is cached or replayed. Always call it with
-    ``globals().get(name)``: a bare undefined name raises NameError, produces no
-    stdout, and the "no output" answer then reads as a value rather than as a
-    lookup failure.
-    """
-    seen = []
-
-    def _hook(msg):
-        if msg['msg_type'] == 'stream' and msg['content'].get('name') == 'stdout':
-            seen.append(msg['content']['text'])
-
-    nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(
-        f"print('__PEEK__', repr({expr}))", store_history=False, output_hook=_hook))
-    for line in "".join(seen).splitlines():
-        if '__PEEK__' in line:
-            return line.split('__PEEK__', 1)[1].strip()
-    return "<no output>"
-
-
 def _globals(nb_runner):
     return {
-        "inline": _peek(nb_runner, "globals().get('CALLS_I')"),
-        "in_callee": _peek(nb_runner, "globals().get('CALLS_F')"),
+        "inline": nb_runner.peek("CALLS_I"),
+        "in_callee": nb_runner.peek("CALLS_F"),
     }
 
 
@@ -230,13 +208,13 @@ def test_every_spelling_of_the_call_behaves_the_same(nb_runner, tmp_path, spelli
     nb_runner.create_notebook([SETUP, _defs(cp, cf, ci), source])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert _peek(nb_runner, "globals().get('CALLS_F')") == "[1]"
+    assert nb_runner.peek("CALLS_F") == "[1]"
     cold = _n(cf)
 
     nb_runner.restart()
     nb_runner.run_all()
     assert _n(cf) - cold == 0, f"{spelling}: nothing was cached, so this proves nothing"
-    assert _peek(nb_runner, "globals().get('CALLS_F')") == "[1]", (
+    assert nb_runner.peek("CALLS_F") == "[1]", (
         f"{spelling}: the callee's global write was dropped on a hit"
     )
 
@@ -281,8 +259,8 @@ def test_the_statement_stops_caching_but_the_work_does_not(nb_runner, tmp_path):
     nb_runner.create_notebook([SETUP, defs, "total = mutating(1) + pure(2)\n"])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert _peek(nb_runner, "globals().get('total')") == "210"
-    assert _peek(nb_runner, "globals().get('SEEN')") == "[1]"
+    assert nb_runner.peek("total") == "210"
+    assert nb_runner.peek("SEEN") == "[1]"
     cold = [_n(cf), _n(cp)]
     assert cold == [1, 1]
 
@@ -293,8 +271,8 @@ def test_the_statement_stops_caching_but_the_work_does_not(nb_runner, tmp_path):
         "the statement re-executed AND re-ran its calls; skip-caching the "
         "statement is only affordable because the calls inside it still cache"
     )
-    assert _peek(nb_runner, "globals().get('total')") == "210"
-    assert _peek(nb_runner, "globals().get('SEEN')") == "[1]", (
+    assert nb_runner.peek("total") == "210"
+    assert nb_runner.peek("SEEN") == "[1]", (
         "the callee's global write was lost even though the statement re-ran"
     )
 
@@ -305,13 +283,13 @@ def test_editing_the_callee_still_recomputes(nb_runner, tmp_path):
     a constant."""
     cp, cf, ci = _start(nb_runner, tmp_path)
     cold = _n(cf)
-    assert _peek(nb_runner, "globals().get('af')") == "10"
+    assert nb_runner.peek("af") == "10"
 
     nb_runner.set_cell_source(DEFS_CELL, _defs(cp, cf, ci, mult=20))
     nb_runner.run_all()
 
     assert _n(cf) - cold >= 1, "editing the callee did not re-run it"
-    assert _peek(nb_runner, "globals().get('af')") == "20", "served a stale value after an edit"
+    assert nb_runner.peek("af") == "20", "served a stale value after an edit"
 
 
 def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(
@@ -355,9 +333,9 @@ def test_two_statements_writing_the_same_global_do_not_invalidate_each_other(
     nb_runner.run_all()
 
     assert _n(ci) == 2, "the callee body ran more than twice for two call sites"
-    assert _peek(nb_runner, "globals().get('counter')") == "2"
-    assert _peek(nb_runner, "globals().get('r1')") == "1"
-    assert _peek(nb_runner, "globals().get('r2')") == "2"
+    assert nb_runner.peek("counter") == "2"
+    assert nb_runner.peek("r1") == "1"
+    assert nb_runner.peek("r2") == "2"
 
 
 _HIDDEN_STATE_DEFS = (
@@ -401,15 +379,15 @@ def test_a_loop_over_a_hidden_state_callee_replays_on_a_rerun(nb_runner):
     nb_runner.create_notebook([SETUP, _HIDDEN_STATE_DEFS, _HIDDEN_STATE_LOOP])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert _peek(nb_runner, "globals().get('results')") == "{1: 1, 2: 2, 3: 3}"
-    assert _peek(nb_runner, "globals().get('counter')") == "{'n': 3}"
+    assert nb_runner.peek("results") == "{1: 1, 2: 2, 3: 3}"
+    assert nb_runner.peek("counter") == "{'n': 3}"
 
     for _ in range(2):
         nb_runner.run_cell(LOOP_CELL)
-        assert _peek(nb_runner, "globals().get('results')") == "{1: 1, 2: 2, 3: 3}", (
+        assert nb_runner.peek("results") == "{1: 1, 2: 2, 3: 3}", (
             "a rerun produced different values -- the loop did not replay"
         )
-        assert _peek(nb_runner, "globals().get('counter')") == "{'n': 3}", (
+        assert nb_runner.peek("counter") == "{'n': 3}", (
             "fetch_next() ran again on the rerun instead of replaying"
         )
 
@@ -474,14 +452,14 @@ def test_rerunning_an_earlier_loop_discards_a_later_loops_writes(nb_runner, tmp_
     nb_runner.start_kernel()
     nb_runner.run_all()
     both = {"inline": "[1, 2, 3, 111, 10]", "in_callee": "[1, 2, 3, 111, 10]"}
-    live = {"inline": _peek(nb_runner, "globals().get('LOG_I')"),
-            "in_callee": _peek(nb_runner, "globals().get('CALLS_F')")}
+    live = {"inline": nb_runner.peek("LOG_I"),
+            "in_callee": nb_runner.peek("CALLS_F")}
     assert live == both, f"cold run is not the expected starting point: {live}"
 
     nb_runner.run_cells([4, 5])          # the EARLIER pair only
 
-    after = {"inline": _peek(nb_runner, "globals().get('LOG_I')"),
-             "in_callee": _peek(nb_runner, "globals().get('CALLS_F')")}
+    after = {"inline": nb_runner.peek("LOG_I"),
+             "in_callee": nb_runner.peek("CALLS_F")}
     assert after["inline"] == "[1, 2, 3]", (
         f"the inline yardstick itself moved: {after['inline']}"
     )
@@ -504,4 +482,4 @@ def test_oracle_the_harness_measures_real_work(nb_runner, tmp_path):
     assert [a - b for a, b in zip([_n(cp), _n(cf), _n(ci)], cold)] == [1, 1, 1], (
         "the oracle did not re-execute; the counters are not measuring real work"
     )
-    assert _peek(nb_runner, "globals().get('CALLS_F')") == "[1, 1]"
+    assert nb_runner.peek("CALLS_F") == "[1, 1]"
