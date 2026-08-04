@@ -59,27 +59,38 @@ def _n_calls(out: str) -> int:
     return int(m[-1])
 
 
-class _Counter:
-    """Samples the LIVE global counter, not a cell's stale output.
+def _sub_calls(out: str) -> list[tuple[int, int]]:
+    """The badge's ``sub-call compute(x): n/1 hit`` rows, as (hits, total).
 
-    ``CALLS`` accumulates across every cell, so reading it out of a cell's
-    recorded output tells you what the total was when that cell last ran — which
-    is not the same as what it is now. A dedicated sampler cell is the only
-    honest way to bracket a single re-run.
+    This is the notebook's work signal, and it replaced ``len(CALLS)``.
+    ``CALLS`` is a global written from inside ``compute``'s body, so CAS-260/265
+    captures it per call and restores it on a hit: a served call reproduces its
+    append without executing. That is the feature working -- the observable
+    state matches an uncached run either way -- and it means the counter cannot
+    distinguish "ran" from "was served". Any instrument written inside the
+    callee has the same problem, so the signal has to come from outside it.
+
+    An empty list means interception never engaged for that statement, i.e.
+    every call really executed.
+
+    Rows under the badge's ``Upstream:`` section are EXCLUDED. Those are marked
+    ``^COMPUTED`` and belong to reconstructed cells, not to the statement under
+    test -- a re-run of section 2 reconstructs section 1's loop and reports its
+    sub-calls too, so a flat scan of the output reads another cell's hits as
+    this one's and no "interception is off here" assertion can ever fail.
     """
-
-    def __init__(self, nb_runner, cell_index):
-        self._nb, self._i = nb_runner, cell_index
-
-    def __call__(self) -> int:
-        import re
-        self._nb.run_cell(self._i)
-        out = self._nb.get_output(self._i)
-        # The text badge shares this cell's output, so match the marker rather
-        # than trusting position.
-        m = re.search(r"LIVE (\d+)", out)
-        assert m, f"sampler produced no LIVE line:\n{out}"
-        return int(m.group(1))
+    import re
+    rows: list[tuple[int, int]] = []
+    owner_is_upstream = True          # anything before the first row is a header
+    for line in out.splitlines():
+        stripped = line.lstrip()
+        if "COMPUTED:" in stripped or "RESTORED:" in stripped:
+            owner_is_upstream = stripped.startswith("^")
+            continue
+        m = re.search(r"sub-call\s+\S+:\s*(\d+)/(\d+)\s+hit", stripped)
+        if m and not owner_is_upstream:
+            rows.append((int(m.group(1)), int(m.group(2))))
+    return rows
 
 
 def test_demo_notebook_claims_hold(nb_runner):
@@ -87,39 +98,40 @@ def test_demo_notebook_claims_hold(nb_runner):
     assert len(cells) == 9, f"expected 9 code cells, got {len(cells)}"
 
     # 1 %cash_badge, then the notebook's own cells at 2..10, then a sampler.
-    nb_runner.create_notebook([
-        "%cash_badge print", *cells,
-        "# @cash:no-cache\nprint('LIVE', len(CALLS))",
-    ])
+    nb_runner.create_notebook(["%cash_badge print", *cells])
     nb_runner.start_kernel()
     nb_runner.run_all()
 
     APPEND_PLAIN, APPEND_NO_CACHE_CALLS = 5, 7
     FOLD_PLAIN, FOLD_NO_CACHE_CALLS = 8, 9
     INELIGIBLE = 10
-    live = _Counter(nb_runner, len(cells) + 2)
+
+    # The cold run must MISS, or every "it hit" assertion below would also hold
+    # for a build where interception never engaged at all.
+    cold = _sub_calls(nb_runner.get_output(APPEND_PLAIN))
+    assert cold == [(0, 1)] * 3, (
+        f"the first run should show three missed sub-calls, got {cold}"
+    )
 
     # Claim 1: the plain append loop is cached automatically -- no directive,
-    # a re-run adds nothing.
-    before = live()
+    # a re-run does no work.
     nb_runner.run_cell(APPEND_PLAIN)
     out = nb_runner.get_output(APPEND_PLAIN)
-    assert live() == before, (
-        "notebook claims the undirected append loop is cached by default; "
-        f"a re-run added executions:\n{out}"
+    assert _sub_calls(out) == [(1, 1)] * 3, (
+        "notebook claims the undirected append loop is cached by default; the "
+        f"re-run's sub-calls did not all hit:\n{out}"
     )
     assert "[intercepted]" in out, (
         f"the badge does not confirm interception on the undirected call:\n{out}"
     )
 
-    # Claim 2: with the opt-out, a re-run adds the full three executions again
-    # -- interception genuinely switched off, not merely quiet this run.
-    before = live()
+    # Claim 2: with the opt-out, interception genuinely switches off -- no
+    # sub-call rows at all, so every call really executed.
     nb_runner.run_cell(APPEND_NO_CACHE_CALLS)
     out = nb_runner.get_output(APPEND_NO_CACHE_CALLS)
-    assert live() == before + 3, (
-        "notebook claims no-cache-calls disables call caching; a re-run did "
-        f"not cost 3 executions:\n{out}"
+    assert _sub_calls(out) == [], (
+        "notebook claims no-cache-calls disables call caching; the badge still "
+        f"reports intercepted sub-calls:\n{out}"
     )
     assert "[intercepted]" not in out, (
         f"a no-cache-calls statement must not carry the intercepted tag:\n{out}"
@@ -128,28 +140,28 @@ def test_demo_notebook_claims_hold(nb_runner):
 
     # Claim 3: reordering the UNDIRECTED fold costs nothing -- this is the
     # headline behavioural flip from the opt-in era.
-    before = live()
     nb_runner.set_cell_source(
         FOLD_PLAIN,
         cells[FOLD_PLAIN - 2].replace("[10, 20, 30]", "[30, 20, 10]"),
     )
     nb_runner.run_cell(FOLD_PLAIN)
     out = nb_runner.get_output(FOLD_PLAIN)
-    assert live() == before, f"reordering the undirected fold cost executions:\n{out}"
+    assert _sub_calls(out) == [(1, 1)] * 3, (
+        f"reordering the undirected fold cost executions:\n{out}"
+    )
     assert "SUM 63" in out, f"the reordered fold gave a different answer:\n{out}"
 
-    # Claim 4: the SAME reorder, under no-cache-calls, costs the full three
-    # executions -- the positive control proving claim 3 is the directive's
-    # doing and not some other cause (e.g. the values simply being small).
-    before = live()
+    # Claim 4: the SAME reorder, under no-cache-calls, re-executes -- the
+    # positive control proving claim 3 is the directive's doing and not some
+    # other cause (e.g. the values simply being small).
     nb_runner.set_cell_source(
         FOLD_NO_CACHE_CALLS,
         cells[FOLD_NO_CACHE_CALLS - 2].replace("[11, 22, 33]", "[33, 22, 11]"),
     )
     nb_runner.run_cell(FOLD_NO_CACHE_CALLS)
     out = nb_runner.get_output(FOLD_NO_CACHE_CALLS)
-    assert live() == before + 3, (
-        f"no-cache-calls should have made the reorder cost 3 executions:\n{out}"
+    assert _sub_calls(out) == [], (
+        f"no-cache-calls should have left the reorder uncached:\n{out}"
     )
     assert "SUM 69" in out, f"the reordered fold gave a different answer:\n{out}"
 
