@@ -253,7 +253,10 @@ Two shapes benefit, and neither can be fixed at statement level:
 - **A call inside an accumulator fold.** `s += compute(x)` reads `s`, so each
   iteration's key encodes every iteration before it and reordering the list
   re-runs everything after the first change. A call cache keys on arguments, not
-  on execution history, so it is order-independent by construction. See
+  on execution history, so it is order-independent by construction — for a
+  callee that computes and returns. One that also writes outside itself (a
+  global, a file) is not a function of its arguments, so it is re-executed
+  rather than served and a reorder costs full price for it. See
   [Reordering a loop's items](known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 
 **What is eligible.** One rule: a call qualifies when it does **not** read the

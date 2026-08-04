@@ -120,7 +120,7 @@ Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`
 
 **What to do:** mutate through the original name (`x.append(99)`), or rebind rather than mutate (`x = x + [99]`).
 
-### Mutating global state inside a function — inside a loop
+### Mutating global state inside a function
 
 <!-- claim: cash/notebook/cacheability.py:called_function_global_mutations @ce3be880 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
@@ -147,53 +147,40 @@ restored with it — so what re-runs is the glue, not the work. Re-running cell 
 alone, or restarting the kernel and running everything, both land where a clean
 top-to-bottom run lands.
 
-**What it still cannot do is the same write from inside a loop body:**
-
-<!-- test:skip reason="illustrative: the loop-body half, still open" -->
-```python
-LOG = []
-def step(v):
-    LOG.append(v)               # not captured while the call is in a loop body
-    return v * 10
-
-out = []
-for t in items:                 # LOG is left where the last real execution
-    out.append(step(t))         # put it, rather than being restored
-```
-
-A loop is one unit to cash, so its body's writes belong to the loop rather than
-to any single iteration. Both narrower placements were measured and both
-corrupt the accumulation rather than merely leaving it stale — a per-iteration
-capture of the global's *whole* value gives `[2]` where `[1, 2, 3]` is correct,
-and per-call restores interleaved with the iterations that genuinely run give
-`[1, 2, 2, 3]`. Until the loop owns this, the write is skipped on a hit.
-
-**The visible consequence is worse than a skipped write.** Because nothing
-tracks the global inside a loop, re-running an *earlier* loop cell does not
-discard a *later* one's contributions:
+**The same write from inside a loop body is tracked too**, including across
+cells: re-running an *earlier* loop cell discards a *later* one's contributions
+and lands where a clean top-to-bottom run up to that cell lands.
 
 <!-- test:skip reason="illustrative: cross-cell loop re-run, needs a real kernel" -->
 ```python
+LOG = []
+def step(v):
+    LOG.append(v)          # captured per call, restored along with the result
+    return v * 10
+
 for x in [1, 2, 3]:        # cell A
     out.append(step(x))
 
 for x in [111, 10]:        # cell B
     total += step(x)
 
-# re-run cell A -> LOG still holds cell B's entries
+# re-run cell A -> LOG holds [1, 2, 3], not cell B's entries
 ```
 
-Written inline the same mutation gives `[1, 2, 3]` there, which is what a clean
-top-to-bottom run up to cell A produces. So state from a cell that had not run
-yet survives, which is ordinary out-of-order notebook work rather than an
-exotic case.
+**What it costs.** A call whose callee writes a global is re-executed rather
+than served, so the order-independent reuse described under
+[Reordering a loop's items](#reordering-a-loops-items-re-runs-the-tail) does not
+apply to it.
 
-Note that `@stateful` does **not** rescue the loop case: it forces the call to
-re-execute, but the call still reads an already-advanced global.
+That is not a gap waiting to be closed. A call cache keys on **arguments**, and
+a function that writes a global is not a function of its arguments — its effect
+depends on when it ran. Serving such a call would leave the global holding the
+*previous* order's contents, which is wrong rather than merely stale. Paying for
+the re-execution is what buys the correct answer.
 
-**What to do:** for the loop case, pass the state in and return it out, rather
-than mutating a global — or accumulate at cell level (`LOG.append(t)` written in
-the loop body directly, which *is* tracked).
+**What to do:** nothing, if you want the write — it works. If you would rather
+have the call served, pass the state in and return it out instead of mutating a
+global, which also makes the function orderable by argument.
 
 ### Mutating an object created in an earlier cell
 
@@ -427,6 +414,11 @@ Measured on exactly that cell, with the current default:
 | back to `[1, 10, 5]` | 0 | 0 s |
 
 Only a genuinely new value costs a call; any reordering of values cash has already seen costs nothing, regardless of position. See [Call-level caching](annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls) for what qualifies — the same eligibility rule (the call must not read the statement's own fold target) applies here.
+
+!!! note "This assumes the call is a function of its arguments"
+    Keying on arguments is what makes a reorder free, so it holds for a callee that computes and returns. A callee that also **writes something outside itself** — appends to a global, writes a file — is re-executed instead, and a reorder costs full price for it.
+
+    That is not a shortfall: such a function is not a function of its arguments, and serving it would leave the global holding the *previous* order's contents. If a reorder unexpectedly costs executions, look for a write escaping the callee. See [Mutating global state inside a function](#mutating-global-state-inside-a-function).
 
 **If you disable it** (`# @cash:no-cache-calls`), or the call isn't eligible, you get the *statement*-level table this section used to describe unconditionally — the historical, pre-default-on shape:
 

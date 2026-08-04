@@ -169,8 +169,9 @@ for ticker in ["AAPL", "MSFT", "GOOG"]:
 Two more things worth knowing before you lean on loop caching: a *statement*
 that accumulates (`s += f(x)`, not a bare call) has reuse that follows the
 *order* of the items — but that historical limitation is exactly what the
-default call-level caching above already dissolves for eligible calls
-(reordering costs nothing, not "just the tail"), and a long loop can switch
+default call-level caching above already dissolves for eligible calls that
+compute and return (reordering costs nothing, not "just the tail" — a callee
+that also writes a global or a file is re-executed instead), and a long loop can switch
 to whole-loop caching. Both are measured in
 [Known limitations](../known-limitations.md#reordering-a-loops-items-re-runs-the-tail).
 See [The notebook path](../how-it-works/notebook-path.md) for how partial hits work.

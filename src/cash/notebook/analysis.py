@@ -644,9 +644,12 @@ class CodeAnalyzer:
         )
 
     @staticmethod
-    def analyze_code_block(code: str, tree: ast.Module | None = None,
-                           resolve_source=None,
-                           user_ns=None) -> tuple[set[str], set[str]]:
+    def analyze_code_block(
+        code: str,
+        tree: ast.Module | None = None,
+        resolve_source: Callable[[str], str | None] | None = None,
+        user_ns: dict[str, Any] | None = None,
+    ) -> tuple[set[str], set[str]]:
         """
         Analyze a block of code to find input (read) and output (written) variables.
 

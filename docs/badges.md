@@ -138,9 +138,11 @@ A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused
     itself left uncached — it re-executes so the write really happens, while
     the call inside it still caches). Effects Cash *cannot* replay — mutating
     an argument, drawing from an RNG — make a call ineligible, so it re-runs.
-    The one write it still misses is a global mutated from inside a callee **in
-    a loop body** ([Mutating global state inside a function — inside a
-    loop](known-limitations.md#mutating-global-state-inside-a-function-inside-a-loop)).
+    A global mutated from inside a callee *is* tracked, at cell level and in a
+    loop body alike — but such a call is re-executed rather than served, so it
+    does not get the order-independent reuse an ordinary call does ([Mutating
+    global state inside a
+    function](known-limitations.md#mutating-global-state-inside-a-function)).
 
     `# @cash:no-cache-calls` turns call-level caching off for a statement or
     cell; `# @cash:no-cache` covers the statement *and* everything in it.
