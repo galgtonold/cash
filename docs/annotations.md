@@ -599,26 +599,19 @@ The literal `@cash:` is case-sensitive (the regex isn't compiled with `IGNORECAS
 ### `ttl=` with no value (or non-digits)
 
 ```python
-# @cash:ttl=               # WRONG — silently ignored
-# @cash:ttl=-30            # WRONG — minus sign isn't a digit, silently ignored
+# @cash:ttl=               # ignored — no value given
+# @cash:ttl=-30            # ignored — not a whole number of seconds
+# @cash:ttl=5m             # ignored — ttl takes no unit suffix
 model = train()
 ```
 
-!!! danger "A unit suffix is silently *truncated*, not rejected"
-    The value pattern is `(\d+)`, and it is not anchored to the end of the
-    directive — so it matches the leading digits and drops the rest:
+Each of these warns rather than passing silently:
 
-    ```python
-    # @cash:ttl=5m          # parses as ttl=5  -- FIVE SECONDS, not five minutes
-    # @cash:ttl=2h          # parses as ttl=2  -- two seconds
-    ```
+> cash: `# @cash:ttl=5m` is not a whole number of seconds, so the annotation was
+> IGNORED and this statement keeps its normal caching. ttl has no unit suffix —
+> write `ttl=300` for five minutes, not `ttl=5m`.
 
-    There is no warning. If you write `ttl=5m` meaning five minutes you get a
-    value 60× smaller than you intended, and the only symptom is a cache that
-    keeps missing. **TTL is always in seconds and takes digits only** — write
-    `# @cash:ttl=300`.
-
-Use a plain integer in seconds: `# @cash:ttl=300`.
+**TTL is always in seconds, digits only** — write `# @cash:ttl=300`.
 
 ### Typo'd directive name
 

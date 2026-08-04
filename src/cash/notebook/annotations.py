@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import ast
 import re
+import warnings
 from dataclasses import dataclass
+
+from ..exceptions import CashCacheIneffectiveWarning
 
 __all__ = ["CacheAnnotation", "ANNOTATION_PATTERN", "leading_cell_annotation", "parse_annotation_line", "parse_annotations_in_range", "get_statement_annotations", "extract_annotations_for_statements"]
 
@@ -42,7 +45,15 @@ class CacheAnnotation:
 # documented ``# @cash:no-cache`` and the natural ``# @cash: no-cache`` parse
 # (see test_annotation_with_spaces). Without the ``\s*`` after the colon the
 # spaced form was silently ignored -- the statement was cached as normal.
-ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')
+#
+# The value group is ``\S*``, NOT ``\d+``. An unanchored ``\d+`` matched the
+# leading digit run and silently dropped the rest, so ``ttl=5m`` parsed as
+# ``ttl=5`` -- five SECONDS where five minutes was asked for, a 60x error, and
+# ``ttl=1h`` a 3600x one. The only symptom is a cache that keeps missing, which
+# reads as "cash isn't working" rather than "my annotation was truncated"
+# (CAS-249). Capturing the whole token lets the directive handler see ``5m``
+# and reject it out loud.
+ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
 
 def parse_annotation_line(line: str) -> CacheAnnotation | None:
     """
@@ -73,10 +84,19 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
     if directive == 'no-cache-calls' or directive == 'nocachecalls':
         return CacheAnnotation(no_cache_calls=True)
     if directive == 'ttl' and value is not None:
-        try:
+        # ``isascii`` as well as ``isdigit``: the latter is True for characters
+        # like the superscript two, which ``int()`` then refuses.
+        if value.isascii() and value.isdigit():
             return CacheAnnotation(ttl=int(value))
-        except ValueError:
-            return None
+        warnings.warn(
+            f"cash: `# @cash:ttl={value}` is not a whole number of seconds, so "
+            f"the annotation was IGNORED and this statement keeps its normal "
+            f"caching. ttl has no unit suffix -- write `ttl=300` for five "
+            f"minutes, not `ttl=5m`.",
+            CashCacheIneffectiveWarning,
+            stacklevel=2,
+        )
+        return None
 
     return None
 
