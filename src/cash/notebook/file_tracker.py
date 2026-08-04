@@ -89,6 +89,31 @@ def _is_pseudo_fs(path: str) -> bool:
     return str(path).replace("\\", "/").startswith(_PSEUDO_FS_PREFIXES)
 
 
+#: Path segments that belong to cash's OWN storage, never to the user's data.
+#:
+#: A cache HIT reads the entry's ``.data`` file to deserialise it, and that read
+#: happens inside the enclosing statement's tracker window -- so without this
+#: guard the statement acquires a dependency on a cash-internal file. The
+#: consequence is not a stale value but an UNSTABLE LINEAGE: the dependency
+#: exists on a run where the inner call hit and not on a run where it missed,
+#: so the statement's output lineage differs between those runs. In a loop that
+#: makes each iteration's key depend on whether the previous one was already
+#: cached, and the loop converges one iteration per run -- measured 7, 6, 5, 4,
+#: 3 real calls across five restarts of an 8-iteration loop, i.e. O(N) runs to
+#: warm up.
+#:
+#: Same class as the ``/proc`` guard above: cash's own I/O must never become a
+#: user-visible dependency. That one was found through a stale value, this one
+#: through a cache that would not settle.
+_CASH_INTERNAL_SEGMENTS: tuple[str, ...] = ("/.cash/", "/_global_cash/")
+
+
+def _is_cash_internal(path: str) -> bool:
+    """True for a read of cash's own cache storage."""
+    p = str(path).replace("\\", "/")
+    return any(seg in p for seg in _CASH_INTERNAL_SEGMENTS)
+
+
 def _dispatch_track(path: Any) -> None:
     """Module-level tracker-dispatching shim. Custom handler factories
     registered via :func:`cash.register_file_handler` receive this as
@@ -547,6 +572,11 @@ class FileAccessTracker:
             # permanently unfreshenable. Return before the relative-path arm
             # too — these paths are always absolute.
             logger.debug("[TRACKER] Ignoring pseudo-fs read %r", abs_path)
+            return
+        if _is_cash_internal(abs_path):
+            # See _CASH_INTERNAL_SEGMENTS. Checked after realpath so a relative
+            # or symlinked cache path is caught too.
+            logger.debug("[TRACKER] Ignoring cash-internal read %r", abs_path)
             return
         self._add_tracked(abs_path)
         # a RELATIVE read path also records the UN-resolved relative
