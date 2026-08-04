@@ -1145,9 +1145,42 @@ class NotebookTestRunner:
         """
         self._run_async(self.client.km._async_restart_kernel(now=True))
         self._run_async(self.client.kc._async_wait_for_ready(timeout=30))
+        self._restore_working_directory()
         if self._inject_path:
             self._inject_notebook_path()
         return self
+
+    def _restore_working_directory(self) -> None:
+        """Re-enter ``work_dir`` after a restart.
+
+        A freshly-booted runner's kernel PROCESS is launched with
+        ``cwd=work_dir``, so restarting it lands back there for free. A WARM
+        kernel (``CASH_TEST_REUSE_KERNEL=1``) is launched once at the repo root
+        and moved into each test's directory IN-PROCESS by
+        ``_WarmKernel.prepare_for_test``. A restart discards that, and the
+        kernel silently resumes at the repo root -- so the test's ``.cash``
+        directory, and every relative path it touches, land outside its tmp
+        directory and are shared with every other test on that worker.
+
+        Measured before this was added, same probe, both modes::
+
+            default   before: .../pytest-.../test_x0   after: .../pytest-.../test_x0
+            reuse     before: .../pytest-.../test_x0   after: <repo root>
+
+        The symptom is not a crash. Restart-dependent tests fail their own
+        non-vacuity guards ("nothing was served from cache after the restart")
+        because they are no longer reading the cache they wrote, which reads as
+        a cash bug rather than a harness one.
+
+        Unconditional rather than gated on the warm path: it is a no-op for a
+        fresh kernel (already there) and keeps the two modes' post-restart
+        state identical, which is the property the suite actually depends on.
+        """
+        dir_str = str(self.work_dir).replace('\\', '\\\\')
+        self._run_async(self.client.kc._async_execute_interactive(
+            f"import os as _os; _os.chdir(r'{dir_str}')",
+            store_history=False, output_hook=lambda msg: None,
+        ))
 
     def _inject_notebook_path(self) -> None:
         """Inject the notebook path into the kernel namespace.
