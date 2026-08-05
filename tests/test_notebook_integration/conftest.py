@@ -1498,6 +1498,23 @@ except Exception:
             self._warm = None
             self._kernel_started = False
             self.client = None
+            # Disown the warm kernel's loop. It belongs to _WarmKernel, not to
+            # this runner, and leaving it here is a use-after-free waiting to
+            # happen: a later start_kernel() on this same runner that does NOT
+            # take the warm path (with_cash=False, or no path injection) skips
+            # creating its own loop because `self._loop is None` is False, and
+            # runs its fresh kernel on the WARM kernel's loop. Its shutdown()
+            # then takes the kill branch below and calls _close_async_runner()
+            # on it -- closing the shared loop, so every later test on this
+            # worker dies with "RuntimeError: Event loop is closed".
+            #
+            # `test_cfd_perf.py` does exactly this: a cash-on arm followed by a
+            # cash-off arm in one test, and it was the first casualty of a
+            # 138-failure cascade under CASH_TEST_REUSE_KERNEL=1.
+            #
+            # Cleared rather than closed -- the warm kernel is still using it.
+            self._loop = None
+            self._run_async = None
             return
         if self._pooled_kernel and self.use_pool:
             # Return kernel to pool for reuse
