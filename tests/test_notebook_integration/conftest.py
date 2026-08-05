@@ -27,11 +27,22 @@ import sys
 # Crash visibility (faulthandler) is installed in the ROOT conftest
 # (tests/conftest.py) so it covers every worker, not just notebook workers.
 
-# Opt-in warm-kernel reuse (off by default so the standard run boots a fresh
-# kernel per test). When CASH_TEST_REUSE_KERNEL=1, each xdist worker keeps a
-# single long-lived kernel alive and resets its state between tests instead of
-# paying the ~1.8s boot cost every time. See _WarmKernel below.
-_REUSE_KERNEL = os.environ.get("CASH_TEST_REUSE_KERNEL") == "1"
+# Warm-kernel reuse: each xdist worker keeps ONE long-lived kernel alive and
+# resets its state between tests instead of paying the ~2.3s boot every time.
+# The suite booted 4008 kernels for 4102 tests while a trivial test's own work
+# took 0.02s, so the boot WAS the runtime. Measured over all 838 files, both
+# arms green: 33.4 min fresh-per-test vs 14-16 min reused.
+#
+# ON by default. Set CASH_TEST_REUSE_KERNEL=0 to force a fresh kernel per test
+# -- worth doing when a failure looks like cross-test contamination, because
+# that comparison is exactly what attributes it. Six classes of state a fresh
+# kernel resets by dying and a warm one does not each cost this suite real
+# failures; see _WarmKernel.prepare_for_test, which undoes all six.
+#
+# Individual tests opt out with `@pytest.mark.fresh_kernel`; start_kernel()
+# opts out automatically for with_cash=False and no-path runs, and shutdown()
+# opts out for the remainder of a test that shut its kernel down mid-way.
+_REUSE_KERNEL = os.environ.get("CASH_TEST_REUSE_KERNEL", "1") != "0"
 
 DEFAULT_KERNEL_NAME = 'python3'
 
