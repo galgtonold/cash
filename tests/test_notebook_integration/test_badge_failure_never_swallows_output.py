@@ -34,24 +34,41 @@ def test_badge_render_failure_does_not_swallow_output(nb_runner):
     # Replace the badge renderer with one that always raises — the same shape as
     # the import-time failure seen in the wild. Installed via a raw kernel exec
     # so this setup does not itself route through cash / render a badge.
+    #
+    # RESTORED in the finally below, and that is not tidiness. This patches a
+    # module inside cash itself, and `prepare_for_test`'s module purge
+    # deliberately spares cash's own modules — so under
+    # CASH_TEST_REUSE_KERNEL=1 the boom survives into every later test on that
+    # worker and no badge ever renders again. A fresh kernel hides it, because
+    # the process dies with the patch. Measured: this one file was enough to
+    # fail `test_badge_upstream_cached.py` ("Cell 4 produced no badge HTML"),
+    # bisected out of a 59-test prefix.
     _raw_exec(
         nb_runner,
         "import cash.notebook.badge_renderer as _br\n"
+        "_CASH_BADGE_SAVED = (_br.render_interactive_badge, _br.print_text_badge)\n"
         "def _boom(*a, **k):\n"
         "    raise RuntimeError('badge boom')\n"
         "_br.render_interactive_badge = _boom\n"
         "_br.print_text_badge = _boom\n",
     )
 
-    nb_runner.run_cell(1)  # a perfectly ordinary cell
+    try:
+        nb_runner.run_cell(1)  # a perfectly ordinary cell
 
-    out = _text(nb_runner.get_cell(1))
-    assert "HELLO" in out, f"a failing badge swallowed the cell's output: {out!r}"
+        out = _text(nb_runner.get_cell(1))
+        assert "HELLO" in out, f"a failing badge swallowed the cell's output: {out!r}"
 
-    # ...and the statement actually executed (the cell was not aborted).
-    val = []
-    nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(
-        "print('XIS', x)", store_history=False,
-        output_hook=lambda m: val.append(m["content"].get("text", "")) if m["msg_type"] == "stream" else None,
-    ))
-    assert "XIS 42" in "".join(val), "the statement did not run — the cell was aborted"
+        # ...and the statement actually executed (the cell was not aborted).
+        val = []
+        nb_runner._run_async(nb_runner.client.kc._async_execute_interactive(
+            "print('XIS', x)", store_history=False,
+            output_hook=lambda m: val.append(m["content"].get("text", "")) if m["msg_type"] == "stream" else None,
+        ))
+        assert "XIS 42" in "".join(val), "the statement did not run — the cell was aborted"
+    finally:
+        _raw_exec(
+            nb_runner,
+            "import cash.notebook.badge_renderer as _br\n"
+            "_br.render_interactive_badge, _br.print_text_badge = _CASH_BADGE_SAVED\n",
+        )
