@@ -248,6 +248,7 @@ markers = [
     "skip_optimization: Skip optimization (already-executed detection)",
     "badges: Badge/metrics display integration",
     "restore: Disk restore after kernel restart",
+    "fresh_kernel: Needs a real kernel process restart; opts out of CASH_TEST_REUSE_KERNEL",
     "libraries: Real-world library integration (pandas, sklearn, etc.)",
     "stress: Comprehensive stress/regression tests",
     "slow: Tests that take longer than usual",

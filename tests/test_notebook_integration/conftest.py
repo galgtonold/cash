@@ -844,6 +844,7 @@ class NotebookTestRunner:
         self._kernel_started = False
         self._cash_initialized = False
         self._pooled_kernel: Optional[Dict] = None
+        self._force_fresh_kernel = False
         self._warm: Optional['_WarmKernel'] = None
         # Each runner gets its own event loop to avoid cross-test contamination.
         # Created lazily in start_kernel() (and torn down in shutdown()) so a
@@ -941,7 +942,8 @@ class NotebookTestRunner:
         # injection: prepare_for_test() always defines __vsc_ipynb_file__, which
         # would silently defeat the no-path environment the test is trying to
         # reproduce (CAS-205).
-        if _REUSE_KERNEL and with_cash and inject_notebook_path:
+        if (_REUSE_KERNEL and with_cash and inject_notebook_path
+                and not self._force_fresh_kernel):
             wk = _get_warm_kernel(self.kernel_name)
             self._warm = wk
             # Drive ALL kernel I/O on the warm kernel's own loop so the async
@@ -1576,7 +1578,7 @@ except Exception:
 # =============================================================================
 
 @pytest.fixture
-def nb_runner(tmp_path):
+def nb_runner(tmp_path, request):
     """
     Primary fixture for notebook integration tests.
     
@@ -1604,6 +1606,12 @@ def nb_runner(tmp_path):
     """
     # Disable pool for stability - kernel pooling causes hanging issues
     runner = NotebookTestRunner(work_dir=tmp_path, use_pool=False)
+    # A test marked `fresh_kernel` opts OUT of warm-kernel reuse. Under
+    # reuse, shutdown()+start_kernel() is a namespace reset on the SAME
+    # process -- measured, pid unchanged -- so a test whose subject IS the
+    # restart stops testing anything and passes vacuously.
+    runner._force_fresh_kernel = (
+        request.node.get_closest_marker('fresh_kernel') is not None)
     yield runner
     runner.shutdown()
 
