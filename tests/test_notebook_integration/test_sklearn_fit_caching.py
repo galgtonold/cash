@@ -22,8 +22,6 @@ one-repetition test came to confirm the wrong belief.
 
 ``# @cash:cache-fit`` opts back in to the CAS-138 machinery for users who want it.
 """
-import asyncio
-
 import pytest
 
 pytest.importorskip("sklearn")
@@ -43,11 +41,20 @@ MODEL = "clf = RandomForestClassifier(n_estimators=160, random_state=0)"
 
 
 def _restart(nb_runner):
-    """Restart the kernel in place and re-inject the notebook path."""
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
-    loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
-    nb_runner._inject_notebook_path()
+    """Restart the kernel in place and re-inject the notebook path.
+
+    Delegates to the runner rather than driving the KernelManager directly.
+    CAS-190 added ``nb_runner.restart()`` precisely because nine files had
+    hand-rolled this and each was free to get the after-care wrong; this was
+    one of them. A restart puts the kernel back at the cwd its PROCESS was
+    launched with, and under CASH_TEST_REUSE_KERNEL=1 that is the repo root,
+    not this test's tmp dir -- so cash rebuilds its backend against
+    ``<repo>/.cash`` while the entry written before the restart sits in
+    ``<tmp>/.cash``, and nothing restores. Measured: the three
+    restores-after-restart tests here failed with "COMPUTED ... -> RAM+DISK"
+    where they expected RESTORED.
+    """
+    nb_runner.restart()
 
 
 # ----------------------------------------------------------------------

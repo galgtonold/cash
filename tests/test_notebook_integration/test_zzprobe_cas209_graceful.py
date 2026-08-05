@@ -47,8 +47,13 @@ def _counts(cache_dir):
             len([f for f in files if f.endswith(".part")]))
 
 
+@pytest.mark.fresh_kernel
 @pytest.mark.parametrize("graceful", [False, True], ids=["hard_kill", "graceful"])
 def test_probe_shutdown_path_durability(nb_runner, tmp_path, graceful):
+    # This test's whole subject is killing the kernel, so it has to own the one
+    # it kills. Under CASH_TEST_REUSE_KERNEL=1 it would otherwise destroy the
+    # worker's SHARED warm kernel -- the only test in the suite that reaches
+    # past the runner to `km.shutdown_kernel` directly.
     cache_dir = str(tmp_path / "cache")
     nb_runner.create_notebook(_chain_cells(cache_dir))
     nb_runner.start_kernel()
