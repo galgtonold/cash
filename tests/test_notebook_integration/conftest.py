@@ -1724,6 +1724,22 @@ def upstream_trace(nb_runner):
 
     created: list[str] = []
 
+    # The trace file is named by an environment variable the kernel PROCESS
+    # reads at boot, so this fixture can only ever work on a kernel booted
+    # after `_capture` sets it. Under CASH_TEST_REUSE_KERNEL=1 the warm kernel
+    # boots once per worker, before any test runs -- so the trace file stays
+    # empty and every assertion about the trace fails on an empty record list.
+    #
+    # That failure is order-dependent in the most misleading way: the FIRST
+    # trace test on a worker passes (its warm kernel had not been claimed yet),
+    # and every later one fails, which reads as one test poisoning another.
+    # Measured: test_nocache_inplace_does_not_reexecute_producer passes alone
+    # and fails behind ANY predecessor, whatever that predecessor does.
+    #
+    # Opting out of reuse here, rather than marking each calling test, keeps
+    # the requirement with the fixture that has it.
+    nb_runner._force_fresh_kernel = True
+
     def _capture(cells, actions, *, with_cash: bool = True) -> 'TraceResult':
         fd, path = tempfile.mkstemp(suffix=".cashtrace.jsonl")
         os.close(fd)

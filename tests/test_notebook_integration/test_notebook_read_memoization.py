@@ -48,15 +48,30 @@ def test_edit_does_not_trigger_notebook_read_storm(nb_runner):
         "_sd._wait_for_notebook_save = _w\n"
     ))
 
-    # Edit one cell and re-run everything.
-    nb_runner.set_cell_source(1, "a = 100")
-    nb_runner.run_all()
+    try:
+        # Edit one cell and re-run everything.
+        nb_runner.set_cell_source(1, "a = 100")
+        nb_runner.run_all()
 
-    reads = _exec(nb_runner, (
-        "from cash.notebook import server_discovery as _sd\n"
-        "print(getattr(_sd, '_READS', -1))"
-    ))
-    n = int(reads.strip().splitlines()[-1])
+        reads = _exec(nb_runner, (
+            "from cash.notebook import server_discovery as _sd\n"
+            "print(getattr(_sd, '_READS', -1))"
+        ))
+        n = int(reads.strip().splitlines()[-1])
+    finally:
+        # RESTORE, and that is not tidiness. The patch above replaces a
+        # function inside cash's OWN module, and prepare_for_test's module
+        # purge deliberately spares cash's modules -- so under
+        # CASH_TEST_REUSE_KERNEL=1 the wrapper survives into every later test
+        # on this worker. A fresh kernel hides it, because the process dies
+        # with the patch. Measured: this one file was enough to fail all three
+        # tests in test_numpy_out_rerun.py ("306.0" not in "36.0" -- the edit
+        # to an upstream cell never reached the downstream one), reproduced in
+        # 5s from a two-file run.
+        _exec(nb_runner, (
+            "from cash.notebook import server_discovery as _sd\n"
+            "_sd._wait_for_notebook_save = _orig\n"
+        ))
 
     # Per file state we parse at most twice (the plain + include_ids variants).
     # A small bound (<= 4) leaves slack while still catching the ~30x storm.
