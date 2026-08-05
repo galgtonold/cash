@@ -668,7 +668,6 @@ class _WarmKernel:
         # state across reused tests. Then re-enable auto-caching on the fresh
         # instance (a fresh Cash starts with caching off).
         self._exec("import cash as _cash\nfrom cash import Cash\n_cash.reset_session()")
-        self._exec("%cash_on")
         # Put cash's logger back to INFO. `%cash_debug on` (41 callers via
         # `enable_debug()`) sets the level on the KERNEL's logger, and a fresh
         # kernel forgets it when the process dies -- a warm one does not. The
@@ -677,9 +676,26 @@ class _WarmKernel:
         # output and any out-of-band read that scans stdout for a marker.
         self._exec("%cash_debug off")
         # Purge test-authored modules from sys.modules so a stale same-named
-        # module from a prior test can't shadow this test's import. Runs last,
-        # after cash state is rebuilt, so its baseline snapshot includes cash.
+        # module from a prior test can't shadow this test's import.
         self._exec(_REUSE_PURGE_TEST_MODULES)
+        # Re-enable auto-caching LAST (a fresh Cash starts with caching off).
+        #
+        # The order is load-bearing, not cosmetic. Every `self._exec` here is a
+        # real kernel execution, so once cash is ON it processes these setup
+        # cells like any other cell -- and `__vsc_ipynb_file__` already points
+        # at THIS test's notebook. cash then treats the setup cell as one that
+        # sits below the notebook's cells, reconstructs the upstream state it
+        # thinks is missing, and RUNS those cells' statements for their side
+        # effects, before the test has executed a single cell.
+        #
+        # Measured with an `os.write` tick stamped with the execution counter:
+        # a three-cell notebook read "1,3," under reuse against "3," on a fresh
+        # kernel, and the tick file was already non-empty when start_kernel()
+        # returned. Every "cell executed N+1 times" failure in the reuse arm
+        # traced back to this one extra execution. Keeping `%cash_on` last
+        # makes prepare_for_test end exactly where _init_cash does on the
+        # fresh-boot path: cash enabled, nothing executed after it.
+        self._exec("%cash_on")
 
     def shutdown(self) -> None:
         if self.km is None:
