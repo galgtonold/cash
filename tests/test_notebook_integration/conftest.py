@@ -740,6 +740,7 @@ class _WarmKernel:
         # was never told why" -- the guard had worked, only the warning was
         # missing.
         self._exec(_REUSE_RESET_WARNING_REGISTRIES)
+        self._exec(_REUSE_CLOSE_FIGURES)
         # Purge test-authored modules from sys.modules so a stale same-named
         # module from a prior test can't shadow this test's import.
         self._exec(_REUSE_PURGE_TEST_MODULES)
@@ -828,6 +829,30 @@ try:
         _sd._warned_notebook_not_found = False
     except Exception:
         pass
+except Exception:
+    pass
+"""
+
+# Close every open matplotlib figure. pyplot keeps its figures in a
+# PROCESS-GLOBAL registry (`_pylab_helpers.Gcf`), which `get_ipython().reset()`
+# knows nothing about, so on a warm kernel each test inherits every figure the
+# previous ones left open and the inline backend flushes them ALL into the next
+# plotting cell's output.
+#
+# Measured: test_upstream_plot_not_leaked_into_downstream asserted its plot cell
+# had 1 image and found 4. It only surfaced once the whole suite ran in ONE
+# pytest invocation -- chunking had been spreading matplotlib tests across
+# different workers, so few enough shared a kernel to stay under the threshold.
+#
+# Looked up in sys.modules rather than imported: importing pyplot into every
+# reused kernel would cost far more than it saves, and a kernel that never
+# imported it has no figures to close.
+_REUSE_CLOSE_FIGURES = """
+try:
+    import sys as _sys
+    _plt = _sys.modules.get('matplotlib.pyplot')
+    if _plt is not None:
+        _plt.close('all')
 except Exception:
     pass
 """
