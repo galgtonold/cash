@@ -561,18 +561,39 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
     Returns:
         str: The extracted text output
     """
-    text_outputs = []
+    # (kind, text) so adjacent stream chunks can be rejoined without inserting a
+    # separator that was never in the output.
+    parts: list[tuple[str, str]] = []
     for output in cell.get('outputs', []):
         if output.output_type == 'stream':
-            text_outputs.append(output.text)
+            parts.append(('stream', output.text))
         elif output.output_type in ('execute_result', 'display_data'):
             data = output.get('data', {})
             if 'text/plain' in data:
                 val = data['text/plain']
                 if '<IPython.core.display.HTML object>' not in val:
-                    text_outputs.append(val)
-    
-    raw_text = "\n".join(text_outputs)
+                    parts.append(('value', val))
+
+    # A stream output is a slice of a BYTE STREAM, not a line: its own text
+    # already carries whatever newlines the code printed. Two consecutive
+    # stream outputs are two halves of one stream and must be concatenated,
+    # while a separate execute_result / display_data is its own block and gets
+    # a newline before it.
+    #
+    # Joining everything with "\n" was a latent flake. The kernel usually
+    # coalesces a cell's stdout into ONE stream output, so it read correctly --
+    # but under load it can flush mid-print, and then `print('p', p)` arrived
+    # as 'p' + ' 50\n' and was reassembled as "p\n 50". The value was right and
+    # the assertion still failed. Measured on one 58-file chunk run repeatedly:
+    # 4 failures in 16 randomized runs across three unrelated tests, all of
+    # which assert on printed text, against 0 in 6 runs with a fresh kernel per
+    # test -- fresh kernels hid it by being slow enough never to split.
+    buf: list[str] = []
+    for i, (kind, text) in enumerate(parts):
+        if i and not (kind == 'stream' and parts[i - 1][0] == 'stream'):
+            buf.append("\n")
+        buf.append(text)
+    raw_text = "".join(buf)
     
     if filter_debug:
         # '[cash.' catches every line emitted by the %cash_debug console
