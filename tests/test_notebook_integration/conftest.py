@@ -675,6 +675,39 @@ class _WarmKernel:
         # [cash.notebook...] DEBUG lines, which breaks any assertion about cell
         # output and any out-of-band read that scans stdout for a marker.
         self._exec("%cash_debug off")
+        # Same shape, different flag: `%cash_persist on` sets `_persist_all` on
+        # the CashMagics INSTANCE (and mirrors it onto the statement
+        # processor), and `reset_session()` does NOT rebuild that instance --
+        # IPython keeps the object already in its magics registry, so
+        # register_magic() rebinds the functions but the flag rides along.
+        #
+        # Measured, peeking right after prepare_for_test::
+        #
+        #     baseline        magics=False processor=False
+        #     after a test    magics=True  processor=True
+        #     that enabled it
+        #
+        # persist bypasses the cost floors, so the leak makes later tests cache
+        # statements that are far too cheap to cache -- which is exactly what
+        # test_zzverify_cas160_persist_loop_amplification measures. One
+        # persist-enabling test ahead of it turned its 3 passes into 3
+        # failures, reproduced in 9s.
+        self._exec("%cash_persist off")
+        # Forget which warnings have already been shown.
+        #
+        # `warnings.warn` under the default filter fires once per unique
+        # (text, category, module, lineno) and records that in the calling
+        # module's `__warningregistry__` -- process state a fresh kernel starts
+        # empty and a warm one does not. cash warns the user exactly once about
+        # several conditions, so on a warm kernel only the FIRST test to
+        # provoke a given warning sees it and every later one reads silence.
+        #
+        # Measured: test_zzverify_cas160_persist_loop_amplification's three
+        # tests each provoke the same persist-amplification warning. The first
+        # passed and the other two failed on "cache was bounded but the user
+        # was never told why" -- the guard had worked, only the warning was
+        # missing.
+        self._exec(_REUSE_RESET_WARNING_REGISTRIES)
         # Purge test-authored modules from sys.modules so a stale same-named
         # module from a prior test can't shadow this test's import.
         self._exec(_REUSE_PURGE_TEST_MODULES)
@@ -733,6 +766,40 @@ class _WarmKernel:
 #      from a prior test can't be returned by import. Heavy library modules
 #      (pandas/numpy/etc., under stdlib or site-packages) stay cached for speed -
 #      re-importing them would defeat warm-kernel reuse and they don't change.
+#   3. warning registries: see _REUSE_RESET_WARNING_REGISTRIES below.
+
+# Clear every module's warning registry, plus cash's own once-flags, so each
+# reused test starts as ignorant of past warnings as a freshly booted kernel.
+# `warnings.warn` under the default filter fires once per unique (text,
+# category, module, lineno) and records that in the calling module's
+# `__warningregistry__` -- so on a warm kernel only the first test to provoke a
+# given cash warning ever sees it. `_filters_mutated()` bumps the version stamp
+# those registries are validated against, which is what makes already-cached
+# "already warned" entries stale; clearing the dicts alone is not always enough.
+_REUSE_RESET_WARNING_REGISTRIES = """
+try:
+    import sys as _sys, warnings as _warnings
+    for _mod in list(_sys.modules.values()):
+        _reg = getattr(_mod, '__warningregistry__', None)
+        if _reg:
+            try:
+                _reg.clear()
+            except Exception:
+                pass
+    try:
+        _warnings._filters_mutated()
+    except Exception:
+        pass
+    # cash keeps its own warn-once flags outside the warnings machinery.
+    try:
+        from cash.notebook import server_discovery as _sd
+        _sd._warned_notebook_not_found = False
+    except Exception:
+        pass
+except Exception:
+    pass
+"""
+
 _REUSE_PURGE_TEST_MODULES = """
 try:
     import sys as _sys, os as _os, importlib as _il
@@ -1540,6 +1607,24 @@ except Exception:
             # Cleared rather than closed -- the warm kernel is still using it.
             self._loop = None
             self._run_async = None
+            # A test that shuts down and starts again MID-TEST is asserting
+            # something about a kernel that really died. Handing it the same
+            # warm kernel back makes "shutdown" a lie: prepare_for_test resets
+            # the namespace and the cash singleton, but the process -- and
+            # whatever cash state is not reachable from that singleton --
+            # carries straight through, and on into every LATER test.
+            #
+            # Measured: test_restart_persist_then_edit_upstream_recomputes does
+            # exactly this, and behind it the last two tests of
+            # test_zzverify_cas160_persist_loop_amplification failed with every
+            # statement RESTORED from a cache they never wrote -- so the
+            # amplification guard never engaged and its warning never fired.
+            # The sibling test that restarts WITHOUT persist did not poison
+            # anything, and forcing a fresh kernel here makes both pass.
+            #
+            # Costs one boot for the handful of tests with this shape, and only
+            # after they have already had a warm one.
+            self._force_fresh_kernel = True
             return
         if self._pooled_kernel and self.use_pool:
             # Return kernel to pool for reuse
