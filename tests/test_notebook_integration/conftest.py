@@ -132,6 +132,14 @@ import warnings
 from contextlib import contextmanager
 
 _BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
+
+# When to throw a warm kernel away and boot a fresh one. See
+# _WarmKernel._recycle_if_bloated: a reused kernel's RSS only climbs, and 16 of
+# them growing across a 4000-test unchunked run filled a 64 GB machine and
+# stalled every worker at once.
+_WARM_MAX_RSS_BYTES = int(os.environ.get(
+    "CASH_TEST_WARM_MAX_RSS_MB", "1200")) * 2**20
+_WARM_MAX_TESTS = int(os.environ.get("CASH_TEST_WARM_MAX_TESTS", "250"))
 _BOOT_DIR = os.path.join(tempfile.gettempdir(), "cash_kernel_boot_throttle")
 _BOOT_STATE = os.path.join(_BOOT_DIR, "active.json")
 _BOOT_LOCK = os.path.join(_BOOT_DIR, "lock.d")
@@ -644,6 +652,7 @@ class _WarmKernel:
         # likely cause of the old pool's hangs).
         self.loop, self.run_async = _make_async_runner()
         self._initialized = False
+        self._tests_since_boot = 0
 
     def boot(self) -> None:
         from jupyter_client import KernelManager
@@ -663,6 +672,58 @@ class _WarmKernel:
         self.km = km
         self.kc = kc
 
+    def _recycle_if_bloated(self) -> None:
+        """Re-boot this kernel once it has grown too large to be safe to keep.
+
+        A warm kernel never forgets. `get_ipython().reset()` clears the user
+        namespace but not the allocator's arenas, not pandas/sklearn/matplotlib
+        module state, and not whatever the C extensions hold -- so RSS only
+        climbs. Chunking used to hide this by starting a fresh pytest (and so a
+        fresh kernel) every 60 files; running all 838 in one invocation does
+        not, and 16 kernels each growing for ~260 tests is what fills 64 GB.
+
+        The failure mode is not a slow test, it is a CLIFF: measured on one
+        unchunked run, ALL 16 workers hit the 300s stall watchdog within four
+        seconds of each other, every one blocked in `select` waiting on a
+        kernel that had stopped answering, and the run took 22:47 instead of
+        6:00 while the watchdog killed and restarted them.
+
+        Recycling on RSS rather than on a test count targets the actual
+        resource: a worker running cheap tests keeps its kernel indefinitely,
+        while one that just loaded sklearn twice gets a fresh one. The count is
+        a backstop for when RSS cannot be read (psutil missing, permissions).
+        A re-boot costs ~2.3s and, at these thresholds, happens a handful of
+        times per worker per full run.
+        """
+        self._tests_since_boot += 1
+        over = self._tests_since_boot >= _WARM_MAX_TESTS
+        if not over:
+            try:
+                import psutil
+                prov = getattr(self.km, "provisioner", None)
+                pid = getattr(prov, "pid", None) or getattr(
+                    getattr(self.km, "kernel", None), "pid", None)
+                if pid:
+                    rss = psutil.Process(pid).memory_info().rss
+                    over = rss >= _WARM_MAX_RSS_BYTES
+            except Exception:
+                pass  # fall back to the count backstop
+        if not over:
+            return
+        try:
+            if self.kc:
+                self.kc.stop_channels()
+            _force_kill_kernel(self.km)
+        except Exception:
+            pass
+        self.km = self.kc = None
+        self._initialized = False
+        self.boot()
+        self._tests_since_boot = 0
+        # cash is not initialised here: the rest of prepare_for_test, which
+        # called us, does exactly that (reset_session + %cash_on) and works the
+        # same on a freshly booted kernel as on a reused one.
+
     def _exec(self, code: str) -> None:
         self.run_async(
             self.kc._async_execute_interactive(
@@ -680,6 +741,7 @@ class _WarmKernel:
         prior test's same-named module can't shadow this test's). Then ensures
         cash is loaded + enabled (idempotent).
         """
+        self._recycle_if_bloated()
         path_str = str(nb_path).replace('\\', '\\\\')
         dir_str = str(work_dir).replace('\\', '\\\\')
         # Clear the namespace in its OWN execution. reset() rebinds user_ns to a
@@ -1101,6 +1163,11 @@ class NotebookTestRunner:
             self.client.kc = wk.kc
             self._kernel_started = True
             wk.prepare_for_test(self.work_dir, self.nb_path)
+            # RE-READ km/kc: prepare_for_test may have recycled a bloated
+            # kernel, in which case the handles captured above are dead and
+            # every call this test makes would hit a killed process.
+            self.client.km = wk.km
+            self.client.kc = wk.kc
             self._cash_initialized = True
             return self
 
