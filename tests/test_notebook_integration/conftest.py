@@ -1181,6 +1181,37 @@ class NotebookTestRunner:
             f"import os as _os; _os.chdir(r'{dir_str}')",
             store_history=False, output_hook=lambda msg: None,
         ))
+        if not _REUSE_KERNEL:
+            return
+        # Re-point the cache directory, which the chdir above does NOT move.
+        #
+        # `config.cache_dir` defaults to the RELATIVE `".cash"`, and
+        # `FileBackend.__init__` resolves it with `os.path.abspath` -- so an
+        # entry's location is fixed by the cwd at BACKEND CONSTRUCTION, and a
+        # later chdir cannot move it. Cash's auto-load rebuilds that backend
+        # while the kernel is still starting, before any code here can run.
+        #
+        # A fresh kernel's PROCESS is launched with `cwd=work_dir`, so that
+        # startup construction already lands in the right place. The warm
+        # kernel's process is launched once at the repo root, so post-restart
+        # it pins to `<repo>/.cash` -- shared with every other test on this
+        # worker, and gitignored, so the leak is invisible. Traced, one test,
+        # both modes::
+        #
+        #     default  cwd=<tmp> -> <tmp>/.cash     (x2, both correct)
+        #     reuse    cwd=<repo> -> <repo>/.cash   boot
+        #              cwd=<tmp>  -> <tmp>/.cash    prepare_for_test, correct
+        #              cwd=<repo> -> <repo>/.cash   AFTER RESTART, wrong
+        #
+        # `reset_session()` drops the singleton so the next access rebuilds
+        # against the cwd we just set -- the same fix `prepare_for_test`
+        # already applies, which is why its construction is the correct one.
+        # Gated on the warm path: a fresh kernel is already right, and dropping
+        # its singleton would discard state a test may be mid-way through.
+        self._run_async(self.client.kc._async_execute_interactive(
+            "import cash as _c; _c.reset_session()",
+            store_history=False, output_hook=lambda msg: None,
+        ))
 
     def _inject_notebook_path(self) -> None:
         """Inject the notebook path into the kernel namespace.
