@@ -14,9 +14,9 @@ import pytest
 # exactly what warm-kernel reuse turns into a same-process namespace reset
 # (measured: pid unchanged). Without this marker they would pass while
 # testing nothing, and they leave process state a real restart would clear.
-pytestmark = pytest.mark.fresh_kernel
 
-pytestmark = [pytest.mark.timeout(120), pytest.mark.restore]
+pytestmark = [pytest.mark.timeout(120), pytest.mark.restore,
+              pytest.mark.fresh_kernel]
 
 
 def test_class_cell_survives_restart_with_persist(nb_runner):

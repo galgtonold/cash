@@ -669,6 +669,13 @@ class _WarmKernel:
         # instance (a fresh Cash starts with caching off).
         self._exec("import cash as _cash\nfrom cash import Cash\n_cash.reset_session()")
         self._exec("%cash_on")
+        # Put cash's logger back to INFO. `%cash_debug on` (41 callers via
+        # `enable_debug()`) sets the level on the KERNEL's logger, and a fresh
+        # kernel forgets it when the process dies -- a warm one does not. The
+        # leak is loud but easy to misread: every later test's cells fill with
+        # [cash.notebook...] DEBUG lines, which breaks any assertion about cell
+        # output and any out-of-band read that scans stdout for a marker.
+        self._exec("import logging as _lg; _lg.getLogger('cash').setLevel(_lg.INFO)")
         # Purge test-authored modules from sys.modules so a stale same-named
         # module from a prior test can't shadow this test's import. Runs last,
         # after cash state is rebuilt, so its baseline snapshot includes cash.
