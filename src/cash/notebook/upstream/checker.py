@@ -1565,6 +1565,13 @@ class UpstreamChecker:
         later draw keeps its cached value, whose position is unaffected when the
         edit does not change how many values the re-executed draws consume).
 
+        Chain statements come with the definitions they READ -- see
+        :meth:`_with_input_definitions`. Selecting purely on "touches an RNG
+        module" would schedule ``base = np.random.randn(n)`` without the
+        ``n = 500`` beside it, and the reconstruction would raise ``NameError``.
+        Its cell-granular sibling never had this problem: whole cells carry
+        their siblings along.
+
         Statement-granular sibling of :meth:`_prepend_stale_seed_cells`, triggered
         by a re-executed DRAW rather than a stale seed. A no-op on the warm path
         (nothing re-executes), when the seed is already scheduled, and when no
@@ -1584,9 +1591,11 @@ class UpstreamChecker:
             upstream = notebook_cells if current_cell_idx is None else notebook_cells[:current_cell_idx]
             already = set(statements)
 
-            # Every upstream RNG statement touching a missing module, in source
-            # order, tagged with whether it draws.
-            ordered: list[tuple[str, bool]] = []
+            # Every upstream statement in source order, so a chain statement's
+            # own inputs stay locatable, plus the positions of those touching a
+            # missing module, tagged with whether they draw.
+            all_stmts: list[str] = []
+            rng_positions: list[tuple[int, bool]] = []
             for cell in upstream:
                 try:
                     tree = ast.parse(cell)
@@ -1597,25 +1606,33 @@ class UpstreamChecker:
                         stmt = ast.unparse(node)
                     except (ValueError, TypeError):
                         continue
+                    all_stmts.append(stmt)
                     draws = get_drawing_rng_modules(stmt) & missing
                     seeds = get_seeding_rng_modules(stmt) & missing
                     if draws or seeds:
-                        ordered.append((stmt, bool(draws)))
+                        rng_positions.append((len(all_stmts) - 1, bool(draws)))
 
             # The earliest re-executed draw is the boundary: everything strictly
             # before it re-runs to advance the stream; it and everything after
             # stay in the plan.
             boundary = next(
-                (i for i, (stmt, is_draw) in enumerate(ordered)
-                 if is_draw and stmt in already),
+                (k for k, (idx, is_draw) in enumerate(rng_positions)
+                 if is_draw and all_stmts[idx] in already),
                 None,
             )
             if boundary is None:
                 return statements
 
+            chain = {idx for idx, _is_draw in rng_positions[:boundary]
+                     if all_stmts[idx] not in already}
+            if not chain:
+                return statements
+            selected = self._with_input_definitions(chain, all_stmts, already)
+
             prepend: list[str] = []
-            for stmt, _is_draw in ordered[:boundary]:
-                if stmt not in already and stmt not in prepend:
+            for idx in sorted(selected):
+                stmt = all_stmts[idx]
+                if stmt not in prepend:
                     prepend.append(stmt)
             if not prepend:
                 return statements
@@ -1627,6 +1644,69 @@ class UpstreamChecker:
             return prepend + statements
         except (AttributeError, IndexError, TypeError, ValueError):  # pragma: no cover - defensive
             return statements
+
+    def _with_input_definitions(
+        self, chain: set[int], all_stmts: list[str], already: set[str],
+    ) -> set[int]:
+        """Widen an RNG chain to include the definitions its statements read.
+
+        The chain is chosen by whether a statement touches an RNG module, which
+        says nothing about what it *reads*. ``base = np.random.randn(n)`` is a
+        draw and gets prepended; the ``n = 500`` beside it in the same cell is
+        not a draw and does not, so the reconstruction raises ``NameError``.
+
+        For every free name a chain statement reads, pull in the nearest
+        PRECEDING upstream statement that binds it, then repeat for that
+        statement's own inputs. Returns the widened index set; the caller
+        re-sorts, so source order is preserved and a definition always lands
+        ahead of its reader.
+
+        Two names need no statement of their own:
+
+        - one already bound in the live namespace -- re-deriving it would re-run
+          work the kernel already holds, which is cheap for ``n = 500`` and not
+          cheap for ``n = load_config()``;
+        - one the plan ALREADY schedules. That statement runs after the
+          prepend rather than before it, so a chain statement reading it sees
+          the live value. Left as-is deliberately: it is the behaviour that
+          predates this widening, and moving a scheduled statement earlier
+          would reorder the plan for its other consumers.
+        """
+        live = getattr(self.shell, "user_ns", None)
+        if not isinstance(live, dict):
+            live = {}
+        # name -> indices binding it, built once and only if a name goes missing.
+        definers: dict[str, list[int]] | None = None
+
+        selected = set(chain)
+        queue = sorted(chain)
+        while queue:
+            idx = queue.pop()
+            try:
+                inputs, _outputs = CodeAnalyzer.analyze_code_block(all_stmts[idx])
+            except (SyntaxError, ValueError, TypeError):
+                continue
+            for name in inputs:
+                if name in live or name in _BUILTIN_NAMES:
+                    continue
+                if definers is None:
+                    definers = {}
+                    for j, stmt in enumerate(all_stmts):
+                        try:
+                            _in, outs = CodeAnalyzer.analyze_code_block(stmt)
+                        except (SyntaxError, ValueError, TypeError):
+                            continue
+                        for out in outs:
+                            definers.setdefault(out, []).append(j)
+                nearest = next(
+                    (j for j in reversed(definers.get(name, [])) if j < idx), None)
+                if nearest is None or nearest in selected:
+                    continue
+                if all_stmts[nearest] in already:
+                    continue
+                selected.add(nearest)
+                queue.append(nearest)
+        return selected
 
     @staticmethod
     def _label_rng_rerun_metrics(executed_metrics: list, rng_rerun: set[str]) -> None:
