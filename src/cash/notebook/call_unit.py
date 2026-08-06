@@ -654,6 +654,26 @@ class CallUnit:
         #: on `_invoke`'s closure.
         self._refused: set[str] = set()
 
+    def _cost_floor_s(self) -> float:
+        """The bar a call's own execution must clear to be stored.
+
+        Read from config on every decision rather than captured, so
+        ``cash.configure(call_cost_floor_seconds=...)`` takes effect
+        immediately -- the contract ``min_execution_time_to_cache_seconds``
+        already has.
+
+        Checked with isinstance rather than ``float()`` in a try/except: a
+        MagicMock's ``__float__`` returns 1.0 instead of raising, and
+        ``cash_instance`` is a MagicMock throughout the unit suite, so the
+        exception form would silently install a 1-SECOND floor there and cache
+        nothing. ``_COST_FLOOR_S`` stays the default and the fallback.
+        """
+        value = getattr(
+            getattr(self._cash, "config", None), "call_cost_floor_seconds", None)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return _COST_FLOOR_S
+
     def wrap(self, fn, site: CallSite):
         func_name = self._func_name(fn)
 
@@ -767,7 +787,7 @@ class CallUnit:
                 # catches "mutated but returned a *different* object", which
                 # a hit would silently skip.
                 self._refused.add(key)
-            elif elapsed >= _COST_FLOOR_S and self._storable(result, args, kwargs):
+            elif elapsed >= self._cost_floor_s() and self._storable(result, args, kwargs):
                 # CAS-260: the callee's writes to its own globals, captured as
                 # an END STATE. Snapshotting the final value needs no ordering
                 # and no idempotence, which is why this is tractable where

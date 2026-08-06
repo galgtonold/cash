@@ -133,6 +133,31 @@ from contextlib import contextmanager
 
 _BOOT_CAP = int(os.environ.get("CASH_TEST_BOOT_THROTTLE", "8"))
 
+# Pin cash's cost thresholds so a caching DECISION stops depending on how busy
+# the machine is. Paste into a test's SETUP CELL -- a normal cell, not an
+# out-of-band exec, because cash reconstructs state around an execution it
+# cannot find among the notebook's cells and that perturbs the very decisions
+# this is meant to stabilise (measured: seeding a loop-split verdict that way
+# left the correct verdict in the store and the loop still re-ran 124/124).
+#
+# WHY the threshold and not the workload: these decisions are wall-clock
+# measurements, and the interesting cases sit just BELOW a ceiling (a "cheap"
+# body, a call under the cost floor) while descheduling only pushes a
+# measurement UP. A test can therefore never buy more than ~2x headroom by
+# changing what it runs -- this body is ~3.2ms against a 6ms ceiling. Moving
+# the threshold instead buys as much as you like: at a 1s ceiling the same
+# body has 300x margin and no realistic stall crosses it.
+#
+# Use ONLY where the decision is a precondition of what the test asserts. A
+# test whose SUBJECT is the threshold (test_an_expensive_body_is_never_split)
+# must keep the real one.
+CASH_TEST_PIN_THRESHOLDS = (
+    "cash.configure(call_cost_floor_seconds=0.0, "
+    "min_execution_time_to_cache_seconds=0.0, "
+    "loop_split_max_iter_seconds=1.0, "
+    "loop_split_min_remaining_seconds=0.0)\n"
+)
+
 # When to throw a warm kernel away and boot a fresh one. See
 # _WarmKernel._recycle_if_bloated: a reused kernel's RSS only climbs, and 16 of
 # them growing across a 4000-test unchunked run filled a 64 GB machine and

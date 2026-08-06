@@ -212,6 +212,22 @@ class CashConfig:
     promoted past RAM — disk I/O alone would cost more than
     rerunning. Default 10 ms."""
 
+    call_cost_floor_seconds: float = 0.003
+    """Floor (seconds) a single CALL's own execution must clear before its
+    result is stored. Below it, the ~2.2 ms of interception overhead is most
+    of what a hit would save, so caching cannot pay back. Default 3 ms."""
+
+    loop_split_max_iter_seconds: float = 0.006
+    """Ceiling (seconds) on measured per-iteration cost above which a loop is
+    NOT split. At or above it a call clears ``call_cost_floor_seconds`` once
+    decomposition overhead is subtracted, so per-call caching already covers
+    the loop — and covers it better, being incremental where a split's tail is
+    all-or-nothing. Default 6 ms."""
+
+    loop_split_min_remaining_seconds: float = 0.1
+    """Projected cost (seconds) of a loop's remaining iterations below which a
+    split is not worth persisting a verdict for. Default 100 ms."""
+
     min_cache_savings_pct: float = 0.20
     """Required time-savings fraction (0.0 – 1.0) for a tier to be
     considered worthwhile. If a cache hit only saves 20% of the

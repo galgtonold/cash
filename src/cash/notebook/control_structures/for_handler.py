@@ -729,6 +729,32 @@ class ForLoopHandler:
                 return None
         return n
 
+    def _split_conf(self, name: str, default: float) -> float:
+        """A split threshold, read from config on every decision.
+
+        Not captured at construction, so ``cash.configure(...)`` takes effect
+        immediately -- the contract ``min_execution_time_to_cache_seconds``
+        already has. The class constants stay as the defaults and as the
+        fallback when no config is reachable (the statement processor's
+        ``cash_instance`` is a MagicMock in a fair number of unit tests).
+
+        These are configurable because the judgement is a WALL-CLOCK
+        measurement of the first few iterations, and wall clock is not a
+        property of the code alone: a kernel descheduled mid-probe measures a
+        cheap body as an expensive one and silently declines to split. A test
+        cannot escape that by moving its workload, because the interesting
+        cases sit BELOW the ceiling and descheduling only pushes measurements
+        UP -- so the threshold is the only end that can be moved far enough.
+        """
+        cash_instance = getattr(self.statement_processor, "cash_instance", None)
+        value = getattr(getattr(cash_instance, "config", None), name, None)
+        # isinstance, NOT float(): a MagicMock's __float__ returns 1.0 rather
+        # than raising, so a try/except would hand back 1.0 for every mocked
+        # cash_instance -- a 1-second ceiling that silently changes the verdict.
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return float(value)
+        return default
+
     def _should_split(self, elapsed: float, done: int, n: int) -> bool:
         """Judge from MEASURED cost whether the remainder is worth one unit.
 
@@ -738,10 +764,14 @@ class ForLoopHandler:
         """
         if done <= 0:
             return False
+        max_iter = self._split_conf(
+            "loop_split_max_iter_seconds", self._SPLIT_MAX_ITER_SEC)
+        min_remaining = self._split_conf(
+            "loop_split_min_remaining_seconds", self._SPLIT_MIN_REMAINING_SEC)
         per_iter = elapsed / done
-        if per_iter >= self._SPLIT_MAX_ITER_SEC:
+        if per_iter >= max_iter:
             return False
-        split = (n - done) * per_iter >= self._SPLIT_MIN_REMAINING_SEC
+        split = (n - done) * per_iter >= min_remaining
         if self.debug:
             logger.debug("[LOOP_SPLIT] per_iter=%.2fms remaining=%.0fms n=%d -> %s",
                          per_iter * 1000, (n - done) * per_iter * 1000, n, split)
