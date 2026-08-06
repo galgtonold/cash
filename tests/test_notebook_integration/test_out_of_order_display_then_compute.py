@@ -15,23 +15,46 @@ Scenario (from financial_analysis_demo.ipynb):
 First run: cells 1 → 2 → 3 → 4 → 5 (populates cache).
 After reset (simulating fresh session): execute cells 5 → 3 → 4.
 
-Bug: Cell 4's computation is fully recomputed instead of restored from cache.
+Originally written for a bug where `cell_code_changed` was computed as "this
+raw code has not run this session", which is true of EVERY cell in a fresh
+session, not just edited ones -- so cache lookups were disabled wholesale even
+though the on-disk data was valid. That mechanism is gone: neither
+`cell_code_changed` nor `force_recompute` exists in the source anymore.
 
-Root cause: After reset/kernel restart, `_executed_cell_raw_codes` was empty.
-The `cell_code_changed` flag was computed as `raw_cell not in self._executed_cell_raw_codes`,
-which was True for ALL cells in a fresh session — not just edited cells.
-This set `force_recompute = True` in statement_processor.py, which disabled
-cache lookups entirely, even though the cache data on disk was valid.
+What still needs guarding is the behaviour: running the cells OUT OF ORDER
+after a reset must reconstruct ``df`` to exactly the value a top-to-bottom run
+produces. Cell 5 fires first and has to rebuild ``df`` from scratch, including
+re-establishing the seeded RNG stream, before cell 4's columns can be right.
 
-Fix: Changed `cell_code_changed` detection to use position-based tracking
-(`_last_cell_code_by_index`). Now `cell_code_changed` is only True when we
-have evidence the cell was actually edited (different code at the same notebook
-position), not merely "first time in this session".
+Deliberately NOT asserted: that cell 4 restores from cache. Both of its
+expensive statements are subscript stores on ``df``
+(``df['rolling_mean'] = ...``), which ``analyze_statement`` reports as
+``top_level_mutated_vars={'df'}`` -- the in-place-mutation route sets
+``skip_cache``, so those statements re-execute BY DESIGN and the sleep inside
+cell 4 always runs. The assertion this replaces was ``has_restore or
+t_elapsed < 0.5``; ``has_restore`` was False on passing runs too, so the test
+was decided purely by whether 0.3s of sleep plus ~0.15s of work fitted under
+0.5s. It failed ~2 runs in 4 under parallel load and passed on an idle box,
+having never once verified a restore.
 """
 import pytest
 import time
 
 pytestmark = [pytest.mark.upstream, pytest.mark.core]
+
+
+def _fingerprint(output: str) -> str:
+    """Return cell 4's ``CHK ...`` line, or fail loudly if it is absent.
+
+    Comparing two absent fingerprints would compare equal and quietly assert
+    nothing -- the exact way the wall-clock assertion this replaces went
+    vacuous. An empty or missing line is a test failure, not a match.
+    """
+    for line in output.splitlines():
+        if line.startswith("CHK "):
+            return line.strip()
+    raise AssertionError(
+        f"cell 4 produced no CHK fingerprint line; got:\n{output[:1000]}")
 
 
 class TestOutOfOrderDisplayThenCompute:
@@ -85,6 +108,15 @@ class TestOutOfOrderDisplayThenCompute:
             elapsed2 = time.time() - t0
             print(f"Vol ratio: {elapsed2:.2f}s")
 
+            # Fingerprint of everything cell 1's seeded draw fed into: the
+            # oracle for "was df reconstructed to the top-to-bottom value?".
+            print(
+                f"CHK close={df['close'].sum():.6f} "
+                f"vol={df['volume'].sum()} "
+                f"rm={df['rolling_mean'].sum():.6f} "
+                f"vr={df['vol_ratio'].sum():.6f} "
+                f"rows={len(df)}")
+
             df""")
 
         cell_5 = textwrap.dedent("""\
@@ -103,6 +135,7 @@ class TestOutOfOrderDisplayThenCompute:
         out4_first = nb_runner.get_output(4)
         assert "Rolling mean" in out4_first
         assert "Vol ratio" in out4_first
+        chk_first = _fingerprint(out4_first)
 
         # --- Reset cash state to simulate fresh session ---
         nb_runner.reset_cash_state()
@@ -147,16 +180,20 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
         assert "Rolling mean" in out4_text
         assert "Vol ratio" in out4_text
 
-        # The key assertion: if cell 4 recomputed, it would take > 0.3s (has sleep)
-        # If cached, it should be fast (< 0.25s)
-        # Also check for Virtual Restore SUCCESS in debug output
-        has_restore = "Virtual Restore SUCCESS" in out4_rerun
-        was_fast = t_elapsed < 0.5  # Allow some overhead
+        # Cell 5 ran first with df deleted, so it had to rebuild df -- including
+        # re-seeding the RNG stream -- before cells 3 and 4 could see it. If any
+        # of that reconstruction is wrong (a draw replayed at the wrong stream
+        # position, a stale df restored, the sort skipped), these numbers move.
+        chk_rerun = _fingerprint(out4_text)
+        assert chk_rerun == chk_first, (
+            f"out-of-order execution reconstructed a DIFFERENT df.\n"
+            f"  top-to-bottom: {chk_first}\n"
+            f"  after 5->3->4: {chk_rerun}")
 
-        assert has_restore or was_fast, (
-            f"Cell 4 should have restored from cache, but appears to have recomputed. "
-            f"Elapsed: {t_elapsed:.2f}s. "
-            f"Output: {out4_rerun[:1000]}")
+        # Timing is reported for diagnosis only. It is NOT asserted on: cell 4
+        # mutates df in place, so its statements re-execute by design and the
+        # 0.3s sleep always runs. See the module docstring.
+        print(f"(cell 4 recomputed in {t_elapsed:.2f}s -- expected, not asserted)")
 
     def test_display_before_compute_simple(self, nb_runner):
         """
