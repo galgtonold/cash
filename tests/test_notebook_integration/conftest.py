@@ -773,7 +773,13 @@ class _WarmKernel:
         # fresh dict; if we assigned __vsc_ipynb_file__ in the same cell the
         # assignment would land in the old (captured) globals dict and be
         # invisible afterwards, breaking cash's notebook-path discovery.
-        self._exec("get_ipython().reset(new_session=False)")
+        # `@cash:no-cache` because cash processes these setup execs like any
+        # cell, and without it the harness's own bookkeeping is written into
+        # the cache under test -- observed as `get_ipython().reset(...)` and
+        # `_c.reset_session()` entries in the REPO-ROOT .cash after a full run
+        # (the warm kernel's boot cwd, which is where the backend still points
+        # when these run).
+        self._exec("# @cash:no-cache\nget_ipython().reset(new_session=False)")
         # Repoint cwd + notebook path at THIS test's tmp dir (separate exec, so
         # it runs against the new user_ns).
         self._exec(f"import os as _os\n_os.chdir(r'{dir_str}')\n__vsc_ipynb_file__ = r'{path_str}'")
@@ -1450,7 +1456,7 @@ class NotebookTestRunner:
         # Gated on the warm path: a fresh kernel is already right, and dropping
         # its singleton would discard state a test may be mid-way through.
         self._run_async(self.client.kc._async_execute_interactive(
-            "import cash as _c; _c.reset_session()",
+            "# @cash:no-cache\nimport cash as _c; _c.reset_session()",
             store_history=False, output_hook=lambda msg: None,
         ))
 
