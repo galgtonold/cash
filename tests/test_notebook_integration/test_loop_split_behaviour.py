@@ -32,6 +32,27 @@ SETUP = "import cash\n%cash_on\n"
 SETUP_OFF = "import cash\n"
 UNRELATED = "unrelated = 1\n"
 
+# Raises ONLY the split ceiling, from 6ms to 1s. The body is ~1ms plus ~2.2ms
+# decomposition overhead, so against 6ms there is under 2x headroom and a
+# kernel descheduled mid-probe measures a cheap loop as an expensive one;
+# against 1s there is ~300x and no realistic stall crosses it. Descheduling
+# only pushes a measurement UP, so raising the ceiling cannot manufacture a
+# split that the policy would refuse on an idle machine.
+#
+# Deliberately NOT conftest's CASH_TEST_PIN_THRESHOLDS, which also zeroes
+# call_cost_floor_seconds. This loop's premise is that per-call caching does
+# NOT cover it (each call sits under the floor, so nothing is stored per
+# call); zero that floor and every call caches individually, the rerun
+# measures 0 real calls, and the test passes green without a split ever
+# happening. Safe to leave set: prepare_for_test calls reset_session(), which
+# restores config defaults, so the pin cannot leak into the next warm-kernel
+# test.
+SETUP_PINNED_CEILING = (
+    "import cash\n"
+    "cash.configure(loop_split_max_iter_seconds=1.0)\n"
+    "%cash_on\n"
+)
+
 # Under the single-unit threshold (n>=125 for a 1-statement body), so this
 # loop decomposes -- the band's shape.
 _N = 124
@@ -165,41 +186,43 @@ def test_a_learned_loop_splits_and_then_costs_only_its_head(nb_runner, tmp_path)
     learning, which is why this test is explicit about all three.
 
     Before this landed, every rerun measured 124 -- the whole loop, forever.
+
+    Runs with the split ceiling pinned (``SETUP_PINNED_CEILING``). Against the
+    real 6ms ceiling this body has under 2x headroom, and a kernel descheduled
+    mid-probe measures it as expensive and silently declines; that failed ~2 of
+    4 full parallel runs even with four retries stacked on top. The retries are
+    gone now -- what they papered over was the machine, not the policy.
     """
     counter = tmp_path / "calls.log"
-    nb_runner.create_notebook(_cells(counter))
+    nb_runner.create_notebook(_cells(counter, setup=SETUP_PINNED_CEILING))
     nb_runner.start_kernel()
     nb_runner.run_all()
     cold = _n(counter)
     assert cold == _N, f"baseline did not run all {_N} items: {cold}"
 
-    # Retried, because ONE probe is not the contract. The runtime judges from
-    # wall-clock elapsed over the first _K iterations and declines if measured
-    # per_iter reaches _SPLIT_MAX_ITER_SEC (6ms). This body is ~1ms plus ~2.2ms
-    # decomposition overhead, so a kernel descheduled mid-probe -- routine when
-    # the suite runs 16-24 workers on 32 cores -- crosses the ceiling and
-    # records nothing. Measured as a single-shot assertion, this failed ~4 of 7
-    # full parallel runs.
-    #
-    # Declining is not a wrong verdict, it is a deferred one: nothing is
-    # written, so the next run probes again. What cash promises is that a cheap
-    # loop DOES get learned, not that it is learned on any particular pass, and
-    # that is what this asserts. The split itself is pinned deterministically by
-    # test_a_recorded_split_costs_only_its_head.
-    attempts = 4
-    for attempt in range(1, attempts + 1):
-        before = _n(counter)
-        nb_runner.run_cell(LOOP_CELL)
-        ran = _n(counter) - before
-        if ran <= _K:
-            break                          # settled: head only
-    else:
-        pytest.fail(
-            f"after {attempts} reruns the loop still re-ran {ran}/{_N} calls, so "
-            f"no split verdict was ever recorded. Without one this loop caches "
-            f"nothing and is slower than running with cash off. (A single "
-            f"contended probe declining is expected; {attempts} in a row is not.)"
-        )
+    # Run 2: the verdict recorded at the end of run 1 now exists, so the loop
+    # splits. The tail has never been stored, so it is a cold miss and runs.
+    before = _n(counter)
+    nb_runner.run_cell(LOOP_CELL)
+    learning = _n(counter) - before
+    assert learning > _K, (
+        f"run 2 re-ran only {learning}/{_N} calls. Expected the tail to be a "
+        f"cold miss here -- run 1 stored per-iteration entries, not a tail. "
+        f"Something served this loop that should not have."
+    )
+
+    # Run 3: the tail hits, so only the head runs. With the ceiling pinned a
+    # decline is no longer a scheduling coin flip, so this is asserted once
+    # rather than retried -- if it fails, no verdict was recorded and the loop
+    # caches nothing at all, which is slower than running with cash off.
+    before = _n(counter)
+    nb_runner.run_cell(LOOP_CELL)
+    steady = _n(counter) - before
+    assert steady <= _K, (
+        f"run 3 re-ran {steady}/{_N} calls; expected at most the {_K}-iteration "
+        f"head. Run 2 ran {learning}, so the loop decomposed but no split "
+        f"verdict survived into run 3."
+    )
     assert f"OUT {_N}" in nb_runner.get_output(LOOP_CELL)
 
 
