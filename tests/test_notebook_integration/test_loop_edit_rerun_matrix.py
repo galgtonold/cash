@@ -181,10 +181,17 @@ def _compute_def(counter, sleep, mult=10):
     shapes C and D assert on exact printed values, so altering the return
     here silently rewrites what those tests are checking.
     """
+    # ``time.sleep(0)`` is NOT a no-op: it is a voluntary yield, so under a
+    # 16-worker suite the call can be descheduled for a full Windows quantum
+    # (~10-15ms) and measure far above the 3ms cost floor. That is how the
+    # sub-break-even test's body -- meant to be unambiguously cheap -- ended up
+    # storing 6 calls and failing at 54/60. Emit no sleep at all when there is
+    # none to take; callers passing a real duration are unaffected.
+    body_sleep = f"    time.sleep({sleep})\n" if sleep else ""
     return (
         "def compute(v):\n"
         f"    open(r'{counter}', 'a').write('X')\n"
-        f"    time.sleep({sleep})\n"
+        f"{body_sleep}"
         f"    return v * {mult}"
     )
 
@@ -776,17 +783,18 @@ def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
     warm = _n(counter) - cold
 
     # Deliberately a range, not `== _N_TINY`. The store decision is itself
-    # timing-derived, so an occasional call genuinely does clear 3ms -- the
-    # first one usually does, since it pays the counter file's creation cost.
-    # Measured here: 59/60. That is the policy working, not failing.
+    # timing-derived, so an occasional call can genuinely clear the floor.
     #
-    # The range still discriminates sharply, which is the point: with the
-    # floor removed (the rejected "aggregate elapsed" fix) essentially every
-    # call is stored and this reads ~0-1, nowhere near the bound.
+    # The range discriminates sharply, which is the point. Measured: 60/60
+    # across three full parallel suite runs, and 0/60 with the floor set to
+    # zero. The bound sits in open space between them.
     assert warm >= _N_TINY - 5, (
         f"sub-break-even calls are being cached individually ({warm}/"
         f"{_N_TINY} re-ran; expected nearly all of them). Storing these costs "
-        "more than recomputing them -- check whether _COST_FLOOR_S was "
-        "lowered below the measured ~1.2ms break-even, or whether a store "
-        "decision stopped consulting it."
+        "more than recomputing them -- check whether "
+        "`config.call_cost_floor_seconds` was lowered below the measured "
+        "~1.2ms break-even, or whether a store decision stopped consulting "
+        "it. NOTE: patching the `call_unit._COST_FLOOR_S` constant does NOT "
+        "move this -- it is only the fallback for when no config is "
+        "reachable; the config field is what governs."
     )

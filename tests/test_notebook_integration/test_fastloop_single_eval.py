@@ -156,7 +156,15 @@ def test_reiterable_list_still_single_unit_and_caches(nb_runner):
         "import time\ndata = list(range(60))",
         "acc = 0\n"
         "for x in data:\n"
-        "    time.sleep(0.01)\n"   # cross the size-aware cache-write floor
+        # 60 x 50ms = ~3s of real work. The ratio asserted below is
+        # overhead / (work + overhead), so what matters is that the work
+        # DWARFS the fixed per-run orchestration. At the original 10ms the
+        # work was ~0.6s against ~0.4s of contended overhead -- a ratio of
+        # ~0.45 against a 0.5 bound, which is why this failed under load.
+        # At 50ms the same overhead yields ~0.14, roughly 3.5x of headroom.
+        # Still far above _SPLIT_MAX_ITER_SEC, so the loop stays on the
+        # single-unit path this test is about.
+        "    time.sleep(0.05)\n"
         "    t = x + 1\n"
         "    acc = acc + t",
         "print(f'acc={acc}')",
@@ -173,10 +181,15 @@ def test_reiterable_list_still_single_unit_and_caches(nb_runner):
     nb_runner.run_all()
     dur2 = time.time() - t0
     assert "acc=1830" in nb_runner.get_output(3), nb_runner.get_output(3)
-    # Restored from the single-unit cache entry: no re-sleeping. Generous margin.
+    # Restored from the single-unit cache entry: no re-sleeping. Measured on
+    # an idle box: run1=3.09s, run2=0.06s, ratio 0.02. With caching disabled
+    # the same test measures 1.00. The bound sits in open space between them,
+    # and run2 would have to grow 25x -- from 0.06s to 1.5s -- before load
+    # could false-fail it.
     assert dur2 < dur1 * 0.5, (
         f"single-unit re-iterable loop did not restore from cache: "
-        f"run1={dur1:.2f}s run2={dur2:.2f}s"
+        f"run1={dur1:.2f}s run2={dur2:.2f}s ratio={dur2 / dur1:.2f} "
+        f"(expected <0.5; a restore measures ~0.02, a full recompute ~1.00)"
     )
 
 
