@@ -678,6 +678,11 @@ class _WarmKernel:
         self.loop, self.run_async = _make_async_runner()
         self._initialized = False
         self._tests_since_boot = 0
+        # Whether user_ns may still hold a previous test's names. Cleared by
+        # whoever resets, so prepare_for_test can skip a reset that the last
+        # teardown already did -- ~47ms per test, and it was every test.
+        # Starts True so an unknown state is always cleared.
+        self._ns_dirty = True
 
     def boot(self) -> None:
         from jupyter_client import KernelManager
@@ -696,6 +701,8 @@ class _WarmKernel:
             self.run_async(_wait_ready())
         self.km = km
         self.kc = kc
+        # A just-booted kernel has nothing to clear.
+        self._ns_dirty = False
 
     def _recycle_if_bloated(self) -> None:
         """Re-boot this kernel once it has grown too large to be safe to keep.
@@ -766,7 +773,6 @@ class _WarmKernel:
         prior test's same-named module can't shadow this test's). Then ensures
         cash is loaded + enabled (idempotent).
         """
-        self._recycle_if_bloated()
         path_str = str(nb_path).replace('\\', '\\\\')
         dir_str = str(work_dir).replace('\\', '\\\\')
         # Clear the namespace in its OWN execution. reset() rebinds user_ns to a
@@ -779,7 +785,28 @@ class _WarmKernel:
         # `_c.reset_session()` entries in the REPO-ROOT .cash after a full run
         # (the warm kernel's boot cwd, which is where the backend still points
         # when these run).
-        self._exec("# @cash:no-cache\nget_ipython().reset(new_session=False)")
+        # Clear the namespace -- unless shutdown() already did it for this
+        # kernel. The two resets were redundant and each costs ~47ms, but only
+        # ONE of them is disposable, and it is this one. Dropping the teardown
+        # reset instead looked identical on paper and broke three module-reload
+        # tests (test_interaction_import_edits, test_round3_import_patterns):
+        # they pass alone and fail behind any other test, so something the
+        # previous test leaves in the warm kernel has to be cleared at teardown
+        # and not merely before the next test runs. Turning cash off first did
+        # not help, so it is not about cash processing the reset. Do not
+        # re-attempt without a reproducer -- two files, `-n0`, ~20s.
+        if self._ns_dirty:
+            self._exec("# @cash:no-cache\nget_ipython().reset(new_session=False)")
+            self._ns_dirty = False
+        # Recycle AFTER the reset, not before, so the RSS it reads is what this
+        # kernel has PERMANENTLY accumulated rather than that plus whatever the
+        # last test happened to leave live. Reading it first would inflate every
+        # sample and buy spurious re-boots at ~2.3s each.
+        #
+        # If this DOES recycle, the reset above (when it ran at all) is wasted
+        # on a kernel about to die -- one exec, only on the handful of tests
+        # that trip the threshold.
+        self._recycle_if_bloated()
         # Repoint cwd + notebook path at THIS test's tmp dir (separate exec, so
         # it runs against the new user_ns).
         self._exec(f"import os as _os\n_os.chdir(r'{dir_str}')\n__vsc_ipynb_file__ = r'{path_str}'")
@@ -799,7 +826,29 @@ class _WarmKernel:
         # leak is loud but easy to misread: every later test's cells fill with
         # [cash.notebook...] DEBUG lines, which breaks any assertion about cell
         # output and any out-of-band read that scans stdout for a marker.
-        self._exec("%cash_debug off")
+        #
+        # The next five steps are ONE exec, not five. They are independent of
+        # each other -- no ordering constraint, unlike the reset / chdir /
+        # reset_session / %cash_on sequence around them -- and each kernel
+        # round-trip is ~8ms of real work in two processes, so five of them is
+        # ~32ms on EVERY test. Per-step failure isolation is kept by wrapping
+        # each step in its own try/except (the three code blocks already carry
+        # one, and the magics are called through run_line_magic so they can be
+        # wrapped the same way); merging them must not turn one broken step
+        # into four skipped ones.
+        self._exec(
+            "try:\n"
+            "    get_ipython().run_line_magic('cash_debug', 'off')\n"
+            "except Exception:\n"
+            "    pass\n"
+            "try:\n"
+            "    get_ipython().run_line_magic('cash_persist', 'off')\n"
+            "except Exception:\n"
+            "    pass\n"
+            + _REUSE_RESET_WARNING_REGISTRIES
+            + _REUSE_CLOSE_FIGURES
+            + _REUSE_PURGE_TEST_MODULES
+        )
         # Same shape, different flag: `%cash_persist on` sets `_persist_all` on
         # the CashMagics INSTANCE (and mirrors it onto the statement
         # processor), and `reset_session()` does NOT rebuild that instance --
@@ -817,7 +866,7 @@ class _WarmKernel:
         # test_zzverify_cas160_persist_loop_amplification measures. One
         # persist-enabling test ahead of it turned its 3 passes into 3
         # failures, reproduced in 9s.
-        self._exec("%cash_persist off")
+        #
         # Forget which warnings have already been shown.
         #
         # `warnings.warn` under the default filter fires once per unique
@@ -832,11 +881,10 @@ class _WarmKernel:
         # passed and the other two failed on "cache was bounded but the user
         # was never told why" -- the guard had worked, only the warning was
         # missing.
-        self._exec(_REUSE_RESET_WARNING_REGISTRIES)
-        self._exec(_REUSE_CLOSE_FIGURES)
-        # Purge test-authored modules from sys.modules so a stale same-named
-        # module from a prior test can't shadow this test's import.
-        self._exec(_REUSE_PURGE_TEST_MODULES)
+        #
+        # And purge test-authored modules from sys.modules so a stale
+        # same-named module from a prior test can't shadow this test's import.
+        #
         # Re-enable auto-caching LAST (a fresh Cash starts with caching off).
         #
         # The order is load-bearing, not cosmetic. Every `self._exec` here is a
@@ -855,6 +903,8 @@ class _WarmKernel:
         # makes prepare_for_test end exactly where _init_cash does on the
         # fresh-boot path: cash enabled, nothing executed after it.
         self._exec("%cash_on")
+        # From here the test owns the namespace; assume it dirties it.
+        self._ns_dirty = True
 
     def shutdown(self) -> None:
         if self.km is None:
@@ -1735,11 +1785,14 @@ except Exception:
     def shutdown(self) -> None:
         """Shutdown the kernel."""
         if self._warm is not None:
-            # Reuse mode: leave the warm kernel alive for the next test. Drop
-            # this test's big variables now to free memory; full state reset
-            # happens in prepare_for_test() at the next start_kernel().
+            # Reuse mode: leave the warm kernel alive for the next test, but
+            # clear its namespace HERE. This reset is load-bearing and its
+            # timing is part of that -- see prepare_for_test, which used to run
+            # a second, identical one and now skips it while `_ns_dirty` says
+            # this one already happened.
             try:
                 self._warm._exec("get_ipython().reset(new_session=False)")
+                self._warm._ns_dirty = False
             except Exception:
                 pass
             self._warm = None
