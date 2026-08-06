@@ -79,6 +79,76 @@ def _n(path):
     return len(path.read_bytes()) if path.exists() else 0
 
 
+def _seed_split_verdict(work_dir, loop_src, k=_K):
+    """Write a k-verdict into the store FILE, before the kernel starts.
+
+    Written from the test process, on disk, rather than by executing anything
+    in the kernel -- and that is the whole point. A ``store_history=False``
+    exec is not a free observation: cash cannot find it among the notebook's
+    cells, so it reconstructs state around it. Measured, seeding that way: the
+    store held the correct verdict and the hash matched the one the simulator
+    wanted, and the loop STILL re-ran 124/124 on both later runs. The probe was
+    the thing breaking the split it was there to observe.
+
+    Mirrors ``loop_split.LoopSplitStore``: same filename, same schema version,
+    and the same identity function (sha256 of ``ast.unparse`` of the loop node),
+    recomputed here rather than imported so a change to either side shows up as
+    a failing test instead of a silently agreeing one.
+    """
+    import ast
+    import hashlib
+    import json
+
+    node = ast.parse(loop_src).body[0]
+    source_hash = hashlib.sha256(ast.unparse(node).encode("utf-8")).hexdigest()
+    cache_dir = work_dir / ".cash"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "_loop_split.json").write_text(
+        json.dumps({"version": 1, "splits": {source_hash: k}}), encoding="utf-8")
+    return source_hash
+
+
+def test_a_recorded_split_costs_only_its_head(nb_runner, tmp_path):
+    """Given a verdict, a settled rerun runs the head and nothing else.
+
+    This is the SPLIT itself -- the simulator half -- and it is the part that
+    must never regress. The verdict is seeded rather than learned, because
+    learning is a wall-clock measurement and therefore hostage to whatever else
+    is on the machine; see
+    test_the_runtime_eventually_learns_to_split_a_cheap_loop for that half.
+
+    Splitting the two was not tidiness. As one test it failed ~4 of 7 full
+    parallel runs with 124/124: under 40+ processes on 32 cores the kernel was
+    descheduled during the 5-iteration probe, measured per_iter crossed
+    ``for_handler._SPLIT_MAX_ITER_SEC`` (6ms, against a body of ~1ms plus
+    ~2.2ms decomposition overhead -- under 2x headroom), and no verdict was
+    ever recorded. Instrumented at the moment of failure, the store file did
+    not exist on disk. So the flake was in the LEARNING, while the assertion
+    that kept failing was about the SPLIT.
+    """
+    counter = tmp_path / "calls.log"
+    nb_runner.create_notebook(_cells(counter))
+    # Seeded BEFORE the kernel starts, so the store loads it on first use and
+    # no out-of-band execution ever happens (see _seed_split_verdict).
+    _seed_split_verdict(tmp_path, _loop())
+    nb_runner.start_kernel()
+    nb_runner.run_all()
+    cold = _n(counter)
+    assert cold == _N, f"baseline did not run all {_N} items: {cold}"
+
+    nb_runner.run_cell(LOOP_CELL)          # splits; the tail is a cold miss
+    after_first_split = _n(counter)
+
+    nb_runner.run_cell(LOOP_CELL)          # the tail now hits
+    steady = _n(counter) - after_first_split
+    assert steady <= _K, (
+        f"a settled rerun re-ran {steady}/{_N} calls with a verdict already "
+        f"recorded; expected at most the {_K}-iteration head. The split is "
+        "applied by the simulator, so this is a simulator-side regression."
+    )
+    assert f"OUT {_N}" in nb_runner.get_output(LOOP_CELL)
+
+
 def test_a_learned_loop_splits_and_then_costs_only_its_head(nb_runner, tmp_path):
     """Three runs, because learning costs one:
 
@@ -103,16 +173,33 @@ def test_a_learned_loop_splits_and_then_costs_only_its_head(nb_runner, tmp_path)
     cold = _n(counter)
     assert cold == _N, f"baseline did not run all {_N} items: {cold}"
 
-    nb_runner.run_cell(LOOP_CELL)          # run 2: splits, tail stores
-    after_learning = _n(counter)
-
-    nb_runner.run_cell(LOOP_CELL)          # run 3: tail hits
-    steady = _n(counter) - after_learning
-    assert steady <= _K, (
-        f"a settled rerun re-ran {steady}/{_N} calls; expected at most the "
-        f"{_K}-iteration head. Without a split this loop caches nothing and "
-        "is slower than running with cash off."
-    )
+    # Retried, because ONE probe is not the contract. The runtime judges from
+    # wall-clock elapsed over the first _K iterations and declines if measured
+    # per_iter reaches _SPLIT_MAX_ITER_SEC (6ms). This body is ~1ms plus ~2.2ms
+    # decomposition overhead, so a kernel descheduled mid-probe -- routine when
+    # the suite runs 16-24 workers on 32 cores -- crosses the ceiling and
+    # records nothing. Measured as a single-shot assertion, this failed ~4 of 7
+    # full parallel runs.
+    #
+    # Declining is not a wrong verdict, it is a deferred one: nothing is
+    # written, so the next run probes again. What cash promises is that a cheap
+    # loop DOES get learned, not that it is learned on any particular pass, and
+    # that is what this asserts. The split itself is pinned deterministically by
+    # test_a_recorded_split_costs_only_its_head.
+    attempts = 4
+    for attempt in range(1, attempts + 1):
+        before = _n(counter)
+        nb_runner.run_cell(LOOP_CELL)
+        ran = _n(counter) - before
+        if ran <= _K:
+            break                          # settled: head only
+    else:
+        pytest.fail(
+            f"after {attempts} reruns the loop still re-ran {ran}/{_N} calls, so "
+            f"no split verdict was ever recorded. Without one this loop caches "
+            f"nothing and is slower than running with cash off. (A single "
+            f"contended probe declining is expected; {attempts} in a row is not.)"
+        )
     assert f"OUT {_N}" in nb_runner.get_output(LOOP_CELL)
 
 
