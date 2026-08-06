@@ -36,9 +36,7 @@ def _p(path) -> str:
 
 def _restart(nb_runner):
     import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
-    loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
+    nb_runner.restart()
     nb_runner._inject_notebook_path()
 
 

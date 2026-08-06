@@ -195,9 +195,7 @@ def test_writer_input_restored_after_kernel_restart(nb_runner, tmp_path):
 
     # ACTUAL kernel restart — clears user_ns, so df is genuinely absent.
     import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
-    loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
+    nb_runner.restart()
     nb_runner._inject_notebook_path()
     nb_runner.run_cell(1)
     nb_runner.run_cell(2)
@@ -218,9 +216,7 @@ def _restart_kernel(nb_runner):
     """Perform a REAL kernel restart and re-establish the notebook path + cash."""
     import asyncio
 
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
-    loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
+    nb_runner.restart()
     nb_runner._inject_notebook_path()
 
 

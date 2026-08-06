@@ -117,8 +117,7 @@ for _v in ['df', 't0', 'elapsed1', 'elapsed2', 'n']:
         pass
 """
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(clear_code, store_history=False)
         )
 

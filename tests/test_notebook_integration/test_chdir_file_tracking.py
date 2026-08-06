@@ -43,8 +43,7 @@ def test_chdir_doesnt_break_file_caching(nb_runner, tmp_path):
     
     # Enable cash debug
     import asyncio
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(
+    nb_runner._run_async(
         nb_runner.client.kc._async_execute_interactive("%cash_debug on", store_history=False)
     )
     

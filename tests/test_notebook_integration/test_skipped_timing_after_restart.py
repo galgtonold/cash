@@ -95,8 +95,7 @@ class TestSkippedTimingAfterRestart:
         # Simulate FULL kernel restart
         nb_runner.reset_cash_state()
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
                 _full_restart_code(['pd', 'np', 'df', 'time']),
                 store_history=False
@@ -203,8 +202,7 @@ class TestSkippedTimingAfterRestart:
         # Simulate FULL kernel restart
         nb_runner.reset_cash_state()
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
                 _full_restart_code(['pd', 'np', 'df', 'result', 'time']),
                 store_history=False

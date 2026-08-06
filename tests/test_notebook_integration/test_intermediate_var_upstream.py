@@ -48,8 +48,7 @@ class TestIntermediateVariableUpstream:
         # Simulate kernel restart: reset cash state and clear namespace
         nb_runner.reset_cash_state()
         # Clear variables except imports
-        loop = __import__('asyncio').get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
                 "del x, intermediate, result", store_history=False
             )
@@ -86,8 +85,7 @@ class TestIntermediateVariableUpstream:
 
         # Simulate kernel restart
         nb_runner.reset_cash_state()
-        loop = __import__('asyncio').get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
                 "del a, b, c, d", store_history=False
             )
@@ -126,8 +124,7 @@ class TestIntermediateVariableUpstream:
 
         # Simulate kernel restart
         nb_runner.reset_cash_state()
-        loop = __import__('asyncio').get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
                 "del N, A, rhs, psi_flat, stream_function", store_history=False
             )
@@ -241,8 +238,7 @@ class TestIntermediateVariableUpstream:
 
         # Simulate kernel restart: clear everything
         nb_runner.reset_cash_state()
-        loop = __import__('asyncio').get_event_loop()
-        loop.run_until_complete(
+        nb_runner._run_async(
             nb_runner.client.kc._async_execute_interactive(
                 "for _v in ['Re','N','dx','dy','x','y','A_laplacian','pressure_solve',"
                 "'u','v','p','residual_history','t0',"
@@ -366,9 +362,7 @@ class TestIntermediateVariableUpstream:
 
         # ACTUAL kernel restart
         import asyncio
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(nb_runner.client.km._async_restart_kernel(now=True))
-        loop.run_until_complete(nb_runner.client.kc._async_wait_for_ready(timeout=30))
+        nb_runner.restart()
 
         # Re-inject notebook path (lost after restart)
         nb_runner._inject_notebook_path()
