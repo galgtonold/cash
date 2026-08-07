@@ -3472,7 +3472,6 @@ class StatementProcessor:
         import warnings
 
         from cash.backends.adaptive_caps import human_bytes
-        from cash.exceptions import CashCacheIneffectiveWarning
 
         first_line = (stmt_id.splitlines() or [''])[0].strip()
         if len(first_line) > 60:
