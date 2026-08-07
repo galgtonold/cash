@@ -168,6 +168,25 @@ def _n(path):
     return len(path.read_bytes()) if path.exists() else 0
 
 
+def _why(work_dir):
+    """What cash left on DISK, for use in a failure message.
+
+    The four shape-A-large cases fail only on a genuinely loaded machine, and
+    only from inside a full parallel suite -- not under synthetic CPU load, not
+    when this file runs alone beside one. Each real occurrence is therefore
+    rare and not summonable, and a bare "re-ran 100 calls" cannot tell "nothing
+    was ever stored" from "entries were stored and then not found". The entry
+    count separates those. Reading the directory perturbs nothing.
+    """
+    cache_dir = work_dir / ".cash"
+    if not cache_dir.exists():
+        return "no .cash directory: nothing was ever stored"
+    entries = list(cache_dir.glob("*.meta"))
+    split = (cache_dir / "_loop_split.json")
+    return (f"{len(entries)} cache entries on disk; "
+            f"split store {'present' if split.exists() else 'absent'}")
+
+
 def _compute_def(counter, sleep, mult=10):
     """Item sets must not contain ``0`` -- see the LARGE_* definitions.
 
@@ -284,7 +303,7 @@ def test_shape_a_small_append(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_HOISTED, _a_body(SMALL_APPEND))
     nb_runner.run_cell(LOOP_CELL_HOISTED)
     warm = _n(counter) - cold
-    assert warm == 1, f"append re-ran {warm} calls, expected 1 (only the new item)"
+    assert warm == 1, f"append re-ran {warm} calls, expected 1 (only the new item) [{_why(tmp_path)}]"
     assert "OUT [10, 20, 30, 40]" in nb_runner.get_output(LOOP_CELL_HOISTED)
 
 
@@ -302,7 +321,7 @@ def test_shape_a_small_reorder(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_HOISTED, _a_body(SMALL_REORDER))
     nb_runner.run_cell(LOOP_CELL_HOISTED)
     warm = _n(counter) - cold
-    assert warm == 0, f"reorder re-ran {warm} calls, expected 0"
+    assert warm == 0, f"reorder re-ran {warm} calls, expected 0 [{_why(tmp_path)}]"
     assert "OUT [30, 10, 20]" in nb_runner.get_output(LOOP_CELL_HOISTED)
 
 
@@ -385,7 +404,7 @@ def test_shape_a_large_unchanged_rerun(nb_runner, tmp_path):
 
     nb_runner.run_cell(LOOP_CELL_ADJACENT)
     warm = _n(counter) - cold
-    assert warm == 0, f"unchanged rerun re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE})"
+    assert warm == 0, f"unchanged rerun re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE}) [{_why(tmp_path)}]"
 
 
 def test_shape_a_large_append(nb_runner, tmp_path):
@@ -402,7 +421,7 @@ def test_shape_a_large_append(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_ADJACENT, f"out = []\n{_a_body(LARGE_APPEND)}")
     nb_runner.run_cell(LOOP_CELL_ADJACENT)
     warm = _n(counter) - cold
-    assert warm == 1, f"append re-ran {warm} calls, expected 1 (only the new item)"
+    assert warm == 1, f"append re-ran {warm} calls, expected 1 (only the new item) [{_why(tmp_path)}]"
 
 
 def test_shape_a_large_reorder(nb_runner, tmp_path):
@@ -418,7 +437,7 @@ def test_shape_a_large_reorder(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_ADJACENT, f"out = []\n{_a_body(LARGE_REORDER)}")
     nb_runner.run_cell(LOOP_CELL_ADJACENT)
     warm = _n(counter) - cold
-    assert warm == 0, f"reorder re-ran {warm} calls, expected 0"
+    assert warm == 0, f"reorder re-ran {warm} calls, expected 0 [{_why(tmp_path)}]"
 
 
 def test_shape_a_large_unrelated_edit(nb_runner, tmp_path):
@@ -434,7 +453,7 @@ def test_shape_a_large_unrelated_edit(nb_runner, tmp_path):
     nb_runner.set_cell_source(UNRELATED_CELL, UNRELATED_EDITED)
     nb_runner.run_cell(LOOP_CELL_ADJACENT)
     warm = _n(counter) - cold
-    assert warm == 0, f"unrelated upstream edit re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE})"
+    assert warm == 0, f"unrelated upstream edit re-ran {warm} calls, expected 0 (measured: {warm}/{_N_LARGE}) [{_why(tmp_path)}]"
 
 
 def test_shape_a_large_dependency_edit(nb_runner, tmp_path):
@@ -510,7 +529,7 @@ def test_shape_b_reorder(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_HOISTED, _b_body(SMALL_REORDER))
     nb_runner.run_cell(LOOP_CELL_HOISTED)
     warm = _n(counter) - cold
-    assert warm == 0, f"reorder re-ran {warm} calls, expected 0"
+    assert warm == 0, f"reorder re-ran {warm} calls, expected 0 [{_why(tmp_path)}]"
 
 
 def test_shape_b_unrelated_edit(nb_runner, tmp_path):
@@ -600,7 +619,7 @@ def test_shape_c_reorder(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_HOISTED, _c_body(SMALL_REORDER))
     nb_runner.run_cell(LOOP_CELL_HOISTED)
     warm = _n(counter) - cold
-    assert warm == 0, f"reorder re-ran {warm} calls, expected 0"
+    assert warm == 0, f"reorder re-ran {warm} calls, expected 0 [{_why(tmp_path)}]"
     assert "S 60" in nb_runner.get_output(LOOP_CELL_HOISTED)
 
 
@@ -688,7 +707,7 @@ def test_shape_d_reorder(nb_runner, tmp_path):
     nb_runner.set_cell_source(LOOP_CELL_HOISTED, _d_body(SMALL_REORDER))
     nb_runner.run_cell(LOOP_CELL_HOISTED)
     warm = _n(counter) - cold
-    assert warm == 0, f"reorder re-ran {warm} calls, expected 0"
+    assert warm == 0, f"reorder re-ran {warm} calls, expected 0 [{_why(tmp_path)}]"
     assert "[(1, 10), (2, 20), (3, 30)]" in nb_runner.get_output(LOOP_CELL_HOISTED)
 
 

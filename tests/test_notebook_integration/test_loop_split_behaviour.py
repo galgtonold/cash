@@ -100,6 +100,30 @@ def _n(path):
     return len(path.read_bytes()) if path.exists() else 0
 
 
+def _why(work_dir):
+    """What cash decided, read off DISK, for use in a failure message.
+
+    These assertions fail only on a genuinely loaded machine -- not under a
+    synthetic CPU load, not when the file runs alone beside a full parallel
+    suite, only inside one. That makes each real occurrence expensive: it is
+    rare, it is not summonable, and without this it reports a bare count that
+    cannot distinguish "was split when it should not have been" from "per-call
+    caching never engaged". The split store answers exactly that, and reading a
+    JSON file perturbs nothing -- unlike `enable_debug()`, which changes the
+    timing that decides the verdict in the first place.
+    """
+    import json
+    store = work_dir / ".cash" / "_loop_split.json"
+    if not store.exists():
+        entries = list((work_dir / ".cash").glob("*.meta")) if (
+            work_dir / ".cash").exists() else []
+        return f"no split verdict recorded; {len(entries)} cache entries on disk"
+    try:
+        return f"split store = {json.dumps(json.loads(store.read_text()))}"
+    except (OSError, ValueError) as e:
+        return f"split store unreadable: {e}"
+
+
 def _seed_split_verdict(work_dir, loop_src, k=_K):
     """Write a k-verdict into the store FILE, before the kernel starts.
 
@@ -290,7 +314,7 @@ def test_an_expensive_body_is_never_split(nb_runner, tmp_path):
     assert warm == 1, (
         f"append re-ran {warm}/{n + 1} calls, expected 1. An expensive-bodied "
         "loop must keep per-call incremental reuse (CAS-259) rather than "
-        "being split into an all-or-nothing tail."
+        f"being split into an all-or-nothing tail. [{_why(tmp_path)}]"
     )
 
 
