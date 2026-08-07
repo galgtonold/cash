@@ -148,7 +148,7 @@ the branch that ran is cached. `while` and `with` blocks (and a `for` containing
 iteration space to key on. The full mechanism is in
 [The notebook path](how-it-works/notebook-path.md#fine-grained-caching-loops-and-branches).
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f6bf4ab2 -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @df02711d -->
 ### In-place mutation runs fresh
 
 One deliberate exception to statement-level caching: a **top-level** statement

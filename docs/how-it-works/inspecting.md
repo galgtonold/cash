@@ -8,7 +8,7 @@ it run.
 
 ## The execution badge
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row_from_metric @8dd4c81b, cash/notebook/badge_renderer/renderers/html.py:_rowtip_html @e0c1ee6b -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row_from_metric @16e6b771, cash/notebook/badge_renderer/renderers/html.py:_rowtip_html @d9820ca6 -->
 Every cell you run under `%cash_on` paints an **execution badge**: a compact
 summary of what just happened — which statements computed, which were restored
 from cache, the time each took, and any decorator hit/miss metrics folded in

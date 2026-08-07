@@ -38,7 +38,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @ec76110a broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @e91ce30c broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -63,6 +63,9 @@ the `CASH_*` binding; the TOML key matches the field name.
 | `min_execution_time_to_cache_seconds` | `CASH_MIN_EXECUTION_TIME_TO_CACHE_SECONDS` | `0.01` | "Too cheap to cache at all" floor — statements faster than this never get a cache entry. |
 | `min_cache_savings_pct` | `CASH_MIN_CACHE_SAVINGS_PCT` | `0.20` | Required savings fraction for promotion — used by both the notebook Gate A and the tier promotion policy. |
 | `min_cache_fixed_budget_seconds` | `CASH_MIN_CACHE_FIXED_BUDGET_SECONDS` | `0.05` | Notebook path: always allow caching when predicted restore is below this. |
+| `call_cost_floor_seconds` | `CASH_CALL_COST_FLOOR_SECONDS` | `0.003` | The same "too cheap" floor, one level down: an individual **call inside** a statement is only cached when it costs at least this. Lower than the statement floor because a call entry is cheaper to store than a statement's. |
+| `loop_split_max_iter_seconds` | `CASH_LOOP_SPLIT_MAX_ITER_SECONDS` | `0.006` | A loop whose measured per-iteration cost is under this is a candidate for being cached as one whole unit rather than per iteration — per-statement bookkeeping stops paying for itself below it. |
+| `loop_split_min_remaining_seconds` | `CASH_LOOP_SPLIT_MIN_REMAINING_SECONDS` | `0.1` | …and only when at least this much work remains after the measured head, so a loop that is nearly finished is not reorganised for nothing. |
 
 ### Remote data
 

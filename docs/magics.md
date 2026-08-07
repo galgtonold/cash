@@ -43,7 +43,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @fbbd8852 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @656d4606 -->
 
 Enable automatic caching for every subsequent cell.
 

@@ -6,7 +6,7 @@ Every cached result is stored under a key that captures exactly what was compute
 
 A cache key is a deterministic fingerprint of a computation: the same source code over the same inputs always produces the same key, so a hit means the result can be reused without re-executing anything. Any relevant change — edited code, a recomputed upstream variable, a changed helper function — produces a different key and causes a miss.
 
-<!-- claim: cash/notebook/cache_key.py:compute_cache_key @28e97877 -->
+<!-- claim: cash/notebook/cache_key.py:compute_cache_key @4ae41646 -->
 The statement-level key is built by `compute_cache_key()` in `cash.notebook.cache_key`:
 
 ```
@@ -164,7 +164,7 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
-    <!-- claim: cash/core.py:Cash.register_hasher @2cc59e2a, cash/notebook/object_hashing.py:compute_hash @e849aae7 -->
+    <!-- claim: cash/core.py:Cash.register_hasher @2cc59e2a, cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
     notebook path hashes fallback values through `cash.notebook.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a
@@ -186,7 +186,7 @@ The two paths answer "what is this object's fingerprint?" differently, and the o
 
 Content beats the lineage attribute, and that ordering is the fix for a real bug: a notebook variable's `_cash_lineage_hash` is re-derived in every kernel session and is not reproducible across a restart, so keying a persisted decorator entry on it made `train_model(X_train, ...)` miss after a restart and re-train the model. Pinned by `tests/test_core/test_arg_hash_restart_stable.py`.
 
-<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @f1dc058b, cash/notebook/object_hashing.py:_hash_dataframe_or_series @3cb5309c, cash/notebook/object_hashing.py:_hash_collection @f3ff9c8e, cash/notebook/object_hashing.py:compute_hash @e849aae7 -->
+<!-- claim: cash/notebook/lineage_store.py:LineageStore.resolve @f1dc058b, cash/notebook/object_hashing.py:_hash_dataframe_or_series @3cb5309c, cash/notebook/object_hashing.py:_hash_collection @f3ff9c8e, cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
 **Notebook — resolving a statement input** (`LineageStore.resolve`):
 
 1. **Virtual lineage** — the simulated value, when an upstream simulation is in flight.

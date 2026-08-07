@@ -50,7 +50,7 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130, cash/notebook/statement/processor.py:StatementProcessor.process_statement @2472bfa1 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130, cash/notebook/statement/processor.py:StatementProcessor.process_statement @64de20e9 -->
 - **Step 7 — the per-statement decision.** Each statement passes the detector
   pre-checks from [Safety](safety.md) — merged into one verdict by
   `decide_cacheability` — before the cache is consulted at all. If the verdict
@@ -101,7 +101,7 @@ flowchart TD
     I3 --> K3
 ```
 
-<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @589aad3c, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @a4751a00 -->
+<!-- claim: cash/notebook/control_structures/processor.py:compute_context_hash @589aad3c, cash/notebook/control_structures/for_handler.py:ForLoopHandler.process @77ef09c3 -->
 The mechanism is deliberately plain: the context hash is prepended to the body
 statement as a *comment*, so it flows into the ordinary statement cache key
 through the source hash — no special key format is needed.
@@ -173,7 +173,7 @@ Conditionals work the same way with a different marker: `if`/`elif`/`else` and
 `# control_context:` branch hash, so only the branch that actually ran is
 cached and unused branches never pollute the key space.
 
-<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @62350cb2, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
+<!-- claim: cash/notebook/control_structures/processor.py:ControlStructureProcessor.process @ac7a00ad, cash/notebook/control_structures/processor.py:get_control_structure_type @eb40f97d -->
 `while` and `with` are the exception — they are executed as a **single cacheable
 unit** through the statement processor rather than decomposed, because neither
 has an enumerable iteration space to key on.

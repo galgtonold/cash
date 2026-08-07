@@ -324,7 +324,7 @@ purity analyzer, and `explain()` — is in the [decorator guide](../decorator.md
 
 ## Configuration (both paths)
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @fbbd8852 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @656d4606 -->
 `%cash_on` takes only an optional `ttl=N`; to pick a different backend or cache
 directory, construct a `Cash(backend=...)` instance before enabling the magic (in a
 notebook), or decorate with its `@c.cache` (in a script). Optional backends — SQLite,

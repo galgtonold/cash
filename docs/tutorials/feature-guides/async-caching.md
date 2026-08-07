@@ -6,7 +6,7 @@ Cash caches `async def` functions with the same TTL, file-dependency tracking, p
 
 The natural cached unit for `async def` is the *awaited result*, not the coroutine object. A naive `functools.cache` on a coroutine function would return the same exhausted coroutine on every hit — awaitable exactly once. Cash unwraps the await inside the wrapper, stores the awaited value under the same cache-key scheme used for sync functions, and on a hit returns the value directly so the caller's `await` resolves immediately without re-running the coroutine body.
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @0571a93e, cash/core.py:Cash._make_wrapper @ae8fc8e8 -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @d31a2ae1, cash/core.py:Cash._make_wrapper @ceedc60c -->
 The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` selects `_make_async_wrapper`, everything else falls through to `_make_wrapper`. Both wrappers share the helpers (`_resolve_cache_key`, `_try_get_cached`, `_store_in_cache`, `_wrap_iterator_hit`, `_write_chunks`), so the storage layout and metadata shape are identical.
 
 ## Quick start
@@ -61,7 +61,7 @@ The pattern matches `test_async_function_caches` and `test_async_cache_info` in 
 
 ## What works on async wrappers
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @0571a93e broad="the parity list is a claim about the whole async wrapper body" -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @d31a2ae1 broad="the parity list is a claim about the whole async wrapper body" -->
 The async wrapper mirrors the sync wrapper feature-for-feature with the following confirmed parity:
 
 - **TTL and freshness.** `_validate_ttl` on the hit path is shared between wrappers; `ttl=` works identically.
@@ -104,7 +104,7 @@ top-level `await` is cached like any other cell.
 rows = await db.fetch("SELECT * FROM events")   # cached like any other cell
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @d4521d68, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @8df7f24e -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @d4521d68, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @1df265b0 -->
 ipykernel dispatches such a cell through `shell.run_cell_async` rather than the
 `pre_run_cell` hook that `%cash_on` patches, so cash intercepts that entry point
 too and routes the cell into `CellExecutor.execute_cell_async` →

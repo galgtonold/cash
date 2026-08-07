@@ -32,7 +32,7 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @7b6bd448, cash/notebook/annotations.py:ANNOTATION_PATTERN @8370c735 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @9b96b731, cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce -->
 That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
@@ -234,7 +234,7 @@ The first source that triggers wins; later sources are not consulted.
 
 For the annotations that *don't* skip caching:
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @ff86f11c -->
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @b2421117 -->
 - `@cash:persist` + `@cash:ttl=N` compose freely — a statement can be both forced-to-disk and time-limited. `CacheAnnotation.merge` ORs the persist flags and overrides the TTL, so stacking on consecutive lines works:
 
   ```python { .nb-cell }

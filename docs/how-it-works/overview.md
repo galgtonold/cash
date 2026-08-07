@@ -69,7 +69,7 @@ Under the surface, Cash is one engine: a shared set of cache-key computation rul
 The next pages explain the shared foundation first, then each path's specifics. If you read from top to bottom you will understand both paths by the time you reach the storage and inspection pages.
 
 ??? question "Why statement-level, not whole-cell?"
-    <!-- claim: cash/notebook/statement/processor.py:StatementProcessor.process_statement @2472bfa1 -->
+    <!-- claim: cash/notebook/statement/processor.py:StatementProcessor.process_statement @64de20e9 -->
     Cash caches each statement in a cell independently rather than the cell as a
     unit. If a 3-statement cell changes only its first line, statements 2 and 3
     still restore from cache; a one-line edit never throws away a cell full of

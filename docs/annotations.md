@@ -40,11 +40,11 @@ It's applied with `re.search` (not `re.match`), so the directive can appear **an
 
 A few details that bite people:
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @8370c735, cash/notebook/annotations.py:parse_annotation_line @7b6bd448 -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce, cash/notebook/annotations.py:parse_annotation_line @9b96b731 -->
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
-- **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl=`, `# @cash:ttl=abc`, and `# @cash:ttl=-5` all silently no-op (the regex requires `\d+`).
+- **`=N` only accepts digits.** `# @cash:ttl=60` works. `# @cash:ttl=`, `# @cash:ttl=abc`, `# @cash:ttl=-5` and `# @cash:ttl=5m` do not set a TTL — but they are **not** silent: each warns and names the directive it could not read. The suffix case is why: `ttl=5m` used to parse as *five seconds*, a 60× error whose only symptom was a cache that kept missing.
 - **Unknown directives silently drop.** `# @cash:typo` produces no warning and no log line. Spell-check your directives.
 
 ## Directives
@@ -62,7 +62,7 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @7b6bd448, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @9b96b731, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
 Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
@@ -106,7 +106,7 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @7b6bd448 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @9b96b731 -->
 Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random` (alias: `allowrandom`)
@@ -558,7 +558,7 @@ That's a perfectly valid placement. Don't overuse it — the multi-line form abo
 
 ## Merging multiple annotations
 
-<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @ff86f11c -->
+<!-- claim: cash/notebook/annotations.py:CacheAnnotation.merge @b2421117 -->
 When several annotations apply to a single statement (stacked above, on the line, or inside a compound body), Cash merges them with `CacheAnnotation.merge` ([`annotations.py` — `CacheAnnotation.merge`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)):
 
 | Field | Merge rule |
@@ -596,7 +596,10 @@ model = train()                  # no_cache wins; never cached
 
 ## Common mistakes
 
-These are the failure modes that produce *no error and no warning* — the annotation just doesn't take effect. Worth memorising.
+These are the failure modes where the annotation just doesn't take effect. Most
+are silent — the directive is simply not recognised, and nothing tells you.
+The exception is a malformed `ttl=`, which warns and names itself; that case is
+called out below.
 
 ### Space after the colon — *not* a mistake
 

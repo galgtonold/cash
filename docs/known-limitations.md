@@ -122,7 +122,7 @@ Literal unpacking — flat (`(y,) = (x,)`) *and* nested (`(p, (q,)) = (x, (y,))`
 
 ### Mutating global state inside a function
 
-<!-- claim: cash/notebook/cacheability.py:called_function_global_mutations @ce3be880 -->
+<!-- claim: cash/notebook/cacheability.py:called_function_global_mutations @e5298503 -->
 Cash analyses what a *statement* reads and writes, and it tracks the **arguments**
 a called function mutates — including imported helpers and bare calls (`proc(df)`
 that mutates `df`). It also tracks a function mutating a **global** it wasn't
@@ -167,20 +167,26 @@ for x in [111, 10]:        # cell B
 # re-run cell A -> LOG holds [1, 2, 3], not cell B's entries
 ```
 
-**What it costs.** A call whose callee writes a global is re-executed rather
-than served, so the order-independent reuse described under
-[Reordering a loop's items](#reordering-a-loops-items-re-runs-the-tail) does not
-apply to it.
+**What it costs: nothing, for a reorder.** The global's post-state is captured
+with the call and replayed in the *new* order, so reordering the loop's items
+keeps the order-independent reuse described under
+[Reordering a loop's items](#reordering-a-loops-items-re-runs-the-tail).
+Measured on a real kernel — `for v in vols: out.append(price(v))`, where
+`price` appends to a global `SEEN`:
 
-That is not a gap waiting to be closed. A call cache keys on **arguments**, and
-a function that writes a global is not a function of its arguments — its effect
-depends on when it ran. Serving such a call would leave the global holding the
-*previous* order's contents, which is wrong rather than merely stale. Paying for
-the re-execution is what buys the correct answer.
+| | `SEEN` | `out` |
+|---|---|---|
+| cold, `vols = [1, 2, 3]` | `[1, 2, 3]` | `[2, 4, 6]` |
+| reordered to `[2, 1, 3]` | `[2, 1, 3]` | `[4, 2, 6]` |
+| a clean run with no cache | `[2, 1, 3]` | `[4, 2, 6]` |
 
-**What to do:** nothing, if you want the write — it works. If you would rather
-have the call served, pass the state in and return it out instead of mutating a
-global, which also makes the function orderable by argument.
+The callee does not run again; the recorded write is restored in the order the
+new sequence implies. So a global write costs you the *statement's* caching —
+the statement re-executes, as described above — but not the call's.
+
+**What to do:** nothing. If you would rather not depend on the capture at all,
+pass the state in and return it out instead of mutating a global, which also
+makes the function a pure function of its arguments.
 
 ### Mutating an object created in an earlier cell
 
@@ -294,7 +300,7 @@ for q in [[1], [1]]:            # two iterations, EQUAL at binding time
 
 Both iterations bind `q` to an equal value (`[1]`), so both get the same discriminator even though the body has since made them different — the second iteration is served the first's cached result instead of a fresh call.
 
-<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @57ad1115 -->
+<!-- claim: cash/notebook/call_unit.py:_loop_var_digest @c26d2458 -->
 This is true of a plain cached statement in the loop exactly as it is of an intercepted call: `v = pull(handle)` on its own line, with no directive at all, collapses the same way, because both channels read the same value, frozen at the same moment. Neither spelling is a special case of the other.
 
 **What to do:** the fix is not "mutate vs. rebind" — a body-local rebind is exactly as invisible as an in-place mutation:
@@ -330,7 +336,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f6bf4ab2 broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @df02711d broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
@@ -486,7 +492,7 @@ save.
 
 To keep hashing cheap, cash samples large values rather than reading them whole:
 
-<!-- claim: cash/notebook/object_hashing.py:compute_hash @e849aae7 -->
+<!-- claim: cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
 | Type | What is hashed |
 |---|---|
 | DataFrame | shape, dtypes, **first 5 rows** |
