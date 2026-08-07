@@ -57,7 +57,7 @@ print(f"Loaded {len(df)} rows")
 ### Step 3: Re-run — it's instant
 
 Run the cell again and the `read_csv` result loads from cache. The badge above the
-cell flips from `EXECUTED` (ochre) to `RESTORED` (green):
+cell flips from `EXECUTED` (ochre) to `CACHED` (green):
 
 **First run** — Cash ran the statement and cached the result:
 

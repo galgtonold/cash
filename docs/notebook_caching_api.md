@@ -59,7 +59,7 @@ result = df.groupby('category').sum()
 
 Re-run the cell and both statements restore from cache instead of recomputing.
 You see that happen on the **badge** above the cell's output — `EXECUTED` (ochre)
-on the first run, `RESTORED` (green) on the second:
+on the first run, `CACHED` (green) on the second:
 
 <iframe class="cash-badge" src="/_badges/status_computed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
 
