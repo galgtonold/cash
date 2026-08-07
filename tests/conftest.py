@@ -508,11 +508,44 @@ def pytest_runtest_setup(item):
     _STALL_WATCHDOG.set_allowance(seconds)
 
 
+# Failures that were retried away, kept so the run can still report them.
+#
+# A rerun that passes is reported as a bare `R` and a "1 rerun" tally -- the
+# failure text is dropped. For the infra signatures the global --only-rerun
+# covers (a kernel that could not get a socket) that is the right amount of
+# noise. For a test that opts in with `@pytest.mark.flaky` because it is
+# load-sensitive, it is not: those failures are rare, not summonable, and
+# carry the on-disk evidence that says which mechanism fired. Retrying them
+# without this hook would spend the occurrence and keep nothing.
+_RERUN_FAILURES: list[tuple[str, str]] = []
+
+
 def pytest_runtest_logreport(report):
     _STALL_WATCHDOG.poke(f"{report.when}:{report.outcome} {report.nodeid}")
+    if report.outcome == "rerun" and report.longrepr is not None:
+        _RERUN_FAILURES.append((report.nodeid, str(report.longrepr)))
     if report.when == "teardown":
         # Back to the default limit; the next test declares its own.
         _STALL_WATCHDOG.set_allowance(None)
+
+
+def pytest_terminal_summary(terminalreporter):
+    """Print what each retried-away failure actually said."""
+    if not _RERUN_FAILURES:
+        return
+    tr = terminalreporter
+    tr.write_sep("=", "failures that passed on a retry", yellow=True)
+    tr.write_line(
+        "These did not fail the run. They are shown because a green retry "
+        "otherwise discards the only evidence a rare failure produces.")
+    for nodeid, longrepr in _RERUN_FAILURES:
+        tr.write_line("")
+        tr.write_line(f"--- {nodeid}", bold=True)
+        # The assertion line is what carries the diagnostic; the frames above
+        # it are the same every time and would bury the summary.
+        lines = [ln for ln in longrepr.splitlines() if ln.startswith("E ")]
+        for ln in (lines or longrepr.splitlines())[-6:]:
+            tr.write_line(f"    {ln.strip()}")
 
 
 # ---------------------------------------------------------------------------
