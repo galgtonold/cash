@@ -233,3 +233,44 @@ def test_a_refused_call_is_never_stored_through_the_production_dispatch_path(tmp
 
     assert calls == [1, 1], "a mutating callee was served from cache via CallCache.resolve"
     assert payload["dirty"] is False
+
+
+def test_an_unhashable_argument_reads_as_changed_not_unchanged(monkeypatch):
+    """`_hash_args`'s `except` branch must fail CLOSED, on every Python.
+
+    It used to append `None` there, reasoning that "'cannot prove unmutated' is
+    exactly what a `None` here already means to the caller". It did not:
+    `None == None`, so two unknowable snapshots compared EQUAL and read as
+    "argument unchanged" — a callee mutating that argument was cached and its
+    mutation silently skipped.
+
+    That branch was believed unreachable ("compute_hash's tier-3 fallback
+    hashes id(obj), which cannot itself raise"). It is reachable on **every
+    Python before 3.14**: hashing an instance of a locally-defined class raises
+    `AttributeError: Can't pickle local object '<f>.<locals>.C'` instead of
+    falling through to the identity tier. A class defined inside a function is
+    ordinary in a notebook and ubiquitous in tests.
+
+    CI caught it — every 3.10-3.13 job red, all three 3.14 jobs green — and a
+    fully green local suite did not, because local dev runs 3.14. So this test
+    forces the branch directly rather than relying on a version's pickling
+    quirk to reach it, and therefore keeps protecting the property on 3.14 and
+    on whatever 3.15 does.
+    """
+    from cash.notebook import call_unit as cu
+
+    def boom(_obj):
+        raise AttributeError("Can't pickle local object")
+
+    monkeypatch.setattr(cu, "compute_hash", boom)
+
+    unit = cu.CallUnit.__new__(cu.CallUnit)
+    subject = object()
+    before = cu.CallUnit._hash_args(unit, (subject,), {})
+    after = cu.CallUnit._hash_args(unit, (subject,), {})
+
+    assert len(before) == 1, "the argument must still produce a slot"
+    assert before != after, (
+        "two unknowable snapshots compared equal — an argument whose content "
+        "cannot be hashed is being read as 'unchanged', which is fail-open"
+    )

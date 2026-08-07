@@ -950,14 +950,23 @@ class CallUnit:
         for value in (*args, *kwargs.values()):
             try:
                 h = compute_hash(value)
-            except Exception:  # noqa: BLE001 - belt: compute_hash's own tier-3
-                # fallback (`identity_hash`) hashes `id(obj)`, which cannot
-                # itself raise, so this except is not expected to be live in
-                # practice. Kept because "cannot prove unmutated" is exactly
-                # what a `None` here already means to the caller, and it costs
-                # nothing to keep the same fail-closed answer if that ever
-                # stops being true.
-                out.append(None)
+            except Exception:  # noqa: BLE001
+                # This branch IS live, on every Python before 3.14: hashing an
+                # instance of a locally-defined class raises
+                # `AttributeError: Can't pickle local object '<f>.<locals>.C'`
+                # rather than reaching `compute_hash`'s identity fallback. A
+                # class defined inside a function is ordinary in a notebook and
+                # ubiquitous in tests.
+                #
+                # It must append the SAME single-use sentinel as the
+                # identity-fallback case below, and for the same reason. This
+                # used to append `None`, on the reasoning that "'cannot prove
+                # unmutated' is exactly what a `None` here already means to the
+                # caller" -- but `None == None`, so two unknowable snapshots
+                # compared EQUAL and read as "argument unchanged". That is
+                # fail-OPEN: a callee mutating an unpicklable argument was
+                # cached and its mutation silently skipped, on 3.10-3.13.
+                out.append(object())
                 continue
             if is_identity_fallback_hash(value, h):
                 out.append(object())
