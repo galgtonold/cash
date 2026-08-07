@@ -22,7 +22,7 @@ argument by its evaluated VALUE, not a hidden object's id-stable lineage), on
 the interception-is-on-by-default path (no ``# @cash:cache-calls`` directive
 anywhere). The key-construction logic itself is already unit-tested directly
 (``tests/test_notebook/test_call_unit_key.py::test_a_computed_argument_discriminates_by_VALUE_not_lineage``),
-and an untracked probe (``zzprobe_hidden_state_arg.py``) exercised a
+and a probe (``zzprobe_hidden_state_arg.py``, in this directory) exercised a
 real-kernel shape of it -- but only under the OLD opt-in
 ``# @cash:cache-calls`` directive, and with no assertion at all ("this probe
 reports, it does not gate").
