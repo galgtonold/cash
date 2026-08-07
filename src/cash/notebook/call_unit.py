@@ -619,6 +619,7 @@ class CallUnit:
         loop_vars_provider: Callable[[], dict[str, object]] | None = None,
         loop_var_digests_provider: Callable[[], Mapping[str, str]] | None = None,
         ttl_provider: Callable[[], int | None] | None = None,
+        persist_provider: Callable[[], bool] | None = None,
     ):
         self._cash = cash_instance
         self._ctx_provider = ctx_provider
@@ -629,6 +630,13 @@ class CallUnit:
         # construction predating this parameter gets -- means "no TTL", which
         # is the behaviour this class had when it ignored TTL entirely.
         self._ttl_provider = ttl_provider or (lambda: None)
+        # `# @cash:persist` / `%cash_persist` for the statement this call sits
+        # in (CAS-269). Read at STORE time for the same reason `ttl` is read at
+        # invoke time: one `CallCache` serves every statement. `False` -- the
+        # default, and what every construction predating this parameter gets --
+        # leaves the decision to the cost model, which is what this class did
+        # when it ignored `persist` entirely.
+        self._persist_provider = persist_provider or (lambda: False)
         # See `call_cache_key`'s `loop_vars` section. `None` (rather than
         # requiring every caller to pass one) keeps every existing direct
         # construction of `CallUnit` -- tests included -- working exactly as
@@ -1355,6 +1363,17 @@ class CallUnit:
         no new required field when these stay absent.
         """
         metadata: dict[str, Any] = {"execution_time": elapsed, "timestamp": _time.time()}
+        # CAS-269. `TieredBackend` reads exactly this key to bypass the ~0.1s
+        # persistence floor, so threading the statement's resolved annotation
+        # here is the whole fix -- the statement path writes the same field
+        # from the same `force_persist` (`processor._save_to_cache`).
+        #
+        # Written only when True, keeping the sparse-entry shape every other
+        # optional channel here follows, and it is a plain `bool`: metadata is
+        # eagerly unpickled for EVERY entry at startup, so nothing but builtins
+        # belongs in it (see the `callee_globals` note below).
+        if self._persist_provider():
+            metadata["force_persist"] = True
         if file_deps or remote_deps:
             try:
                 from cash.notebook.file_dep_snapshot import snapshot_dependencies

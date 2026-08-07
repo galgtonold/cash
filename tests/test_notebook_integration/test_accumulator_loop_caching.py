@@ -29,23 +29,24 @@ The correctness gates this file pins, post-CAS-259:
     compute-cost floor (~1s) regardless of any annotation. An EXPENSIVE
     intercepted call (e.g. a 1.2s ``slow``) survives a restart today, with or
     without ``@cash:persist`` — confirmed against a real kernel. What is
-    actually lost is narrower: ``CallUnit._store`` never consults the
-    ``persist`` annotation and always writes the same sparse, fixed metadata
-    (``execution_time``/``timestamp``), so it can never set
-    ``force_persist`` — cache *policy* (this branch's Task 5 report already
-    documented the same gap for TTL and the size/cost model) doesn't
-    propagate down to call units. For a call CHEAP enough to also miss the
-    generic floor (this file's ``slow`` sleeps 0.03s, deliberately below it),
-    ``@cash:persist`` can no longer override that and force it durable, so it
-    does NOT survive a restart. The RESULT stays correct either way (a full,
-    correct recompute — not corruption or a stale value); these two tests
-    were rewritten to pin exactly that ("correct but fully recomputed", not
-    "restored") for the cheap/sub-floor case specifically. This is a known,
-    accepted consequence of CAS-259 surfaced during its own test triage, not
-    something this suite is hiding — see the CAS-259 task report for the
-    follow-up question it raises (should ``persist`` — and TTL, and the size
-    model — propagate from the statement path down into ``CallUnit``, so it
-    can override the floor for cheap calls too?);
+    actually lost was narrower: ``CallUnit._store`` never consulted the
+    ``persist`` annotation and always wrote the same sparse, fixed metadata
+    (``execution_time``/``timestamp``), so it could never set
+    ``force_persist`` — cache *policy* did not propagate down to call units.
+    For a call CHEAP enough to also miss the generic floor (this file's
+    ``slow`` sleeps 0.03s, deliberately below it), ``@cash:persist`` could not
+    override that, so it did NOT survive a restart.
+
+    **The follow-up question this file used to pose — "should ``persist``, TTL
+    and the size model propagate from the statement path down into
+    ``CallUnit``?" — has since been answered "yes" for two of the three:** TTL
+    in CAS-268, ``persist`` in CAS-269. So the pair of restart tests below now
+    pins the propagating behaviour (``persist`` → restored, no directive →
+    fully recomputed), with the no-directive arm as the control that keeps the
+    other honest about ``slow`` staying below the generic floor. The RESULT is
+    asserted correct in BOTH arms, which is the property these tests existed
+    for in the first place. The size/cost model still does not propagate;
+
   * #4 a loop with a genuine side effect is NOT cached and re-fires every run
     (the wrong-result guard — unaffected by CAS-259, side effects still
     refuse via the normal per-statement pipeline);
@@ -189,27 +190,30 @@ def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# #2 CAS-259 consequence: a REAL kernel restart no longer restores this shape
-#    from disk. The disk tier is fine; ``persist`` (like TTL and the
-#    size/cost model, per this branch's Task 5 report) just doesn't
-#    propagate from the statement path into ``CallUnit`` -- see module
-#    docstring. What must NOT regress is correctness: the recompute must
-#    still land the exact right answer.
+# #2 A REAL kernel restart, both arms. ``persist`` propagates into
+#    ``CallUnit`` since CAS-269, so the annotated arm is RESTORED and the
+#    bare arm is fully recomputed -- and the bare arm is what proves the
+#    annotated one is measuring the annotation rather than the backend's
+#    generic compute floor. What must NOT regress either way is correctness:
+#    the loop must land the exact right answer, restored or recomputed.
 # ---------------------------------------------------------------------------
 
-def test_accumulator_loop_recomputes_correctly_after_restart(nb_runner, tmp_path):
+def _restart_and_rerun_loop(nb_runner, tmp_path, annotation):
+    """Cold run, real restart, re-run the loop cell. Returns re-executions.
+
+    ``annotation`` is the directive on the FOR line (or ``""``), scoped there
+    rather than to the too-cheap seed statement above it.
+    """
     counter = tmp_path / "calls.log"
+    loop = "out = []\n"
+    if annotation:
+        loop += f"{annotation}\n"
+    loop += "for e in items:\n    out.append(slow(e))"
     nb_runner.create_notebook([
         SETUP,
         _slow_def(counter),
         "items = [1, 2, 3, 4, 5]",
-        # persist directive on the FOR line so it scopes to the loop unit, not
-        # the (too-cheap) seed above it. Kept even though it can no longer
-        # make this shape survive a restart, to prove that too (see below).
-        "out = []\n"
-        "# @cash:persist\n"
-        "for e in items:\n"
-        "    out.append(slow(e))",
+        loop,
         "print(f'out={out}')",
     ])
     nb_runner.start_kernel()
@@ -225,21 +229,51 @@ def test_accumulator_loop_recomputes_correctly_after_restart(nb_runner, tmp_path
 
     nb_runner.run_cell(4)
     warm = _n(counter) - cold
-    # NOT because interception is RAM-only -- it isn't; CallUnit writes
-    # through the same backend.set() the statement path uses, and an
-    # EXPENSIVE intercepted call (e.g. 1.2s) survives a restart just fine
-    # (TieredBackend promotes to disk once its generic ~1s compute floor is
-    # cleared, `@cash:persist` or not). ``slow`` here sleeps only 0.03s --
-    # deliberately cheap -- and CallUnit's metadata carries neither
-    # `force_persist` (the `persist` annotation never reaches CallUnit._store)
-    # nor a cost-model family, so it falls through to that generic floor and
-    # does NOT clear it. So all 5 calls genuinely re-run. Asserted explicitly
-    # (not just "don't crash") so a future change that silently alters this
-    # either direction gets caught rather than passing unnoticed.
-    assert warm == 5, f"expected all 5 calls to re-run post-restart, got {warm}"
 
+    # Correctness is the property that must hold in BOTH arms, restored or
+    # recomputed. It is what this pair originally existed to pin.
     nb_runner.run_cell(5)
     assert "out=[10, 20, 30, 40, 50]" in nb_runner.get_output(5), nb_runner.get_output(5)
+    return warm
+
+
+def test_persist_makes_a_cheap_accumulator_loop_survive_a_restart(nb_runner, tmp_path):
+    """``# @cash:persist`` now reaches the call entry (CAS-269).
+
+    This assertion used to read ``warm == 5``, pinning the opposite. That was
+    not a mistake at the time -- it snapshotted a real gap, deliberately, with
+    a note that "a future change that silently alters this either direction
+    gets caught rather than passing unnoticed". CAS-269 is that change, so the
+    snapshot is now the thing to update rather than defend.
+
+    Why the annotation is load-bearing HERE and nowhere else in this file:
+    ``TieredBackend`` promotes an entry to disk when its metadata sets
+    ``force_persist`` OR when it clears the backend's own generic compute
+    floor. An EXPENSIVE intercepted call (~1.2s) survives a restart with or
+    without the directive. ``slow`` sleeps 0.03s -- deliberately below that
+    floor -- so ``persist`` is the only thing that can make this durable, which
+    is exactly what makes the control below meaningful.
+    """
+    warm = _restart_and_rerun_loop(nb_runner, tmp_path, "# @cash:persist")
+    assert warm == 0, (
+        f"`# @cash:persist` did not reach the loop's call entries: {warm} of 5 "
+        "calls re-ran after a restart"
+    )
+
+
+def test_without_persist_a_cheap_accumulator_loop_recomputes(nb_runner, tmp_path):
+    """NON-VACUITY for the test above, and the ``slow`` cost floor is why.
+
+    Without this, a ``slow`` that had drifted above ``TieredBackend``'s generic
+    compute floor would make the ``persist`` test pass on the floor alone,
+    proving nothing about whether the annotation reaches a call entry.
+    """
+    warm = _restart_and_rerun_loop(nb_runner, tmp_path, "")
+    assert warm == 5, (
+        f"expected all 5 sub-floor calls to re-run after a restart with no "
+        f"persist directive, got {warm} -- `slow` may have grown expensive "
+        "enough to clear TieredBackend's generic compute floor on its own"
+    )
 
 
 # ---------------------------------------------------------------------------

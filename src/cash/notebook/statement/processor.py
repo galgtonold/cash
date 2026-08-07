@@ -454,6 +454,9 @@ class StatementProcessor:
         # at invoke time by the call units inside it (CAS-268). Refreshed on
         # every statement; `None` means no TTL.
         self._call_unit_ttl: int | None = None
+        # Same shape, same lifetime, for `# @cash:persist` / `%cash_persist`
+        # (CAS-269). `False` means "leave it to the cost model".
+        self._call_unit_persist: bool = False
         self._call_unit_loop_vars: list[dict[str, Any]] = []
         # Parallel stack, pushed/popped in lockstep with ``_call_unit_loop_vars``
         # by the SAME ``loop_vars_scope`` call: ``{name: full_hash}`` for
@@ -623,6 +626,18 @@ class StatementProcessor:
         each statement publishes its own annotation before executing.
         """
         return self._call_unit_ttl
+
+    def current_call_persist(self) -> bool:
+        """Whether the statement being processed asked for disk persistence.
+
+        The twin of :meth:`current_call_ttl`, and handed over the same way, for
+        the same reason (CAS-269).  `persist` forces an entry past the ~0.1s
+        persistence floor; it reached the STATEMENT entry only.  In the CAS-260
+        shape -- the callee writes a global, so the statement is skip-cached and
+        the call entry is the ONLY thing cached -- that left the annotation
+        acting on nothing, and cheap-ish work re-ran after every restart.
+        """
+        return self._call_unit_persist
 
     def current_loop_vars(self) -> dict[str, Any]:
         """The innermost enclosing loop's non-dunder iteration vars, or ``{}``.
@@ -862,6 +877,7 @@ class StatementProcessor:
         # EVERY statement, so a previous statement's ttl can never leak into
         # one that carries no annotation.
         self._call_unit_ttl = effective_ttl
+        self._call_unit_persist = force_persist
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
@@ -1146,6 +1162,7 @@ class StatementProcessor:
         # EVERY statement, so a previous statement's ttl can never leak into
         # one that carries no annotation.
         self._call_unit_ttl = effective_ttl
+        self._call_unit_persist = force_persist
         unseeded_calls = self._warn_unseeded_randomness(code, allow_random)
         self._warn_entropy_reseed(code)
         metrics: ProcessResult = {
@@ -2022,6 +2039,7 @@ class StatementProcessor:
                 self._call_cache = CallCache(
                     cash_instance,
                     ttl_provider=self.current_call_ttl,
+                    persist_provider=self.current_call_persist,
                     ctx_provider=lambda: CacheKeyContext(
                         variable_lineage=self.variable_lineage,
                         user_ns=self.shell.user_ns,

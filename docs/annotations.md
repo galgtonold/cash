@@ -336,6 +336,27 @@ with `@cash.cache`:
     reach for `# @cash:no-cache-calls` (per statement or per cell) the moment a
     callee's purity is something you're not sure of.
 
+#### Which directives reach the call inside a statement
+
+A directive is written on a *statement*, but under default-on interception the
+expensive work often lives in a **call entry** of its own. Those are two
+different cache entries, so "does this directive reach the call?" is a real
+question with a per-directive answer:
+
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor.current_call_ttl @d31c17fa, cash/notebook/statement/processor.py:StatementProcessor.current_call_persist @e00d6e61 -->
+| Directive | Reaches the intercepted call? |
+|---|---|
+| `# @cash:no-cache` | Yes — it switches interception off entirely, so there is no call entry to miss |
+| `# @cash:ttl=N` | Yes — the statement's TTL governs the calls inside it |
+| `# @cash:persist` | Yes — the statement's persistence request governs them too |
+| Automatically tracked file reads | Yes — a call re-validates the files it read, on its own |
+| `# @cash:allow-random` | Not applicable — a call that consumes RNG refuses to cache in the first place |
+
+This mattered most in the shape where the statement **cannot** cache — a callee
+that writes a global makes its statement skip-cache, leaving the call entry as
+the only thing cached. A directive that stopped at the statement then acted on
+nothing at all, silently.
+
 ### The two warnings
 
 Cash raises a *different* warning when it serves you a cached value that came

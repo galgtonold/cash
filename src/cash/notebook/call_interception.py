@@ -182,6 +182,7 @@ class CallCache:
         loop_vars_provider: Callable[[], dict[str, Any]] | None = None,
         loop_var_digests_provider: Callable[[], dict[str, str]] | None = None,
         ttl_provider: Callable[[], int | None] | None = None,
+        persist_provider: Callable[[], bool] | None = None,
     ):
         self._cash = cash_instance
         # Keyed by (id(fn), site) -- NOT (id(fn), site_index). `set_sites` is
@@ -237,6 +238,9 @@ class CallCache:
             # No fallback: absent a live processor there is no annotation in
             # force, and `None` is precisely "no TTL" (CAS-268).
             ttl_provider,
+            # Same reasoning for `persist`: no processor means no annotation,
+            # and `None` degrades to "don't force it" (CAS-269).
+            persist_provider,
         )
 
     def _default_ctx(self) -> CacheKeyContext:
