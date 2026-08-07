@@ -5,6 +5,105 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-08-07
+
+One headline change: cash now caches the **expensive call inside a statement**,
+automatically. Statements that could never be cached before — the ones where the
+work sits inside a call and the statement itself is a mutation — are now fast on
+a re-run, with no annotation.
+
+### Changed
+
+**Call-level caching is on by default.** This changes what cash does to code you
+have already written, so it is worth understanding before you upgrade.
+
+Previously the unit of caching was the whole statement. That is the wrong unit in
+both directions:
+
+<!-- test:skip reason="illustrative: two schematic statement shapes, no compute() to call" -->
+```python
+out.append(compute(x))     # skip-cached: `.append` is a mutation -> zero reuse, ever
+s += compute(x)            # cached, but keyed on the running total -> a reorder re-ran the tail
+```
+
+`compute(x)` is now cached in its own right, so the first shape reuses work it
+never could before, and reordering the second no longer re-runs everything after
+the first change. `for e in items: out.append(f(e))` — the most ordinary way to
+run something slow over a list — went from caching nothing to caching per item.
+
+The trade-off is real and worth stating plainly: statements cash previously
+declined to cache for an unrelated reason are now purity-judged for the first
+time, automatically. If a callee has side effects the analyzer cannot see, a
+cached call skips them without being asked. Opt out per statement or per cell
+with `# @cash:no-cache-calls`. See *Annotations* → *Call-level caching*.
+
+`# @cash:cache-calls` still parses and now does nothing; it is no longer needed.
+
+### Added
+
+- **Loops that are cheap per iteration but long are handled properly.** Cash
+  measures a short head of the loop and, when per-iteration bookkeeping would
+  cost more than it saves, stores the tail as one unit instead. A 20,000-iteration
+  loop of sub-millisecond work is ~46x faster warm; previously it fell between two
+  policies and cached nothing useful.
+- **The badge shows which parts of a statement were cached**, so an intercepted
+  call's hits and time saved are visible next to hand-decorated ones and tagged
+  `[intercepted]`.
+- **Three cost thresholds are configurable at runtime** — `call_cost_floor_seconds`,
+  `loop_split_max_iter_seconds` and `loop_split_min_remaining_seconds` — via every
+  layer (`configure()`, `CASH_*`, TOML). Documented in *Configuration*.
+- `# @cash:ttl=` and `# @cash:persist` now reach the calls inside a statement, not
+  just the statement. Both used to stop at the statement boundary, which meant
+  that in the shape where only the call is cached, the annotation acted on
+  nothing.
+
+### Fixed
+
+**Wrong values**
+
+- **A global or captured variable passed to a call now invalidates the cache.**
+  `sum(G)`, `len(G)`, `helper(G)` and `model.predict(X_test)` all put their
+  argument beyond the tracker, so changing it left `@cash.cache` serving a stale
+  result forever — with `.explain()` reporting `[HIT]`. The canonical shape was an
+  `X_train`/`X_test` pair read as free variables by a decorated training function:
+  changing the split ratio left the old predictions in place. Closure captures had
+  the identical bug and are fixed the same way.
+- **An argument whose content cannot be hashed is treated as changed, not
+  unchanged.** A callee mutating such an argument was cached and its mutation
+  silently skipped, on every Python before 3.14.
+- **A cached callee's writes to globals are no longer dropped**, including from
+  inside a loop body, and are replayed in the right order when the loop's items
+  are reordered.
+- **`# @cash:ttl=5m` no longer parses as five seconds.** A unit suffix was
+  silently truncated to its leading digits — a 60x error whose only symptom was a
+  cache that kept missing. Malformed TTLs are now rejected loudly and name
+  themselves.
+- **`@cash.cache` on a function returning a matplotlib `Figure` no longer hijacks
+  pyplot's current figure.** Caching one made the cache's private copy current, so
+  a later `plt.savefig()` wrote a figure you never drew on — on the first call,
+  silently. Such results are now refused, with a warning explaining why.
+
+**Correctness of behaviour**
+
+- A statement's own `ttl` governs the calls inside it, so `# @cash:ttl=0` really
+  does re-fetch.
+- Cash's own cache reads are no longer recorded as your file dependencies.
+- A cache entry this environment cannot read is treated as absent rather than
+  raising, so a cache written with an optional dependency present stays usable
+  without it.
+- Re-executing a seeded draw now schedules the definitions it reads along with it,
+  instead of raising `UpstreamStateError`.
+- `%cash_on`'s notebook-not-found message no longer tells JupyterLab users to
+  change a VS Code setting.
+
+### Documentation
+
+Three documented claims were found to disagree with the code and corrected: the
+`CashConfig` field table was missing three fields, malformed-TTL handling was
+described as silent when it warns, and a callee that writes a global was
+described as re-executed on a loop reorder when it is in fact served with its
+write replayed.
+
 ## [0.2.0] - 2026-07-29
 
 Two features: cash can now track objects in remote storage the way it has always
