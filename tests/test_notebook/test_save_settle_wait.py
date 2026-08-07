@@ -123,17 +123,44 @@ def test_a_write_landing_mid_wait_is_waited_out(nb, monkeypatch):
     Guards against the fake-sleep tests above passing for reasons that have
     nothing to do with the real polling loop.
     """
+    # The writer must be provably UNDER WAY before the wait starts. The first
+    # version of this test started the thread and immediately began waiting,
+    # with the writer sleeping before its first write -- so the file was still
+    # untouched, the poll loop could see two identical (mtime, size) readings
+    # and return having waited for nothing. Linux and Windows scheduled the
+    # thread fast enough to hide it; every macOS job failed.
+    first_write = threading.Event()
     done = threading.Event()
 
+    # Long enough to span several poll cycles, comfortably short of the loop's
+    # own cap -- if the writer outlasted the cap, the wait would return early
+    # for a legitimate reason and this test would fail for the wrong one. Both
+    # margins are derived from the module's constants and asserted below, so
+    # changing a constant reports here instead of going quietly flaky.
+    # The gap must be SHORTER than the poll interval, not equal to it. At the
+    # same rate the poller can land twice between two writes, read an identical
+    # (mtime, size) both times and conclude the file has settled while it very
+    # much has not -- which is exactly what happened when this was first
+    # written with `gap = _SAVE_POLL_INTERVAL_S`: a deterministic failure, not
+    # a flake. The writer has to out-pace the poller for "still changing" to be
+    # observable at all.
+    gap = sd._SAVE_POLL_INTERVAL_S / 2
+    n_writes = 12
+    assert gap < sd._SAVE_POLL_INTERVAL_S, "writer must out-pace the poller"
+    assert n_writes * gap > 2 * sd._SAVE_POLL_INTERVAL_S, "writer too brief to span a poll cycle"
+    assert n_writes * gap < sd._SAVE_MAX_WAIT_S * 0.6, "writer outlasts the wait cap"
+
     def writer():
-        for _ in range(4):
-            time.sleep(sd._SAVE_POLL_INTERVAL_S / 2)
+        for _ in range(n_writes):
             with open(nb, "a", encoding="utf-8") as f:
                 f.write("x")
+            first_write.set()
+            time.sleep(gap)
         done.set()
 
     t = threading.Thread(target=writer, daemon=True)
     t.start()
+    assert first_write.wait(timeout=5), "the writer thread never ran"
     sd._wait_for_notebook_save(str(nb))
     # Read the flag BEFORE joining. Joining first would let the writer finish
     # on its own and the assertion would hold however early the wait returned
