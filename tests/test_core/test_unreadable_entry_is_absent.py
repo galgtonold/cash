@@ -46,11 +46,33 @@ def _poison(cache_dir, key="poisoned"):
     return meta
 
 
+def _write_and_settle(cache_dir, key="good", value=None):
+    """``set`` the entry and make it DURABLE before another instance reads it.
+
+    ``FileBackend.set`` queues an async write; ``list_entries``/``cleanup``
+    drain ``self._writes`` first, which covers "the caller already set() this"
+    only when the caller is the SAME instance. These tests deliberately read
+    through a FRESH backend — a fresh instance's queue is empty, so it drains
+    nothing and the `.meta` file may simply not exist yet.
+
+    That is exactly how these two went red on ubuntu 3.13/3.14 while every
+    other job passed: `list_entries()` returned `[]`, missing the GOOD entry,
+    not just the poisoned one. Unreproducible in 40 local runs — a runner-speed
+    race, not a logic error, which is why it looked like flakiness.
+
+    ``shutdown()`` is the public drain (`_writes.shutdown(wait=True)` then
+    `_flush_metadata()`), and it is what a real process does when it finishes.
+    """
+    backend = FileBackend(cache_dir=str(cache_dir))
+    backend.set(key, {"v": 1} if value is None else value)
+    backend.shutdown()
+    return backend
+
+
 def test_a_poisoned_entry_does_not_break_startup(tmp_path):
     """``_init_stats`` runs over every entry at startup -- one bad file there
     took down the whole session."""
-    backend = FileBackend(cache_dir=str(tmp_path))
-    backend.set("good", {"v": 1})
+    _write_and_settle(tmp_path)
     _poison(tmp_path)
 
     fresh = FileBackend(cache_dir=str(tmp_path))
@@ -59,8 +81,7 @@ def test_a_poisoned_entry_does_not_break_startup(tmp_path):
 
 def test_a_poisoned_entry_does_not_break_list_entries(tmp_path):
     """``list_entries`` is what ``%cash_on`` calls to report cache state."""
-    backend = FileBackend(cache_dir=str(tmp_path))
-    backend.set("good", {"v": 1})
+    _write_and_settle(tmp_path)
     _poison(tmp_path)
 
     entries = FileBackend(cache_dir=str(tmp_path)).list_entries()
