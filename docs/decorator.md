@@ -164,12 +164,23 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @f5229284 -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @c2035a2e -->
 Only globals the function **reads** participate. Globals it *writes*
 (`global x; x = ...`) or mutates in place are excluded — those are
 side-effect accumulators, and folding them in would invalidate the
 function on its own output. A read global whose value can't be hashed
 warns once rather than failing the call.
+
+**Reading includes passing it to something.** `sum(G)`, `len(G)`,
+`helper(G)` and `model.predict(G)` all count, so changing `G` invalidates
+in each case. If cash then observes that *calling your function* is what
+changed `G` — a helper that appends to it, say — it stops tracking that one
+name and warns, because a value the call itself moves would key every entry
+on the previous call's output. The rest of the function keeps caching
+normally.
+
+The same rule applies to variables a closure captures, not just module
+globals.
 
 Globals read inside a nested scope count too. A generator expression or
 `lambda` always compiles to its own code object, and detection recurses into

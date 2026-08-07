@@ -564,6 +564,21 @@ class Cash:
         self._capture_use_cache: dict = {}
         # code object -> tuple of global names it reads (global folding)
         self._global_read_cache: dict = {}
+        # code object -> names folded only provisionally (CAS-270). See
+        # `_read_global_data_names`. A missing entry means "unknown", which
+        # `_fold_read_globals` treats as "watch everything".
+        self._provisional_global_cache: dict = {}
+        # (code object, scope) -> names a call was OBSERVED to mutate. Learned
+        # once, then those names stop being folded (see `_learn_mutating_captures`).
+        self._mutating_globals: dict = {}
+        # code object -> closure free vars folded only provisionally (CAS-270).
+        self._provisional_capture_cache: dict = {}
+        # Per-call scratch: {name: (pre-call hash, scope)} for every provisional
+        # capture folded into the key being built. Cleared once per
+        # `_resolve_cache_key`, because BOTH `_fold_closure` and
+        # `_fold_read_globals` contribute and either clearing it would wipe the
+        # other's entries.
+        self._pending_capture_watch: dict[str, tuple[str, str]] = {}
         # func_name -> RNG modules that function was OBSERVED drawing from.
         # Learned on a miss; only these functions get a seed-epoch in their key.
         self._rng_drawing_funcs: dict[str, set[str]] = {}
@@ -1292,6 +1307,9 @@ class Cash:
           - (_CACHE_MISS, result, 'unhashable')             - unhashable args
           - (_CACHE_MISS, result, 'error')                  - key generation error
         """
+        # One reset per key build: both _fold_closure and
+        # _fold_read_globals contribute, so neither may clear it.
+        self._pending_capture_watch = {}
         try:
             current_state_hash = self._state_hasher.compute(
                 func_name, own_source_override=self._pin_own_source(func),
@@ -1851,6 +1869,9 @@ class Cash:
             ttl = self._effective_ttl(func_name, ttl_decl)
 
             key_result = self._resolve_cache_key(func, func_name, dynamic_depends_on, args, kwargs, call_start)
+            # Snapshot into a LOCAL immediately: a nested cached call would
+            # overwrite the instance scratch before this body finishes (CAS-270).
+            capture_watch = self._pending_capture_watch
             if key_result[0] is _CACHE_MISS:
                 return key_result[1]
             cache_key, current_state_hash, args_hash = key_result
@@ -1962,6 +1983,9 @@ class Cash:
                     except Exception as e:
                         self._warn_cache_if_raised(func_name, e)
                         should_cache = False
+                # After the body ran, before deciding to store: a provisional
+                # global this call moved must stop being folded (CAS-270).
+                self._learn_mutating_captures(func, func_name, capture_watch)
                 if should_cache and self._refuses_identity_coupled(func_name, res):
                     should_cache = False
 
@@ -2021,6 +2045,8 @@ class Cash:
             key_result = self._resolve_cache_key(
                 func, func_name, dynamic_depends_on, args, kwargs, call_start
             )
+            # See the sync wrapper: snapshot before anything else can run.
+            capture_watch = self._pending_capture_watch
             if key_result[0] is _CACHE_MISS:
                 # _resolve_cache_key called `func(*args, **kwargs)` on the
                 # unhashable/error path. For an async function that returns
@@ -2160,6 +2186,8 @@ class Cash:
                     except Exception as e:
                         self._warn_cache_if_raised(func_name, e, stacklevel=6)
                         should_cache = False
+                # See the sync path.
+                self._learn_mutating_captures(func, func_name, capture_watch)
                 if should_cache and self._refuses_identity_coupled(func_name, res):
                     should_cache = False
 
@@ -2535,18 +2563,30 @@ class Cash:
         if cached is not None:
             return cached
         freevars = set(code.co_freevars or ())
+        provisional: frozenset = frozenset()
         try:
             tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
         except SOURCE_RETRIEVAL_ERRORS:
+            # No source: keep the old conservative answer. Nothing can be told
+            # apart, so nothing is folded and nothing is provisional.
             result = frozenset(freevars)
         else:
-            result = Cash._unsafe_uses_of(tree, freevars)
+            # Only mutations visible in this function's own source disqualify a
+            # capture outright. "Passed to a call" is provisional: folded, then
+            # confirmed by observation (CAS-270). Before this split, `sum(data)`
+            # put `data` beyond the fold and the closure served stale forever.
+            result = Cash._unsafe_uses_of(tree, freevars, bare_args=False)
+            provisional = Cash._unsafe_uses_of(tree, freevars) - result
         if len(self._capture_use_cache) < 4096:
             self._capture_use_cache[code] = result
+            # Kept in lockstep with the cache above so the two can never
+            # disagree about a code object.
+            self._provisional_capture_cache[code] = provisional
         return result
 
     @staticmethod
-    def _unsafe_uses_of(tree: ast.AST, names: set[str]) -> frozenset:
+    def _unsafe_uses_of(tree: ast.AST, names: set[str], *,
+                        bare_args: bool = True) -> frozenset:
         """Return the subset of *names* the AST body *may mutate*.
 
         Disqualifying uses of a name ``n``: method calls on it (``n.append(...)``
@@ -2554,6 +2594,20 @@ class Cash:
         (the callee may mutate), subscript/attribute stores or aug-assigns rooted
         at it, and ``del``. Iteration, subscript reads, and arithmetic stay safe.
         Shared by the closure-capture and module-global folds.
+
+        ``bare_args=False`` drops the "passed as an argument" rule, leaving only
+        uses that are *provably* a mutation in this function's own source. The
+        difference between the two calls is the PROVISIONAL set: names with no
+        positive evidence against them, which the argument rule was refusing
+        purely because an opaque callee *might* mutate them.
+
+        That refusal was over-broad, and it chose the worse failure. `sum(G)`,
+        `len(G)`, `helper(G)` and `model.predict(G)` all put `G` beyond the
+        argument rule, so a later `G = ...` never reached the key and the
+        function served a stale value forever, silently (CAS-270). Only
+        iteration and subscript reads survived. Callers now fold the
+        provisional names and confirm at runtime — see
+        ``_learn_mutating_captures``.
         """
         unsafe: set[str] = set()
         for node in ast.walk(tree):
@@ -2562,11 +2616,12 @@ class Cash:
                 if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
                         and f.value.id in names):
                     unsafe.add(f.value.id)
-                for a in list(node.args) + [kw.value for kw in node.keywords]:
-                    if isinstance(a, ast.Starred):
-                        a = a.value
-                    if isinstance(a, ast.Name) and a.id in names:
-                        unsafe.add(a.id)
+                if bare_args:
+                    for a in list(node.args) + [kw.value for kw in node.keywords]:
+                        if isinstance(a, ast.Starred):
+                            a = a.value
+                        if isinstance(a, ast.Name) and a.id in names:
+                            unsafe.add(a.id)
             elif isinstance(node, (ast.Assign, ast.AugAssign, ast.Delete)):
                 if isinstance(node, ast.Assign):
                     targets = node.targets
@@ -2608,9 +2663,14 @@ class Cash:
         # even when their value type is immutable - exclude them.
         written = self._closure_written_freevars(code)
         unsafe = self._capture_unsafe_uses(func)
+        # Captures excluded ONLY because they were passed to a call. Folded, then
+        # confirmed at runtime -- same treatment as module globals (CAS-270). A
+        # missing entry means "unknown": watch it rather than fold it blind.
+        provisional = self._provisional_capture_cache.get(code)
+        learned_mutating = self._mutating_globals.get((code, "closure"), frozenset())
         captures = []
         for name, cell in zip(freevars, closure):
-            if name in written:
+            if name in written or name in learned_mutating:
                 continue
             try:
                 v = cell.cell_contents
@@ -2622,9 +2682,12 @@ class Cash:
                 # Read-only mutable capture: fold its content hash.
                 # Unhashable content keeps the old skip behavior.
                 try:
-                    captures.append((name, self._hash_arg_payload((v,), {})))
+                    h = self._hash_arg_payload((v,), {})
                 except (TypeError, pickle.PicklingError, AttributeError, OverflowError):
                     continue
+                captures.append((name, h))
+                if provisional is None or name in provisional:
+                    self._pending_capture_watch[name] = (h, "closure")
         if not captures:
             return state_hash
         clo = self._serialize_args(func_name, tuple(captures), {})
@@ -2907,15 +2970,35 @@ class Cash:
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
         # otherwise drift every call and cause a permanent miss.
+        #
+        # `hard` is that set: mutations visible in this function's own source.
+        # `provisional` is the weaker case the argument rule used to lump in with
+        # it - a name merely PASSED to a call. Those are folded (so a change
+        # invalidates, CAS-270) and confirmed at runtime by
+        # `_learn_mutating_captures`, which demotes any that the call is actually
+        # observed to mutate.
+        provisional: frozenset = frozenset()
         if candidates:
             try:
                 tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
-                candidates -= Cash._unsafe_uses_of(tree, candidates)
+                hard = Cash._unsafe_uses_of(tree, candidates, bare_args=False)
+                provisional = Cash._unsafe_uses_of(tree, candidates) - hard
+                candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
-                candidates = set()
+                # No source: keep the old conservative answer. Without an AST
+                # there is no way to tell a read from a mutation, and folding
+                # blind would risk the permanent-miss trap with nothing to
+                # learn from.
+                candidates, provisional = set(), frozenset()
         names = tuple(sorted(candidates))
         if len(self._global_read_cache) < 4096:
             self._global_read_cache[code] = names
+            # Kept in lockstep with the names cache so the two can never
+            # disagree about a code object. A MISSING entry is not "nothing is
+            # provisional" -- `_fold_read_globals` reads that as "watch every
+            # folded name", which costs an extra hash per miss and is the safe
+            # direction.
+            self._provisional_global_cache[code] = provisional
         return names
 
     @staticmethod
@@ -3033,8 +3116,20 @@ class Cash:
         # globals, so bailing here skipped the module-attribute channel in
         # exactly the case it exists for.
         parts: list[tuple[str, str]] = []
+        code = getattr(func, "__code__", None)
+        # A missing provisional entry means "unknown", not "none" -- watch every
+        # folded name rather than fold one blind (see `_read_global_data_names`).
+        provisional = self._provisional_global_cache.get(code)
+        learned_mutating = self._mutating_globals.get((code, "global"), frozenset())
+        watch: dict[str, str] = {}
         for name in names:
             if name not in g:
+                continue
+            if name in learned_mutating:
+                # Observed to drift as a result of calling this function. Folding
+                # it would key the entry on the function's own output and miss
+                # forever, which is the trap the old argument rule guarded --
+                # and the decorator has no perpetual-miss guard to catch it.
                 continue
             v = g[name]
             # Skip modules, classes, and plain callables (helpers/deps handled
@@ -3047,6 +3142,10 @@ class Cash:
                 stabilized = self._stabilize_for_global_hash(v, self._hash_callable_source)
                 h = self._hash_arg_payload((stabilized,), {})
                 parts.append((name, h))
+                # Free: this is the hash the key already needed. Keeping it is
+                # what makes the post-call check cost one hash instead of two.
+                if provisional is None or name in provisional:
+                    watch[name] = (h, "global")
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 self._warn_once(
                     CashImpurityWarning,
@@ -3066,6 +3165,7 @@ class Cash:
                 if self._is_user_class(type(item)):
                     for cname, chash in self._instance_class_source_parts(item):
                         parts.append((f"{name}#cls:{cname}", chash))
+        self._pending_capture_watch.update(watch)
         parts.extend(self._module_attr_parts(func, func_name, g))
         if not parts:
             return state_hash
@@ -4033,6 +4133,74 @@ class Cash:
         """
         src_hash = self._hash_callable_source(hasher_fn)
         self._type_hashers[type_] = (hasher_fn, src_hash)
+
+    def _learn_mutating_captures(self, func: Callable, func_name: str,
+                                 watched: dict[str, tuple[str, str]]) -> None:
+        """Demote any provisional global this call was OBSERVED to mutate.
+
+        A global merely *passed to a call* (`sum(G)`, `model.predict(G)`) used to
+        be dropped from the key outright, on the theory that the callee might
+        mutate it. That silently served stale values forever (CAS-270). Those
+        names are folded now, and confirmed here: hash them again once the body
+        has run and compare against the hash the key already needed.
+
+        Changed across the call => calling this function is what moves the value,
+        so folding it would key the entry on the function's own output and miss
+        forever. Stop folding that ONE name; the function keeps caching on
+        everything else.
+
+        Two things worth knowing:
+
+        * The entry just written stays valid -- it is keyed on the PRE-call
+          state, which is what produced it. The next call keys without this
+          name, misses once, and thereafter behaves as it did before CAS-270.
+        * A change *between* calls (`G = [...]` anywhere) is invisible to this
+          window by construction, which is correct: that is precisely what
+          folding is for, and it needs no detection.
+
+        Only runs on a miss -- the body has to execute for there to be anything
+        to observe -- so the cost is one hash on the path that just paid for a
+        real computation.
+        """
+        if not watched:
+            return
+        code = getattr(func, "__code__", None)
+        if code is None:
+            return
+        g = getattr(func, "__globals__", None)
+        cells = dict(zip(getattr(code, "co_freevars", ()) or (),
+                         getattr(func, "__closure__", ()) or ()))
+        for name, (before, scope) in watched.items():
+            try:
+                if scope == "closure":
+                    cell = cells.get(name)
+                    if cell is None:
+                        continue
+                    after = self._hash_arg_payload((cell.cell_contents,), {})
+                else:
+                    if not isinstance(g, dict):
+                        continue
+                    after = self._hash_arg_payload(
+                        (self._stabilize_for_global_hash(
+                            g.get(name), self._hash_callable_source),), {})
+            except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
+                continue
+            if after == before:
+                continue
+            self._mutating_globals.setdefault((code, scope), set()).add(name)
+            where = ("variable it captures" if scope == "closure"
+                     else "module global")
+            self._warn_once(
+                CashImpurityWarning,
+                func_name,
+                name,
+                f"@cash.cache on {func_name}: calling it modifies the {where} "
+                f"'{name}', so '{name}' can no longer be tracked for "
+                f"invalidation and a cache hit will not repeat that change. "
+                f"Pass it as an argument, or return the new value instead of "
+                f"mutating it.",
+                stacklevel=6,
+            )
 
     def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
         """True when *result* must never be stored, because storing it would
