@@ -14,10 +14,12 @@ refuses. Measured: with the directive, ``fig.savefig()`` and ``plt.savefig()``
 wrote *different images* and ``plt.gcf() is fig`` was False; without caching,
 identical and True.
 
-The decorator has the same hole when a user writes ``@cash.cache`` by hand
-(confirmed by the same probe) — that is filed separately. This guards the path
-that applies caching *without the user asking*, which is the one that owes a
-higher duty of care.
+The decorator used to have the same hole when a user wrote ``@cash.cache`` by
+hand (confirmed by the same probe). That was filed as CAS-245 and is now closed
+— ``Cash._refuses_identity_coupled`` gates all four decorator store sites, with
+``tests/test_core/test_decorator_identity_guard.py`` guarding it. This file
+still guards the path that applies caching *without the user asking*, which is
+the one that owes a higher duty of care.
 
 **Migrated to real sites (CAS-243 Task 6).** This file used to be the one
 deliberate holdout exercising only the no-site decorator-fallback branch of

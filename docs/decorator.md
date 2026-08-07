@@ -726,6 +726,36 @@ roundtrip is the "side effect"), `assume_safe=True` silences the
 warning. If it isn't, refactor: separate the pure compute from the
 side effect, and only cache the pure part.
 
+### A function returning a matplotlib `Figure` is never cached
+
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @409a9199 -->
+`@cash.cache` refuses to store a result that is — or contains — a matplotlib
+`Figure` or `Axes`, and warns once saying so.
+
+This is not a limitation cash is apologising for; storing one would be *wrong*.
+pyplot keeps a process-wide registry of the "current figure", and
+`plt.savefig()` / `plt.title()` act on whatever that registry says, not on your
+variable. Cash's RAM tier deep-copies every value it stores, and reconstructing
+a `Figure` re-registers the **copy** as current. From then on you draw on your
+figure while `plt.savefig()` writes the cache's private snapshot — a blank
+image, on the first call, with no error.
+
+The trade is one-sided: a figure costs milliseconds to build, so there is no
+version of this that pays for the risk. Cache the *data* and draw from it:
+
+<!-- test:skip reason="illustrative — needs a df and a pyplot import the page doesn't set up" -->
+```python
+@cash.cache
+def summarise(df):          # expensive, cacheable
+    return df.groupby("region")["sales"].sum()
+
+fig, ax = plt.subplots()    # cheap, never cached
+summarise(df).plot(ax=ax)
+```
+
+The statement cache and call-unit caching refuse these objects for the same
+reason, so the rule is the same wherever you write it.
+
 ### `@cash.cache` on a generator
 
 Generators are materialized into a list (or chunks) on first call so

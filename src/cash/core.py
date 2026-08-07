@@ -1905,6 +1905,10 @@ class Cash:
                             except Exception as e:
                                 self._warn_cache_if_raised(func_name, e)
                                 should_cache = False
+                        if should_cache and self._refuses_identity_coupled(
+                            func_name, single_chunk_buffer
+                        ):
+                            should_cache = False
 
                         if should_cache and single_chunk_buffer:
                             # Write the one chunk now that the predicate approved.
@@ -1958,6 +1962,8 @@ class Cash:
                     except Exception as e:
                         self._warn_cache_if_raised(func_name, e)
                         should_cache = False
+                if should_cache and self._refuses_identity_coupled(func_name, res):
+                    should_cache = False
 
                 if should_cache:
                     # Attach lineage only when the value is actually stored: a
@@ -2101,6 +2107,10 @@ class Cash:
                             except Exception as e:
                                 self._warn_cache_if_raised(func_name, e, stacklevel=6)
                                 should_cache = False
+                        if should_cache and self._refuses_identity_coupled(
+                            func_name, single_chunk_buffer
+                        ):
+                            should_cache = False
 
                         if should_cache and single_chunk_buffer:
                             self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
@@ -2150,6 +2160,8 @@ class Cash:
                     except Exception as e:
                         self._warn_cache_if_raised(func_name, e, stacklevel=6)
                         should_cache = False
+                if should_cache and self._refuses_identity_coupled(func_name, res):
+                    should_cache = False
 
                 if should_cache:
                     # Attach lineage only when actually stored (see sync path):
@@ -4021,6 +4033,54 @@ class Cash:
         """
         src_hash = self._hash_callable_source(hasher_fn)
         self._type_hashers[type_] = (hasher_fn, src_hash)
+
+    def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
+        """True when *result* must never be stored, because storing it would
+        detach a library's global registry from the object the caller holds.
+
+        The statement path (``statement/processor.py``) and call interception
+        (``call_unit.py``) have gated on ``identity_coupled_reason`` for a
+        while; the decorator did not.  So ``@cash.cache`` on a function
+        returning a ``Figure`` hijacked ``plt.gcf()`` -- on the FIRST call,
+        during the *store*, because the RAM tier deep-copies and
+        ``Figure.__setstate__`` re-registers the copy as pyplot's current
+        figure.  The user then draws on their figure while ``plt.savefig()``
+        writes the cache's private snapshot (CAS-245).
+
+        Checked here rather than inside ``_store_in_cache`` so the refusal
+        lands beside ``cache_if``, BEFORE ``_attach_lineage``: a value that is
+        not stored must not carry a lineage hash pointing at an entry that was
+        never written.
+
+        KNOWN BOUNDARY: called at all four store sites (sync/async x
+        non-iterator/single-chunk), which is every site where the value is in
+        hand before anything is written.  A *multi*-chunk iterator is not
+        covered -- ``_write_chunks`` has already written earlier chunks by the
+        time any item could be inspected, so gating there would mean aborting
+        mid-write and reclaiming them.  Reaching it needs a generator yielding
+        enough Figures to cross ``chunk_max_bytes`` (or a million of them),
+        which no reported case comes near.  Widen this if one ever does.
+        """
+        # Local import: ``cacheability_decision`` pulls in the annotation and
+        # AST-analysis modules, and this runs only on a miss's store path.
+        # ``core`` -> ``cash.notebook`` is an established direction (see the
+        # module-level CodeAnalyzer / parse_annotation_line imports), so no
+        # shared module is needed for this.
+        from cash.notebook.cacheability_decision import identity_coupled_reason
+
+        # ``func_name`` is already in the message prefix, so name the slot
+        # rather than repeating the qualified path inside the reason.
+        reason = identity_coupled_reason("the returned value", result)
+        if reason is None:
+            return False
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "",
+            f"@cash.cache on {func_name}: result not cached. {reason}",
+            stacklevel=6,
+        )
+        return True
 
     def _store_in_cache(
         self,
