@@ -41,7 +41,7 @@ from ..view import (
 # which is never the one that fails.
 #
 # ``_rng_suffix`` below already stated this rule for the RNG marker; the status
-# icons simply predated it. The label ("RESTORED", "COMPUTED", ...) already
+# icons simply predated it. The label ("CACHED", "EXECUTED", ...) already
 # carries the meaning, so dropping the glyph loses no information -- and matches
 # the plain-text format the docs advertise.
 
@@ -52,10 +52,23 @@ def _header_line(h: BadgeHeader) -> str:
     if h.computed_count == 0 and h.skipped_count > 0:
         return "SKIPPED (already computed)"
     if h.total_saved_s > 0:
-        return (f"EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
+        line = (f"EXECUTED ({h.total_exec_s:.2f}s, saved {h.total_saved_s:.2f}s)"
                 if h.total_exec_s else f"EXECUTED (saved {h.total_saved_s:.2f}s)")
-    return (f"EXECUTED ({h.total_exec_s:.2f}s)"
-            if h.total_exec_s else "EXECUTED")
+    else:
+        line = (f"EXECUTED ({h.total_exec_s:.2f}s)"
+                if h.total_exec_s else "EXECUTED")
+    return line + _uncacheable_suffix(h)
+
+
+def _uncacheable_suffix(h: BadgeHeader) -> str:
+    """Name the work that will be paid for again on every future run.
+
+    Only ever appended to an EXECUTED header: an uncacheable row is a row that
+    ran, so a cell with one can't reach the CACHED or SKIPPED branches above.
+    """
+    if not h.uncacheable_count:
+        return ""
+    return f" - {h.uncacheable_count} not cached"
 
 
 def _row_tag(row: StatementRow, *, is_upstream: bool) -> str:
@@ -79,23 +92,9 @@ def _status_icon(status: BadgeStatus) -> str:
 
 
 def _status_label(status: BadgeStatus, row: StatementRow) -> str:
-    if status is BadgeStatus.RESTORED:
-        return "RESTORED"
-    if status is BadgeStatus.SKIPPED:
-        return "SKIPPED"
-    if status is BadgeStatus.COMPUTED:
-        if row.uncacheable_reasons:
-            return "NOT CACHED"  # 🚫 in HTML
-        if row.skipped_reason:
-            return "NOT CACHED"  # ⚠️ in HTML
-        return "COMPUTED"
-    if status is BadgeStatus.FUNCTION_CHANGED:
-        return "FUNC CHANGED"
-    if status is BadgeStatus.MODULE_RELOADED:
-        return "MODULE RELOADED"
-    if status is BadgeStatus.WARNING:
-        return "WARNING"
-    return status.value.upper()
+    if status is BadgeStatus.COMPUTED and (row.uncacheable_reasons or row.skipped_reason):
+        return theme.LABEL_UNCACHEABLE
+    return theme.label_of(status.value)
 
 
 def _rng_suffix(row: StatementRow) -> str:

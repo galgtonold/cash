@@ -149,7 +149,7 @@ Cash then treats the fitted estimator as the statement's cached value: the const
 - This isn't fixable by trying harder at the `fit` statement: on a warm run-all the *constructor* statement's own cache hit rebinds `model` before the fit's transfer runs, so the aliasing is already broken upstream.
 - The estimator gate is a duck-type (`fit` + `get_params`), so it admits non-sklearn estimators (xgboost, lightgbm, your own class). Each has its own pickle contract, and some never restore cleanly — which means paying serialisation on every run for nothing.
 
-Use it when the receiver has no aliases and you've confirmed the badge actually reads `RESTORED` on a warm re-run. Otherwise use `@cash.cache`.
+Use it when the receiver has no aliases and you've confirmed the badge actually reads `CACHED` on a warm re-run. Otherwise use `@cash.cache`.
 
 </details>
 
@@ -165,8 +165,8 @@ print(classification_report(y_test, y_pred))
 
 Switch the merge in Cell 4 from `how='left'` to `how='inner'` and re-run the notebook:
 
-- Cells 2-3 **RESTORED** from cache.
-- In Cell 4, the groupby is **RESTORED** (code didn't change), only the merge **RECOMPUTES**.
+- Cells 2-3 read **CACHED** — served without running.
+- In Cell 4, the groupby is **CACHED** (code didn't change), only the merge re-runs.
 - Cells 5-6 **RECOMPUTE** (new `df` → new model → new evaluation).
 
 <iframe class="cash-badge" src="/_badges/workflows_mixed.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>

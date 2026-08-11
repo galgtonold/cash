@@ -419,6 +419,16 @@ class BadgeHeader:
     current_step: int = 0
     total_steps: int = 0
     current_code: str | None = None
+    # Rows that ran and were NOT stored (too cheap, a side effect, an
+    # unpicklable value, ``# @cash:no-cache``). Counted separately from
+    # ``warn_count`` on purpose: a notification is transient and usually
+    # self-explanatory, whereas an uncacheable statement is a STANDING
+    # property that recurs on every single run and is normally the user's to
+    # fix. Folded into ``computed_count`` it was invisible -- a permanently
+    # uncacheable cell looked exactly like one the user had just edited.
+    # (Appended rather than grouped with the other counts so positional
+    # construction of this dataclass keeps working.)
+    uncacheable_count: int = 0
 
 
 @dataclass(frozen=True)

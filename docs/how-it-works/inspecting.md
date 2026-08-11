@@ -8,11 +8,12 @@ it run.
 
 ## The execution badge
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row_from_metric @16e6b771, cash/notebook/badge_renderer/renderers/html.py:_rowtip_html @d9820ca6 -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row_from_metric @16e6b771, cash/notebook/badge_renderer/renderers/html.py:_rowtip_html @4a2577a0 -->
 Every cell you run under `%cash_on` paints an **execution badge**: a compact
-summary of what just happened — which statements computed, which were restored
-from cache, the time each took, and any decorator hit/miss metrics folded in
-from the [decorator path](decorator-path.md). It's the first thing you see, and
+summary of what just happened — which statements ran, which came from the
+cache, which ran without being stored, the time each took, and any decorator
+hit/miss metrics folded in from the [decorator path](decorator-path.md). It's
+the first thing you see, and
 usually all you need. The full field-by-field guide lives in
 [Reading the Cash Badge](../badges.md).
 

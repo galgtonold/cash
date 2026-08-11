@@ -60,40 +60,40 @@
 </head>
 <body>
   <div class="reel">
-    <!-- Frame 1: first run, all cells COMPUTED -->
+    <!-- Frame 1: first run, all cells EXECUTED -->
     <div class="reel-frame">
       <div class="reel-caption">First run — kernel cold</div>
       <div class="badge-row">
-        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">2.83s</span></span>
-        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">1.04s</span></span>
-        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">5.91s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">EXECUTED</span><span class="badge-time">2.83s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">EXECUTED</span><span class="badge-time">1.04s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">EXECUTED</span><span class="badge-time">5.91s</span></span>
       </div>
     </div>
-    <!-- Frame 2: re-run unchanged, SKIPPED + RESTORED -->
+    <!-- Frame 2: re-run unchanged, SKIPPED + CACHED -->
     <div class="reel-frame">
       <div class="reel-caption">Same notebook, re-run</div>
       <div class="badge-row">
         <span class="badge kind-skipped"><span class="badge-rail"></span><span class="badge-label">SKIPPED</span><span class="badge-time">0.01s</span></span>
-        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
-        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.04s</span><span class="badge-time badge-saved">↑5.87s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">CACHED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">CACHED</span><span class="badge-time">0.04s</span><span class="badge-time badge-saved">↑5.87s</span></span>
       </div>
     </div>
-    <!-- Frame 3: kernel restart, RESTORED from disk -->
+    <!-- Frame 3: kernel restart, CACHED from disk -->
     <div class="reel-frame">
       <div class="reel-caption">After kernel restart</div>
       <div class="badge-row">
-        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.03s</span><span class="badge-time badge-saved">↑2.80s</span></span>
-        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
-        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.05s</span><span class="badge-time badge-saved">↑5.86s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">CACHED</span><span class="badge-time">0.03s</span><span class="badge-time badge-saved">↑2.80s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">CACHED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">CACHED</span><span class="badge-time">0.05s</span><span class="badge-time badge-saved">↑5.86s</span></span>
       </div>
     </div>
-    <!-- Frame 4: upstream cell edited, selective re-COMPUTE -->
+    <!-- Frame 4: upstream cell edited, selective re-run -->
     <div class="reel-frame">
       <div class="reel-caption">Upstream cell edited</div>
       <div class="badge-row">
-        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">2.91s</span></span>
-        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">RESTORED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
-        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">COMPUTED</span><span class="badge-time">6.13s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">EXECUTED</span><span class="badge-time">2.91s</span></span>
+        <span class="badge kind-restored"><span class="badge-rail"></span><span class="badge-label">CACHED</span><span class="badge-time">0.02s</span><span class="badge-time badge-saved">↑1.02s</span></span>
+        <span class="badge kind-computed"><span class="badge-rail"></span><span class="badge-label">EXECUTED</span><span class="badge-time">6.13s</span></span>
       </div>
     </div>
   </div>

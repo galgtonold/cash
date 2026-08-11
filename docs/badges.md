@@ -10,7 +10,7 @@ This is a badge from a cell where the upstream `df` was restored, the intermedia
 
 What you're looking at:
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_compute_stats @bceb6587, cash/notebook/badge_renderer/view_builder.py:_overhead_section @67bf94ef -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_compute_stats @6a018e4d, cash/notebook/badge_renderer/view_builder.py:_overhead_section @67bf94ef -->
 1. **Header line** — the collapsed view. Shows the cell-level status (`EXECUTED` here), the total time and the **net** saving (`0.42s · saved 3.38s`), a tiny sparkline, and counter chips (`exec 1`, `cached 2`). The header saving is net: it subtracts this cell's own Cash overhead from the gross recompute the restores avoided, so it can read a little below the sum of the per-row savings (that difference is the overhead row at the bottom). Click the header to expand and see the panel below.
 2. **Upstream context** — a collapsed pill at the top of the panel labeled "upstream context · 1 step · ↑2.85s". Click to expand and see the upstream rows (statements from earlier cells that Cash had to re-check or re-restore for this cell to be valid).
 3. **Current cell** — the section labeled `CURRENT CELL`. Each row is a statement in *this* cell with its per-row status — `restored` (green rail) for `features = encode(df)`, `computed` (ochre rail) for `preds = decorated_predict(features)`. Click any row for a detail tooltip showing the cache key, storage tiers, miss reason, and `@cash.cache` hit ratio (`2/3 cache hits` here).
@@ -23,16 +23,23 @@ What you're looking at:
 
 Every row and the overall badge use one of these statuses. The badge identifies status by the **colored left rail** on each row and by the header chip text — not by an icon glyph.
 
-| Status | Rail color | Header label | When you see it |
-|---|---|---|---|
-| **RESTORED** | green | `CACHED` chip | Row's value came from the cache. |
-| **COMPUTED** | ochre | `EXEC` chip | Row ran. May or may not have been stored — check the row detail for "NOT CACHED". |
-| **SKIPPED** | green | `cached` chip | Row was unreachable on this run (downstream of a branch not taken) or its value isn't needed. |
-| **MIXED** | (cell header only) | `EXECUTED` summary with both `EXEC` and `CACHED` chips | Cell-level only: some rows restored, some computed. |
-| **FUNCTION_CHANGED** | red | warning chip | A helper function this row calls had its source change since the last run. |
-| **MODULE_RELOADED** | red | warning chip | A tracked local import was edited; everything downstream re-runs. |
-| **WARNING** | red | warning chip | Something to look at (e.g. an opaque call Cash can't see through); the row still ran. |
-| **ERROR** | red | (error label) | The statement raised. |
+One word per state, and the **same** word whether you are reading a single row or the cell header above it.
+
+| Label | Rail color | When you see it |
+|---|---|---|
+| **CACHED** | green | The value came from the cache. On the cell header this means *every* statement was served — nothing ran. |
+| **EXECUTED** | ochre | It ran. On the cell header this means at least one statement ran. |
+| **NOT CACHED** | ochre | It ran and Cash did *not* store the result, so it will run again every time. The row names the reason; the cell header counts these in a `not cached` chip. |
+| **SKIPPED** | green | Unreachable on this run (downstream of a branch not taken) or the value isn't needed. |
+| **MIXED** | (loop aggregates only) | Some iterations came from cache, some ran. |
+| **FUNC CHANGED** | red | A helper function this row calls had its source change since the last run. |
+| **MODULE RELOADED** | red | A tracked local import was edited; everything downstream re-runs. |
+| **WARNING** | red | Something to look at (e.g. an opaque call Cash can't see through); the row still ran. |
+| **ERROR** | red | The statement raised. |
+
+The cell header also carries counter chips — `EXEC`, `NOT CACHED`, `CACHED`, `WARN` — each with a count. They tally rows by family rather than naming this cell's state, so `EXEC 1 · CACHED 1` under an `EXECUTED` header means one statement ran and one came from cache.
+
+`CACHED` and `EXECUTED` are the badge's words. The `CacheStatus` and `BadgeStatus` enums in the API still spell the underlying members `RESTORED` and `COMPUTED`; only the display vocabulary was unified.
 
 Individual examples:
 
@@ -76,7 +83,7 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 **Why:** Cash has no record of this exact statement having been computed before. Editing a statement (even whitespace, in some cases) makes a new cache key.
 
-**Fix:** Nothing to fix — this is expected. The next run with unchanged code will show as `RESTORED` (green rail).
+**Fix:** Nothing to fix — this is expected. The next run with unchanged code will show as `CACHED` (green rail).
 
 ### Input lineage changed
 
@@ -112,7 +119,7 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 ## 4. Why wasn't this cached?
 
-A `COMPUTED` row (ochre rail) that also says **NOT CACHED** ran but Cash refused to store the result. Four common causes:
+A row labelled **NOT CACHED** (ochre rail) ran but Cash refused to store the result, so it will run again on every future run. The cell header counts these in a `not cached` chip. Four common causes:
 
 !!! note "Unseeded randomness is *not* one of them"
     A statement that draws from an unseeded RNG is still cached — Cash warns

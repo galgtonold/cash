@@ -232,8 +232,8 @@ class TestTextBadge:
         magics._print_text_badge(metrics)
         out = capsys.readouterr().out
         assert '[Cash]' in out
-        assert 'COMPUTED' in out
-        assert 'RESTORED' in out
+        assert 'EXECUTED' in out
+        assert 'CACHED' in out
 
     def test_text_badge_upstream_and_current_separated(self, magics_fixture, capsys):
         magics, _shell, _backend = magics_fixture
@@ -245,7 +245,7 @@ class TestTextBadge:
         magics._print_text_badge(metrics)
         out = capsys.readouterr().out
         assert 'Upstream' in out
-        assert '^RESTORED' in out  # ASCII upstream marker
+        assert '^CACHED' in out  # ASCII upstream marker
         # Must survive a legacy-codepage reader: this mode exists to be parsed
         # by a headless agent / nbconvert, not by the kernel that wrote it.
         out.encode('cp1252')

@@ -12,8 +12,11 @@ def test_cached_summary_header() -> None:
                 "total_time": 0.01, "saved_time": 0.5}]
     text = render_text(build_interactive_badge(metrics))
     assert text.startswith("[Cash]")
-    assert "CACHED" in text
-    assert "RESTORED" in text
+    # The header and the row under it use the SAME word for the same state.
+    # They used to disagree -- header "CACHED", row "RESTORED" -- which is what
+    # sent four docs pages describing the wrong label (CAS-272).
+    assert text.count("CACHED") == 2, text
+    assert "RESTORED" not in text, "internal vocabulary leaked into the badge"
     assert "saved 0.50s" in text
 
 
@@ -40,8 +43,8 @@ def test_upstream_section_label_and_indent() -> None:
     ]
     text = render_text(build_interactive_badge(metrics))
     assert "Upstream:" in text
-    assert "^RESTORED" in text  # ASCII upstream marker; see below for why
-    assert "COMPUTED" in text
+    assert "^CACHED" in text  # ASCII upstream marker; see below for why
+    assert "EXECUTED" in text
     # The text badge feeds headless/agent runs, so it is read by a different
     # process than wrote it. Any character a cp1252 console cannot encode
     # crashes that reader instead of showing it the badge.

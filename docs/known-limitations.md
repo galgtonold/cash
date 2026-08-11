@@ -268,13 +268,13 @@ A thread that mutates data after the cell that created it has finished is outsid
 <!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21 -->
 Cash records a file dependency by intercepting the *read*: `pd.read_*`, `np.load`, `joblib.load`, `polars`, plain `open()`, and friends. A read that goes through none of those — a C extension that opens the file itself, a third-party client, a `subprocess` — is invisible.
 
-The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `RESTORED` badge and no warning.
+The consequence is easy to mis-guess, so it is worth stating plainly: cash **does not** refuse to cache such a statement. It caches it exactly like any other, with *no file recorded*. Change the file on disk afterwards and nothing invalidates; you get the old value back with a `CACHED` badge and no warning.
 
 <!-- test:skip reason="illustrative: my_reader stands in for the reader's own untracked loader" -->
 ```python
 data = my_reader.load('sensor.bin')    # cash sees a value, not a file read
 # ...edit sensor.bin on disk...
-data = my_reader.load('sensor.bin')    # RESTORED — the old contents
+data = my_reader.load('sensor.bin')    # CACHED — the old contents
 ```
 
 **What to do:** name the file explicitly so cash tracks it anyway. In a notebook, add the read of a tracked API alongside it, or annotate the statement `# @cash:no-cache` if the read is cheap. In the decorator path, declare it: `@c.cache(file_depends_on="sensor.bin")`.

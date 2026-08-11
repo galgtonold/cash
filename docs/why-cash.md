@@ -97,7 +97,7 @@ What each pain looks like with cash:
 - 🕐 **Restart cost** → statement-level caching + automatic restore-after-restart. Re-running a cell hits the cache; restarting the kernel hits disk.
 - ❓ **Staleness** → lineage hashes invalidate automatically when any upstream cell changes. The badge tells you what was reused and what was recomputed.
 - 🥒 **Pickle sprawl** → no filenames. The cache is keyed by code + inputs, stored in a single managed backend.
-- 🌅 **Restart fear** → restart freely. The cache survives the kernel, so the next run is RESTORED, not recomputed.
+- 🌅 **Restart fear** → restart freely. The cache survives the kernel, so the next run is CACHED, not recomputed.
 
 ### How much time would *you* reclaim?
 

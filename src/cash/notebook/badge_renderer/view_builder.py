@@ -13,7 +13,7 @@ from urllib.parse import quote
 
 from cash.notebook.cache_status import CacheStatus
 
-from .theme import MIN_TIME_DISPLAY_MS
+from .theme import MIN_TIME_DISPLAY_MS, label_of
 from .view import (
     BadgeHeader,
     BadgeStatus,
@@ -565,16 +565,23 @@ def _summary_status(restored: int, computed: int, skipped: int) -> BadgeStatus:
 # Cell-level statistics
 # ---------------------------------------------------------------------------
 
-def _compute_stats(metrics: list[dict[str, Any]]) -> tuple[float, float, int, int, int]:
-    """``(total_saved, total_exec, restored_count, computed_count, skipped_count)``.
+def _compute_stats(
+    metrics: list[dict[str, Any]],
+) -> tuple[float, float, int, int, int, int]:
+    """``(total_saved, total_exec, restored, computed, skipped, uncacheable)``.
 
     ERROR rows are counted as computed (they consumed time and ran the
     operation, just unsuccessfully) so the cell summary reflects that
     something happened instead of silently dropping the failure.
+
+    ``uncacheable`` is a SUBSET of ``computed``, not a fourth bucket: those
+    rows really did run, so they belong in the exec tally. It is counted
+    separately only so the header can say that some of that work will be paid
+    for again on every future run — see ``BadgeHeader.uncacheable_count``.
     """
     total_saved = 0.0
     total_exec = 0.0
-    restored = computed = skipped = 0
+    restored = computed = skipped = uncacheable = 0
     for m in metrics:
         status = str(m.get("status", ""))
         if status in _NOTIFICATION_STATUSES:
@@ -591,7 +598,11 @@ def _compute_stats(metrics: list[dict[str, Any]]) -> tuple[float, float, int, in
                 or status == str(CacheStatus.ERROR)):
             computed += 1
             total_exec += m.get("total_time", 0.0)
-    return total_saved, total_exec, restored, computed, skipped
+            # Same test the renderers use to label a row NOT CACHED, so the
+            # header count can never disagree with the rows below it.
+            if m.get("uncacheable_reasons") or m.get("skipped_reason"):
+                uncacheable += 1
+    return total_saved, total_exec, restored, computed, skipped, uncacheable
 
 
 # ---------------------------------------------------------------------------
@@ -1001,7 +1012,11 @@ def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = N
         code = _strip_context_comments(str(m.get("code") or "")).strip()
         if len(code) > 100:
             code = code[:97] + "..."
-        st = str(m.get("status", "")).replace("CacheStatus.", "")
+        # The words the reporter actually SAW on their badge. This dump used
+        # the internal status names, so an issue said RESTORED about a row the
+        # user watched render as CACHED -- and the reporter is the one who has
+        # to recognise their own cell in the preview.
+        st = label_of(str(m.get("status", "")).replace("CacheStatus.", "").lower())
         t = m.get("total_time") or m.get("execution_time") or 0.0
         saved = m.get("saved_time") or 0.0
         outs_raw = m.get("outputs", [])
@@ -1030,7 +1045,7 @@ def build_bug_report_url(metrics: list[dict[str, Any]], context: dict | None = N
         "<!-- What did cash do wrong? What did you expect instead? -->\n\n"
         "**Cash badge output:**\n```\n{badge}\n```\n\n"
         "**Expected behavior:**\n"
-        "<!-- e.g. 'Should have re-executed but was RESTORED from cache' -->\n\n"
+        "<!-- e.g. 'Should have re-executed but the badge read CACHED' -->\n\n"
         "{nb_source}"
         "**Environment:**\n"
         f"- Cash version: {version}\n"
@@ -1099,7 +1114,8 @@ def build_interactive_badge(
                         and m.get("is_upstream", False)]
     current = [m for m in metrics if not m.get("is_upstream", False)]
 
-    total_saved, total_exec, restored, computed, skipped_count = _compute_stats(metrics)
+    (total_saved, total_exec, restored, computed, skipped_count,
+     uncacheable_count) = _compute_stats(metrics)
     # Notification statuses (WARN / FUNCTION_CHANGED / MODULE_RELOADED / ERROR)
     # don't count as restored/computed/skipped but should appear in the
     # summary chip strip — otherwise a notification-only cell shows no chip.
@@ -1133,6 +1149,7 @@ def build_interactive_badge(
         restored_count=restored,
         computed_count=computed,
         skipped_count=skipped_count,
+        uncacheable_count=uncacheable_count,
         warn_count=warn_count,
         total_saved_s=header_saved,
         total_exec_s=summary_time,

@@ -275,6 +275,26 @@ FIXTURES: dict[str, MetricsList] = {
             "is_upstream": False,
         },
     ],
+    # purity-decorators.md — the warm re-run the page tells the reader to look
+    # for. This snapshot existed as a committed .html with no fixture behind
+    # it, so it silently froze at whatever the renderer emitted the day it was
+    # made: it still showed a lowercase raw-enum status pill long after every
+    # other example had moved on. Values below are transcribed from that file
+    # so the page's numbers are unchanged; only the rendering is current.
+    "purity_restored": [
+        {
+            "status": "RESTORED",
+            "code": "result = featurize(my_df)",
+            "total_time": 0.009,
+            "saved_time": 0.09,
+            "evaluated_vars": ["result"],
+            "restored_vars": ["result"],
+            "storage": ["RAM", "DISK"],
+            "source": "RAM",
+            "cache_key": "5b1d8e2a",
+            "is_upstream": False,
+        },
+    ],
     # §2 anatomy — one rich badge that exercises every visible region:
     # header with mixed counts, upstream section, current section,
     # decorator-call group, overhead breakdown.

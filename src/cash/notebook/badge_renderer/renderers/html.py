@@ -1064,10 +1064,19 @@ def _rng_pill(row: StatementRow) -> str:
 def _rowtip_html(row: StatementRow) -> str:
     """Pure-CSS click-to-expand tooltip body for a :class:`StatementRow`."""
     kind = theme.kind_of(row.status.value)
+    # Same word the text renderer uses for this row, and the same word the cell
+    # header uses for the whole-cell case (CAS-272) -- this pill used to render
+    # the raw enum value, so an HTML row read RESTORED under a CACHED header.
+    label = (
+        theme.LABEL_UNCACHEABLE
+        if row.status is BadgeStatus.COMPUTED
+        and (row.uncacheable_reasons or row.skipped_reason)
+        else theme.label_of(row.status.value)
+    )
     status_pill = (
         f'<span class="c3-rt-status" '
         f'style="color:{theme.chip_fg(kind)};background:{theme.chip_bg(kind)};">'
-        f"{_esc(row.status.value)}</span>"
+        f"{_esc(label)}</span>"
     )
     is_notif = row.status in (
         BadgeStatus.WARNING, BadgeStatus.FUNCTION_CHANGED, BadgeStatus.MODULE_RELOADED,
@@ -1408,7 +1417,7 @@ def _loop_tip_html(
     status_label = (
         "MIXED" if cached and computed
         else "CACHED" if cached and not computed
-        else "COMPUTED"
+        else "EXECUTED"
     )
     pill = (
         f'<span class="c3-rt-status" '
@@ -2064,8 +2073,8 @@ def _sparkline_html(badge: InteractiveBadge) -> str:
 def _filter_chips_html(header: BadgeHeader) -> str:
     """Static (non-interactive) state counters in the summary chip.
 
-    Three families: exec, cached, warn. A notification-only cell (e.g.
-    only FUNCTION_CHANGED rows) gets only the warn chip; without it the
+    Four families: exec, uncacheable, cached, warn. A notification-only cell
+    (e.g. only FUNCTION_CHANGED rows) gets only the warn chip; without it the
     summary would carry no counter at all.
     """
     parts = []
@@ -2073,6 +2082,17 @@ def _filter_chips_html(header: BadgeHeader) -> str:
         parts.append(
             f'<span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>'
             f'exec<span class="c3-fchip-count">{header.computed_count}</span></span>'
+        )
+    # Warn-coloured but its own chip: this is not a transient notification, it
+    # is work this cell will repeat on every run until the user changes
+    # something. Merged into `warn` it would be lost among RNG and
+    # function-changed notices; merged into `exec` (where its rows are also
+    # counted) it was invisible altogether.
+    if header.uncacheable_count:
+        parts.append(
+            f'<span class="c3-fchip c3-fchip-warn"><span class="c3-fchip-dot"></span>'
+            f'not cached<span class="c3-fchip-count">{header.uncacheable_count}'
+            f'</span></span>'
         )
     if header.restored_count or header.skipped_count:
         cached = header.restored_count + header.skipped_count

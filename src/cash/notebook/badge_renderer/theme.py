@@ -116,6 +116,33 @@ def kind_of(status: str) -> str:
     return "exec"  # computed, mixed, unknown
 
 
+# The user's vocabulary, not cash's. A notebook user "executes" a cell and a
+# result is "cached" -- those are the words Jupyter and the docs already use.
+# ``restored`` and ``computed`` are the runtime's internal names, and leaking
+# them into the badge meant the cell header said CACHED while the row under it
+# said RESTORED for the same state (CAS-272). One word per state, at every
+# level, chosen from the vocabulary the reader already has.
+_LABELS = {
+    "restored": "CACHED",
+    "computed": "EXECUTED",
+    "skipped": "SKIPPED",
+    "mixed": "MIXED",
+    "error": "ERROR",
+    "function_changed": "FUNC CHANGED",
+    "module_reloaded": "MODULE RELOADED",
+    "warning": "WARNING",
+}
+
+# What an uncacheable row says instead of EXECUTED. It ran *and* it will run
+# again every time, which is the part worth the reader's attention.
+LABEL_UNCACHEABLE = "NOT CACHED"
+
+
+def label_of(status: str) -> str:
+    """User-facing word for a :class:`BadgeStatus` value."""
+    return _LABELS.get(status, status.replace("_", " ").upper())
+
+
 def rail_color(status: str) -> str:
     """Color of the left rail for one row."""
     if status == "restored" or status == "skipped":

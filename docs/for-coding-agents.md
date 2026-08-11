@@ -20,10 +20,10 @@ blind. The text badge prints under each cell:
 
 ```
 [Cash] EXECUTED (0.01s, saved 0.42s)
-  RESTORED: df = load()      COMPUTED: x = f(df)      NOT CACHED: cheap = 1 + 1
+  CACHED: df = load()      EXECUTED: x = f(df)      NOT CACHED: cheap = 1 + 1
 ```
 
-`RESTORED` = served from cache · `COMPUTED` = ran · `NOT CACHED` = ran but not
+`CACHED` = served from cache · `EXECUTED` = ran · `NOT CACHED` = ran but not
 stored (too cheap, a side effect, or `# @cash:no-cache`). Check the running total
 with `%cash_stats` ("Net time saved" — honest, and it will report a **loss** if
 you cached something too cheap).

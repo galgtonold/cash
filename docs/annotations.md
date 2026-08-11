@@ -191,7 +191,7 @@ swept in.
     run for nothing.
 
     Opt in when the receiver has no aliases and you've confirmed the badge really
-    reads `RESTORED` on a warm re-run.
+    reads `CACHED` on a warm re-run.
 
 For expensive training, prefer the decorator — wrap the fit in a function that
 *returns* the model. It caches on the arguments, has no identity caveat, and is

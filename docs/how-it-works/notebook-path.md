@@ -66,8 +66,8 @@ Each statement row on the badge carries one status:
 
 | Status | Meaning |
 |--------|---------|
-| `RESTORED` | Served from cache; the row shows the time saved |
-| `COMPUTED` | Executed and stored |
+| `CACHED` | Served from cache; the row shows the time saved |
+| `EXECUTED` | Ran, and the result was stored |
 | `NOT CACHED` | Executed, deliberately not stored — the row names the reason |
 | `SKIPPED` | Not re-run at all (a redundant import, or already covered) |
 | `FUNC CHANGED` / `MODULE RELOADED` | A notification row, not a statement |

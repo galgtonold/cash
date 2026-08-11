@@ -65,7 +65,7 @@ import cash
 def featurize(df):
     return df.assign(score=df["a"] * df["b"])
 
-result = featurize(my_df)      # re-run the cell: the badge reads RESTORED
+result = featurize(my_df)      # re-run the cell: the badge reads CACHED
 ```
 
 <iframe class="cash-badge" src="/_badges/purity_restored.html" loading="lazy" scrolling="no" height="40" style="width:100%;border:0;display:block;margin:8px 0;"></iframe>
