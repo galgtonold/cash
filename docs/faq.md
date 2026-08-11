@@ -106,7 +106,7 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
 ## Production readiness
 
 ??? question "Is a 0.x release safe for real work?"
-    Yes for notebook use; `0.2.0` is backed by
+    Yes for notebook use; cash is backed by
     thousands of integration tests (many derived from real-world bug reports).
     Treat it like any library you'd pin — this is a `0.x` release, so the API
     and cache format may change between minor versions (run `%cash_repair --full`
