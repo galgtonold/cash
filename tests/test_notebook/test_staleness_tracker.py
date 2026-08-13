@@ -122,3 +122,71 @@ def test_hint_handles_non_ascii_by_replacement(tmp_path):
     # ASCII parts should survive
     assert "=" in hint
     assert "1" in hint
+
+
+def test_checker_detects_a_stale_file_on_an_id_match(tmp_path, monkeypatch):
+    """The proof site. `_find_current_cell_index` matches by cell ID and returns
+    immediately -- both strings are in hand at that moment and were discarded.
+    """
+    from cash.notebook.upstream.checker import UpstreamChecker
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+
+    checker = UpstreamChecker.__new__(UpstreamChecker)   # no full init needed
+    checker.debug = False
+    checker.staleness = StalenessTracker()
+    checker._notebook_path_for_staleness = str(nb)
+
+    idx = checker._find_current_cell_index(
+        "THRESHOLD = 0.9",
+        ["THRESHOLD = 0.5"],
+        cell_id="c1",
+        cells_with_ids=[("c1", "THRESHOLD = 0.5")],
+    )
+    assert idx == 0, "the ID match must still win; detection is a side effect"
+    assert checker.staleness.is_stale() is True
+
+
+def test_checker_is_quiet_when_the_file_matches(tmp_path):
+    """Control. Without this, a detector that fired unconditionally passes."""
+    from cash.notebook.upstream.checker import UpstreamChecker
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+
+    checker = UpstreamChecker.__new__(UpstreamChecker)
+    checker.debug = False
+    checker.staleness = StalenessTracker()
+    checker._notebook_path_for_staleness = str(nb)
+
+    checker._find_current_cell_index(
+        "THRESHOLD = 0.5",
+        ["THRESHOLD = 0.5"],
+        cell_id="c1",
+        cells_with_ids=[("c1", "THRESHOLD = 0.5")],
+    )
+    assert checker.staleness.is_stale() is False
+
+
+def test_check_and_reexecute_stores_the_resolved_notebook_path():
+    """Regression guard for a NO-OP, which the tests above cannot see.
+
+    `observe()` returns False whenever `notebook_path` is None, so a checker
+    that never stores the resolved path detects nothing in production while
+    every unit test still passes — the feature would ship dead.
+
+    Asserting on the source of the one method that must do the wiring, rather
+    than on the file's text, so renaming a local does not break the test while
+    deleting the wiring still does.
+    """
+    import inspect
+
+    from cash.notebook.upstream.checker import UpstreamChecker
+
+    src = inspect.getsource(UpstreamChecker.check_and_reexecute)
+    assert "_notebook_path_for_staleness" in src, (
+        "check_and_reexecute never stores the resolved notebook path, so "
+        "StalenessTracker.observe always receives notebook_path=None and can "
+        "never report staleness"
+    )
