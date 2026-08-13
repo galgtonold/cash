@@ -153,6 +153,17 @@ dev = [
     # unseeded-fit randomness pills silently untested on any dev machine
     # without it, which is how nine of them read as a regression (CAS-244).
     "scikit-learn",
+    # The only way left to pump a kernel's event loop from inside a running
+    # cell: IPythonKernel.do_one_iteration, which every older recipe uses, no
+    # longer exists on ipykernel 7. test_comm_reply_during_execution.py needs
+    # it to establish whether a frontend can answer the kernel MID-EXECUTION —
+    # the fact that decides whether a JupyterLab extension could serve cash a
+    # live notebook read synchronously (it cannot; see that file).
+    #
+    # Declared rather than left to importorskip for the same reason as sklearn
+    # above: skipped, the test proves nothing, and a future ipykernel that
+    # quietly changes this would sail through CI.
+    "jupyter_ui_poll",
     "nest_asyncio",
     "traitlets",
     "pyinstrument>=4.6,<6",
