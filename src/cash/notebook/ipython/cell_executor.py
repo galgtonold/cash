@@ -155,6 +155,33 @@ def _close_pyplot_figures(nums: set[int]) -> None:
             pass
 
 
+def staleness_notification(tracker) -> dict | None:
+    """Badge row for a notebook file cash has PROVEN is out of date.
+
+    Returns None unless there is proof. This is deliberately quiet: a warning
+    that appears when cash is merely unsure is a warning users learn to skip,
+    and this one needs to be believed the once it matters.
+
+    ASCII only -- see the module-level note on `%cash_badge print` readers.
+    """
+    if not tracker.is_stale():
+        return None
+    saved = tracker.saved_at()
+    when = time.strftime("%H:%M:%S", time.localtime(saved)) if saved else "an earlier time"
+    hint = tracker.hint()
+    where = f" '{hint}' differs from the saved copy." if hint else ""
+    return {
+        'status': 'WARNING',
+        'code': (f"[!] Upstream check used the notebook saved at {when}."
+                 f"{where} Other cells may have changed too -- "
+                 f"Save (Ctrl+S) and re-run to be sure."),
+        'is_upstream': True,
+        'total_time': 0.0,
+        'execution_time': 0.0,
+        'outputs': [],
+    }
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -836,6 +863,18 @@ class CellExecutor:
             all_metrics.extend(upstream_metrics)
         all_metrics.extend(self._make_function_change_metrics())
         all_metrics.extend(self._make_opaque_warning_metrics(raw_cell))
+        # Deliberately NOT built in `_detect_module_changes` alongside
+        # MODULE_RELOADED: that phase runs BEFORE upstream resolution
+        # (`_resolve_upstream_state` / `check_and_reexecute`), which is where
+        # `staleness.observe()` is called for THIS cell (checker.py's
+        # `_find_current_cell_index`). Reading the tracker there would still
+        # see the PREVIOUS cell's verdict, so the run that actually proves
+        # staleness would show the warning one cell late. This function runs
+        # after upstream resolution has completed for the current cell, so the
+        # tracker is current.
+        stale = staleness_notification(self._upstream_checker.staleness)
+        if stale is not None:
+            all_metrics.append(stale)
         return all_metrics
 
     # ------------------------------------------------------------------
