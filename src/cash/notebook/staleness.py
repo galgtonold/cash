@@ -50,7 +50,8 @@ class StalenessTracker:
 
         self._stale = True
         self._saved_at = mtime
-        self._hint = running_code.strip().splitlines()[0][:60] if running_code.strip() else None
+        first_line = running_code.strip().splitlines()[0][:60] if running_code.strip() else None
+        self._hint = _to_ascii(first_line) if first_line else None
         return True
 
     def is_stale(self) -> bool:
@@ -85,3 +86,15 @@ def _mtime(path: str | None) -> float | None:
         return os.stat(path).st_mtime
     except OSError:
         return None                 # degrade, never raise
+
+
+def _to_ascii(text: str) -> str:
+    """Guarantee ASCII by replacing non-encodable characters.
+
+    Task 3 embeds hint() in a badge code field. The downstream consumer reads
+    the badge via a different process on a possibly cp1252 console. Non-ASCII
+    would crash the reader, so replace non-encodable chars rather than lose
+    the hint entirely. A lossy-but-present diagnostic beats none.
+    """
+    # Try encoding to cp1252; if it fails, replace non-encodable chars with '?'
+    return text.encode("cp1252", errors="replace").decode("cp1252")

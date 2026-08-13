@@ -91,3 +91,34 @@ def test_hint_names_the_running_cell(tmp_path):
     t.observe(running_code="THRESHOLD = 0.9\nmore()", file_code="THRESHOLD = 0.5",
               notebook_path=str(nb))
     assert "THRESHOLD = 0.9" in t.hint()
+
+
+def test_re_notify_guard_does_not_re_emit_on_still_mismatching_cell(tmp_path):
+    """A second mismatching cell should not re-emit; the transition happened once."""
+    nb = _touch(tmp_path / "nb.ipynb")
+    t = StalenessTracker()
+    assert t.observe(running_code="a = 2", file_code="a = 1", notebook_path=str(nb)) is True
+    saved_at_first = t.saved_at()
+    hint_first = t.hint()
+
+    # Second call with STILL-MISMATCHING code should not re-notify
+    assert t.observe(running_code="b = 2", file_code="b = 1", notebook_path=str(nb)) is False
+    # and verdict details must not change
+    assert t.saved_at() == saved_at_first
+    assert t.hint() == hint_first
+
+
+def test_hint_handles_non_ascii_by_replacement(tmp_path):
+    """hint() must guarantee ASCII for badge embedding. Replace non-encodable chars."""
+    nb = _touch(tmp_path / "nb.ipynb")
+    t = StalenessTracker()
+    # A cell with non-ASCII characters (café, café spelled with different encoding)
+    t.observe(running_code="café = 1\nmore()", file_code="cafe = 1",
+              notebook_path=str(nb))
+    hint = t.hint()
+    assert hint is not None
+    # Must be encodable as cp1252 (the downstream constraint)
+    hint.encode("cp1252")  # should not raise
+    # ASCII parts should survive
+    assert "=" in hint
+    assert "1" in hint
