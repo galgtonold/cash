@@ -617,6 +617,21 @@ def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> li
             if cell.get("cell_type") == "code"
         ]
 
+        if not extracted:
+            # [] is not None: returned as-is it reads as "these ARE the live
+            # cells" and the caller (_read_notebook_code_cells) would never
+            # fall through to the file. That is indistinguishable from a
+            # genuinely all-markdown notebook UNLESS every entry failed to
+            # match cell_type == "code" -- exactly what happens when a backup
+            # uses VS Code's OTHER notebook serialization (observed:
+            # {"cells": [{"kind": 2, "language": "python", "value": ...}]},
+            # keyed "kind"/"value" rather than "cell_type"/"source"). Treat an
+            # empty extraction as unusable so the file -- which reports the
+            # same [] for an actually-empty notebook -- is the one source of
+            # truth for "no code cells", never this comprehension by omission.
+            _vscode_cells_cache.pop(cache_key, None)
+            return None
+
         backup = find_backup(notebook_path)
         backup_sig = _stat_sig(backup) if backup is not None else None
         if backup is not None and backup_sig is not None and file_sig is not None:

@@ -172,6 +172,39 @@ def test_a_malformed_cell_entry_returns_none_not_a_raise(tmp_path, monkeypatch):
     assert sd.get_notebook_cells(str(nb)) == ["OLD_SAVED = 1"]
 
 
+def test_an_unrecognised_backup_serialization_falls_through_to_the_file(tmp_path, monkeypatch):
+    """VS Code has (at least) two notebook JSON shapes. This module understands
+    the one keyed "cell_type"/"source" (nbformat). The other -- observed in the
+    wild -- keys entries "kind"/"language"/"value" instead. A backup written in
+    that shape has zero entries with cell_type == "code", so the comprehension
+    yields [] -- which is NOT None. Returning [] as though it were "these ARE
+    the live cells" (a confidently-empty notebook) silently DISABLED upstream
+    checking entirely instead of falling through to the file's real cells --
+    strictly worse than not having this feature, and silent about it."""
+    nb = tmp_path / "nb.ipynb"
+    _write_notebook(nb, ["FIRST = 1", "SECOND = 2"])
+    _signal_vscode(monkeypatch, nb)
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    uri = nb.as_uri()
+    header = json.dumps({"mtime": int(st.st_mtime * 1000), "size": st.st_size})
+    # VS Code's OTHER notebook serialization: "kind"/"value", not this
+    # module's "cell_type"/"source".
+    body = json.dumps({"cells": [{"kind": 2, "language": "python", "value": "x = 5"}]})
+    backup = root / "abc123"
+    backup.write_text(f"{uri} {header}\n{body}", encoding="utf-8")
+    old = time.time() - 60
+    os.utime(backup, (old, old))
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    sd.invalidate_notebook_cells_cache()
+
+    assert sd.get_notebook_cells(str(nb)) == ["FIRST = 1", "SECOND = 2"], (
+        "an unrecognised backup serialization silently disabled upstream "
+        "checking instead of falling through to the file"
+    )
+
+
 def test_a_second_call_with_nothing_changed_does_not_rescan(tmp_path, monkeypatch):
     """The caching fix: a single cell run calls this ~3x (the magic once, the
     upstream checker twice) against unchanged state; only the first should
