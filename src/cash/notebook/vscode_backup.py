@@ -153,7 +153,7 @@ def live_cells(notebook_path: str) -> list[dict] | None:
     """
     try:
         st = os.stat(notebook_path)
-    except OSError:
+    except (OSError, ValueError):
         return None
 
     backup = find_backup(notebook_path)
@@ -166,7 +166,7 @@ def live_cells(notebook_path: str) -> list[dict] | None:
 
     size = meta.get("size")
     mtime_ms = meta.get("mtime")
-    if not isinstance(size, int) or not isinstance(mtime_ms, (int, float)):
+    if not isinstance(size, int) or isinstance(size, bool) or not isinstance(mtime_ms, (int, float)):
         return None
     if size != st.st_size:
         return None

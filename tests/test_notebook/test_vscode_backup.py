@@ -250,3 +250,60 @@ def test_a_missing_notebook_is_none_not_an_error(tmp_path, monkeypatch):
     import cash.notebook.vscode_backup as vb
     monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
     assert live_cells(str(tmp_path / "gone.ipynb")) is None
+
+
+def test_a_same_size_resave_with_different_content_is_refused(tmp_path, monkeypatch):
+    """A same-length edit -- THRESHOLD = 0.5 -> THRESHOLD = 0.9 -- leaves size
+    unable to discriminate at all; mtime is the only thing standing between
+    the user and a wrongly-trusted backup on this, the common case."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"THRESHOLD = 0.5")
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=st.st_size,
+                  cells=["THRESHOLD = 0.5"])
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+
+    nb.write_bytes(b"THRESHOLD = 0.9")  # same size as above, different content
+    resave_time = st.st_mtime + 10  # well outside the 2s tolerance
+    os.utime(nb, (resave_time, resave_time))
+    assert live_cells(str(nb)) is None
+
+
+def test_a_skew_inside_the_tolerance_is_still_accepted(tmp_path, monkeypatch):
+    """Pins the tolerance itself rather than leaving it incidental: filesystem
+    mtime granularity varies (FAT is 2s), so a small skew between the header
+    and the on-disk mtime must not cost the feature."""
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["THRESHOLD = 0.9"], skew_ms=1500)
+    cells = live_cells(str(nb))
+    assert cells is not None
+    assert cells[0]["source"] == "THRESHOLD = 0.9"
+
+
+def test_a_nul_byte_in_the_path_returns_none_not_a_raise(tmp_path, monkeypatch):
+    """os.stat raises ValueError, not OSError, for an embedded NUL. Every
+    failure mode here must degrade to None: the caller falls through to the
+    saved file on None, but an uncaught exception breaks cell execution."""
+    import cash.notebook.vscode_backup as vb
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells("bad\x00path.ipynb") is None
+
+
+def test_a_boolean_size_header_does_not_pass_as_an_integer(tmp_path, monkeypatch):
+    """isinstance(True, int) is True in Python, so a header of {"size": true}
+    would otherwise pass the type guard -- and for a 1-byte file, compare equal
+    to it too. This is a foreign, undocumented format; tighten the guard."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"x")  # 1 byte, so a bare True == 1 would otherwise match
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=True,
+                  cells=["x = 1"])
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells(str(nb)) is None
