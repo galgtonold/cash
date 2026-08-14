@@ -336,7 +336,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @df02711d broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f52540f4 broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
@@ -473,6 +473,16 @@ Binder) and VS Code alike** — not just one editor. Two ways it shows up:
 Values stay correct in the sense that you get what your kernel actually holds —
 the same thing plain Jupyter would give you. What you lose is the safety net:
 cash's upstream check is only ever as current as the file it read.
+
+**What cash does now:** when the cell you run is itself unsaved, cash can prove
+the file is behind and says so on the badge — a warning row naming the time the
+file was last saved. That proof condemns the whole file, so the warning stands
+until you save.
+
+**What it still cannot see:** editing one cell and running a *different* one.
+The cell you ran matches the file, so there is nothing to compare and no
+warning. This is a real hole, not an oversight — the kernel has no other copy
+of the notebook to check against.
 
 **What to do:** save the notebook (`Ctrl+S` / `Cmd+S`) after editing a cell you
 aren't about to run. Autosave exists in JupyterLab but runs on a timer, so a

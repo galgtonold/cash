@@ -1,0 +1,141 @@
+"""Did the saved .ipynb fall behind the editor? Sometimes cash can PROVE it.
+
+cash reads the cells it did not execute from the saved `.ipynb`, so an unsaved
+edit is invisible to it: edit an upstream cell, run a downstream one, and cash
+reads the old value, concludes nothing changed and restores the previous answer
+while the screen shows new code. Silent, and the silence is the problem.
+
+There is one place the proof is free. IPython hands cash the code it is actually
+running; cash separately reads that same cell out of the file. If those differ,
+the file is out of date -- and therefore so is every OTHER cell cash read from
+it. That is a fact, not a heuristic.
+
+What this canNOT do, stated so nobody mistakes it for a fix: it fires only when
+the cell being RUN is the edited one. Edit cell 3, run cell 7, and cell 7 still
+matches the file. Detectors for that case were designed and rejected during
+design -- in-kernel detection cannot reach it. This is a floor.
+"""
+from __future__ import annotations
+
+import os
+import re
+
+
+class StalenessTracker:
+    """Remembers, for the session, that the notebook file was proven stale."""
+
+    def __init__(self) -> None:
+        self._stale = False
+        self._saved_at: float | None = None
+        self._hint: str | None = None
+
+    def observe(self, *, running_code: str, file_code: str | None,
+                notebook_path: str | None) -> bool:
+        """Compare what is running against what the file says, and remember.
+
+        Returns True on exactly the call that flips the verdict from fresh to
+        stale -- the transition edge, not the level. A later call, even one
+        that finds a different mismatch while already stale, returns False
+        even though `is_stale()` stays True. The one production caller
+        (`UpstreamChecker._find_current_cell_index`) does not use this value
+        -- it reads `is_stale()` after the fact instead -- so this is the
+        edge-triggered half of the tracker's surface, there for a caller (or
+        test) that wants the moment of proof rather than the polled level.
+        """
+        mtime = _mtime(notebook_path)
+        # A save is the only thing that can clear the verdict: the file has
+        # been rewritten, so whatever it now holds is current as of that write.
+        if self._stale and mtime is not None and mtime != self._saved_at:
+            self.reset()
+
+        if file_code is None or notebook_path is None or mtime is None:
+            return False            # no proof available; not the same as "fresh"
+        file_code = _undo_magic_line_strip(running_code, file_code)
+        if _normalise(running_code) == _normalise(file_code):
+            return False
+        if self._stale:
+            return False            # already known; do not re-notify
+
+        self._stale = True
+        self._saved_at = mtime
+        first_line = running_code.strip().splitlines()[0][:60] if running_code.strip() else None
+        self._hint = _to_ascii(first_line) if first_line else None
+        return True
+
+    def is_stale(self) -> bool:
+        return self._stale
+
+    def saved_at(self) -> float | None:
+        return self._saved_at
+
+    def hint(self) -> str | None:
+        return self._hint
+
+    def reset(self) -> None:
+        self._stale = False
+        self._saved_at = None
+        self._hint = None
+
+
+#: Matches a leading ``%%cash`` cell-magic line (optionally with args, e.g.
+#: ``%%cash ttl=60``), including its trailing newline when present. The
+#: negative lookahead keeps a differently-named magic (``%%cash_variant``)
+#: from matching.
+_CASH_CELL_MAGIC_LINE = re.compile(r'^%%cash(?![A-Za-z0-9_])[^\n]*\n?')
+
+
+def _undo_magic_line_strip(running_code: str, file_code: str) -> str:
+    """Undo the one difference IPython's own contract makes, not the user.
+
+    ``%%cash`` is a cell magic: IPython strips the ``%%cash`` line before
+    handing the cell's BODY to ``CellExecutor.execute_cell`` (see
+    ``magics.py``'s ``cash()``). The file on disk still has that line -- it
+    is what the user actually saved. Comparing the bare body against "magic
+    line + body" made every untouched ``%%cash`` cell look edited, which is
+    exactly the false positive this tracker exists to never produce.
+
+    Only strip when *running_code* does not itself already start with a
+    cell-magic line: the ``%cash_on`` hook path is handed the RAW,
+    unprocessed cell (nothing strips it there), so if that path's code
+    already starts with ``%%`` the two sides are already comparable, and
+    stripping only the file's copy would introduce a mismatch instead of
+    removing one.
+    """
+    if running_code.lstrip().startswith('%%'):
+        return file_code
+    match = _CASH_CELL_MAGIC_LINE.match(file_code)
+    return file_code[match.end():] if match else file_code
+
+
+def _normalise(code: str) -> str:
+    """Ignore differences no human made.
+
+    nbformat and editors disagree about trailing newlines and line endings
+    routinely. Firing on those would make the warning noise, and a warning the
+    user learns to ignore is worse than no warning.
+    """
+    return code.replace("\r\n", "\n").strip()
+
+
+def _mtime(path: str | None) -> float | None:
+    if not path:
+        return None
+    try:
+        return os.stat(path).st_mtime
+    except OSError:
+        return None                 # degrade, never raise
+
+
+def _to_ascii(text: str) -> str:
+    """Guarantee true ASCII by replacing non-encodable characters.
+
+    Task 3 embeds hint() in a badge code field. The downstream consumer reads
+    the badge via a different process on a console whose codepage cash cannot
+    know at write time -- cp1252, cp437, cp850, or anything else. ASCII is the
+    only encoding safely assumed to be a subset of all of them: sanitising to
+    cp1252 (as this used to) still lets accented Latin-1 characters through
+    unescaped, which then crashes a cp437/cp850 reader. Replace anything
+    outside plain ASCII rather than lose the hint entirely -- a
+    lossy-but-present diagnostic beats none.
+    """
+    return text.encode("ascii", errors="replace").decode("ascii")

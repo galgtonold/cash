@@ -155,6 +155,47 @@ def _close_pyplot_figures(nums: set[int]) -> None:
             pass
 
 
+def staleness_notification(tracker) -> dict | None:
+    """Badge row for a notebook file cash has PROVEN is out of date.
+
+    Returns None unless there is proof. This is deliberately quiet: a warning
+    that appears when cash is merely unsure is a warning users learn to skip,
+    and this one needs to be believed the once it matters.
+
+    ASCII only: `code` is written into the saved .ipynb and may be read back
+    by a different process (nbconvert, a log scraper, an agent) on a console
+    whose codepage cash cannot know. See `cash.notebook.staleness._to_ascii`,
+    which sanitises `hint()` for the same reason before it ever gets here.
+
+    Message order is load-bearing, not stylistic. `%cash_badge print` renders
+    `code` through `renderers.text._row_line`, which hard-truncates a row's
+    first line at `theme.HEADER_MAX_LEN` (80 chars) -- there is no tooltip or
+    drawer in that mode to hold the rest, unlike HTML. The fact of staleness
+    and the remedy ("Save and re-run") are what make the row actionable, so
+    they go FIRST, comfortably inside the cap; the save time and the cell
+    hint are supporting evidence, appended after, and may be silently cut off
+    in print mode. Keep the essential clause short enough that it plus a
+    small margin stays under 80 chars even after the RNG suffix a future
+    change might add.
+    """
+    if not tracker.is_stale():
+        return None
+    saved = tracker.saved_at()
+    when = time.strftime("%H:%M:%S", time.localtime(saved)) if saved else "an earlier time"
+    hint = tracker.hint()
+    where = f" '{hint}' differs from the saved copy." if hint else ""
+    return {
+        'status': 'WARNING',
+        'code': (f"[!] Notebook file is stale -- Save (Ctrl+S) and re-run to be sure. "
+                 f"Upstream check used the copy saved at {when}.{where} "
+                 f"Other cells may have changed too."),
+        'is_upstream': True,
+        'total_time': 0.0,
+        'execution_time': 0.0,
+        'outputs': [],
+    }
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -822,6 +863,25 @@ class CellExecutor:
             logger.debug("Failed to detect opaque call patterns: %s", exc)
             return []
 
+    def _make_staleness_metrics(self) -> list[ProcessResult]:
+        """Return a WARNING notification if the notebook file is PROVEN stale.
+
+        Guarded like `_make_function_change_metrics` / `_make_opaque_warning_metrics`
+        above. Nothing in `StalenessTracker`'s current implementation raises,
+        but this is a diagnostic nicety layered on top of upstream resolution
+        (which must already have succeeded to reach this point) -- its failure
+        must never be able to take down a user's cell execution over what is,
+        at worst, a missed warning. Broader than the siblings' exception tuples
+        on purpose: unlike theirs, there is no specific failure mode to name
+        here, so the guarantee has to be unconditional.
+        """
+        try:
+            stale = staleness_notification(self._upstream_checker.staleness)
+            return [stale] if stale is not None else []
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never break execution
+            logger.debug("Failed to check notebook staleness: %s", exc)
+            return []
+
     def _build_pre_execution_notifications(
         self,
         raw_cell: str,
@@ -836,6 +896,16 @@ class CellExecutor:
             all_metrics.extend(upstream_metrics)
         all_metrics.extend(self._make_function_change_metrics())
         all_metrics.extend(self._make_opaque_warning_metrics(raw_cell))
+        # Deliberately NOT built in `_detect_module_changes` alongside
+        # MODULE_RELOADED: that phase runs BEFORE upstream resolution
+        # (`_resolve_upstream_state` / `check_and_reexecute`), which is where
+        # `staleness.observe()` is called for THIS cell (checker.py's
+        # `_find_current_cell_index`). Reading the tracker there would still
+        # see the PREVIOUS cell's verdict, so the run that actually proves
+        # staleness would show the warning one cell late. This function runs
+        # after upstream resolution has completed for the current cell, so the
+        # tracker is current.
+        all_metrics.extend(self._make_staleness_metrics())
         return all_metrics
 
     # ------------------------------------------------------------------

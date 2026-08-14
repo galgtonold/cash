@@ -14,6 +14,7 @@ from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
 from ..analysis import CodeAnalyzer
 from ..annotations import extract_annotations_for_statements, parse_annotation_line
+from ..staleness import StalenessTracker
 from ..randomness import (
     get_drawing_rng_modules,
     get_seeding_rng_modules,
@@ -135,6 +136,12 @@ class UpstreamChecker:
         # a fixed cell is broken again.
         self._warned_broken_cells: dict[int, str] = {}
 
+        # Proven-stale verdict for the saved .ipynb, held for the session.
+        # Populated at the cell-ID match site below, where both the running
+        # code and the file's copy of that cell are already in hand.
+        self.staleness = StalenessTracker()
+        self._notebook_path_for_staleness: str | None = None
+
         ts = tracking_state or TrackingState()
         self._wire_state(ts)
 
@@ -161,6 +168,11 @@ class UpstreamChecker:
         # Re-arm the broken-upstream-cell warning for the new notebook:
         # its cell indices/hashes are meaningless across a notebook switch.
         self._warned_broken_cells.clear()
+        # A staleness verdict is proof about notebook A's file; carrying it
+        # into notebook B (or a fresh %cash_on on the same one) would show a
+        # warning about a file this session no longer even reads from, until
+        # the first ID-matched run in the new notebook happens to reset it.
+        self.staleness.reset()
 
     def _wire_state(self, state: TrackingState) -> None:
         """Internal: alias tracking dicts onto self so existing attribute
@@ -200,8 +212,17 @@ class UpstreamChecker:
         """
         # Strategy 1: Exact cell-ID match (available since IPython 8.3)
         if cell_id and cells_with_ids:
-            for i, (nb_cell_id, _) in enumerate(cells_with_ids):
+            for i, (nb_cell_id, nb_cell_src) in enumerate(cells_with_ids):
                 if nb_cell_id == cell_id:
+                    # Both strings are here: what IPython is running, and what
+                    # the FILE thinks this same cell says. If they differ the
+                    # file is out of date -- and so is every other cell we read
+                    # from it. Detection only; the match result is unchanged.
+                    self.staleness.observe(
+                        running_code=cell_code,
+                        file_code=nb_cell_src,
+                        notebook_path=self._notebook_path_for_staleness,
+                    )
                     if self.debug:
                         logger.debug("[UPSTREAM_DEBUG] Found cell by ID match at index %s", i)
                     return i
@@ -282,6 +303,10 @@ class UpstreamChecker:
         # re-running discovery. The negative cache in server_discovery bounds a
         # failed probe, and this collapses the success case to a single resolve.
         notebook_path = self._resolve_notebook_path()
+        # The ID-match site below needs this to stat the file. Reuse the single
+        # resolve rather than probing again -- discovery is deliberately done
+        # once per cell check.
+        self._notebook_path_for_staleness = notebook_path
 
         # Phase 1 — Lineage-based staleness check (diagnostic-only).
         # Detects when variables are inconsistent with each other based on

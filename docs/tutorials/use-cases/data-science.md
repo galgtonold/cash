@@ -48,7 +48,7 @@ transactions = transactions.assign(date=pd.to_datetime(transactions['date']))
 
 Each statement is cached independently. Change the `dropna` logic and only that statement (plus its dependents) recomputes.
 
-<!-- claim: cash/notebook/cacheability.py:_MutationVisitor @0eefc402 broad="the subscript-store verdict is one branch of the visitor, read together with the outputs rule", cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @df02711d -->
+<!-- claim: cash/notebook/cacheability.py:_MutationVisitor @0eefc402 broad="the subscript-store verdict is one branch of the visitor, read together with the outputs rule", cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f52540f4 -->
 !!! tip "Use `.assign()`, not `df['col'] = ...`, for columns worth caching"
     `df['col'] = ...` caches *when `df` was built in the same cell* — the
     subscript store gives the analyzer a target, so `df` is the statement's own
