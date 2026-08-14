@@ -109,7 +109,11 @@ def test_re_notify_guard_does_not_re_emit_on_still_mismatching_cell(tmp_path):
 
 
 def test_hint_handles_non_ascii_by_replacement(tmp_path):
-    """hint() must guarantee ASCII for badge embedding. Replace non-encodable chars."""
+    """hint() must guarantee TRUE ASCII for badge embedding, not merely
+    cp1252-safety: the downstream reader's codepage is unknown, and cp437 /
+    cp850 consoles exist too. A cp1252-representable accented character
+    passing through unescaped would still crash one of those. Replace
+    non-encodable chars rather than lose the hint entirely."""
     nb = _touch(tmp_path / "nb.ipynb")
     t = StalenessTracker()
     # A cell with non-ASCII characters (café, café spelled with different encoding)
@@ -117,7 +121,10 @@ def test_hint_handles_non_ascii_by_replacement(tmp_path):
               notebook_path=str(nb))
     hint = t.hint()
     assert hint is not None
-    # Must be encodable as cp1252 (the downstream constraint)
+    # The real constraint: must be encodable as pure ASCII.
+    hint.encode("ascii")  # should not raise
+    # A cp1252 encode is a corollary of the ASCII one (ASCII is a
+    # subset of cp1252), kept as a belt-and-suspenders check.
     hint.encode("cp1252")  # should not raise
     # ASCII parts should survive
     assert "=" in hint
