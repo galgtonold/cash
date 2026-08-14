@@ -549,6 +549,19 @@ def _stat_sig(path: str | Path) -> tuple[int, int] | None:
         return None
 
 
+def _in_vscode() -> bool:
+    """True when this kernel currently carries VS Code's injected signal.
+
+    Reuses ``_try_vscode_path()``'s own detection (the ``__vsc_ipynb_file__``
+    variable VS Code injects into ``user_ns``) rather than a second,
+    independent check -- it is a plain in-process dict lookup with no I/O, so
+    it is free to call again here even though ``get_notebook_path()`` may
+    already have consulted it earlier in the same resolution (and, on a cache
+    hit, may not call it again at all).
+    """
+    return _try_vscode_path() is not None
+
+
 def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> list | None:
     """Return code cells from VS Code's hot-exit backup, or ``None``.
 
@@ -558,6 +571,14 @@ def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> li
     `standaloneModel` stub with an empty cell list -- but it does persist dirty
     editors to disk, and that backup carries the unsaved edits the file does not.
 
+    Gated on ``_in_vscode()`` first: a backup on disk is evidence some VS Code
+    window once had this notebook open, not that THIS kernel is the one being
+    looked at right now. Without the gate, a plain JupyterLab kernel pointed at
+    a file some VS Code window still holds dirty would silently read edits that
+    are not on the screen the user is looking at -- and a hot-exit backup can
+    outlive the VS Code session that wrote it by weeks, so its mere existence
+    is never on its own evidence of anything current.
+
     Memoized against both the backup's and the file's signature (see
     ``_vscode_cells_cache`` above) so that the ~3 calls a single cell run makes
     (the magic once, the upstream checker twice) pay for the backup-directory
@@ -565,6 +586,8 @@ def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> li
     -- an unmemoized version was measured to turn the settle wait's 1.5s cap
     into up to 3x that across one run, since each call waited independently.
     """
+    if not _in_vscode():
+        return None
     if not notebook_path:
         return None
 

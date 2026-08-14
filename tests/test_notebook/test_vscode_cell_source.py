@@ -71,11 +71,21 @@ def _plant_backup(tmp_path, monkeypatch, nb: Path, *, cells: list[str],
     return backup
 
 
+def _signal_vscode(monkeypatch, nb: Path) -> None:
+    """Simulate VS Code's injected ``__vsc_ipynb_file__`` variable -- the
+    signal ``_try_vscode_backup_cells`` gates on before it will even look for
+    a backup. Tests that plant a backup and expect it to win must call this;
+    ``_try_vscode_path`` is otherwise unmocked and returns None under plain
+    pytest (no real VS Code kernel), which would make the gate refuse."""
+    monkeypatch.setattr(sd, "_try_vscode_path", lambda: str(nb))
+
+
 def test_get_notebook_cells_returns_backup_content_not_saved_file(tmp_path, monkeypatch):
     """The feature's whole point: an unsaved edit must win over the stale
     saved file. This is the wiring the review found nothing committed tests."""
     nb = tmp_path / "nb.ipynb"
     _write_notebook(nb, ["OLD_SAVED = 1"])
+    _signal_vscode(monkeypatch, nb)
     _plant_backup(tmp_path, monkeypatch, nb, cells=["NEW_UNSAVED = 2"])
 
     assert sd.get_notebook_cells(str(nb)) == ["NEW_UNSAVED = 2"]
@@ -84,6 +94,7 @@ def test_get_notebook_cells_returns_backup_content_not_saved_file(tmp_path, monk
 def test_get_notebook_cells_with_ids_returns_backup_content(tmp_path, monkeypatch):
     nb = tmp_path / "nb.ipynb"
     _write_notebook(nb, ["OLD_SAVED = 1"])
+    _signal_vscode(monkeypatch, nb)
     _plant_backup(tmp_path, monkeypatch, nb, cells=["NEW_UNSAVED = 2"])
 
     result = sd.get_notebook_cells_with_ids(str(nb))
@@ -101,6 +112,36 @@ def test_no_backup_falls_through_to_the_saved_file(tmp_path, monkeypatch):
     assert sd.get_notebook_cells(str(nb)) == ["OLD_SAVED = 1"]
 
 
+def test_no_backup_served_without_vscode_signal(tmp_path, monkeypatch):
+    """The gate: no signal that this kernel is running inside VS Code means no
+    backup is served, even though a perfectly valid, matching one exists. The
+    concrete failure this closes: leave a notebook dirty in a VS Code window,
+    then open and run that same file in JupyterLab -- without the gate, cash
+    would use edits that are not on the screen being looked at. A hot-exit
+    backup can also outlive its VS Code session by weeks, so "a matching
+    backup exists" is never on its own evidence of anything current."""
+    nb = tmp_path / "nb.ipynb"
+    _write_notebook(nb, ["OLD_SAVED = 1"])
+    monkeypatch.setattr(sd, "_try_vscode_path", lambda: None)  # explicitly not VS Code
+    _plant_backup(tmp_path, monkeypatch, nb, cells=["NEW_UNSAVED = 2"])
+
+    assert sd.get_notebook_cells(str(nb)) == ["OLD_SAVED = 1"], (
+        "served a VS Code backup with no VS Code signal present"
+    )
+
+
+def test_backup_still_served_with_vscode_signal_present(tmp_path, monkeypatch):
+    """The control paired with the test above: identical setup, but with the
+    signal present, the backup still wins. The gate must not cost the feature
+    anything in the case it exists to protect."""
+    nb = tmp_path / "nb.ipynb"
+    _write_notebook(nb, ["OLD_SAVED = 1"])
+    _signal_vscode(monkeypatch, nb)
+    _plant_backup(tmp_path, monkeypatch, nb, cells=["NEW_UNSAVED = 2"])
+
+    assert sd.get_notebook_cells(str(nb)) == ["NEW_UNSAVED = 2"]
+
+
 def test_a_malformed_cell_entry_returns_none_not_a_raise(tmp_path, monkeypatch):
     """A non-dict entry in an otherwise well-formed backup's cells list must
     degrade to None (fall through to the file), not raise out of
@@ -109,6 +150,7 @@ def test_a_malformed_cell_entry_returns_none_not_a_raise(tmp_path, monkeypatch):
     the review reproduced this raising AttributeError before the fix."""
     nb = tmp_path / "nb.ipynb"
     _write_notebook(nb, ["OLD_SAVED = 1"])
+    _signal_vscode(monkeypatch, nb)
     st = os.stat(nb)
     root = tmp_path / "Backups" / "ws" / "file"
     root.mkdir(parents=True)
@@ -136,6 +178,7 @@ def test_a_second_call_with_nothing_changed_does_not_rescan(tmp_path, monkeypatc
     pay for find_backup's directory scan and the settle wait."""
     nb = tmp_path / "nb.ipynb"
     _write_notebook(nb, ["OLD_SAVED = 1"])
+    _signal_vscode(monkeypatch, nb)
     _plant_backup(tmp_path, monkeypatch, nb, cells=["NEW_UNSAVED = 2"])
 
     first = sd.get_notebook_cells(str(nb))  # cold: warms the cache
@@ -163,6 +206,7 @@ def test_a_changed_backup_between_calls_is_picked_up(tmp_path, monkeypatch):
     would have frozen the first edit and missed this."""
     nb = tmp_path / "nb.ipynb"
     _write_notebook(nb, ["OLD_SAVED = 1"])
+    _signal_vscode(monkeypatch, nb)
     _plant_backup(tmp_path, monkeypatch, nb, cells=["FIRST_EDIT = 1"])
 
     assert sd.get_notebook_cells(str(nb)) == ["FIRST_EDIT = 1"]
