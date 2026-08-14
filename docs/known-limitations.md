@@ -479,6 +479,7 @@ the file is behind and says so on the badge — a warning row naming the time th
 file was last saved. That proof condemns the whole file, so the warning stands
 until you save.
 
+<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.take_unverifiable_announcement @fecc0722 -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
 cells from there instead of the saved `.ipynb` — so editing one cell and running
