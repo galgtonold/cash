@@ -474,6 +474,16 @@ Values stay correct in the sense that you get what your kernel actually holds �
 the same thing plain Jupyter would give you. What you lose is the safety net:
 cash's upstream check is only ever as current as the file it read.
 
+**What cash does now:** when the cell you run is itself unsaved, cash can prove
+the file is behind and says so on the badge — a warning row naming the time the
+file was last saved. That proof condemns the whole file, so the warning stands
+until you save.
+
+**What it still cannot see:** editing one cell and running a *different* one.
+The cell you ran matches the file, so there is nothing to compare and no
+warning. This is a real hole, not an oversight — the kernel has no other copy
+of the notebook to check against.
+
 **What to do:** save the notebook (`Ctrl+S` / `Cmd+S`) after editing a cell you
 aren't about to run. Autosave exists in JupyterLab but runs on a timer, so a
 quick edit-then-run lands inside the window. **Google Colab is exempt** — there
