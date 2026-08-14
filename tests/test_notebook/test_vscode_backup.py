@@ -181,3 +181,72 @@ def test_find_backup_survives_generator_raising_permission_error(tmp_path, monke
 
     monkeypatch.setattr(Path, "glob", patched_glob)
     assert find_backup(str(nb)) is None
+
+
+import os
+import time
+
+from cash.notebook.vscode_backup import live_cells
+
+
+def _setup(tmp_path, monkeypatch, *, backup_cells, file_bytes=b"{}", skew_ms=0):
+    """A notebook on disk plus a backup whose header describes it."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(file_bytes)
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000) + skew_ms,
+                  size=st.st_size, cells=backup_cells)
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    return nb
+
+
+def test_a_matching_backup_supplies_live_cells(tmp_path, monkeypatch):
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["THRESHOLD = 0.9"])
+    cells = live_cells(str(nb))
+    assert cells is not None
+    assert cells[0]["source"] == "THRESHOLD = 0.9"
+
+
+def test_a_backup_for_a_different_saved_version_is_refused(tmp_path, monkeypatch):
+    """THE safety property. The header describes the SAVED file; if it does not
+    match what is on disk now, the backup belongs to some other version and
+    using it would substitute one staleness for another."""
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["THRESHOLD = 0.9"])
+    time.sleep(0.01)
+    nb.write_bytes(b'{"cells": []}')        # the user saved; backup header now stale
+    assert live_cells(str(nb)) is None
+
+
+def test_a_size_mismatch_alone_is_enough_to_refuse(tmp_path, monkeypatch):
+    """mtime granularity varies by filesystem, so size is the second check
+    rather than a redundant one."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"{}")
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000),
+                  size=st.st_size + 999, cells=["x = 1"])
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells(str(nb)) is None
+
+
+def test_no_backup_means_none_not_an_error(tmp_path, monkeypatch):
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"{}")
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "empty"])
+    assert live_cells(str(nb)) is None
+
+
+def test_a_missing_notebook_is_none_not_an_error(tmp_path, monkeypatch):
+    import cash.notebook.vscode_backup as vb
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells(str(tmp_path / "gone.ipynb")) is None

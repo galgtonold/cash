@@ -131,3 +131,49 @@ def find_backup(notebook_path: str) -> Path | None:
         except OSError:
             continue
     return None
+
+
+# The header's mtime is epoch milliseconds; os.stat gives float seconds. Compare
+# with a tolerance rather than exactly: filesystems differ in granularity (FAT is
+# 2 s, some network mounts round), and a false mismatch here silently costs the
+# feature while a false match would serve the wrong version.
+_MTIME_TOLERANCE_MS = 2000
+
+
+def live_cells(notebook_path: str) -> list[dict] | None:
+    """The notebook's live cells from VS Code's backup, or ``None``.
+
+    ``None`` means "no usable backup" -- absent, unparseable, or belonging to a
+    different saved version -- and the caller falls through to reading the file.
+
+    The version check is the safety property. The header records the SAVED
+    file's mtime and size, so a backup whose header no longer matches the file
+    on disk was written against a version that has since been replaced; using it
+    would trade one staleness for another.
+    """
+    try:
+        st = os.stat(notebook_path)
+    except OSError:
+        return None
+
+    backup = find_backup(notebook_path)
+    if backup is None:
+        return None
+    parsed = parse_backup(backup)
+    if parsed is None:
+        return None
+    _, meta, notebook = parsed
+
+    size = meta.get("size")
+    mtime_ms = meta.get("mtime")
+    if not isinstance(size, int) or not isinstance(mtime_ms, (int, float)):
+        return None
+    if size != st.st_size:
+        return None
+    if abs(float(mtime_ms) - st.st_mtime * 1000.0) > _MTIME_TOLERANCE_MS:
+        return None
+
+    cells = notebook.get("cells")
+    if not isinstance(cells, list):
+        return None
+    return cells
