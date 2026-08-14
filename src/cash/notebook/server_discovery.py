@@ -604,6 +604,22 @@ def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> li
         return None
 
 
+#: Which reader supplied the most recent cell read, set by
+#: ``_read_notebook_code_cells`` and read by ``last_cell_source``. Session-level
+#: (module) state, same lifetime as the caches above.
+_last_cell_source: str | None = None
+
+
+def last_cell_source() -> str | None:
+    """Which reader supplied the most recent cell read.
+
+    ``"colab"`` / ``"vscode-backup"`` see unsaved edits; ``"file"`` does not,
+    which is what the once-per-session "cannot verify" notice keys on. ``None``
+    means no read has happened yet this session.
+    """
+    return _last_cell_source
+
+
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
     """
     Read code cells from the notebook file.
@@ -618,12 +634,20 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
         include_ids: If True, return list of (cell_id, code) tuples.
                      If False, return list of code strings.
     """
+    global _last_cell_source
+    # Default to the pessimistic answer. Every exit below except the two live
+    # readers ends up reading (or failing to read) the saved file, and a failed
+    # read is emphatically not a verified-fresh one -- so only an actual live
+    # hit may upgrade this.
+    _last_cell_source = "file"
+
     # Colab first: its notebook is a Drive fileId, not a local file, so the
     # file reader below returns []. Reading the live cells from the Colab
     # frontend is what makes upstream resolution work there. A fast no-op when
     # not running in Colab.
     colab_cells = _try_colab_notebook_cells(include_ids)
     if colab_cells is not None:
+        _last_cell_source = "colab"
         return colab_cells
 
     if not notebook_path:
@@ -636,6 +660,7 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
     # the common case of a caller that passes no explicit path.
     vscode_cells = _try_vscode_backup_cells(notebook_path, include_ids)
     if vscode_cells is not None:
+        _last_cell_source = "vscode-backup"
         return vscode_cells
 
     if not notebook_path:
