@@ -336,7 +336,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f52540f4 broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @20807ce5 broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
