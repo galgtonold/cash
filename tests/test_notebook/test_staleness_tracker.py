@@ -289,6 +289,26 @@ def test_checker_still_catches_a_real_edit_in_a_percent_percent_cash_cell(tmp_pa
     assert checker.staleness.is_stale() is True
 
 
+def test_reset_caches_clears_the_staleness_verdict(tmp_path):
+    """CAS-274 final-review finding 3 (MINOR). `reset_caches()` is called on
+    a notebook switch or a fresh `%cash_on` -- a staleness verdict proven
+    against notebook A's file must not survive into notebook B, or the badge
+    warns about a file this session no longer even reads from until the
+    first ID-matched run in the new notebook happens to reset it."""
+    from unittest.mock import MagicMock
+
+    from cash.notebook.upstream.checker import UpstreamChecker
+
+    nb = _touch(tmp_path / "nb.ipynb")
+    checker = UpstreamChecker(MagicMock(), debug=False)
+    checker.staleness.observe(running_code="a = 2", file_code="a = 1", notebook_path=str(nb))
+    assert checker.staleness.is_stale() is True
+
+    checker.reset_caches()
+
+    assert checker.staleness.is_stale() is False
+
+
 def test_checker_detects_a_stale_file_on_an_id_match(tmp_path, monkeypatch):
     """The proof site. `_find_current_cell_index` matches by cell ID and returns
     immediately -- both strings are in hand at that moment and were discarded.

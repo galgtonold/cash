@@ -168,6 +168,11 @@ class UpstreamChecker:
         # Re-arm the broken-upstream-cell warning for the new notebook:
         # its cell indices/hashes are meaningless across a notebook switch.
         self._warned_broken_cells.clear()
+        # A staleness verdict is proof about notebook A's file; carrying it
+        # into notebook B (or a fresh %cash_on on the same one) would show a
+        # warning about a file this session no longer even reads from, until
+        # the first ID-matched run in the new notebook happens to reset it.
+        self.staleness.reset()
 
     def _wire_state(self, state: TrackingState) -> None:
         """Internal: alias tracking dicts onto self so existing attribute

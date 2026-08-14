@@ -33,8 +33,14 @@ class StalenessTracker:
                 notebook_path: str | None) -> bool:
         """Compare what is running against what the file says, and remember.
 
-        Returns True only on the transition into "stale" so the caller can emit
-        one notification rather than one per statement.
+        Returns True on exactly the call that flips the verdict from fresh to
+        stale -- the transition edge, not the level. A later call, even one
+        that finds a different mismatch while already stale, returns False
+        even though `is_stale()` stays True. The one production caller
+        (`UpstreamChecker._find_current_cell_index`) does not use this value
+        -- it reads `is_stale()` after the fact instead -- so this is the
+        edge-triggered half of the tracker's surface, there for a caller (or
+        test) that wants the moment of proof rather than the polled level.
         """
         mtime = _mtime(notebook_path)
         # A save is the only thing that can clear the verdict: the file has
