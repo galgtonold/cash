@@ -143,6 +143,45 @@ def test_find_backup_returns_none_when_nothing_matches(tmp_path, monkeypatch):
     assert find_backup(str(nb)) is None
 
 
+def test_find_backup_prefers_the_most_recently_modified_match(tmp_path, monkeypatch):
+    """The same notebook left dirty in two VS Code windows (two workspaces)
+    produces two matching backups. find_backup used to return whichever one
+    directory iteration happened to visit first -- an accident of OS/glob
+    order, not "the window the user is typing in right now". The most
+    recently modified match is.
+
+    The two candidates live under SEPARATE backup_roots() entries (rather
+    than two workspace dirs under one root) so this does not depend on
+    Path.glob's within-directory ordering: backup_roots() returns them as an
+    ordered list, and the OLDER one is placed first in that list, so the old
+    first-match-wins code is guaranteed to reach it before the newer one and
+    return the wrong answer.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+
+    root_a = tmp_path / "BackupsA" / "ws" / "file"
+    root_a.mkdir(parents=True)
+    root_b = tmp_path / "BackupsB" / "ws" / "file"
+    root_b.mkdir(parents=True)
+
+    older = _write_backup(root_a, nb, mtime_ms=1, size=1, cells=["OLDER = 1"])
+    older_time = time.time() - 60
+    os.utime(older, (older_time, older_time))
+
+    newer = _write_backup(root_b, nb, mtime_ms=1, size=1, cells=["NEWER = 1"])
+    newer_time = time.time() - 5
+    os.utime(newer, (newer_time, newer_time))
+
+    monkeypatch.setattr(vb, "backup_roots",
+                        lambda: [tmp_path / "BackupsA", tmp_path / "BackupsB"])
+    assert vb.find_backup(str(nb)) == newer, (
+        "first-encountered backup won instead of the most recently modified one"
+    )
+
+
 def test_find_backup_survives_an_unreadable_root(tmp_path, monkeypatch):
     import cash.notebook.vscode_backup as vb
 

@@ -114,8 +114,25 @@ def _same_file(a: str, b: str) -> bool:
         return False
 
 
+def _backup_mtime(path: Path) -> float:
+    """Sort key for backup freshness: unreadable candidates sort last."""
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return -1.0
+
+
 def find_backup(notebook_path: str) -> Path | None:
-    """The backup for *notebook_path*, or ``None`` if there isn't one."""
+    """The backup for *notebook_path*, or ``None`` if there isn't one.
+
+    When several backups match -- the same notebook left dirty in more than
+    one VS Code window/workspace -- the most recently modified one wins. It
+    is the only one that can plausibly be "the window the user is typing in
+    right now"; picking by directory/glob order instead (the previous
+    behaviour) meant an arbitrary one of them did, and could just as easily
+    be the window the user is NOT looking at.
+    """
+    matches: list[Path] = []
     for root in backup_roots():
         try:
             if not root.is_dir():
@@ -128,10 +145,15 @@ def find_backup(notebook_path: str) -> Path | None:
                 uri = parsed[0]
                 local = _uri_to_path(uri)
                 if local and _same_file(local, notebook_path):
-                    return candidate
+                    matches.append(candidate)
         except OSError:
             continue
-    return None
+
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0]
+    return max(matches, key=_backup_mtime)
 
 
 # The header's mtime is epoch milliseconds; os.stat gives float seconds. Compare
