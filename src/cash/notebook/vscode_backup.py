@@ -90,6 +90,36 @@ def parse_backup(path: Path) -> tuple[str, dict, dict] | None:
     return uri, meta, notebook
 
 
+def _read_uri(path: Path) -> str | None:
+    """The backup's header URI, without reading the rest of the file.
+
+    ``parse_backup`` reads and JSON-parses the whole file -- header AND body
+    -- which is wasted work for every candidate that turns out not to match:
+    the body is the notebook's entire JSON, potentially megabytes, and the
+    scan in ``find_backup`` used to pay that for EVERY backup in every
+    candidate's workspace just to compare a few header bytes (measured 24
+    ms/call with a single 1.2 MB unrelated dirty editor open, vs. 0.095
+    ms/call with none). Reading only the first line keeps the scan to one
+    small buffered read per candidate; the body is parsed later, via
+    ``parse_backup``, only for the candidate that actually wins.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            header_line = f.readline()
+    except OSError:
+        return None
+    if not header_line.endswith("\n"):
+        # No second line read -- either a one-line file with no body, or
+        # nothing readable came back. Same "no body" rejection parse_backup
+        # applies when text.find("\n") == -1.
+        return None
+    header_line = header_line[:-1]
+    space = header_line.find(" ")
+    if space == -1:
+        return None
+    return header_line[:space]
+
+
 def _uri_to_path(uri: str) -> str | None:
     """``file:///c%3A/x/nb.ipynb`` -> a comparable local path, or ``None``."""
     try:
@@ -139,10 +169,9 @@ def find_backup(notebook_path: str) -> Path | None:
                 continue
             candidates = root.glob(f"*/{_SCHEME_DIR}/*")
             for candidate in candidates:
-                parsed = parse_backup(candidate)
-                if parsed is None:
+                uri = _read_uri(candidate)
+                if uri is None:
                     continue
-                uri = parsed[0]
                 local = _uri_to_path(uri)
                 if local and _same_file(local, notebook_path):
                     matches.append(candidate)

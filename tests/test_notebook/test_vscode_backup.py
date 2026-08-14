@@ -182,6 +182,51 @@ def test_find_backup_prefers_the_most_recently_modified_match(tmp_path, monkeypa
     )
 
 
+def test_find_backup_does_not_read_full_bodies_while_scanning(tmp_path, monkeypatch):
+    """The scan only needs the header line's URI to know whether a candidate
+    is even a contender; reading (and JSON-parsing) the whole file -- the
+    notebook's entire JSON body -- is wasted for every candidate that is not
+    the match, and used to be paid by ALL of them. Measured: 24 ms/call with a
+    single 1.2 MB unrelated dirty editor open, vs. 0.095 ms/call with none.
+
+    A wall-clock assertion would be flaky, so this pins the actual mechanism
+    instead: Path.read_text is what parse_backup uses to pull in the whole
+    file, and the scan must never call it -- only the later, single
+    parse_backup of the winning candidate (done by live_cells, not tested
+    here) may.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    unrelated = tmp_path / "unrelated.ipynb"
+    unrelated.write_text("{}", encoding="utf-8")
+
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    # Stands in for "a large, unrelated dirty editor" -- irrelevant to the
+    # notebook being searched for, but expensive to fully read and parse.
+    _write_backup(root, unrelated, mtime_ms=1, size=1,
+                  cells=["x = 1"] * 20000, name="huge")
+    want = _write_backup(root, nb, mtime_ms=2, size=2, cells=["y = 2"], name="small")
+
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+
+    read_text_calls: list[Path] = []
+    original_read_text = Path.read_text
+
+    def _tracking_read_text(self, *args, **kwargs):
+        read_text_calls.append(self)
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _tracking_read_text)
+
+    assert vb.find_backup(str(nb)) == want
+    assert read_text_calls == [], (
+        f"scan read a candidate's full body via Path.read_text: {read_text_calls}"
+    )
+
+
 def test_find_backup_survives_an_unreadable_root(tmp_path, monkeypatch):
     import cash.notebook.vscode_backup as vb
 
