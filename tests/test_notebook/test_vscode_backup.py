@@ -307,3 +307,36 @@ def test_a_boolean_size_header_does_not_pass_as_an_integer(tmp_path, monkeypatch
                   cells=["x = 1"])
     monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
     assert live_cells(str(nb)) is None
+
+
+def test_a_freshly_written_backup_is_allowed_to_settle(tmp_path, monkeypatch):
+    """VS Code writes the backup on a trailing-edge ~1s debounce, so one touched
+    moments ago may still be mid-write. Reading it then can yield a partial
+    file -- which parses as None and silently costs the feature."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["x = 1"])
+    slept = []
+    monkeypatch.setattr(vb._time, "sleep", lambda s: slept.append(s))
+
+    backup = vb.find_backup(str(nb))
+    os.utime(backup, None)                      # make it look freshly written
+    vb._wait_for_backup_settle(backup)
+
+    assert slept, "a freshly written backup was read without waiting for it to settle"
+
+
+def test_a_settled_backup_is_not_waited_on(tmp_path, monkeypatch):
+    """The control: the common case must cost nothing."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["x = 1"])
+    slept = []
+    monkeypatch.setattr(vb._time, "sleep", lambda s: slept.append(s))
+
+    backup = vb.find_backup(str(nb))
+    old = time.time() - 60
+    os.utime(backup, (old, old))
+    vb._wait_for_backup_settle(backup)
+
+    assert slept == [], f"waited on a long-settled backup: {slept}"

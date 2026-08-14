@@ -520,6 +520,33 @@ def _try_colab_notebook_cells(include_ids: bool) -> list | None:
     return cells
 
 
+# --- VS Code hot-exit backup cell source -------------------------------------
+def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> list | None:
+    """Return code cells from VS Code's hot-exit backup, or ``None``.
+
+    Same contract as the Colab reader above: ``None`` means "not applicable /
+    unavailable" and the caller falls through to the file. VS Code gives a
+    kernel no route to its live document -- the widget webview holds a
+    `standaloneModel` stub with an empty cell list -- but it does persist dirty
+    editors to disk, and that backup carries the unsaved edits the file does not.
+    """
+    if not notebook_path:
+        return None
+    try:
+        from cash.notebook.vscode_backup import live_cells
+        cells = live_cells(notebook_path)
+    except Exception as e:  # noqa: BLE001 - another product's private format
+        logger.debug("[UTILS] VS Code backup read failed: %s", e)
+        return None
+    if cells is None:
+        return None
+    return [
+        _extract_cell_entry(cell, include_ids)
+        for cell in cells
+        if cell.get("cell_type") == "code"
+    ]
+
+
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
     """
     Read code cells from the notebook file.
@@ -544,6 +571,10 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
 
     if not notebook_path:
         notebook_path = get_notebook_path()
+
+    vscode_cells = _try_vscode_backup_cells(notebook_path, include_ids)
+    if vscode_cells is not None:
+        return vscode_cells
 
     if not notebook_path:
         # Do NOT use glob fallback - picking the most recently modified .ipynb

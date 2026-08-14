@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time as _time
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
@@ -139,6 +140,39 @@ def find_backup(notebook_path: str) -> Path | None:
 # feature while a false match would serve the wrong version.
 _MTIME_TOLERANCE_MS = 2000
 
+# Mirrors server_discovery's save-settle constants, for the same reason: read a
+# file that is still being written and you get a partial parse. VS Code's
+# backup debounce measured ~1s trailing-edge, so the window is the same size.
+_FRESH_WINDOW_S: float = 1.5     # only wait when the backup changed this recently
+_POLL_INTERVAL_S: float = 0.05   # re-stat cadence while a write is in flight
+_MAX_WAIT_S: float = 1.5         # hard cap so we never block a run for long
+
+
+def _wait_for_backup_settle(path: Path) -> None:
+    """Block until a freshly-written backup stops changing, bounded by a cap.
+
+    A long-settled backup returns at once, so the common case costs nothing.
+    """
+    try:
+        st = os.stat(path)
+    except OSError:
+        return
+    if _time.time() - st.st_mtime >= _FRESH_WINDOW_S:
+        return
+
+    deadline = _time.monotonic() + _MAX_WAIT_S
+    last = (st.st_mtime_ns, st.st_size)
+    while _time.monotonic() < deadline:
+        _time.sleep(_POLL_INTERVAL_S)
+        try:
+            st = os.stat(path)
+        except OSError:
+            return
+        now = (st.st_mtime_ns, st.st_size)
+        if now == last:
+            return
+        last = now
+
 
 def live_cells(notebook_path: str) -> list[dict] | None:
     """The notebook's live cells from VS Code's backup, or ``None``.
@@ -159,6 +193,7 @@ def live_cells(notebook_path: str) -> list[dict] | None:
     backup = find_backup(notebook_path)
     if backup is None:
         return None
+    _wait_for_backup_settle(backup)
     parsed = parse_backup(backup)
     if parsed is None:
         return None
