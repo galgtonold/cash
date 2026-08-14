@@ -69,6 +69,34 @@ def test_parse_returns_none_for_garbage(tmp_path):
     assert parse_backup(bad) is None
 
 
+def test_parse_returns_none_for_single_line_with_no_newline(tmp_path):
+    """Isolate the newline guard: a file with no newline at all."""
+    bad = tmp_path / "no_newline"
+    bad.write_text("single line content", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_header_has_no_space(tmp_path):
+    """Isolate the space guard: a header line with URI but no JSON."""
+    bad = tmp_path / "no_space"
+    bad.write_text("file:///c%3A/path/nb.ipynb\n{}", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_header_json_is_wrong_type(tmp_path):
+    """Valid JSON but not a dict (list instead)."""
+    bad = tmp_path / "wrong_type"
+    bad.write_text("file:///c%3A/path/nb.ipynb [1,2,3]\n{}", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_notebook_json_is_wrong_type(tmp_path):
+    """Valid JSON header but notebook body is not a dict (int instead)."""
+    bad = tmp_path / "wrong_nb_type"
+    bad.write_text('file:///c%3A/path/nb.ipynb {"mtime":1}\n42', encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
 def test_parse_returns_none_when_the_body_is_not_json(tmp_path):
     nb = tmp_path / "nb.ipynb"
     nb.write_text("{}", encoding="utf-8")
@@ -121,4 +149,35 @@ def test_find_backup_survives_an_unreadable_root(tmp_path, monkeypatch):
     nb = tmp_path / "target.ipynb"
     nb.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "does-not-exist"])
+    assert find_backup(str(nb)) is None
+
+
+def test_find_backup_survives_generator_raising_permission_error(tmp_path, monkeypatch):
+    """A glob generator that raises PermissionError mid-iteration must not propagate.
+
+    This tests that the iteration happens inside the try/except, not outside it.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+
+    # Mock backup_roots to return a root that exists
+    root = tmp_path / "Backups"
+    root.mkdir()
+    monkeypatch.setattr(vb, "backup_roots", lambda: [root])
+
+    # Mock glob to return a generator that raises PermissionError mid-iteration
+    def failing_glob(pattern):
+        """Yield one item then raise PermissionError to simulate access denied."""
+        raise PermissionError("Permission denied")
+        yield  # pragma: no cover
+
+    original_glob = Path.glob
+    def patched_glob(self, pattern):
+        if self == root:
+            return failing_glob(pattern)
+        return original_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", patched_glob)
     assert find_backup(str(nb)) is None

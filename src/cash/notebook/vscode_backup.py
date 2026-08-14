@@ -120,14 +120,14 @@ def find_backup(notebook_path: str) -> Path | None:
             if not root.is_dir():
                 continue
             candidates = root.glob(f"*/{_SCHEME_DIR}/*")
+            for candidate in candidates:
+                parsed = parse_backup(candidate)
+                if parsed is None:
+                    continue
+                uri = parsed[0]
+                local = _uri_to_path(uri)
+                if local and _same_file(local, notebook_path):
+                    return candidate
         except OSError:
             continue
-        for candidate in candidates:
-            parsed = parse_backup(candidate)
-            if parsed is None:
-                continue
-            uri = parsed[0]
-            local = _uri_to_path(uri)
-            if local and _same_file(local, notebook_path):
-                return candidate
     return None
