@@ -162,7 +162,10 @@ def staleness_notification(tracker) -> dict | None:
     that appears when cash is merely unsure is a warning users learn to skip,
     and this one needs to be believed the once it matters.
 
-    ASCII only -- see the module-level note on `%cash_badge print` readers.
+    ASCII only: `code` is written into the saved .ipynb and may be read back
+    by a different process (nbconvert, a log scraper, an agent) on a console
+    whose codepage cash cannot know. See `cash.notebook.staleness._to_ascii`,
+    which sanitises `hint()` for the same reason before it ever gets here.
     """
     if not tracker.is_stale():
         return None
@@ -849,6 +852,25 @@ class CellExecutor:
             logger.debug("Failed to detect opaque call patterns: %s", exc)
             return []
 
+    def _make_staleness_metrics(self) -> list[ProcessResult]:
+        """Return a WARNING notification if the notebook file is PROVEN stale.
+
+        Guarded like `_make_function_change_metrics` / `_make_opaque_warning_metrics`
+        above. Nothing in `StalenessTracker`'s current implementation raises,
+        but this is a diagnostic nicety layered on top of upstream resolution
+        (which must already have succeeded to reach this point) -- its failure
+        must never be able to take down a user's cell execution over what is,
+        at worst, a missed warning. Broader than the siblings' exception tuples
+        on purpose: unlike theirs, there is no specific failure mode to name
+        here, so the guarantee has to be unconditional.
+        """
+        try:
+            stale = staleness_notification(self._upstream_checker.staleness)
+            return [stale] if stale is not None else []
+        except Exception as exc:  # noqa: BLE001 - a diagnostic must never break execution
+            logger.debug("Failed to check notebook staleness: %s", exc)
+            return []
+
     def _build_pre_execution_notifications(
         self,
         raw_cell: str,
@@ -872,9 +894,7 @@ class CellExecutor:
         # staleness would show the warning one cell late. This function runs
         # after upstream resolution has completed for the current cell, so the
         # tracker is current.
-        stale = staleness_notification(self._upstream_checker.staleness)
-        if stale is not None:
-            all_metrics.append(stale)
+        all_metrics.extend(self._make_staleness_metrics())
         return all_metrics
 
     # ------------------------------------------------------------------

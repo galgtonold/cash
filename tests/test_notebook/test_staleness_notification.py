@@ -91,3 +91,29 @@ def test_the_executor_actually_calls_it_with_a_live_tracker(tmp_path):
     warnings = [m for m in all_metrics if m.get("status") == "WARNING"]
     assert len(warnings) == 1
     assert "THRESHOLD = 0.9" in warnings[0]["code"]
+
+
+def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
+    """The staleness check is a diagnostic nicety layered onto upstream
+    resolution, which must already have succeeded to reach this point.
+    Nothing in StalenessTracker raises today, but a future break in it must
+    degrade to "no warning" -- never take the user's cell execution down over
+    what is, at worst, a missed notification. Unlike its guarded siblings
+    (`_make_function_change_metrics`, `_make_opaque_warning_metrics`), which
+    catch a short, specific exception tuple, this one has no particular
+    failure mode to anticipate, so it must be unconditional: this test raises
+    something outside either sibling's tuple to prove the guard is not
+    accidentally narrow."""
+    class _ExplodingTracker:
+        def is_stale(self):
+            raise RuntimeError("boom")
+
+    executor = CellExecutor.__new__(CellExecutor)
+    executor._upstream_checker = types.SimpleNamespace(staleness=_ExplodingTracker())
+    executor._statement_processor = types.SimpleNamespace(function_tracker=object())
+    executor.shell = types.SimpleNamespace(user_ns={})
+    executor._debug = False
+
+    all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])  # must not raise
+
+    assert not any(m.get("status") == "WARNING" for m in all_metrics)
