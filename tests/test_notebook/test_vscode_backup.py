@@ -109,6 +109,55 @@ def test_parse_returns_none_for_a_missing_file(tmp_path):
     assert parse_backup(tmp_path / "nope") is None
 
 
+def test_uri_to_path_rejects_a_non_empty_netloc(tmp_path):
+    """A UNC-form URI ("file://server/share/nb.ipynb") carries the remote
+    host in netloc. The old code silently dropped it, turning the path into
+    "/share/nb.ipynb" -- which os.path.abspath resolves against the CURRENT
+    drive on Windows, so it could match an unrelated local file
+    (C:\\share\\nb.ipynb) that merely happens to share that relative path.
+    Refusing to match a non-empty netloc is always safe; only the
+    empty-authority form ("file:///c:/x/nb.ipynb") is one this module can
+    correctly interpret."""
+    from cash.notebook.vscode_backup import _uri_to_path
+    assert _uri_to_path("file://server/share/nb.ipynb") is None
+
+
+def test_uri_to_path_accepts_the_standard_local_form(tmp_path):
+    """The control: the normal empty-netloc form is unaffected."""
+    from cash.notebook.vscode_backup import _uri_to_path
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    assert _uri_to_path(nb.as_uri()) is not None
+
+
+def test_a_unc_backup_does_not_match_a_same_relative_path_local_file(tmp_path, monkeypatch):
+    """End-to-end reproduction of the exploit, not just the unit-level guard:
+    a backup whose header names a UNC path must not be treated as the backup
+    for an unrelated local file that happens to resolve to the same path.
+
+    os.path.abspath("/share/nb.ipynb") resolves against the CURRENT drive on
+    Windows -- with no requirement that anything actually exist there, which
+    is exactly what made the old behaviour dangerous. The target path is
+    computed the same way rather than assumed (e.g. hardcoded "C:\\..."), so
+    this reproduces the collision on whatever drive the test happens to run
+    on, and is a no-op assertion (not a false pass) on platforms where the
+    two forms are not in fact equal.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    colliding_path = os.path.abspath("/share/nb.ipynb")
+
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    header = json.dumps({"mtime": 1, "size": 1})
+    body = json.dumps({"cells": [{"cell_type": "code", "id": "c0", "source": "REMOTE = 1"}]})
+    backup = root / "abc123"
+    backup.write_text(f"file://server/share/nb.ipynb {header}\n{body}", encoding="utf-8")
+
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert vb.find_backup(colliding_path) is None
+
+
 def test_find_backup_matches_by_uri(tmp_path, monkeypatch):
     import cash.notebook.vscode_backup as vb
 

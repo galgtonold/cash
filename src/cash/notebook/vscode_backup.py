@@ -128,6 +128,16 @@ def _uri_to_path(uri: str) -> str | None:
         return None
     if parsed.scheme != "file":
         return None
+    if parsed.netloc:
+        # A non-empty netloc is a UNC host ("file://server/share/nb.ipynb"),
+        # not the empty-authority form ("file:///c:/x/nb.ipynb") handled
+        # below. Silently dropping it (the old behaviour) turned
+        # "\\server\share\nb.ipynb" into "/share/nb.ipynb", which
+        # os.path.abspath resolves against the CURRENT drive on Windows -- so
+        # a UNC backup could match an unrelated local file that merely shares
+        # its relative-to-drive-root path. Comparing UNC paths correctly is
+        # unimplemented; refusing to match one is always safe.
+        return None
     path = unquote(parsed.path)
     # A Windows URI path is "/c:/x", which is not a usable path until the
     # leading slash goes.
