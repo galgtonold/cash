@@ -66,6 +66,34 @@ def test_the_message_shows_the_running_code_not_the_file_code(tmp_path):
     assert "THRESHOLD = 0.5" not in n["code"]    # NOT the file's stale copy
 
 
+def test_the_remedy_survives_print_modes_80_char_cap(tmp_path):
+    """CAS-274 final-review finding 2 (IMPORTANT). `%cash_badge print` renders
+    `code` through `renderers.text._row_line`, which hard-truncates a row's
+    first line at `theme.HEADER_MAX_LEN` (80 chars) -- unlike HTML, there is
+    no tooltip or drawer in that mode to hold the rest. The old message put
+    the actionable half ("Save and re-run") at the END, past the cap, so
+    print mode -- exactly the nbconvert / log-scraper / agent audience this
+    feature was built for -- showed a warning with no remedy.
+
+    Renders through the REAL text renderer (not the raw dict) so a fix that
+    only reorders dict keys without actually fitting the 80-char cap still
+    fails this, and asserts on "ctrl"/"re-run" rather than "save" alone,
+    since "save" is a substring of "saved" and would spuriously match the
+    unfixed message's "...notebook saved at..." clause.
+    """
+    from cash.notebook.badge_renderer.renderers.text import render_text
+    from cash.notebook.badge_renderer.view_builder import build_interactive_badge
+
+    n = staleness_notification(_stale_tracker(tmp_path))
+    view = build_interactive_badge([n])
+    text = render_text(view)
+    lowered = text.lower()
+
+    assert "stale" in lowered, f"the fact of staleness did not survive truncation: {text!r}"
+    assert "ctrl" in lowered, f"the remedy (Ctrl+S) did not survive truncation: {text!r}"
+    assert "re-run" in lowered, f"the remedy (re-run) did not survive truncation: {text!r}"
+
+
 def test_the_executor_actually_calls_it_with_a_live_tracker(tmp_path):
     """Wiring regression guard.
 

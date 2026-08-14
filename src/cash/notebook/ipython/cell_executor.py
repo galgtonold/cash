@@ -166,6 +166,17 @@ def staleness_notification(tracker) -> dict | None:
     by a different process (nbconvert, a log scraper, an agent) on a console
     whose codepage cash cannot know. See `cash.notebook.staleness._to_ascii`,
     which sanitises `hint()` for the same reason before it ever gets here.
+
+    Message order is load-bearing, not stylistic. `%cash_badge print` renders
+    `code` through `renderers.text._row_line`, which hard-truncates a row's
+    first line at `theme.HEADER_MAX_LEN` (80 chars) -- there is no tooltip or
+    drawer in that mode to hold the rest, unlike HTML. The fact of staleness
+    and the remedy ("Save and re-run") are what make the row actionable, so
+    they go FIRST, comfortably inside the cap; the save time and the cell
+    hint are supporting evidence, appended after, and may be silently cut off
+    in print mode. Keep the essential clause short enough that it plus a
+    small margin stays under 80 chars even after the RNG suffix a future
+    change might add.
     """
     if not tracker.is_stale():
         return None
@@ -175,9 +186,9 @@ def staleness_notification(tracker) -> dict | None:
     where = f" '{hint}' differs from the saved copy." if hint else ""
     return {
         'status': 'WARNING',
-        'code': (f"[!] Upstream check used the notebook saved at {when}."
-                 f"{where} Other cells may have changed too -- "
-                 f"Save (Ctrl+S) and re-run to be sure."),
+        'code': (f"[!] Notebook file is stale -- Save (Ctrl+S) and re-run to be sure. "
+                 f"Upstream check used the copy saved at {when}.{where} "
+                 f"Other cells may have changed too."),
         'is_upstream': True,
         'total_time': 0.0,
         'execution_time': 0.0,
