@@ -18,6 +18,7 @@ design -- in-kernel detection cannot reach it. This is a floor.
 from __future__ import annotations
 
 import os
+import re
 
 
 class StalenessTracker:
@@ -43,6 +44,7 @@ class StalenessTracker:
 
         if file_code is None or notebook_path is None or mtime is None:
             return False            # no proof available; not the same as "fresh"
+        file_code = _undo_magic_line_strip(running_code, file_code)
         if _normalise(running_code) == _normalise(file_code):
             return False
         if self._stale:
@@ -67,6 +69,36 @@ class StalenessTracker:
         self._stale = False
         self._saved_at = None
         self._hint = None
+
+
+#: Matches a leading ``%%cash`` cell-magic line (optionally with args, e.g.
+#: ``%%cash ttl=60``), including its trailing newline when present. The
+#: negative lookahead keeps a differently-named magic (``%%cash_variant``)
+#: from matching.
+_CASH_CELL_MAGIC_LINE = re.compile(r'^%%cash(?![A-Za-z0-9_])[^\n]*\n?')
+
+
+def _undo_magic_line_strip(running_code: str, file_code: str) -> str:
+    """Undo the one difference IPython's own contract makes, not the user.
+
+    ``%%cash`` is a cell magic: IPython strips the ``%%cash`` line before
+    handing the cell's BODY to ``CellExecutor.execute_cell`` (see
+    ``magics.py``'s ``cash()``). The file on disk still has that line -- it
+    is what the user actually saved. Comparing the bare body against "magic
+    line + body" made every untouched ``%%cash`` cell look edited, which is
+    exactly the false positive this tracker exists to never produce.
+
+    Only strip when *running_code* does not itself already start with a
+    cell-magic line: the ``%cash_on`` hook path is handed the RAW,
+    unprocessed cell (nothing strips it there), so if that path's code
+    already starts with ``%%`` the two sides are already comparable, and
+    stripping only the file's copy would introduce a mismatch instead of
+    removing one.
+    """
+    if running_code.lstrip().startswith('%%'):
+        return file_code
+    match = _CASH_CELL_MAGIC_LINE.match(file_code)
+    return file_code[match.end():] if match else file_code
 
 
 def _normalise(code: str) -> str:
