@@ -464,6 +464,43 @@ def invalidate_notebook_cells_cache() -> None:
     _vscode_cells_cache.clear()
 
 
+# --- JupyterLab live-cell push cell source ------------------------------------
+# JupyterLab gives a kernel no route to its live document at all -- unlike
+# Colab's frontend API or VS Code's hot-exit backup, there is nothing on disk
+# or reachable over an existing channel to read. cash's own extension closes
+# that gap by pushing the notebook's current cell sources over a comm; see
+# ``cash.notebook.live_cells`` for the receiving half and why it is a push
+# rather than a request/response.
+def _try_extension_cells(include_ids: bool) -> list | None:
+    """Cells pushed by cash's JupyterLab extension, or ``None``.
+
+    Same contract as the Colab and VS Code readers: ``None`` means "not
+    available" and the caller falls through to the saved file. Needs no
+    environment gate -- a push can only exist if the extension is running.
+    """
+    try:
+        from cash.notebook.live_cells import latest_cells
+        cells = latest_cells()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[UTILS] extension cell read failed: %s", e)
+        return None
+    if not cells:
+        return None
+    try:
+        extracted = [
+            _extract_cell_entry(cell, include_ids)
+            for cell in cells
+            if cell.get("cell_type") == "code"
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[UTILS] extension cell shape unusable: %s", e)
+        return None
+    # An unrecognised shape must fall through to the file, never disable the
+    # upstream check by returning an empty list -- exactly that made cash
+    # strictly worse than not having the feature in CAS-274 Tier 1c.
+    return extracted or None
+
+
 # --- Google Colab cell source ------------------------------------------------
 # Colab notebooks live in Google Drive, not a local file, so the file reader
 # below finds nothing: get_notebook_path() returns a "/fileId=..." reference
@@ -651,9 +688,9 @@ _last_cell_source: str | None = None
 def last_cell_source() -> str | None:
     """Which reader supplied the most recent cell read.
 
-    ``"colab"`` / ``"vscode-backup"`` see unsaved edits; ``"file"`` does not,
-    which is what the once-per-session "cannot verify" notice keys on. ``None``
-    means no read has happened yet this session.
+    ``"extension"`` / ``"colab"`` / ``"vscode-backup"`` see unsaved edits;
+    ``"file"`` does not, which is what the once-per-session "cannot verify"
+    notice keys on. ``None`` means no read has happened yet this session.
     """
     return _last_cell_source
 
@@ -673,13 +710,21 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
                      If False, return list of code strings.
     """
     global _last_cell_source
-    # Default to the pessimistic answer. Every exit below except the two live
+    # Default to the pessimistic answer. Every exit below except the three live
     # readers ends up reading (or failing to read) the saved file, and a failed
     # read is emphatically not a verified-fresh one -- so only an actual live
     # hit may upgrade this.
     _last_cell_source = "file"
 
-    # Colab first: its notebook is a Drive fileId, not a local file, so the
+    # cash's own JupyterLab extension first, when present: it is the most
+    # authoritative source (the frontend pushed it moments ago) and checking
+    # costs one dict lookup when there is no extension to push anything.
+    extension_cells = _try_extension_cells(include_ids)
+    if extension_cells is not None:
+        _last_cell_source = "extension"
+        return extension_cells
+
+    # Colab next: its notebook is a Drive fileId, not a local file, so the
     # file reader below returns []. Reading the live cells from the Colab
     # frontend is what makes upstream resolution work there. A fast no-op when
     # not running in Colab.

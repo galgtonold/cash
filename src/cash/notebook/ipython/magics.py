@@ -342,6 +342,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 e,
             )
 
+        # JupyterLab live-cell push (CAS-274 Tier 2): register the comm target
+        # that receives cell sources pushed by cash's frontend extension, when
+        # one is present. A silent no-op everywhere else — register_target()
+        # returns False rather than raising when there is no kernel / comm
+        # manager to attach to (bare IPython, older ipykernel, MockShell, ...).
+        from ..live_cells import register_target
+        register_target(shell)
+
         # Monkey-patch run_cell to intercept execution.
         #
         # Both hooks are installed as ``functools.wraps``-ed proxies rather than
@@ -449,6 +457,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # Clear upstream checker's simulation and AST caches to prevent stale
         # data from a previous notebook from interfering (Issue 23 part 2)
         self._upstream_checker.reset_caches()
+
+        # Drop any cell snapshot cash's JupyterLab extension pushed for the
+        # PREVIOUS notebook -- otherwise the new notebook's first upstream
+        # check would read stale cells from a document this session no longer
+        # even has open, exactly the per-notebook staleness reset above.
+        from ..live_cells import reset as _reset_live_cells
+        _reset_live_cells()
 
         self._auto_cache_enabled = True
         self._global_ttl = ttl
