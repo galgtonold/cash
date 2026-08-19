@@ -98,23 +98,30 @@ is stale but `features` is not, and repairs exactly that:
 - `score(features, THRESHOLD)` re-runs, once, with the new threshold,
 - Cell 3 prints the new number.
 
-!!! warning "Save the notebook first — cash reads upstream cells from the file on disk"
+!!! warning "If cash has no live reader, save first — it falls back to the file on disk"
     This is the one thing that will make the walk-back above appear not to work.
-    Cash reads the cells it didn't execute from the **saved `.ipynb`**, not from
-    your editor's in-memory buffer. Change `THRESHOLD` to 15, run Cell 3 without
-    saving, and cash still reads `10` — so it concludes nothing upstream changed,
-    the repair never fires, and Cell 3 prints the *old* number while your screen
-    shows the new one.
+    With no live reader, cash reads the cells it didn't execute from the **saved
+    `.ipynb`**, not from your editor's in-memory buffer. Change `THRESHOLD` to 15,
+    run Cell 3 without saving, and cash still reads `10` — so it concludes nothing
+    upstream changed, the repair never fires, and Cell 3 prints the *old* number
+    while your screen shows the new one.
 
-    **Press `Ctrl+S` (`Cmd+S` on macOS) after editing an upstream cell.**
-    JupyterLab does autosave, but on a timer — a quick edit-then-run lands inside
-    that window, which is exactly when you're most likely to hit this.
+    **Three editors have a live reader and don't need the save:** Google Colab
+    (cells come from the frontend), JupyterLab (`pip install cash-lib` also
+    installs an extension that pushes your live cells to the kernel before each
+    run), and VS Code with hot exit on (cash reads its unsaved-state backup).
+    Everywhere else — and on JupyterLab for the *first* run after a kernel
+    restart, including a cold `Run All` — **press `Ctrl+S` (`Cmd+S` on macOS)
+    after editing an upstream cell.** JupyterLab's autosave runs on a timer, so a
+    quick edit-then-run lands inside that window.
 
     Nothing is corrupted when it happens: you get the value your kernel actually
     holds, which is the same thing plain Jupyter would give you. What you lose is
-    the safety net — cash's upstream check is only ever as current as the file it
-    read. **Google Colab is the exception**: there cash reads cells live from the
-    frontend, so there is nothing to save.
+    the safety net — cash's upstream check is only ever as current as the cells it
+    read. cash tells you which case you are in: it prints *"cash cannot see
+    unsaved edits here"* once per session, and only when reading the saved file.
+    Full detail in
+    [editing without saving](../known-limitations.md#editing-without-saving).
 
 You get the same result you'd get from *Run All*, at the cost of the one cheap
 statement that actually changed. That's the difference between caching *cells* and
@@ -324,7 +331,7 @@ purity analyzer, and `explain()` — is in the [decorator guide](../decorator.md
 
 ## Configuration (both paths)
 
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @656d4606 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @e19353cf -->
 `%cash_on` takes only an optional `ttl=N`; to pick a different backend or cache
 directory, construct a `Cash(backend=...)` instance before enabling the magic (in a
 notebook), or decorate with its `@c.cache` (in a script). Optional backends — SQLite,

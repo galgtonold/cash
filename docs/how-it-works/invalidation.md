@@ -18,13 +18,16 @@ A *failed* lookup is memoised too, but for two seconds rather than five minutes 
 
 ## Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @ba7e70bc, cash/notebook/upstream/simulator.py:NotebookSimulator @8ffd10e8, cash/notebook/server_discovery.py:_read_notebook_code_cells @b43894d9 broad="the simulation story is the two orchestrating classes, not one method" -->
-The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available (VS Code's hot-exit backup, Colab's frontend), the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @ba7e70bc, cash/notebook/upstream/simulator.py:NotebookSimulator @8ffd10e8, cash/notebook/server_discovery.py:_read_notebook_code_cells @9fc1d8a0 broad="the simulation story is the two orchestrating classes, not one method" -->
+The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
+
+<!-- claim: cash/notebook/server_discovery.py:_read_notebook_code_cells @9fc1d8a0, cash/notebook/server_discovery.py:last_cell_source @b653689d -->
+"A live source when one is available" means, in the order Cash tries them: cell sources **pushed by cash's JupyterLab extension**, which the frontend flushes to the kernel before every execution; **Colab's frontend** (`get_ipynb`); and **VS Code's hot-exit backup**. Each of the three sees edits you have not saved. When none answers, Cash reads the saved `.ipynb` — the fallback that makes an unsaved upstream edit invisible, and the one case where Cash says so once per session on the badge. See [editing without saving](../known-limitations.md#editing-without-saving) for what each reader covers and what it does not.
 
 ```mermaid
 flowchart TD
     START(["User runs Cell 3<br/>(requires variable 'df')"])
-    READ["<b>Read Notebook File</b><br/>Get current cell contents"]
+    READ["<b>Read Current Cell Sources</b><br/>Live source if one answers,<br/>saved .ipynb otherwise"]
     SIM["<b>Simulate Cells 1, 2 (upstream)</b><br/>Compute virtual lineages<br/>from notebook code"]
     CMP{"<b>Compare Lineages</b><br/>Virtual vs Actual"}
     OK["<b>Continue</b><br/>with cached values"]

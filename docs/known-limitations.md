@@ -461,8 +461,9 @@ for x in [5, 10, 1]:     # reordered: the fold's per-iteration cache misses,
 ### Editing without saving
 
 Cash reads the cells it did *not* execute from the saved `.ipynb` on disk, so an
-edit you haven't saved is invisible to it. This affects **JupyterLab (including
-Binder) and VS Code alike** — not just one editor. Two ways it shows up:
+edit you haven't saved is invisible to it — **unless a live reader is available**.
+Colab, JupyterLab and VS Code each have one, with the caveats below; where none
+applies, this is how it shows up:
 
 - **The upstream repair doesn't fire.** Edit a config cell, then run a downstream
   cell without saving: cash reads the old value, concludes nothing upstream
@@ -479,6 +480,64 @@ the file is behind and says so on the badge — a warning row naming the time th
 file was last saved. That proof condemns the whole file, so the warning stands
 until you save.
 
+<!-- claim: cash/notebook/live_cells.py:handle_message @c2aa8d99, cash/notebook/server_discovery.py:_try_extension_cells @3418ae7c -->
+**On JupyterLab, cash's own extension pushes your unsaved edits to the kernel.**
+`pip install cash-lib` also drops a prebuilt JupyterLab extension
+(`cash-live-cells`) into your environment, which JupyterLab discovers at startup
+— no marketplace, no build step, no Node. It sends the notebook's current cell
+sources to the kernel over a comm, and **flushes them before every
+`execute_request` leaves the browser**. Shell-channel messages are processed
+first-in-first-out, so the push is handled before the cell that follows it: the
+fast case — edit a cell, immediately run a different one, never touch `Ctrl+S` —
+is an ordering guarantee rather than a race you have to win. There is nothing to
+enable and nothing to configure.
+
+Measured on **JupyterLab 4.6.3, on Windows**: 20 consecutive edit-then-run
+iterations with no pause between the last keystroke and the run, all 20 checked
+against the value that existed only on screen, on two independent runs. **What
+was not tested: Notebook 7, split installs, and a cold-kernel `Run All`.**
+Notebook 7 is built on the same JupyterLab 4 extension API, but we have not run
+it there, so treat it as unverified rather than working.
+
+**The first execution on a fresh kernel still reads the saved file.** The
+extension's comm cannot open until the kernel has a target to open it against,
+and that target does not exist until the cell containing `import cash` has run —
+so the first attempt is necessarily refused, and the extension re-opens on the
+next execution. Live cells therefore apply from the **second** execution onward.
+The consequence worth knowing: **a `Run All` on a fresh kernel gets no live cells
+for the whole run**, because JupyterLab queues every `execute_request` up front,
+before the comm exists. Save before a cold `Run All`.
+
+**The extension is discovered from the *server's* environment, not the kernel's.**
+If you launch JupyterLab from one environment and run the notebook against a
+kernel from another — a split install — the server never loads the extension,
+nothing is pushed, and cash falls back to the saved `.ipynb`. Nothing breaks, and
+it is not quiet about it: the once-per-session badge notice fires, as it does for
+anyone reading the saved file.
+
+**Turning it off.** `jupyter labextension disable cash-live-cells`, then reload
+the page: cash falls back to the saved file exactly as it does for a user who
+never had the extension. Getting back is less obvious, because JupyterLab
+*locks* an extension when it disables one, and a plain `unlock` then refuses with
+*"locked at a higher level"* even when the only config on the machine is the one
+`disable` just wrote. The way out is to name the level:
+
+```bash
+jupyter labextension unlock cash-live-cells --level=system
+jupyter labextension enable cash-live-cells
+```
+
+That lock behaviour is JupyterLab's own and applies to any extension, not just
+this one.
+
+<!-- claim: cash/notebook/server_discovery.py:_labextension_installed @ce644745 -->
+Disabling does not remove the installed directory, and the proactive `Ctrl+S` tip
+`%cash_on` prints is gated on that directory being present — so a disabled
+extension, like a split install, keeps the tip suppressed. You are still told,
+just reactively rather than up front: the once-per-session "cash cannot see
+unsaved edits here" notice keys on the read that actually happened, so it is
+right in both cases.
+
 <!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.take_unverifiable_announcement @fecc0722 -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
@@ -492,20 +551,24 @@ release. When it does — or when the backup is missing because hot exit is
 disabled — cash falls back to reading the saved file and says so once, rather
 than silently losing the guarantee.
 
-**What it still cannot see:** editing one cell and running a *different* one —
-still the case wherever cash has no live reader: JupyterLab always reads the
-saved file, and a VS Code session falls back to it too when no usable backup
-exists. There the cell you ran matches what cash read, so there is nothing to
-compare and no warning — a real hole, not an oversight, since there is no other
-copy of the notebook to check against. It is no longer silent about the gap,
-though: the first time a session cannot verify freshness this way, cash says so
-once on the badge.
+**What it still cannot see:** editing one cell and running a *different* one,
+wherever no live reader applies — a JupyterLab session with no working extension
+(split install, extension disabled, or the first execution on a fresh kernel),
+and a VS Code session with no usable backup. There the cell you ran matches what
+cash read, so there is nothing to compare and no warning — a real hole, not an
+oversight, since there is no other copy of the notebook to check against. It is
+no longer silent about the gap, though: the first time a session cannot verify
+freshness this way, cash says so once on the badge.
 
 **What to do:** save the notebook (`Ctrl+S` / `Cmd+S`) after editing a cell you
-aren't about to run. Autosave exists in JupyterLab but runs on a timer, so a
-quick edit-then-run lands inside the window. **Google Colab is exempt** — there
-cash reads cells live from the frontend via `get_ipynb`, so there is nothing to
-save. **So is a VS Code session with a usable hot-exit backup** — see above.
+aren't about to run, in any session where cash has no live reader — and before a
+cold `Run All` on JupyterLab. Autosave exists in JupyterLab but runs on a timer,
+so a quick edit-then-run lands inside the window. **Google Colab is exempt** —
+there cash reads cells live from the frontend via `get_ipynb`, so there is
+nothing to save. **So are JupyterLab with the bundled extension, and a VS Code
+session with a usable hot-exit backup** — both above. If you are unsure which
+you have, the badge settles it: cash says *"cash cannot see unsaved edits here"*
+once per session, and only when it is reading the saved file.
 
 ### Others
 
