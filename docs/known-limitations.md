@@ -520,7 +520,7 @@ nothing is pushed, and cash falls back to the saved `.ipynb`. Nothing breaks, an
 it is not quiet about it: the once-per-session badge notice fires, as it does for
 anyone reading the saved file.
 
-<!-- claim: cash/notebook/live_cells.py:expire @11066d55 -->
+<!-- claim: cash/notebook/live_cells.py:expire @47a3dfed -->
 **Turning it off.** `jupyter labextension disable cash-live-cells`, then reload
 the page — **no kernel restart needed**: cash falls back to the saved file
 exactly as it does for a user who never had the extension, and says so once on

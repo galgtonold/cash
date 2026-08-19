@@ -12,8 +12,9 @@ request/response design could never serve a read at the moment cash needs one.
 The extension pushes on change and flushes before execution; shell messages are
 FIFO, so a push sent before an execute_request is processed first.
 
-A snapshot is valid for exactly ONE execution -- the one it preceded. See
-``expire``, which is the whole reason this module is more than a variable.
+A snapshot is valid for exactly one NON-SILENT execution -- the one it
+preceded. See ``expire``, which is the whole reason this module is more than
+a variable, including the ``silent=True`` gap in that guarantee.
 
 Everything here tolerates nonsense: the payload crosses a process boundary from
 JavaScript, and a malformed one must cost the fallback, never an exception.
@@ -78,20 +79,31 @@ def expire() -> None:
     edits here" notice is suppressed as well. Confidently wrong, and silent
     about it: strictly worse than the staleness this feature exists to fix.
 
-    So a snapshot is valid for exactly the ONE execution it preceded. The
-    extension flushes before every ``execute_request``
-    (``labextension/src/index.ts``), so requiring a fresh push per execution
-    costs a working extension nothing, and the moment one stops pushing cash
-    falls back to the saved file AND the reactive notice fires -- both correct.
+    So a snapshot is valid for exactly the ONE non-silent execution it
+    preceded (see the ``silent=True`` gap below). The extension flushes before
+    every ``execute_request`` (``labextension/src/index.ts``), so requiring a
+    fresh push per execution costs a working extension nothing, and the
+    moment one stops pushing cash falls back to the saved file AND the
+    reactive notice fires -- both correct.
 
-    Called from IPython's ``post_run_cell``, the last event of an execution.
-    Measured on a real kernel (ipykernel 7.2, IPython 9.13): a push sent
-    immediately before an ``execute_request`` is processed BEFORE that execution
-    begins, and every one of cash's cell reads happens before ``post_run_cell``
-    fires -- so one snapshot survives all of them, however many times cash reads
-    within a single cell. ``pre_run_cell`` would be the wrong hook: the push has
-    already landed by the time it fires, so it would throw away the snapshot
-    that just arrived for the execution now starting.
+    Called from IPython's ``post_run_cell``, the last event of a non-silent
+    execution. Measured on a real kernel (ipykernel 7.2, IPython 9.13): a push
+    sent immediately before an ``execute_request`` is processed BEFORE that
+    execution begins, and every one of cash's cell reads happens before
+    ``post_run_cell`` fires -- so one snapshot survives all of them, however
+    many times cash reads within a single cell. ``pre_run_cell`` would be the
+    wrong hook: the push has already landed by the time it fires, so it would
+    throw away the snapshot that just arrived for the execution now starting.
+
+    The ``silent=True`` gap: both places that fire ``post_run_cell`` --
+    ``IPython.core.interactiveshell.InteractiveShell.run_cell`` and
+    ``ipykernel.ipkernel.IPythonKernel.do_execute`` -- guard the trigger behind
+    ``if not silent``, so a silent execution never calls this function and any
+    snapshot pushed for it survives into whatever runs next. That is a real
+    hole in "exactly one execution," not a hedge -- but it costs nothing in
+    practice: JupyterLab never sends a silent ``execute_request`` for a user's
+    own cell, so nothing reachable through the UI this feature targets ever
+    exercises it.
 
     ``seq`` deliberately survives. It is a duplicate-suppression high-water
     mark, not part of the snapshot: dropping it here would let a retransmitted
