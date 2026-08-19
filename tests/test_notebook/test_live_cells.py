@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+from IPython.core.events import available_events
+
 from cash.notebook import server_discovery as sd
 from cash.notebook.live_cells import (
     TARGET,
@@ -358,17 +360,28 @@ _MISSING_NOTEBOOK = "no-such-notebook-cas274.ipynb"
 
 
 class _FakeEvents:
+    """Mimics the part of IPython's ``EventManager`` this file depends on --
+    including its closed set of event names. Real ``InteractiveShell.__init__``
+    builds ``self.events = EventManager(self, available_events)``, and
+    ``EventManager.__init__`` pre-populates ``callbacks`` from that same
+    ``available_events`` dict, so register/unregister/trigger on an unknown
+    name raise ``KeyError`` rather than accepting it. Seeding ``registered``
+    from the real ``available_events`` (imported above) reproduces that: a
+    typo in ``"post_run_cell"`` must fail every test below, not pass them
+    silently the way a plain ``defaultdict``-style fake would.
+    """
+
     def __init__(self):
-        self.registered = {}
+        self.registered = {name: [] for name in available_events}
 
     def register(self, event, fn):
-        self.registered.setdefault(event, []).append(fn)
+        self.registered[event].append(fn)   # KeyError on an unknown event, as IPython's does
 
     def unregister(self, event, fn):
         self.registered[event].remove(fn)   # raises when absent, as IPython's does
 
     def trigger(self, event, *a):
-        for fn in list(self.registered.get(event, ())):
+        for fn in list(self.registered[event]):
             fn(*a)
 
 
