@@ -65,9 +65,12 @@ Enable automatic caching for every subsequent cell.
   first upstream check.
 - Sets the global TTL (`None` if not supplied) and flips
   `_auto_cache_enabled = True`.
-- Prints a one-time `[Tip]` about saving before running, **unless** a live cell
-  reader makes it false — Colab, or cash's JupyterLab extension being installed
-  in this environment. See
+- Prints a one-time `[Tip]` about saving before running, **unless** this is
+  Colab or cash's JupyterLab extension is installed in this environment. Those
+  two are the whole gate. A VS Code hot-exit backup is a live reader too and
+  does **not** suppress the tip: whether a usable backup exists is a property of
+  each individual read, not something `%cash_on` can settle up front, so VS Code
+  users still see it. See
   [editing without saving](known-limitations.md#editing-without-saving).
 
 **Examples:**

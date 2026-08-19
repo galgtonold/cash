@@ -493,9 +493,12 @@ is an ordering guarantee rather than a race you have to win. There is nothing to
 enable and nothing to configure.
 
 Measured on **JupyterLab 4.6.3, on Windows**: 20 consecutive edit-then-run
-iterations with no pause between the last keystroke and the run, all 20 checked
-against the value that existed only on screen, on two independent runs. **What
-was not tested: Notebook 7, split installs, and a cold-kernel `Run All`.**
+iterations with no deliberate pause between the last keystroke and the run — in
+practice tens of milliseconds apart rather than zero, since each browser action
+is its own round trip — all 20 checked against the value that existed only on
+screen, on two independent runs, the second of them on the bundle that actually
+ships (v0.1.2). **What was not tested: Notebook 7, split installs, and a
+cold-kernel `Run All`.**
 Notebook 7 is built on the same JupyterLab 4 extension API, but we have not run
 it there, so treat it as unverified rather than working.
 
@@ -503,10 +506,12 @@ it there, so treat it as unverified rather than working.
 extension's comm cannot open until the kernel has a target to open it against,
 and that target does not exist until the cell containing `import cash` has run —
 so the first attempt is necessarily refused, and the extension re-opens on the
-next execution. Live cells therefore apply from the **second** execution onward.
-The consequence worth knowing: **a `Run All` on a fresh kernel gets no live cells
-for the whole run**, because JupyterLab queues every `execute_request` up front,
-before the comm exists. Save before a cold `Run All`.
+next execution. Live cells therefore apply from the first execution *after* the
+one that ran `import cash` — which is the second cell you run only if that
+import is the first thing you run. The consequence worth knowing: **a `Run All`
+on a fresh kernel gets no live cells for the whole run**, because JupyterLab
+queues every `execute_request` up front, before the comm exists. Save before a
+cold `Run All`.
 
 **The extension is discovered from the *server's* environment, not the kernel's.**
 If you launch JupyterLab from one environment and run the notebook against a
@@ -515,9 +520,17 @@ nothing is pushed, and cash falls back to the saved `.ipynb`. Nothing breaks, an
 it is not quiet about it: the once-per-session badge notice fires, as it does for
 anyone reading the saved file.
 
+<!-- claim: cash/notebook/live_cells.py:expire @11066d55 -->
 **Turning it off.** `jupyter labextension disable cash-live-cells`, then reload
-the page: cash falls back to the saved file exactly as it does for a user who
-never had the extension. Getting back is less obvious, because JupyterLab
+the page — **no kernel restart needed**: cash falls back to the saved file
+exactly as it does for a user who never had the extension, and says so once on
+the badge. That works because a pushed snapshot is only good for the one
+execution it preceded; the moment the pushes stop, the next execution reads the
+saved `.ipynb` again. (Measured on a kernel that had already been receiving
+pushes: the outgoing page can get one last push in as it unloads, so in the
+worst case the very first execution after the reload still answers from it, and
+every execution after that reads the file.) Getting back is less obvious,
+because JupyterLab
 *locks* an extension when it disables one, and a plain `unlock` then refuses with
 *"locked at a higher level"* even when the only config on the machine is the one
 `disable` just wrote. The way out is to name the level:
@@ -553,8 +566,8 @@ than silently losing the guarantee.
 
 **What it still cannot see:** editing one cell and running a *different* one,
 wherever no live reader applies — a JupyterLab session with no working extension
-(split install, extension disabled, or the first execution on a fresh kernel),
-and a VS Code session with no usable backup. There the cell you ran matches what
+(split install, extension disabled, the first execution on a fresh kernel, or a
+frontend that has stopped pushing), and a VS Code session with no usable backup. There the cell you ran matches what
 cash read, so there is nothing to compare and no warning — a real hole, not an
 oversight, since there is no other copy of the notebook to check against. It is
 no longer silent about the gap, though: the first time a session cannot verify
