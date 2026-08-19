@@ -742,15 +742,31 @@ def last_cell_source() -> str | None:
 
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
     """
-    Read code cells from the notebook file.
+    Read code cells from the first reader in the chain that can answer.
 
-    Memoized by the file's ``(mtime_ns, size)`` signature: repeated reads of an
-    unchanged file return the cached parse without re-opening it, while any edit
-    (which bumps mtime/size) forces a fresh read — so a quick edit-then-run never
-    serves stale cell sources.
+    Tried in order, each falling through to the next on ``None``: cash's own
+    JupyterLab extension (``_try_extension_cells``), Google Colab
+    (``_try_colab_notebook_cells``), VS Code's hot-exit backup
+    (``_try_vscode_backup_cells``), and finally the saved ``.ipynb`` on disk.
+    The first three see UNSAVED edits; the file does not. ``last_cell_source()``
+    reports which one actually answered a given call.
+
+    The extension and Colab readers ignore ``notebook_path`` entirely -- the
+    extension keys off the running kernel, not a path, and a Colab notebook is
+    a Drive fileId, not a local file. Only the VS Code and file readers use it:
+    VS Code to match a backup against the right notebook, the file reader to
+    open it.
+
+    The file read (the last resort) is memoized by the file's ``(mtime_ns,
+    size)`` signature: repeated reads of an unchanged file return the cached
+    parse without re-opening it, while any edit (which bumps mtime/size)
+    forces a fresh read — so a quick edit-then-run never serves stale cell
+    sources from the file. That caching is local to the file path; none of the
+    three live readers ahead of it in the chain go through it.
 
     Args:
-        notebook_path: Path to notebook file. Auto-detected if None.
+        notebook_path: Path to notebook file, used only by the VS Code and
+                        file readers (see above). Auto-detected if None.
         include_ids: If True, return list of (cell_id, code) tuples.
                      If False, return list of code strings.
     """
@@ -841,7 +857,11 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
 
 
 def get_notebook_cells(notebook_path: str | None = None) -> list[str]:
-    """Read code cells from the notebook file. Returns a list of code strings."""
+    """Read code cells from the first reader that can answer -- cash's
+    JupyterLab extension, Colab, a VS Code hot-exit backup, or (last resort)
+    the saved notebook file. Returns a list of code strings. See
+    ``_read_notebook_code_cells`` for the reader chain and ``last_cell_source``
+    for which one answered."""
     return _read_notebook_code_cells(notebook_path, include_ids=False)
 
 
