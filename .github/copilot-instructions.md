@@ -60,6 +60,24 @@ The notebook caching is statement-level, not cell-level. The four biggest cluste
 - **`_protocols.py`** - `TrackingState` + the subsystem's Protocol types
 - **`_trace.py`** - Opt-in decision tracing for the upstream checker/simulator
 
+### JupyterLab extension (`labextension/`)
+
+The one part of this repo that is not Python. It pushes the notebook's live
+(unsaved) cell sources over the `cash_live_cells` comm that
+`notebook/live_cells.py` receives, which is the only way cash sees an edit that
+has not been written to the `.ipynb` yet.
+
+**Node is never on your critical path.** The built bundle is committed under
+`src/cash/labextension/`, so `pip install -e .`, `pytest`, and building the wheel
+all work with no JavaScript toolchain installed. You need Node only if you change
+`labextension/src/index.ts` — then `cd labextension && npm install && npm run
+build`, and commit the regenerated `src/cash/labextension/`.
+
+`comm.commsOverSubshells = 'disabled'` in that file is **load-bearing** and is
+guarded twice (a build-time script and
+`tests/test_notebook/test_labextension_packaging.py`). Read
+`labextension/README.md` before touching it.
+
 ### Key Data Flows
 1. **Lineage Tracking**: Each variable gets a lineage hash = `hash(code + sorted(input_lineages) + file_deps)`
 2. **Cache Keys**: `stmt:{hash(code + input_lineage_hashes)}` for statement-level caching
@@ -470,6 +488,12 @@ clean it out before going near an upload — do not "just skip" the extra files.
 - `twine check dist/*`
 - `pip install dist/cash_lib-X.Y.Z-py3-none-any.whl` in a fresh venv →
   `python -c "import cash; print(cash.__version__)"` prints `X.Y.Z`
+- In that same fresh venv, `pip install "jupyterlab>=4,<5"` then
+  `jupyter labextension list` → must show `cash-live-cells vN.N.N enabled ok
+  (python, cash-lib)`. A wheel that installs fine but registers no extension is
+  the failure mode here, and nothing short of this command catches it: the
+  bundle is committed build output, so it can be stale or absent while every
+  Python check stays green.
 
 ### 5. Commit & tag
 
