@@ -68,6 +68,23 @@ def register_target(shell) -> bool:
     """
     try:
         def _on_open(comm, msg):
+            # A comm_open is a NEW frontend connection superseding any previous
+            # one, so the high-water mark from the old one must not outlive it.
+            #
+            # The extension's `seq` is a closure variable in the plugin
+            # activation, so it restarts at 0 on every browser page load, while
+            # this store lives as long as the KERNEL. Without this reset, every
+            # push after an F5 is dropped as "older" and `latest_cells()` keeps
+            # serving the PRE-RELOAD snapshot -- source text that, since a
+            # reload discards unsaved edits, no longer exists anywhere. That is
+            # strictly worse than the saved-file fallback it displaces, which is
+            # the one outcome this feature must never produce.
+            #
+            # Clearing is the safe direction: `latest_cells()` returning None
+            # makes `_try_extension_cells` return None, and cash falls through
+            # to the saved .ipynb rather than believing the notebook is empty.
+            # Pinned by test_live_cells.py.
+            reset()
             handle_message((msg or {}).get("content", {}).get("data"))
 
             @comm.on_msg
