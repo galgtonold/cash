@@ -44,6 +44,13 @@ def _cell_shape_ok(cell: dict) -> bool:
     reaches ``ast.parse``, which raises ``TypeError`` on a non-str argument --
     not the ``(SyntaxError, ValueError)`` the upstream checker catches, so it
     would escape all the way out to the user's own cell execution.
+
+    Deliberately stricter than ``_extract_cell_entry``: a ``list`` source is
+    rejected here even though that function would have joined it. The
+    extension sends ``sharedModel.getSource()``, always a string, so nothing
+    real is turned away, and the nbformat list form is not worth widening a
+    guard whose whole job is to keep a non-string out. Rejection costs the
+    saved-file fallback, never an exception.
     """
     source = cell.get("source", "")
     return isinstance(source, str)

@@ -866,8 +866,10 @@ def get_notebook_cells(notebook_path: str | None = None) -> list[str]:
 
 
 def get_notebook_cells_with_ids(notebook_path: str | None = None) -> list[tuple[str | None, str]]:
-    """
-    Read code cells with their IDs from the notebook file.
-    Returns a list of (cell_id, code_string) tuples.
-    """
+    """Read code cells with their IDs from the first reader that can answer --
+    cash's JupyterLab extension, Colab, a VS Code hot-exit backup, or (last
+    resort) the saved notebook file. Returns a list of (cell_id, code_string)
+    tuples; ``cell_id`` is ``None`` for a reader that cannot supply one. See
+    ``_read_notebook_code_cells`` for the reader chain and ``last_cell_source``
+    for which one answered."""
     return _read_notebook_code_cells(notebook_path, include_ids=True)
