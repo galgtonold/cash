@@ -105,7 +105,7 @@
     "audited": "2026-07-27"
   },
   "docs/how-it-works/invalidation.md": {
-    "anchors": 10,
+    "anchors": 18,
     "audited": "2026-07-27"
   },
   "docs/how-it-works/notebook-path.md": {
@@ -129,7 +129,7 @@
     "audited": "2026-07-27"
   },
   "docs/known-limitations.md": {
-    "anchors": 17,
+    "anchors": 26,
     "audited": "2026-07-27"
   },
   "docs/magics.md": {

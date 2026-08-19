@@ -342,6 +342,27 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 e,
             )
 
+        # JupyterLab live-cell push (CAS-274 Tier 2): register the comm target
+        # that receives cell sources pushed by cash's frontend extension, when
+        # one is present. A silent no-op everywhere else — register_target()
+        # returns False rather than raising when there is no kernel / comm
+        # manager to attach to (bare IPython, older ipykernel, MockShell, ...).
+        from ..live_cells import install_expiry_hook, register_target
+        register_target(shell)
+        # ...and retire each pushed snapshot when the execution it arrived for
+        # ends. The store outlives the frontend that fills it, so without this a
+        # frontend that stops pushing without re-opening (a reload onto the same
+        # kernel with the extension disabled, a second client attached without
+        # it, the extension erroring after having worked once) leaves cash
+        # serving one frozen snapshot for the rest of the kernel's life -- and
+        # suppressing the notice that would have said so. See ``expire``.
+        #
+        # Registered here rather than beside _flush_pending_writes above because
+        # it belongs to the comm, not to the cache: both halves of the live-cell
+        # contract are then visible in one place, and neither is conditional on
+        # %cash_on having run.
+        install_expiry_hook(shell)
+
         # Monkey-patch run_cell to intercept execution.
         #
         # Both hooks are installed as ``functools.wraps``-ed proxies rather than
@@ -450,6 +471,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # data from a previous notebook from interfering (Issue 23 part 2)
         self._upstream_checker.reset_caches()
 
+        # Drop any cell snapshot cash's JupyterLab extension pushed for the
+        # PREVIOUS notebook -- otherwise the new notebook's first upstream
+        # check would read stale cells from a document this session no longer
+        # even has open, exactly the per-notebook staleness reset above.
+        from ..live_cells import reset as _reset_live_cells
+        _reset_live_cells()
+
         self._auto_cache_enabled = True
         self._global_ttl = ttl
         ttl_msg = f" (TTL: {ttl}s)" if ttl is not None else ""
@@ -464,15 +492,25 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 print(f"   Found existing cache with {len(entries)} entries.")
         except (OSError, AttributeError, TypeError):
             pass
-        # One-time hint: OFF Colab, cash reads upstream cells from the .ipynb
-        # file on disk, so an upstream edit that has not been saved is invisible
-        # until it is — hence the save advice. In Colab the cells are read live
-        # from the frontend (google.colab ``get_ipynb``), so there is nothing to
-        # save and the hint would be misleading; skip it there.
+        # One-time hint: with no live reader, cash reads upstream cells from the
+        # .ipynb file on disk, so an upstream edit that has not been saved is
+        # invisible until it is — hence the save advice. Skipped wherever a LIVE
+        # reader exists, because there the advice is not merely redundant, it is
+        # FALSE: in Colab the cells come from the frontend (``get_ipynb``), and
+        # on JupyterLab cash's own extension pushes the live sources over a comm
+        # before every execution (see ``cash.notebook.live_cells``). Telling a
+        # user of the feature they just installed that their unsaved edit is
+        # invisible contradicts the thing they can watch working.
+        #
+        # The extension gate is a filesystem probe, not a look at the pushed
+        # store: at %cash_on time no comm has opened yet for anyone, so the
+        # store cannot distinguish absent from not-yet. See
+        # ``_labextension_installed`` for the one topology it answers wrongly
+        # (a split install) and why suppressing-by-omission is the safe error.
         if not getattr(self, '_save_hint_shown', False):
             self._save_hint_shown = True
-            from ..server_discovery import _in_colab
-            if not _in_colab():
+            from ..server_discovery import _in_colab, _labextension_installed
+            if not _in_colab() and not _labextension_installed():
                 print("[Tip] Cash reads upstream cells from the saved notebook file.")
                 print("   Save (Ctrl+S) after editing a cell you are not about to run:")
                 print("   an unsaved edit is invisible, so the upstream check skips it")

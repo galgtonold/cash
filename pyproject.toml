@@ -5,6 +5,31 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/cash"]
 
+# The JupyterLab extension (labextension/) is what makes an UNSAVED cell edit
+# visible to cash on JupyterLab: it pushes live cell sources over the
+# `cash_live_cells` comm that src/cash/notebook/live_cells.py receives. Without
+# it cash reads the saved .ipynb and a downstream cell can restore a stale
+# value.
+#
+# `share/jupyter/labextensions/<name>` is where JupyterLab discovers PREBUILT
+# extensions, so this mapping is the entire install step -- `pip install
+# cash-lib` and it is enabled, no `jupyter labextension install`, no JupyterLab
+# rebuild, no Node on the user's machine. The directory name MUST stay equal to
+# the npm package name in labextension/package.json (federated module loading
+# resolves by package name); tests/test_notebook/test_labextension_packaging.py
+# asserts they agree.
+#
+# The built bundle is COMMITTED under src/cash/labextension/ rather than built
+# here, deliberately: adding a JS build to the wheel build would put Node on the
+# critical path of `pip install -e .` and of every contributor running pytest.
+# Rebuild it with `cd labextension && npm run build` when index.ts changes.
+#
+# install.json is what makes `jupyter labextension uninstall` say "use pip"
+# instead of trying to remove a directory pip owns.
+[tool.hatch.build.targets.wheel.shared-data]
+"src/cash/labextension" = "share/jupyter/labextensions/cash-live-cells"
+"labextension/install.json" = "share/jupyter/labextensions/cash-live-cells/install.json"
+
 # A source distribution only needs to REBUILD the package, so it ships exactly
 # that: the package source, the build config, and the two files the metadata
 # references (README = the PyPI description, LICENSE). Everything else in the
@@ -25,6 +50,23 @@ include = [
     "/pyproject.toml",
     "/README.md",
     "/LICENSE",
+    # The JupyterLab extension. `/src/cash/labextension` (the committed BUILD
+    # OUTPUT) is already covered by `/src/cash` above and is what the wheel's
+    # shared-data mapping ships; these four entries are its SOURCE, so an sdist
+    # can rebuild the bundle rather than only re-package it. install.json is not
+    # optional -- the shared-data mapping names it by path, so a wheel built
+    # from an sdist without it would lose it.
+    #
+    # Named file-by-file rather than as `/labextension` because that directory
+    # also grows node_modules/ and lib/ once anyone runs `npm install`, and this
+    # project's sdist is a whitelist precisely so generated output can never
+    # leak in.
+    "/labextension/install.json",
+    "/labextension/package.json",
+    "/labextension/tsconfig.json",
+    "/labextension/README.md",
+    "/labextension/src",
+    "/labextension/scripts",
 ]
 
 # Single source of truth for the version: src/cash/__init__.py's __version__.

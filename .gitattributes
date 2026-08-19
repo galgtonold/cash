@@ -1,0 +1,13 @@
+# The JupyterLab extension's bundle is COMMITTED build output (see
+# labextension/README.md), so that building the wheel never needs Node. Pin its
+# newlines to LF on every platform: without this, a Windows checkout rewrites
+# the emitted JavaScript and the bytes served to the browser are no longer the
+# bytes `npm run build` produced and guarded.
+#
+# Scoped to the extensions the bundle actually ships (.js, .json) rather than
+# `**` over the whole directory: a blanket rule would just as happily rewrite
+# the newlines of a future binary asset emitted here -- a font, an image, a
+# sourcemap -- which is corruption, not normalization. Add an extension here
+# only once something under this directory actually ships it.
+src/cash/labextension/**/*.js text eol=lf
+src/cash/labextension/**/*.json text eol=lf

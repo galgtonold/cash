@@ -389,6 +389,32 @@ __all__ = [
 # Experimental features are available via:
 #   from cash.experimental import CacheExplorer, CacheDebugger, etc.
 
+
+def _jupyter_labextension_paths():
+    """Where cash's prebuilt JupyterLab extension lives inside the package.
+
+    The extension pushes the notebook's live (unsaved) cell sources over the
+    ``cash_live_cells`` comm that `cash.notebook.live_cells` receives, which
+    is the only way cash can see an edit that is not saved to the ``.ipynb``
+    yet. Source and build instructions: ``labextension/`` in the repo.
+
+    An ordinary ``pip install`` does **not** go through this hook -- the wheel
+    drops the bundle straight into ``share/jupyter/labextensions/`` (see
+    ``[tool.hatch.build.targets.wheel.shared-data]`` in ``pyproject.toml``),
+    which is where JupyterLab looks. This exists for the *other* install
+    route, ``jupyter labextension develop``, which symlinks the directory
+    named here so a rebuild is picked up without reinstalling. Invoke it as
+    ``cd src && jupyter labextension develop --overwrite cash`` -- from the
+    repo root it would look for an importable module named after the
+    *distribution* (``cash_lib``), which does not exist.
+
+    ``src`` is relative to this package's directory; ``dest`` must equal the
+    npm package name in ``labextension/package.json``, because federated
+    module loading resolves the extension by that name.
+    """
+    return [{"src": "labextension", "dest": "cash-live-cells"}]
+
+
 def load_ipython_extension(ipython):
     """Register the ``%%cash`` IPython magic on behalf of the global singleton.
 

@@ -43,7 +43,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @656d4606 -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @e19353cf -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -52,16 +52,26 @@ Enable automatic caching for every subsequent cell.
 **Arguments:**
 
 - `ttl=N` — *Optional.* Default TTL in seconds applied to every cached
-  statement. Must be an integer; invalid values log a warning and the command
-  returns without enabling caching.
+  statement. Must be an integer; an invalid value — or any argument other than
+  `ttl` — prints an error and the command returns **without** enabling caching.
 
 **Side effects:**
 
 - Invalidates the notebook-path discovery cache so the current notebook is
   re-discovered on the next cell (fixes notebook-switch within a kernel).
 - Resets the upstream checker's AST and simulation caches.
+- Drops any cell snapshot cash's JupyterLab extension pushed, for the same
+  reason: a snapshot of the *previous* notebook must not answer the new one's
+  first upstream check.
 - Sets the global TTL (`None` if not supplied) and flips
   `_auto_cache_enabled = True`.
+- Prints a one-time `[Tip]` about saving before running, **unless** this is
+  Colab or cash's JupyterLab extension is installed in this environment. Those
+  two are the whole gate. A VS Code hot-exit backup is a live reader too and
+  does **not** suppress the tip: whether a usable backup exists is a property of
+  each individual read, not something `%cash_on` can settle up front, so VS Code
+  users still see it. See
+  [editing without saving](known-limitations.md#editing-without-saving).
 
 **Examples:**
 
@@ -285,8 +295,11 @@ processing as `%cash_on` (upstream simulation, file tracking, badge rendering).
 
 - Parses the cell with `ast.parse` and processes each top-level statement
   individually. A `SyntaxError` aborts the cell early.
-- Runs upstream simulation against the on-disk notebook (so unsaved upstream
-  edits won't be seen — save before running).
+- Runs upstream simulation against the notebook's current cell sources — a live
+  reader where one answers (cash's JupyterLab extension, Colab, VS Code's
+  hot-exit backup), the on-disk `.ipynb` otherwise. On the on-disk path an
+  unsaved upstream edit won't be seen, so save before running; see
+  [editing without saving](known-limitations.md#editing-without-saving).
 - Renders the configured badge (`html` / `print` / off — see
   [`%cash_badge`](#cash_badge)).
 - Caches cells that use top-level `await` on the same terms as any other cell

@@ -464,6 +464,88 @@ def invalidate_notebook_cells_cache() -> None:
     _vscode_cells_cache.clear()
 
 
+# --- JupyterLab live-cell push cell source ------------------------------------
+# JupyterLab gives a kernel no route to its live document at all -- unlike
+# Colab's frontend API or VS Code's hot-exit backup, there is nothing on disk
+# or reachable over an existing channel to read. cash's own extension closes
+# that gap by pushing the notebook's current cell sources over a comm; see
+# ``cash.notebook.live_cells`` for the receiving half and why it is a push
+# rather than a request/response.
+def _try_extension_cells(include_ids: bool) -> list | None:
+    """Cells pushed by cash's JupyterLab extension, or ``None``.
+
+    Same contract as the Colab and VS Code readers: ``None`` means "not
+    available" and the caller falls through to the saved file. Needs no
+    environment gate -- a push can only exist if the extension is running.
+    """
+    try:
+        from cash.notebook.live_cells import latest_cells
+        cells = latest_cells()
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[UTILS] extension cell read failed: %s", e)
+        return None
+    if not cells:
+        return None
+    try:
+        extracted = [
+            _extract_cell_entry(cell, include_ids)
+            for cell in cells
+            if cell.get("cell_type") == "code"
+        ]
+    except Exception as e:  # noqa: BLE001
+        logger.debug("[UTILS] extension cell shape unusable: %s", e)
+        return None
+    # An unrecognised shape must fall through to the file, never disable the
+    # upstream check by returning an empty list -- exactly that made cash
+    # strictly worse than not having the feature in CAS-274 Tier 1c.
+    return extracted or None
+
+
+#: Where a prebuilt labextension lives, relative to an environment's data root.
+#: Fixed by the wheel's ``shared-data`` mapping in pyproject.toml, which
+#: tests/test_notebook/test_labextension_packaging.py pins to this same name.
+_LABEXT_RELPATH = ("share", "jupyter", "labextensions", "cash-live-cells")
+
+
+def _labextension_installed() -> bool:
+    """True when cash's prebuilt JupyterLab extension is installed in this env.
+
+    A FILESYSTEM check, not a runtime one, and deliberately so. The only caller
+    is ``%cash_on``, which necessarily runs before the extension's comm can
+    exist: on a fresh kernel the first ``comm_open`` is refused because the
+    target is not registered until ``import cash`` has run (see
+    ``live_cells.register_target``), so ``latest_cells()`` is ``None`` at that
+    moment for EVERY user and cannot tell "absent" from "not yet". The wheel
+    drops the extension at a fixed path under the environment's data root, and
+    that is true the instant cash is importable.
+
+    Wrong in exactly one topology: a SPLIT INSTALL, where the JupyterLab server
+    and the kernel live in different environments -- this answers for the
+    kernel's. Accepted, because the only caller uses it to SUPPRESS a proactive
+    hint: the cost is a missing sentence, never a false claim, and the reactive
+    once-per-session "cash cannot see unsaved edits here" notice still fires
+    correctly there, since it keys on the read that actually happened rather
+    than on an inference.
+
+    A probe that cannot answer returns ``False`` -- "assume no extension".
+    That is the direction that degrades well at scale: if this check ever
+    breaks wholesale (a packaging change moving the directory), everyone keeps
+    today's advice, which is right for the majority who have no extension,
+    instead of it being silently withdrawn from all of them.
+    """
+    try:
+        import site
+        roots = [sys.prefix]
+        user_base = site.getuserbase()
+        if user_base:
+            roots.append(user_base)
+        return any(os.path.isdir(os.path.join(root, *_LABEXT_RELPATH))
+                   for root in roots)
+    except Exception as e:  # noqa: BLE001 - a hint gate must never break %cash_on
+        logger.debug("[UTILS] labextension probe failed: %s", e)
+        return False
+
+
 # --- Google Colab cell source ------------------------------------------------
 # Colab notebooks live in Google Drive, not a local file, so the file reader
 # below finds nothing: get_notebook_path() returns a "/fileId=..." reference
@@ -651,35 +733,59 @@ _last_cell_source: str | None = None
 def last_cell_source() -> str | None:
     """Which reader supplied the most recent cell read.
 
-    ``"colab"`` / ``"vscode-backup"`` see unsaved edits; ``"file"`` does not,
-    which is what the once-per-session "cannot verify" notice keys on. ``None``
-    means no read has happened yet this session.
+    ``"extension"`` / ``"colab"`` / ``"vscode-backup"`` see unsaved edits;
+    ``"file"`` does not, which is what the once-per-session "cannot verify"
+    notice keys on. ``None`` means no read has happened yet this session.
     """
     return _last_cell_source
 
 
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
     """
-    Read code cells from the notebook file.
+    Read code cells from the first reader in the chain that can answer.
 
-    Memoized by the file's ``(mtime_ns, size)`` signature: repeated reads of an
-    unchanged file return the cached parse without re-opening it, while any edit
-    (which bumps mtime/size) forces a fresh read — so a quick edit-then-run never
-    serves stale cell sources.
+    Tried in order, each falling through to the next on ``None``: cash's own
+    JupyterLab extension (``_try_extension_cells``), Google Colab
+    (``_try_colab_notebook_cells``), VS Code's hot-exit backup
+    (``_try_vscode_backup_cells``), and finally the saved ``.ipynb`` on disk.
+    The first three see UNSAVED edits; the file does not. ``last_cell_source()``
+    reports which one actually answered a given call.
+
+    The extension and Colab readers ignore ``notebook_path`` entirely -- the
+    extension keys off the running kernel, not a path, and a Colab notebook is
+    a Drive fileId, not a local file. Only the VS Code and file readers use it:
+    VS Code to match a backup against the right notebook, the file reader to
+    open it.
+
+    The file read (the last resort) is memoized by the file's ``(mtime_ns,
+    size)`` signature: repeated reads of an unchanged file return the cached
+    parse without re-opening it, while any edit (which bumps mtime/size)
+    forces a fresh read — so a quick edit-then-run never serves stale cell
+    sources from the file. That caching is local to the file path; none of the
+    three live readers ahead of it in the chain go through it.
 
     Args:
-        notebook_path: Path to notebook file. Auto-detected if None.
+        notebook_path: Path to notebook file, used only by the VS Code and
+                        file readers (see above). Auto-detected if None.
         include_ids: If True, return list of (cell_id, code) tuples.
                      If False, return list of code strings.
     """
     global _last_cell_source
-    # Default to the pessimistic answer. Every exit below except the two live
+    # Default to the pessimistic answer. Every exit below except the three live
     # readers ends up reading (or failing to read) the saved file, and a failed
     # read is emphatically not a verified-fresh one -- so only an actual live
     # hit may upgrade this.
     _last_cell_source = "file"
 
-    # Colab first: its notebook is a Drive fileId, not a local file, so the
+    # cash's own JupyterLab extension first, when present: it is the most
+    # authoritative source (the frontend pushed it moments ago) and checking
+    # costs one dict lookup when there is no extension to push anything.
+    extension_cells = _try_extension_cells(include_ids)
+    if extension_cells is not None:
+        _last_cell_source = "extension"
+        return extension_cells
+
+    # Colab next: its notebook is a Drive fileId, not a local file, so the
     # file reader below returns []. Reading the live cells from the Colab
     # frontend is what makes upstream resolution work there. A fast no-op when
     # not running in Colab.
@@ -751,13 +857,19 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
 
 
 def get_notebook_cells(notebook_path: str | None = None) -> list[str]:
-    """Read code cells from the notebook file. Returns a list of code strings."""
+    """Read code cells from the first reader that can answer -- cash's
+    JupyterLab extension, Colab, a VS Code hot-exit backup, or (last resort)
+    the saved notebook file. Returns a list of code strings. See
+    ``_read_notebook_code_cells`` for the reader chain and ``last_cell_source``
+    for which one answered."""
     return _read_notebook_code_cells(notebook_path, include_ids=False)
 
 
 def get_notebook_cells_with_ids(notebook_path: str | None = None) -> list[tuple[str | None, str]]:
-    """
-    Read code cells with their IDs from the notebook file.
-    Returns a list of (cell_id, code_string) tuples.
-    """
+    """Read code cells with their IDs from the first reader that can answer --
+    cash's JupyterLab extension, Colab, a VS Code hot-exit backup, or (last
+    resort) the saved notebook file. Returns a list of (cell_id, code_string)
+    tuples; ``cell_id`` is ``None`` for a reader that cannot supply one. See
+    ``_read_notebook_code_cells`` for the reader chain and ``last_cell_source``
+    for which one answered."""
     return _read_notebook_code_cells(notebook_path, include_ids=True)

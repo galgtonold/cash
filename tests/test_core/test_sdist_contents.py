@@ -33,6 +33,15 @@ JUNK_MARKERS = (
     "/dist/",
     ".pytest_cache",
     "__pycache__",
+    # The JavaScript equivalents. `labextension/` is on the sdist include list
+    # as a file-by-file whitelist, so nothing leaks today -- but the top-level
+    # `tops <= allowed_top` check below had been the ONLY thing standing between
+    # us and someone later simplifying that whitelist to a plain `/labextension`,
+    # and adding "labextension" to allowed_top spent exactly that protection.
+    # These two restore it at a finer grain: node_modules is 450 packages, and
+    # lib/ is intermediate tsc output that the wheel never ships.
+    "node_modules/",
+    "/labextension/lib/",
 )
 
 
@@ -75,7 +84,14 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     # cash — they live on GitHub — so they must never bloat the release.
     rel = [n.split("/", 1)[1] for n in names if "/" in n]  # drop the cash_lib-X.Y.Z/ prefix
     tops = {r.split("/")[0] for r in rel if r}
-    allowed_top = {"src", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"}
+    # `labextension` earns its place under the same rule as the rest: it is
+    # needed to BUILD. The wheel's shared-data mapping names
+    # `labextension/install.json` by path, so an sdist without it produces a
+    # wheel whose JupyterLab extension is unregisterable; the TypeScript source
+    # beside it is what makes the bundle rebuildable rather than only
+    # re-packageable. Its node_modules/ and lib/ are deliberately NOT in the
+    # include list -- see [tool.hatch.build.targets.sdist].
+    allowed_top = {"src", "labextension", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"}
     assert tops <= allowed_top, (
         f"sdist ships non-essential top-level entries {sorted(tops - allowed_top)}; "
         f"the sdist is a minimal include list — see [tool.hatch.build.targets.sdist]."
