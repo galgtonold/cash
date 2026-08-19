@@ -34,6 +34,21 @@ TARGET = "cash_live_cells"
 _store: dict = {"seq": -1, "cells": None}
 
 
+def _cell_shape_ok(cell: dict) -> bool:
+    """A cell dict is safe to store only if its ``source``, when present, is a
+    plain string.
+
+    ``_extract_cell_entry`` (``server_discovery.py``) only special-cases a
+    ``list`` source (joining it); anything else -- an int, ``None``, a dict, a
+    bool -- passes through UNCHANGED as the "cell source". That value then
+    reaches ``ast.parse``, which raises ``TypeError`` on a non-str argument --
+    not the ``(SyntaxError, ValueError)`` the upstream checker catches, so it
+    would escape all the way out to the user's own cell execution.
+    """
+    source = cell.get("source", "")
+    return isinstance(source, str)
+
+
 def handle_message(data) -> None:
     """Accept one pushed snapshot. Ignores anything that is not one."""
     if not isinstance(data, dict):
@@ -44,7 +59,9 @@ def handle_message(data) -> None:
     # would compare as 0/1 and wedge the store.
     if not isinstance(seq, int) or isinstance(seq, bool):
         return
-    if not isinstance(cells, list) or not all(isinstance(c, dict) for c in cells):
+    if not isinstance(cells, list) or not all(
+        isinstance(c, dict) and _cell_shape_ok(c) for c in cells
+    ):
         return
     # Never move backwards: a retry or duplicate must not replace a newer
     # snapshot with an older one.

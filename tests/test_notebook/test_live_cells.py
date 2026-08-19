@@ -79,10 +79,24 @@ def test_an_out_of_order_push_is_ignored():
 
 def test_a_malformed_payload_is_ignored_not_raised():
     """The payload crosses a process boundary from JavaScript. Every shape is
-    optional; none may break a user's cell execution."""
+    optional; none may break a user's cell execution.
+
+    This covers both the CONTAINER shapes (top-level, seq, cells) and the
+    FIELD shapes inside an otherwise well-formed cell dict: a non-str
+    `source` (int, None, list, dict, bool) passes `_extract_cell_entry`
+    (server_discovery.py) UNCHANGED -- it only special-cases `list` for the
+    join, so anything else threads through as a "cell source" all the way to
+    `ast.parse`, which raises `TypeError`. That is not a `(SyntaxError,
+    ValueError)` the upstream checker catches, so it would reach the user out
+    of a cell they never touched.
+    """
     for bad in (None, 42, "cells", {}, {"seq": "x", "cells": []},
                 {"seq": 1, "cells": "nope"}, {"seq": 1, "cells": [1, 2, 3]},
-                {"seq": True, "cells": []}):
+                {"seq": True, "cells": []},
+                {"seq": 1, "cells": [{"cell_type": "code", "source": 123}]},
+                {"seq": 1, "cells": [{"cell_type": "code", "source": None}]},
+                {"seq": 1, "cells": [{"cell_type": "code", "source": True}]},
+                {"seq": 1, "cells": [{"cell_type": "code", "source": {}}]}):
         handle_message(bad)
     assert latest_cells() is None
 
@@ -130,6 +144,24 @@ def test_wiring_control_nothing_pushed_reads_the_file(tmp_path):
     _write_notebook(nb_path, "from_file = True")
     sd.invalidate_notebook_cells_cache()
 
+    assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
+
+
+def test_wiring_a_non_string_source_falls_back_to_the_file_not_ast_parse(tmp_path):
+    """CAS-274 review, item 2. A cell whose `source` is not a string must not
+    become a `[123]`-shaped "notebook cell" that reaches `ast.parse` --
+    `_extract_cell_entry` uses a non-list `source` UNCHANGED, and `ast.parse`
+    raises `TypeError` on it, which the upstream checker's `except
+    (SyntaxError, ValueError)` does not catch. Drives the real reader chain,
+    not just `handle_message`+`latest_cells()`, because that is where the
+    bad value used to surface."""
+    nb_path = tmp_path / "notebook.ipynb"
+    _write_notebook(nb_path, "from_file = True")
+    sd.invalidate_notebook_cells_cache()
+
+    handle_message({"seq": 1, "cells": [{"cell_type": "code", "source": 123}]})
+
+    assert latest_cells() is None
     assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
 
 
