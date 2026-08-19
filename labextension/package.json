@@ -1,6 +1,6 @@
 {
   "name": "cash-live-cells",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Pushes a JupyterLab notebook's live (unsaved) cell sources to the kernel so cash can see edits that are not saved to the .ipynb yet.",
   "keywords": [
     "jupyter",

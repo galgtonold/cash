@@ -34,7 +34,19 @@ function snapshot(panel: NotebookPanel): any[] {
 }
 
 const plugin: JupyterFrontEndPlugin<void> = {
-  id: 'cash:live-cells',
+  // MUST stay `<npm package name>:<plugin name>`. JupyterLab resolves a
+  // package-level disable -- `jupyter labextension disable cash-live-cells`,
+  // the `--disable-extension` server flag, the 4.1+ per-plugin UI -- against
+  // the part of this id BEFORE the colon, not against the installed directory
+  // name. While this read `cash:live-cells` the documented disable command
+  // wrote `{"cash-live-cells": true}`, matched nothing, and the extension kept
+  // running while `jupyter labextension list` reported it disabled: a kill
+  // switch that lied in both directions (CAS-274 Task 4, Finding A).
+  //
+  // Pinned by tests/test_labextension_packaging.py::
+  // test_the_plugin_id_is_namespaced_by_the_package_name, over BOTH this
+  // source and the shipped bundle.
+  id: 'cash-live-cells:plugin',
   autoStart: true,
   requires: [INotebookTracker],
   activate: (app: JupyterFrontEnd, tracker: INotebookTracker) => {

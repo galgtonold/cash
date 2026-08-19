@@ -243,6 +243,55 @@ def test_the_built_output_matches_its_source_package():
     )
 
 
+_WHY_PLUGIN_ID = """
+
+JupyterLab resolves a PACKAGE-level disable -- `jupyter labextension disable
+cash-live-cells`, the `--disable-extension` server flag, the 4.1+ per-plugin UI
+-- against the part of the plugin id BEFORE the colon. It does NOT look at the
+installed directory name.
+
+While the id read `cash:live-cells` and the package was `cash-live-cells`, the
+documented disable command wrote {"cash-live-cells": true} into page_config.json,
+matched nothing, and the extension went on pushing -- while `jupyter labextension
+list` reported it `disabled ok`. The kill switch lied in both directions
+(measured end to end, CAS-274 Task 4 Finding A). A feature whose safety story is
+"degrade, never break" has to be switchable off.
+
+Keep the id `<npm package name>:<plugin name>`."""
+
+PLUGIN_ID = re.compile(r"""id\s*:\s*["']([^"']+)["']""")
+
+
+def test_the_plugin_id_is_namespaced_by_the_package_name():
+    """The plugin id's prefix is what `labextension disable` matches on.
+
+    Checked in the SHIPPED bundle as well as the source: the bundle is
+    committed, so a stale one would keep an old id in front of users no matter
+    what the TypeScript says.
+    """
+    _skip_without_checkout()
+
+    source_ids = PLUGIN_ID.findall(INDEX_TS.read_text(encoding="utf-8"))
+    assert f"{EXT_NAME}:plugin" in source_ids, (
+        f"labextension/src/index.ts declares no plugin id starting with "
+        f"{EXT_NAME!r}; found {source_ids!r}.{_WHY_PLUGIN_ID}"
+    )
+
+    shipped = [text for path in _built_js()
+               for text in [path.read_text(encoding="utf-8", errors="replace")]]
+    assert any(f"{EXT_NAME}:plugin" in text for text in shipped), (
+        f"no bundle under {BUILT} carries the plugin id {EXT_NAME}:plugin -- "
+        f"the committed build is stale, rebuild it with "
+        f"`cd labextension && npm run build`.{_WHY_PLUGIN_ID}"
+    )
+    orphan = f"{EXT_NAME.split('-')[0]}:"      # the old, unmatchable `cash:` prefix
+    assert not any(f"'{orphan}live-cells'" in text or f'"{orphan}live-cells"' in text
+                   for text in shipped), (
+        f"a bundle still registers the old {orphan}live-cells id."
+        f"{_WHY_PLUGIN_ID}"
+    )
+
+
 def test_every_place_that_names_the_extension_agrees():
     """A prebuilt labextension is resolved by NAME.
 
