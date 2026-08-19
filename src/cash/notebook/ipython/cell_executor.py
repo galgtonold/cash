@@ -196,6 +196,30 @@ def staleness_notification(tracker) -> dict | None:
     }
 
 
+def unverifiable_notification(tracker) -> dict | None:
+    """Badge row said ONCE when cash cannot see unsaved edits at all.
+
+    Distinct from `staleness_notification`, which reports proven staleness. This
+    reports a missing capability: cash is reading the saved file, so an edit you
+    have not saved is invisible to it and it cannot promise the check was
+    current. That is permanent for the session, hence once.
+
+    ASCII only, and short enough to survive print mode's 80-char row cap -- see
+    `staleness_notification` for why both matter.
+    """
+    if not tracker.take_unverifiable_announcement():
+        return None
+    return {
+        'status': 'WARNING',
+        'code': ("[!] cash cannot see unsaved edits here -- Save before running "
+                 "to be sure. It is reading the saved notebook file."),
+        'is_upstream': True,
+        'total_time': 0.0,
+        'execution_time': 0.0,
+        'outputs': [],
+    }
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -864,9 +888,12 @@ class CellExecutor:
             return []
 
     def _make_staleness_metrics(self) -> list[ProcessResult]:
-        """Return a WARNING notification if the notebook file is PROVEN stale.
+        """Return WARNING notifications from the staleness tracker's two checks.
 
-        Guarded like `_make_function_change_metrics` / `_make_opaque_warning_metrics`
+        Two independent rows share this guard: `staleness_notification` (proven
+        stale -- loud every occurrence) and `unverifiable_notification`
+        (freshness cannot be verified at all -- loud once per session). Guarded
+        like `_make_function_change_metrics` / `_make_opaque_warning_metrics`
         above. Nothing in `StalenessTracker`'s current implementation raises,
         but this is a diagnostic nicety layered on top of upstream resolution
         (which must already have succeeded to reach this point) -- its failure
@@ -876,8 +903,15 @@ class CellExecutor:
         here, so the guarantee has to be unconditional.
         """
         try:
-            stale = staleness_notification(self._upstream_checker.staleness)
-            return [stale] if stale is not None else []
+            tracker = self._upstream_checker.staleness
+            notifications = []
+            stale = staleness_notification(tracker)
+            if stale is not None:
+                notifications.append(stale)
+            unverifiable = unverifiable_notification(tracker)
+            if unverifiable is not None:
+                notifications.append(unverifiable)
+            return notifications
         except Exception as exc:  # noqa: BLE001 - a diagnostic must never break execution
             logger.debug("Failed to check notebook staleness: %s", exc)
             return []

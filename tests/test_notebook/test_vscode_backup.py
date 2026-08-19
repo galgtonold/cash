@@ -1,0 +1,475 @@
+"""VS Code keeps unsaved notebook state on disk; cash can read it.
+
+cash reads the cells it did not execute from the saved `.ipynb`, so an unsaved
+edit is invisible and a downstream cell can restore a stale value. VS Code has
+no in-page route to its live document -- the widget webview holds a
+`standaloneModel` stub with an empty cell list, and output JS is sandboxed away
+from the workbench. But VS Code persists dirty editors to a backup so it can
+restore after a crash, and that file is plain JSON the kernel can read.
+
+Format, measured on VS Code 1.123:
+
+    line 1   file:///c%3A/path/nb.ipynb {"mtime":<epoch_ms>,"size":<bytes>,...}
+    rest     the full notebook JSON
+
+The header describes the SAVED file, which is what makes the backup usable
+rather than a guess: cash can confirm a backup belongs to the version currently
+on disk before trusting its body.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from cash.notebook.vscode_backup import find_backup, parse_backup
+
+
+def _write_backup(dirpath: Path, nb_path: Path, *, mtime_ms: int, size: int,
+                  cells: list[str], name: str = "abc123") -> Path:
+    """Write a file in VS Code's backup format."""
+    uri = nb_path.as_uri()
+    header = json.dumps({
+        "mtime": mtime_ms, "ctime": mtime_ms, "size": size,
+        "etag": "x", "orphaned": False,
+        "typeId": "notebook/jupyter-notebook/jupyter-notebook",
+    })
+    body = json.dumps({
+        "cells": [
+            {"cell_type": "code", "id": f"c{i}", "metadata": {},
+             "outputs": [], "execution_count": None, "source": src}
+            for i, src in enumerate(cells)
+        ],
+        "nbformat": 4, "nbformat_minor": 5, "metadata": {},
+    })
+    target = dirpath / name
+    target.write_text(f"{uri} {header}\n{body}", encoding="utf-8")
+    return target
+
+
+def test_parse_returns_uri_header_and_notebook(tmp_path):
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    bak = _write_backup(tmp_path, nb, mtime_ms=1700000000000, size=42,
+                        cells=["THRESHOLD = 0.9"])
+
+    parsed = parse_backup(bak)
+    assert parsed is not None
+    uri, meta, notebook = parsed
+    assert uri == nb.as_uri()
+    assert meta["mtime"] == 1700000000000
+    assert meta["size"] == 42
+    assert notebook["cells"][0]["source"] == "THRESHOLD = 0.9"
+
+
+def test_parse_returns_none_for_garbage(tmp_path):
+    """Degrade, never raise -- this is another product's private format and it
+    can change without notice."""
+    bad = tmp_path / "bad"
+    bad.write_text("not a backup at all", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_for_single_line_with_no_newline(tmp_path):
+    """Isolate the newline guard: a file with no newline at all."""
+    bad = tmp_path / "no_newline"
+    bad.write_text("single line content", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_header_has_no_space(tmp_path):
+    """Isolate the space guard: a header line with URI but no JSON."""
+    bad = tmp_path / "no_space"
+    bad.write_text("file:///c%3A/path/nb.ipynb\n{}", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_header_json_is_wrong_type(tmp_path):
+    """Valid JSON but not a dict (list instead)."""
+    bad = tmp_path / "wrong_type"
+    bad.write_text("file:///c%3A/path/nb.ipynb [1,2,3]\n{}", encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_notebook_json_is_wrong_type(tmp_path):
+    """Valid JSON header but notebook body is not a dict (int instead)."""
+    bad = tmp_path / "wrong_nb_type"
+    bad.write_text('file:///c%3A/path/nb.ipynb {"mtime":1}\n42', encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_when_the_body_is_not_json(tmp_path):
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    bad = tmp_path / "halfwritten"
+    bad.write_text(f'{nb.as_uri()} {{"mtime":1,"size":2}}\n{{"cells": [', encoding="utf-8")
+    assert parse_backup(bad) is None
+
+
+def test_parse_returns_none_for_a_missing_file(tmp_path):
+    assert parse_backup(tmp_path / "nope") is None
+
+
+def test_uri_to_path_rejects_a_non_empty_netloc(tmp_path):
+    """A UNC-form URI ("file://server/share/nb.ipynb") carries the remote
+    host in netloc. The old code silently dropped it, turning the path into
+    "/share/nb.ipynb" -- which os.path.abspath resolves against the CURRENT
+    drive on Windows, so it could match an unrelated local file
+    (C:\\share\\nb.ipynb) that merely happens to share that relative path.
+    Refusing to match a non-empty netloc is always safe; only the
+    empty-authority form ("file:///c:/x/nb.ipynb") is one this module can
+    correctly interpret."""
+    from cash.notebook.vscode_backup import _uri_to_path
+    assert _uri_to_path("file://server/share/nb.ipynb") is None
+
+
+def test_uri_to_path_accepts_the_standard_local_form(tmp_path):
+    """The control: the normal empty-netloc form is unaffected."""
+    from cash.notebook.vscode_backup import _uri_to_path
+    nb = tmp_path / "nb.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    assert _uri_to_path(nb.as_uri()) is not None
+
+
+def test_a_unc_backup_does_not_match_a_same_relative_path_local_file(tmp_path, monkeypatch):
+    """End-to-end reproduction of the exploit, not just the unit-level guard:
+    a backup whose header names a UNC path must not be treated as the backup
+    for an unrelated local file that happens to resolve to the same path.
+
+    os.path.abspath("/share/nb.ipynb") resolves against the CURRENT drive on
+    Windows -- with no requirement that anything actually exist there, which
+    is exactly what made the old behaviour dangerous. The target path is
+    computed the same way rather than assumed (e.g. hardcoded "C:\\..."), so
+    this reproduces the collision on whatever drive the test happens to run
+    on, and is a no-op assertion (not a false pass) on platforms where the
+    two forms are not in fact equal.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    colliding_path = os.path.abspath("/share/nb.ipynb")
+
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    header = json.dumps({"mtime": 1, "size": 1})
+    body = json.dumps({"cells": [{"cell_type": "code", "id": "c0", "source": "REMOTE = 1"}]})
+    backup = root / "abc123"
+    backup.write_text(f"file://server/share/nb.ipynb {header}\n{body}", encoding="utf-8")
+
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert vb.find_backup(colliding_path) is None
+
+
+def test_find_backup_matches_by_uri(tmp_path, monkeypatch):
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    other = tmp_path / "other.ipynb"
+    other.write_text("{}", encoding="utf-8")
+
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, other, mtime_ms=1, size=1, cells=["x = 1"], name="aaa")
+    want = _write_backup(root, nb, mtime_ms=2, size=2, cells=["y = 2"], name="bbb")
+
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert find_backup(str(nb)) == want
+
+
+def test_find_backup_returns_none_when_nothing_matches(tmp_path, monkeypatch):
+    """The control: a notebook with no backup must not pick up someone else's."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    other = tmp_path / "other.ipynb"
+    other.write_text("{}", encoding="utf-8")
+
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, other, mtime_ms=1, size=1, cells=["x = 1"], name="aaa")
+
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert find_backup(str(nb)) is None
+
+
+def test_find_backup_prefers_the_most_recently_modified_match(tmp_path, monkeypatch):
+    """The same notebook left dirty in two VS Code windows (two workspaces)
+    produces two matching backups. find_backup used to return whichever one
+    directory iteration happened to visit first -- an accident of OS/glob
+    order, not "the window the user is typing in right now". The most
+    recently modified match is.
+
+    The two candidates live under SEPARATE backup_roots() entries (rather
+    than two workspace dirs under one root) so this does not depend on
+    Path.glob's within-directory ordering: backup_roots() returns them as an
+    ordered list, and the OLDER one is placed first in that list, so the old
+    first-match-wins code is guaranteed to reach it before the newer one and
+    return the wrong answer.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+
+    root_a = tmp_path / "BackupsA" / "ws" / "file"
+    root_a.mkdir(parents=True)
+    root_b = tmp_path / "BackupsB" / "ws" / "file"
+    root_b.mkdir(parents=True)
+
+    older = _write_backup(root_a, nb, mtime_ms=1, size=1, cells=["OLDER = 1"])
+    older_time = time.time() - 60
+    os.utime(older, (older_time, older_time))
+
+    newer = _write_backup(root_b, nb, mtime_ms=1, size=1, cells=["NEWER = 1"])
+    newer_time = time.time() - 5
+    os.utime(newer, (newer_time, newer_time))
+
+    monkeypatch.setattr(vb, "backup_roots",
+                        lambda: [tmp_path / "BackupsA", tmp_path / "BackupsB"])
+    assert vb.find_backup(str(nb)) == newer, (
+        "first-encountered backup won instead of the most recently modified one"
+    )
+
+
+def test_find_backup_does_not_read_full_bodies_while_scanning(tmp_path, monkeypatch):
+    """The scan only needs the header line's URI to know whether a candidate
+    is even a contender; reading (and JSON-parsing) the whole file -- the
+    notebook's entire JSON body -- is wasted for every candidate that is not
+    the match, and used to be paid by ALL of them. Measured: 24 ms/call with a
+    single 1.2 MB unrelated dirty editor open, vs. 0.095 ms/call with none.
+
+    A wall-clock assertion would be flaky, so this pins the actual mechanism
+    instead: Path.read_text is what parse_backup uses to pull in the whole
+    file, and the scan must never call it -- only the later, single
+    parse_backup of the winning candidate (done by live_cells, not tested
+    here) may.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    unrelated = tmp_path / "unrelated.ipynb"
+    unrelated.write_text("{}", encoding="utf-8")
+
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    # Stands in for "a large, unrelated dirty editor" -- irrelevant to the
+    # notebook being searched for, but expensive to fully read and parse.
+    _write_backup(root, unrelated, mtime_ms=1, size=1,
+                  cells=["x = 1"] * 20000, name="huge")
+    want = _write_backup(root, nb, mtime_ms=2, size=2, cells=["y = 2"], name="small")
+
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+
+    read_text_calls: list[Path] = []
+    original_read_text = Path.read_text
+
+    def _tracking_read_text(self, *args, **kwargs):
+        read_text_calls.append(self)
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _tracking_read_text)
+
+    assert vb.find_backup(str(nb)) == want
+    assert read_text_calls == [], (
+        f"scan read a candidate's full body via Path.read_text: {read_text_calls}"
+    )
+
+
+def test_find_backup_survives_an_unreadable_root(tmp_path, monkeypatch):
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "does-not-exist"])
+    assert find_backup(str(nb)) is None
+
+
+def test_find_backup_survives_generator_raising_permission_error(tmp_path, monkeypatch):
+    """A glob generator that raises PermissionError mid-iteration must not propagate.
+
+    This tests that the iteration happens inside the try/except, not outside it.
+    """
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "target.ipynb"
+    nb.write_text("{}", encoding="utf-8")
+
+    # Mock backup_roots to return a root that exists
+    root = tmp_path / "Backups"
+    root.mkdir()
+    monkeypatch.setattr(vb, "backup_roots", lambda: [root])
+
+    # Mock glob to return a generator that raises PermissionError mid-iteration
+    def failing_glob(pattern):
+        """Yield one item then raise PermissionError to simulate access denied."""
+        raise PermissionError("Permission denied")
+        yield  # pragma: no cover
+
+    original_glob = Path.glob
+    def patched_glob(self, pattern):
+        if self == root:
+            return failing_glob(pattern)
+        return original_glob(self, pattern)
+
+    monkeypatch.setattr(Path, "glob", patched_glob)
+    assert find_backup(str(nb)) is None
+
+
+import os
+import time
+
+from cash.notebook.vscode_backup import live_cells
+
+
+def _setup(tmp_path, monkeypatch, *, backup_cells, file_bytes=b"{}", skew_ms=0):
+    """A notebook on disk plus a backup whose header describes it."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(file_bytes)
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000) + skew_ms,
+                  size=st.st_size, cells=backup_cells)
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    return nb
+
+
+def test_a_matching_backup_supplies_live_cells(tmp_path, monkeypatch):
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["THRESHOLD = 0.9"])
+    cells = live_cells(str(nb))
+    assert cells is not None
+    assert cells[0]["source"] == "THRESHOLD = 0.9"
+
+
+def test_a_backup_for_a_different_saved_version_is_refused(tmp_path, monkeypatch):
+    """THE safety property. The header describes the SAVED file; if it does not
+    match what is on disk now, the backup belongs to some other version and
+    using it would substitute one staleness for another."""
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["THRESHOLD = 0.9"])
+    time.sleep(0.01)
+    nb.write_bytes(b'{"cells": []}')        # the user saved; backup header now stale
+    assert live_cells(str(nb)) is None
+
+
+def test_a_size_mismatch_alone_is_enough_to_refuse(tmp_path, monkeypatch):
+    """mtime granularity varies by filesystem, so size is the second check
+    rather than a redundant one."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"{}")
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000),
+                  size=st.st_size + 999, cells=["x = 1"])
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells(str(nb)) is None
+
+
+def test_no_backup_means_none_not_an_error(tmp_path, monkeypatch):
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"{}")
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "empty"])
+    assert live_cells(str(nb)) is None
+
+
+def test_a_missing_notebook_is_none_not_an_error(tmp_path, monkeypatch):
+    import cash.notebook.vscode_backup as vb
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells(str(tmp_path / "gone.ipynb")) is None
+
+
+def test_a_same_size_resave_with_different_content_is_refused(tmp_path, monkeypatch):
+    """A same-length edit -- THRESHOLD = 0.5 -> THRESHOLD = 0.9 -- leaves size
+    unable to discriminate at all; mtime is the only thing standing between
+    the user and a wrongly-trusted backup on this, the common case."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"THRESHOLD = 0.5")
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=st.st_size,
+                  cells=["THRESHOLD = 0.5"])
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+
+    nb.write_bytes(b"THRESHOLD = 0.9")  # same size as above, different content
+    resave_time = st.st_mtime + 10  # well outside the 2s tolerance
+    os.utime(nb, (resave_time, resave_time))
+    assert live_cells(str(nb)) is None
+
+
+def test_a_skew_inside_the_tolerance_is_still_accepted(tmp_path, monkeypatch):
+    """Pins the tolerance itself rather than leaving it incidental: filesystem
+    mtime granularity varies (FAT is 2s), so a small skew between the header
+    and the on-disk mtime must not cost the feature."""
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["THRESHOLD = 0.9"], skew_ms=1500)
+    cells = live_cells(str(nb))
+    assert cells is not None
+    assert cells[0]["source"] == "THRESHOLD = 0.9"
+
+
+def test_a_nul_byte_in_the_path_returns_none_not_a_raise(tmp_path, monkeypatch):
+    """os.stat raises ValueError, not OSError, for an embedded NUL. Every
+    failure mode here must degrade to None: the caller falls through to the
+    saved file on None, but an uncaught exception breaks cell execution."""
+    import cash.notebook.vscode_backup as vb
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells("bad\x00path.ipynb") is None
+
+
+def test_a_boolean_size_header_does_not_pass_as_an_integer(tmp_path, monkeypatch):
+    """isinstance(True, int) is True in Python, so a header of {"size": true}
+    would otherwise pass the type guard -- and for a 1-byte file, compare equal
+    to it too. This is a foreign, undocumented format; tighten the guard."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = tmp_path / "nb.ipynb"
+    nb.write_bytes(b"x")  # 1 byte, so a bare True == 1 would otherwise match
+    st = os.stat(nb)
+    root = tmp_path / "Backups" / "ws" / "file"
+    root.mkdir(parents=True)
+    _write_backup(root, nb, mtime_ms=int(st.st_mtime * 1000), size=True,
+                  cells=["x = 1"])
+    monkeypatch.setattr(vb, "backup_roots", lambda: [tmp_path / "Backups"])
+    assert live_cells(str(nb)) is None
+
+
+def test_a_freshly_written_backup_is_allowed_to_settle(tmp_path, monkeypatch):
+    """VS Code writes the backup on a trailing-edge ~1s debounce, so one touched
+    moments ago may still be mid-write. Reading it then can yield a partial
+    file -- which parses as None and silently costs the feature."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["x = 1"])
+    slept = []
+    monkeypatch.setattr(vb._time, "sleep", lambda s: slept.append(s))
+
+    backup = vb.find_backup(str(nb))
+    os.utime(backup, None)                      # make it look freshly written
+    vb._wait_for_backup_settle(backup)
+
+    assert slept, "a freshly written backup was read without waiting for it to settle"
+
+
+def test_a_settled_backup_is_not_waited_on(tmp_path, monkeypatch):
+    """The control: the common case must cost nothing."""
+    import cash.notebook.vscode_backup as vb
+
+    nb = _setup(tmp_path, monkeypatch, backup_cells=["x = 1"])
+    slept = []
+    monkeypatch.setattr(vb._time, "sleep", lambda s: slept.append(s))
+
+    backup = vb.find_backup(str(nb))
+    old = time.time() - 60
+    os.utime(backup, (old, old))
+    vb._wait_for_backup_settle(backup)
+
+    assert slept == [], f"waited on a long-settled backup: {slept}"

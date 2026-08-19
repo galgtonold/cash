@@ -336,7 +336,7 @@ for i, base in enumerate([[1], [1]]):
 
 > Ambiguous cell execution! The current cell content appears 2 times in the notebook and no cell ID could be resolved.
 
-<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @f52540f4 broad="the claim is about when this exception type exists to be raised at all" -->
+<!-- claim: cash/exceptions.py:AmbiguousCellError @267a93a2, cash/notebook/upstream/checker.py:UpstreamChecker.check_and_reexecute @20807ce5 broad="the claim is about when this exception type exists to be raised at all" -->
 Raised when two cells have **byte-identical content** *and* cash cannot resolve a cell ID. Cash fails loudly here rather than guessing, because guessing wrong would silently serve one cell's result for the other.
 
 In JupyterLab and VS Code with IPython ≥ 8.3, cell IDs normally resolve and this does not occur. It shows up in environments that do not supply them.
@@ -479,16 +479,33 @@ the file is behind and says so on the badge — a warning row naming the time th
 file was last saved. That proof condemns the whole file, so the warning stands
 until you save.
 
-**What it still cannot see:** editing one cell and running a *different* one.
-The cell you ran matches the file, so there is nothing to compare and no
-warning. This is a real hole, not an oversight — the kernel has no other copy
-of the notebook to check against.
+<!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.take_unverifiable_announcement @fecc0722 -->
+**On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
+editors in a backup file so it can restore after a crash, and cash reads its
+cells from there instead of the saved `.ipynb` — so editing one cell and running
+a different one is checked against what is on screen, not what was last saved.
+It only uses that backup when the backup's own record of the saved file still
+matches the file on disk, so it can never substitute one stale copy for another.
+
+This relies on an internal detail of VS Code that could change in a future
+release. When it does — or when the backup is missing because hot exit is
+disabled — cash falls back to reading the saved file and says so once, rather
+than silently losing the guarantee.
+
+**What it still cannot see:** editing one cell and running a *different* one —
+still the case wherever cash has no live reader: JupyterLab always reads the
+saved file, and a VS Code session falls back to it too when no usable backup
+exists. There the cell you ran matches what cash read, so there is nothing to
+compare and no warning — a real hole, not an oversight, since there is no other
+copy of the notebook to check against. It is no longer silent about the gap,
+though: the first time a session cannot verify freshness this way, cash says so
+once on the badge.
 
 **What to do:** save the notebook (`Ctrl+S` / `Cmd+S`) after editing a cell you
 aren't about to run. Autosave exists in JupyterLab but runs on a timer, so a
 quick edit-then-run lands inside the window. **Google Colab is exempt** — there
 cash reads cells live from the frontend via `get_ipynb`, so there is nothing to
-save.
+save. **So is a VS Code session with a usable hot-exit backup** — see above.
 
 ### Others
 

@@ -145,3 +145,45 @@ def test_a_raising_tracker_does_not_crash_the_notification_builder(tmp_path):
     all_metrics = executor._build_pre_execution_notifications("x = 1", [], [])  # must not raise
 
     assert not any(m.get("status") == "WARNING" for m in all_metrics)
+
+
+def test_an_unverifiable_source_is_announced_once(tmp_path):
+    """Loud, but once. A row on every cell forever is noise users tune out --
+    and this warning has to be believed the once it matters."""
+    from cash.notebook.ipython.cell_executor import unverifiable_notification
+    from cash.notebook.staleness import StalenessTracker
+
+    t = StalenessTracker()
+    t.note_source("file")
+    first = unverifiable_notification(t)
+    assert first is not None
+    assert first["status"] == "WARNING"
+    assert "cannot" in first["code"].lower()
+
+    assert unverifiable_notification(t) is None, "announced twice in one session"
+
+
+def test_a_verifiable_source_says_nothing(tmp_path):
+    """The control. Colab and the VS Code backup both give live cells, so there
+    is nothing to warn about and the row must not appear."""
+    from cash.notebook.ipython.cell_executor import unverifiable_notification
+    from cash.notebook.staleness import StalenessTracker
+
+    for source in ("colab", "vscode-backup"):
+        t = StalenessTracker()
+        t.note_source(source)
+        assert unverifiable_notification(t) is None, source
+        assert t.can_verify() is True, source
+
+
+def test_the_unverifiable_message_survives_a_legacy_console(tmp_path):
+    """Same ASCII-safety contract as `staleness_notification`'s sibling test
+    above, for the unverifiable row. Named distinctly so it does not shadow
+    that test -- two module-level functions sharing a name silently collapse
+    to one collected test, and the point here is both rows are covered."""
+    from cash.notebook.ipython.cell_executor import unverifiable_notification
+    from cash.notebook.staleness import StalenessTracker
+
+    t = StalenessTracker()
+    t.note_source("file")
+    unverifiable_notification(t)["code"].encode("ascii")

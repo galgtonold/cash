@@ -22,6 +22,7 @@ import time as _time
 import urllib.error
 import urllib.request
 import warnings
+from pathlib import Path
 from urllib.parse import unquote
 
 from ..exceptions import CashWarning
@@ -460,6 +461,7 @@ def invalidate_notebook_cells_cache() -> None:
     """Drop the parsed-notebook-cells cache (e.g. on notebook switch / %cash_on)."""
     _notebook_cells_cache.clear()
     _colab_cells_cache.clear()
+    _vscode_cells_cache.clear()
 
 
 # --- Google Colab cell source ------------------------------------------------
@@ -520,6 +522,142 @@ def _try_colab_notebook_cells(include_ids: bool) -> list | None:
     return cells
 
 
+# --- VS Code hot-exit backup cell source -------------------------------------
+# Session-level cache, same shape and purpose as _notebook_cells_cache above:
+# keyed by (path, include_ids), a hit is validated by two cheap os.stat calls
+# instead of re-scanning the backup directory. Two things make this cache
+# unlike _notebook_cells_cache, though. First, it must be validated against
+# BOTH signatures, not just the file's: live_cells() only returns cells when
+# the backup's header pairs with the file on disk, so caching on the file's
+# signature alone would freeze the first read of an unsaved edit forever --
+# the file's own signature does not change again until the user actually
+# saves, even though the backup keeps changing underneath it as they keep
+# typing. Second, a "no backup found" result is never cached (see the miss
+# path below): unlike a missing file, which os.path.exists rules out in one
+# cheap stat, "no backup" can only be established by the directory scan
+# itself, so there is no cheap signature to invalidate on and caching it
+# would risk never noticing a backup that appears later in the session.
+_vscode_cells_cache: dict[tuple[str, bool], tuple[Path, tuple[int, int], tuple[int, int], list]] = {}
+
+
+def _stat_sig(path: str | Path) -> tuple[int, int] | None:
+    """``(mtime_ns, size)`` for *path*, or ``None`` if it cannot be stat'd."""
+    try:
+        st = os.stat(path)
+        return (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return None
+
+
+def _in_vscode() -> bool:
+    """True when this kernel currently carries VS Code's injected signal.
+
+    Reuses ``_try_vscode_path()``'s own detection (the ``__vsc_ipynb_file__``
+    variable VS Code injects into ``user_ns``) rather than a second,
+    independent check -- it is a plain in-process dict lookup with no I/O, so
+    it is free to call again here even though ``get_notebook_path()`` may
+    already have consulted it earlier in the same resolution (and, on a cache
+    hit, may not call it again at all).
+    """
+    return _try_vscode_path() is not None
+
+
+def _try_vscode_backup_cells(notebook_path: str | None, include_ids: bool) -> list | None:
+    """Return code cells from VS Code's hot-exit backup, or ``None``.
+
+    Same contract as the Colab reader above: ``None`` means "not applicable /
+    unavailable" and the caller falls through to the file. VS Code gives a
+    kernel no route to its live document -- the widget webview holds a
+    `standaloneModel` stub with an empty cell list -- but it does persist dirty
+    editors to disk, and that backup carries the unsaved edits the file does not.
+
+    Gated on ``_in_vscode()`` first: a backup on disk is evidence some VS Code
+    window once had this notebook open, not that THIS kernel is the one being
+    looked at right now. Without the gate, a plain JupyterLab kernel pointed at
+    a file some VS Code window still holds dirty would silently read edits that
+    are not on the screen the user is looking at -- and a hot-exit backup can
+    outlive the VS Code session that wrote it by weeks, so its mere existence
+    is never on its own evidence of anything current.
+
+    Memoized against both the backup's and the file's signature (see
+    ``_vscode_cells_cache`` above) so that the ~3 calls a single cell run makes
+    (the magic once, the upstream checker twice) pay for the backup-directory
+    scan and the settle wait at most once per actual change, not once per call
+    -- an unmemoized version was measured to turn the settle wait's 1.5s cap
+    into up to 3x that across one run, since each call waited independently.
+    """
+    if not _in_vscode():
+        return None
+    if not notebook_path:
+        return None
+
+    cache_key = (notebook_path, include_ids)
+    file_sig = _stat_sig(notebook_path)
+    cached = _vscode_cells_cache.get(cache_key)
+    if cached is not None and file_sig is not None:
+        cached_backup, cached_backup_sig, cached_file_sig, cached_cells = cached
+        if cached_file_sig == file_sig and _stat_sig(cached_backup) == cached_backup_sig:
+            return cached_cells
+
+    try:
+        from cash.notebook.vscode_backup import find_backup, live_cells
+
+        cells = live_cells(notebook_path)
+        if cells is None:
+            _vscode_cells_cache.pop(cache_key, None)
+            return None
+
+        # The comprehension below is inside this guard deliberately: a cell
+        # entry is another product's undocumented format, and a malformed
+        # (non-dict) entry must degrade to None like everything else here,
+        # not raise out of a caller that has no reason to expect it.
+        extracted = [
+            _extract_cell_entry(cell, include_ids)
+            for cell in cells
+            if cell.get("cell_type") == "code"
+        ]
+
+        if not extracted:
+            # [] is not None: returned as-is it reads as "these ARE the live
+            # cells" and the caller (_read_notebook_code_cells) would never
+            # fall through to the file. That is indistinguishable from a
+            # genuinely all-markdown notebook UNLESS every entry failed to
+            # match cell_type == "code" -- exactly what happens when a backup
+            # uses VS Code's OTHER notebook serialization (observed:
+            # {"cells": [{"kind": 2, "language": "python", "value": ...}]},
+            # keyed "kind"/"value" rather than "cell_type"/"source"). Treat an
+            # empty extraction as unusable so the file -- which reports the
+            # same [] for an actually-empty notebook -- is the one source of
+            # truth for "no code cells", never this comprehension by omission.
+            _vscode_cells_cache.pop(cache_key, None)
+            return None
+
+        backup = find_backup(notebook_path)
+        backup_sig = _stat_sig(backup) if backup is not None else None
+        if backup is not None and backup_sig is not None and file_sig is not None:
+            _vscode_cells_cache[cache_key] = (backup, backup_sig, file_sig, extracted)
+        return extracted
+    except Exception as e:  # noqa: BLE001 - another product's private format
+        logger.debug("[UTILS] VS Code backup read failed: %s", e)
+        return None
+
+
+#: Which reader supplied the most recent cell read, set by
+#: ``_read_notebook_code_cells`` and read by ``last_cell_source``. Session-level
+#: (module) state, same lifetime as the caches above.
+_last_cell_source: str | None = None
+
+
+def last_cell_source() -> str | None:
+    """Which reader supplied the most recent cell read.
+
+    ``"colab"`` / ``"vscode-backup"`` see unsaved edits; ``"file"`` does not,
+    which is what the once-per-session "cannot verify" notice keys on. ``None``
+    means no read has happened yet this session.
+    """
+    return _last_cell_source
+
+
 def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: bool = False) -> list[str] | list[tuple[str | None, str]]:
     """
     Read code cells from the notebook file.
@@ -534,16 +672,34 @@ def _read_notebook_code_cells(notebook_path: str | None = None, include_ids: boo
         include_ids: If True, return list of (cell_id, code) tuples.
                      If False, return list of code strings.
     """
+    global _last_cell_source
+    # Default to the pessimistic answer. Every exit below except the two live
+    # readers ends up reading (or failing to read) the saved file, and a failed
+    # read is emphatically not a verified-fresh one -- so only an actual live
+    # hit may upgrade this.
+    _last_cell_source = "file"
+
     # Colab first: its notebook is a Drive fileId, not a local file, so the
     # file reader below returns []. Reading the live cells from the Colab
     # frontend is what makes upstream resolution work there. A fast no-op when
     # not running in Colab.
     colab_cells = _try_colab_notebook_cells(include_ids)
     if colab_cells is not None:
+        _last_cell_source = "colab"
         return colab_cells
 
     if not notebook_path:
         notebook_path = get_notebook_path()
+
+    # VS Code next. The position here is load-bearing on both sides: after
+    # notebook_path is resolved, since the reader needs a path to match a
+    # backup against; before the "no notebook_path" early return just below,
+    # since moving it after that return would mean this path never runs for
+    # the common case of a caller that passes no explicit path.
+    vscode_cells = _try_vscode_backup_cells(notebook_path, include_ids)
+    if vscode_cells is not None:
+        _last_cell_source = "vscode-backup"
+        return vscode_cells
 
     if not notebook_path:
         # Do NOT use glob fallback - picking the most recently modified .ipynb

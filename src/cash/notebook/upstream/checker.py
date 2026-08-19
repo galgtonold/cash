@@ -307,6 +307,8 @@ class UpstreamChecker:
         # resolve rather than probing again -- discovery is deliberately done
         # once per cell check.
         self._notebook_path_for_staleness = notebook_path
+        from cash.notebook import server_discovery as _sd
+        self.staleness.note_source(_sd.last_cell_source())
 
         # Phase 1 — Lineage-based staleness check (diagnostic-only).
         # Detects when variables are inconsistent with each other based on
