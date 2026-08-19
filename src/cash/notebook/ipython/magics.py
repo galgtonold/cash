@@ -479,15 +479,25 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 print(f"   Found existing cache with {len(entries)} entries.")
         except (OSError, AttributeError, TypeError):
             pass
-        # One-time hint: OFF Colab, cash reads upstream cells from the .ipynb
-        # file on disk, so an upstream edit that has not been saved is invisible
-        # until it is — hence the save advice. In Colab the cells are read live
-        # from the frontend (google.colab ``get_ipynb``), so there is nothing to
-        # save and the hint would be misleading; skip it there.
+        # One-time hint: with no live reader, cash reads upstream cells from the
+        # .ipynb file on disk, so an upstream edit that has not been saved is
+        # invisible until it is — hence the save advice. Skipped wherever a LIVE
+        # reader exists, because there the advice is not merely redundant, it is
+        # FALSE: in Colab the cells come from the frontend (``get_ipynb``), and
+        # on JupyterLab cash's own extension pushes the live sources over a comm
+        # before every execution (see ``cash.notebook.live_cells``). Telling a
+        # user of the feature they just installed that their unsaved edit is
+        # invisible contradicts the thing they can watch working.
+        #
+        # The extension gate is a filesystem probe, not a look at the pushed
+        # store: at %cash_on time no comm has opened yet for anyone, so the
+        # store cannot distinguish absent from not-yet. See
+        # ``_labextension_installed`` for the one topology it answers wrongly
+        # (a split install) and why suppressing-by-omission is the safe error.
         if not getattr(self, '_save_hint_shown', False):
             self._save_hint_shown = True
-            from ..server_discovery import _in_colab
-            if not _in_colab():
+            from ..server_discovery import _in_colab, _labextension_installed
+            if not _in_colab() and not _labextension_installed():
                 print("[Tip] Cash reads upstream cells from the saved notebook file.")
                 print("   Save (Ctrl+S) after editing a cell you are not about to run:")
                 print("   an unsaved edit is invisible, so the upstream check skips it")

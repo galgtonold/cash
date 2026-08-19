@@ -41,14 +41,28 @@ def magics_fixture():
     shell.user_ns.clear()
 
 
-class TestSaveHintColabAware:
-    """The 'save your upstream edits' hint is off-Colab only: in Colab cash
-    reads cells live from the frontend (get_ipynb), so there is nothing to save
-    and the hint would mislead."""
+class TestSaveHintLiveReaderAware:
+    """The 'save your upstream edits' hint is for the FILE reader only.
 
-    def test_hint_shown_off_colab(self, magics_fixture, capsys, monkeypatch):
+    Wherever a live reader supplies the cells the advice is not redundant, it is
+    false, so it is suppressed: Colab reads them from the frontend
+    (``get_ipynb``), and on JupyterLab cash's own extension pushes them over a
+    comm. Both gates are monkeypatched in every case below -- the extension
+    probe looks at the real filesystem, so leaving it unset would make these
+    tests pass or fail depending on whether the developer happens to have
+    JupyterLab in the same environment.
+    """
+
+    @staticmethod
+    def _gates(monkeypatch, *, colab: bool, labext: bool) -> None:
+        monkeypatch.setattr("cash.notebook.server_discovery._in_colab",
+                            lambda: colab)
+        monkeypatch.setattr("cash.notebook.server_discovery._labextension_installed",
+                            lambda: labext)
+
+    def test_hint_shown_when_no_live_reader(self, magics_fixture, capsys, monkeypatch):
         magics, _shell, _backend = magics_fixture
-        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: False)
+        self._gates(monkeypatch, colab=False, labext=False)
         magics._save_hint_shown = False
         magics.cash_on("")
         out = capsys.readouterr().out
@@ -57,13 +71,40 @@ class TestSaveHintColabAware:
 
     def test_hint_suppressed_in_colab(self, magics_fixture, capsys, monkeypatch):
         magics, _shell, _backend = magics_fixture
-        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: True)
+        self._gates(monkeypatch, colab=True, labext=False)
         magics._save_hint_shown = False
         magics.cash_on("")
         out = capsys.readouterr().out
         assert "Cash enabled" in out        # cash_on still ran normally
         assert "Save (Ctrl+S)" not in out   # but the save hint is suppressed
         assert "saved notebook file" not in out
+
+    def test_hint_suppressed_when_the_labextension_is_installed(
+            self, magics_fixture, capsys, monkeypatch):
+        """CAS-274 Finding B: the extension makes the save advice false."""
+        magics, _shell, _backend = magics_fixture
+        self._gates(monkeypatch, colab=False, labext=True)
+        magics._save_hint_shown = False
+        magics.cash_on("")
+        out = capsys.readouterr().out
+        assert "Cash enabled" in out
+        assert "Save (Ctrl+S)" not in out
+        assert "saved notebook file" not in out
+
+    def test_a_broken_probe_keeps_the_hint_rather_than_withdrawing_it(
+            self, magics_fixture, capsys, monkeypatch):
+        """The probe must never raise, and its failure must not silence advice
+        that is correct for everyone without the extension."""
+        def _boom():
+            raise RuntimeError("no filesystem for you")
+
+        magics, _shell, _backend = magics_fixture
+        monkeypatch.setattr("cash.notebook.server_discovery._in_colab", lambda: False)
+        monkeypatch.setattr("os.path.isdir", lambda *_a, **_k: _boom())
+        magics._save_hint_shown = False
+        magics.cash_on("")                  # must not raise
+        out = capsys.readouterr().out
+        assert "Save (Ctrl+S)" in out
 
 
 # ============================================================================

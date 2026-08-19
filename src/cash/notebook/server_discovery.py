@@ -501,6 +501,51 @@ def _try_extension_cells(include_ids: bool) -> list | None:
     return extracted or None
 
 
+#: Where a prebuilt labextension lives, relative to an environment's data root.
+#: Fixed by the wheel's ``shared-data`` mapping in pyproject.toml, which
+#: tests/test_notebook/test_labextension_packaging.py pins to this same name.
+_LABEXT_RELPATH = ("share", "jupyter", "labextensions", "cash-live-cells")
+
+
+def _labextension_installed() -> bool:
+    """True when cash's prebuilt JupyterLab extension is installed in this env.
+
+    A FILESYSTEM check, not a runtime one, and deliberately so. The only caller
+    is ``%cash_on``, which necessarily runs before the extension's comm can
+    exist: on a fresh kernel the first ``comm_open`` is refused because the
+    target is not registered until ``import cash`` has run (see
+    ``live_cells.register_target``), so ``latest_cells()`` is ``None`` at that
+    moment for EVERY user and cannot tell "absent" from "not yet". The wheel
+    drops the extension at a fixed path under the environment's data root, and
+    that is true the instant cash is importable.
+
+    Wrong in exactly one topology: a SPLIT INSTALL, where the JupyterLab server
+    and the kernel live in different environments -- this answers for the
+    kernel's. Accepted, because the only caller uses it to SUPPRESS a proactive
+    hint: the cost is a missing sentence, never a false claim, and the reactive
+    once-per-session "cash cannot see unsaved edits here" notice still fires
+    correctly there, since it keys on the read that actually happened rather
+    than on an inference.
+
+    A probe that cannot answer returns ``False`` -- "assume no extension".
+    That is the direction that degrades well at scale: if this check ever
+    breaks wholesale (a packaging change moving the directory), everyone keeps
+    today's advice, which is right for the majority who have no extension,
+    instead of it being silently withdrawn from all of them.
+    """
+    try:
+        import site
+        roots = [sys.prefix]
+        user_base = site.getuserbase()
+        if user_base:
+            roots.append(user_base)
+        return any(os.path.isdir(os.path.join(root, *_LABEXT_RELPATH))
+                   for root in roots)
+    except Exception as e:  # noqa: BLE001 - a hint gate must never break %cash_on
+        logger.debug("[UTILS] labextension probe failed: %s", e)
+        return False
+
+
 # --- Google Colab cell source ------------------------------------------------
 # Colab notebooks live in Google Drive, not a local file, so the file reader
 # below finds nothing: get_notebook_path() returns a "/fileId=..." reference
