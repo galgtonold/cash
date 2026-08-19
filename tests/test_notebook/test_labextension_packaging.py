@@ -309,6 +309,13 @@ def test_every_place_that_names_the_extension_agrees():
     assert shared["src/cash/labextension"] == f"share/jupyter/labextensions/{EXT_NAME}"
     assert shared["labextension/install.json"] == f"share/jupyter/labextensions/{EXT_NAME}/install.json"
 
+    # The save-hint probe holds a FOURTH copy of this path. Its own test builds
+    # its sandbox from this constant, so it moves with a typo instead of
+    # catching one -- and a probe pointed at the wrong directory degrades to
+    # always-False silently, restoring the Ctrl+S advice this branch made false.
+    from cash.notebook.server_discovery import _LABEXT_RELPATH
+    assert _LABEXT_RELPATH == ("share", "jupyter", "labextensions", EXT_NAME)
+
     paths = cash._jupyter_labextension_paths()
     assert paths == [{"src": "labextension", "dest": EXT_NAME}]
     assert (REPO_ROOT / "src" / "cash" / paths[0]["src"]).is_dir(), (
