@@ -14,7 +14,15 @@ import json
 from types import SimpleNamespace
 
 from cash.notebook import server_discovery as sd
-from cash.notebook.live_cells import TARGET, handle_message, latest_cells, register_target, reset
+from cash.notebook.live_cells import (
+    TARGET,
+    expire,
+    handle_message,
+    install_expiry_hook,
+    latest_cells,
+    register_target,
+    reset,
+)
 
 CELLS = [
     {"cell_type": "code", "id": "a", "source": "THRESHOLD = 0.9"},
@@ -232,3 +240,195 @@ def test_wiring_a_reopen_falls_back_to_the_file_until_the_new_snapshot_lands(tmp
     _open_comm(shell)  # reload: store cleared, replacement not yet sent
     sd.invalidate_notebook_cells_cache()
     assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
+
+
+# --- A snapshot is valid for ONE execution (CAS-274 review, Critical) ---------
+#
+# `_store` lives as long as the KERNEL; the frontend that fills it does not. A
+# page reload with the extension disabled, a second client attached without it,
+# or the extension erroring after having worked once all stop the pushes WITHOUT
+# closing the comm, so `reset()`-on-open never runs. Before `expire`, the last
+# snapshot was then served for the rest of the kernel's life: cash compared the
+# user's edited upstream cell against frozen text, found no change -- and,
+# because "extension" is in `staleness._LIVE_SOURCES`, suppressed the notice
+# that would have said cash could not see unsaved edits. Confidently wrong AND
+# silent, which is worse than the staleness the feature exists to fix.
+
+
+def test_a_snapshot_does_not_outlive_the_execution_it_arrived_for():
+    handle_message({"seq": 1, "cells": CELLS})
+    assert latest_cells() is not None
+    expire()
+    assert latest_cells() is None
+
+
+def test_every_read_within_one_execution_still_sees_the_snapshot():
+    """cash reads the cells several times per cell -- measured at 7 on a real
+    kernel. Expiry is per EXECUTION, not per read, so all of them must succeed
+    off one push; a consume-on-read design would serve the first and starve the
+    rest."""
+    handle_message({"seq": 1, "cells": CELLS})
+    for _ in range(7):
+        assert latest_cells()[0]["source"] == "THRESHOLD = 0.9"
+    expire()
+    assert latest_cells() is None
+
+
+def test_a_fresh_push_re_arms_the_store_after_an_expiry():
+    """The control: expiry must not be a one-way door, or the extension would
+    work for exactly one cell and then look permanently absent."""
+    handle_message({"seq": 1, "cells": CELLS})
+    expire()
+    handle_message({"seq": 2, "cells": [{"cell_type": "code", "id": "a", "source": "NEXT"}]})
+    assert latest_cells()[0]["source"] == "NEXT"
+
+
+def test_a_retransmitted_snapshot_cannot_re_arm_itself_after_expiry():
+    """`expire` retires the cells but NOT the sequence high-water mark.
+
+    Dropping `seq` too would let a duplicate or retried send of the snapshot
+    just retired re-arm itself for the next execution -- reintroducing exactly
+    the staleness being closed. Only `reset` (a new frontend connection, a new
+    notebook) may move the mark backwards.
+    """
+    handle_message({"seq": 4, "cells": CELLS})
+    expire()
+    handle_message({"seq": 4, "cells": CELLS})       # duplicate
+    handle_message({"seq": 3, "cells": CELLS})       # late retry of an older one
+    assert latest_cells() is None
+
+
+def test_wiring_a_frontend_that_stops_pushing_falls_back_to_the_file(tmp_path):
+    """THE regression, through the production entry point.
+
+    One execution's worth of pushes, then silence -- the state a reload with the
+    extension disabled leaves behind, with the comm never re-opened. cash must
+    read the saved .ipynb from the next execution onward, and must SAY it did.
+    """
+    nb_path = tmp_path / "notebook.ipynb"
+    _write_notebook(nb_path, "from_file = True")
+
+    handle_message({"seq": 1, "cells": CELLS})
+    sd.invalidate_notebook_cells_cache()
+    assert sd.get_notebook_cells(str(nb_path)) == ["THRESHOLD = 0.9", "y = THRESHOLD * 2"]
+    assert sd.last_cell_source() == "extension"
+
+    expire()  # end of that execution; the frontend pushes nothing more
+
+    sd.invalidate_notebook_cells_cache()
+    assert sd.get_notebook_cells(str(nb_path)) == ["from_file = True"]
+    assert sd.last_cell_source() == "file"
+
+
+def test_wiring_the_unsaved_edits_notice_fires_again_once_a_snapshot_expires():
+    """The other half of the Critical, and the half a cells-only test misses.
+
+    `last_cell_source()` feeds `StalenessTracker`, and "extension" counts as a
+    live source -- so a store that kept serving a dead frontend's snapshot also
+    switched OFF the once-per-session "cash cannot see unsaved edits here"
+    notice. Being wrong is bad; being wrong with the warning suppressed is the
+    failure this feature must never produce.
+    """
+    from cash.notebook.staleness import StalenessTracker
+
+    handle_message({"seq": 1, "cells": CELLS})
+    sd.invalidate_notebook_cells_cache()
+    sd.get_notebook_cells(str(_MISSING_NOTEBOOK))
+    live = StalenessTracker()
+    live.note_source(sd.last_cell_source())
+    assert live.can_verify()
+    assert not live.take_unverifiable_announcement()
+
+    expire()
+
+    sd.invalidate_notebook_cells_cache()
+    sd.get_notebook_cells(str(_MISSING_NOTEBOOK))
+    dead = StalenessTracker()
+    dead.note_source(sd.last_cell_source())
+    assert not dead.can_verify()
+    assert dead.take_unverifiable_announcement()
+
+
+#: A path that cannot exist, so the file reader contributes nothing and the only
+#: variable in the test above is which reader answered.
+_MISSING_NOTEBOOK = "no-such-notebook-cas274.ipynb"
+
+
+# --- The hook that calls `expire` -- registration, not just the function -----
+
+
+class _FakeEvents:
+    def __init__(self):
+        self.registered = {}
+
+    def register(self, event, fn):
+        self.registered.setdefault(event, []).append(fn)
+
+    def unregister(self, event, fn):
+        self.registered[event].remove(fn)   # raises when absent, as IPython's does
+
+    def trigger(self, event, *a):
+        for fn in list(self.registered.get(event, ())):
+            fn(*a)
+
+
+def test_the_expiry_hook_is_registered_on_post_run_cell_and_retires_a_snapshot():
+    """Wiring, not logic: `expire` being correct is worth nothing if nothing
+    calls it. Drives the registered callback through the event, the way IPython
+    does, rather than calling `expire` directly."""
+    shell = SimpleNamespace(events=_FakeEvents())
+    assert install_expiry_hook(shell)
+    assert shell.events.registered["post_run_cell"]
+
+    handle_message({"seq": 1, "cells": CELLS})
+    shell.events.trigger("post_run_cell", None)      # IPython passes the result
+    assert latest_cells() is None
+
+
+def test_re_installing_the_hook_does_not_stack_registrations():
+    """`cash.reset_session()`, a second `Cash()`, or `%load_ext` after a reset
+    all re-run the hook install. The callback is idempotent, so a duplicate
+    would not corrupt anything -- but the list would grow without bound for the
+    life of the kernel, which is the same leak the other hooks unregister to
+    avoid."""
+    shell = SimpleNamespace(events=_FakeEvents())
+    for _ in range(3):
+        assert install_expiry_hook(shell)
+    assert len(shell.events.registered["post_run_cell"]) == 1
+
+
+def test_a_shell_without_events_is_a_false_not_a_raise():
+    """MockShell and embedded interpreters have no event manager. Absence is
+    normal here, and harmless: nothing pushes a snapshot there either."""
+    assert install_expiry_hook(SimpleNamespace()) is False
+
+
+def test_wiring_cashmagics_installs_both_halves_of_the_live_cell_contract():
+    """The call sites, not the functions.
+
+    `expire` and `register_target` can both be perfect while `magics.py` calls
+    neither, and every test above would still pass -- the "correct logic,
+    missing wiring" failure this file's other wiring tests exist to catch.
+    Drives `_init_session_state`, the method that installs cash's shell hooks,
+    and checks that the comm target AND the expiry hook both ended up attached.
+    """
+    from cash.notebook.ipython.magics import CashMagics
+    from cash.notebook.live_cells import _on_post_run_cell
+
+    shell = _FakeShell()
+    shell.events = _FakeEvents()
+    shell.run_cell = lambda code, *a, **k: None
+    shell.run_cell_async = None
+
+    magics = CashMagics.__new__(CashMagics)
+    magics._init_session_state(shell)
+
+    assert TARGET in shell.kernel.comm_manager.targets, "the comm target was never registered"
+    assert _on_post_run_cell in shell.events.registered.get("post_run_cell", []), (
+        "nothing retires a pushed snapshot, so it would outlive its execution"
+    )
+
+    # ...and the registered callback really is the one that retires a snapshot.
+    handle_message({"seq": 1, "cells": CELLS})
+    shell.events.trigger("post_run_cell", None)
+    assert latest_cells() is None

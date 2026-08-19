@@ -347,8 +347,21 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # one is present. A silent no-op everywhere else — register_target()
         # returns False rather than raising when there is no kernel / comm
         # manager to attach to (bare IPython, older ipykernel, MockShell, ...).
-        from ..live_cells import register_target
+        from ..live_cells import install_expiry_hook, register_target
         register_target(shell)
+        # ...and retire each pushed snapshot when the execution it arrived for
+        # ends. The store outlives the frontend that fills it, so without this a
+        # frontend that stops pushing without re-opening (a reload onto the same
+        # kernel with the extension disabled, a second client attached without
+        # it, the extension erroring after having worked once) leaves cash
+        # serving one frozen snapshot for the rest of the kernel's life -- and
+        # suppressing the notice that would have said so. See ``expire``.
+        #
+        # Registered here rather than beside _flush_pending_writes above because
+        # it belongs to the comm, not to the cache: both halves of the live-cell
+        # contract are then visible in one place, and neither is conditional on
+        # %cash_on having run.
+        install_expiry_hook(shell)
 
         # Monkey-patch run_cell to intercept execution.
         #

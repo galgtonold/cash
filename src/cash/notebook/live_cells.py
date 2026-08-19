@@ -12,6 +12,9 @@ request/response design could never serve a read at the moment cash needs one.
 The extension pushes on change and flushes before execution; shell messages are
 FIFO, so a push sent before an execute_request is processed first.
 
+A snapshot is valid for exactly ONE execution -- the one it preceded. See
+``expire``, which is the whole reason this module is more than a variable.
+
 Everything here tolerates nonsense: the payload crosses a process boundary from
 JavaScript, and a malformed one must cost the fallback, never an exception.
 """
@@ -19,6 +22,10 @@ from __future__ import annotations
 
 TARGET = "cash_live_cells"
 
+#: ``cells`` is the servable snapshot and the ONLY gate on serving one: it is
+#: ``None`` whenever no snapshot may be served, so ``latest_cells`` cannot
+#: disagree with some other field. ``seq`` is a high-water mark that OUTLIVES
+#: the snapshot -- see ``expire`` for why it must.
 _store: dict = {"seq": -1, "cells": None}
 
 
@@ -43,8 +50,52 @@ def handle_message(data) -> None:
 
 
 def latest_cells() -> list[dict] | None:
-    """The most recent pushed snapshot, or None if the extension never spoke."""
+    """The snapshot pushed for the CURRENT execution, or None.
+
+    None means "no live source", and the caller falls back to the saved
+    ``.ipynb`` -- both when the extension never spoke at all, and when it spoke
+    for an earlier execution but not for this one.
+    """
     return _store["cells"]
+
+
+def expire() -> None:
+    """Retire the snapshot at the end of the execution it arrived for.
+
+    THE safety property of this feature. This store lives as long as the
+    KERNEL, while the frontend that fills it does not: a page reload onto the
+    same kernel, ``jupyter labextension disable`` plus a reload, a second client
+    attaching without the extension, or the extension simply erroring after
+    having worked once, all stop the pushes without closing anything. Without
+    expiry the last snapshot is then served for the rest of the kernel's life --
+    cash checks the user's edited upstream cell against FROZEN text and finds no
+    change, and because ``"extension"`` counts as a live source in
+    ``staleness._LIVE_SOURCES`` the once-per-session "cash cannot see unsaved
+    edits here" notice is suppressed as well. Confidently wrong, and silent
+    about it: strictly worse than the staleness this feature exists to fix.
+
+    So a snapshot is valid for exactly the ONE execution it preceded. The
+    extension flushes before every ``execute_request``
+    (``labextension/src/index.ts``), so requiring a fresh push per execution
+    costs a working extension nothing, and the moment one stops pushing cash
+    falls back to the saved file AND the reactive notice fires -- both correct.
+
+    Called from IPython's ``post_run_cell``, the last event of an execution.
+    Measured on a real kernel (ipykernel 7.2, IPython 9.13): a push sent
+    immediately before an ``execute_request`` is processed BEFORE that execution
+    begins, and every one of cash's cell reads happens before ``post_run_cell``
+    fires -- so one snapshot survives all of them, however many times cash reads
+    within a single cell. ``pre_run_cell`` would be the wrong hook: the push has
+    already landed by the time it fires, so it would throw away the snapshot
+    that just arrived for the execution now starting.
+
+    ``seq`` deliberately survives. It is a duplicate-suppression high-water
+    mark, not part of the snapshot: dropping it here would let a retransmitted
+    copy of the snapshot just retired re-arm itself for the NEXT execution,
+    which is the exact staleness being closed. Only ``reset`` -- a new frontend
+    connection, or a new notebook -- may move it backwards.
+    """
+    _store["cells"] = None
 
 
 def reset() -> None:
@@ -58,6 +109,37 @@ def reset() -> None:
 # JupyterLab 4.6 defaults to delivering comms on a subshell thread -- this store
 # becomes cross-thread mutable state and the two-field update below stops being
 # atomic. Do not remove that line in the extension without revisiting this.
+
+
+def _on_post_run_cell(result=None) -> None:
+    """IPython event adapter for ``expire``.
+
+    A module-level function rather than a closure or a bound method, so its
+    identity is stable across ``CashMagics`` re-instantiations
+    (``cash.reset_session()``, a second ``Cash()``, ``%load_ext`` after a reset)
+    and ``install_expiry_hook`` can unregister the previous registration by
+    passing this same object.
+    """
+    expire()
+
+
+def install_expiry_hook(shell) -> bool:
+    """Register ``expire`` on ``post_run_cell``. False if that is not possible.
+
+    False is the ordinary case outside a real IPython shell (MockShell, an
+    embedded interpreter), so it is a return value rather than an exception --
+    and it is harmless there, because nothing pushes a snapshot in the first
+    place.
+    """
+    try:
+        try:
+            shell.events.unregister("post_run_cell", _on_post_run_cell)
+        except (ValueError, KeyError, AttributeError, TypeError):
+            pass  # not registered yet, which is the common case
+        shell.events.register("post_run_cell", _on_post_run_cell)
+        return True
+    except Exception:  # noqa: BLE001 - no events, an odd shell, anything
+        return False
 
 
 def register_target(shell) -> bool:
