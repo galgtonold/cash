@@ -46,6 +46,13 @@ EXT_NAME = "cash-live-cells"
 # string literals, so the same pattern matches the built bundle.
 FORCES_MAIN_SHELL = re.compile(r"""commsOverSubshells\s*[=:]\s*["']disabled["']""")
 
+# The C1 fix (CAS-274 review): a comm the kernel refused must not be latched on
+# to forever. Both patterns are written to survive minification -- property
+# names and the `catch` keyword both do -- so one regex serves the TypeScript
+# source and the shipped bundle.
+REBUILDS_A_CLOSED_COMM = re.compile(r"\.onClose\s*=")
+CATCH_DROPS_THE_COMM = re.compile(r"catch\s*\([^)]*\)\s*\{[^}]*\.delete\(")
+
 _WHY = (
     "\n\n`comm.commsOverSubshells = 'disabled'` is LOAD-BEARING, not a tuning knob.\n"
     "Without it JupyterLab 4.6 delivers the comm on a subshell thread, which\n"
@@ -91,6 +98,18 @@ def _pyproject() -> dict:
         return tomllib.load(fh)
 
 
+_WHY_REOPEN = """
+
+A fresh kernel REFUSES the first comm_open: the flush-before-execute ordering
+guarantees it arrives before the cell that runs `import cash` registers the
+target. ipykernel replies comm_close and JupyterLab disposes the handler, so an
+extension that keeps holding it is MUTE for the life of that kernel -- silently,
+because every later push just throws into the catch.
+
+Recovery is to drop the comm on close, and on a throw, so the next execution
+flush opens a fresh one -- by which time the import has run."""
+
+
 # --- The one line ------------------------------------------------------------
 
 
@@ -117,6 +136,62 @@ def test_the_shipped_bundle_forces_the_comm_onto_the_main_shell():
     assert hit, (
         f"the SHIPPED bundle under {BUILT} does not force the comm onto the main "
         f"shell ({len(files)} .js files scanned)." + _WHY
+    )
+
+
+# --- A refused comm must not be latched on to (review C1) --------------------
+#
+# The fix is frontend-only, so these source+bundle assertions are its regression
+# test: there is no JS harness here, and the kernel side cannot observe an
+# extension that has gone quiet. Same two-layer pattern as the line above, and
+# for the same reason -- the bundle is committed, so a correct source proves
+# nothing about what ships.
+
+
+def test_the_source_rebuilds_a_comm_the_kernel_closed():
+    _skip_without_checkout()
+    text = INDEX_TS.read_text(encoding="utf-8")
+    assert REBUILDS_A_CLOSED_COMM.search(text), (
+        f"{INDEX_TS} installs no onClose handler." + _WHY_REOPEN
+    )
+    assert CATCH_DROPS_THE_COMM.search(text), (
+        f"{INDEX_TS}'s catch swallows the error without dropping the comm, so a "
+        f"disposed handler ('Cannot send') is latched on to forever." + _WHY_REOPEN
+    )
+
+
+def test_the_shipped_bundle_rebuilds_a_comm_the_kernel_closed():
+    _skip_without_checkout()
+    files = _built_js()
+    assert files, f"no built JavaScript under {BUILT}"
+    blobs = [f.read_text(encoding="utf-8", errors="replace") for f in files]
+    assert any(REBUILDS_A_CLOSED_COMM.search(b) for b in blobs), (
+        f"the SHIPPED bundle under {BUILT} installs no onClose handler." + _WHY_REOPEN
+    )
+    assert any(CATCH_DROPS_THE_COMM.search(b) for b in blobs), (
+        f"the SHIPPED bundle under {BUILT} does not drop the comm on a throw." + _WHY_REOPEN
+    )
+
+
+def test_only_the_execution_flush_may_open_a_comm():
+    """Source-only, and deliberately so.
+
+    Gating the open is a noise control rather than a correctness fix -- opening
+    from the debounce path would still recover, just after spraying "No such
+    comm target registered" through the kernel log of every user who never
+    imports cash. Worth pinning, not worth a bundle-side regex that would be
+    guessing at minified argument positions.
+    """
+    _skip_without_checkout()
+    text = INDEX_TS.read_text(encoding="utf-8")
+    assert re.search(r"if\s*\(\s*!allowOpen\s*\)", text), (
+        "the open is no longer gated on allowOpen; every debounced keystroke "
+        "would now try to open a comm"
+    )
+    assert re.search(r"executionScheduled[\s\S]{0,400}?send\(\s*panel\s*,\s*true\s*\)", text), (
+        "the execution flush must pass allowOpen=true -- it is the only route "
+        "that may open a comm, and the only one that runs after `import cash` "
+        "has had a chance to register the target"
     )
 
 

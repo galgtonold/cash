@@ -54,6 +54,41 @@ thread-safety note in `live_cells.py`.
 
 ---
 
+## The first comm_open is always refused — that is normal
+
+On a fresh kernel the extension's first `comm_open` **cannot** succeed, and the
+flush-before-execute ordering is exactly why: the push is emitted before the
+`execute_request`, so it necessarily arrives before the cell that runs
+`import cash` registers the target. ipykernel answers `comm_close`
+("No such comm target registered") and JupyterLab disposes the handler.
+
+So the comm is treated as disposable, not as a handle to keep:
+
+- `onClose` drops it from the per-panel `WeakMap`, so the next push builds a new
+  one — by which time the import has run. An identity check stops a late close
+  for an already-replaced comm from evicting its successor.
+- the `catch` drops it too, because a disposed handler raises `Cannot send` and
+  latching on to it would reproduce the same muteness.
+- **only** `executionScheduled` may *open* a comm (`send(panel, true)`). The
+  debounced keystroke path passes `false`. Opening from there as well would
+  still work, but it would spray that refusal through the kernel log of every
+  user who never imports cash — and buy nothing, since the debounced push is a
+  latency optimisation while the flush is the correctness path.
+- a kernel restart only *deletes* the comm. Rebuilding it immediately would hit
+  a kernel that has likewise lost its `import cash`.
+
+The matching kernel-side rule is in `live_cells.py`: **`_on_open` calls
+`reset()`**. A `comm_open` is a new frontend connection superseding the old one,
+and the extension's `seq` counter is a closure variable in the plugin
+activation — it restarts at 0 on every browser page load, while the kernel store
+lives as long as the kernel. Without the reset, every push after an F5 is dropped
+as "older" and cash keeps serving the pre-reload snapshot: source text that, since
+a reload discards unsaved edits, no longer exists anywhere. Clearing is the safe
+direction, because an empty store makes cash fall through to the saved `.ipynb`
+rather than believe the notebook is empty.
+
+---
+
 ## Building
 
 Node is **not** required to develop cash, to run `pytest`, or to build the
@@ -96,7 +131,7 @@ install`, no rebuild of JupyterLab.
 Verify with:
 
 ```bash
-jupyter labextension list        # expect: cash-live-cells v0.1.0 enabled ok
+jupyter labextension list        # expect: cash-live-cells vX.Y.Z enabled ok
 ```
 
 An **editable** install (`pip install -e .`) carries the same shared data, so a

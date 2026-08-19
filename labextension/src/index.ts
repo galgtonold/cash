@@ -41,7 +41,24 @@ const plugin: JupyterFrontEndPlugin<void> = {
     let seq = 0;
     const comms = new WeakMap<NotebookPanel, any>();
 
-    const send = (panel: NotebookPanel) => {
+    /**
+     * Push a snapshot. `allowOpen` gates whether a MISSING comm may be opened.
+     *
+     * Only the execution flush passes true, and that is not a tuning choice. A
+     * fresh kernel has not run `import cash` yet, and the flush-before-execute
+     * ordering GUARANTEES our comm_open is processed before the cell that
+     * imports it -- so the very first open is refused ("No such comm target
+     * registered"), ipykernel replies comm_close, and JupyterLab disposes the
+     * handler. The only recovery is to open again on the NEXT flush, by which
+     * time the import has run.
+     *
+     * Opening on every debounced keystroke instead would spray that refusal
+     * through the kernel log of every user who never imports cash, and buy
+     * nothing: the debounced push is a latency optimisation, while the flush is
+     * the correctness path -- cash only reads cells while a cell is executing,
+     * and the flush always precedes that.
+     */
+    const send = (panel: NotebookPanel, allowOpen: boolean) => {
       try {
         const kernel = panel.sessionContext?.session?.kernel;
         if (!kernel) {
@@ -49,6 +66,9 @@ const plugin: JupyterFrontEndPlugin<void> = {
         }
         let comm = comms.get(panel);
         if (!comm) {
+          if (!allowOpen) {
+            return;
+          }
           comm = kernel.createComm(TARGET);
           // LOAD-BEARING, not a tuning knob. JupyterLab 4.6 defaults
           // `commsOverSubshells: perCommTarget`, which delivers comms on a
@@ -69,13 +89,31 @@ const plugin: JupyterFrontEndPlugin<void> = {
           // bundle) and by tests/test_notebook/test_labextension_packaging.py.
           // Do not delete those guards to "fix" a failure here.
           comm.commsOverSubshells = 'disabled';
+          // Without this the extension is MUTE for the life of any kernel that
+          // refused the first open -- which, per the note above, is EVERY fresh
+          // kernel. `send` would hold the disposed handler forever and every
+          // later push would throw into the catch below, silently. Dropping it
+          // here lets the next flush build a working one.
+          //
+          // The identity check stops a late close for an already-replaced comm
+          // from evicting its successor.
+          const opened = comm;
+          opened.onClose = () => {
+            if (comms.get(panel) === opened) {
+              comms.delete(panel);
+            }
+          };
           comm.open({});
           comms.set(panel, comm);
         }
         seq += 1;
         comm.send({ seq, cells: snapshot(panel) });
       } catch (err) {
-        // A diagnostic aid must never break the frontend.
+        // A diagnostic aid must never break the frontend. Drop the comm as well
+        // as swallowing the error: a disposed handler raises 'Cannot send', and
+        // latching on to it here would reproduce exactly the muteness the
+        // onClose hook above exists to prevent.
+        comms.delete(panel);
         console.debug('[cash] push failed', err);
       }
     };
@@ -84,21 +122,24 @@ const plugin: JupyterFrontEndPlugin<void> = {
       let timer: number | undefined;
       panel.content.model?.contentChanged.connect(() => {
         window.clearTimeout(timer);
-        timer = window.setTimeout(() => send(panel), DEBOUNCE_MS);
+        timer = window.setTimeout(() => send(panel, false), DEBOUNCE_MS);
       });
-      // A kernel restart drops the comm; rebuild it and resend.
+      // A kernel restart drops the comm. Do NOT rebuild it here: the restarted
+      // kernel has also lost its `import cash`, so an immediate re-open would
+      // only be refused again. Drop the handle and let the next execution flush
+      // open one, once the import has had a chance to run.
       panel.sessionContext.kernelChanged.connect(() => {
         comms.delete(panel);
-        send(panel);
       });
     });
 
     // THE ordering guarantee. Send synchronously here, before the
-    // execute_request leaves, so FIFO delivers it to the kernel first.
+    // execute_request leaves, so FIFO delivers it to the kernel first. Also the
+    // only route allowed to OPEN a comm -- see the note on `send`.
     NotebookActions.executionScheduled.connect((_, args) => {
       const panel = tracker.find(p => p.content === args.notebook);
       if (panel) {
-        send(panel);
+        send(panel, true);
       }
     });
   }
