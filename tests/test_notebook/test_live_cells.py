@@ -461,6 +461,25 @@ def test_a_shell_without_events_is_a_false_not_a_raise():
     assert install_expiry_hook(SimpleNamespace()) is False
 
 
+def test_install_expiry_hook_survives_a_keyerror_from_events_register():
+    """CAS-274 review, item 3. `_FakeEvents` above models IPython's real
+    `EventManager`, which raises `KeyError` -- not `AttributeError` or
+    `TypeError` -- on an unknown event name, because `callbacks` is
+    pre-populated from a closed set (`available_events`).
+
+    Not reachable through the hardcoded "post_run_cell" with a real IPython
+    shell -- that name is always in `available_events` -- so this simulates a
+    still-narrower event set the way a future or embedded `EventManager`
+    might have one. The production catch must be at least as wide as this
+    file's own model of what can go wrong, or exactly this would propagate
+    out of `install_expiry_hook`, out of `_init_session_state`, i.e. out of
+    `import cash`.
+    """
+    shell = SimpleNamespace(events=_FakeEvents())
+    del shell.events.registered["post_run_cell"]
+    assert install_expiry_hook(shell) is False
+
+
 def test_wiring_cashmagics_installs_both_halves_of_the_live_cell_contract():
     """The call sites, not the functions.
 

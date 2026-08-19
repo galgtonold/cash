@@ -171,7 +171,7 @@ def install_expiry_hook(shell) -> bool:
     try:
         shell.events.register("post_run_cell", _on_post_run_cell)
         return True
-    except (AttributeError, TypeError) as e:
+    except (AttributeError, KeyError, TypeError) as e:
         logger.warning(
             "Could not register the live-cell expiry hook on post_run_cell: "
             "%s. A snapshot pushed by cash's JupyterLab extension would then "
