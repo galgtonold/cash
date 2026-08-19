@@ -37,6 +37,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 LABEXT_SRC = REPO_ROOT / "labextension"
 INDEX_TS = LABEXT_SRC / "src" / "index.ts"
 BUILT = REPO_ROOT / "src" / "cash" / "labextension"
+LIVE_CELLS_PY = REPO_ROOT / "src" / "cash" / "notebook" / "live_cells.py"
+SERVER_DISCOVERY_PY = REPO_ROOT / "src" / "cash" / "notebook" / "server_discovery.py"
 
 # The extension's identity, asserted from four independent places below.
 EXT_NAME = "cash-live-cells"
@@ -208,6 +210,98 @@ def test_the_extension_targets_the_comm_the_kernel_registers():
     assert m.group(1) == TARGET, (
         f"the extension opens comm target {m.group(1)!r} but the kernel registers "
         f"{TARGET!r}; the push would be dropped by the comm manager"
+    )
+
+
+# --- The payload schema: seq, cell_type, id, source (CAS-274 review, item 6) --
+#
+# Unlike TARGET above, none of these four field names has a shared Python
+# constant to compare against -- index.ts and the kernel side each spell them
+# out independently. Renaming any one degrades SILENTLY to the saved-file
+# fallback: a cell dict missing the key the kernel expects just looks like
+# "nothing useful was pushed", `_try_extension_cells` returns None, and every
+# OTHER test in this suite -- which drives `handle_message` with payloads
+# built from the same (renamed) vocabulary on both sides -- stays green. Same
+# two-layer pattern as the rest of this file: source AND shipped bundle.
+
+# `id`/`source` are only special-cased for `list`; `cell_type` is filtered by
+# equality -- tying all three to their receiver ties them to the ONE object
+# literal `snapshot()` builds, rather than to some unrelated `id:`/`source:`
+# elsewhere (the plugin id string, for instance, also contains "id:").
+SNAPSHOT_OBJECT = re.compile(
+    r"cell_type\s*:\s*[\w.]+\.type\s*,\s*"
+    r"id\s*:\s*[\w.]+\.id\s*,\s*"
+    r"source\s*:\s*[\w.]+\.sharedModel\.getSource\(\s*\)"
+)
+
+# `seq` is a shorthand property in the TS source (`{ seq, cells: ... }`) but
+# an expanded one once compiled (`{seq:n,cells:l(e)}`) -- the optional group
+# matches both. Tied to `cells` in the same object so a rename of either
+# fails this, not some unrelated identifier named `seq`.
+SEQ_AND_CELLS_SENT = re.compile(r"seq\s*(:\s*[\w.]+\s*)?,\s*cells\s*:\s*[\w.]+\(")
+
+
+def test_the_source_encodes_all_four_payload_fields():
+    _skip_without_checkout()
+    text = INDEX_TS.read_text(encoding="utf-8")
+    assert SNAPSHOT_OBJECT.search(text), (
+        f"{INDEX_TS} no longer builds a cell entry as "
+        f"{{cell_type, id, source}} -- server_discovery._extract_cell_entry "
+        f"and _try_extension_cells decode exactly these three names, and a "
+        f"silent rename here degrades to the saved-file fallback with every "
+        f"other test still green."
+    )
+    assert SEQ_AND_CELLS_SENT.search(text), (
+        f"{INDEX_TS} no longer sends {{seq, cells}} -- "
+        f"live_cells.handle_message decodes exactly these two names."
+    )
+
+
+def test_the_shipped_bundle_encodes_all_four_payload_fields():
+    """The source is not what runs -- the committed bundle is. Same reason as
+    every other bundle-side test in this file."""
+    _skip_without_checkout()
+    files = _built_js()
+    assert files, f"no built JavaScript under {BUILT}"
+    blobs = [f.read_text(encoding="utf-8", errors="replace") for f in files]
+    assert any(SNAPSHOT_OBJECT.search(b) for b in blobs), (
+        f"the SHIPPED bundle under {BUILT} does not build a cell entry as "
+        f"{{cell_type, id, source}} ({len(files)} .js files scanned)."
+    )
+    assert any(SEQ_AND_CELLS_SENT.search(b) for b in blobs), (
+        f"the SHIPPED bundle under {BUILT} does not send {{seq, cells}}."
+    )
+
+
+def test_the_kernel_side_decodes_all_four_payload_fields():
+    """The Python mirror of the two tests above.
+
+    Ties BOTH sides to the same four literal field names: a rename on either
+    side alone fails somewhere -- the frontend tests above if index.ts
+    changes without the kernel side, this one if the kernel side changes
+    without index.ts.
+    """
+    _skip_without_checkout()
+    live_cells_src = LIVE_CELLS_PY.read_text(encoding="utf-8")
+    assert re.search(r"""data\.get\(\s*["']seq["']\s*\)""", live_cells_src), (
+        f"{LIVE_CELLS_PY}'s handle_message no longer reads data['seq']"
+    )
+    assert re.search(r"""data\.get\(\s*["']cells["']\s*\)""", live_cells_src), (
+        f"{LIVE_CELLS_PY}'s handle_message no longer reads data['cells']"
+    )
+
+    discovery_src = SERVER_DISCOVERY_PY.read_text(encoding="utf-8")
+    assert re.search(
+        r"""cell\.get\(\s*["']cell_type["']\s*\)\s*==\s*["']code["']""", discovery_src
+    ), (
+        f"{SERVER_DISCOVERY_PY} no longer filters cells on "
+        f"cell['cell_type'] == 'code'"
+    )
+    assert re.search(r"""cell\.get\(\s*["']id["']""", discovery_src), (
+        f"{SERVER_DISCOVERY_PY}'s _extract_cell_entry no longer reads cell['id']"
+    )
+    assert re.search(r"""cell\.get\(\s*["']source["']""", discovery_src), (
+        f"{SERVER_DISCOVERY_PY}'s _extract_cell_entry no longer reads cell['source']"
     )
 
 
