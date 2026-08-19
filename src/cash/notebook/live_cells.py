@@ -20,6 +20,10 @@ JavaScript, and a malformed one must cost the fallback, never an exception.
 """
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 TARGET = "cash_live_cells"
 
 #: ``cells`` is the servable snapshot and the ONLY gate on serving one: it is
@@ -132,13 +136,20 @@ def install_expiry_hook(shell) -> bool:
     place.
     """
     try:
-        try:
-            shell.events.unregister("post_run_cell", _on_post_run_cell)
-        except (ValueError, KeyError, AttributeError, TypeError):
-            pass  # not registered yet, which is the common case
+        shell.events.unregister("post_run_cell", _on_post_run_cell)
+    except (ValueError, KeyError, AttributeError, TypeError):
+        pass  # not registered yet, which is the common case
+    try:
         shell.events.register("post_run_cell", _on_post_run_cell)
         return True
-    except Exception:  # noqa: BLE001 - no events, an odd shell, anything
+    except (AttributeError, TypeError) as e:
+        logger.warning(
+            "Could not register the live-cell expiry hook on post_run_cell: "
+            "%s. A snapshot pushed by cash's JupyterLab extension would then "
+            "be served for the rest of the kernel's life instead of expiring "
+            "with the execution it arrived for, and cash's own \"cannot see "
+            "unsaved edits\" notice would stay suppressed along with it.", e,
+        )
         return False
 
 
