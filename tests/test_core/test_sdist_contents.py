@@ -33,6 +33,15 @@ JUNK_MARKERS = (
     "/dist/",
     ".pytest_cache",
     "__pycache__",
+    # The JavaScript equivalents. `labextension/` is on the sdist include list
+    # as a file-by-file whitelist, so nothing leaks today -- but the top-level
+    # `tops <= allowed_top` check below had been the ONLY thing standing between
+    # us and someone later simplifying that whitelist to a plain `/labextension`,
+    # and adding "labextension" to allowed_top spent exactly that protection.
+    # These two restore it at a finer grain: node_modules is 450 packages, and
+    # lib/ is intermediate tsc output that the wheel never ships.
+    "node_modules/",
+    "/labextension/lib/",
 )
 
 
