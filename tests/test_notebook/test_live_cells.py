@@ -36,6 +36,19 @@ def setup_function():
     reset()
 
 
+def teardown_function():
+    # Belt-and-suspenders: a test that armed the store (or the file-signature
+    # caches _try_extension_cells sits in front of) must not leak it into
+    # whatever test xdist schedules next on this worker. `_try_extension_cells`
+    # is the FIRST branch of `_read_notebook_code_cells` and ignores
+    # `notebook_path` entirely, so a leaked snapshot here silently overrides
+    # every other reader -- observed taking down test_colab_cell_source.py and
+    # test_vscode_cell_source.py under `--dist worksteal`, which (unlike a
+    # sequential run) can schedule this file's tests interleaved with theirs.
+    reset()
+    sd.invalidate_notebook_cells_cache()
+
+
 def test_nothing_pushed_means_none():
     """The control: with no extension present cash must fall through to the
     saved file, not serve an empty notebook."""
