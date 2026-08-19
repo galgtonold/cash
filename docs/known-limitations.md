@@ -551,6 +551,34 @@ just reactively rather than up front: the once-per-session "cash cannot see
 unsaved edits here" notice keys on the read that actually happened, so it is
 right in both cases.
 
+<!-- claim: cash/notebook/live_cells.py:handle_message @3f85127c -->
+**Two tabs on the same notebook can silently mute each other.** Each browser
+tab that opens the notebook activates the extension independently, and `seq`
+is a variable local to that activation's own closure
+(`labextension/src/index.ts`) — every tab starts counting from 0 with no idea
+what any other tab has sent. The kernel-side store keeps only the highest
+`seq` it has seen and drops anything not strictly greater, so once one tab's
+count pulls ahead, the other tab's pushes are dropped as "older" — not
+merged, not chosen by recency. Edit in tab A after the last cell you ran
+anywhere, then run a cell in tab B: cash can serve **tab A's** edited text
+for **tab B's** execution, believing it current — and because a push did
+land, from A, the "cash cannot see unsaved edits here" notice stays
+suppressed right along with it.
+
+Unlike the single-tab gaps above, `expire()` does not bound this to one
+execution. It still clears the store after every run, but tab A keeps
+re-arming it: each further debounced edit there pushes again with a higher
+`seq` than anything B has sent, so the wrong tab can keep winning for as long
+as A keeps editing — not just the one execution immediately after.
+
+This needs two tabs on the same notebook with unsaved edits that have
+actually **diverged**, which is already an unusual way to work a notebook.
+The common case is the safe one: with no edit outstanding in the tab you are
+not running, there is nothing to diverge on and this never triggers.
+
+**What to do:** avoid editing the same notebook open in two tabs at once, or
+save (`Ctrl+S` / `Cmd+S`) before switching tabs to run a cell.
+
 <!-- claim: cash/notebook/vscode_backup.py:live_cells @b86cd33f, cash/notebook/staleness.py:StalenessTracker.take_unverifiable_announcement @fecc0722 -->
 **On VS Code, cash reads your unsaved edits directly.** VS Code keeps dirty
 editors in a backup file so it can restore after a crash, and cash reads its
