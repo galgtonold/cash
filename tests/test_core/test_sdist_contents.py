@@ -75,7 +75,14 @@ def test_sdist_has_no_environment_or_build_junk(tmp_path):
     # cash — they live on GitHub — so they must never bloat the release.
     rel = [n.split("/", 1)[1] for n in names if "/" in n]  # drop the cash_lib-X.Y.Z/ prefix
     tops = {r.split("/")[0] for r in rel if r}
-    allowed_top = {"src", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"}
+    # `labextension` earns its place under the same rule as the rest: it is
+    # needed to BUILD. The wheel's shared-data mapping names
+    # `labextension/install.json` by path, so an sdist without it produces a
+    # wheel whose JupyterLab extension is unregisterable; the TypeScript source
+    # beside it is what makes the bundle rebuildable rather than only
+    # re-packageable. Its node_modules/ and lib/ are deliberately NOT in the
+    # include list -- see [tool.hatch.build.targets.sdist].
+    allowed_top = {"src", "labextension", "pyproject.toml", "README.md", "LICENSE", "PKG-INFO", ".gitignore"}
     assert tops <= allowed_top, (
         f"sdist ships non-essential top-level entries {sorted(tops - allowed_top)}; "
         f"the sdist is a minimal include list — see [tool.hatch.build.targets.sdist]."

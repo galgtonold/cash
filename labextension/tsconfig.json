@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "declaration": true,
+    "esModuleInterop": true,
+    "incremental": false,
+    "lib": ["DOM", "ES2018"],
+    "module": "esnext",
+    "moduleResolution": "node",
+    "noEmitOnError": true,
+    "noImplicitAny": true,
+    "noUnusedLocals": true,
+    "outDir": "lib",
+    "resolveJsonModule": true,
+    "rootDir": "src",
+    // Check OUR source, not JupyterLab's shipped .d.ts files. Without this,
+    // `tsc` fails on declarations in @jupyterlab/lsp, @jupyterlab/coreutils and
+    // lib0 that were written against a different TypeScript/lib combination --
+    // none of which this extension imports or can fix.
+    "skipLibCheck": true,
+    "sourceMap": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "target": "ES2018",
+    "types": []
+  },
+  "include": ["src/**/*"]
+}

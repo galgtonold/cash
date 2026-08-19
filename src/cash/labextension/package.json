@@ -1,0 +1,55 @@
+{
+  "name": "cash-live-cells",
+  "version": "0.1.0",
+  "description": "Pushes a JupyterLab notebook's live (unsaved) cell sources to the kernel so cash can see edits that are not saved to the .ipynb yet.",
+  "keywords": [
+    "jupyter",
+    "jupyterlab",
+    "jupyterlab-extension",
+    "cash"
+  ],
+  "homepage": "https://github.com/galgtonold/cash",
+  "bugs": {
+    "url": "https://github.com/galgtonold/cash/issues"
+  },
+  "license": "MIT",
+  "author": "Cash Contributors",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/galgtonold/cash.git",
+    "directory": "labextension"
+  },
+  "main": "lib/index.js",
+  "types": "lib/index.d.ts",
+  "files": [
+    "lib/**/*.{d.ts,js,js.map}",
+    "src/**/*.ts"
+  ],
+  "scripts": {
+    "check:comms": "node scripts/check-comms-over-subshells.js",
+    "check:comms:source": "node scripts/check-comms-over-subshells.js --source-only",
+    "clean": "node -e \"require('fs').rmSync('lib',{recursive:true,force:true})\"",
+    "build:lib": "tsc",
+    "build:labextension": "jupyter labextension build .",
+    "normalize": "node scripts/normalize-load-path.js",
+    "build": "npm run check:comms:source && npm run build:lib && npm run build:labextension && npm run normalize && npm run check:comms",
+    "watch": "tsc -w"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "@jupyterlab/application": ">=4.0.0 <5.0.0",
+    "@jupyterlab/notebook": ">=4.0.0 <5.0.0"
+  },
+  "devDependencies": {
+    "@jupyterlab/builder": "^4.0.0",
+    "typescript": "~5.5.0"
+  },
+  "jupyterlab": {
+    "extension": true,
+    "outputDir": "../src/cash/labextension",
+    "_build": {
+      "load": "static/remoteEntry.16c638bdc6ccb242df83.js",
+      "extension": "./extension"
+    }
+  }
+}

@@ -1,0 +1,9 @@
+# Node install + intermediate tsc output. Neither is shipped.
+node_modules/
+lib/
+*.tsbuildinfo
+package-lock.json
+
+# The BUILT extension does NOT live here -- it is written to
+# ../src/cash/labextension/ (see "jupyterlab.outputDir" in package.json) and is
+# COMMITTED, so that building the wheel never needs Node. See README.md.
