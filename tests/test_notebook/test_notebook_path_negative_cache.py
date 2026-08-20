@@ -236,3 +236,94 @@ def test_no_warning_when_path_resolves(monkeypatch):
 
     assert path == "C:/nb/ok.ipynb"
     assert not [w for w in caught if issubclass(w.category, sd.CashNotebookDiscoveryWarning)]
+
+
+# ---------------------------------------------------------------------------
+# The advisory is FALSE while a path-free reader is answering
+# ---------------------------------------------------------------------------
+#
+# "upstream dependency tracking is disabled for this session" is about to be
+# untrue in two topologies where get_notebook_path() legitimately returns None:
+# Colab, which has never had a discoverable path, and a remote or containerised
+# kernel whose JupyterLab extension is pushing while path discovery fails. The
+# check runs on live frontend cells in both.
+
+
+def _advisories(fn) -> int:
+    """How many discovery advisories ``fn()`` emits."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fn()
+    return len([
+        w for w in caught
+        if issubclass(w.category, sd.CashNotebookDiscoveryWarning)
+    ])
+
+
+def test_a_pushed_snapshot_suppresses_the_disabled_advisory(monkeypatch):
+    from cash.notebook import live_cells
+
+    sd.reset_notebook_discovery_warning()
+    monkeypatch.setattr(live_cells, "_store", {"seq": 3, "cells": [
+        {"cell_type": "code", "id": "a", "source": "x = 1"},
+    ]})
+
+    assert _advisories(sd.warn_notebook_not_found_once) == 0, (
+        "cash claimed upstream tracking was disabled while the extension was "
+        "supplying the very cells the check was about to run on"
+    )
+
+
+def test_colab_suppresses_the_disabled_advisory(monkeypatch):
+    sd.reset_notebook_discovery_warning()
+    monkeypatch.setattr(sd, "_in_colab", lambda: True)
+
+    assert _advisories(sd.warn_notebook_not_found_once) == 0, (
+        "Colab has no discoverable notebook path by design, but reads its cells "
+        "live from the frontend -- the advisory was never true there"
+    )
+
+
+def test_suppression_does_not_burn_the_once_per_session_flag(monkeypatch):
+    """Suppression is about THIS MOMENT, not about the session.
+
+    If a suppressed call set ``_warned_notebook_not_found``, a frontend that
+    later stopped pushing would be silently un-warnable for the rest of the
+    kernel's life -- trading a false advisory for a missing one, which is the
+    worse direction.
+    """
+    from cash.notebook import live_cells
+
+    sd.reset_notebook_discovery_warning()
+    monkeypatch.setattr(live_cells, "_store", {"seq": 3, "cells": [
+        {"cell_type": "code", "id": "a", "source": "x = 1"},
+    ]})
+    assert _advisories(sd.warn_notebook_not_found_once) == 0
+
+    # The frontend goes away: the snapshot expires and nothing replaces it.
+    monkeypatch.setattr(live_cells, "_store", {"seq": 3, "cells": None})
+    assert _advisories(sd.warn_notebook_not_found_once) == 1, (
+        "the advisory must still be available once the live reader stops "
+        "answering; suppression must not consume the once-per-session flag"
+    )
+
+
+def test_no_live_reader_still_warns(monkeypatch):
+    """The control arm: the advisory is right whenever it is true."""
+    from cash.notebook import live_cells
+
+    sd.reset_notebook_discovery_warning()
+    monkeypatch.setattr(live_cells, "_store", {"seq": 0, "cells": None})
+    monkeypatch.setattr(sd, "_in_colab", lambda: False)
+
+    assert _advisories(sd.warn_notebook_not_found_once) == 1
+
+
+def test_a_broken_live_reader_probe_keeps_the_advisory(monkeypatch):
+    """A gate that cannot answer must not swallow the advisory, or a real
+    papermill/CI session loses the one signal that its headline feature is off.
+    """
+    sd.reset_notebook_discovery_warning()
+    monkeypatch.setattr(sd, "_in_colab", lambda: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    assert _advisories(sd.warn_notebook_not_found_once) == 1

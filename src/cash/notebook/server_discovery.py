@@ -96,6 +96,26 @@ _NOTEBOOK_PATH_NEGATIVE_TTL: float = 2.0  # seconds
 _warned_notebook_not_found: bool = False
 
 
+def _a_live_reader_can_answer() -> bool:
+    """True when a reader that needs no notebook path can supply the cells.
+
+    Both checks are CURRENT state, not a record of what answered last time:
+    ``last_cell_source()`` is set by the previous read, so a session that has
+    just gained a live reader would still read as "file" here and get warned
+    anyway.
+
+    VS Code is deliberately absent. Its backup reader is reached only when
+    ``_try_vscode_path()`` found a path, in which case ``get_notebook_path()``
+    returned that path and this advisory was never on the table.
+    """
+    try:
+        from . import live_cells
+        return live_cells.latest_cells() is not None or _in_colab()
+    except Exception as e:  # noqa: BLE001 - an advisory gate must never break a cell
+        logger.debug("[UTILS] live-reader probe failed: %s", e)
+        return False
+
+
 def warn_notebook_not_found_once() -> None:
     """Emit the "upstream tracking disabled" advisory at most once per session.
 
@@ -103,9 +123,21 @@ def warn_notebook_not_found_once() -> None:
     ``None`` for a cell that would otherwise get dependency tracking.  A user
     must know cash's headline feature is off (papermill / nbconvert / CI, or a
     stale Jupyter runtime) rather than silently receiving no upstream checks.
+
+    Suppressed while a path-free reader can answer, because the advisory would
+    be FALSE there: the check is about to run on live frontend cells. Two such
+    topologies exist -- Colab, which has never had a discoverable path, and a
+    remote or containerised kernel whose JupyterLab extension is pushing but
+    whose ``_resolve_notebook_path`` fails.
+
+    The once-per-session flag is NOT set when suppressed. Suppression is a
+    statement about this moment, not about the session: a frontend that later
+    stops pushing must still be able to raise the advisory.
     """
     global _warned_notebook_not_found
     if _warned_notebook_not_found:
+        return
+    if _a_live_reader_can_answer():
         return
     _warned_notebook_not_found = True
     msg = (
