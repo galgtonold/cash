@@ -276,10 +276,13 @@ a namedtuple, an `Enum` member, a `__slots__` instance, or a callable object.
 Base classes count: editing a base invalidates a call that was passed the
 subclass.
 
-This channel walks the **cached function's own** `args` and `kwargs` — what its
-caller handed it — and nothing else. A module-level object the *body* reaches
-for is the separate read-globals channel [above](#module-globals-a-function-reads),
-which folds that object's value and its class's source on its own terms.
+This channel walks the **cached function's own bound arguments** — what the
+caller handed it, *plus any parameter default the caller left out* — and nothing
+else. Defaults count because the same logical call must key the same way however
+it is written: `build()` and `build(Schema)` share one entry, and editing
+`Schema` invalidates both. A module-level object the *body* reaches for is the
+separate read-globals channel [above](#module-globals-a-function-reads), which
+folds that object's value and its class's source on its own terms.
 
 The digest is **bytecode**, not source — a class defined in a notebook cell has
 no retrievable source at all, because `inspect.getsource` resolves a class

@@ -964,15 +964,21 @@ class Cash:
         return Cash._is_user_code_object(type(carrier))
 
     def _warn_unhashable_code_once(self, carrier: Any) -> None:
-        """Tell the user once that a passed type's code is NOT in the key."""
+        """Tell the user once that a reached type's code is NOT in the key.
+
+        "reached", not "passed": the code channel keys off the BOUND arguments,
+        so a carrier arriving as a parameter default the caller never typed
+        gets here too.
+        """
         name = self._carrier_name(carrier)
         if name in Cash._WARNED_UNHASHABLE:
             return
         Cash._WARNED_UNHASHABLE.add(name)
         msg = (
-            f"cash: {name} was passed as an argument but its code could not be "
-            f"hashed, so editing it will NOT invalidate the cache. Declare it "
-            f"with @cash.cache(depends_on=[...]) if the result depends on its "
+            f"cash: {name} reached a cached call as an argument or a parameter "
+            f"default, but its code could not be hashed, so editing it will NOT "
+            f"invalidate the cache. Declare it with "
+            f"@cash.cache(depends_on=[...]) if the result depends on its "
             f"implementation, or cash.mark_opaque({name}) to silence this."
         )
         logger.warning(msg)
@@ -3404,10 +3410,16 @@ class Cash:
         A lambda, function or class is approximated by its CODE SURFACE, which
         is strictly better than the old ``repr()`` on both counts -- stable
         across processes, and sensitive to an edit of the lambda's body, which
-        an address never was. Anything else collapses to its type name: two
-        distinct unpicklable objects of one type then share an identity, but
-        the only thing that ever distinguished them was an address that
-        changed every process, so the "distinction" was noise, never signal.
+        an address never was.
+
+        Everything else keeps its ``repr()`` UNLESS that repr carries a memory
+        address. Only an address-bearing repr is the thing this method exists
+        to remove; a value-based ``__repr__`` -- ``Config(n=1)`` -- is
+        deterministic across processes and carries real information, and
+        discarding it was measured to serve a stale result when the value
+        changed. Collapsing to a type name is the last resort, for the case
+        where the only thing distinguishing two objects was an address that
+        changed every process: noise, never signal.
         """
         if _depth > 4:
             return "<deep>"
@@ -3432,6 +3444,20 @@ class Cash:
         surface = self._code_surface_hash(v)
         if surface is not None:
             return f"code:{surface}"
+        try:
+            text = repr(v)
+        except Exception as e:  # noqa: BLE001 - a __repr__ may raise
+            logger.debug("[CORE] repr() failed while identifying %s: %s", type(v), e)
+            text = ""
+        # ``0x`` is how CPython renders the address in every default repr
+        # (``<object object at 0x...>``, ``<function <lambda> at 0x...>``,
+        # ``functools.partial(<function f at 0x...>, 3)``), so its presence is
+        # the test for "this repr is not reproducible". A value-based repr that
+        # happens to contain a hex literal is collapsed too -- conservative in
+        # the same direction as the old behaviour, i.e. a recompute is missed,
+        # never a wrong answer invented.
+        if text and "0x" not in text:
+            return text
         cls = type(v)
         return f"<{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}>"
 

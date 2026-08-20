@@ -134,6 +134,7 @@ def test_an_instance_of_a_decorated_class_is_opaque():
 # ---------------------------------------------------------------------------
 
 import functools
+import pickle
 import itertools
 import sys
 import types
@@ -828,3 +829,54 @@ def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
     CashCls.mark_opaque(nb2.VendorBase)
     assert marked_before != c._code_surface_hash(nb2.Derived), \
         "control: the subclass's OWN edit must still move the digest"
+
+
+# ---------------------------------------------------------------------------
+# The unpicklable-default fallback must keep a repr that carries information.
+# ---------------------------------------------------------------------------
+
+_VALUE_REPR_BODY = (
+    "import threading\n"
+    "class Config:\n"
+    "    def __init__(self, n):\n"
+    "        self.n = n\n"
+    "        self.lock = threading.Lock()\n"      # <- unpicklable
+    "    def __repr__(self):\n"
+    "        return f'Config(n={{self.n}})'\n"
+    "class Renderer:\n"
+    "    def render(self, cfg=Config({n})):\n"
+    "        return cfg.n\n"
+)
+
+
+def test_a_value_based_repr_on_an_unpicklable_default_still_invalidates(c):
+    """`_hash_arg_payload` refuses this default (a `threading.Lock` inside it),
+    so it reaches the fallback -- but its `__repr__` is VALUE-based,
+    `Config(n=1)`, with no address in it.
+
+    Collapsing every unhashable value to its type name was justified by "the only
+    thing that distinguished them was an address that changed every process".
+    That holds for an address-based repr and not for this one: the old repr was
+    stable across processes here, so nothing was traded away, and discarding it
+    served the pre-edit answer. `args_hash` pickles the passed class BY
+    REFERENCE, so the code surface is the only channel that can see this edit.
+
+    The premise is asserted in-test rather than assumed: if `Config` ever
+    becomes picklable, or CPython starts putting an address in that repr, this
+    test must fail on its own setup instead of quietly measuring nothing.
+    """
+    takes, calls = _counting(c, name="value_repr_takes")
+    nb = _nb_module()
+    _define(nb, _VALUE_REPR_BODY.format(n=1), name="Renderer")
+
+    default = nb.Renderer.render.__defaults__[0]
+    with pytest.raises((TypeError, pickle.PicklingError)):
+        pickle.dumps(default)          # premise: really unpicklable
+    assert repr(default) == "Config(n=1)"   # premise: really value-based
+
+    takes(nb.Renderer)
+    takes(nb.Renderer)
+    assert len(calls) == 1, "control: an unedited default must HIT"
+    _define(nb, _VALUE_REPR_BODY.format(n=2), name="Renderer")
+    takes(nb.Renderer)
+    assert len(calls) == 2, "the edited default value was discarded from the key"

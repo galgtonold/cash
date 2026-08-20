@@ -684,18 +684,18 @@ if the churn matters.
 
 ### A `functools.partial` hides the function it wraps
 
-Passed **directly as an argument**, a `partial` contributes nothing: it has no
-`__code__` of its own, and the function inside it pickles by reference like any
-other. Editing that function's body does not invalidate. This is the one case
-where cash tells you the edit will not invalidate — once, the first time a
-`partial` reaches a cached call in this process (a long-lived kernel will not
-repeat it):
+Reaching a cached call as an argument — or as a parameter default the caller
+left out — a `partial` contributes nothing: it has no `__code__` of its own, and
+the function inside it pickles by reference like any other. Editing that
+function's body does not invalidate. This is the one case where cash tells you
+the edit will not invalidate — once, the first time a `partial` reaches a cached
+call in this process (a long-lived kernel will not repeat it):
 
 ```text
-cash: partial was passed as an argument but its code could not be hashed, so
-editing it will NOT invalidate the cache. Declare it with
-@cash.cache(depends_on=[...]) if the result depends on its implementation, or
-cash.mark_opaque(partial) to silence this.
+cash: partial reached a cached call as an argument or a parameter default, but
+its code could not be hashed, so editing it will NOT invalidate the cache.
+Declare it with @cash.cache(depends_on=[...]) if the result depends on its
+implementation, or cash.mark_opaque(partial) to silence this.
 ```
 
 **What to do:** exactly what the warning says — name the wrapped function in
