@@ -34,8 +34,14 @@ def _exec_class(body: str, name: str = "S"):
     REGISTERED, fileless module's ``__dict__`` -- exactly like a real
     kernel's ``user_ns``, which IS ``sys.modules['__main__']``, has no
     ``__file__``, and already has ``__name__ == '__main__'`` set before any
-    cell ever runs. ``inspect.getsource`` raises ``OSError`` on the result,
-    exactly as it does for a class defined in a real kernel.
+    cell ever runs. ``inspect.getsource`` cannot read source from the
+    result, exactly as it can't for something defined in a real kernel --
+    ``TypeError`` for a class (``inspect.getfile`` calls it "a built-in
+    class" once its module has no ``__file__``), ``OSError`` for a plain
+    function (resolved through ``co_filename`` instead, which fails at the
+    file-read rather than the type-check). Both are in
+    ``SOURCE_RETRIEVAL_ERRORS``, so which one fires never matters to the
+    code under test -- only that source retrieval fails at all.
 
     A bare ``exec(body, {})`` does NOT reproduce this. The empty dict has no
     ``__name__``, so CPython's implicit ``__module__ = __name__`` lookup at
@@ -213,3 +219,61 @@ def test_a_functools_wraps_decorated_method_body_edit_invalidates():
     v1 = _exec_class(body_template.format(value="V1"))
     v2 = _exec_class(body_template.format(value="V2"))
     assert c._code_surface_hash(v1) != c._code_surface_hash(v2)
+
+
+def test_a_partialmethod_bound_argument_change_invalidates():
+    """Fold-both regression: the __wrapped__/.func unwrap that fixed
+    functools.singledispatchmethod (previous round) let a successful `ident`
+    fully REPLACE the content fold for any non-callable member -- so a
+    functools.partialmethod's bound arguments, which live on the descriptor
+    itself rather than on the function .func resolves to, went invisible.
+    Isolated to the bound argument alone: same qualname, same base function
+    object, only the bound value differs."""
+    body_template = (
+        "import functools\n"
+        "def base(self, y):\n"
+        "    return y\n"
+        "class S:\n"
+        "    pm = functools.partialmethod(base, {arg})\n"
+    )
+    c = CashCls()
+    v1 = _exec_class(body_template.format(arg=3))
+    v2 = _exec_class(body_template.format(arg=4))
+    assert c._code_surface_hash(v1) != c._code_surface_hash(v2)
+
+
+def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
+    """Blocker-1-class regression: `x in {...}` compiles a frozenset straight
+    into co_consts, and repr() of a set/frozenset follows hash-table
+    iteration order -- randomized per process by Python's default string-hash
+    randomization. Six elements, not two: a 2-element set has only 2 possible
+    orderings, so two independent processes coincidentally agree about half
+    the time (measured) even with the bug present, which would make the
+    mutation check below unreliable. Six elements diverged in 10 of 10
+    sampled fresh processes during development of this test."""
+    body = (
+        "class S:\n"
+        "    def m(self, x):\n"
+        "        return x in {'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'}\n"
+    )
+    h1 = _code_surface_hash_in_subprocess(body)
+    h2 = _code_surface_hash_in_subprocess(body)
+    assert h1 != "None"
+    assert h1 == h2
+
+
+def test_a_default_sentinel_hashes_identically_across_processes():
+    """Blocker-1-class regression: the common `def m(self, x=_MISSING)`
+    sentinel-default idiom reprs `__defaults__` with the sentinel's own
+    memory address (`<object object at 0x...>`), the same disease as
+    Blocker 1's nested code objects, one layer up (a function default
+    instead of a comprehension)."""
+    body = (
+        "class S:\n"
+        "    def m(self, x=object()):\n"
+        "        return x\n"
+    )
+    h1 = _code_surface_hash_in_subprocess(body)
+    h2 = _code_surface_hash_in_subprocess(body)
+    assert h1 != "None"
+    assert h1 == h2

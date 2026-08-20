@@ -3028,8 +3028,7 @@ class Cash:
             )
         return v
 
-    @staticmethod
-    def _code_identity(fn: Any) -> tuple:
+    def _code_identity(self, fn: Any) -> tuple:
         """The bytecode-level identity of a callable, or ``()`` if it has none.
 
         Bytecode rather than source because a class defined in a notebook cell
@@ -3041,20 +3040,26 @@ class Cash:
         Comments and formatting are absent from bytecode, so they do not
         invalidate -- strictly better than source hashing. Docstrings live in
         ``co_consts`` and do.
+
+        Instance method (not static) because defaults/kwdefaults go through
+        ``_value_identity`` -> ``self._hash_arg_payload``: a default like
+        ``def m(self, x=_MISSING)`` reprs as ``<object object at 0x...>``,
+        the same address leak as a nested code object, just one layer up.
         """
         code = getattr(fn, "__code__", None)
         if code is None:
             return ()
         return (
-            Cash._code_object_identity(code),
-            repr(getattr(fn, "__defaults__", None)),
-            repr(getattr(fn, "__kwdefaults__", None)),
+            self._code_object_identity(code),
+            self._value_identity(getattr(fn, "__defaults__", None)),
+            self._value_identity(getattr(fn, "__kwdefaults__", None)),
         )
 
-    @staticmethod
-    def _code_object_identity(code: types.CodeType) -> tuple:
+    def _code_object_identity(self, code: types.CodeType) -> tuple:
         """Structural identity of one ``types.CodeType``, recursing into any
-        nested code object in ``co_consts`` instead of ``repr()``-ing it.
+        nested code object in ``co_consts`` instead of ``repr()``-ing it, and
+        folding every OTHER const through ``_value_identity`` instead of
+        ``repr()`` too.
 
         A lambda, a generator expression, or -- pre-3.12, before PEP 709
         inlined them -- a plain comprehension compiles to a NESTED code
@@ -3066,15 +3071,39 @@ class Cash:
         comprehension in a method. A nested code object carries no defaults of
         its own (those belong to the FUNCTION eventually built from it, not to
         the raw code object), so only co_code/co_consts/co_names apply here.
+
+        The SAME disease reaches a plain (non-code) const too: ``x in
+        {'alpha', 'beta'}`` compiles a ``frozenset`` straight into
+        ``co_consts``, and ``repr()`` of a set/frozenset follows the table's
+        internal (hash-order-dependent) iteration -- under Python's default
+        per-process string-hash randomization, measured 2 distinct orderings
+        across repeated fresh processes for a 2-element set. ``_value_identity``
+        folds CONTENT instead, which is order-independent for a set/frozenset.
         """
         return (
             code.co_code,
             tuple(
-                Cash._code_object_identity(k) if isinstance(k, types.CodeType) else repr(k)
+                self._code_object_identity(k) if isinstance(k, types.CodeType)
+                else self._value_identity(k)
                 for k in code.co_consts
             ),
             tuple(code.co_names),
         )
+
+    def _value_identity(self, v: Any) -> str:
+        """Address-free identity for a value that is not itself a code object.
+
+        ``_hash_arg_payload`` folds CONTENT and is already the established,
+        address-free tool used throughout this file for exactly this;
+        ``repr()`` is a last resort for the rare value it cannot handle (an
+        unpicklable default argument, say) -- at which point whatever
+        ``repr()`` gives, address included, cannot be helped without a THIRD
+        hashing mechanism.
+        """
+        try:
+            return self._hash_arg_payload((v,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            return repr(v)
 
     def _code_surface_hash(self, obj: Any) -> str | None:
         """A digest of the user code *obj* carries, or ``None``.
@@ -3089,28 +3118,34 @@ class Cash:
         be a correctness bug, since CPython recycles addresses.
         """
         try:
-            # The memo read must be INSIDE the try: this is consumed on cache
-            # ARGUMENTS (Task 4), where an unhashable value -- a list, dict,
-            # set, numpy array, DataFrame -- is the common case, not the
-            # exception. dict.get() raises TypeError on those; reading the
-            # cache before the guard that is supposed to catch it broke the
-            # "never raises" contract for exactly the inputs it exists for.
+            # Dispatch FIRST, memo read second. Every argument to a cached
+            # function passes through here (Task 4), and most are not a
+            # class or callable at all -- a list, dict, set, numpy array,
+            # DataFrame. Checking the dispatch before touching the memo means
+            # those return None from a plain isinstance()/callable() check
+            # (neither raises) instead of reaching a dict.get() that would
+            # raise TypeError and get caught, on the common case rather than
+            # the exception.
+            is_type = isinstance(obj, type)
+            if not (is_type or callable(obj)):
+                return None
+            if not self._is_user_code_object(obj):
+                return None
+            # The memo read must still be INSIDE the try: by this point *obj*
+            # is a class or a callable, and while both are hashable in the
+            # overwhelming common case, neither is guaranteed to be (a
+            # __call__-implementing instance can set __hash__ = None) -- this
+            # must not be the one path in this method that can still raise.
             cached = self._code_surface_cache.get(obj)
             if cached is not None:
                 return cached
-            if isinstance(obj, type):
-                if not self._is_user_code_object(obj):
-                    return None
+            if is_type:
                 parts = self._class_surface_parts(obj)
-            elif callable(obj):
-                if not self._is_user_code_object(obj):
-                    return None
+            else:
                 ident = self._code_identity(obj)
                 if not ident:
                     return None
                 parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
-            else:
-                return None
             if not parts:
                 return None
             digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
@@ -3170,22 +3205,45 @@ class Cash:
                     if func_attr is not None and hasattr(func_attr, "__code__"):
                         target = func_attr
                 ident = self._code_identity(target)
-                if ident:
-                    parts.append((base.__qualname__, name, ident))
-                elif not callable(member):
-                    # A class-level DATA attribute. repr() leaks a memory
-                    # address for anything like a `MISSING = object()`
-                    # sentinel (non-deterministic across processes, same
-                    # disease as Blocker 1); _hash_arg_payload folds CONTENT
-                    # instead and is already the established, address-free
-                    # tool for exactly this (mirrors the class-constant fold
-                    # in the self-deps channel).
+                if callable(member):
+                    if ident:
+                        parts.append((base.__qualname__, name, ident))
+                    # else: no __code__/__wrapped__/.func reachable (e.g. a C
+                    # extension callable) - nothing to fold, matches the prior
+                    # "drop it" behavior.
+                else:
+                    # A non-callable member. Fold its OWN content
+                    # unconditionally -- a descriptor like
+                    # functools.partialmethod carries bound state (.args)
+                    # that lives on the descriptor ITSELF, not on the inner
+                    # function `ident` above resolved through .func, and a
+                    # plain object that happens to expose an unrelated `.func`
+                    # attribute must not have its OTHER state go invisible
+                    # just because that lookup succeeded (measured: a
+                    # partialmethod's bound-argument edit, and an unrelated
+                    # object's own attribute edit, both went undetected when
+                    # `ident` alone short-circuited this). Fold `ident` TOO
+                    # when reachable, so a non-callable descriptor that ALSO
+                    # wraps a real function body -- functools.
+                    # singledispatchmethod, functools.cached_property, both
+                    # confirmed to expose .func without __wrapped__ or
+                    # __code__ of their own -- has that body participate as
+                    # well. Folding only one half silently drops whichever
+                    # state that particular member happens to carry.
+                    #
+                    # No repr() fallback here (unlike _value_identity):
+                    # falling back to repr() on this specific path would
+                    # reintroduce the address leak this member-content fold
+                    # exists to avoid (a class attribute is exactly what
+                    # Blocker 2 measured repr() leaking on). If content can't
+                    # be folded and no `ident` was found either, dropping the
+                    # member is strictly safer than a non-deterministic repr.
                     try:
-                        parts.append(
-                            (base.__qualname__, name, self._hash_arg_payload((member,), {}))
-                        )
+                        content = self._hash_arg_payload((member,), {})
                     except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-                        pass  # unhashable - drop this one member, not the whole class
+                        content = None
+                    if ident or content is not None:
+                        parts.append((base.__qualname__, name, (ident, content)))
         return parts
 
     def _user_class_source_hash(self, cls: type) -> str:
