@@ -74,8 +74,28 @@ _CACHE_MISS = object()
 # Types that can carry no user code. `_iter_code_carriers` walks EVERY argument
 # of every cached call, so this is checked once per element of a container and
 # is deliberately a module-level global (one LOAD_GLOBAL) rather than a class
-# attribute (an extra attribute lookup per element).
-_CODELESS_PRIMS = (str, bytes, bytearray, int, float, bool, complex, type(None))
+# attribute (an extra attribute lookup per element). Ordered by how often each
+# actually shows up in an argument, because `in` on a tuple scans in order.
+#
+# Tested as `type(v) in _CODELESS_PRIMS`, NOT `isinstance(v, _CODELESS_PRIMS)`:
+# isinstance is true for SUBCLASSES, so a user class deriving from str/int/
+# float/bytes -- and every IntEnum member, whose type is the user's own enum
+# class -- was skipped here and never reached the fold. That is a missed
+# invalidation on exactly the bug class this feature exists to fix.
+#
+# And a TUPLE, not a frozenset: `x in frozenset` hashes `x`, and a class whose
+# metaclass defines __eq__ without __hash__ is itself unhashable (see
+# `_is_opaque`, which carries a test for that shape), so a frozenset raises
+# TypeError on an instance of one and fails the whole fold open. Tuple `in`
+# compares with `is`/`==` and never hashes. Measured over 200k elements it is
+# also FASTER than the isinstance form it replaces: 4.0ms vs 5.1ms (ints),
+# 3.2ms vs 3.4ms (strs), 3.6ms vs 4.3ms (mixed).
+_CODELESS_PRIMS = (str, int, float, bool, type(None), bytes, complex, bytearray)
+
+#: Exact types of the builtin containers walked below. An instance of a SUBCLASS
+#: of one of these is still walked for its contents, but it is also a user
+#: object whose class carries code, so it additionally contributes that class.
+_BUILTIN_CONTAINERS = (dict, list, tuple, set, frozenset)
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -918,6 +938,31 @@ class Cash:
         t = type(carrier)
         return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
 
+    @staticmethod
+    def _is_user_code_carrier(carrier: Any) -> bool:
+        """``_is_user_code_object`` for the ADVISORY rather than for hashing.
+
+        ``_is_user_code_object`` answers "could not confirm reachability ->
+        treat as user code". That is the safe direction when deciding whether
+        to HASH something and the wrong one when deciding whether to WARN about
+        it: an object with no ``__qualname__`` of its own -- a
+        ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
+        every single one was reported as un-hashable user code.
+
+        Judge such an object by what it WRAPS (``.func``, the same attribute
+        ``_class_surface_parts`` already follows for ``singledispatchmethod``
+        and ``cached_property``), else by its TYPE. Measured:
+        ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
+        while ``functools.partial(<a user function>)`` still warns -- and it
+        must, because the wrapped body genuinely is absent from the key.
+        """
+        if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
+            return Cash._is_user_code_object(carrier)
+        wrapped = getattr(carrier, "func", None)
+        if wrapped is not None:
+            return Cash._is_user_code_object(wrapped)
+        return Cash._is_user_code_object(type(carrier))
+
     def _warn_unhashable_code_once(self, carrier: Any) -> None:
         """Tell the user once that a passed type's code is NOT in the key."""
         name = self._carrier_name(carrier)
@@ -937,7 +982,12 @@ class Cash:
         """Yield objects in *value* that carry user code.
 
         Depth-bounded at 8, matching ``_stabilize_for_global_hash``. ``_seen``
-        guards self-referential containers.
+        guards self-referential containers, and doubles as a once-per-argument
+        dedup for the classes yielded on behalf of instances: a list of 50k
+        objects of one class must evaluate the user-code gate once, not 50k
+        times. Dedup by identity is safe in both roles -- a class already
+        yielded does not need yielding again, and the fold takes a ``set`` of
+        the parts anyway.
         """
         if _depth > 8:
             return
@@ -945,24 +995,31 @@ class Cash:
         # argument. Returning before ``_seen`` is touched keeps a list of a
         # million numbers allocation-free; otherwise the id-set below would grow
         # to the container's length on every cached call. Mirrors
-        # ``_iter_contained``'s first line.
-        if isinstance(value, _CODELESS_PRIMS):
+        # ``_iter_contained``'s first line. See `_CODELESS_PRIMS` for why this
+        # is an exact-type test against a tuple rather than an isinstance.
+        if type(value) in _CODELESS_PRIMS:
             return
         if _seen is None:
             _seen = set()
-        if id(value) in _seen:
-            return
-        _seen.add(id(value))
+        # ``_seen`` is recorded on the paths that need it -- containers, for
+        # cycle safety, and yielded carriers, to yield each once -- and NOT for
+        # a leaf instance. A leaf cannot contain itself, and its class is
+        # deduped by `_instance_class_carrier` anyway, so an entry per element
+        # bought nothing and cost a set insert per element: measured 2000
+        # ns/element at 200k against 470 ns/element at 10k, i.e. the set itself
+        # had become the superlinear term.
         if isinstance(value, type):
-            yield value
+            if id(value) not in _seen:
+                _seen.add(id(value))
+                yield value
             return
         if callable(value):
             # Distinguish a callable INSTANCE (whose class defines ``__call__``
             # in Python) from a function/method/C-callable. An instance has no
             # ``__code__`` of its own -- its code lives on its class -- so
             # yielding the instance would fold NOTHING, while the identical
-            # object WITHOUT ``__call__`` takes the ``__dict__`` branch below
-            # and folds its class. Measured before this branch existed: adding
+            # object WITHOUT ``__call__`` takes the instance branch below and
+            # folds its class. Measured before this branch existed: adding
             # ``__call__`` to a class silently removed that class's code from
             # the key, and the instance then also tripped the unhashable
             # advisory. ``_is_opaque`` returns the same verdict for a class as
@@ -970,30 +1027,76 @@ class Cash:
             # the instance leaves opacity unchanged.
             call = getattr(type(value), "__call__", None)
             if getattr(call, "__code__", None) is not None:
-                if self._is_user_code_object(type(value)):
-                    yield type(value)
+                cls = self._instance_class_carrier(value, _seen)
+                if cls is not None:
+                    yield cls
                 return
-            yield value
+            if id(value) not in _seen:
+                _seen.add(id(value))
+                yield value
             return
         # The primitive test is repeated INLINE in each loop below rather than
         # left to the recursive call's own first line. It is the same test and
         # the same result, but it skips building a generator frame per element,
         # and a container of primitives is the overwhelmingly common argument:
-        # measured 25.8ms -> 7.2ms for a 200k-int list, 17.7ms -> 10.1ms for
-        # 20k small dicts, taking the walk from ~21% of the pickling that
-        # ``args_hash`` already does per call down to ~6%.
+        # measured 25.8ms -> 7.2ms for a 200k-int list.
         if isinstance(value, dict):
+            if id(value) in _seen:
+                return
+            _seen.add(id(value))
+            # A dict SUBCLASS is both a container to walk and a user object
+            # whose class carries code. Handling only the first is the same
+            # "invisible because of what it inherits from" hole that the
+            # exact-type test above closes for str/int subclasses.
+            if type(value) is not dict:
+                cls = self._instance_class_carrier(value, _seen)
+                if cls is not None:
+                    yield cls
             for k, v in value.items():
-                if not isinstance(k, _CODELESS_PRIMS):
+                if type(k) not in _CODELESS_PRIMS:
                     yield from self._iter_code_carriers(k, _depth + 1, _seen)
-                if not isinstance(v, _CODELESS_PRIMS):
+                if type(v) not in _CODELESS_PRIMS:
                     yield from self._iter_code_carriers(v, _depth + 1, _seen)
         elif isinstance(value, (list, tuple, set, frozenset)):
+            if id(value) in _seen:
+                return
+            _seen.add(id(value))
+            if type(value) not in _BUILTIN_CONTAINERS:
+                cls = self._instance_class_carrier(value, _seen)
+                if cls is not None:
+                    yield cls
             for v in value:
-                if not isinstance(v, _CODELESS_PRIMS):
+                if type(v) not in _CODELESS_PRIMS:
                     yield from self._iter_code_carriers(v, _depth + 1, _seen)
-        elif hasattr(value, "__dict__") and self._is_user_code_object(type(value)):
-            yield type(value)          # an instance contributes its class's code
+        else:
+            # An instance contributes its class's code. Deliberately NOT gated
+            # on ``hasattr(value, "__dict__")``: a class using ``__slots__``
+            # gives its instances no ``__dict__``, and that has nothing to do
+            # with whether the user edits the class. Same family as the two
+            # holes above -- a user class invisible because of how it is
+            # declared rather than because of what it is.
+            cls = self._instance_class_carrier(value, _seen)
+            if cls is not None:
+                yield cls
+
+    def _instance_class_carrier(self, value: Any, _seen: set) -> type | None:
+        """``type(value)`` if it is user code and not already seen this walk.
+
+        Split out because three branches need it, and because the dedup is the
+        difference between one user-code gate evaluation per ARGUMENT and one
+        per ELEMENT -- ``_is_user_code_object`` is a ``sys.modules`` lookup plus
+        a ``__qualname__`` walk, and a list of 50k instances of one class was
+        paying it 50k times (measured: 50000 calls -> 1).
+
+        A plain function rather than a generator on purpose: the callers are in
+        the per-element path, and `yield from` on a fresh generator costs more
+        per element than the call plus the `is not None` test it replaces.
+        """
+        cls = type(value)
+        if id(cls) in _seen:
+            return None
+        _seen.add(id(cls))
+        return cls if self._is_user_code_object(cls) else None
 
     def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str,
                         warn: bool = True) -> str:
@@ -1012,15 +1115,25 @@ class Cash:
         an explanation emits no warnings.
         """
         parts: list[str] = []
+        seen_carriers: set[int] = set()
         try:
             for value in (*args, *kwargs.values()):
                 for carrier in self._iter_code_carriers(value):
+                    # Dedup ACROSS arguments too, not just within one walk:
+                    # `f(a, b, c)` with three instances of one class reaches
+                    # `_is_opaque` + `_code_surface_hash` once instead of three
+                    # times. Safe by identity because every carrier is
+                    # reachable from `args`/`kwargs` for this whole loop, so no
+                    # id can be recycled underneath us.
+                    if id(carrier) in seen_carriers:
+                        continue
+                    seen_carriers.add(id(carrier))
                     if self._is_opaque(carrier):
                         continue
                     digest = self._code_surface_hash(carrier)
                     if digest is not None:
                         parts.append(f"{self._carrier_name(carrier)}:{digest}")
-                    elif warn and self._is_user_code_object(carrier):
+                    elif warn and self._is_user_code_carrier(carrier):
                         # User code we could not hash: a C-extension type, an
                         # exotic descriptor, a ``functools.partial`` (whose
                         # wrapped function pickles by reference like any

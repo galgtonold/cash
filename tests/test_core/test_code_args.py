@@ -193,6 +193,31 @@ def c(tmp_path):
     return CashCls(cache_dir=str(tmp_path))
 
 
+@pytest.fixture()
+def opaque_registry():
+    """Isolate the process-global opaque registry.
+
+    ``mark_opaque`` writes to ``Cash._OPAQUE_TYPES``, which every Cash instance
+    in the process shares and nothing ever clears. The suite runs under
+    ``--dist worksteal``, which splits ONE file across workers, so a leak here
+    is a cross-test dependency that only appears under parallelism.
+    """
+    saved = set(CashCls._OPAQUE_TYPES)
+    yield
+    CashCls._OPAQUE_TYPES.clear()
+    CashCls._OPAQUE_TYPES.update(saved)
+
+
+@pytest.fixture()
+def warned_unhashable():
+    """Isolate the process-global advisory dedup set, for the same reason."""
+    saved = set(CashCls._WARNED_UNHASHABLE)
+    CashCls._WARNED_UNHASHABLE.clear()
+    yield
+    CashCls._WARNED_UNHASHABLE.clear()
+    CashCls._WARNED_UNHASHABLE.update(saved)
+
+
 def _counting(c, name="takes"):
     """A cached function plus a call counter, so ``len(calls)`` is the oracle
     for "did this recompute?".
@@ -301,7 +326,7 @@ def test_a_callable_instance_folds_its_class_code(c):
     assert len(calls) == 2, "editing __call__ did not invalidate"
 
 
-def test_an_opaque_class_does_not_invalidate(c):
+def test_an_opaque_class_does_not_invalidate(c, opaque_registry):
     """The second arm is the control: the identical edit on an UNMARKED pair
     must invalidate, or this test would also pass against an implementation
     that never folds a class argument at all."""
@@ -428,7 +453,7 @@ def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
     assert takes.explain(_define(nb, _V2)).would_hit is False
 
 
-def test_a_partial_argument_warns_at_most_once_across_distinct_partials(c):
+def test_a_partial_argument_warns_at_most_once_across_distinct_partials(c, warned_unhashable):
     """``repr(functools.partial(...))`` embeds a memory address, so keying the
     once-per-type dedup on ``repr()`` -- as the task brief's fallback did --
     warns for EVERY partial ever constructed and grows a class-global set
@@ -438,20 +463,14 @@ def test_a_partial_argument_warns_at_most_once_across_distinct_partials(c):
     takes, _calls = _counting(c)
     nb = _nb_module()
     _define(nb, "def scale(k, x): return k * x\n", name="scale")
-    saved = set(CashCls._WARNED_UNHASHABLE)
-    CashCls._WARNED_UNHASHABLE.clear()
-    try:
-        with warnings.catch_warnings(record=True) as rec:
-            warnings.simplefilter("always")
-            takes(functools.partial(nb.scale, 2))
-            takes(functools.partial(nb.scale, 3))
-            takes(functools.partial(nb.scale, 4))
-        advisories = _code_advisories(rec)
-        assert len(advisories) == 1, advisories
-        assert "0x" not in advisories[0], "the advisory leaked an address"
-    finally:
-        CashCls._WARNED_UNHASHABLE.clear()
-        CashCls._WARNED_UNHASHABLE.update(saved)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        takes(functools.partial(nb.scale, 2))
+        takes(functools.partial(nb.scale, 3))
+        takes(functools.partial(nb.scale, 4))
+    advisories = _code_advisories(rec)
+    assert len(advisories) == 1, advisories
+    assert "0x" not in advisories[0], "the advisory leaked an address"
 
 
 def test_ordinary_arguments_still_hit_warm_and_stay_silent(c):
@@ -487,3 +506,139 @@ async def test_the_async_wrapper_folds_code_arguments_too(c):
     assert len(calls) == 1, "control: a repeat async call must HIT"
     await atakes(_define(nb, _V2))
     assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# The walk must not lose a user class to what it INHERITS FROM, or to how it
+# is DECLARED. Every shape below was verified to pickle byte-identically
+# across its edit, so `args_hash` cannot move and the code fold is the only
+# thing that can.
+# ---------------------------------------------------------------------------
+
+
+def _assert_edit_invalidates(c, template, build, name, func_name):
+    """Define *template* at V1, call twice, redefine at V2, call again.
+
+    The repeat call is an in-test control: "never caches" and "argument
+    unhashable" both satisfy the MISS assertion on their own, and only the HIT
+    assertion rules them out. *build* turns the (re)defined object into the
+    argument, and is called afresh each time so the two V1 calls pass two
+    DISTINCT but equal objects -- a warm hit on object identity would prove
+    nothing.
+    """
+    takes, calls = _counting(c, name=func_name)
+    nb = _nb_module()
+    _define(nb, template.format(v="V1"), name=name)
+    takes(build(nb))
+    takes(build(nb))
+    assert len(calls) == 1, "control: an unedited argument must HIT"
+    _define(nb, template.format(v="V2"), name=name)
+    takes(build(nb))
+    assert len(calls) == 2, "editing the argument's class did not invalidate"
+
+
+def test_a_str_subclass_argument_folds_its_class(c):
+    """`isinstance(v, (str, int, ...))` is true for SUBCLASSES, so a fast path
+    written with it skips a user class deriving from `str` before it ever
+    reaches the fold -- a missed invalidation on exactly the bug class this
+    feature exists for. The exact-type test is what makes this pass."""
+    _assert_edit_invalidates(
+        c, "class StrSub(str):\n    def r(self): return {v!r}\n",
+        lambda mod: mod.StrSub("fixed"), name="StrSub", func_name="strsub_takes",
+    )
+
+
+def test_an_int_enum_member_folds_its_enum(c):
+    """The same hole with no hand-written subclassing: an `IntEnum` member's
+    type IS the user's own enum class, and it is also an `int`. Its pickle does
+    not carry the method body at all, so `args_hash` cannot see this edit."""
+    _assert_edit_invalidates(
+        c,
+        "import enum\n"
+        "class Col(enum.IntEnum):\n    A = 1\n    def label(self): return {v!r}\n",
+        lambda mod: mod.Col.A, name="Col", func_name="enum_takes",
+    )
+
+
+def test_a_slots_instance_folds_its_class(c):
+    """`__slots__` gives instances no `__dict__`, which says nothing about
+    whether the user edits the class. Gating the instance branch on
+    `hasattr(value, "__dict__")` dropped every one of them."""
+    def build(mod):
+        obj = mod.Slotted()
+        obj.a = 1
+        return obj
+
+    _assert_edit_invalidates(
+        c, "class Slotted:\n    __slots__ = ('a',)\n    def r(self): return {v!r}\n",
+        build, name="Slotted", func_name="slots_takes",
+    )
+
+
+def test_a_dict_subclass_instance_folds_its_class(c):
+    """A `dict` subclass is BOTH a container to walk and a user object whose
+    class carries code. Walking only the contents made the class invisible."""
+    _assert_edit_invalidates(
+        c, "class Opts(dict):\n    def r(self): return {v!r}\n",
+        lambda mod: mod.Opts(a=1), name="Opts", func_name="dictsub_takes",
+    )
+
+
+def test_a_list_subclass_instance_folds_its_class(c):
+    """Same hole on the sequence branch, pinned independently: the dict and
+    sequence branches are separate code paths."""
+    _assert_edit_invalidates(
+        c, "class Seq(list):\n    def r(self): return {v!r}\n",
+        lambda mod: mod.Seq([1, 2]), name="Seq", func_name="listsub_takes",
+    )
+
+
+def test_a_self_referential_container_argument_terminates(c):
+    """The `_seen` set is no longer written for every element, only for the
+    containers that can actually cycle and the carriers that are yielded. Pin
+    the property that motivated it, so a future narrowing cannot quietly
+    reintroduce unbounded recursion. The class assertion is the control: the
+    walk must still REACH the payload, not merely survive it."""
+    takes, calls = _counting(c, name="cycle_takes")
+    nb = _nb_module()
+    v1 = _define(nb, _V1)
+    payload = [v1]
+    payload.append(payload)
+    assert [x.__qualname__ for x in c._iter_code_carriers(payload)] == ["S"]
+    base = "0" * 64
+    assert c._fold_code_args((payload,), {}, base) != base
+    assert len(calls) == 0  # nothing above should have called the function
+
+
+def test_the_advisory_ignores_a_stdlib_callable_object(c, warned_unhashable):
+    """`_is_user_code_object` answers "could not confirm -> user code", which is
+    the right direction for deciding whether to HASH and the wrong one for
+    deciding whether to WARN: a `functools.partial` and a `weakref.ref` have no
+    `__qualname__` of their own, so neither can ever be confirmed and both were
+    reported as un-hashable user code.
+
+    The second arm is the control, and it is what stops this test from passing
+    by simply disabling the advisory: a partial over a USER function must still
+    warn, because that function's body genuinely is absent from the key.
+    """
+    import json
+    import weakref
+
+    takes, _calls = _counting(c, name="advisory_takes")
+    nb = _nb_module()
+    _define(nb, "def user_scale(k, x): return k * x\n", name="user_scale")
+
+    class Holder:
+        pass
+
+    holder = Holder()
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        takes(functools.partial(json.dumps))
+        takes(weakref.ref(holder))
+    assert _code_advisories(rec) == [], "a stdlib callable object must not warn"
+
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        takes(functools.partial(nb.user_scale, 3))
+    assert len(_code_advisories(rec)) == 1, "control: a partial over USER code must warn"
