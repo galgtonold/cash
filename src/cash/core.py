@@ -3046,11 +3046,34 @@ class Cash:
         if code is None:
             return ()
         return (
-            code.co_code,
-            tuple(repr(k) for k in code.co_consts),
-            tuple(code.co_names),
+            Cash._code_object_identity(code),
             repr(getattr(fn, "__defaults__", None)),
             repr(getattr(fn, "__kwdefaults__", None)),
+        )
+
+    @staticmethod
+    def _code_object_identity(code: types.CodeType) -> tuple:
+        """Structural identity of one ``types.CodeType``, recursing into any
+        nested code object in ``co_consts`` instead of ``repr()``-ing it.
+
+        A lambda, a generator expression, or -- pre-3.12, before PEP 709
+        inlined them -- a plain comprehension compiles to a NESTED code
+        object stored in the enclosing method's ``co_consts``. Its ``repr()``
+        is ``<code object <genexpr> at 0x...>``: a live memory address, fresh
+        every process. Measured: the same class's digest differed between two
+        freshly started processes whenever a method held one of these,
+        permanently missing the cache cross-process for any user class with a
+        comprehension in a method. A nested code object carries no defaults of
+        its own (those belong to the FUNCTION eventually built from it, not to
+        the raw code object), so only co_code/co_consts/co_names apply here.
+        """
+        return (
+            code.co_code,
+            tuple(
+                Cash._code_object_identity(k) if isinstance(k, types.CodeType) else repr(k)
+                for k in code.co_consts
+            ),
+            tuple(code.co_names),
         )
 
     def _code_surface_hash(self, obj: Any) -> str | None:
@@ -3065,10 +3088,16 @@ class Cash:
         key, so the memo cannot serve a stale entry. Keying on ``id()`` would
         be a correctness bug, since CPython recycles addresses.
         """
-        cached = self._code_surface_cache.get(obj)
-        if cached is not None:
-            return cached
         try:
+            # The memo read must be INSIDE the try: this is consumed on cache
+            # ARGUMENTS (Task 4), where an unhashable value -- a list, dict,
+            # set, numpy array, DataFrame -- is the common case, not the
+            # exception. dict.get() raises TypeError on those; reading the
+            # cache before the guard that is supposed to catch it broke the
+            # "never raises" contract for exactly the inputs it exists for.
+            cached = self._code_surface_cache.get(obj)
+            if cached is not None:
+                return cached
             if isinstance(obj, type):
                 if not self._is_user_code_object(obj):
                     return None
@@ -3107,7 +3136,12 @@ class Cash:
             if base is object or not self._is_user_code_object(base):
                 continue
             for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
-                if name in ("__dict__", "__weakref__", "__module__"):
+                # __firstlineno__ (class attribute since Python 3.13, absent on
+                # 3.10/3.11) records the class's first source line, which shifts
+                # when a comment or blank line is added above it -- with no
+                # code change at all. Skipping it is what keeps "comments do
+                # not invalidate" (see _code_identity) true on 3.13+ too.
+                if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
                     continue
                 target = member
                 if isinstance(member, (classmethod, staticmethod)):
@@ -3118,11 +3152,40 @@ class Cash:
                         if ident:
                             parts.append((base.__qualname__, f"{name}.{tag}", ident))
                     continue
+                # Unwrap decoration to reach the function whose __code__
+                # actually reflects a body edit (mirrors the single-level
+                # __wrapped__ unwrap in _analyze_method_self_deps). Without
+                # this, @functools.wraps and @functools.lru_cache both hash
+                # the WRAPPER's own generic dispatch code -- fixed regardless
+                # of what the wrapped body says -- and @functools.
+                # singledispatchmethod has no __wrapped__ or __code__ at all
+                # (it exposes the underlying function as .func instead), so it
+                # fell through to the data-attribute branch below and hashed
+                # an unchanging descriptor repr. Measured: editing any of
+                # these three wrapped method bodies left the digest unchanged
+                # without this step.
+                target = getattr(target, "__wrapped__", target)
+                if not hasattr(target, "__code__"):
+                    func_attr = getattr(target, "func", None)
+                    if func_attr is not None and hasattr(func_attr, "__code__"):
+                        target = func_attr
                 ident = self._code_identity(target)
                 if ident:
                     parts.append((base.__qualname__, name, ident))
                 elif not callable(member):
-                    parts.append((base.__qualname__, name, repr(member)))
+                    # A class-level DATA attribute. repr() leaks a memory
+                    # address for anything like a `MISSING = object()`
+                    # sentinel (non-deterministic across processes, same
+                    # disease as Blocker 1); _hash_arg_payload folds CONTENT
+                    # instead and is already the established, address-free
+                    # tool for exactly this (mirrors the class-constant fold
+                    # in the self-deps channel).
+                    try:
+                        parts.append(
+                            (base.__qualname__, name, self._hash_arg_payload((member,), {}))
+                        )
+                    except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                        pass  # unhashable - drop this one member, not the whole class
         return parts
 
     def _user_class_source_hash(self, cls: type) -> str:
@@ -3133,16 +3196,35 @@ class Cash:
         so the hash is computed once per class object and reused on every
         subsequent call. The per-call cost of the instance channel below is then
         a cheap object-graph walk plus dict lookups -- never source I/O.
+
+        Source-first, surface-as-fallback. Both of this method's callers
+        (``_instance_class_source_parts``, directly and via
+        ``_fold_read_globals``) gate on ``_is_user_class`` -> ``_is_user_module``,
+        which requires ``__file__`` -- so every class actually reachable here
+        already has retrievable source, and ``inspect.getsource`` succeeds. The
+        class-aware surface (``_code_surface_hash``) only engages on
+        ``SOURCE_RETRIEVAL_ERRORS`` -- a class truly without source, e.g. a
+        notebook cell's ``__main__`` has no ``__file__`` -- or when this method
+        is reached some other way in the future. Preferring it unconditionally
+        was measured to regress every file-backed class whose method is wrapped
+        by ``@functools.wraps``, ``@lru_cache``, or ``@singledispatchmethod``:
+        ``_class_surface_parts`` walks the WRAPPER, not the wrapped function, so
+        a body edit under one of those decorators stopped invalidating even
+        though whole-class source hashing always saw it (source is just text).
         """
         cached = self._user_class_src_cache.get(cls)
         if cached is not None:
             return cached
-        # Prefer the class-aware surface. _hash_callable_source has no class
-        # branch: a class has no __code__, so it falls through to
-        # type(fn).__qualname__ -- literally "type" for EVERY class, which
-        # collides all source-less classes onto one hash instead of merely
-        # failing to notice an edit.
-        h = self._code_surface_hash(cls) or self._hash_callable_source(cls)
+        try:
+            src = inspect.getsource(cls)
+            h = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        except SOURCE_RETRIEVAL_ERRORS:
+            # No source to hash (or it doesn't parse). _hash_callable_source
+            # has no class branch of its own: a class has no __code__, so ITS
+            # fallback chain falls through to type(fn).__qualname__ --
+            # literally "type" for EVERY class, colliding all source-less
+            # classes onto one hash. Try the class-aware surface first.
+            h = self._code_surface_hash(cls) or self._hash_callable_source(cls)
         if len(self._user_class_src_cache) < 4096:
             self._user_class_src_cache[cls] = h
         return h
@@ -3371,18 +3453,29 @@ class Cash:
     @staticmethod
     def _qualname_resolves_in(mod: Any, obj: Any) -> bool:
         """True if *obj* is actually reachable by walking its ``__qualname__``
-        from *mod*, not merely claiming *mod* via ``__module__``."""
+        from *mod*, not merely claiming *mod* via ``__module__``.
+
+        ``getattr(x, name, default)`` only swallows ``AttributeError`` -- a
+        module implementing PEP 562 ``__getattr__`` (a real pattern for
+        deprecation shims: raise a custom error for an old name instead of
+        just returning it) can make this walk raise something else entirely.
+        Task 1's original predicate, which this refines, could never raise;
+        this must not become the first way ``_is_user_code_object`` can.
+        """
         qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
         if not qualname:
             return False
         cur = mod
-        for part in qualname.split("."):
-            if part == "<locals>":
-                return False  # nested in a function body - not module-reachable
-            cur = getattr(cur, part, None)
-            if cur is None:
-                return False
-        return cur is obj
+        try:
+            for part in qualname.split("."):
+                if part == "<locals>":
+                    return False  # nested in a function body - not module-reachable
+                cur = getattr(cur, part, None)
+                if cur is None:
+                    return False
+            return cur is obj
+        except Exception:
+            return False  # could not confirm reachability - do not trust it
 
     def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
         """``(module_global, attribute)`` pairs the body reads, from bytecode.
