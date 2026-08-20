@@ -3212,6 +3212,36 @@ class Cash:
             pass
         return not p.startswith(os.path.normcase(os.path.dirname(os.path.abspath(__file__))))
 
+    #: Fileless modules that are NOT the user's code. Everything else without a
+    #: __file__ is a notebook cell, a REPL, or exec'd source -- i.e. something
+    #: the user is plausibly editing between runs, which is the whole point.
+    _FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
+        "builtins", "__future__", "_frozen_importlib", "_frozen_importlib_external",
+    }
+
+    @staticmethod
+    def _is_user_code_module(mod: Any) -> bool:
+        """Like :meth:`_is_user_module`, but a module with no ``__file__``
+        counts as user code rather than being disqualified.
+
+        ``_is_user_module`` returns False for a fileless module ("nothing to
+        edit"). That is right for its callers and wrong here: a class defined
+        in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
+        is precisely the thing the user edits between runs.
+        """
+        name = getattr(mod, "__name__", "") or ""
+        path = getattr(mod, "__file__", None)
+        if path is None:
+            return name not in Cash._FILELESS_NON_USER
+        return Cash._is_user_module(mod)
+
+    @staticmethod
+    def _is_user_code_object(obj: Any) -> bool:
+        """True when *obj* -- a class OR a function -- is defined in code the user
+        plausibly edits. Both carry ``__module__``, so one predicate serves both."""
+        mod = sys.modules.get(getattr(obj, "__module__", None) or "")
+        return mod is not None and Cash._is_user_code_module(mod)
+
     def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
         """``(module_global, attribute)`` pairs the body reads, from bytecode.
 
