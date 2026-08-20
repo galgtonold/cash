@@ -928,3 +928,264 @@ def test_value_anchor_on_a_class_still_needs_broad_justification(tmp_path):
     )
     (problem,) = check_page(page)
     assert problem.kind == "broad"
+
+
+# --------------------------------------------------------------------------- #
+# Unanchored prose triage                                                     #
+#                                                                             #
+# Regression fixtures for two REAL misses. The JupyterLab live-cell branch    #
+# falsified two documented statements and the drift queue saw neither, because #
+# it only ever reads sentences that carry an anchor:                          #
+#                                                                             #
+#   docs/magics.md            -- the %%cash behaviour list, in a sibling      #
+#                               section of the page that anchors %cash_on     #
+#   quickstart.md             -- "Google Colab is the exception", in a section #
+#                               with no anchor at all, naming no symbol        #
+#                                                                             #
+# The two fixtures below are those two shapes, reduced. Each needs a DIFFERENT #
+# rule to reach it, which is why check_unanchored has two.                    #
+# --------------------------------------------------------------------------- #
+from tests.docs._claims import check_unanchored, mention_pattern  # noqa: E402
+
+
+def _page(tmp_path, name, body):
+    page = tmp_path / name
+    page.write_text(body, encoding="utf-8")
+    return page
+
+
+MAGICS_SHAPE = """\
+# Magics
+
+## Enabling and configuring
+
+### `%thing_on`
+<!-- claim: mod.py:Magics.thing_on @00000000 -->
+
+Enable the thing. Turn it off and on with `%thing_on` again.
+
+### `%%thing`
+<!-- claim: mod.py:Magics.thing @11111111 -->
+
+Cell magic, with the same processing as `%thing_on`.
+
+**Behaviour:**
+
+- Runs upstream simulation against the on-disk notebook.
+"""
+
+QUICKSTART_SHAPE = """\
+# Quickstart
+
+## Walk-back
+
+!!! warning "Save the notebook first"
+    Cash reads the cells it did not execute from the saved file, not from
+    your editor's buffer. **Google Colab is the exception**: there cash reads
+    cells live from the frontend, so there is nothing to save.
+
+## Configuration
+
+<!-- claim: mod.py:Magics.thing_on @00000000 -->
+`%thing_on` takes only an optional `ttl=N`.
+"""
+
+THING_ON = Target("mod.py", "Magics.thing_on")
+
+
+def test_a_sibling_section_of_the_anchoring_page_is_surfaced(tmp_path):
+    """The docs/magics.md miss: same page, one section over, unpinned.
+
+    The false statement lived under `### %%cash` on the very page that anchors
+    `%cash_on`. Excluding the whole anchoring page -- the obvious rule, and the
+    one this was first specified with -- surfaces nothing here at all. The
+    exclusion has to be the anchored SECTION.
+    """
+    page = _page(tmp_path, "magics.md", MAGICS_SHAPE)
+    hits = check_unanchored(THING_ON, [page])
+
+    assert [h.line for h in hits] == [13], hits
+    assert hits[0].kind == "unanchored"
+    assert "same processing as `%thing_on`" in hits[0].message
+    # ...and NOT the anchor's own section: the `### %thing_on` heading on line 5
+    # and the sentence under it on line 8 both name the target.
+    assert all(h.line not in (5, 8) for h in hits)
+
+
+def test_a_closed_enumeration_on_the_anchoring_page_is_surfaced(tmp_path):
+    """The quickstart.md miss: names no symbol, so only co-location can reach it.
+
+    "Google Colab is the exception" contains no identifier of any kind. No
+    name-based rule can find it from the target's side; what links the two is
+    that the page is already pinned to this code and this sentence about it is
+    not.
+    """
+    page = _page(tmp_path, "quickstart.md", QUICKSTART_SHAPE)
+    hits = check_unanchored(THING_ON, [page])
+
+    lines = {h.line: h for h in hits}
+    assert 7 in lines, hits
+    assert "Google Colab is the exception" in lines[7].message
+    assert "closed enumeration" in lines[7].message
+    # The anchored section's own `%thing_on` sentence (line 13) is the working
+    # case and must stay quiet.
+    assert all(h.line < 10 for h in hits), hits
+
+
+def test_a_mention_on_a_page_that_never_anchors_the_target_is_surfaced(tmp_path):
+    """The plain case: another page talks about the code and pins nothing."""
+    page = _page(
+        tmp_path, "faq.md",
+        "# FAQ\n\nNo. `%thing_on` caches your existing cells as-is.\n",
+    )
+    hits = check_unanchored(THING_ON, [page])
+    assert [h.line for h in hits] == [3], hits
+
+
+def test_a_closed_enumeration_needs_the_page_to_anchor_the_target(tmp_path):
+    """Scoping control: without it this becomes a global prose lint.
+
+    The same sentence, on a page that pins nothing, must stay silent -- a
+    standing "find every absolute claim" check would fire across the whole
+    corpus and get switched off within a week.
+    """
+    page = _page(
+        tmp_path, "loose.md",
+        "# Loose\n\n**Google Colab is the exception**: it reads cells live.\n",
+    )
+    assert check_unanchored(THING_ON, [page]) == []
+
+
+def test_absolute_emphasis_is_not_a_closed_enumeration(tmp_path):
+    """"never" / "only" / "always" alone are ordinary emphasis, not a list.
+
+    Measured on the pre-fix tree, admitting them added 23 lines to one target's
+    triage and every one was still true. The failure class is prose that closes
+    an enumeration a new code path then joins.
+    """
+    page = _page(
+        tmp_path, "emphasis.md",
+        "# Emphasis\n\n"
+        "The repair never fires, and only the cheap append happens; it always\n"
+        "reproduces the value.\n\n"
+        "## Config\n\n"
+        "<!-- claim: mod.py:Magics.thing_on @00000000 -->\n"
+        "Takes a ttl.\n",
+    )
+    assert check_unanchored(THING_ON, [page]) == []
+
+
+def test_a_mention_inside_a_code_fence_is_not_surfaced(tmp_path):
+    """An example is not a claim -- the same rule parse_anchors already applies."""
+    page = _page(
+        tmp_path, "example.md",
+        "# Example\n\n```python\n%thing_on\n%thing_on ttl=60\n```\n",
+    )
+    assert check_unanchored(THING_ON, [page]) == []
+
+
+def test_html_comments_are_not_prose(tmp_path):
+    """A comment naming the target is not a page making a claim about it.
+
+    Two failures in one fixture, because one fixture can carry both:
+
+    * the editorial comment on line 4 names the symbol. Unmasked, it is
+      reported as unpinned prose -- and so is every claim anchor for a
+      same-named symbol in another module, which on the real corpus was four
+      of ``UpstreamChecker``'s six hits.
+    * it also spans lines. Masking a comment by ``"\\0" * len(match)`` eats the
+      newlines inside it and every line after comes out short -- on
+      ``docs/magics.md``, by five. The real mention sits AFTER it, so a
+      swallowed newline moves the number this reports.
+    """
+    page = _page(
+        tmp_path, "anchored.md",
+        "# Page\n\n"
+        "<!--\nEditorial note: document `%thing_on`'s ttl handling\nhere.\n-->\n\n"
+        "## Reference\n\n"
+        "<!-- claim: mod.py:Magics.thing_on @00000000 -->\n"
+        "Enable the thing.\n\n"
+        "## Elsewhere\n\n"
+        "Run `%thing_on` first.\n",
+    )
+    hits = check_unanchored(THING_ON, [page])
+    assert [h.line for h in hits] == [15], hits
+    assert page.read_text(encoding="utf-8").splitlines()[14].strip() == (
+        "Run `%thing_on` first."
+    )
+
+
+def test_a_generic_final_component_is_not_searched_bare(tmp_path):
+    """`Cash.cache` must not go hunting for the word "cache".
+
+    It occurs on 633 prose lines across 51 published pages; attaching that to a
+    drift entry buries the entry it is attached to. The dotted form still works.
+    """
+    assert mention_pattern(Target("cash/core.py", "Cash.cache")).search("Cash.cache")
+    page = _page(
+        tmp_path, "prose.md",
+        "# Prose\n\nThe cache is unbounded, and a cache entry is compressed.\n",
+    )
+    assert check_unanchored(Target("cash/core.py", "Cash.cache"), [page]) == []
+
+
+def test_a_module_target_has_no_prose_name(tmp_path):
+    assert mention_pattern(Target("cash/core.py", None)) is None
+
+
+def test_triage_never_becomes_a_gate(tmp_path):
+    """check_page is what blocks; it must not learn about any of this.
+
+    A page that check_unanchored has plenty to say about still has to come back
+    clean from the checker the test suite actually asserts on -- otherwise this
+    is a new gate, it floods, and it gets disabled.
+    """
+    src_root = tmp_path / "src"
+    (src_root / "").mkdir(parents=True, exist_ok=True)
+    (src_root / "mod.py").write_text(
+        "class Magics:\n    def thing_on(self):\n        return 1\n",
+        encoding="utf-8",
+    )
+    body = QUICKSTART_SHAPE.replace("@00000000", "@?")
+    page = _page(tmp_path, "quickstart.md", body)
+    nodes, source = resolve(Target("mod.py", "Magics.thing_on"), src_root=src_root)
+    page.write_text(
+        body.replace("@?", "@" + fingerprint(nodes, source)), encoding="utf-8"
+    )
+
+    assert check_unanchored(THING_ON, [page]), "fixture must have triage to report"
+    assert check_page(page, src_root=src_root) == []
+
+
+def test_queue_lists_unpinned_prose_under_the_drifted_target(tmp_path, monkeypatch,
+                                                             capsys):
+    """The whole point, end to end: drift, then the unpinned prose beside it."""
+    src_root = tmp_path / "src"
+    src_root.mkdir()
+    (src_root / "mod.py").write_text(
+        "class Magics:\n    def thing_on(self):\n        return 1\n",
+        encoding="utf-8",
+    )
+    anchored = _page(
+        tmp_path, "anchored.md",
+        "# Anchored\n\n"
+        "<!-- claim: mod.py:Magics.thing_on @00000000 -->\n"
+        "Enable the thing.\n",
+    )
+    loose = _page(
+        tmp_path, "loose.md",
+        "# Loose\n\nRun `%thing_on` before anything else.\n",
+    )
+
+    _patch_src_root(monkeypatch, src_root)
+    monkeypatch.setattr(_cli, "published_pages", lambda: [anchored, loose])
+    monkeypatch.setattr(_cli, "REPO_ROOT", tmp_path)
+
+    assert _cli._cmd_queue() == 1
+    out = capsys.readouterr().out
+    assert "Unpinned prose about the same code" in out
+    assert "mod.py:Magics.thing_on" in out
+    assert ":3  names mod.py:Magics.thing_on but pins nothing" in out
+    assert "Run `%thing_on` before anything else." in out
+    # The drift entry itself is still the headline, and still the exit status.
+    assert "1 claim(s) rest on code that has changed" in out

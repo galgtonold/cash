@@ -11,6 +11,12 @@ advisory on a PR and blocking only at release, via ``CASH_CLAIMS_STRICT=1``
 (set by the ``build`` job in ``.github/workflows/publish.yml``) — see
 ``tests/docs/README.md``'s "Claim anchors" section for the authoring rules.
 
+Anchored prose is the only prose any of that reads. ``check_unanchored`` covers
+the other half — when a target drifts, it surfaces the *unpinned* pages that
+talk about the same code, as triage attached to the queue entry rather than as
+a check of its own. See its section for why that question is only worth asking
+at the moment of drift.
+
 This module is pure — no pytest import — so ``scripts/claims.py`` can use it.
 """
 from __future__ import annotations
@@ -499,8 +505,16 @@ MANIFEST = Path(__file__).resolve().parent / "claim_manifest.json"
 class Problem:
     page: str
     line: int
-    kind: str    # unresolved | drift | value | broad | unpinned | manifest
+    # unresolved | drift | value | broad | unpinned | manifest | unanchored
+    kind: str
     message: str
+    # The anchor target this problem is about, when there is one. Defaulted so
+    # every existing 4-argument construction (and the equality assertions in
+    # test_claims_lib.py that spell one out) keeps working unchanged. It exists
+    # so a consumer holding a drift Problem can ask the follow-up question --
+    # "what else in the docs talks about THIS target?" -- without re-deriving
+    # the target by parsing the message string back apart.
+    target: "Target | None" = None
 
 
 def anchor_count(page: Path) -> int:
@@ -509,12 +523,22 @@ def anchor_count(page: Path) -> int:
     return sum(len(a.targets) for a in parse_anchors(text, page))
 
 
+def _rel(page: Path) -> str:
+    """A page's repo-relative posix path, or its own path if it is outside.
+
+    A fixture page under ``tmp_path`` is not under ``REPO_ROOT``; falling back
+    to its own path keeps the unit tests reporting something readable instead
+    of raising.
+    """
+    try:
+        return page.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        return page.as_posix()
+
+
 def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
     """Every problem with the claim anchors on one page."""
-    try:
-        rel = page.relative_to(REPO_ROOT).as_posix()
-    except ValueError:
-        rel = page.as_posix()
+    rel = _rel(page)
     problems: list[Problem] = []
 
     for anchor in parse_anchors(page.read_text(encoding="utf-8"), page):
@@ -522,7 +546,9 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
             try:
                 nodes, source = resolve(t, src_root)
             except AnchorError as exc:
-                problems.append(Problem(rel, anchor.line, "unresolved", str(exc)))
+                problems.append(
+                    Problem(rel, anchor.line, "unresolved", str(exc), t)
+                )
                 continue
 
             name = f"{t.path}:{t.symbol or '<module>'}"
@@ -552,6 +578,7 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
                         f"{name} is a {what}-level anchor; narrow it to the "
                         f"function or attribute the claim is actually about, or "
                         f'justify it with broad="reason"',
+                        t,
                     )
                 )
                 continue
@@ -561,13 +588,16 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
                     actual = literal_value(node)
                     ok = values_match(t.value, actual)
                 except AnchorError as exc:
-                    problems.append(Problem(rel, anchor.line, "value", str(exc)))
+                    problems.append(
+                        Problem(rel, anchor.line, "value", str(exc), t)
+                    )
                     continue
                 if not ok:
                     problems.append(
                         Problem(
                             rel, anchor.line, "value",
                             f"docs say {name} == {t.value}, source says {actual!r}",
+                            t,
                         )
                     )
                 continue
@@ -578,6 +608,7 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
                         rel, anchor.line, "unpinned",
                         f"{name} has an unfilled pin placeholder; run "
                         f"`python scripts/claims.py --pin`",
+                        t,
                     )
                 )
                 continue
@@ -592,9 +623,232 @@ def check_page(page: Path, src_root: Path = SRC_ROOT) -> list[Problem]:
                         rel, anchor.line, "drift",
                         f"{name} changed (@{t.pin} -> @{actual_fp}); re-read the "
                         f"claim: {ellipsize(anchor.claim)!r}",
+                        t,
                     )
                 )
     return problems
+
+
+# --------------------------------------------------------------------------- #
+# Unanchored prose about a drifted target                                     #
+# --------------------------------------------------------------------------- #
+#
+# Everything above only ever looks at a sentence that carries an anchor. Prose
+# with no anchor is invisible to it however false it becomes -- and that is not
+# hypothetical: the JupyterLab live-cell branch made ``docs/magics.md``'s
+# ``%%cash`` behaviour list and ``docs/getting-started/quickstart.md``'s "Google
+# Colab is the exception" warning both false, and the queue could not see
+# either. Both were found by hand with grep.
+#
+# A standing "find the unanchored claims" lint would be hopeless -- every page
+# is mostly unanchored prose, and a check that fires on everything gets turned
+# off. The question is only worth asking at ONE moment: when a target's
+# fingerprint actually drifts, someone is already re-reading the claims that
+# name it, and that is exactly when to also hand them the prose about the same
+# code that names nothing.
+#
+# So this is TRIAGE, not a gate. It detects no falsehood; it decides no claim.
+# It puts unpinned prose about the drifted target in front of the person who is
+# already reading, in the same pass. Nothing here is wired into ``check_page``,
+# so nothing here can turn a PR red.
+
+_HEADING_RE = re.compile(r"^(?P<hashes>#{1,6})\s")
+_HTML_COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
+
+# The vocabulary that CLOSES an enumeration. Both real misses were the same
+# shape -- a description of a code path that gained a new member -- and that
+# shape has a lexical signature: prose asserting that the list it just gave is
+# the whole list.
+#
+# Deliberately NOT "only" / "always" / "never" on their own, which is where the
+# first cut of this went. Measured against the pre-fix tree those three add 23
+# more lines to a single drifted target's triage, and every one of them was
+# ordinary emphasis that was still true ("the repair never fires", "only the
+# cheap append itself happens"). They describe behaviour absolutely; they do not
+# close an enumeration, which is the thing a new code path falsifies.
+_ENUMERATION_RE = re.compile(
+    r"\b(the only|the exception|an exception|one exception|no other"
+    r"|nothing else|the sole|solely)\b",
+    re.IGNORECASE,
+)
+
+
+def _mask_html_comments(text: str) -> str:
+    r"""Blank HTML comments, preserving every newline.
+
+    A claim anchor IS an HTML comment naming its target, so without this every
+    anchor would match its own target's needle and report itself as unpinned
+    prose.
+
+    Only non-newline characters are blanked. Replacing a multi-line comment with
+    ``"\0" * len(match)`` -- the obvious version, and the one this started as --
+    eats the newlines inside it, and every line number after the first
+    multi-line comment on the page comes out short. On ``docs/magics.md`` that
+    was a five-line error: exactly the kind of close-enough-to-look-right
+    wrongness that makes a report worse than useless, because it names a real
+    line, just not the one it found.
+    """
+    return _HTML_COMMENT_RE.sub(
+        lambda m: re.sub(r"[^\n]", "\0", m.group(0)), text
+    )
+
+
+def _headings(text: str) -> list[tuple[int, int]]:
+    """``(line, level)`` for every Markdown heading, 1-based, in source order."""
+    out: list[tuple[int, int]] = []
+    for i, line in enumerate(text.splitlines(), 1):
+        m = _HEADING_RE.match(line)
+        if m:
+            out.append((i, len(m.group("hashes"))))
+    return out
+
+
+def _enclosing_section(
+    headings: list[tuple[int, int]], total_lines: int, line: int
+) -> tuple[int, int]:
+    """The INNERMOST heading-delimited section containing *line*, 1-based.
+
+    Innermost, not outermost, and that is load-bearing. An anchor under
+    ``### %cash_on`` covers its own subsection; taking the enclosing ``##``
+    instead would swallow every sibling subsection under the same parent --
+    including, on ``docs/magics.md``, the ``### %%cash`` section that carried
+    one of the two statements this whole mechanism exists to surface.
+    """
+    above = [h for h in headings if h[0] <= line]
+    if not above:
+        return (1, (headings[0][0] - 1) if headings else total_lines)
+    start, level = above[-1]
+    below = [ln for ln, lvl in headings if ln > start and lvl <= level]
+    return (start, (below[0] - 1) if below else total_lines)
+
+
+def _same_symbol(a: Target, b: Target) -> bool:
+    """Same code target, ignoring how it happens to be pinned."""
+    return a.path == b.path and a.symbol == b.symbol
+
+
+def _within(spans: list[tuple[int, int]], line: int) -> bool:
+    return any(start <= line <= end for start, end in spans)
+
+
+def mention_pattern(target: Target) -> "re.Pattern[str] | None":
+    """How *target* would be written in prose, or None if it cannot be searched.
+
+    Two surface forms, and the second one is rationed:
+
+    * the dotted symbol as written in the anchor (``CashMagics.cash_on``,
+      ``UpstreamChecker.check_and_reexecute``), always;
+    * the bare final component (``cash_on``) -- but ONLY when it cannot be
+      mistaken for an ordinary English word, which here means it carries an
+      underscore or an uppercase letter.
+
+    That ration is the difference between a report and a flood, and the number
+    behind it is not a guess. ``cash/core.py:Cash.cache``'s final component is
+    ``cache``, which occurs on 633 prose lines across 51 published pages;
+    attaching that to a drift entry would bury the entry it is attached to.
+    Rationed, the same target yields 4 lines. ``cash_on`` -- underscored, so
+    searchable -- yields 61 lines across 26 pages, which is simply the true
+    answer for a magic that 26 pages talk about.
+
+    A module target (no symbol) has no prose name at all and returns None; the
+    enumeration rule in ``check_unanchored`` still applies to it.
+    """
+    if not target.symbol:
+        return None
+    parts = target.symbol.split(".")
+    forms = [target.symbol] if len(parts) > 1 else []
+    last = parts[-1]
+    if "_" in last or not last.islower():
+        forms.append(last)
+    if not forms:
+        return None
+    # Longest-first so the dotted form wins over its own final component and the
+    # reported match is the more specific one.
+    alternatives = "|".join(re.escape(f) for f in sorted(forms, key=len, reverse=True))
+    # ``%{0,2}`` so ``%cash_on`` and ``%%cash`` read as mentions of the method
+    # behind them. The lookbehind rejects ``foo.cash_on``-style attribute access
+    # on some other object; the lookahead stops ``cache`` matching inside
+    # ``cache_info``.
+    return re.compile(r"(?<![\w.])%{0,2}(?:" + alternatives + r")(?![\w])")
+
+
+def check_unanchored(
+    target: Target, pages: list[Path] | None = None
+) -> list[Problem]:
+    """Published prose about *target* that pins nothing -- triage, never a gate.
+
+    Two rules, because the two real misses needed two different ones:
+
+    ``names``
+        A prose line anywhere in the docs that writes the target's symbol (see
+        ``mention_pattern``), outside any section already anchored to that same
+        target. Section-scoped, NOT page-scoped: the ``docs/magics.md`` miss sat
+        on the page that anchors ``CashMagics.cash_on``, several sections away
+        from the anchor, so excluding the whole anchoring page -- the obvious
+        rule -- surfaces nothing at all there.
+
+    ``enumeration``
+        A line that closes an enumeration (see ``_ENUMERATION_RE``) on a page
+        that anchors this target, sitting outside EVERY anchored section on that
+        page. This is the rule that reaches the ``quickstart.md`` miss, whose
+        false sentence -- "**Google Colab is the exception**" -- names no symbol
+        at all and so cannot be found by name from any direction. What links it
+        to the target is co-location: the page is already pinned to this code,
+        and this sentence about it is not.
+
+    Fences are masked (an example is not a claim) and HTML comments are masked
+    (an anchor names its target by definition, and would otherwise report
+    itself).
+
+    Honest about its reach: neither rule knows whether the prose is TRUE. This
+    answers "what else talks about this code without pinning it" -- a question a
+    human settles in a glance and a machine cannot settle at all.
+    """
+    needle = mention_pattern(target)
+    name = f"{target.path}:{target.symbol or '<module>'}"
+    out: list[Problem] = []
+
+    for page in (published_pages() if pages is None else pages):
+        rel = _rel(page)
+        text = page.read_text(encoding="utf-8")
+        prose = _mask_html_comments(strip_code_fences(text)).splitlines()
+        headings = _headings(text)
+        total = len(text.splitlines())
+
+        anchored: list[tuple[int, int]] = []
+        anchored_here: list[tuple[int, int]] = []
+        for anchor in parse_anchors(text, page):
+            span = _enclosing_section(headings, total, anchor.line)
+            anchored.append(span)
+            if any(_same_symbol(t, target) for t in anchor.targets):
+                anchored_here.append(span)
+
+        for i, line in enumerate(prose, 1):
+            if not line.strip():
+                continue
+            if needle and needle.search(line) and not _within(anchored_here, i):
+                out.append(
+                    Problem(
+                        rel, i, "unanchored",
+                        f"names {name} but pins nothing: "
+                        f"{ellipsize(line.strip())!r}",
+                        target,
+                    )
+                )
+            elif (
+                anchored_here
+                and _ENUMERATION_RE.search(line)
+                and not _within(anchored, i)
+            ):
+                out.append(
+                    Problem(
+                        rel, i, "unanchored",
+                        f"closed enumeration on a page that pins {name}, but "
+                        f"this line pins nothing: {ellipsize(line.strip())!r}",
+                        target,
+                    )
+                )
+    return out
 
 
 # --------------------------------------------------------------------------- #
