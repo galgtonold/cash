@@ -620,7 +620,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @02d3d980 -->
+<!-- claim: cash/core.py:Cash._explain_call @65fc5654 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

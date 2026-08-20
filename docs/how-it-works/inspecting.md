@@ -160,7 +160,7 @@ keep. `show` displays the last 50. Full flag reference in
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @02d3d980 -->
+<!-- claim: cash/core.py:Cash._explain_call @65fc5654 -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:

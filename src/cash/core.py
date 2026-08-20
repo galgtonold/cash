@@ -71,6 +71,12 @@ except ImportError:  # IPython not installed
 # conflicting with any legitimate cached value (including None).
 _CACHE_MISS = object()
 
+# Types that can carry no user code. `_iter_code_carriers` walks EVERY argument
+# of every cached call, so this is checked once per element of a container and
+# is deliberately a module-level global (one LOAD_GLOBAL) rather than a class
+# attribute (an extra attribute lookup per element).
+_CODELESS_PRIMS = (str, bytes, bytearray, int, float, bool, complex, type(None))
+
 P = ParamSpec("P")
 T = TypeVar("T")
 
@@ -889,6 +895,148 @@ class Cash:
         payload = ":".join(sorted(parts))
         return hashlib.sha256(f"{state_hash}:selfdeps:{payload}".encode('utf-8')).hexdigest()
 
+    #: Types already reported as unhashable, so the advisory stays once-per-type
+    #: per session rather than once per call.
+    _WARNED_UNHASHABLE: set = set()
+
+    @staticmethod
+    def _carrier_name(carrier: Any) -> str:
+        """A stable, address-free name for a code carrier.
+
+        ``__qualname__`` for anything that has one -- a class, a function.
+        Otherwise the carrier's TYPE, deliberately not ``repr()``: a
+        ``functools.partial`` reprs as ``functools.partial(<function f at
+        0x...>, 3)``, and that address is unique per object, so a
+        ``repr()``-derived key would make ``_WARNED_UNHASHABLE`` dedup
+        nothing (one warning per partial ever constructed, plus a global set
+        that grows without bound) and would make a folded part label differ
+        between two processes holding equal arguments.
+        """
+        name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
+        if isinstance(name, str) and name:
+            return name
+        t = type(carrier)
+        return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
+
+    def _warn_unhashable_code_once(self, carrier: Any) -> None:
+        """Tell the user once that a passed type's code is NOT in the key."""
+        name = self._carrier_name(carrier)
+        if name in Cash._WARNED_UNHASHABLE:
+            return
+        Cash._WARNED_UNHASHABLE.add(name)
+        msg = (
+            f"cash: {name} was passed as an argument but its code could not be "
+            f"hashed, so editing it will NOT invalidate the cache. Declare it "
+            f"with @cash.cache(depends_on=[...]) if the result depends on its "
+            f"implementation, or cash.mark_opaque({name}) to silence this."
+        )
+        logger.warning(msg)
+        warnings.warn(msg, category=CashImpurityWarning, stacklevel=2)
+
+    def _iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
+        """Yield objects in *value* that carry user code.
+
+        Depth-bounded at 8, matching ``_stabilize_for_global_hash``. ``_seen``
+        guards self-referential containers.
+        """
+        if _depth > 8:
+            return
+        # Primitives carry no user code, and in a large argument they ARE the
+        # argument. Returning before ``_seen`` is touched keeps a list of a
+        # million numbers allocation-free; otherwise the id-set below would grow
+        # to the container's length on every cached call. Mirrors
+        # ``_iter_contained``'s first line.
+        if isinstance(value, _CODELESS_PRIMS):
+            return
+        if _seen is None:
+            _seen = set()
+        if id(value) in _seen:
+            return
+        _seen.add(id(value))
+        if isinstance(value, type):
+            yield value
+            return
+        if callable(value):
+            # Distinguish a callable INSTANCE (whose class defines ``__call__``
+            # in Python) from a function/method/C-callable. An instance has no
+            # ``__code__`` of its own -- its code lives on its class -- so
+            # yielding the instance would fold NOTHING, while the identical
+            # object WITHOUT ``__call__`` takes the ``__dict__`` branch below
+            # and folds its class. Measured before this branch existed: adding
+            # ``__call__`` to a class silently removed that class's code from
+            # the key, and the instance then also tripped the unhashable
+            # advisory. ``_is_opaque`` returns the same verdict for a class as
+            # for one of its instances, so routing the class here rather than
+            # the instance leaves opacity unchanged.
+            call = getattr(type(value), "__call__", None)
+            if getattr(call, "__code__", None) is not None:
+                if self._is_user_code_object(type(value)):
+                    yield type(value)
+                return
+            yield value
+            return
+        # The primitive test is repeated INLINE in each loop below rather than
+        # left to the recursive call's own first line. It is the same test and
+        # the same result, but it skips building a generator frame per element,
+        # and a container of primitives is the overwhelmingly common argument:
+        # measured 25.8ms -> 7.2ms for a 200k-int list, 17.7ms -> 10.1ms for
+        # 20k small dicts, taking the walk from ~21% of the pickling that
+        # ``args_hash`` already does per call down to ~6%.
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if not isinstance(k, _CODELESS_PRIMS):
+                    yield from self._iter_code_carriers(k, _depth + 1, _seen)
+                if not isinstance(v, _CODELESS_PRIMS):
+                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            for v in value:
+                if not isinstance(v, _CODELESS_PRIMS):
+                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+        elif hasattr(value, "__dict__") and self._is_user_code_object(type(value)):
+            yield type(value)          # an instance contributes its class's code
+
+    def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str,
+                        warn: bool = True) -> str:
+        """Fold user code reached through the arguments into the key.
+
+        ``args_hash`` is a digest of the PICKLED arguments, and pickle
+        serializes a class or function by reference -- module plus qualname,
+        never its code. So editing a passed class produced an identical key and
+        a hit, and cash handed back the stale class object it had cached.
+
+        Folded into ``state_hash`` rather than ``args_hash`` because this is
+        code, and ``state_hash`` is already where code lives: function source,
+        ``depends_on``, transitive helpers, module globals read.
+
+        ``warn=False`` for ``_explain_call``, whose contract is that inspecting
+        an explanation emits no warnings.
+        """
+        parts: list[str] = []
+        try:
+            for value in (*args, *kwargs.values()):
+                for carrier in self._iter_code_carriers(value):
+                    if self._is_opaque(carrier):
+                        continue
+                    digest = self._code_surface_hash(carrier)
+                    if digest is not None:
+                        parts.append(f"{self._carrier_name(carrier)}:{digest}")
+                    elif warn and self._is_user_code_object(carrier):
+                        # User code we could not hash: a C-extension type, an
+                        # exotic descriptor, a ``functools.partial`` (whose
+                        # wrapped function pickles by reference like any
+                        # other). We fall back to today's key, which means an
+                        # edit will NOT invalidate -- so say so once. This is
+                        # the residue where cash genuinely cannot determine the
+                        # answer, and silence is the danger.
+                        self._warn_unhashable_code_once(carrier)
+        except Exception as e:  # noqa: BLE001 - never break a call
+            logger.debug("[CORE] code-arg fold failed: %s", e)
+            return state_hash
+        if not parts:
+            return state_hash
+        payload = ":".join(sorted(set(parts)))
+        return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode('utf-8')).hexdigest()
+
     @staticmethod
     def _hash_callable_source(fn: Callable) -> str:
         """Return a stable hex digest representing *fn*'s body.
@@ -1331,6 +1479,7 @@ class Cash:
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
             current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
+            current_state_hash = self._fold_code_args(args, kwargs, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
             args_hash = self._serialize_args(func_name, args, kwargs)
             if args_hash is None:
@@ -1434,6 +1583,12 @@ class Cash:
             current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
+            # Mirrors `_resolve_cache_key`: without this the predicted key
+            # would differ from the one a real call builds for exactly the
+            # arguments this feature exists for, so `explain()` would report
+            # `no_entry` for a call that in fact hits. `warn=False` because
+            # inspecting an explanation must stay silent.
+            current_state_hash = self._fold_code_args(args, kwargs, current_state_hash, warn=False)
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
