@@ -27,12 +27,14 @@ Deliberately KEPT in the digest:
 """
 
 import functools
+import hashlib
 import io
 import re
 import textwrap
 import tokenize
+import types
 
-__all__ = ["normalize_source_for_hash"]
+__all__ = ["bytecode_identity", "normalize_source_for_hash"]
 
 # Populated on first use from ``cash.notebook.annotations``. Imported
 # lazily because this module sits below the notebook package in the
@@ -117,3 +119,79 @@ def normalize_source_for_hash(source: str) -> str:
             atoms.append(tok.string)
 
     return _SEP.join(atoms)
+
+
+# Consts that describe themselves exactly under ``repr`` -- no identity, no
+# address, stable across processes and runs.
+_PRIMITIVE_CONSTS = (bool, int, float, complex, str, bytes, type(None))
+
+# Nested code nests: a comprehension inside a closure inside a method. The cap
+# is a runaway guard, not a real limit -- eight levels is far past anything a
+# human writes, and stopping early only makes the digest coarser, never wrong.
+_MAX_CONST_DEPTH = 8
+
+
+def _stabilize_const(const: object, depth: int) -> str:
+    """Describe one const so the description never embeds an address."""
+    if isinstance(const, _PRIMITIVE_CONSTS):
+        return repr(const)
+    if isinstance(const, types.CodeType):
+        if depth >= _MAX_CONST_DEPTH:
+            return "<code:depth>"
+        return "code(" + _code_atoms(const, depth + 1) + ")"
+    if isinstance(const, tuple):
+        return "(" + ",".join(_stabilize_const(c, depth) for c in const) + ")"
+    if isinstance(const, frozenset):
+        return "{" + ",".join(sorted(_stabilize_const(c, depth) for c in const)) + "}"
+    # Anything else (a rare exotic const) contributes its TYPE only: its repr
+    # may carry an address, and a wrong-but-stable digest beats a right-but-
+    # unstable one, which would miss forever.
+    return f"<{type(const).__name__}>"
+
+
+def _code_atoms(code: types.CodeType, depth: int = 0) -> str:
+    """Serialize a code object's behaviour-bearing fields."""
+    consts = ",".join(_stabilize_const(c, depth) for c in code.co_consts)
+    return _SEP.join(
+        (
+            code.co_code.hex(),
+            repr(code.co_names),
+            repr(code.co_varnames),
+            consts,
+        )
+    )
+
+
+def bytecode_identity(fn: object) -> str | None:
+    """Digest *fn*'s compiled body, or ``None`` when it has none.
+
+    The identity of last resort, for callables whose source cannot be read
+    (``exec``-defined, REPL, a source file that moved). Two requirements
+    pull against each other and both are load-bearing:
+
+    **It must see changes.** ``co_code`` ALONE does not. The operand of a
+    const load is an INDEX into ``co_consts``, not the value, so on 3.14::
+
+        return "alpha"  vs  return "omega"   -> co_code IDENTICAL
+        return 100000   vs  return 200000    -> co_code IDENTICAL
+
+    Measured, not assumed. Small ints happen to inline into the opcode and
+    so do differ, which makes the blindness easy to miss when probing.
+
+    **It must be stable across processes.** A nested code object's ``repr``
+    embeds a memory address, so folding ``co_consts`` in via ``str()``
+    yields a fresh digest every run and the cache never hits again. Nested
+    code is therefore RECURSED into rather than repr'd -- and rather than
+    dropped, which is the other way to stay safe but hides any edit made
+    inside a nested function or lambda.
+    """
+    code = getattr(fn, "__code__", None)
+    if code is None:
+        # A callable instance: its behaviour lives in __call__.
+        code = getattr(getattr(fn, "__call__", None), "__code__", None)
+    if not isinstance(code, types.CodeType):
+        return None
+    try:
+        return hashlib.sha256(_code_atoms(code).encode("utf-8")).hexdigest()
+    except (AttributeError, TypeError, ValueError, RecursionError):
+        return None

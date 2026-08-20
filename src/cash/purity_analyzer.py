@@ -44,7 +44,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
-from .source_norm import normalize_source_for_hash
 from .notebook.cacheability import (
     PANDAS_INPLACE_METHODS,
     _get_base_name,
@@ -54,13 +53,14 @@ from .notebook.cacheability import (
 )
 from .notebook.function_tracker import is_local_module
 from .notebook.purity import (
-    KNOWN_PURE_BUILTINS,
     _IMPURE_FUNCTION_CALLS,
     _IMPURE_MODULE_CALLS,
     _WRITE_METHODS,
+    KNOWN_PURE_BUILTINS,
     is_pure,
     is_stateful,
 )
+from .source_norm import bytecode_identity, normalize_source_for_hash
 
 logger = logging.getLogger(__name__)
 
@@ -117,11 +117,14 @@ class PurityReport:
 
     Attributes:
         issues: All findings, in stable order (kind, line).
-        helper_source_hashes: ``qualname -> sha256(source)`` for
-            every user-code helper actually walked, captured at
-            analysis time. Used as the fallback when per-call
-            re-resolution fails (helper was deleted/renamed since
-            analysis).
+        helper_source_hashes: ``qualname -> digest`` for every user-code
+            helper actually walked, captured at analysis time. Used as the
+            fallback when per-call re-resolution fails (helper was
+            deleted/renamed since analysis). The digest is over NORMALIZED
+            source, so a comment or reformat in a helper does not
+            invalidate its callers; for a helper with no readable source
+            it is ``bytecode_identity``, matching what the per-call rehash
+            computes for the same object.
         helper_resolution_paths: ``qualname -> (module_name, attr_chain)``
             for every walked helper. Used by the decorator to
             re-resolve the helper from ``sys.modules`` on each
@@ -134,6 +137,13 @@ class PurityReport:
             but couldn't read source for (C extensions, missing source,
             partial application). Treated as pure by default; strict
             mode promotes their presence to an issue.
+
+            Opaque for PURITY only. One that still has a ``__code__``
+            also gets an entry in ``helper_source_hashes`` and
+            ``helper_resolution_paths``, digested from its compiled form,
+            so editing it invalidates its callers. It used to be dropped
+            from both, which made every edit to such a helper invisible
+            to the cache key -- a silently stale result, not a recompute.
     """
 
     issues: tuple[PurityIssue, ...] = ()
@@ -744,6 +754,28 @@ class PurityAnalyzer:
         opaque: list[str] = []
         visited: set[str] = set()
 
+        def _record_resolution_path(func: Callable[..., Any], qualname: str) -> None:
+            """Note where to re-resolve *func* from ``sys.modules`` per call.
+
+            Lets the decorator pick up in-process redefinitions (notebook
+            cells, REPL). The attr_chain is the helper's ``__qualname__``
+            split on '.' so methods like ``Klass.method`` resolve. The root
+            function is skipped -- it is not a "helper" and the decorator
+            holds its own reference.
+            """
+            helper_module = getattr(func, "__module__", None)
+            helper_inner_qualname = getattr(func, "__qualname__", None)
+            if (
+                func is not root_func
+                and helper_module
+                and helper_inner_qualname
+                and "<locals>" not in helper_inner_qualname
+            ):
+                helper_paths[qualname] = (
+                    helper_module,
+                    tuple(helper_inner_qualname.split(".")),
+                )
+
         stack: list[tuple[Callable[..., Any], int]] = [(root_func, 0)]
         while stack:
             func, depth = stack.pop()
@@ -752,11 +784,27 @@ class PurityAnalyzer:
                 continue
             visited.add(qualname)
 
-            # Read source. Failure -> opaque leaf.
+            # Read source. Failure -> opaque leaf for PURITY: we cannot see
+            # what it does, so we decline to judge it.
+            #
+            # It must NOT become invisible to the CACHE KEY as well, which is
+            # what dropping it outright used to do. A helper whose source
+            # cannot be read contributed nothing to its callers' state hash,
+            # so ANY edit to it went unnoticed -- not merely a constant.
+            # Measured with an exec-defined helper under a filename absent
+            # from linecache: replacing its entire body still served the
+            # stale result. Fall back to the compiled identity, which is
+            # exactly what ``Cash._hash_callable_source`` recomputes live for
+            # the same object, so the snapshot and the per-call value agree
+            # instead of disagreeing forever.
             try:
                 src = inspect.getsource(func)
             except SOURCE_RETRIEVAL_ERRORS:
                 opaque.append(qualname)
+                digest = bytecode_identity(func)
+                if digest is not None:
+                    helper_hashes[qualname] = digest
+                    _record_resolution_path(func, qualname)
                 continue
             src = textwrap.dedent(src)
 
@@ -772,23 +820,7 @@ class PurityAnalyzer:
                 normalize_source_for_hash(src).encode("utf-8")
             ).hexdigest()
 
-            # Capture a resolution hint so the decorator can re-resolve
-            # this helper from sys.modules per call and pick up
-            # in-process redefinitions (notebook cells, REPL). The
-            # attr_chain is the helper's __qualname__ split on '.' so
-            # methods like ``Klass.method`` resolve correctly. Skip the
-            # root function itself (it's not a "helper" - the decorator
-            # has its own reference).
-            helper_module = getattr(func, "__module__", None)
-            helper_inner_qualname = getattr(func, "__qualname__", None)
-            if (
-                func is not root_func
-                and helper_module
-                and helper_inner_qualname
-                and "<locals>" not in helper_inner_qualname
-            ):
-                attr_chain = tuple(helper_inner_qualname.split("."))
-                helper_paths[qualname] = (helper_module, attr_chain)
+            _record_resolution_path(func, qualname)
 
             try:
                 tree = ast.parse(src)
