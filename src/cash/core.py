@@ -9,6 +9,7 @@ from __future__ import annotations
 import ast
 import asyncio
 import atexit
+import dataclasses
 import functools
 import hashlib
 import inspect
@@ -624,6 +625,11 @@ class Cash:
         # aware); see _code_surface_hash. Keyed on the object itself, not
         # id(), so a redefinition (a new object) is a distinct memo entry.
         self._code_surface_cache: dict = {}
+        # object -> tuple of (code object, globals dict) it carries. Static for
+        # as long as that object exists (a redefinition makes a new one), so it
+        # is safe to memo; the NAMES those code objects reference are resolved
+        # fresh per call, because what a name is bound to can change.
+        self._code_refs_cache: dict = {}
         # func_name -> (function the signature was read from, inspect.Signature
         # or None if introspection failed). Used to bind call arguments to a
         # canonical form so that logically-identical calls written differently
@@ -3474,8 +3480,15 @@ class Cash:
         cls = type(v)
         return f"<{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}>"
 
-    def _code_surface_hash(self, obj: Any) -> str | None:
-        """A digest of the user code *obj* carries, or ``None``.
+    def _code_surface_own(self, obj: Any) -> str | None:
+        """A digest of the user code *obj* itself carries, or ``None``.
+
+        Its OWN surface only -- code merely referenced by that code is folded
+        by :meth:`_code_surface_hash`, which combines these per-object digests.
+        The split is what keeps the memo below honest: memoizing a digest that
+        included a referenced class would serve a stale answer when only that
+        OTHER class is redefined (a notebook cell re-run), because *obj* is
+        still the same object and still hits its memo entry.
 
         ``None`` means "cannot determine" and the caller must fall back to
         today's by-reference key. This never raises: a hashing failure must not
@@ -3527,6 +3540,176 @@ class Cash:
         except TypeError:
             pass  # unhashable object - skip the memo, keep the answer
         return digest
+
+    # Bounds on the reference walk. Depth 4 and 64 targets are far past any
+    # real object graph; they exist so a pathological one degrades into a
+    # coarser digest rather than a hang. Exceeding them can only UNDER-fold,
+    # which is the pre-existing behaviour, never a wrong-but-confident answer.
+    _MAX_CODE_REF_DEPTH = 4
+    _MAX_CODE_REF_TARGETS = 64
+
+    @staticmethod
+    def _walk_nested_code(code: types.CodeType, glb: dict, _depth: int = 0):
+        """Yield *code* and the code objects nested in its constants.
+
+        A comprehension, a lambda, or a nested ``def`` compiles to its own
+        code object stored in ``co_consts``; the names IT references do not
+        appear in the parent's ``co_names``. ``field(default_factory=lambda:
+        B(0))`` is exactly that shape -- ``B`` is reachable only through the
+        lambda -- so a walk that stopped at the top level would miss the case
+        this exists for.
+        """
+        yield code, glb
+        if _depth >= Cash._MAX_CODE_REF_DEPTH:
+            return
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                yield from Cash._walk_nested_code(const, glb, _depth + 1)
+
+    def _iter_code_and_globals(self, obj: Any):
+        """Yield ``(code object, globals)`` for the code *obj* carries."""
+        carriers: list[Any] = []
+        if isinstance(obj, type):
+            for base in obj.__mro__:
+                if base is object or self._is_opaque(base):
+                    continue
+                if not self._is_user_code_object(base):
+                    continue
+                carriers.extend(vars(base).values())
+                # Same blind spot as _class_surface_parts: a field declaring
+                # default_factory has no class attribute to find in vars().
+                fields_map = getattr(base, "__dataclass_fields__", None)
+                if isinstance(fields_map, dict):
+                    for fld in fields_map.values():
+                        factory = getattr(fld, "default_factory", None)
+                        if factory is not None and factory is not dataclasses.MISSING:
+                            carriers.append(factory)
+        else:
+            carriers.append(obj)
+
+        for member in carriers:
+            if isinstance(member, (classmethod, staticmethod)):
+                member = member.__func__
+            if isinstance(member, property):
+                accessors = [a for a in (member.fget, member.fset, member.fdel) if a]
+            else:
+                accessors = [member]
+            for accessor in accessors:
+                accessor = getattr(accessor, "__wrapped__", accessor)
+                code = getattr(accessor, "__code__", None)
+                glb = getattr(accessor, "__globals__", None)
+                if isinstance(code, types.CodeType) and isinstance(glb, dict):
+                    yield from self._walk_nested_code(code, glb)
+
+    def _code_ref_targets(self, obj: Any) -> list[Any]:
+        """User-code objects that *obj*'s code references by global name.
+
+        Resolution happens on every call, deliberately. Only the (code,
+        globals) pairs are memoized -- those are fixed for as long as *obj*
+        exists -- because what a NAME is bound to can change underneath us,
+        and that change is precisely what must invalidate.
+
+        Names come from ``co_names``, i.e. what the code actually LOADS.
+        Annotations are not consulted: ``__annotations__`` holds ``'B'`` as a
+        string for a hint that never runs, so following them would invalidate
+        on a change that cannot alter any result.
+        """
+        pairs = None
+        try:
+            pairs = self._code_refs_cache.get(obj)
+        except TypeError:
+            pass  # unhashable - recompute each time rather than fail
+        if pairs is None:
+            pairs = tuple(self._iter_code_and_globals(obj))
+            try:
+                if len(self._code_refs_cache) < 4096:
+                    self._code_refs_cache[obj] = pairs
+            except TypeError:
+                pass
+
+        targets: list[Any] = []
+        seen_names: set[str] = set()
+        for code, glb in pairs:
+            for name in code.co_names:
+                if name in seen_names:
+                    continue
+                seen_names.add(name)
+                value = glb.get(name)
+                if value is None or value is obj:
+                    continue
+                if not (isinstance(value, type) or callable(value)):
+                    continue
+                try:
+                    if self._is_opaque(value) or not self._is_user_code_object(value):
+                        continue
+                except Exception:  # noqa: BLE001 - never break a call
+                    continue
+                targets.append(value)
+        return targets
+
+    def _code_surface_hash(self, obj: Any) -> str | None:
+        """A digest of *obj*'s code AND the user code that code reaches.
+
+        Folding only what an argument or global directly carries left a real
+        hole: a class whose field factory constructs another class changes
+        behaviour when THAT class is edited, and nothing in the first class's
+        own surface moves. Measured -- the cache returned
+        ``A(value=B(value=10))`` where a fresh call produced
+        ``A(value=B(value=1000))``, a wrong answer rather than a stale one.
+
+        Reachability is STATIC: names the code loads from its globals,
+        transitively, bounded. Code selected at runtime (a class picked out of
+        a dict) still cannot be followed, so this narrows the gap rather than
+        closing it.
+        """
+        own = self._code_surface_own(obj)
+        if own is None:
+            return None
+        try:
+            reached = self._code_ref_closure(obj)
+        except Exception as e:  # noqa: BLE001 - hashing must never break a call
+            logger.debug("[CORE] code-ref closure failed for %r: %s", obj, e)
+            return own
+        if not reached:
+            return own
+        return hashlib.sha256(
+            ":".join([own, *sorted(reached)]).encode("utf-8")
+        ).hexdigest()
+
+    def _code_ref_closure(self, obj: Any) -> list[str]:
+        """Own-digests of every user-code object reachable from *obj*'s code.
+
+        Breadth-first with an identity ``seen`` set, so a mutually-referential
+        pair (``A.make`` returns ``B``, ``B.make`` returns ``A``) terminates
+        instead of recursing forever. Reached objects are held in *keep* for
+        the duration: ``id()`` is only unique among LIVE objects, and a
+        collected one could otherwise let a later object reuse its id and be
+        skipped as already-seen.
+        """
+        seen: set[int] = {id(obj)}
+        keep: list[Any] = [obj]
+        digests: list[str] = []
+        frontier: list[Any] = [obj]
+        depth = 0
+        while frontier and depth < self._MAX_CODE_REF_DEPTH:
+            following: list[Any] = []
+            for source in frontier:
+                for target in self._code_ref_targets(source):
+                    if id(target) in seen:
+                        continue
+                    seen.add(id(target))
+                    keep.append(target)
+                    digest = self._code_surface_own(target)
+                    if digest is not None:
+                        digests.append(
+                            f"{getattr(target, '__qualname__', '?')}:{digest}"
+                        )
+                    following.append(target)
+                    if len(digests) >= self._MAX_CODE_REF_TARGETS:
+                        return digests
+            frontier = following
+            depth += 1
+        return digests
 
     def _class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
         """Every user-code member of *cls* and its user base classes.
@@ -3671,6 +3854,29 @@ class Cash:
                         content = None
                     if ident or content is not None:
                         parts.append((base.__qualname__, name, (ident, content)))
+
+        # Dataclass field factories. ``dataclasses`` DELETES the class
+        # attribute when a field declares ``default_factory``, so the
+        # ``vars()`` walk above cannot see it -- ``getattr_static`` raises
+        # AttributeError for that name. The factory is nonetheless code that
+        # decides what every instance holds: measured, editing
+        # ``field(default_factory=lambda: B(0))`` to ``B(999)`` changed what
+        # ``A()`` produced while leaving this digest byte-identical.
+        #
+        # Read from ``__dataclass_fields__`` rather than calling
+        # ``dataclasses.fields()``: the latter raises on a non-dataclass and
+        # skips pseudo-fields, and this must never raise.
+        fields_map = getattr(cls, "__dataclass_fields__", None)
+        if isinstance(fields_map, dict):
+            for fname, fld in sorted(fields_map.items()):
+                factory = getattr(fld, "default_factory", None)
+                # ``MISSING`` is a sentinel INSTANCE, not None; compare by
+                # identity against the one dataclasses hands out.
+                if factory is None or factory is dataclasses.MISSING:
+                    continue
+                ident = self._code_identity(factory)
+                if ident:
+                    parts.append((cls.__qualname__, f"field:{fname}:factory", ident))
         return parts
 
     def _user_class_source_hash(self, cls: type) -> str:
