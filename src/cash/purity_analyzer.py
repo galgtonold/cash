@@ -34,9 +34,11 @@ warnings / exceptions / cache-key components.
 from __future__ import annotations
 
 import ast
+import dataclasses
 import hashlib
 import inspect
 import logging
+import sys
 import textwrap
 import threading
 from collections.abc import Callable
@@ -654,6 +656,49 @@ def _resolve_callee(node: ast.AST, namespace: dict[str, Any]) -> Any | None:
     return None
 
 
+def _called_names_in_tree(tree: ast.AST) -> list[str]:
+    """Bare names called anywhere in *tree*, including inside lambdas.
+
+    Used for a CLASS body, where the interesting call can sit inside a
+    default-factory lambda: ``field(default_factory=lambda: B(0))``. Only
+    ``ast.Name`` callees -- an attribute call (``mod.f()``) is resolved by
+    the ordinary callee machinery, not here.
+    """
+    names: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            names.append(node.func.id)
+    return names
+
+
+def _class_namespace(cls: type) -> dict[str, Any]:
+    """A globals dict in which *cls*'s body names resolve.
+
+    Prefers a member's ``__globals__``: that works for a class built by
+    ``exec`` into a namespace that never reaches ``sys.modules`` (notebook
+    cells, REPL), where the module lookup returns nothing. Dataclass field
+    factories are consulted too -- for a dataclass with no methods of its
+    own, the factory lambda may be the only member defined in the user's
+    module, since the generated ``__init__`` carries the dataclasses
+    machinery's globals instead.
+    """
+    candidates: list[Any] = list(vars(cls).values())
+    fields_map = getattr(cls, "__dataclass_fields__", None)
+    if isinstance(fields_map, dict):
+        for fld in fields_map.values():
+            factory = getattr(fld, "default_factory", None)
+            if factory is not None and factory is not dataclasses.MISSING:
+                candidates.append(factory)
+    for member in candidates:
+        if isinstance(member, (classmethod, staticmethod)):
+            member = member.__func__
+        glb = getattr(member, "__globals__", None)
+        if isinstance(glb, dict):
+            return glb
+    module = sys.modules.get(getattr(cls, "__module__", "") or "")
+    return getattr(module, "__dict__", {}) or {}
+
+
 def _build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
     """Return a merged ``__globals__`` + closure-cell namespace for *func*.
 
@@ -776,9 +821,31 @@ class PurityAnalyzer:
                     tuple(helper_inner_qualname.split(".")),
                 )
 
-        stack: list[tuple[Callable[..., Any], int]] = [(root_func, 0)]
+        # The third element is HASH_ONLY: fold this callable's code into the
+        # cache key, but do not analyze it for purity. Set for classes reached
+        # from another class's body -- they are followed for correctness, not
+        # audited, and analyzing them reports every ``self.x = x`` in an
+        # ordinary __init__ as a scope mutation.
+        def _queue_class_refs(cls: Any, tree: ast.AST, depth: int) -> None:
+            """Queue user-code objects a CLASS body constructs, hash-only."""
+            if not isinstance(cls, type) or depth >= self._MAX_DEPTH:
+                return
+            class_ns = _class_namespace(cls)
+            for called in _called_names_in_tree(tree):
+                target = class_ns.get(called)
+                if target is None or target is cls or not callable(target):
+                    continue
+                if getattr(target, "_cash_cached", False):
+                    continue
+                if is_pure(target) or is_stateful(target):
+                    continue
+                if not _is_user_code(target, root_module):
+                    continue
+                stack.append((target, depth + 1, True))
+
+        stack: list[tuple[Callable[..., Any], int, bool]] = [(root_func, 0, False)]
         while stack:
-            func, depth = stack.pop()
+            func, depth, hash_only = stack.pop()
             qualname = _qualname_of(func)
             if qualname in visited:
                 continue
@@ -828,9 +895,33 @@ class PurityAnalyzer:
                 opaque.append(qualname)
                 continue
 
+            if hash_only:
+                # Followed for the cache key, not audited: reporting every
+                # ``self.x = x`` in an ordinary __init__ as a scope mutation
+                # would bury the real findings. Keep walking what IT builds,
+                # so the closure stays transitive.
+                opaque.append(qualname)
+                _queue_class_refs(func, tree, depth)
+                continue
+
             func_def = _find_first_function_def(tree)
             if func_def is None:
+                # A CLASS, not a function: a ClassDef has no FunctionDef at
+                # the top, so there is no body to analyze for purity. Bailing
+                # here also ended the WALK, which lost the code the class
+                # reaches. A dataclass field like
+                # ``field(default_factory=lambda: B(0))`` constructs B, so
+                # editing B changes what every instance holds -- measured, the
+                # cache returned ``A(value=B(value=10))`` where a fresh call
+                # produced ``A(value=B(value=1000))``. A wrong answer, not a
+                # stale one.
+                #
+                # Queue what the class body CALLS. Names only, from actual
+                # Call nodes: annotations are deliberately not consulted,
+                # since ``value: B`` never runs and following it would
+                # invalidate on a type hint.
                 opaque.append(qualname)
+                _queue_class_refs(func, tree, depth)
                 continue
 
             # Drop the decorator expressions: ``inspect.getsource`` includes the
@@ -900,7 +991,7 @@ class PurityAnalyzer:
                     return
                 if not _is_user_code(callee, root_module):
                     return
-                stack.append((callee, depth + 1))  # noqa: B023 - same
+                stack.append((callee, depth + 1, False))  # noqa: B023 - same
 
             for call_node in visitor.called_callable_nodes:
                 _queue_helper(
