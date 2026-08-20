@@ -649,6 +649,73 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ---
 
+## Code passed as an argument
+
+A `@cash.cache` function that takes one of *your* classes or functions as an
+argument keys on that code, so editing it invalidates — see [the decorator
+guide](decorator.md#code-you-pass-as-an-argument). Three edges do not, and each
+is a deliberate stopping point rather than an oversight.
+
+### Third-party code passed as an argument is keyed by name, not implementation
+
+<!-- claim: cash/core.py:Cash._is_user_code_object @9fc1e2b0, cash/core.py:Cash._is_user_code_module @9683036c -->
+A class or function you define is hashed by its code. A class from a library is
+not: folding thousands of library methods into every key would churn on every
+upgrade for no correctness gain, and "user code" here means a module with no
+`__file__` (a notebook cell) or one that is neither in the standard library nor
+under `site-packages`. Pin your dependencies if a library's behaviour is part of
+what you are caching.
+
+### A `functools.partial` hides the function it wraps
+
+Passed **directly as an argument**, a `partial` contributes nothing: it has no
+`__code__` of its own, and the function inside it pickles by reference like any
+other. Editing that function's body does not invalidate. This is the one case
+cash tells you about — once, the first time a `partial` reaches a cached call in
+this process (a long-lived kernel will not repeat it):
+
+```text
+cash: partial was passed as an argument but its code could not be hashed, so
+editing it will NOT invalidate the cache. Declare it with
+@cash.cache(depends_on=[...]) if the result depends on its implementation, or
+cash.mark_opaque(partial) to silence this.
+```
+
+**What to do:** exactly what the warning says — name the wrapped function in
+`depends_on=[...]`, or pass it plainly and bind its arguments inside the cached
+function. The advisory stays quiet for stdlib and third-party objects
+(`functools.partial(json.dumps)`, a `weakref.ref`), which are not yours to edit.
+
+### A closure or `lambda` passed as an argument stops the call caching entirely
+
+A nested function's qualified name is `make_scaler.<locals>.scale`, and pickle
+cannot serialize a name it can't look up again — so the argument hash fails
+before the code channel is ever consulted. cash warns once and runs the call
+uncached; it does not return a wrong answer, it just never caches:
+
+<!-- test:skip reason="illustrative: the point is the warning and the absent cache, not a return value" -->
+```python
+def make_scaler(k):
+    def scale(x):
+        return x * k
+    return scale
+
+apply_to(rows, make_scaler(2))   # CashCacheIneffectiveWarning: failed to build
+apply_to(rows, make_scaler(2))   # cache key from argument of type function
+```
+
+The code channel does not rescue this, and would not be enough if it did: two
+functions compiled from the same body have identical bytecode whatever their
+closure cells hold, so `k=2` and `k=3` are indistinguishable to it. Folding
+`__closure__` was rejected deliberately — it drags arbitrary live objects into
+the code channel.
+
+**What to do:** pass a module-level function (whose body *is* hashed, so editing
+it invalidates) and give it the captured value as a plain argument —
+`apply_to(rows, scale, k=3)` — where `args_hash` sees it.
+
+---
+
 ## Reporting something not on this page
 
 Please open an issue with the cell sequence that triggers it and what you expected. Two things make a report immediately actionable:

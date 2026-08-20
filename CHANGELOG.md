@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Notes for whoever curates the next release section — this repo writes the
+CHANGELOG from `git log` at release time, so fold these in and delete the
+heading rather than shipping it as-is.
+
+### Fixed
+
+- Code reached through a cached function's arguments (a class, a function, or an
+  instance's class) now contributes to the cache key, so editing it invalidates
+  rather than returning the previously cached value. `args_hash` pickles its
+  arguments and pickle serializes a class or function **by reference**, so
+  editing a passed schema class used to hit forever — and hand back the stale
+  class object. `cash.mark_opaque(T)` or `@cash.opaque` opts a type out.
+
+  **Migration:** this changes the cache key. An entry that passes user code as
+  an argument recomputes **once** on upgrade, and once more on a Python-version
+  change, because the digest is bytecode (measured: the same class body hashes
+  differently under 3.10 and 3.11). Both are one-time recomputes, never wrong
+  answers.
+
 ## [0.3.0] - 2026-08-07
 
 One headline change: cash now caches the **expensive call inside a statement**,
