@@ -19,7 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
-from ..source_norm import normalize_source_for_hash
+from ..source_norm import bytecode_identity, normalize_source_for_hash
 
 __all__ = ["CodeAnalyzer"]
 
@@ -423,20 +423,17 @@ class CodeAnalyzer:
                   # co_filename that doesn't tokenize as Python; fall through to
                   # the bytecode hash.
 
-        code_obj = getattr(func, '__code__', None)
-        if code_obj is None and hasattr(func, '__wrapped__'):
-            code_obj = getattr(func.__wrapped__, '__code__', None)
-        if code_obj is not None:
-            try:
-                parts = [
-                    code_obj.co_code,
-                    str(code_obj.co_consts).encode('utf-8'),
-                    str(code_obj.co_names).encode('utf-8'),
-                    str(code_obj.co_varnames).encode('utf-8'),
-                ]
-                return hashlib.sha256(b''.join(parts)).hexdigest()
-            except (AttributeError, TypeError, ValueError) as exc:
-                logger.debug("[ANALYSIS] Failed to compute bytecode hash for function: %s", exc)
+        # ``bytecode_identity`` rather than ``str(co_consts)``: a nested code
+        # object's repr embeds a memory ADDRESS, so the old spelling handed
+        # back a different digest in every process for any function
+        # containing a nested def or lambda -- a permanent miss, not a stale
+        # hit, but just as much a broken cache.
+        target = func
+        if getattr(func, '__code__', None) is None and hasattr(func, '__wrapped__'):
+            target = func.__wrapped__
+        digest = bytecode_identity(target)
+        if digest is not None:
+            return digest
 
         # Opaque callable (builtin / C-extension / ufunc / partial): key on a
         # stable identity rather than crashing.

@@ -45,19 +45,20 @@ from .exceptions import (
 )
 from .graph import DependencyGraph
 from .notebook.analysis import CodeAnalyzer
+
 # The decorator path reuses the notebook path's randomness detector verbatim
 # so the two cannot diverge on what counts as an unseeded draw.
 # Imported from the submodule directly, like CodeAnalyzer above, to sidestep
 # ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
 # depends on ``..exceptions``, so there is no cycle.
 from .notebook.annotations import parse_annotation_line
-from .source_norm import normalize_source_for_hash
 from .notebook.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
     describe_random_call,
 )
 from .purity_analyzer import PurityReport, get_analyzer
+from .source_norm import bytecode_identity, normalize_source_for_hash
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -1177,13 +1178,15 @@ class Cash:
            helper does not invalidate the functions that call it. Works
            for module-level functions and lambdas defined in a
            discoverable source file.
-        2. ``fn.__code__.co_code`` - fallback. Works for functions defined
-           in a REPL or via ``exec()``. Bytecode is stable within a Python
-           version; a Python upgrade conservatively invalidates the cache.
-        3. ``fn.__call__.__code__.co_code`` - fallback for callable
-           instances (objects with ``__call__``). Two instances of the
-           same callable class share the same source hash.
-        4. ``type(fn).__qualname__`` - last resort. Doesn't differentiate
+        2. ``bytecode_identity(fn)`` - fallback. Works for functions defined
+           in a REPL or via ``exec()``, and for callable instances (it reads
+           ``__call__``), so two instances of the same callable class share
+           one identity. Folds consts/names/varnames, NOT ``co_code`` alone:
+           a const load's operand is an index, so bare ``co_code`` cannot
+           see ``return "alpha"`` become ``return "omega"``. Bytecode is
+           stable within a Python version; an upgrade conservatively
+           invalidates the cache.
+        3. ``type(fn).__qualname__`` - last resort. Doesn't differentiate
            instances of the same class; the user gets stability within
            a process but coarse cross-process behavior.
         """
@@ -1193,13 +1196,9 @@ class Cash:
             return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         except SOURCE_RETRIEVAL_ERRORS:
             pass
-        code = getattr(fn, "__code__", None)
-        if code is None:
-            # Callable instance - try its __call__.__code__
-            call_method = getattr(fn, "__call__", None)
-            code = getattr(call_method, "__code__", None)
-        if code is not None:
-            return hashlib.sha256(code.co_code).hexdigest()
+        digest = bytecode_identity(fn)
+        if digest is not None:
+            return digest
         return hashlib.sha256(type(fn).__qualname__.encode("utf-8")).hexdigest()
 
 
