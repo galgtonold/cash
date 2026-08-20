@@ -7,9 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Notes for whoever curates the next release section — this repo writes the
-CHANGELOG from `git log` at release time, so fold these in and delete the
-heading rather than shipping it as-is.
+**Curator: fold this block into the new version section, then delete the block.**
+The release process (`.github/copilot-instructions.md`, "Write the CHANGELOG
+entry FROM the `git log`") tells you to *insert* `## [X.Y.Z] - YYYY-MM-DD` at the
+top and says nothing about removing an Unreleased heading — so inserting above
+this without folding it in leaves the note orphaned mid-file. It is a note for
+you, not a release entry.
 
 ### Fixed
 

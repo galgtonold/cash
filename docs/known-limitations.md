@@ -659,20 +659,37 @@ is a deliberate stopping point rather than an oversight.
 ### Third-party code passed as an argument is keyed by name, not implementation
 
 <!-- claim: cash/core.py:Cash._is_user_code_object @9fc1e2b0, cash/core.py:Cash._is_user_code_module @9683036c -->
-A class or function you define is hashed by its code. A class from a library is
-not: folding thousands of library methods into every key would churn on every
-upgrade for no correctness gain, and "user code" here means a module with no
-`__file__` (a notebook cell) or one that is neither in the standard library nor
-under `site-packages`. Pin your dependencies if a library's behaviour is part of
-what you are caching.
+A class or function you define is hashed by its code. One from a library is not:
+folding thousands of library methods into every key would churn on every upgrade
+for no correctness gain. Pin your dependencies if a library's behaviour is part
+of what you are caching.
+
+"User code" is decided in two steps, and the second one has an edge worth
+knowing. First, the *module*: one with no `__file__` (a notebook cell, a REPL,
+`exec`'d source) counts, and so does any file outside the standard library,
+`site-packages`/`dist-packages`, and cash itself. Second, the *object*: cash
+checks that its `__qualname__` really resolves back inside the module it claims,
+and when it cannot confirm that it errs toward "user code". A library class built
+**inside a function** — qualname `factory.<locals>.Widget`, unreachable from the
+module — therefore lands on the safe side and *is* folded, so its key does churn
+on a library upgrade. Measured on a class planted under a `site-packages` path:
+
+| library class | `__qualname__` | folded? |
+|---|---|---|
+| `vendorlib.Widget` (module-level) | `Widget` | no |
+| `vendorlib.DynamicWidget` (built in a function) | `make_dynamic.<locals>.DynamicWidget` | **yes** |
+
+That is a recompute, never a wrong answer. `cash.mark_opaque(TheClass)` stops it
+if the churn matters.
 
 ### A `functools.partial` hides the function it wraps
 
 Passed **directly as an argument**, a `partial` contributes nothing: it has no
 `__code__` of its own, and the function inside it pickles by reference like any
 other. Editing that function's body does not invalidate. This is the one case
-cash tells you about — once, the first time a `partial` reaches a cached call in
-this process (a long-lived kernel will not repeat it):
+where cash tells you the edit will not invalidate — once, the first time a
+`partial` reaches a cached call in this process (a long-lived kernel will not
+repeat it):
 
 ```text
 cash: partial was passed as an argument but its code could not be hashed, so

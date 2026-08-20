@@ -231,20 +231,23 @@ and stopping there keeps the key from churning.
 
 Two boundaries worth knowing:
 
-- **This is the *data* path.** An object you call a method on directly
-  (`obj.transform(x)`) is excluded from value-folding (it might mutate — see the
-  write/mutate rule above). A directly *called* method's own edit is still
-  caught, by the helper-source channel; only a method reached **solely** through
-  such an excluded object can be missed. An object passed as a bare **argument**
-  (`fn(obj)`) is excluded from *this* channel too, but its class's code reaches
-  the key through the argument channel [below](#code-you-pass-as-an-argument).
+- **This is the *data* path, and the exclusion is the method receiver.** An
+  object you call a method on directly (`obj.transform(x)`) is excluded from
+  value-folding — it might mutate, see the write/mutate rule above — and
+  rebinding it does not invalidate. A directly *called* method's own edit is
+  still caught, by the helper-source channel; only a method reached **solely**
+  through such an excluded object can be missed. Handing the object to something
+  else instead (`helper(OBJ, rows)`) is a *read*, so both its value and its
+  class's source fold, exactly as the rule above says.
 - **Source is assumed stable within a process.** cash reads a class's source
   once per interpreter run. Editing a class's source *between two calls in the
   same running process* is out of scope — that only happens with live
   re-`exec`/reload tricks, not normal use. Re-run the process (the ordinary
-  edit-and-rerun loop) and the edit is seen. The argument channel below does
-  **not** share this boundary: it hashes bytecode off the object it was handed,
-  so a re-run notebook cell — a new class object — is seen immediately.
+  edit-and-rerun loop) and the edit is seen. The argument channel below relaxes
+  this, but only for a *re-definition*: it hashes bytecode off the object it was
+  handed and memoizes per object, so a re-run notebook cell — a **new** class
+  object — is seen immediately, while an in-place edit of the same live class
+  (`Schema.render = ...`) still is not.
 
 ### Code you pass as an argument
 
@@ -273,6 +276,11 @@ a namedtuple, an `Enum` member, a `__slots__` instance, or a callable object.
 Base classes count: editing a base invalidates a call that was passed the
 subclass.
 
+This channel walks the **cached function's own** `args` and `kwargs` — what its
+caller handed it — and nothing else. A module-level object the *body* reaches
+for is the separate read-globals channel [above](#module-globals-a-function-reads),
+which folds that object's value and its class's source on its own terms.
+
 The digest is **bytecode**, not source — a class defined in a notebook cell has
 no retrievable source at all, because `inspect.getsource` resolves a class
 through `sys.modules[cls.__module__].__file__` and a kernel's `__main__` has
@@ -283,9 +291,9 @@ code, once.
 
 Where cash is handed code of yours it cannot hash — a `functools.partial` around
 one of your functions is the case you are most likely to meet — it says so once
-rather than silently keying on the name. Third-party code is deliberately **not**
-folded, and rightly gets no warning: see
-[known limitations](known-limitations.md#code-passed-as-an-argument).
+rather than silently keying on the name. Library code is deliberately **not**
+folded, and rightly gets no warning — with one edge where cash cannot tell:
+see [known limitations](known-limitations.md#code-passed-as-an-argument).
 
 #### `cash.mark_opaque(T)` / `@cash.opaque` — opt a type out
 

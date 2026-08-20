@@ -11,15 +11,27 @@ class through ``sys.modules[cls.__module__].__file__`` and a kernel's
 ``__main__`` has none.
 
 An in-process harness answers that question about *its own* process, and every
-shape measured gives a different wrong answer: ``exec`` into a bare ``{}`` (what
-``tests/conftest.py``'s ``MockShell`` does) leaves ``__module__ == 'builtins'``
-and ``getsource`` raises ``TypeError: is a built-in class``; ``exec`` into a
-namespace named ``__main__`` inside a pytest process resolves ``__main__`` to
-the **driver script** and ``getsource`` goes and reads *that file*, so it
-returns the driver's own source whenever the name happens to appear there;
-``InteractiveShell.instance()`` installs its own file-less ``__main__``. None of
-those is the kernel's shape, and a source-based implementation can look like it
-works under any of them.
+shape measured gives a different wrong answer:
+
+* ``exec`` into a bare ``{}`` -- what ``tests/conftest.py``'s ``MockShell`` does
+  -- leaves ``__module__ == 'builtins'``, and ``getsource`` raises
+  ``TypeError: is a built-in class`` (3.10, 3.11, 3.14 alike).
+* ``exec`` into a namespace named ``__main__`` inside a driver process resolves
+  ``__main__`` to the **driver script**, and ``getsource`` opens and reads *that
+  file*. On 3.10/3.11 it then searches it for the name and reports ``OSError:
+  could not find class definition`` -- i.e. it failed only because that
+  particular driver did not contain a matching definition. On 3.13+ there is no
+  search: ``getsource`` goes by ``__firstlineno__``, which is 1 for an ``exec``'d
+  class, so on 3.14 it **returns the driver's own source, unconditionally** --
+  measured: the returned text was the driver file's own first line, not the
+  class at all.
+* ``InteractiveShell.instance()`` installs its own file-less ``__main__``, so it
+  raises like a kernel -- and would NOT have false-passed. That is a reason to
+  keep the real kernel rather than to relax: the conclusion would otherwise rest
+  on an IPython implementation detail nothing pins.
+
+None of those is the kernel's shape. (Interpreter labels matter here: this
+suite's kernel is the interpreter running pytest, currently 3.11.)
 ``test_a_notebook_defined_class_has_no_source_but_is_still_user_code`` below
 pins the kernel's shape by measurement, so a future rewrite onto
 ``inspect.getsource`` fails here with the reason attached rather than shipping.
@@ -41,7 +53,11 @@ from __future__ import annotations
 
 import pytest
 
-pytestmark = [pytest.mark.integration, pytest.mark.core]
+# timeout(90): the global default is 30s and these three tests each boot a
+# FRESH, unpooled kernel (with_cash=False opts out of warm reuse). 13.8s
+# unloaded, but every residual flake in this suite has been a wall-clock
+# measurement sitting near a threshold, so leave headroom for a loaded box.
+pytestmark = [pytest.mark.integration, pytest.mark.core, pytest.mark.timeout(90)]
 
 
 _V1 = "class Schema:\n    def render(self):\n        return 'V1'\n"
