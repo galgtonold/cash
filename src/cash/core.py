@@ -1592,9 +1592,18 @@ class Cash:
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
             current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
-            current_state_hash = self._fold_code_args(args, kwargs, current_state_hash)
+            # ONE canonicalisation, fed to both the code channel and the value
+            # channel. `_fold_code_args` on the RAW arguments saw a class
+            # passed explicitly but not the identical class arriving as a
+            # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
+            # logical call -- produced two cache keys and two executions,
+            # breaking the unification invariant stated at the top of this
+            # class. Measured: 2 executions before, 1 after, with a primitive
+            # default (`add(k=7)`) as the control that always was 1.
+            normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            current_state_hash = self._fold_code_args(*normalized_args, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
-            args_hash = self._serialize_args(func_name, args, kwargs)
+            args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
             if args_hash is None:
                 arg_type_name = self._first_unhashable_arg_type(args, kwargs)
                 if arg_type_name == "<unknown>":
@@ -1700,8 +1709,12 @@ class Cash:
             # would differ from the one a real call builds for exactly the
             # arguments this feature exists for, so `explain()` would report
             # `no_entry` for a call that in fact hits. `warn=False` because
-            # inspecting an explanation must stay silent.
-            current_state_hash = self._fold_code_args(args, kwargs, current_state_hash, warn=False)
+            # inspecting an explanation must stay silent. Canonicalised once
+            # and reused below, exactly as `_resolve_cache_key` does.
+            normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            current_state_hash = self._fold_code_args(
+                *normalized_args, current_state_hash, warn=False,
+            )
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
@@ -1729,7 +1742,9 @@ class Cash:
             )
 
         try:
-            args_hash = self._serialize_args(func_name, args, kwargs)
+            args_hash = self._serialize_args(
+                func_name, args, kwargs, normalized=normalized_args,
+            )
         except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
             return CacheExplanation(
@@ -3361,17 +3376,64 @@ class Cash:
     def _value_identity(self, v: Any) -> str:
         """Address-free identity for a value that is not itself a code object.
 
-        ``_hash_arg_payload`` folds CONTENT and is already the established,
-        address-free tool used throughout this file for exactly this;
-        ``repr()`` is a last resort for the rare value it cannot handle (an
-        unpicklable default argument, say) -- at which point whatever
-        ``repr()`` gives, address included, cannot be helped without a THIRD
-        hashing mechanism.
+        ``_hash_arg_payload`` folds CONTENT and is the established,
+        address-free tool used throughout this file for exactly this. What it
+        cannot pickle used to fall back to ``repr()`` -- and ``repr()`` is a
+        memory ADDRESS for the most ordinary unpicklable default there is.
+        Measured in three fresh processes, ``def m(self, key=lambda r: r)``
+        produced three different class digests, as did ``lock=threading.
+        Lock()`` and the keyword-only spelling; the entry could therefore
+        never hit again after a kernel restart, silently and permanently.
+
+        ``_class_surface_parts`` already refuses a ``repr()`` fallback, on the
+        grounds that it "would reintroduce the address leak this member-content
+        fold exists to avoid". This makes the two agree.
         """
         try:
             return self._hash_arg_payload((v,), {})
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
-            return repr(v)
+            return self._unpicklable_identity(v)
+
+    def _unpicklable_identity(self, v: Any, _depth: int = 0) -> str:
+        """Process-stable stand-in for a value ``_hash_arg_payload`` refused.
+
+        Recursive because ``__defaults__`` is hashed as a WHOLE TUPLE: one
+        unpicklable element poisons the entire tuple, so every element that
+        CAN be folded still is, and only the residue is approximated.
+
+        A lambda, function or class is approximated by its CODE SURFACE, which
+        is strictly better than the old ``repr()`` on both counts -- stable
+        across processes, and sensitive to an edit of the lambda's body, which
+        an address never was. Anything else collapses to its type name: two
+        distinct unpicklable objects of one type then share an identity, but
+        the only thing that ever distinguished them was an address that
+        changed every process, so the "distinction" was noise, never signal.
+        """
+        if _depth > 4:
+            return "<deep>"
+        if isinstance(v, (list, tuple, set, frozenset)):
+            inner = [self._unpicklable_identity(x, _depth + 1) for x in v]
+            if isinstance(v, (set, frozenset)):
+                # Set iteration order follows the hash table, and string
+                # hashing is randomized per process -- sort or reintroduce the
+                # very instability this method exists to remove.
+                inner.sort()
+            return f"{type(v).__qualname__}[{'|'.join(inner)}]"
+        if isinstance(v, dict):
+            return "dict[" + "|".join(sorted(
+                f"{self._unpicklable_identity(k, _depth + 1)}"
+                f"={self._unpicklable_identity(val, _depth + 1)}"
+                for k, val in v.items()
+            )) + "]"
+        try:
+            return self._hash_arg_payload((v,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            pass
+        surface = self._code_surface_hash(v)
+        if surface is not None:
+            return f"code:{surface}"
+        cls = type(v)
+        return f"<{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}>"
 
     def _code_surface_hash(self, obj: Any) -> str | None:
         """A digest of the user code *obj* carries, or ``None``.
@@ -3427,7 +3489,7 @@ class Cash:
             pass  # unhashable object - skip the memo, keep the answer
         return digest
 
-    def _class_surface_parts(self, cls: type) -> list[tuple]:
+    def _class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
         """Every user-code member of *cls* and its user base classes.
 
         Walked in reverse MRO so a subclass override lands after the base it
@@ -3436,7 +3498,16 @@ class Cash:
         """
         parts: list[tuple] = []
         for base in reversed(cls.__mro__):
-            if base is object or not self._is_user_code_object(base):
+            # An OPAQUE base contributes nothing, so `mark_opaque(VendorBase)`
+            # also stops a `Derived(VendorBase)` digest moving when the vendor
+            # edits its own base. Without this the escape hatch worked only
+            # when the opaque class was the one passed, which is not how
+            # `docs/decorator.md` advertises it. Per-base and exact-match, so
+            # opacity still does not inherit: marking a base does not make
+            # `Derived` opaque, it only drops that base's own members.
+            if base is object or self._is_opaque(base):
+                continue
+            if not self._is_user_code_object(base):
                 continue
             for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
                 # __firstlineno__ (class attribute since Python 3.13, absent on
@@ -3475,10 +3546,59 @@ class Cash:
                 ident = self._code_identity(target)
                 if callable(member):
                     if ident:
+                        # When `ident` was reached by UNWRAPPING (``.func`` /
+                        # ``__wrapped__``), it describes the inner function and
+                        # says nothing about the state the wrapper itself
+                        # carries: ``functools.partial(scale, 3)`` and
+                        # ``partial(scale, 4)`` unwrap to the same ``scale``
+                        # and collided. Fold the wrapper's own content too,
+                        # exactly as the non-callable branch does for a
+                        # ``partialmethod``. Skipped when nothing was
+                        # unwrapped, because a plain method's own pickle is
+                        # its module path -- which would make every class's
+                        # digest depend on the module it lives in.
+                        if target is not member:
+                            try:
+                                own = self._hash_arg_payload((member,), {})
+                            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                                own = None
+                            if own is not None:
+                                parts.append((base.__qualname__, name, (ident, own)))
+                                continue
                         parts.append((base.__qualname__, name, ident))
-                    # else: no __code__/__wrapped__/.func reachable (e.g. a C
-                    # extension callable) - nothing to fold, matches the prior
-                    # "drop it" behavior.
+                        continue
+                    # A callable member with NO reachable ``__code__``: a
+                    # nested class (``class Outer: inner = Inner``), a
+                    # ``functools.partial``, a callable instance. Dropping it
+                    # meant the non-callable branch below folded content for
+                    # an ordinary member while these three folded nothing at
+                    # all -- measured: editing ``Inner.f`` left ``Outer``'s
+                    # digest unchanged, and ``partial(scale, 3)`` collided
+                    # with ``partial(scale, 4)``.
+                    #
+                    # The nested walk recurses into ``_class_surface_parts``
+                    # DIRECTLY, not through the memoized ``_code_surface_hash``,
+                    # and is bounded by DEPTH rather than by a cycle set. A
+                    # cycle set would make the digest depend on which class
+                    # happened to be hashed first (the memo would hold a cut
+                    # result for one order and a full one for the other) --
+                    # reintroducing exactly the cross-process instability
+                    # ``_value_identity`` was just fixed for. A depth bound
+                    # gives every process the same answer regardless of order.
+                    nested = None
+                    inner_cls = member if isinstance(member, type) else type(member)
+                    if _depth < 2 and self._is_user_code_object(inner_cls):
+                        sub_parts = self._class_surface_parts(inner_cls, _depth + 1)
+                        if sub_parts:
+                            nested = hashlib.sha256(
+                                repr(sub_parts).encode("utf-8"),
+                            ).hexdigest()
+                    try:
+                        content = self._hash_arg_payload((member,), {})
+                    except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                        content = None
+                    if nested is not None or content is not None:
+                        parts.append((base.__qualname__, name, (nested, content)))
                 else:
                     # A non-callable member. Fold its OWN content
                     # unconditionally -- a descriptor like
@@ -4077,8 +4197,20 @@ class Cash:
         args_bytes = pickle.dumps(payload)
         return hashlib.sha256(args_bytes).hexdigest()
 
-    def _serialize_args(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
-        normalized = self._normalize_call_args(func_name, args, kwargs)
+    def _serialize_args(self, func_name: str, args: tuple, kwargs: dict,
+                        normalized: tuple[tuple, dict] | None = None) -> str | None:
+        """Hash the arguments, canonicalised.
+
+        *normalized* lets a caller that has ALREADY canonicalised pass the
+        result in rather than have it recomputed. That is not an optimisation:
+        the code channel (`_fold_code_args`) and this value channel must key
+        off the SAME bound arguments, or `f()` and `f(<the default>)` -- the
+        same logical call -- disagree in one channel and split into two cache
+        entries. One canonicalisation, shared, is the only way that invariant
+        holds by construction rather than by two call sites staying in step.
+        """
+        if normalized is None:
+            normalized = self._normalize_call_args(func_name, args, kwargs)
         try:
             return self._hash_arg_payload(*normalized)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:

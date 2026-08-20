@@ -642,3 +642,189 @@ def test_the_advisory_ignores_a_stdlib_callable_object(c, warned_unhashable):
         warnings.simplefilter("always")
         takes(functools.partial(nb.user_scale, 3))
     assert len(_code_advisories(rec)) == 1, "control: a partial over USER code must warn"
+
+
+# ---------------------------------------------------------------------------
+# Code arriving as a parameter DEFAULT. `_serialize_args` canonicalises with
+# `apply_defaults()`; the code channel did not, so the same logical call keyed
+# two different ways depending on whether the caller typed the argument.
+# ---------------------------------------------------------------------------
+
+
+def _defaulted(c, schema, calls, name):
+    """A cached function whose only link to *schema* is its parameter DEFAULT.
+
+    Every version comes from one code object with one source text, so
+    ``_hash_callable_source`` cannot tell two of them apart, and
+    ``_fold_defaults`` pickles the default BY REFERENCE (module + qualname),
+    which is byte-identical across a same-module redefinition. The code channel
+    is the only thing left that can see the difference -- which is what makes
+    these two tests measure the fix rather than some other channel.
+    """
+    def build(schema=schema):
+        calls.append(1)
+        return schema().r()
+
+    build.__name__ = build.__qualname__ = name
+    return c.cache(build)
+
+
+def test_a_class_default_keys_the_same_whether_or_not_it_is_passed(c):
+    """The unification invariant this class states about itself: "logically-
+    identical calls written differently ... share one cache key". Folding the
+    RAW arguments saw `build(Schema)` and not `build()`, so the same call split
+    into two entries and executed twice.
+
+    The primitive-default control is what separates "the fix works" from "the
+    binding machinery is broken for everything": it was never affected.
+    """
+    for label, order in (("omitted first", (False, True)), ("passed first", (True, False))):
+        calls: list = []
+        nb = _nb_module()
+        v1 = _define(nb, "class Schema:\n    def r(self): return 'V1'\n", name="Schema")
+        build = _defaulted(c, v1, calls, f"default_takes_{label.split()[0]}")
+        for pass_it in order:
+            build(v1) if pass_it else build()
+        assert len(calls) == 1, f"{label}: f() and f(<the default>) must share one key"
+
+    plain: list = []
+
+    def add(k=7):
+        plain.append(1)
+        return k
+
+    add.__name__ = add.__qualname__ = "default_add"
+    cached_add = c.cache(add)
+    cached_add()
+    cached_add(7)
+    assert len(plain) == 1, "control: a primitive default was already unified"
+
+
+def test_editing_a_class_used_as_a_default_invalidates_the_omitted_call(c):
+    """The correctness half. Before the fix `build()` returned the pre-edit
+    result forever while `build(Schema)` recomputed -- same logical call,
+    opposite answers, decided by whether the caller typed the argument."""
+    calls: list = []
+    nb = _nb_module()
+    v1 = _define(nb, "class Schema:\n    def r(self): return 'V1'\n", name="Schema")
+    assert _defaulted(c, v1, calls, "stale_takes")() == "V1"
+    v2 = _define(nb, "class Schema:\n    def r(self): return 'V2'\n", name="Schema")
+    assert _defaulted(c, v2, calls, "stale_takes")() == "V2", "served a stale default class"
+    assert len(calls) == 2
+
+
+# ---------------------------------------------------------------------------
+# A callable class member with no reachable `__code__` folded nothing at all,
+# where an ordinary member folded its content.
+# ---------------------------------------------------------------------------
+
+
+def _holder_digests(c, prelude, body_a, body_b):
+    """Digests of ``Holder`` before and after an edit, in ONE module.
+
+    One module because a pickle-by-reference component (which is what folds a
+    callable member's own state) legitimately differs on the module name, so
+    two modules would report a difference for the wrong reason.
+    """
+    nb = _nb_module()
+    _define(nb, prelude + body_a, name="Holder")
+    before = c._code_surface_hash(nb.Holder)
+    _define(nb, prelude + body_b, name="Holder")
+    return before, c._code_surface_hash(nb.Holder)
+
+
+_HOLDER_PRELUDE = (
+    "import functools\n"
+    "def scale(k, x): return k * x\n"
+    "class Op:\n"
+    "    def __init__(self, k): self.k = k\n"
+    "    def __call__(self, x): return x * self.k\n"
+)
+
+
+def test_a_nested_class_attribute_folds_the_nested_class_body(c):
+    """`class Outer: inner = Inner`. A class IS callable and its
+    `_code_identity` is `()`, so the callable branch dropped it while the
+    non-callable branch would have folded content -- editing `Inner.f` left
+    `Outer`'s digest unchanged."""
+    before, after = _holder_digests(
+        c, _HOLDER_PRELUDE,
+        "class Inner:\n    def f(self): return 'V1'\nclass Holder:\n    inner = Inner\n",
+        "class Inner:\n    def f(self): return 'V2'\nclass Holder:\n    inner = Inner\n",
+    )
+    assert before != after
+
+
+def test_a_partial_class_attribute_folds_its_bound_arguments(c):
+    """`ident` is reached by unwrapping `.func`, so `partial(scale, 3)` and
+    `partial(scale, 4)` both resolved to `scale` and collided."""
+    before, after = _holder_digests(
+        c, _HOLDER_PRELUDE,
+        "class Holder:\n    op = functools.partial(scale, 3)\n",
+        "class Holder:\n    op = functools.partial(scale, 4)\n",
+    )
+    assert before != after
+
+
+def test_a_callable_instance_attribute_folds_state_and_class_code(c):
+    """Both halves of the same member: the instance's own bound state (`Op(2)`
+    vs `Op(3)`), and the class code behind its `__call__`. Before the fix a
+    callable instance attribute contributed neither."""
+    state_before, state_after = _holder_digests(
+        c, _HOLDER_PRELUDE,
+        "class Holder:\n    op = Op(2)\n",
+        "class Holder:\n    op = Op(3)\n",
+    )
+    assert state_before != state_after, "the instance's bound state is not folded"
+
+    edited = _HOLDER_PRELUDE.replace("return x * self.k", "return x * self.k + 1")
+    nb = _nb_module()
+    holder = "class Holder:\n    op = Op(2)\n"
+    _define(nb, _HOLDER_PRELUDE + holder, name="Holder")
+    code_before = c._code_surface_hash(nb.Holder)
+    _define(nb, edited + holder, name="Holder")
+    assert code_before != c._code_surface_hash(nb.Holder), "__call__ body is not folded"
+
+
+def test_an_unchanged_holder_still_collides(c):
+    """The control for the three tests above: re-executing the SAME body must
+    produce the SAME digest, or 'differs after an edit' proves nothing."""
+    before, after = _holder_digests(
+        c, _HOLDER_PRELUDE,
+        "class Holder:\n    op = Op(2)\n",
+        "class Holder:\n    op = Op(2)\n",
+    )
+    assert before == after
+
+
+def test_an_opaque_base_does_not_move_its_subclass_digest(c, opaque_registry):
+    """`mark_opaque(VendorBase)` is advertised as the escape hatch for a class
+    you cannot edit, but `_class_surface_parts` walked the whole MRO without
+    consulting it, so a vendor's own edit still churned every subclass key.
+
+    Two controls, because the claim is a NEGATIVE: unmarked, the same edit must
+    move the digest; and marked, the subclass's OWN edit must still move it --
+    otherwise this could pass by making the digest constant.
+    """
+    body = ("class VendorBase:\n    def helper(self): return {v!r}\n"
+            "class Derived(VendorBase):\n    def mine(self): return {m}\n")
+    nb = _nb_module()
+    _define(nb, body.format(v="V1", m=1), name="Derived")
+    unmarked_before = c._code_surface_hash(nb.Derived)
+    _define(nb, body.format(v="V2", m=1), name="Derived")
+    assert unmarked_before != c._code_surface_hash(nb.Derived), \
+        "control: an unmarked base edit must move the digest"
+
+    nb2 = _nb_module()
+    _define(nb2, body.format(v="V1", m=1), name="Derived")
+    CashCls.mark_opaque(nb2.VendorBase)
+    marked_before = c._code_surface_hash(nb2.Derived)
+    _define(nb2, body.format(v="V2", m=1), name="Derived")
+    CashCls.mark_opaque(nb2.VendorBase)
+    assert marked_before == c._code_surface_hash(nb2.Derived), \
+        "an opaque base must not move its subclass's digest"
+
+    _define(nb2, body.format(v="V2", m=2), name="Derived")
+    CashCls.mark_opaque(nb2.VendorBase)
+    assert marked_before != c._code_surface_hash(nb2.Derived), \
+        "control: the subclass's OWN edit must still move the digest"

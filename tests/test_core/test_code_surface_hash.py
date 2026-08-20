@@ -24,6 +24,8 @@ import hashlib
 import itertools
 import subprocess
 
+import pytest
+
 from cash import Cash as CashCls
 
 _notebook_module_counter = itertools.count()
@@ -285,18 +287,53 @@ def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
     assert h1 == h2
 
 
-def test_a_default_sentinel_hashes_identically_across_processes():
-    """Blocker-1-class regression: the common `def m(self, x=_MISSING)`
-    sentinel-default idiom reprs `__defaults__` with the sentinel's own
-    memory address (`<object object at 0x...>`), the same disease as
-    Blocker 1's nested code objects, one layer up (a function default
-    instead of a comprehension)."""
+@pytest.mark.parametrize(
+    "label,default",
+    [
+        # THE SHAPES THAT ACTUALLY REACH THE FALLBACK. `_value_identity` folds
+        # a default through `_hash_arg_payload` and only approximates what that
+        # REFUSES, so a default has to be UNPICKLABLE to exercise the path at
+        # all. Each of these produced 3 distinct digests in 3 fresh processes
+        # before the fix, i.e. an entry that could never hit again after a
+        # kernel restart.
+        ("lambda default", "key=lambda r: r"),
+        ("keyword-only lambda default", "*, key=lambda r: r"),
+        ("threading.Lock default", "lock=threading.Lock()"),
+        # THE CONTROL, and the reason this test was rewritten: `object()` is
+        # PICKLABLE, so it never reaches the fallback and passed no matter what
+        # the fallback did. Kept, because a sentinel default is a real idiom
+        # and it must stay stable -- but it can no longer stand alone.
+        ("object() sentinel (picklable: control)", "x=object()"),
+    ],
+)
+def test_an_unpicklable_default_hashes_identically_across_processes(label, default):
+    """A default `_hash_arg_payload` cannot pickle used to fall back to
+    `repr()`, and `repr()` of a lambda or a Lock is a memory ADDRESS.
+
+    Must run in SUBPROCESSES: an address leak is invisible within one process,
+    because nothing forces two objects on one heap to collide the way two
+    separate interpreter invocations reliably differ.
+    """
     body = (
+        "import threading\n"
         "class S:\n"
-        "    def m(self, x=object()):\n"
-        "        return x\n"
+        f"    def m(self, {default}):\n"
+        "        return 1\n"
     )
-    h1 = _code_surface_hash_in_subprocess(body)
-    h2 = _code_surface_hash_in_subprocess(body)
-    assert h1 != "None"
-    assert h1 == h2
+    digests = {_code_surface_hash_in_subprocess(body) for _ in range(3)}
+    assert "None" not in digests
+    assert len(digests) == 1, f"{label}: {len(digests)} distinct digests across 3 processes"
+
+
+def test_an_edited_lambda_default_changes_the_hash():
+    """The upgrade that comes with dropping `repr()`: the fallback now folds a
+    lambda default's CODE SURFACE, so editing its body invalidates. An address
+    never carried that information -- it changed on every run and on no edit.
+
+    Same process is enough here: this is about sensitivity, not stability, and
+    the stability half is pinned above.
+    """
+    c = CashCls()
+    a = _exec_class("class S:\n    def m(self, key=lambda r: r): return key\n")
+    b = _exec_class("class S:\n    def m(self, key=lambda r: r.x): return key\n")
+    assert c._code_surface_hash(a) != c._code_surface_hash(b)
