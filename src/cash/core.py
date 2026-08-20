@@ -592,6 +592,10 @@ class Cash:
         # running interpreter, so it is hashed once and reused; see
         # _user_class_source_hash / _instance_class_source_parts.
         self._user_class_src_cache: dict = {}
+        # user class or function -> code-surface digest (bytecode-based, class-
+        # aware); see _code_surface_hash. Keyed on the object itself, not
+        # id(), so a redefinition (a new object) is a distinct memo entry.
+        self._code_surface_cache: dict = {}
         # func_name -> (function the signature was read from, inspect.Signature
         # or None if introspection failed). Used to bind call arguments to a
         # canonical form so that logically-identical calls written differently
@@ -3024,6 +3028,103 @@ class Cash:
             )
         return v
 
+    @staticmethod
+    def _code_identity(fn: Any) -> tuple:
+        """The bytecode-level identity of a callable, or ``()`` if it has none.
+
+        Bytecode rather than source because a class defined in a notebook cell
+        has no retrievable source at all: ``inspect.getsource`` resolves a class
+        through ``sys.modules[cls.__module__].__file__``, and a notebook
+        ``__main__`` has none. A function escapes this via ``co_filename``,
+        which is why ``_hash_callable_source`` works for helpers and not here.
+
+        Comments and formatting are absent from bytecode, so they do not
+        invalidate -- strictly better than source hashing. Docstrings live in
+        ``co_consts`` and do.
+        """
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return ()
+        return (
+            code.co_code,
+            tuple(repr(k) for k in code.co_consts),
+            tuple(code.co_names),
+            repr(getattr(fn, "__defaults__", None)),
+            repr(getattr(fn, "__kwdefaults__", None)),
+        )
+
+    def _code_surface_hash(self, obj: Any) -> str | None:
+        """A digest of the user code *obj* carries, or ``None``.
+
+        ``None`` means "cannot determine" and the caller must fall back to
+        today's by-reference key. This never raises: a hashing failure must not
+        break a cached call.
+
+        Memoized on the object itself, following ``_user_class_src_cache``:
+        redefining a class produces a NEW object and therefore a distinct dict
+        key, so the memo cannot serve a stale entry. Keying on ``id()`` would
+        be a correctness bug, since CPython recycles addresses.
+        """
+        cached = self._code_surface_cache.get(obj)
+        if cached is not None:
+            return cached
+        try:
+            if isinstance(obj, type):
+                if not self._is_user_code_object(obj):
+                    return None
+                parts = self._class_surface_parts(obj)
+            elif callable(obj):
+                if not self._is_user_code_object(obj):
+                    return None
+                ident = self._code_identity(obj)
+                if not ident:
+                    return None
+                parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
+            else:
+                return None
+            if not parts:
+                return None
+            digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
+        except Exception as e:  # noqa: BLE001 - hashing must never break a call
+            logger.debug("[CORE] code-surface hash failed for %r: %s", obj, e)
+            return None
+        try:
+            if len(self._code_surface_cache) < 4096:
+                self._code_surface_cache[obj] = digest
+        except TypeError:
+            pass  # unhashable object - skip the memo, keep the answer
+        return digest
+
+    def _class_surface_parts(self, cls: type) -> list[tuple]:
+        """Every user-code member of *cls* and its user base classes.
+
+        Walked in reverse MRO so a subclass override lands after the base it
+        replaces, and sorted within each class so dict ordering cannot change
+        the digest.
+        """
+        parts: list[tuple] = []
+        for base in reversed(cls.__mro__):
+            if base is object or not self._is_user_code_object(base):
+                continue
+            for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
+                if name in ("__dict__", "__weakref__", "__module__"):
+                    continue
+                target = member
+                if isinstance(member, (classmethod, staticmethod)):
+                    target = member.__func__
+                elif isinstance(member, property):
+                    for tag, accessor in (("get", member.fget), ("set", member.fset)):
+                        ident = self._code_identity(accessor)
+                        if ident:
+                            parts.append((base.__qualname__, f"{name}.{tag}", ident))
+                    continue
+                ident = self._code_identity(target)
+                if ident:
+                    parts.append((base.__qualname__, name, ident))
+                elif not callable(member):
+                    parts.append((base.__qualname__, name, repr(member)))
+        return parts
+
     def _user_class_source_hash(self, cls: type) -> str:
         """Memoized source hash of a USER class.
 
@@ -3036,7 +3137,12 @@ class Cash:
         cached = self._user_class_src_cache.get(cls)
         if cached is not None:
             return cached
-        h = self._hash_callable_source(cls)  # inspect.getsource over the class body
+        # Prefer the class-aware surface. _hash_callable_source has no class
+        # branch: a class has no __code__, so it falls through to
+        # type(fn).__qualname__ -- literally "type" for EVERY class, which
+        # collides all source-less classes onto one hash instead of merely
+        # failing to notice an edit.
+        h = self._code_surface_hash(cls) or self._hash_callable_source(cls)
         if len(self._user_class_src_cache) < 4096:
             self._user_class_src_cache[cls] = h
         return h
@@ -3238,9 +3344,45 @@ class Cash:
     @staticmethod
     def _is_user_code_object(obj: Any) -> bool:
         """True when *obj* -- a class OR a function -- is defined in code the user
-        plausibly edits. Both carry ``__module__``, so one predicate serves both."""
-        mod = sys.modules.get(getattr(obj, "__module__", None) or "")
-        return mod is not None and Cash._is_user_code_module(mod)
+        plausibly edits. Both carry ``__module__``, so one predicate serves both.
+
+        ``__module__`` alone is not trustworthy. A class or function built by
+        ``exec(body, ns)`` where *ns* lacks a ``__name__`` key (a bare ``{}``,
+        unlike a real notebook's globals, which start with ``__name__ ==
+        '__main__'``) gets a fallback ``__module__`` from CPython's implicit
+        ``__module__ = __name__`` lookup at definition time: ``None`` for a
+        function, and -- because that lookup falls all the way through to the
+        REAL ``builtins`` module's own ``__name__`` attribute -- literally
+        ``'builtins'`` for a class. Neither reflects where the code actually
+        lives. Confirm *obj* is actually reachable through the module it
+        claims before trusting that module's verdict; otherwise this is the
+        exec()/notebook case the predicate exists to catch, so it counts as
+        user code (mirroring ``_is_user_code_module``'s fileless-module
+        handling).
+        """
+        mod_name = getattr(obj, "__module__", None)
+        mod = sys.modules.get(mod_name) if mod_name else None
+        if mod is None:
+            return True
+        if not Cash._qualname_resolves_in(mod, obj):
+            return True
+        return Cash._is_user_code_module(mod)
+
+    @staticmethod
+    def _qualname_resolves_in(mod: Any, obj: Any) -> bool:
+        """True if *obj* is actually reachable by walking its ``__qualname__``
+        from *mod*, not merely claiming *mod* via ``__module__``."""
+        qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
+        if not qualname:
+            return False
+        cur = mod
+        for part in qualname.split("."):
+            if part == "<locals>":
+                return False  # nested in a function body - not module-reachable
+            cur = getattr(cur, part, None)
+            if cur is None:
+                return False
+        return cur is obj
 
     def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
         """``(module_global, attribute)`` pairs the body reads, from bytecode.
