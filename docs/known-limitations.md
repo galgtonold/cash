@@ -497,10 +497,15 @@ iterations with no deliberate pause between the last keystroke and the run — i
 practice tens of milliseconds apart rather than zero, since each browser action
 is its own round trip — all 20 checked against the value that existed only on
 screen, on two independent runs, the second of them on the bundle that actually
-ships (v0.1.2). **What was not tested: Notebook 7, split installs, and a
-cold-kernel `Run All`.**
-Notebook 7 is built on the same JupyterLab 4 extension API, but we have not run
-it there, so treat it as unverified rather than working.
+ships (v0.1.2).
+
+The same 20 iterations were then run against **Jupyter Notebook 7.6.2, also on
+Windows**, on that same shipped bundle: 20 of 20 again. Notebook 7 pins
+`jupyterlab>=4.6.3,<4.7`, so it is not merely a similar API — it runs the very
+JupyterLab whose `commsOverSubshells` default the extension has to override, and
+the plugin was confirmed *activated* there rather than merely discovered.
+
+**What was not tested: split installs, and a cold-kernel `Run All`.**
 
 **The first execution on a fresh kernel still reads the saved file.** The
 extension's comm cannot open until the kernel has a target to open it against,
@@ -641,6 +646,90 @@ Two large objects that differ only outside the sampled region therefore hash ide
     by pickling their full content, so a deep mutation to a large DataFrame
     argument (e.g. row 700 of 1000) *is* detected and produces a fresh cache
     entry. The sampling blind spot does not reach the decorator's argument hash.
+
+---
+
+## Code passed as an argument
+
+A `@cash.cache` function that takes one of *your* classes or functions as an
+argument keys on that code, so editing it invalidates — see [the decorator
+guide](decorator.md#code-you-pass-as-an-argument). Three edges do not, and each
+is a deliberate stopping point rather than an oversight.
+
+### Third-party code passed as an argument is keyed by name, not implementation
+
+<!-- claim: cash/core.py:Cash._is_user_code_object @9fc1e2b0, cash/core.py:Cash._is_user_code_module @9683036c -->
+A class or function you define is hashed by its code. One from a library is not:
+folding thousands of library methods into every key would churn on every upgrade
+for no correctness gain. Pin your dependencies if a library's behaviour is part
+of what you are caching.
+
+"User code" is decided in two steps, and the second one has an edge worth
+knowing. First, the *module*: one with no `__file__` (a notebook cell, a REPL,
+`exec`'d source) counts, and so does any file outside the standard library,
+`site-packages`/`dist-packages`, and cash itself. Second, the *object*: cash
+checks that its `__qualname__` really resolves back inside the module it claims,
+and when it cannot confirm that it errs toward "user code". A library class built
+**inside a function** — qualname `factory.<locals>.Widget`, unreachable from the
+module — therefore lands on the safe side and *is* folded, so its key does churn
+on a library upgrade. Measured on a class planted under a `site-packages` path:
+
+| library class | `__qualname__` | folded? |
+|---|---|---|
+| `vendorlib.Widget` (module-level) | `Widget` | no |
+| `vendorlib.DynamicWidget` (built in a function) | `make_dynamic.<locals>.DynamicWidget` | **yes** |
+
+That is a recompute, never a wrong answer. `cash.mark_opaque(TheClass)` stops it
+if the churn matters.
+
+### A `functools.partial` hides the function it wraps
+
+Reaching a cached call as an argument — or as a parameter default the caller
+left out — a `partial` contributes nothing: it has no `__code__` of its own, and
+the function inside it pickles by reference like any other. Editing that
+function's body does not invalidate. This is the one case where cash tells you
+the edit will not invalidate — once, the first time a `partial` reaches a cached
+call in this process (a long-lived kernel will not repeat it):
+
+```text
+cash: partial reached a cached call as an argument or a parameter default, but
+its code could not be hashed, so editing it will NOT invalidate the cache.
+Declare it with @cash.cache(depends_on=[...]) if the result depends on its
+implementation, or cash.mark_opaque(partial) to silence this.
+```
+
+**What to do:** exactly what the warning says — name the wrapped function in
+`depends_on=[...]`, or pass it plainly and bind its arguments inside the cached
+function. The advisory stays quiet for stdlib and third-party objects
+(`functools.partial(json.dumps)`, a `weakref.ref`), which are not yours to edit.
+
+### A closure or `lambda` passed as an argument stops the call caching entirely
+
+A nested function's qualified name is `make_scaler.<locals>.scale`, and pickle
+cannot serialize a name it can't look up again — so the argument hash fails
+before the code channel is ever consulted. cash warns once and runs the call
+uncached; it does not return a wrong answer, it just never caches:
+
+<!-- test:skip reason="illustrative: the point is the warning and the absent cache, not a return value" -->
+```python
+def make_scaler(k):
+    def scale(x):
+        return x * k
+    return scale
+
+apply_to(rows, make_scaler(2))   # CashCacheIneffectiveWarning: failed to build
+apply_to(rows, make_scaler(2))   # cache key from argument of type function
+```
+
+The code channel does not rescue this, and would not be enough if it did: two
+functions compiled from the same body have identical bytecode whatever their
+closure cells hold, so `k=2` and `k=3` are indistinguishable to it. Folding
+`__closure__` was rejected deliberately — it drags arbitrary live objects into
+the code channel.
+
+**What to do:** pass a module-level function (whose body *is* hashed, so editing
+it invalidates) and give it the captured value as a plain argument —
+`apply_to(rows, scale, k=3)` — where `args_hash` sees it.
 
 ---
 

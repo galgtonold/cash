@@ -43,6 +43,9 @@ def test_core_exports_stable():
         # Purity declarations
         'pure', 'stateful', 'is_pure', 'is_stateful',
         'analyze_function_purity', 'mark_pure', 'mark_stateful',
+        # Code-surface opt-out
+        'opaque',  # public since 06c2bd6 (decorator form of the escape hatch)
+        'mark_opaque',  # public since 06c2bd6 (same, for a class you cannot edit)
         # Configuration
         'get_config', 'CashConfig', 'create_default_config',
         # Backends

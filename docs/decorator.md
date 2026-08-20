@@ -231,16 +231,93 @@ and stopping there keeps the key from churning.
 
 Two boundaries worth knowing:
 
-- **This is the *data* path.** An object you call a method on directly
-  (`obj.transform(x)`) or pass as a bare argument (`fn(obj)`) is excluded from
-  value-folding (it might mutate — see the write/mutate rule above). A directly
-  *called* method's own edit is still caught, by the helper-source channel; only
-  a method reached **solely** through such an excluded object can be missed.
+- **This is the *data* path, and the exclusion is the method receiver.** An
+  object you call a method on directly (`obj.transform(x)`) is excluded from
+  value-folding — it might mutate, see the write/mutate rule above — and
+  rebinding it does not invalidate. A directly *called* method's own edit is
+  still caught, by the helper-source channel; only a method reached **solely**
+  through such an excluded object can be missed. Handing the object to something
+  else instead (`helper(OBJ, rows)`) is a *read*, so both its value and its
+  class's source fold, exactly as the rule above says.
 - **Source is assumed stable within a process.** cash reads a class's source
   once per interpreter run. Editing a class's source *between two calls in the
   same running process* is out of scope — that only happens with live
   re-`exec`/reload tricks, not normal use. Re-run the process (the ordinary
-  edit-and-rerun loop) and the edit is seen.
+  edit-and-rerun loop) and the edit is seen. The argument channel below relaxes
+  this, but only for a *re-definition*: it hashes bytecode off the object it was
+  handed and memoizes per object, so a re-run notebook cell — a **new** class
+  object — is seen immediately, while an in-place edit of the same live class
+  (`Schema.render = ...`) still is not.
+
+### Code you pass as an argument
+
+`args_hash` pickles the arguments, and pickle serializes a class or a function
+**by reference** — its module and qualified name, never its body. So a call that
+takes your code as data used to hit forever:
+
+<!-- test:skip reason="illustrative: the two Schema definitions are the same name edited between runs, which one script cannot express" -->
+```python
+class Schema:
+    def render(self): ...        # ...edit this
+
+@cash.cache
+def build(schema):
+    return schema().render()
+
+build(Schema)                    # edit Schema, call again -> used to return the old answer
+```
+
+<!-- claim: cash/core.py:Cash._fold_code_args @fb6b947e, cash/core.py:Cash._iter_code_carriers @90eef39d -->
+Your code reached through the arguments now folds into `state_hash`, so editing
+it invalidates. cash finds it in a class, a function, an instance (through its
+class), any of those nested in a list/tuple/set/dict, and an instance whose
+class is a subclass of `dict`/`list`/`tuple`/`set`/`str`/`int`/`float`/`bytes`,
+a namedtuple, an `Enum` member, a `__slots__` instance, or a callable object.
+Base classes count: editing a base invalidates a call that was passed the
+subclass.
+
+This channel walks the **cached function's own bound arguments** — what the
+caller handed it, *plus any parameter default the caller left out* — and nothing
+else. Defaults count because the same logical call must key the same way however
+it is written: `build()` and `build(Schema)` share one entry, and editing
+`Schema` invalidates both. A module-level object the *body* reaches for is the
+separate read-globals channel [above](#module-globals-a-function-reads), which
+folds that object's value and its class's source on its own terms.
+
+The digest is **bytecode**, not source — a class defined in a notebook cell has
+no retrievable source at all, because `inspect.getsource` resolves a class
+through `sys.modules[cls.__module__].__file__` and a kernel's `__main__` has
+none. Two consequences follow from that choice: reformatting or a comment-only
+edit does *not* invalidate (bytecode carries neither — though a docstring, class
+or method, does), and a Python-version upgrade re-keys every entry that passes
+code, once.
+
+Where cash is handed code of yours it cannot hash — a `functools.partial` around
+one of your functions is the case you are most likely to meet — it says so once
+rather than silently keying on the name. Library code is deliberately **not**
+folded, and rightly gets no warning — with one edge where cash cannot tell:
+see [known limitations](known-limitations.md#code-passed-as-an-argument).
+
+#### `cash.mark_opaque(T)` / `@cash.opaque` — opt a type out
+
+<!-- claim: cash/core.py:Cash._is_opaque @7af6c0fc, cash/__init__.py:opaque @3e1ca111 -->
+For a marker class you pass but do not depend on, or one whose code churns for
+reasons that never change the result:
+
+```python
+@cash.opaque                       # a class you own
+class RenderTarget:
+    ...
+
+VendorWidget = type("VendorWidget", (), {})   # stands in for a library's class
+cash.mark_opaque(VendorWidget)                # one you can't decorate — same marker,
+                                              # applied from outside
+```
+
+`@cash.opaque` returns the class itself, not a wrapper, so `isinstance` and
+identity comparisons are unaffected. Neither spelling is inherited: a subclass
+of an opaque class is *not* opaque, because it may carry freshly written methods
+of its own. Mark the subclass too if you want the same treatment.
 
 ### How a call decides hit vs miss
 
@@ -257,13 +334,24 @@ flowchart TD
     F -->|Yes| G[Return cached value]
 ```
 
-<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962 -->
+<!-- claim: cash/core.py:Cash._compute_cache_key @a3272962, cash/core.py:Cash._fold_code_args @fb6b947e -->
 The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
   `depends_on` source + transitive helper hashes (so editing a helper
   invalidates) + the content of any **module global the function reads**
-  (see above).
+  (see above) + the code of any class or function of yours reached through
+  the **arguments** ([below](#code-you-pass-as-an-argument)) — so passing a
+  schema class or a callback and then editing it invalidates instead of
+  returning the old answer.
+  Every source hash in `state_hash` is taken over a **normalized** form of
+  the code, not its raw text: comments, blank lines, trailing whitespace and
+  the exact indentation width are dropped first. Adding a comment or running
+  a formatter therefore keeps your cache, while any change to what the code
+  actually does invalidates it. Two exceptions stay load-bearing on purpose —
+  `# @cash:` annotations (`no-cache`, `ttl`, `persist`, …), because they are
+  directives rather than prose, and docstrings, which are ordinary string
+  constants a function may well return.
 - `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
   set).
 - `args_hash` is a SHA-256 over the pickled args (with custom hashers
@@ -272,7 +360,7 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
   are equal but for insertion order share a key —
   `f({"a": 1, "b": 2})` and `f({"b": 2, "a": 1})` hit the same entry.
 
-When something that affects the result *isn't* among those five signals — a
+When something that affects the result *isn't* among those signals — a
 database table, a remote URL, a file you never `open()` — declare it with the
 parameters below. And when a miss (or a suspicious hit) mystifies you,
 [`func.explain()`](#funcexplainargs-kwargs) shows which signal decided.
@@ -620,7 +708,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @02d3d980 -->
+<!-- claim: cash/core.py:Cash._explain_call @0c1153d9 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

@@ -16,6 +16,7 @@ import types
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_norm import normalize_source_for_hash
 
 __all__ = ["FunctionTracker", "is_local_module"]
 
@@ -247,7 +248,14 @@ class FunctionTracker:
             source = inspect.getsource(func)
             # Dedent to normalize indentation
             source = textwrap.dedent(source)
-            source_hash = hashlib.sha256(source.encode('utf-8')).hexdigest()
+            # Hash the NORMALIZED form: this hash lands in the notebook
+            # statement cache key (see cache_key.py), so hashing raw text
+            # meant a comment added to any referenced function recomputed
+            # the statement. The raw source is still cached alongside for
+            # callers that want to read it.
+            source_hash = hashlib.sha256(
+                normalize_source_for_hash(source).encode('utf-8')
+            ).hexdigest()
 
             _evict_source_cache(self._source_cache, self.MAX_CACHE_SIZE)
             self._source_cache[cache_key] = (source_hash, source)

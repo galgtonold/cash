@@ -51,6 +51,7 @@ from .notebook.analysis import CodeAnalyzer
 # ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
 # depends on ``..exceptions``, so there is no cycle.
 from .notebook.annotations import parse_annotation_line
+from .source_norm import normalize_source_for_hash
 from .notebook.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
@@ -70,6 +71,32 @@ except ImportError:  # IPython not installed
 # Sentinel object used by wrapper helpers to signal a cache miss without
 # conflicting with any legitimate cached value (including None).
 _CACHE_MISS = object()
+
+# Types that can carry no user code. `_iter_code_carriers` walks EVERY argument
+# of every cached call, so this is checked once per element of a container and
+# is deliberately a module-level global (one LOAD_GLOBAL) rather than a class
+# attribute (an extra attribute lookup per element). Ordered by how often each
+# actually shows up in an argument, because `in` on a tuple scans in order.
+#
+# Tested as `type(v) in _CODELESS_PRIMS`, NOT `isinstance(v, _CODELESS_PRIMS)`:
+# isinstance is true for SUBCLASSES, so a user class deriving from str/int/
+# float/bytes -- and every IntEnum member, whose type is the user's own enum
+# class -- was skipped here and never reached the fold. That is a missed
+# invalidation on exactly the bug class this feature exists to fix.
+#
+# And a TUPLE, not a frozenset: `x in frozenset` hashes `x`, and a class whose
+# metaclass defines __eq__ without __hash__ is itself unhashable (see
+# `_is_opaque`, which carries a test for that shape), so a frozenset raises
+# TypeError on an instance of one and fails the whole fold open. Tuple `in`
+# compares with `is`/`==` and never hashes. Measured over 200k elements it is
+# also FASTER than the isinstance form it replaces: 4.0ms vs 5.1ms (ints),
+# 3.2ms vs 3.4ms (strs), 3.6ms vs 4.3ms (mixed).
+_CODELESS_PRIMS = (str, int, float, bool, type(None), bytes, complex, bytearray)
+
+#: Exact types of the builtin containers walked below. An instance of a SUBCLASS
+#: of one of these is still walked for its contents, but it is also a user
+#: object whose class carries code, so it additionally contributes that class.
+_BUILTIN_CONTAINERS = (dict, list, tuple, set, frozenset)
 
 P = ParamSpec("P")
 T = TypeVar("T")
@@ -592,6 +619,10 @@ class Cash:
         # running interpreter, so it is hashed once and reused; see
         # _user_class_source_hash / _instance_class_source_parts.
         self._user_class_src_cache: dict = {}
+        # user class or function -> code-surface digest (bytecode-based, class-
+        # aware); see _code_surface_hash. Keyed on the object itself, not
+        # id(), so a redefinition (a new object) is a distinct memo entry.
+        self._code_surface_cache: dict = {}
         # func_name -> (function the signature was read from, inspect.Signature
         # or None if introspection failed). Used to bind call arguments to a
         # canonical form so that logically-identical calls written differently
@@ -885,6 +916,247 @@ class Cash:
         payload = ":".join(sorted(parts))
         return hashlib.sha256(f"{state_hash}:selfdeps:{payload}".encode('utf-8')).hexdigest()
 
+    #: Types already reported as unhashable, so the advisory stays once-per-type
+    #: per session rather than once per call.
+    _WARNED_UNHASHABLE: set = set()
+
+    @staticmethod
+    def _carrier_name(carrier: Any) -> str:
+        """A stable, address-free name for a code carrier.
+
+        ``__qualname__`` for anything that has one -- a class, a function.
+        Otherwise the carrier's TYPE, deliberately not ``repr()``: a
+        ``functools.partial`` reprs as ``functools.partial(<function f at
+        0x...>, 3)``, and that address is unique per object, so a
+        ``repr()``-derived key would make ``_WARNED_UNHASHABLE`` dedup
+        nothing (one warning per partial ever constructed, plus a global set
+        that grows without bound) and would make a folded part label differ
+        between two processes holding equal arguments.
+        """
+        name = getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None)
+        if isinstance(name, str) and name:
+            return name
+        t = type(carrier)
+        return getattr(t, "__qualname__", None) or getattr(t, "__name__", None) or "?"
+
+    @staticmethod
+    def _is_user_code_carrier(carrier: Any) -> bool:
+        """``_is_user_code_object`` for the ADVISORY rather than for hashing.
+
+        ``_is_user_code_object`` answers "could not confirm reachability ->
+        treat as user code". That is the safe direction when deciding whether
+        to HASH something and the wrong one when deciding whether to WARN about
+        it: an object with no ``__qualname__`` of its own -- a
+        ``functools.partial``, a ``weakref.ref`` -- can never be confirmed, so
+        every single one was reported as un-hashable user code.
+
+        Judge such an object by what it WRAPS (``.func``, the same attribute
+        ``_class_surface_parts`` already follows for ``singledispatchmethod``
+        and ``cached_property``), else by its TYPE. Measured:
+        ``functools.partial(json.dumps)`` and ``weakref.ref(x)`` stop warning,
+        while ``functools.partial(<a user function>)`` still warns -- and it
+        must, because the wrapped body genuinely is absent from the key.
+        """
+        if getattr(carrier, "__qualname__", None) or getattr(carrier, "__name__", None):
+            return Cash._is_user_code_object(carrier)
+        wrapped = getattr(carrier, "func", None)
+        if wrapped is not None:
+            return Cash._is_user_code_object(wrapped)
+        return Cash._is_user_code_object(type(carrier))
+
+    def _warn_unhashable_code_once(self, carrier: Any) -> None:
+        """Tell the user once that a reached type's code is NOT in the key.
+
+        "reached", not "passed": the code channel keys off the BOUND arguments,
+        so a carrier arriving as a parameter default the caller never typed
+        gets here too.
+        """
+        name = self._carrier_name(carrier)
+        if name in Cash._WARNED_UNHASHABLE:
+            return
+        Cash._WARNED_UNHASHABLE.add(name)
+        msg = (
+            f"cash: {name} reached a cached call as an argument or a parameter "
+            f"default, but its code could not be hashed, so editing it will NOT "
+            f"invalidate the cache. Declare it with "
+            f"@cash.cache(depends_on=[...]) if the result depends on its "
+            f"implementation, or cash.mark_opaque({name}) to silence this."
+        )
+        logger.warning(msg)
+        warnings.warn(msg, category=CashImpurityWarning, stacklevel=2)
+
+    def _iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
+        """Yield objects in *value* that carry user code.
+
+        Depth-bounded at 8, matching ``_stabilize_for_global_hash``. ``_seen``
+        guards self-referential containers, and doubles as a once-per-argument
+        dedup for the classes yielded on behalf of instances: a list of 50k
+        objects of one class must evaluate the user-code gate once, not 50k
+        times. Dedup by identity is safe in both roles -- a class already
+        yielded does not need yielding again, and the fold takes a ``set`` of
+        the parts anyway.
+        """
+        if _depth > 8:
+            return
+        # Primitives carry no user code, and in a large argument they ARE the
+        # argument. Returning before ``_seen`` is touched keeps a list of a
+        # million numbers allocation-free; otherwise the id-set below would grow
+        # to the container's length on every cached call. Mirrors
+        # ``_iter_contained``'s first line. See `_CODELESS_PRIMS` for why this
+        # is an exact-type test against a tuple rather than an isinstance.
+        if type(value) in _CODELESS_PRIMS:
+            return
+        if _seen is None:
+            _seen = set()
+        # ``_seen`` is recorded on the paths that need it -- containers, for
+        # cycle safety, and yielded carriers, to yield each once -- and NOT for
+        # a leaf instance. A leaf cannot contain itself, and its class is
+        # deduped by `_instance_class_carrier` anyway, so an entry per element
+        # bought nothing and cost a set insert per element: measured 2000
+        # ns/element at 200k against 470 ns/element at 10k, i.e. the set itself
+        # had become the superlinear term.
+        if isinstance(value, type):
+            if id(value) not in _seen:
+                _seen.add(id(value))
+                yield value
+            return
+        if callable(value):
+            # Distinguish a callable INSTANCE (whose class defines ``__call__``
+            # in Python) from a function/method/C-callable. An instance has no
+            # ``__code__`` of its own -- its code lives on its class -- so
+            # yielding the instance would fold NOTHING, while the identical
+            # object WITHOUT ``__call__`` takes the instance branch below and
+            # folds its class. Measured before this branch existed: adding
+            # ``__call__`` to a class silently removed that class's code from
+            # the key, and the instance then also tripped the unhashable
+            # advisory. ``_is_opaque`` returns the same verdict for a class as
+            # for one of its instances, so routing the class here rather than
+            # the instance leaves opacity unchanged.
+            call = getattr(type(value), "__call__", None)
+            if getattr(call, "__code__", None) is not None:
+                cls = self._instance_class_carrier(value, _seen)
+                if cls is not None:
+                    yield cls
+                return
+            if id(value) not in _seen:
+                _seen.add(id(value))
+                yield value
+            return
+        # The primitive test is repeated INLINE in each loop below rather than
+        # left to the recursive call's own first line. It is the same test and
+        # the same result, but it skips building a generator frame per element,
+        # and a container of primitives is the overwhelmingly common argument:
+        # measured 25.8ms -> 7.2ms for a 200k-int list.
+        if isinstance(value, dict):
+            if id(value) in _seen:
+                return
+            _seen.add(id(value))
+            # A dict SUBCLASS is both a container to walk and a user object
+            # whose class carries code. Handling only the first is the same
+            # "invisible because of what it inherits from" hole that the
+            # exact-type test above closes for str/int subclasses.
+            if type(value) is not dict:
+                cls = self._instance_class_carrier(value, _seen)
+                if cls is not None:
+                    yield cls
+            for k, v in value.items():
+                if type(k) not in _CODELESS_PRIMS:
+                    yield from self._iter_code_carriers(k, _depth + 1, _seen)
+                if type(v) not in _CODELESS_PRIMS:
+                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+        elif isinstance(value, (list, tuple, set, frozenset)):
+            if id(value) in _seen:
+                return
+            _seen.add(id(value))
+            if type(value) not in _BUILTIN_CONTAINERS:
+                cls = self._instance_class_carrier(value, _seen)
+                if cls is not None:
+                    yield cls
+            for v in value:
+                if type(v) not in _CODELESS_PRIMS:
+                    yield from self._iter_code_carriers(v, _depth + 1, _seen)
+        else:
+            # An instance contributes its class's code. Deliberately NOT gated
+            # on ``hasattr(value, "__dict__")``: a class using ``__slots__``
+            # gives its instances no ``__dict__``, and that has nothing to do
+            # with whether the user edits the class. Same family as the two
+            # holes above -- a user class invisible because of how it is
+            # declared rather than because of what it is.
+            cls = self._instance_class_carrier(value, _seen)
+            if cls is not None:
+                yield cls
+
+    def _instance_class_carrier(self, value: Any, _seen: set) -> type | None:
+        """``type(value)`` if it is user code and not already seen this walk.
+
+        Split out because three branches need it, and because the dedup is the
+        difference between one user-code gate evaluation per ARGUMENT and one
+        per ELEMENT -- ``_is_user_code_object`` is a ``sys.modules`` lookup plus
+        a ``__qualname__`` walk, and a list of 50k instances of one class was
+        paying it 50k times (measured: 50000 calls -> 1).
+
+        A plain function rather than a generator on purpose: the callers are in
+        the per-element path, and `yield from` on a fresh generator costs more
+        per element than the call plus the `is not None` test it replaces.
+        """
+        cls = type(value)
+        if id(cls) in _seen:
+            return None
+        _seen.add(id(cls))
+        return cls if self._is_user_code_object(cls) else None
+
+    def _fold_code_args(self, args: tuple, kwargs: dict, state_hash: str,
+                        warn: bool = True) -> str:
+        """Fold user code reached through the arguments into the key.
+
+        ``args_hash`` is a digest of the PICKLED arguments, and pickle
+        serializes a class or function by reference -- module plus qualname,
+        never its code. So editing a passed class produced an identical key and
+        a hit, and cash handed back the stale class object it had cached.
+
+        Folded into ``state_hash`` rather than ``args_hash`` because this is
+        code, and ``state_hash`` is already where code lives: function source,
+        ``depends_on``, transitive helpers, module globals read.
+
+        ``warn=False`` for ``_explain_call``, whose contract is that inspecting
+        an explanation emits no warnings.
+        """
+        parts: list[str] = []
+        seen_carriers: set[int] = set()
+        try:
+            for value in (*args, *kwargs.values()):
+                for carrier in self._iter_code_carriers(value):
+                    # Dedup ACROSS arguments too, not just within one walk:
+                    # `f(a, b, c)` with three instances of one class reaches
+                    # `_is_opaque` + `_code_surface_hash` once instead of three
+                    # times. Safe by identity because every carrier is
+                    # reachable from `args`/`kwargs` for this whole loop, so no
+                    # id can be recycled underneath us.
+                    if id(carrier) in seen_carriers:
+                        continue
+                    seen_carriers.add(id(carrier))
+                    if self._is_opaque(carrier):
+                        continue
+                    digest = self._code_surface_hash(carrier)
+                    if digest is not None:
+                        parts.append(f"{self._carrier_name(carrier)}:{digest}")
+                    elif warn and self._is_user_code_carrier(carrier):
+                        # User code we could not hash: a C-extension type, an
+                        # exotic descriptor, a ``functools.partial`` (whose
+                        # wrapped function pickles by reference like any
+                        # other). We fall back to today's key, which means an
+                        # edit will NOT invalidate -- so say so once. This is
+                        # the residue where cash genuinely cannot determine the
+                        # answer, and silence is the danger.
+                        self._warn_unhashable_code_once(carrier)
+        except Exception as e:  # noqa: BLE001 - never break a call
+            logger.debug("[CORE] code-arg fold failed: %s", e)
+            return state_hash
+        if not parts:
+            return state_hash
+        payload = ":".join(sorted(set(parts)))
+        return hashlib.sha256(f"{state_hash}:codeargs:{payload}".encode('utf-8')).hexdigest()
+
     @staticmethod
     def _hash_callable_source(fn: Callable) -> str:
         """Return a stable hex digest representing *fn*'s body.
@@ -892,12 +1164,19 @@ class Cash:
         Used by `register_hasher` to embed the hasher's source
         identity in the cache key, so that changing a hasher's body
         invalidates dependent cache entries even when the hasher's
-        output coincidentally matches the old one.
+        output coincidentally matches the old one. Also the
+        ``hash_callable`` injected into ``SysModulesHelperResolver``,
+        which makes it the live per-call identity of every transitive
+        HELPER -- so what this returns decides whether editing a helper
+        recomputes its callers.
 
         Resolution order:
 
-        1. ``inspect.getsource(fn)`` - primary. Works for module-level
-           functions and lambdas defined in a discoverable source file.
+        1. ``inspect.getsource(fn)`` - primary, NORMALIZED via
+           ``normalize_source_for_hash`` so a comment or reformat in a
+           helper does not invalidate the functions that call it. Works
+           for module-level functions and lambdas defined in a
+           discoverable source file.
         2. ``fn.__code__.co_code`` - fallback. Works for functions defined
            in a REPL or via ``exec()``. Bytecode is stable within a Python
            version; a Python upgrade conservatively invalidates the cache.
@@ -910,7 +1189,8 @@ class Cash:
         """
         try:
             src = inspect.getsource(fn)
-            return hashlib.sha256(src.encode("utf-8")).hexdigest()
+            normalized = normalize_source_for_hash(src)
+            return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         except SOURCE_RETRIEVAL_ERRORS:
             pass
         code = getattr(fn, "__code__", None)
@@ -1327,8 +1607,18 @@ class Cash:
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
             current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
+            # ONE canonicalisation, fed to both the code channel and the value
+            # channel. `_fold_code_args` on the RAW arguments saw a class
+            # passed explicitly but not the identical class arriving as a
+            # parameter DEFAULT, so `build()` and `build(Schema)` -- the same
+            # logical call -- produced two cache keys and two executions,
+            # breaking the unification invariant stated at the top of this
+            # class. Measured: 2 executions before, 1 after, with a primitive
+            # default (`add(k=7)`) as the control that always was 1.
+            normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            current_state_hash = self._fold_code_args(*normalized_args, current_state_hash)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
-            args_hash = self._serialize_args(func_name, args, kwargs)
+            args_hash = self._serialize_args(func_name, args, kwargs, normalized=normalized_args)
             if args_hash is None:
                 arg_type_name = self._first_unhashable_arg_type(args, kwargs)
                 if arg_type_name == "<unknown>":
@@ -1430,6 +1720,16 @@ class Cash:
             current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
+            # Mirrors `_resolve_cache_key`: without this the predicted key
+            # would differ from the one a real call builds for exactly the
+            # arguments this feature exists for, so `explain()` would report
+            # `no_entry` for a call that in fact hits. `warn=False` because
+            # inspecting an explanation must stay silent. Canonicalised once
+            # and reused below, exactly as `_resolve_cache_key` does.
+            normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            current_state_hash = self._fold_code_args(
+                *normalized_args, current_state_hash, warn=False,
+            )
         except (TypeError, ValueError, RuntimeError) as e:
             return CacheExplanation(
                 would_hit=False,
@@ -1457,7 +1757,9 @@ class Cash:
             )
 
         try:
-            args_hash = self._serialize_args(func_name, args, kwargs)
+            args_hash = self._serialize_args(
+                func_name, args, kwargs, normalized=normalized_args,
+            )
         except (TypeError, ValueError, pickle.PicklingError, AttributeError) as e:
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
             return CacheExplanation(
@@ -3024,6 +3326,354 @@ class Cash:
             )
         return v
 
+    def _code_identity(self, fn: Any) -> tuple:
+        """The bytecode-level identity of a callable, or ``()`` if it has none.
+
+        Bytecode rather than source because a class defined in a notebook cell
+        has no retrievable source at all: ``inspect.getsource`` resolves a class
+        through ``sys.modules[cls.__module__].__file__``, and a notebook
+        ``__main__`` has none. A function escapes this via ``co_filename``,
+        which is why ``_hash_callable_source`` works for helpers and not here.
+
+        Comments and formatting are absent from bytecode, so they do not
+        invalidate -- strictly better than source hashing. Docstrings live in
+        ``co_consts`` and do.
+
+        Instance method (not static) because defaults/kwdefaults go through
+        ``_value_identity`` -> ``self._hash_arg_payload``: a default like
+        ``def m(self, x=_MISSING)`` reprs as ``<object object at 0x...>``,
+        the same address leak as a nested code object, just one layer up.
+        """
+        code = getattr(fn, "__code__", None)
+        if code is None:
+            return ()
+        return (
+            self._code_object_identity(code),
+            self._value_identity(getattr(fn, "__defaults__", None)),
+            self._value_identity(getattr(fn, "__kwdefaults__", None)),
+        )
+
+    def _code_object_identity(self, code: types.CodeType) -> tuple:
+        """Structural identity of one ``types.CodeType``, recursing into any
+        nested code object in ``co_consts`` instead of ``repr()``-ing it, and
+        folding every OTHER const through ``_value_identity`` instead of
+        ``repr()`` too.
+
+        A lambda, a generator expression, or -- pre-3.12, before PEP 709
+        inlined them -- a plain comprehension compiles to a NESTED code
+        object stored in the enclosing method's ``co_consts``. Its ``repr()``
+        is ``<code object <genexpr> at 0x...>``: a live memory address, fresh
+        every process. Measured: the same class's digest differed between two
+        freshly started processes whenever a method held one of these,
+        permanently missing the cache cross-process for any user class with a
+        comprehension in a method. A nested code object carries no defaults of
+        its own (those belong to the FUNCTION eventually built from it, not to
+        the raw code object), so only co_code/co_consts/co_names apply here.
+
+        The SAME disease reaches a plain (non-code) const too: ``x in
+        {'alpha', 'beta'}`` compiles a ``frozenset`` straight into
+        ``co_consts``, and ``repr()`` of a set/frozenset follows the table's
+        internal (hash-order-dependent) iteration -- under Python's default
+        per-process string-hash randomization, measured 2 distinct orderings
+        across repeated fresh processes for a 2-element set. ``_value_identity``
+        folds CONTENT instead, which is order-independent for a set/frozenset.
+        """
+        return (
+            code.co_code,
+            tuple(
+                self._code_object_identity(k) if isinstance(k, types.CodeType)
+                else self._value_identity(k)
+                for k in code.co_consts
+            ),
+            tuple(code.co_names),
+        )
+
+    def _value_identity(self, v: Any) -> str:
+        """Address-free identity for a value that is not itself a code object.
+
+        ``_hash_arg_payload`` folds CONTENT and is the established,
+        address-free tool used throughout this file for exactly this. What it
+        cannot pickle used to fall back to ``repr()`` -- and ``repr()`` is a
+        memory ADDRESS for the most ordinary unpicklable default there is.
+        Measured in three fresh processes, ``def m(self, key=lambda r: r)``
+        produced three different class digests, as did ``lock=threading.
+        Lock()`` and the keyword-only spelling; the entry could therefore
+        never hit again after a kernel restart, silently and permanently.
+
+        ``_class_surface_parts`` already refuses a ``repr()`` fallback, on the
+        grounds that it "would reintroduce the address leak this member-content
+        fold exists to avoid". This makes the two agree.
+        """
+        try:
+            return self._hash_arg_payload((v,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            return self._unpicklable_identity(v)
+
+    def _unpicklable_identity(self, v: Any, _depth: int = 0) -> str:
+        """Process-stable stand-in for a value ``_hash_arg_payload`` refused.
+
+        Recursive because ``__defaults__`` is hashed as a WHOLE TUPLE: one
+        unpicklable element poisons the entire tuple, so every element that
+        CAN be folded still is, and only the residue is approximated.
+
+        A lambda, function or class is approximated by its CODE SURFACE, which
+        is strictly better than the old ``repr()`` on both counts -- stable
+        across processes, and sensitive to an edit of the lambda's body, which
+        an address never was.
+
+        Everything else keeps its ``repr()`` UNLESS that repr carries a memory
+        address. Only an address-bearing repr is the thing this method exists
+        to remove; a value-based ``__repr__`` -- ``Config(n=1)`` -- is
+        deterministic across processes and carries real information, and
+        discarding it was measured to serve a stale result when the value
+        changed. Collapsing to a type name is the last resort, for the case
+        where the only thing distinguishing two objects was an address that
+        changed every process: noise, never signal.
+        """
+        if _depth > 4:
+            return "<deep>"
+        if isinstance(v, (list, tuple, set, frozenset)):
+            inner = [self._unpicklable_identity(x, _depth + 1) for x in v]
+            if isinstance(v, (set, frozenset)):
+                # Set iteration order follows the hash table, and string
+                # hashing is randomized per process -- sort or reintroduce the
+                # very instability this method exists to remove.
+                inner.sort()
+            return f"{type(v).__qualname__}[{'|'.join(inner)}]"
+        if isinstance(v, dict):
+            return "dict[" + "|".join(sorted(
+                f"{self._unpicklable_identity(k, _depth + 1)}"
+                f"={self._unpicklable_identity(val, _depth + 1)}"
+                for k, val in v.items()
+            )) + "]"
+        try:
+            return self._hash_arg_payload((v,), {})
+        except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+            pass
+        surface = self._code_surface_hash(v)
+        if surface is not None:
+            return f"code:{surface}"
+        try:
+            text = repr(v)
+        except Exception as e:  # noqa: BLE001 - a __repr__ may raise
+            logger.debug("[CORE] repr() failed while identifying %s: %s", type(v), e)
+            text = ""
+        # ``0x`` is how CPython renders the address in every default repr
+        # (``<object object at 0x...>``, ``<function <lambda> at 0x...>``,
+        # ``functools.partial(<function f at 0x...>, 3)``), so its presence is
+        # the test for "this repr is not reproducible".
+        #
+        # KNOWN RESIDUAL, and it is the UNSAFE direction -- do not read the
+        # collapse below as conservative. A value-based repr that happens to
+        # carry a hex literal (``Config(mask=0xff)``) is collapsed too, so
+        # editing that value does NOT invalidate: measured, such a default
+        # serves a STALE result. Accepted because the shape is narrow, not
+        # because it is safe. Widening the test (e.g. ``0x`` only when preceded
+        # by ``at ``) would shrink it further.
+        if text and "0x" not in text:
+            return text
+        cls = type(v)
+        return f"<{getattr(cls, '__module__', '?')}.{getattr(cls, '__qualname__', '?')}>"
+
+    def _code_surface_hash(self, obj: Any) -> str | None:
+        """A digest of the user code *obj* carries, or ``None``.
+
+        ``None`` means "cannot determine" and the caller must fall back to
+        today's by-reference key. This never raises: a hashing failure must not
+        break a cached call.
+
+        Memoized on the object itself, following ``_user_class_src_cache``:
+        redefining a class produces a NEW object and therefore a distinct dict
+        key, so the memo cannot serve a stale entry. Keying on ``id()`` would
+        be a correctness bug, since CPython recycles addresses.
+        """
+        try:
+            # Dispatch FIRST, memo read second. Every argument to a cached
+            # function passes through here (Task 4), and most are not a
+            # class or callable at all -- a list, dict, set, numpy array,
+            # DataFrame. Checking the dispatch before touching the memo means
+            # those return None from a plain isinstance()/callable() check
+            # (neither raises) instead of reaching a dict.get() that would
+            # raise TypeError and get caught, on the common case rather than
+            # the exception.
+            is_type = isinstance(obj, type)
+            if not (is_type or callable(obj)):
+                return None
+            if not self._is_user_code_object(obj):
+                return None
+            # The memo read must still be INSIDE the try: by this point *obj*
+            # is a class or a callable, and while both are hashable in the
+            # overwhelming common case, neither is guaranteed to be (a
+            # __call__-implementing instance can set __hash__ = None) -- this
+            # must not be the one path in this method that can still raise.
+            cached = self._code_surface_cache.get(obj)
+            if cached is not None:
+                return cached
+            if is_type:
+                parts = self._class_surface_parts(obj)
+            else:
+                ident = self._code_identity(obj)
+                if not ident:
+                    return None
+                parts = [(getattr(obj, "__qualname__", "?"), "", ident)]
+            if not parts:
+                return None
+            digest = hashlib.sha256(repr(parts).encode("utf-8")).hexdigest()
+        except Exception as e:  # noqa: BLE001 - hashing must never break a call
+            logger.debug("[CORE] code-surface hash failed for %r: %s", obj, e)
+            return None
+        try:
+            if len(self._code_surface_cache) < 4096:
+                self._code_surface_cache[obj] = digest
+        except TypeError:
+            pass  # unhashable object - skip the memo, keep the answer
+        return digest
+
+    def _class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
+        """Every user-code member of *cls* and its user base classes.
+
+        Walked in reverse MRO so a subclass override lands after the base it
+        replaces, and sorted within each class so dict ordering cannot change
+        the digest.
+        """
+        parts: list[tuple] = []
+        for base in reversed(cls.__mro__):
+            # An OPAQUE base contributes nothing, so `mark_opaque(VendorBase)`
+            # also stops a `Derived(VendorBase)` digest moving when the vendor
+            # edits its own base. Without this the escape hatch worked only
+            # when the opaque class was the one passed, which is not how
+            # `docs/decorator.md` advertises it. Per-base and exact-match, so
+            # opacity still does not inherit: marking a base does not make
+            # `Derived` opaque, it only drops that base's own members.
+            if base is object or self._is_opaque(base):
+                continue
+            if not self._is_user_code_object(base):
+                continue
+            for name, member in sorted(vars(base).items(), key=lambda kv: kv[0]):
+                # __firstlineno__ (class attribute since Python 3.13, absent on
+                # 3.10/3.11) records the class's first source line, which shifts
+                # when a comment or blank line is added above it -- with no
+                # code change at all. Skipping it is what keeps "comments do
+                # not invalidate" (see _code_identity) true on 3.13+ too.
+                if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
+                    continue
+                target = member
+                if isinstance(member, (classmethod, staticmethod)):
+                    target = member.__func__
+                elif isinstance(member, property):
+                    for tag, accessor in (("get", member.fget), ("set", member.fset)):
+                        ident = self._code_identity(accessor)
+                        if ident:
+                            parts.append((base.__qualname__, f"{name}.{tag}", ident))
+                    continue
+                # Unwrap decoration to reach the function whose __code__
+                # actually reflects a body edit (mirrors the single-level
+                # __wrapped__ unwrap in _analyze_method_self_deps). Without
+                # this, @functools.wraps and @functools.lru_cache both hash
+                # the WRAPPER's own generic dispatch code -- fixed regardless
+                # of what the wrapped body says -- and @functools.
+                # singledispatchmethod has no __wrapped__ or __code__ at all
+                # (it exposes the underlying function as .func instead), so it
+                # fell through to the data-attribute branch below and hashed
+                # an unchanging descriptor repr. Measured: editing any of
+                # these three wrapped method bodies left the digest unchanged
+                # without this step.
+                target = getattr(target, "__wrapped__", target)
+                if not hasattr(target, "__code__"):
+                    func_attr = getattr(target, "func", None)
+                    if func_attr is not None and hasattr(func_attr, "__code__"):
+                        target = func_attr
+                ident = self._code_identity(target)
+                if callable(member):
+                    if ident:
+                        # When `ident` was reached by UNWRAPPING (``.func`` /
+                        # ``__wrapped__``), it describes the inner function and
+                        # says nothing about the state the wrapper itself
+                        # carries: ``functools.partial(scale, 3)`` and
+                        # ``partial(scale, 4)`` unwrap to the same ``scale``
+                        # and collided. Fold the wrapper's own content too,
+                        # exactly as the non-callable branch does for a
+                        # ``partialmethod``. Skipped when nothing was
+                        # unwrapped, because a plain method's own pickle is
+                        # its module path -- which would make every class's
+                        # digest depend on the module it lives in.
+                        if target is not member:
+                            try:
+                                own = self._hash_arg_payload((member,), {})
+                            except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                                own = None
+                            if own is not None:
+                                parts.append((base.__qualname__, name, (ident, own)))
+                                continue
+                        parts.append((base.__qualname__, name, ident))
+                        continue
+                    # A callable member with NO reachable ``__code__``: a
+                    # nested class (``class Outer: inner = Inner``), a
+                    # ``functools.partial``, a callable instance. Dropping it
+                    # meant the non-callable branch below folded content for
+                    # an ordinary member while these three folded nothing at
+                    # all -- measured: editing ``Inner.f`` left ``Outer``'s
+                    # digest unchanged, and ``partial(scale, 3)`` collided
+                    # with ``partial(scale, 4)``.
+                    #
+                    # The nested walk recurses into ``_class_surface_parts``
+                    # DIRECTLY, not through the memoized ``_code_surface_hash``,
+                    # and is bounded by DEPTH rather than by a cycle set. A
+                    # cycle set would make the digest depend on which class
+                    # happened to be hashed first (the memo would hold a cut
+                    # result for one order and a full one for the other) --
+                    # reintroducing exactly the cross-process instability
+                    # ``_value_identity`` was just fixed for. A depth bound
+                    # gives every process the same answer regardless of order.
+                    nested = None
+                    inner_cls = member if isinstance(member, type) else type(member)
+                    if _depth < 2 and self._is_user_code_object(inner_cls):
+                        sub_parts = self._class_surface_parts(inner_cls, _depth + 1)
+                        if sub_parts:
+                            nested = hashlib.sha256(
+                                repr(sub_parts).encode("utf-8"),
+                            ).hexdigest()
+                    try:
+                        content = self._hash_arg_payload((member,), {})
+                    except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                        content = None
+                    if nested is not None or content is not None:
+                        parts.append((base.__qualname__, name, (nested, content)))
+                else:
+                    # A non-callable member. Fold its OWN content
+                    # unconditionally -- a descriptor like
+                    # functools.partialmethod carries bound state (.args)
+                    # that lives on the descriptor ITSELF, not on the inner
+                    # function `ident` above resolved through .func, and a
+                    # plain object that happens to expose an unrelated `.func`
+                    # attribute must not have its OTHER state go invisible
+                    # just because that lookup succeeded (measured: a
+                    # partialmethod's bound-argument edit, and an unrelated
+                    # object's own attribute edit, both went undetected when
+                    # `ident` alone short-circuited this). Fold `ident` TOO
+                    # when reachable, so a non-callable descriptor that ALSO
+                    # wraps a real function body -- functools.
+                    # singledispatchmethod, functools.cached_property, both
+                    # confirmed to expose .func without __wrapped__ or
+                    # __code__ of their own -- has that body participate as
+                    # well. Folding only one half silently drops whichever
+                    # state that particular member happens to carry.
+                    #
+                    # No repr() fallback here (unlike _value_identity):
+                    # falling back to repr() on this specific path would
+                    # reintroduce the address leak this member-content fold
+                    # exists to avoid (a class attribute is exactly what
+                    # Blocker 2 measured repr() leaking on). If content can't
+                    # be folded and no `ident` was found either, dropping the
+                    # member is strictly safer than a non-deterministic repr.
+                    try:
+                        content = self._hash_arg_payload((member,), {})
+                    except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
+                        content = None
+                    if ident or content is not None:
+                        parts.append((base.__qualname__, name, (ident, content)))
+        return parts
+
     def _user_class_source_hash(self, cls: type) -> str:
         """Memoized source hash of a USER class.
 
@@ -3032,11 +3682,35 @@ class Cash:
         so the hash is computed once per class object and reused on every
         subsequent call. The per-call cost of the instance channel below is then
         a cheap object-graph walk plus dict lookups -- never source I/O.
+
+        Source-first, surface-as-fallback. Both of this method's callers
+        (``_instance_class_source_parts``, directly and via
+        ``_fold_read_globals``) gate on ``_is_user_class`` -> ``_is_user_module``,
+        which requires ``__file__`` -- so every class actually reachable here
+        already has retrievable source, and ``inspect.getsource`` succeeds. The
+        class-aware surface (``_code_surface_hash``) only engages on
+        ``SOURCE_RETRIEVAL_ERRORS`` -- a class truly without source, e.g. a
+        notebook cell's ``__main__`` has no ``__file__`` -- or when this method
+        is reached some other way in the future. Preferring it unconditionally
+        was measured to regress every file-backed class whose method is wrapped
+        by ``@functools.wraps``, ``@lru_cache``, or ``@singledispatchmethod``:
+        ``_class_surface_parts`` walks the WRAPPER, not the wrapped function, so
+        a body edit under one of those decorators stopped invalidating even
+        though whole-class source hashing always saw it (source is just text).
         """
         cached = self._user_class_src_cache.get(cls)
         if cached is not None:
             return cached
-        h = self._hash_callable_source(cls)  # inspect.getsource over the class body
+        try:
+            src = inspect.getsource(cls)
+            h = hashlib.sha256(src.encode("utf-8")).hexdigest()
+        except SOURCE_RETRIEVAL_ERRORS:
+            # No source to hash (or it doesn't parse). _hash_callable_source
+            # has no class branch of its own: a class has no __code__, so ITS
+            # fallback chain falls through to type(fn).__qualname__ --
+            # literally "type" for EVERY class, colliding all source-less
+            # classes onto one hash. Try the class-aware surface first.
+            h = self._code_surface_hash(cls) or self._hash_callable_source(cls)
         if len(self._user_class_src_cache) < 4096:
             self._user_class_src_cache[cls] = h
         return h
@@ -3211,6 +3885,83 @@ class Cash:
         except (KeyError, OSError):
             pass
         return not p.startswith(os.path.normcase(os.path.dirname(os.path.abspath(__file__))))
+
+    #: Fileless modules that are NOT the user's code. Everything else without a
+    #: __file__ is a notebook cell, a REPL, or exec'd source -- i.e. something
+    #: the user is plausibly editing between runs, which is the whole point.
+    _FILELESS_NON_USER = frozenset(sys.builtin_module_names) | {
+        "builtins", "__future__", "_frozen_importlib", "_frozen_importlib_external",
+    }
+
+    @staticmethod
+    def _is_user_code_module(mod: Any) -> bool:
+        """Like :meth:`_is_user_module`, but a module with no ``__file__``
+        counts as user code rather than being disqualified.
+
+        ``_is_user_module`` returns False for a fileless module ("nothing to
+        edit"). That is right for its callers and wrong here: a class defined
+        in a notebook cell lives in a ``__main__`` with no ``__file__``, and it
+        is precisely the thing the user edits between runs.
+        """
+        name = getattr(mod, "__name__", "") or ""
+        path = getattr(mod, "__file__", None)
+        if path is None:
+            return name not in Cash._FILELESS_NON_USER
+        return Cash._is_user_module(mod)
+
+    @staticmethod
+    def _is_user_code_object(obj: Any) -> bool:
+        """True when *obj* -- a class OR a function -- is defined in code the user
+        plausibly edits. Both carry ``__module__``, so one predicate serves both.
+
+        ``__module__`` alone is not trustworthy. A class or function built by
+        ``exec(body, ns)`` where *ns* lacks a ``__name__`` key (a bare ``{}``,
+        unlike a real notebook's globals, which start with ``__name__ ==
+        '__main__'``) gets a fallback ``__module__`` from CPython's implicit
+        ``__module__ = __name__`` lookup at definition time: ``None`` for a
+        function, and -- because that lookup falls all the way through to the
+        REAL ``builtins`` module's own ``__name__`` attribute -- literally
+        ``'builtins'`` for a class. Neither reflects where the code actually
+        lives. Confirm *obj* is actually reachable through the module it
+        claims before trusting that module's verdict; otherwise this is the
+        exec()/notebook case the predicate exists to catch, so it counts as
+        user code (mirroring ``_is_user_code_module``'s fileless-module
+        handling).
+        """
+        mod_name = getattr(obj, "__module__", None)
+        mod = sys.modules.get(mod_name) if mod_name else None
+        if mod is None:
+            return True
+        if not Cash._qualname_resolves_in(mod, obj):
+            return True
+        return Cash._is_user_code_module(mod)
+
+    @staticmethod
+    def _qualname_resolves_in(mod: Any, obj: Any) -> bool:
+        """True if *obj* is actually reachable by walking its ``__qualname__``
+        from *mod*, not merely claiming *mod* via ``__module__``.
+
+        ``getattr(x, name, default)`` only swallows ``AttributeError`` -- a
+        module implementing PEP 562 ``__getattr__`` (a real pattern for
+        deprecation shims: raise a custom error for an old name instead of
+        just returning it) can make this walk raise something else entirely.
+        Task 1's original predicate, which this refines, could never raise;
+        this must not become the first way ``_is_user_code_object`` can.
+        """
+        qualname = getattr(obj, "__qualname__", None) or getattr(obj, "__name__", None)
+        if not qualname:
+            return False
+        cur = mod
+        try:
+            for part in qualname.split("."):
+                if part == "<locals>":
+                    return False  # nested in a function body - not module-reachable
+                cur = getattr(cur, part, None)
+                if cur is None:
+                    return False
+            return cur is obj
+        except Exception:
+            return False  # could not confirm reachability - do not trust it
 
     def _read_module_attr_pairs(self, func: Callable) -> tuple[tuple[str, str], ...]:
         """``(module_global, attribute)`` pairs the body reads, from bytecode.
@@ -3486,8 +4237,20 @@ class Cash:
         args_bytes = pickle.dumps(payload)
         return hashlib.sha256(args_bytes).hexdigest()
 
-    def _serialize_args(self, func_name: str, args: tuple, kwargs: dict) -> str | None:
-        normalized = self._normalize_call_args(func_name, args, kwargs)
+    def _serialize_args(self, func_name: str, args: tuple, kwargs: dict,
+                        normalized: tuple[tuple, dict] | None = None) -> str | None:
+        """Hash the arguments, canonicalised.
+
+        *normalized* lets a caller that has ALREADY canonicalised pass the
+        result in rather than have it recomputed. That is not an optimisation:
+        the code channel (`_fold_code_args`) and this value channel must key
+        off the SAME bound arguments, or `f()` and `f(<the default>)` -- the
+        same logical call -- disagree in one channel and split into two cache
+        entries. One canonicalisation, shared, is the only way that invariant
+        holds by construction rather than by two call sites staying in step.
+        """
+        if normalized is None:
+            normalized = self._normalize_call_args(func_name, args, kwargs)
         try:
             return self._hash_arg_payload(*normalized)
         except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
@@ -4133,6 +4896,72 @@ class Cash:
         """
         src_hash = self._hash_callable_source(hasher_fn)
         self._type_hashers[type_] = (hasher_fn, src_hash)
+
+    #: Types whose code must not participate in any cache key. Process-wide,
+    #: not per-instance: a marker is a property of the type, and a user who
+    #: marks it once should not have to repeat it per Cash instance.
+    #:
+    #: Holds STRONG references deliberately, so a registered class can never
+    #: be garbage collected. Considered and rejected a WeakSet: opaque types
+    #: are registered by hand, at import time, in the tens at most for any
+    #: real user -- not generated in volume -- so the leak this trades away
+    #: has no realistic scale to bite at. A WeakSet would also silently
+    #: un-register a type the moment nothing else references it, which is
+    #: the opposite of "mark it once and forget about it."
+    _OPAQUE_TYPES: set = set()
+
+    @staticmethod
+    def mark_opaque(*types_: type) -> None:
+        """Exclude *types_* from code-surface hashing.
+
+        For a class you cannot or should not edit -- third-party, generated, or
+        simply not yours. For one you own, ``@cash.opaque`` is the same thing
+        spelled declaratively.
+        """
+        Cash._OPAQUE_TYPES.update(types_)
+
+    @staticmethod
+    def _is_opaque(obj: Any) -> bool:
+        """True when *obj* -- a class, or an instance of one -- must not have
+        its code hashed into a cache key.
+
+        Checks two independent marks, both EXACT-MATCH on the type itself,
+        deliberately not inheritance-aware:
+
+        * ``_OPAQUE_TYPES`` (``mark_opaque``) is a plain set. Registering a
+          base class does not implicitly cover a subclass the caller never
+          passed to ``mark_opaque`` -- sets have no notion of "and its
+          descendants."
+        * ``__cash_opaque__`` (``@cash.opaque``) is read from the target's
+          OWN ``__dict__`` via ``vars()``, not via plain ``getattr``.
+          ``getattr`` walks the MRO, so a subclass would inherit the mark
+          from an opaque ancestor even though the subclass may carry its
+          own freshly-written methods the user actively edits -- silently
+          exempting THAT code from ever invalidating the cache, for a
+          decision made about a different class entirely. Matching
+          ``_OPAQUE_TYPES``'s exact-match semantics here also keeps the two
+          spellings equivalent, as documented: "the same thing spelled
+          declaratively" should behave the same, not diverge on
+          inheritance because one happens to be implemented as a dunder
+          attribute. A subclass that wants the same treatment marks
+          itself; see ``test_a_subclass_of_an_opaque_class_does_not_
+          inherit_opacity`` for the pinned case.
+
+        Never raises. Measured, not assumed: a metaclass that defines
+        ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
+        (Python's data-model default, not just its instances), so
+        ``target in Cash._OPAQUE_TYPES`` can raise ``TypeError`` on a real,
+        if unusual, class shape. An opacity check must not be the thing
+        that breaks an otherwise-cacheable call.
+        """
+        try:
+            target = obj if isinstance(obj, type) else type(obj)
+            if target in Cash._OPAQUE_TYPES:
+                return True
+            return bool(vars(target).get("__cash_opaque__", False))
+        except Exception as e:  # noqa: BLE001 - opacity check must never break a call
+            logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
+            return False
 
     def _learn_mutating_captures(self, func: Callable, func_name: str,
                                  watched: dict[str, tuple[str, str]]) -> None:

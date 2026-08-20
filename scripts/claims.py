@@ -17,6 +17,11 @@ before/after diff.
 is worse than having no mechanism at all: it manufactures the appearance that
 someone checked the claim, when nobody did. `--yes` exists so re-pinning is
 always a second, conscious step after reading the printed source.
+
+`--queue` also lists, under each drifted target, the published prose that talks
+about that same code and pins nothing (see `_print_unanchored`). That prose is
+invisible to every check in `tests/docs/` no matter how false it goes, and the
+moment a target drifts is the one moment somebody is already re-reading it.
 """
 from __future__ import annotations
 
@@ -44,8 +49,10 @@ for _stream in (sys.stdout, sys.stderr):
 
 from tests.docs._claims import (  # noqa: E402
     AnchorError,
+    Problem,
     Target,
     check_page,
+    check_unanchored,
     ellipsize,
     fingerprint,
     normalize,
@@ -85,6 +92,56 @@ def _display(t: Target) -> str:
     return f"{t.path}:{t.symbol or '<module>'}"
 
 
+def _print_unanchored(drifted: list[Problem]) -> None:
+    """List the unpinned prose about each drifted target, grouped by target.
+
+    Attached to ``--queue`` because that is the one moment the question is worth
+    asking. A standing lint for unanchored claims would fire on nearly every
+    line of every page; asked only when a target's fingerprint has actually
+    moved, it is a short list handed to somebody who is already re-reading that
+    exact code.
+
+    This is triage, not a verdict. Nothing here decides that a page is wrong --
+    ``check_unanchored`` cannot know that. It answers "what else talks about
+    this code without pinning it", and the human answers the rest. Which is why
+    it prints, and does not change the exit code: ``--queue``'s status is the
+    drift, as it was before.
+
+    Grouped by target, not by drifted claim: one target can drift on several
+    pages at once (``CashMagics.cash_on`` drifted on two), and printing the same
+    triage list once per page would triple the output while adding nothing.
+    """
+    targets: list[Target] = []
+    for p in drifted:
+        if p.target is not None and not any(
+            t.path == p.target.path and t.symbol == p.target.symbol for t in targets
+        ):
+            targets.append(p.target)
+
+    pages = published_pages()
+    blocks = [(t, check_unanchored(t, pages)) for t in targets]
+    blocks = [(t, hits) for t, hits in blocks if hits]
+    if not blocks:
+        return
+
+    print("-" * 72)
+    print("Unpinned prose about the same code (triage -- not a failure):\n")
+    for t, hits in blocks:
+        print(f"{t.path}:{t.symbol or '<module>'}")
+        by_page: dict[str, list[Problem]] = {}
+        for h in hits:
+            by_page.setdefault(h.page, []).append(h)
+        for page_rel, page_hits in by_page.items():
+            print(f"  {page_rel}")
+            for h in page_hits:
+                # The message already carries the ellipsized line; the reader
+                # needs the line NUMBER beside it to go and look.
+                print(f"    :{h.line}  {h.message}")
+        print()
+    print("None of the above is checked by anything. Read them while you are")
+    print("re-reading the claim above, and anchor whichever ones are claims.\n")
+
+
 def _cmd_queue() -> int:
     drifted = []
     for page in published_pages():
@@ -97,6 +154,7 @@ def _cmd_queue() -> int:
         print(f"{p.page}:{p.line}")
         print(f"    {p.message}")
         print()
+    _print_unanchored(drifted)
     print("Re-read each, then: python scripts/claims.py --accept <page> --yes")
     return 1
 

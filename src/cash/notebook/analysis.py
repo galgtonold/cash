@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any
 
 from ..exceptions import SOURCE_RETRIEVAL_ERRORS
+from ..source_norm import normalize_source_for_hash
 
 __all__ = ["CodeAnalyzer"]
 
@@ -415,7 +416,8 @@ class CodeAnalyzer:
         """
         try:
             source = inspect.getsource(func)
-            return hashlib.sha256(source.encode('utf-8')).hexdigest()
+            normalized = normalize_source_for_hash(source)
+            return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
         except SOURCE_RETRIEVAL_ERRORS:
             pass  # Expected: source unavailable for builtins/C extensions, or a
                   # co_filename that doesn't tokenize as Python; fall through to

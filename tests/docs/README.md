@@ -191,8 +191,63 @@ Re-pinning without reading is worse than having no mechanism at all — it
 manufactures assurance that nobody checked. The dry run exists to make reading
 the default.
 
+### The unpinned prose beside it
+
+Everything above only ever reads a sentence that carries an anchor. Prose with
+no anchor is invisible to it however false it goes — the JupyterLab live-cell
+branch falsified quickstart's "Google Colab is the exception" warning, and the
+queue saw nothing. It was found by hand with `grep`.
+
+That branch falsified a second statement, `magics.md`'s `%%cash` behaviour
+list, and **that one is a different failure that this section does not fix.**
+It was not unanchored: `docs/magics.md` pins `CashMagics.cash`, and the anchor
+stayed green because that method's own body never changed. The behaviour had
+moved in a callee several hops down (`_read_notebook_code_cells`), so a green
+anchor sat over a false sentence and read as assurance. One-hop callee depth
+would not have caught it either — the intermediate is unchanged too; reaching
+it needs transitive call-graph fingerprints and the noise that implies.
+
+Be precise about which of the two you are looking at, because they want
+opposite fixes: unanchored prose wants an anchor, an anchor-depth miss already
+has one and wants a *deeper* one. The rules below reach the `%%cash` section
+only by luck of wording — its intro happens to name `%cash_on` — and they
+report a line 17 above the false bullet. Treat that as co-location, not
+detection.
+
+So `--queue` now prints, under each drifted target, the published prose that
+talks about that same code and pins nothing:
+
+```
+cash/notebook/ipython/magics.py:CashMagics.cash_on
+  docs/magics.md
+    :271  names ... but pins nothing: 'processing as `%cash_on` (upstream simulation, ...)'
+  docs/getting-started/quickstart.md
+    :116  closed enumeration on a page that pins ...: '**Google Colab is the exception**: ...'
+```
+
+Two rules feed it, because the two real misses needed different ones: a line
+that **names** the symbol (outside any section already anchored to it), and a
+line that **closes an enumeration** ("the only", "the exception", "no other")
+on a page that anchors the target but in a section that anchors nothing. The
+second exists because the quickstart sentence names no symbol at all, so
+nothing name-based can reach it.
+
+This is triage, not a gate — it decides nothing, fails nothing, and changes no
+exit code. Read it while you are re-reading the drifted claim, and anchor
+whichever lines turn out to be claims. Expect it to be chatty for a widely
+documented symbol: `%cash_on` is named on 26 pages, and it lists all of them.
+
 ### Limitations
 
+- **A fingerprint is one symbol deep, so an anchor can be green over false
+  prose.** The claim pins the symbol it names; if the documented behaviour
+  actually lives in something that symbol calls, the callee can change while
+  the fingerprint holds and nothing asks anyone to re-read. This is the
+  `magics.md` case above, and it is the more insidious of the two failures
+  because a green anchor reads as a check that passed rather than a check that
+  never ran. Closing it needs transitive call-graph fingerprints; nothing here
+  approximates that. When you anchor a claim, pin the symbol whose **body**
+  decides the behaviour, not the entry point a reader would name.
 - **Only direct children are walked.** A symbol defined inside
   `if TYPE_CHECKING:` or a `try:`/`except ImportError:` block cannot be
   anchored — `resolve()` only descends through a definition's immediate
