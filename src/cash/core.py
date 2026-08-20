@@ -4457,6 +4457,72 @@ class Cash:
         src_hash = self._hash_callable_source(hasher_fn)
         self._type_hashers[type_] = (hasher_fn, src_hash)
 
+    #: Types whose code must not participate in any cache key. Process-wide,
+    #: not per-instance: a marker is a property of the type, and a user who
+    #: marks it once should not have to repeat it per Cash instance.
+    #:
+    #: Holds STRONG references deliberately, so a registered class can never
+    #: be garbage collected. Considered and rejected a WeakSet: opaque types
+    #: are registered by hand, at import time, in the tens at most for any
+    #: real user -- not generated in volume -- so the leak this trades away
+    #: has no realistic scale to bite at. A WeakSet would also silently
+    #: un-register a type the moment nothing else references it, which is
+    #: the opposite of "mark it once and forget about it."
+    _OPAQUE_TYPES: set = set()
+
+    @staticmethod
+    def mark_opaque(*types_: type) -> None:
+        """Exclude *types_* from code-surface hashing.
+
+        For a class you cannot or should not edit -- third-party, generated, or
+        simply not yours. For one you own, ``@cash.opaque`` is the same thing
+        spelled declaratively.
+        """
+        Cash._OPAQUE_TYPES.update(types_)
+
+    @staticmethod
+    def _is_opaque(obj: Any) -> bool:
+        """True when *obj* -- a class, or an instance of one -- must not have
+        its code hashed into a cache key.
+
+        Checks two independent marks, both EXACT-MATCH on the type itself,
+        deliberately not inheritance-aware:
+
+        * ``_OPAQUE_TYPES`` (``mark_opaque``) is a plain set. Registering a
+          base class does not implicitly cover a subclass the caller never
+          passed to ``mark_opaque`` -- sets have no notion of "and its
+          descendants."
+        * ``__cash_opaque__`` (``@cash.opaque``) is read from the target's
+          OWN ``__dict__`` via ``vars()``, not via plain ``getattr``.
+          ``getattr`` walks the MRO, so a subclass would inherit the mark
+          from an opaque ancestor even though the subclass may carry its
+          own freshly-written methods the user actively edits -- silently
+          exempting THAT code from ever invalidating the cache, for a
+          decision made about a different class entirely. Matching
+          ``_OPAQUE_TYPES``'s exact-match semantics here also keeps the two
+          spellings equivalent, as documented: "the same thing spelled
+          declaratively" should behave the same, not diverge on
+          inheritance because one happens to be implemented as a dunder
+          attribute. A subclass that wants the same treatment marks
+          itself; see ``test_a_subclass_of_an_opaque_class_does_not_
+          inherit_opacity`` for the pinned case.
+
+        Never raises. Measured, not assumed: a metaclass that defines
+        ``__eq__`` without ``__hash__`` makes the CLASS ITSELF unhashable
+        (Python's data-model default, not just its instances), so
+        ``target in Cash._OPAQUE_TYPES`` can raise ``TypeError`` on a real,
+        if unusual, class shape. An opacity check must not be the thing
+        that breaks an otherwise-cacheable call.
+        """
+        try:
+            target = obj if isinstance(obj, type) else type(obj)
+            if target in Cash._OPAQUE_TYPES:
+                return True
+            return bool(vars(target).get("__cash_opaque__", False))
+        except Exception as e:  # noqa: BLE001 - opacity check must never break a call
+            logger.debug("[CORE] opacity check failed for %r: %s", obj, e)
+            return False
+
     def _learn_mutating_captures(self, func: Callable, func_name: str,
                                  watched: dict[str, tuple[str, str]]) -> None:
         """Demote any provisional global this call was OBSERVED to mutate.

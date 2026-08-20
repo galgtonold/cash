@@ -107,6 +107,43 @@ def mark_stateful(func: Any) -> Any:
         pass
     return func
 
+
+def opaque(cls: type) -> type:
+    """Class decorator: exclude this class's code from every cache key.
+
+    Use on a class you own -- when a call takes an instance of it, or the
+    class itself, as an argument -- but don't want its methods' source
+    participating in the cache key. For a class you do NOT own (third-party,
+    generated, vendored) decorating it isn't an option; register it from
+    outside with `mark_opaque` instead. The two are the same marker spelled
+    two ways for the two kinds of owner.
+
+    Returns *cls* itself, unchanged apart from one new attribute
+    (``__cash_opaque__``) -- never a wrapper, so ``isinstance`` checks and
+    identity comparisons against the decorated class keep working exactly
+    as before.
+
+    Example:
+
+        import cash
+
+        @cash.opaque
+        class SlowToHashButStableConfig:
+            ...
+
+    Does NOT propagate to a subclass. A subclass may carry its own
+    freshly-written methods the user actively edits, and inheriting opacity
+    from an ancestor would silently exempt that new code from ever
+    invalidating the cache. A subclass that wants the same treatment
+    decorates itself.
+    """
+    Cash.mark_opaque(cls)
+    cls.__cash_opaque__ = True
+    return cls
+
+
+mark_opaque = Cash.mark_opaque
+
 __version__ = "0.3.0"
 
 # Lazy-initialized global instance (created on first access)
@@ -342,6 +379,8 @@ __all__ = [
     "cache",
     "show_stats",
     "register_hasher",
+    "opaque",
+    "mark_opaque",
     "help",
     "reset_session",
     "configure",
