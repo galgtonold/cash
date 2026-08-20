@@ -497,10 +497,15 @@ iterations with no deliberate pause between the last keystroke and the run — i
 practice tens of milliseconds apart rather than zero, since each browser action
 is its own round trip — all 20 checked against the value that existed only on
 screen, on two independent runs, the second of them on the bundle that actually
-ships (v0.1.2). **What was not tested: Notebook 7, split installs, and a
-cold-kernel `Run All`.**
-Notebook 7 is built on the same JupyterLab 4 extension API, but we have not run
-it there, so treat it as unverified rather than working.
+ships (v0.1.2).
+
+The same 20 iterations were then run against **Jupyter Notebook 7.6.2, also on
+Windows**, on that same shipped bundle: 20 of 20 again. Notebook 7 pins
+`jupyterlab>=4.6.3,<4.7`, so it is not merely a similar API — it runs the very
+JupyterLab whose `commsOverSubshells` default the extension has to override, and
+the plugin was confirmed *activated* there rather than merely discovered.
+
+**What was not tested: split installs, and a cold-kernel `Run All`.**
 
 **The first execution on a fresh kernel still reads the saved file.** The
 extension's comm cannot open until the kernel has a target to open it against,
