@@ -44,6 +44,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .exceptions import SOURCE_RETRIEVAL_ERRORS
+from .source_norm import normalize_source_for_hash
 from .notebook.cacheability import (
     PANDAS_INPLACE_METHODS,
     _get_base_name,
@@ -759,12 +760,17 @@ class PurityAnalyzer:
                 continue
             src = textwrap.dedent(src)
 
-            # Hash the (dedented) source for cache-key invalidation
-            # of helpers. Root function's hash is captured separately
-            # by the decorator via _hash_callable_source - we record
-            # all walked callables here so the decorator can fold
-            # them into the state hash uniformly.
-            helper_hashes[qualname] = hashlib.sha256(src.encode("utf-8")).hexdigest()
+            # Hash the NORMALIZED source for cache-key invalidation of
+            # helpers. Root function's hash is captured separately by the
+            # decorator via _hash_callable_source - we record all walked
+            # callables here so the decorator can fold them into the state
+            # hash uniformly. Normalizing means a comment or reformat in a
+            # helper no longer invalidates its callers, which was the more
+            # surprising half of the old behaviour: users expect editing a
+            # function to recompute it, not editing something it calls.
+            helper_hashes[qualname] = hashlib.sha256(
+                normalize_source_for_hash(src).encode("utf-8")
+            ).hexdigest()
 
             # Capture a resolution hint so the decorator can re-resolve
             # this helper from sys.modules per call and pick up
@@ -1140,7 +1146,9 @@ def _try_source_hash(func: Callable[..., Any]) -> str | None:
         src = inspect.getsource(func)
     except SOURCE_RETRIEVAL_ERRORS:
         return None
-    return hashlib.sha256(src.encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        normalize_source_for_hash(src).encode("utf-8")
+    ).hexdigest()
 
 
 def _find_first_function_def(tree: ast.AST) -> ast.FunctionDef | ast.AsyncFunctionDef | None:

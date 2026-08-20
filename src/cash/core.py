@@ -51,6 +51,7 @@ from .notebook.analysis import CodeAnalyzer
 # ``notebook/__init__``'s lazy circular-import chain; ``randomness`` itself only
 # depends on ``..exceptions``, so there is no cycle.
 from .notebook.annotations import parse_annotation_line
+from .source_norm import normalize_source_for_hash
 from .notebook.randomness import (
     CashRandomnessWarning,
     RandomnessDetector,
@@ -1163,12 +1164,19 @@ class Cash:
         Used by `register_hasher` to embed the hasher's source
         identity in the cache key, so that changing a hasher's body
         invalidates dependent cache entries even when the hasher's
-        output coincidentally matches the old one.
+        output coincidentally matches the old one. Also the
+        ``hash_callable`` injected into ``SysModulesHelperResolver``,
+        which makes it the live per-call identity of every transitive
+        HELPER -- so what this returns decides whether editing a helper
+        recomputes its callers.
 
         Resolution order:
 
-        1. ``inspect.getsource(fn)`` - primary. Works for module-level
-           functions and lambdas defined in a discoverable source file.
+        1. ``inspect.getsource(fn)`` - primary, NORMALIZED via
+           ``normalize_source_for_hash`` so a comment or reformat in a
+           helper does not invalidate the functions that call it. Works
+           for module-level functions and lambdas defined in a
+           discoverable source file.
         2. ``fn.__code__.co_code`` - fallback. Works for functions defined
            in a REPL or via ``exec()``. Bytecode is stable within a Python
            version; a Python upgrade conservatively invalidates the cache.
@@ -1181,7 +1189,8 @@ class Cash:
         """
         try:
             src = inspect.getsource(fn)
-            return hashlib.sha256(src.encode("utf-8")).hexdigest()
+            normalized = normalize_source_for_hash(src)
+            return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         except SOURCE_RETRIEVAL_ERRORS:
             pass
         code = getattr(fn, "__code__", None)

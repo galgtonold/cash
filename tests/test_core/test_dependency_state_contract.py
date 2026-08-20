@@ -18,6 +18,7 @@ import hashlib
 import inspect
 
 from cash import Cash
+from cash.source_norm import normalize_source_for_hash
 
 from . import _purity_helper_module as hm
 
@@ -48,7 +49,12 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
     token, ``:``-joined after the function's own source hash, the whole
     thing sha256'd. Reconstructed from the documented resolution path
     using ``inspect.getsource`` (not the private hasher) to stay
-    independent of the implementation under test."""
+    independent of the implementation under test.
+
+    The helper digest is over the NORMALIZED source: a comment or a
+    reformat inside a helper must not invalidate its callers. That is a
+    deliberate part of the contract, not an implementation detail, so it
+    is reconstructed here through the same public normalizer."""
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
@@ -69,7 +75,7 @@ def test_helper_token_format_is_helper_qual_hash(tmp_path):
             obj = getattr(obj, attr, None)
         if callable(obj):
             live[qual] = hashlib.sha256(
-                inspect.getsource(obj).encode("utf-8")
+                normalize_source_for_hash(inspect.getsource(obj)).encode("utf-8")
             ).hexdigest()
 
     parts = [c.source_hashes[name]]
