@@ -227,19 +227,42 @@ def test_a_partialmethod_bound_argument_change_invalidates():
     fully REPLACE the content fold for any non-callable member -- so a
     functools.partialmethod's bound arguments, which live on the descriptor
     itself rather than on the function .func resolves to, went invisible.
-    Isolated to the bound argument alone: same qualname, same base function
-    object, only the bound value differs."""
-    body_template = (
-        "import functools\n"
-        "def base(self, y):\n"
-        "    return y\n"
-        "class S:\n"
-        "    pm = functools.partialmethod(base, {arg})\n"
-    )
+    Both classes are exec'd into ONE module, because _exec_class builds a new
+    module per call and the content fold pickles the descriptor by reference --
+    embedding that module's name. Two separate modules therefore produce
+    different digests whether or not the bug exists, which would make this
+    assertion pass for the wrong reason. The equal-argument control below is
+    what proves the bound value is carrying it."""
+    def _two_in_one_module(arg_a, arg_b):
+        """Both classes in ONE registered fileless module, same qualname, sharing
+        ONE ``base`` function object.
+
+        ``base`` is defined once and never re-executed. Re-running a body that
+        also defines it rebinds the module's ``base`` to a new object, which
+        leaves the first class's descriptor holding an orphan -- pickle then
+        raises ``it's not the same object as <module>.base`` for one class and
+        not the other, and that difference, not the bound value, decides the
+        assertion.
+        """
+        mod = types.ModuleType(f"_cash_pm_probe_{next(_notebook_module_counter)}")
+        sys.modules[mod.__name__] = mod
+        exec("import functools\ndef base(self, y):\n    return y\n", mod.__dict__)
+        cls_body = "class S:\n    pm = functools.partialmethod(base, {arg})\n"
+        exec(cls_body.format(arg=arg_a), mod.__dict__)
+        first = mod.S
+        exec(cls_body.format(arg=arg_b), mod.__dict__)
+        return first, mod.S
+
     c = CashCls()
-    v1 = _exec_class(body_template.format(arg=3))
-    v2 = _exec_class(body_template.format(arg=4))
-    assert c._code_surface_hash(v1) != c._code_surface_hash(v2)
+    same_a, same_b = _two_in_one_module(3, 3)
+    assert c._code_surface_hash(same_a) == c._code_surface_hash(same_b), (
+        "CONTROL: identical bound arguments in the same module must collide. "
+        "If this fails, something other than the bound value is carrying the "
+        "assertion below and the test proves nothing."
+    )
+
+    diff_a, diff_b = _two_in_one_module(3, 4)
+    assert c._code_surface_hash(diff_a) != c._code_surface_hash(diff_b)
 
 
 def test_a_frozenset_literal_in_a_method_hashes_identically_across_processes():
