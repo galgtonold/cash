@@ -82,7 +82,7 @@ import pandas as pd
 def load_features():
     return pd.read_csv("data/features.csv")
 
-load_features()
+load_features()                                  # cache hit — same body as above
 load_features.explain()
 # CacheExplanation(would_hit=True, reason='hit', ...)
 

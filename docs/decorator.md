@@ -344,6 +344,14 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
   the **arguments** ([below](#code-you-pass-as-an-argument)) — so passing a
   schema class or a callback and then editing it invalidates instead of
   returning the old answer.
+  Every source hash in `state_hash` is taken over a **normalized** form of
+  the code, not its raw text: comments, blank lines, trailing whitespace and
+  the exact indentation width are dropped first. Adding a comment or running
+  a formatter therefore keeps your cache, while any change to what the code
+  actually does invalidates it. Two exceptions stay load-bearing on purpose —
+  `# @cash:` annotations (`no-cache`, `ttl`, `persist`, …), because they are
+  directives rather than prose, and docstrings, which are ordinary string
+  constants a function may well return.
 - `dynamic_hash` folds in `dynamic_depends_on` resolver outputs (when
   set).
 - `args_hash` is a SHA-256 over the pickled args (with custom hashers
