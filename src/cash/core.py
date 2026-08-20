@@ -3452,10 +3452,15 @@ class Cash:
         # ``0x`` is how CPython renders the address in every default repr
         # (``<object object at 0x...>``, ``<function <lambda> at 0x...>``,
         # ``functools.partial(<function f at 0x...>, 3)``), so its presence is
-        # the test for "this repr is not reproducible". A value-based repr that
-        # happens to contain a hex literal is collapsed too -- conservative in
-        # the same direction as the old behaviour, i.e. a recompute is missed,
-        # never a wrong answer invented.
+        # the test for "this repr is not reproducible".
+        #
+        # KNOWN RESIDUAL, and it is the UNSAFE direction -- do not read the
+        # collapse below as conservative. A value-based repr that happens to
+        # carry a hex literal (``Config(mask=0xff)``) is collapsed too, so
+        # editing that value does NOT invalidate: measured, such a default
+        # serves a STALE result. Accepted because the shape is narrow, not
+        # because it is safe. Widening the test (e.g. ``0x`` only when preceded
+        # by ``at ``) would shrink it further.
         if text and "0x" not in text:
             return text
         cls = type(v)
