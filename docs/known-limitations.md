@@ -663,6 +663,7 @@ classes those reach in turn, the helpers it calls. That walk is transitive — a
 class built by another class's `field(default_factory=...)` is folded — but it
 is **static**. An implementation selected while the program runs is invisible:
 
+<!-- test:skip reason="illustrative: the point is what does NOT invalidate, which needs an edit between two runs" -->
 ```python
 HANDLERS = {"fast": FastPath, "exact": ExactPath}
 
@@ -677,6 +678,7 @@ a registry populated at import time by plugins.
 
 Name what you actually depend on:
 
+<!-- test:skip reason="illustrative: continues the runtime-dispatch example above" -->
 ```python
 @cash.cache(depends_on=[FastPath, ExactPath])
 def solve(name, data):
