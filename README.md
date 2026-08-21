@@ -17,6 +17,8 @@ import cash
 
 That's it. The next time you re-run the notebook, every statement that hasn't changed is **restored from cache** instead of recomputed. Outside notebooks, the same engine wraps any function as `@cash.cache`.
 
+**The number that matters:** a 100 MB DataFrame comes back from disk in **166 ms**. Whatever it cost you to compute, that is what every re-run hands back. Cash publishes what a restore costs rather than a speedup multiplier — [here's why](https://cash-lib.readthedocs.io/en/latest/benchmarks/).
+
 📺 **Watch the 90-second demo** — Cash caching a real notebook, end to end:
 
 https://github.com/user-attachments/assets/3f376660-aeb5-4794-89cc-532a04f82f32
@@ -80,13 +82,27 @@ df = pd.read_csv("large_dataset.csv")   # tracked: file change → recompute
 summary = df.describe()
 ```
 
-Re-run the notebook:
+Re-run it, and Cash puts a badge above the cell saying exactly what it did.
+Here is one from a cell of the same shape — a load, then a summary:
 
-- ✅ Nothing changed → restored from cache instantly.
-- 🔄 `large_dataset.csv` changed → the cells that read it recompute.
-- ⚡ Only the analysis changed → the load stays cached, only the analysis recomputes.
+```text
+[Cash] EXECUTED (0.23s, saved 2.85s)
+  CACHED: df = pd.read_csv('sales.csv')  (saved 2.85s)
+  EXECUTED: summary = df.describe()  (0.21s) -> RAM+DISK
+```
 
-Cash shows a badge above each cell summarizing what it did — see [Reading the Cash badge](https://cash-lib.readthedocs.io/en/latest/badges/).
+Two statements, one cell, two different decisions. The file hadn't changed, so
+the load was **restored**; `describe()` had been edited, so only that line
+**ran**. That is what statement-level means in practice — a cell-level cache
+would have had to redo both.
+
+- ✅ Nothing changed → every row reads `CACHED`.
+- 🔄 The CSV changed → the rows that read it flip to `EXECUTED`.
+- ⚡ Only the analysis changed → the load stays `CACHED`, the analysis re-runs.
+
+In the notebook this renders as an expandable HTML badge with timings, tier dots
+and per-statement detail; the text form above is what a terminal or log shows.
+Full anatomy in [Reading the Cash badge](https://cash-lib.readthedocs.io/en/latest/badges/).
 
 ### In a script
 
