@@ -168,6 +168,19 @@ LOAD_SENSITIVE = pytest.mark.flaky(reruns=2, reruns_delay=5, only_rerun=["re-ran
 SETUP = "import cash\n%cash_on\nimport time"
 SETUP_OFF = "import cash\nimport time"
 
+# A cost floor high enough that no realistic stall lifts this test's body over
+# it. The SUBJECT of the break-even test is the PROTECTION -- "a call below the
+# break-even is not stored individually" -- not the 3ms number, so pinning the
+# threshold keeps what is under test and drops what is not: how busy the box is.
+#
+# conftest's CASH_TEST_PIN_THRESHOLDS cannot serve here: it pins the floor to
+# 0.0 so every call clears it, the exact opposite of this test's premise.
+#
+# Measured: with the real 3ms floor the test failed 2/2 in isolation on a loaded
+# machine (45 of 60 calls re-ran; the tolerance is 5) while passing inside the
+# full suite, because a file append is sub-millisecond warm but not under load.
+SETUP_HIGH_COST_FLOOR = SETUP + "\ncash.configure(call_cost_floor_seconds=1.0)"
+
 UNRELATED = "unrelated = 1"
 UNRELATED_EDITED = "unrelated = 1\nz = 1"
 
@@ -814,7 +827,7 @@ def test_sub_break_even_calls_are_not_stored_individually(nb_runner, tmp_path):
     """
     counter = tmp_path / "calls.log"
     # sleep=0 -> the body is just a file append, far below the 3ms floor.
-    cells = [SETUP, UNRELATED, _compute_def(counter, 0),
+    cells = [SETUP_HIGH_COST_FLOOR, UNRELATED, _compute_def(counter, 0),
              f"out = []\nfor t in list(range(1, {_N_TINY + 1})):\n"
              f"    out.append(compute(t))\nprint('OUT', len(out))"]
     nb_runner.create_notebook(cells)
