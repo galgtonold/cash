@@ -237,10 +237,19 @@ def _call(tmp_path, c, source):
     """
     import importlib.util
     import linecache
+    import shutil
     import sys
 
     path = tmp_path / "usermod.py"
     path.write_text(source)
+    # Drop __pycache__ every time. ``return x * 2`` -> ``return x * 3`` is a
+    # SAME-LENGTH edit, so a rewrite inside one mtime second lets Python reuse
+    # the cached .pyc and the module never recompiles. The arms below then
+    # measured a lie: the code object in memory was still the OLD one while
+    # ``inspect.getsource`` read the NEW file, so a "changed helper" test could
+    # pass without anything having changed. See the same trap in
+    # ``test_sourceless_helper_identity``.
+    shutil.rmtree(tmp_path / "__pycache__", ignore_errors=True)
     importlib.invalidate_caches()
     linecache.clearcache()
     spec = importlib.util.spec_from_file_location("usermod", str(path))
@@ -347,11 +356,26 @@ def test_source_hash_memo_is_keyed_by_identity_not_value(tmp_path):
     VALUE and ``co_filename`` is not part of it, so two functions from
     different FILES can occupy one dict slot.
 
-    Their digests can still differ. A TRAILING ``# @cash:`` annotation changes
+    Their digests can still differ: a TRAILING ``# @cash:`` annotation changes
     the normalized source without changing a byte of bytecode or a line
-    number, so a value-keyed memo served one file's digest for the other --
-    silently dropping or applying a caching directive. Found as a reproducible
-    xdist-only failure of ``test_real_helper_change_still_recomputes``.
+    number. The invariant being pinned is simply that this digest is over
+    SOURCE, so two different sources must not share one entry.
+
+    Scope, honestly: no decorator behaviour is known to turn on that
+    particular difference today. The decorator reads ``# @cash:`` in one
+    place only -- honouring ``allow-random`` in
+    ``_warn_unseeded_randomness`` -- and reads the source directly rather
+    than through this digest.
+
+    This test does NOT reproduce the failure that prompted identity keying.
+    That was ``test_real_helper_change_still_recomputes`` failing under
+    xdist, and the cause turned out to be a STALE .pyc in its own fixture:
+    a same-length edit left the old code object running while
+    ``inspect.getsource`` read the new file, so the memo correctly returned
+    the running code's digest and the test's premise was the thing that was
+    wrong. The fixture now clears ``__pycache__``. Identity keying is kept
+    because it is unambiguously correct, not because that failure required
+    it.
 
     Real files on disk are required: ``inspect.getsource`` must SUCCEED here,
     or both sides fall back to ``bytecode_identity`` and compare equal for a
