@@ -1,7 +1,7 @@
 # Cash — stop re-running work that hasn't changed
 
 [![PyPI version](https://img.shields.io/pypi/v/cash-lib.svg)](https://pypi.org/project/cash-lib/)
-[![Downloads](https://img.shields.io/pypi/dm/cash-lib.svg)](https://pypi.org/project/cash-lib/)
+[![Downloads](https://img.shields.io/pepy/dt/cash-lib.svg)](https://pepy.tech/project/cash-lib)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://pypi.org/project/cash-lib/)
 [![CI](https://github.com/galgtonold/cash/actions/workflows/ci.yml/badge.svg)](https://github.com/galgtonold/cash/actions/workflows/ci.yml)
 [![Docs](https://readthedocs.org/projects/cash-lib/badge/?version=latest)](https://cash-lib.readthedocs.io/en/latest/)
