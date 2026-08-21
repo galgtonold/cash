@@ -9,9 +9,9 @@ Cash is a smart caching library for Python with two primary use cases:
 1. **Decorator-based caching** (`@cash.cache`) for functions with automatic dependency tracking
 2. **Jupyter notebook caching** via IPython magics (`%cash_on`) with statement-level granularity
 
-**Current Status:** Preparing the first public release, `v0.1.0` (nothing has been published to PyPI yet). The single source of truth for all planning is the **Linear** workspace (team `Cash`, issue prefix `CAS`) — see the *Project Management* section below.
+**Current Status:** Published on PyPI as `cash-lib`; latest release `0.4.0` (2026-08-21). Still `0.x` — the cache format may change between minor versions. The single source of truth for planning is the **private GitHub tracker** — see the *Project Management* section below.
 
-**Development Priority:** Work the `v0.5.0 Release` project in Linear (milestones: *Beta hardening*, *Launch readiness*). New features default to the `Post-Beta (0.6+)` project unless they unblock the release.
+**Development Priority:** Work `prio:high` first, then `correctness`. New features default to `prio:low` unless they unblock a release.
 
 ## Commit messages
 - **Never include `Co-Authored-By: Claude ...`** or any other AI-attribution trailer in commit messages. Author the commit normally.
@@ -365,18 +365,45 @@ everything is excluded.
 
 ## Project Management
 
-**Linear is the single source of truth.** All tasks, bugs, follow-ups, and roadmap live in the Linear workspace (team `Cash`, issue prefix `CAS`), accessed via the Linear MCP. Do **not** create or resurrect roadmap markdown. The old `planning/ROADMAP.md` no longer exists in the working tree at all (neither `planning/` nor `planning/archive/` is present) — if you need that history, read it out of git, and do not recreate the directory.
+**Two trackers, different jobs.** Use the right one:
+
+| tracker | what goes there |
+| --- | --- |
+| **`galgtonold/cash-tracker`** (private) | Everything internal: bugs, follow-ups, tech debt, roadmap. This is the single source of truth for planning. |
+| **`galgtonold/cash`** (public) | Only issues filed by outside users — the README's bug-report link, the badge's "Report a bug" button, `%cash_feedback`. Do not file internal work here. |
+
+Board: <https://github.com/users/galgtonold/projects/1> (private) — views *All work*, *Board*, *High priority*, *Correctness*, *Docs*.
+
+**Never reference a private tracker issue from the public repo.** No `Fixes cash-tracker#12` in a commit that lands on `galgtonold/cash`, no private issue numbers in public PR descriptions or CHANGELOG entries. A public reader cannot open them, so it reads as noise. Describe the change on its own terms instead.
+
+Do **not** create or resurrect roadmap markdown. The old `planning/ROADMAP.md` no longer exists in the working tree at all (neither `planning/` nor `planning/archive/` is present) — if you need that history, read it out of git, and do not recreate the directory.
 
 **Behavioral rules for AI assistants (do these without being asked):**
-1. **Look in Linear by default.** At the start of planning work, query Linear for the active `v0.5.0 Release` project plus In Progress / Todo issues before proposing what to do. Don't ask the user to paste issue state — fetch it.
-2. **Auto-create on flag.** The moment you notice deferred work, an out-of-scope fix, a real bug, or a "do this later" — create a Linear issue immediately (don't let it die in chat). Default: status Backlog, the right workstream label, a best-guess priority. Better an imperfectly-triaged issue than a lost one.
-3. **Cross-check on reference.** When the user mentions an issue — by id (`CAS-123`) or by description — look it up in Linear and work from its current state/comments, not from memory.
-4. **Reflect progress.** Move an issue to In Progress when you start it and Done when it's verified. Reference the `CAS-id` in the commit subject/body where applicable so commits ↔ issues cross-link.
+1. **Look in the tracker by default.** Before proposing what to work on, run
+   `gh issue list --repo galgtonold/cash-tracker --state open --label prio:high`
+   (and drop the label filter for the full picture). Don't ask the user to paste issue state — fetch it.
+2. **Auto-create on flag.** The moment you notice deferred work, an out-of-scope fix, a real bug, or a "do this later" — file it immediately (don't let it die in chat):
+   `gh issue create --repo galgtonold/cash-tracker --title "..." --body-file <file> --label "prio:medium" --label "type:bug"`
+   Best-guess priority is fine. Better an imperfectly-triaged issue than a lost one.
+3. **Cross-check on reference.** When the user mentions an issue — by number or description — read it (`gh issue view <n> --repo galgtonold/cash-tracker`) and work from its current state and comments, not from memory. **Ticket claims are unreliable**: roughly a third describe code that has since changed. Verify against the source before acting on a description.
+4. **Close with evidence.** When work is verified, close the issue with a comment naming what you checked (`--reason completed --comment "..."`). Don't close silently, and don't delete.
+
+**Historical `CAS-N` ids.** Issues lived in Linear (team `Cash`, prefix `CAS`) until 2026-08-21, when all 68 open ones were migrated. Commit messages and docs still cite `CAS-123` ids; those are **not** GitHub issue numbers — every migrated issue carries a canonical footer instead, so map an old id to its issue with:
+
+```bash
+gh issue list --repo galgtonold/cash-tracker --state all --limit 300 \
+  --json number,title,body \
+  --jq '.[] | select(.body | contains("Migrated from Linear `CAS-123`")) | "#\(.number) \(.title)"'
+```
+
+Match on the **backticked** id, not a bare search. `--search "CAS-19"` returns six issues (anything that merely mentions it), and an unanchored regex matches `CAS-191` inside `CAS-19`. The footer format is uniform across all 68 precisely so this stays a one-line exact lookup — keep it that way when filing new issues.
 
 **Structure:**
-- **Projects** = finite, goal-bearing efforts: `v0.5.0 Release`, `Post-Beta (0.6+)`.
-- **Labels** = the five perennial workstreams + helpers: `correctness`, `cache-perf`, `release`, `Bug`, `Improvement` (the five), plus `tech-debt`, `xfail`, `docs`, `Feature`.
-- **`xfail` label** is load-bearing: an issue with it maps to a `pytest.mark.xfail` in the suite; closing the issue means flipping that marker to a passing test. Some `xfail` issues are *documented limitations* (e.g. CAS-9) — read the body before "fixing".
+- **Priority** — `prio:high` / `prio:medium` / `prio:low`. Every issue has exactly one.
+- **Type** — `type:bug`, `type:feature`, `type:improvement`, `type:docs`, `type:tech-debt`.
+- **Workstreams** — `correctness` (can serve a stale or wrong result), `cache-perf`, `release`.
+- **Area** — `area:notebook`, `area:decorator`, `area:backends`, `area:badge`, `area:tests`. Optional.
+- **`known-limitation`** is load-bearing (it replaces Linear's `xfail`): an issue with it maps to a `pytest.mark.xfail` in the suite, and closing it means flipping that marker to a passing test. Some are *documented limitations we do not intend to fix* — read the body before "fixing" one.
 
 **Other:**
 - **Breaking changes**: Document in `CHANGELOG.md` under the upcoming version and call them out in the PR description.
