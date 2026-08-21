@@ -653,8 +653,38 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 A `@cash.cache` function that takes one of *your* classes or functions as an
 argument keys on that code, so editing it invalidates — see [the decorator
-guide](decorator.md#code-you-pass-as-an-argument). Three edges do not, and each
+guide](decorator.md#code-you-pass-as-an-argument). Four edges do not, and each
 is a deliberate stopping point rather than an oversight.
+
+### Code chosen at runtime is not reached
+
+Cash follows the code your code **refers to**: the names a function loads, the
+classes those reach in turn, the helpers it calls. That walk is transitive — a
+class built by another class's `field(default_factory=...)` is folded — but it
+is **static**. An implementation selected while the program runs is invisible:
+
+```python
+HANDLERS = {"fast": FastPath, "exact": ExactPath}
+
+@cash.cache
+def solve(name, data):
+    return HANDLERS[name]().run(data)   # which class? only runtime knows
+```
+
+Editing `FastPath` does not invalidate, because nothing in `solve`'s code names
+it. The same applies to a class assigned during execution, or one arriving from
+a registry populated at import time by plugins.
+
+Name what you actually depend on:
+
+```python
+@cash.cache(depends_on=[FastPath, ExactPath])
+def solve(name, data):
+    ...
+```
+
+This is the general shape of the boundary: cash reads code, not futures. Where a
+dependency exists only at runtime, `depends_on=` is how you tell it.
 
 ### Third-party code passed as an argument is keyed by name, not implementation
 

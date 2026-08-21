@@ -96,7 +96,8 @@ change:
 | The **function's own source** | Edit the body and old entries stop matching |
 | The source of a **helper it calls** | Followed **transitively** within the module |
 | A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
-| A **module global it reads** | A config constant, a threshold, a dispatch dict |
+| A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper** rather than by the function itself |
+| A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
 
 None of that needs an annotation. That is the point: the usual reasons a cached
 result goes stale are tracked for you, and the [parameters](#parameters) exist
@@ -165,10 +166,13 @@ net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
 <!-- claim: cash/core.py:Cash._fold_read_globals @c2035a2e -->
-Only globals the function **reads** participate. Globals it *writes*
-(`global x; x = ...`) or mutates in place are excluded — those are
-side-effect accumulators, and folding them in would invalidate the
-function on its own output. A read global whose value can't be hashed
+Only globals that are **read** participate — and that includes globals read
+by a **helper** rather than by the cached function itself, so a helper
+returning a module-level `CONFIG` invalidates its caller when that config
+changes. Globals that are *written* (`global x; x = ...`) or mutated in
+place are excluded — those are side-effect accumulators, and folding them
+in would invalidate the function on its own output. That exclusion applies
+to a helper's own accumulator too. A read global whose value can't be hashed
 warns once rather than failing the call.
 
 **Reading includes passing it to something.** `sum(G)`, `len(G)`,
@@ -339,11 +343,24 @@ The cache key is `f"{func_name}:{state_hash}:{dynamic_hash}:{args_hash}"`.
 
 - `state_hash` folds in the function's own source hash + every
   `depends_on` source + transitive helper hashes (so editing a helper
-  invalidates) + the content of any **module global the function reads**
-  (see above) + the code of any class or function of yours reached through
-  the **arguments** ([below](#code-you-pass-as-an-argument)) — so passing a
+  invalidates) + the content of any **module global the function *or one of
+  its helpers* reads** (see above) + the code of any class or function of
+  yours reached through the **arguments**
+  ([below](#code-you-pass-as-an-argument)) — so passing a
   schema class or a callback and then editing it invalidates instead of
   returning the old answer.
+
+  Reachability is **transitive**: code reached *through* code that is already
+  folded is folded too. If a cached function builds an `A`, and `A`'s
+  `field(default_factory=lambda: B())` constructs a `B`, then editing `B`
+  invalidates — even though `B` appears nowhere in the function or in `A`'s
+  own body. Names the code *loads* are followed; type annotations are not,
+  since `value: B` never runs and editing a hint cannot change a result.
+
+  The limit worth knowing: reachability is **static**. Cash follows names
+  your code refers to, so code selected at *runtime* — a class pulled out of
+  a dict, an implementation assigned during execution — is still invisible.
+  Declare those with `depends_on=[...]`.
   Every source hash in `state_hash` is taken over a **normalized** form of
   the code, not its raw text: comments, blank lines, trailing whitespace and
   the exact indentation width are dropped first. Adding a comment or running
