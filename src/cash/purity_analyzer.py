@@ -671,32 +671,60 @@ def _called_names_in_tree(tree: ast.AST) -> list[str]:
     return names
 
 
-def _class_namespace(cls: type) -> dict[str, Any]:
-    """A globals dict in which *cls*'s body names resolve.
+def _class_namespaces(cls: type) -> list[dict[str, Any]]:
+    """Every globals dict in which *cls*'s body names might resolve.
 
-    Prefers a member's ``__globals__``: that works for a class built by
-    ``exec`` into a namespace that never reaches ``sys.modules`` (notebook
-    cells, REPL), where the module lookup returns nothing. Dataclass field
-    factories are consulted too -- for a dataclass with no methods of its
-    own, the factory lambda may be the only member defined in the user's
-    module, since the generated ``__init__`` carries the dataclasses
-    machinery's globals instead.
+    Returns a LIST, and callers must try all of them, because no single one
+    is reliably right:
+
+    * The defining module is the obvious candidate, but a class built by
+      ``exec`` into a namespace that never reaches ``sys.modules`` (notebook
+      cell, REPL) has none.
+    * A member's ``__globals__`` covers that case -- but picking the FIRST
+      member with one is wrong. A dataclass's GENERATED methods carry the
+      ``dataclasses`` machinery's globals, not the user's, and whether such
+      a method comes first in ``vars(cls)`` varies by Python version. On
+      3.13 it does, so ``B`` in ``field(default_factory=lambda: B(10))``
+      resolved against the wrong namespace and the class was never folded;
+      on 3.14 it happened to work. CI caught it on all three 3.13 runners.
+
+    Ordering is best-first (module, then member globals), but correctness
+    does not depend on it -- the caller searches until a name resolves.
     """
-    candidates: list[Any] = list(vars(cls).values())
+    namespaces: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    def add(candidate: Any) -> None:
+        if isinstance(candidate, dict) and id(candidate) not in seen:
+            seen.add(id(candidate))
+            namespaces.append(candidate)
+
+    module = sys.modules.get(getattr(cls, "__module__", "") or "")
+    add(getattr(module, "__dict__", None))
+
+    members: list[Any] = list(vars(cls).values())
     fields_map = getattr(cls, "__dataclass_fields__", None)
     if isinstance(fields_map, dict):
         for fld in fields_map.values():
             factory = getattr(fld, "default_factory", None)
             if factory is not None and factory is not dataclasses.MISSING:
-                candidates.append(factory)
-    for member in candidates:
+                # Put field factories FIRST among members: a factory lambda is
+                # written in the user's module, while a generated __init__ is
+                # not, so it is the more likely place for the name to resolve.
+                members.insert(0, factory)
+    for member in members:
         if isinstance(member, (classmethod, staticmethod)):
             member = member.__func__
-        glb = getattr(member, "__globals__", None)
-        if isinstance(glb, dict):
-            return glb
-    module = sys.modules.get(getattr(cls, "__module__", "") or "")
-    return getattr(module, "__dict__", {}) or {}
+        add(getattr(member, "__globals__", None))
+    return namespaces
+
+
+def _resolve_in_class_namespaces(cls: type, name: str) -> Any:
+    """First binding of *name* across *cls*'s candidate namespaces, else None."""
+    for namespace in _class_namespaces(cls):
+        if name in namespace:
+            return namespace[name]
+    return None
 
 
 def _build_namespace(func: Callable[..., Any]) -> dict[str, Any]:
@@ -830,9 +858,8 @@ class PurityAnalyzer:
             """Queue user-code objects a CLASS body constructs, hash-only."""
             if not isinstance(cls, type) or depth >= self._MAX_DEPTH:
                 return
-            class_ns = _class_namespace(cls)
             for called in _called_names_in_tree(tree):
-                target = class_ns.get(called)
+                target = _resolve_in_class_namespaces(cls, called)
                 if target is None or target is cls or not callable(target):
                     continue
                 if getattr(target, "_cash_cached", False):
