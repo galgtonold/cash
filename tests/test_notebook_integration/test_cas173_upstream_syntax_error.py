@@ -22,6 +22,7 @@ a valid cell must still cache (the ``control`` test pins that CAS-163 stays
 fixed).
 """
 import pytest
+from conftest import shows_cached
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(240)]
 
@@ -53,13 +54,13 @@ def test_broken_upstream_cell_keeps_independent_downstream_cache(nb_runner):
     # A) baseline: an isolated re-run of the expensive cell restores from cache.
     nb_runner.run_cell(3)
     out_a = nb_runner.get_output(3)
-    assert "RESTORED" in out_a, f"baseline did not cache:\n{out_a}"
+    assert shows_cached(out_a), f"baseline did not cache:\n{out_a}"
 
     # B) break cell 2 by SAVING only (never execute it), then re-run cell 3.
     nb_runner.set_cell_source(2, "y = 1 +")  # SyntaxError, saved but not run
     nb_runner.run_cell(3)
     out_b = nb_runner.get_output(3)
-    assert "RESTORED" in out_b, (
+    assert shows_cached(out_b), (
         "A downstream cell that does NOT depend on the broken cell lost its "
         "cache when an unrelated upstream cell had a SyntaxError (CAS-173).\n"
         f"{out_b}"
@@ -69,7 +70,7 @@ def test_broken_upstream_cell_keeps_independent_downstream_cache(nb_runner):
     nb_runner.set_cell_source(2, "y = 1")
     nb_runner.run_cell(3)
     out_a2 = nb_runner.get_output(3)
-    assert "RESTORED" in out_a2, f"post-fix did not cache:\n{out_a2}"
+    assert shows_cached(out_a2), f"post-fix did not cache:\n{out_a2}"
 
 
 def test_dependent_downstream_cell_never_serves_wrong_value(nb_runner):
@@ -111,4 +112,4 @@ def test_valid_upstream_cell_still_caches_control(nb_runner):
 
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
-    assert "RESTORED" in out, f"valid-upstream control did not cache:\n{out}"
+    assert shows_cached(out), f"valid-upstream control did not cache:\n{out}"

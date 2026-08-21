@@ -18,6 +18,7 @@ assert the cell RESTORES from cache on an isolated re-run.  The f-string
 variant is a control that does byte-identical work and must also restore.
 """
 import pytest
+from conftest import shows_cached
 
 pytestmark = [pytest.mark.upstream, pytest.mark.timeout(120)]
 
@@ -57,7 +58,7 @@ def test_multiline_percent_print_cell_restores(nb_runner):
 
     Without the fix, ``strip_magics`` deletes the ``      % (a, b))`` line, the
     simulator sees a fictional SyntaxError, and the cell recomputes every run
-    (never RESTORED).
+    (never CACHED).
     """
     nb_runner.create_notebook([SETUP, BASE, _expensive_cell(MULTILINE_PCT_PRINT)])
     nb_runner.start_kernel()
@@ -67,7 +68,7 @@ def test_multiline_percent_print_cell_restores(nb_runner):
     # Isolated re-run: inputs unchanged -> must be a cache hit.
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
-    assert "RESTORED" in out, (
+    assert shows_cached(out), (
         "cell with a multi-line %-format print did not restore from cache "
         f"(CAS-163). Badge output:\n{out}"
     )
@@ -84,5 +85,5 @@ def test_fstring_print_cell_restores_control(nb_runner):
 
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
-    assert "RESTORED" in out, f"f-string control did not restore. Badge output:\n{out}"
+    assert shows_cached(out), f"f-string control did not restore. Badge output:\n{out}"
     assert "Asian call =" in out

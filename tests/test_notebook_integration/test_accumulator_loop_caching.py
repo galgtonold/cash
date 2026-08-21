@@ -61,10 +61,11 @@ for an unrelated reason ("Input variable missing lineage").
 import asyncio
 
 import pytest
+from conftest import shows_cached
 
 pytestmark = [pytest.mark.loops, pytest.mark.mutations, pytest.mark.timeout(120)]
 
-# ``print`` badge so the RESTORED status lands in the cell's text output.
+# ``print`` badge so the CACHED status lands in the cell's text output.
 SETUP = (
     "import cash\n"
     "%cash_on\n"
@@ -123,7 +124,7 @@ def test_accumulator_loop_caches(nb_runner, tmp_path):
     assert "out=[10, 20, 30, 40, 50]" in nb_runner.get_output(5), nb_runner.get_output(5)
 
     # Isolated re-run of the loop cell must skip ALL real work. Post-CAS-259
-    # the whole-loop `RESTORED` badge is gone — `out.append(slow(e))` is a
+    # the whole-loop `CACHED` badge is gone — `out.append(slow(e))` is a
     # genuine in-place mutation and re-executes every run — but CAS-243 call
     # interception must still cache `slow()` itself, in RAM, per iteration.
     # Real work is counted from OUTSIDE the kernel so a badge-text change
@@ -177,13 +178,13 @@ def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
     # OUTSIDE the kernel so a badge-text change alone can't fake this
     # passing. This is the single-unit path (unlike test #1's 5-item loop,
     # which decomposes and relies on call interception instead) -- so the
-    # badge must show a genuine RESTORED whole-unit entry, not
+    # badge must show a genuine CACHED whole-unit entry, not
     # `[intercepted]` sub-calls.
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
     warm = _n(counter) - cold
     assert warm == 0, f"large accumulator loop did not cache: {warm} real calls, badge={out!r}"
-    assert "RESTORED" in out, f"badge does not show a whole-unit restore: {out!r}"
+    assert shows_cached(out), f"badge does not show a whole-unit restore: {out!r}"
 
     nb_runner.run_cell(5)
     assert "len=150 last=1490" in nb_runner.get_output(5), nb_runner.get_output(5)
@@ -191,7 +192,7 @@ def test_large_accumulator_loop_single_unit_still_caches(nb_runner, tmp_path):
 
 # ---------------------------------------------------------------------------
 # #2 A REAL kernel restart, both arms. ``persist`` propagates into
-#    ``CallUnit`` since CAS-269, so the annotated arm is RESTORED and the
+#    ``CallUnit`` since CAS-269, so the annotated arm is CACHED and the
 #    bare arm is fully recomputed -- and the bare arm is what proves the
 #    annotated one is measuring the annotation rather than the backend's
 #    generic compute floor. What must NOT regress either way is correctness:
@@ -349,7 +350,7 @@ def test_side_effect_loop_not_cached(nb_runner, tmp_path):
     # would skip the write and leave it at 3.
     nb_runner.run_cell(4)
     loop_out = nb_runner.get_output(4)
-    assert "RESTORED" not in loop_out, f"side-effect loop was wrongly cached: {loop_out!r}"
+    assert not shows_cached(loop_out), f"side-effect loop was wrongly cached: {loop_out!r}"
     assert sink.read_text().count("\n") == 6, (
         f"side effect was skipped on re-run (loop wrongly cached): "
         f"{sink.read_text()!r}"
@@ -377,10 +378,10 @@ def test_preseeded_accumulator_not_cached(nb_runner):
     nb_runner.run_all()
     assert "out=[0, 10, 20, 30]" in nb_runner.get_output(5), nb_runner.get_output(5)
 
-    # Isolated re-run: not cached (no RESTORED), and the value stays correct
+    # Isolated re-run: not cached (no CACHED row), and the value stays correct
     # (the seeded prefix is preserved, not doubled).
     nb_runner.run_cell(4)
-    assert "RESTORED" not in nb_runner.get_output(4), nb_runner.get_output(4)
+    assert not shows_cached(nb_runner.get_output(4)), nb_runner.get_output(4)
     nb_runner.run_cell(5)
     assert "out=[0, 10, 20, 30]" in nb_runner.get_output(5), nb_runner.get_output(5)
 
@@ -402,7 +403,7 @@ def test_prior_cell_seed_not_cached(nb_runner):
     assert "out=[10, 20, 30]" in nb_runner.get_output(6), nb_runner.get_output(6)
 
     nb_runner.run_cell(5)
-    assert "RESTORED" not in nb_runner.get_output(5), nb_runner.get_output(5)
+    assert not shows_cached(nb_runner.get_output(5)), nb_runner.get_output(5)
 
 
 # ---------------------------------------------------------------------------

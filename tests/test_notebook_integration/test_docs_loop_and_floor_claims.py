@@ -19,6 +19,7 @@ at 0.05 s each ... persists **nothing**". A loop that long is cached as a
 Counted, never timed.
 """
 import pytest
+from conftest import shows_cached, shows_executed
 
 pytestmark = [pytest.mark.integration, pytest.mark.loops]
 
@@ -120,7 +121,7 @@ def _loop_badge(nb_runner, iters, body_stmts):
     out = nb_runner.get_output(2)
     return {
         "single_unit": any("for i in range" in ln for ln in out.splitlines()
-                           if "COMPUTED" in ln or "RESTORED" in ln),
+                           if shows_executed(ln) or shows_cached(ln)),
         "persisted": "DISK" in out,
         "out": out,
     }

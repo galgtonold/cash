@@ -8,7 +8,7 @@ CAPTURED form ::
     counts, bins, patches = ax.hist(data, bins=50)
 
 -- an ``ast.Assign`` whose RHS is the draw -- slipped straight through: the
-tuple was cached and, on a warm re-run, RESTORED while the draw (the bars on the
+tuple was cached and, on a warm re-run, CACHED while the draw (the bars on the
 Axes) was never replayed. ``fig.savefig()`` then flushed a BLANK histogram, with
 a green badge and ``counts`` printing fine -- silent. The fix routes an
 identity-coupled (live Axes/Figure) receiver as a draw even when its return is
@@ -16,6 +16,7 @@ captured, keyed on the RECEIVER (not the return type, not the statement shape),
 so a genuine pure capture (``m = df.corr()``, DataFrame receiver) still caches.
 """
 import pytest
+from conftest import shows_cached
 
 pytest.importorskip("matplotlib")
 
@@ -119,9 +120,9 @@ def test_pure_capture_on_ordinary_receiver_still_caches(nb_runner):
 
     The discriminator is the identity-coupled receiver check, NOT "the RHS is a
     method call". A DataFrame is not identity-coupled, so a captured pure read
-    must stay on the caching path (RESTORED on warm re-run), never routed to
+    must stay on the caching path (CACHED on warm re-run), never routed to
     skip-cache. ``corr()`` on a wide frame is expensive enough that the cost
-    model keeps it, so RESTORED is a real signal (a cheap op the cost model
+    model keeps it, so CACHED is a real signal (a cheap op the cost model
     declines would make the assertion vacuous).
     """
     nb_runner.create_notebook([
@@ -134,7 +135,7 @@ def test_pure_capture_on_ordinary_receiver_still_caches(nb_runner):
 
     nb_runner.run_cells([3])
     out = nb_runner.get_output(3)
-    assert "RESTORED" in out, (
+    assert shows_cached(out), (
         f"a captured pure read `m = df.corr()` stopped caching -- the CAS-199 "
         f"draw rule over-reached onto an ordinary (non-Axes) receiver. Got:\n{out}"
     )

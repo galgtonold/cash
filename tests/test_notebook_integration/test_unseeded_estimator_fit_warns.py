@@ -26,6 +26,7 @@ are what make the positive test discriminating rather than a detector that shout
 at every ``.fit()`` it sees.
 """
 import pytest
+from conftest import shows_cached
 
 pytest.importorskip("sklearn")
 
@@ -75,7 +76,7 @@ def test_unseeded_estimator_fit_warns(nb_runner):
     # Isolated re-run: the fit restores, and the restore announces the replay.
     nb_runner.run_cell(4)
     warm = nb_runner.get_raw_output(4)
-    assert "RESTORED" in nb_runner.get_output(4), (
+    assert shows_cached(nb_runner.get_output(4)), (
         f"unseeded fit did not restore on warm re-run: {nb_runner.get_output(4)!r}"
     )
     assert RESTORED_TEXT in warm, (

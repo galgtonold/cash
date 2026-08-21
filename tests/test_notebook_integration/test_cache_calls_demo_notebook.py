@@ -74,7 +74,7 @@ def _sub_calls(out: str) -> list[tuple[int, int]]:
     every call really executed.
 
     Rows under the badge's ``Upstream:`` section are EXCLUDED. Those are marked
-    ``^COMPUTED`` and belong to reconstructed cells, not to the statement under
+    ``^EXECUTED`` and belong to reconstructed cells, not to the statement under
     test -- a re-run of section 2 reconstructs section 1's loop and reports its
     sub-calls too, so a flat scan of the output reads another cell's hits as
     this one's and no "interception is off here" assertion can ever fail.
@@ -84,7 +84,11 @@ def _sub_calls(out: str) -> list[tuple[int, int]]:
     owner_is_upstream = True          # anything before the first row is a header
     for line in out.splitlines():
         stripped = line.lstrip()
-        if "COMPUTED:" in stripped or "RESTORED:" in stripped:
+        # Any row line marks a new owner -- including an uncacheable one,
+        # whose label is "NOT CACHED:" and which "CACHED:" deliberately
+        # matches. Before CAS-272 renamed the labels, such a row said
+        # COMPUTED and was caught by the same scan.
+        if "EXECUTED:" in stripped or "CACHED:" in stripped:
             owner_is_upstream = stripped.startswith("^")
             continue
         m = re.search(r"sub-call\s+\S+:\s*(\d+)/(\d+)\s+hit", stripped)
