@@ -336,3 +336,58 @@ def test_normalization_is_memoized():
     normalize_source_for_hash(src)
     after = normalize_source_for_hash.cache_info().hits
     assert after == before + 1, "repeat normalization must be served from the memo"
+
+
+def test_source_hash_memo_is_keyed_by_identity_not_value(tmp_path):
+    """Two value-equal code objects must not share one memo entry.
+
+    ``_hash_callable_source`` memoizes its digest so a helper's source is not
+    re-read and re-tokenized on every cache hit. That memo must key on the
+    code object's IDENTITY: ``CodeType`` implements ``__eq__``/``__hash__`` BY
+    VALUE and ``co_filename`` is not part of it, so two functions from
+    different FILES can occupy one dict slot.
+
+    Their digests can still differ. A TRAILING ``# @cash:`` annotation changes
+    the normalized source without changing a byte of bytecode or a line
+    number, so a value-keyed memo served one file's digest for the other --
+    silently dropping or applying a caching directive. Found as a reproducible
+    xdist-only failure of ``test_real_helper_change_still_recomputes``.
+
+    Real files on disk are required: ``inspect.getsource`` must SUCCEED here,
+    or both sides fall back to ``bytecode_identity`` and compare equal for a
+    reason that has nothing to do with the memo. That mistake made the first
+    version of this test fail against correct code.
+    """
+    import importlib.util
+    import inspect
+    import sys
+
+    from cash import Cash
+
+    def load(name, body):
+        path = tmp_path / (name + ".py")
+        path.write_text(body, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(name, str(path))
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules[name] = mod
+        spec.loader.exec_module(mod)
+        return mod.f
+
+    plain = "def f(x):\n    return x * 2\n"
+    annotated = "def f(x):\n    return x * 2  # @cash: no-cache\n"
+    fn_a = load("memo_mod_a", plain)
+    fn_b = load("memo_mod_b", annotated)
+    try:
+        assert inspect.getsource(fn_a), "premise: source really is retrievable"
+        assert fn_a.__code__ == fn_b.__code__, "premise: code objects are value-equal"
+        assert hash(fn_a.__code__) == hash(fn_b.__code__), "premise: one dict slot"
+        assert fn_a.__code__ is not fn_b.__code__
+        assert normalize_source_for_hash(plain) != normalize_source_for_hash(annotated)
+
+        cash = Cash(register_magic=False)
+        assert cash._hash_callable_source(fn_a) != cash._hash_callable_source(fn_b), (
+            "the memo conflated two value-equal code objects with different sources"
+        )
+    finally:
+        for name in ("memo_mod_a", "memo_mod_b"):
+            sys.modules.pop(name, None)

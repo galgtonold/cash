@@ -7,7 +7,6 @@ caching and the `Cash.notebook` bridge for Jupyter integration.
 from __future__ import annotations
 
 import ast
-import asyncio
 import atexit
 import dataclasses
 import functools
@@ -228,6 +227,10 @@ def _canonicalize_dict_order(value: Any, _depth: int = 0) -> Any:
     """
     if _depth > 50:
         return value
+    # Same short-circuit as ``_contains_set``: a primitive has no dict inside
+    # to reorder, and this runs once per element of every container argument.
+    if type(value) in _CODELESS_PRIMS:
+        return value
     if isinstance(value, dict):
         # A dict SUBCLASS keeps insertion order (it may be semantic) and is
         # tagged with its type; a plain dict is sorted (order-insensitive) and
@@ -259,6 +262,15 @@ def _contains_set(value: Any, _depth: int = 0) -> bool:
     """True if *value* contains a set/frozenset anywhere (recursively, including
     inside objects). Gates the canonicalisation so ordinary args are untouched."""
     if _depth > 50:
+        return False
+    # An exact builtin primitive cannot contain anything, so it cannot contain
+    # a set. Without this the fall-through below called ``_object_state`` on
+    # EVERY element -- which walks ``type(value).__mro__`` looking for
+    # ``__slots__`` -- so hashing a 10k-element list of ints made 10k such
+    # walks per cache hit. Exact-type test, matching ``_CODELESS_PRIMS``'s own
+    # contract: a str/int SUBCLASS can carry a ``__dict__`` holding a set and
+    # must still be walked.
+    if type(value) in _CODELESS_PRIMS:
         return False
     if isinstance(value, (set, frozenset)):
         return True
@@ -507,6 +519,34 @@ def _is_one_shot_iterator(value: Any) -> bool:
         return iter(value) is value
     except TypeError:
         return False
+
+# id(code object) -> (the object itself, its source digest). Keyed by IDENTITY,
+# and the object is retained so the id cannot be recycled under us -- the same
+# guard `function_tracker._source_cache` uses.
+#
+# NOT keyed on the code object directly, which was the first attempt: CodeType
+# implements __eq__/__hash__ BY VALUE, and co_filename is not part of that
+# equality, so two helpers with the same body in different modules share one
+# dict slot. That made `test_real_helper_change_still_recomputes` fail
+# reproducibly under xdist while passing alone -- a stale digest served across
+# tests through a module-level memo.
+#
+# A redefinition (reloaded module, re-run cell) compiles a NEW code object, so
+# identity keying still cannot serve a digest for code that is no longer
+# running. Editing a .py file WITHOUT reloading leaves the old code object
+# live, and the old digest is then the correct answer.
+#
+# Load-bearing, not a micro-optimisation. `_hash_callable_source` is the live
+# per-call identity of every transitive helper, and it calls
+# `inspect.getsource`, which re-reads and RE-TOKENISES the source block on
+# every call. Measured on a 2-helper function: 8700 tokenizer calls per 300
+# cache hits, and 37ms of a 65ms key computation.
+#
+# Module-level rather than per-instance: the digest depends only on the code
+# object, so two Cash instances cannot legitimately disagree about it.
+_SOURCE_HASH_MEMO: dict = {}
+_SOURCE_HASH_MEMO_MAX = 4096
+
 
 class Cash:
     """Smart caching framework for Python functions and Jupyter notebooks.
@@ -1214,10 +1254,24 @@ class Cash:
            instances of the same class; the user gets stability within
            a process but coarse cross-process behavior.
         """
+        memo_owner: Any = getattr(fn, "__code__", None)
+        if memo_owner is None and isinstance(fn, type):
+            memo_owner = fn
+        memo_key = id(memo_owner) if memo_owner is not None else None
+        if memo_key is not None:
+            entry = _SOURCE_HASH_MEMO.get(memo_key)
+            # ``is``, not ``==``: confirms this is the SAME object and not a
+            # recycled id, and sidesteps CodeType's by-value equality.
+            if entry is not None and entry[0] is memo_owner:
+                return entry[1]
+
         try:
             src = inspect.getsource(fn)
             normalized = normalize_source_for_hash(src)
-            return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
+                _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
+            return digest
         except SOURCE_RETRIEVAL_ERRORS:
             pass
         digest = bytecode_identity(fn)
@@ -2400,6 +2454,12 @@ class Cash:
             # event and then read the stored result.
             single_flight_event = None
             if self.use_locking:
+                # Imported HERE, not at module scope: asyncio costs ~76ms of a
+                # ~290ms `import cash`, and a synchronous user never needs it.
+                # Inside a running loop it is necessarily already imported, so
+                # this lookup is free exactly where it is used.
+                import asyncio
+
                 try:
                     running_loop = asyncio.get_running_loop()
                 except RuntimeError:
