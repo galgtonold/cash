@@ -21,6 +21,23 @@ from cash.notebook.randomness import (
 )
 
 
+def _randomness_warnings(recorded):
+    """Only the warnings these tests are actually about.
+
+    ``catch_warnings(record=True)` captures EVERYTHING raised inside the
+    block, so a single unrelated warning -- a DeprecationWarning from a
+    first-time lazy import, say -- makes a bare ``len(w)`` wrong. Both CI
+    failures this class has produced were that shape and neither was a
+    randomness bug: ubuntu-3.14 on ``test_state_updated_when_suppressed``,
+    then windows-3.13 on ``test_warning_suppressed``, the latter passing on
+    a straight re-run.
+
+    Filtering by category asserts what the test means -- "cash warned about
+    randomness, or did not" -- instead of "nothing anywhere warned".
+    """
+    return [x for x in recorded if issubclass(x.category, CashRandomnessWarning)]
+
+
 class TestRandomnessVisitor:
     """Tests for the AST visitor that detects randomness calls."""
     
@@ -249,8 +266,9 @@ x = random.random()
             warnings.simplefilter("always")
             check_and_warn_randomness(code, detector, suppress_warning=False)
             
-            assert len(w) == 1
-            assert issubclass(w[0].category, CashRandomnessWarning)
+            randomness = _randomness_warnings(w)
+            assert len(randomness) == 1
+            assert issubclass(randomness[0].category, CashRandomnessWarning)
     
     def test_warning_suppressed(self):
         """Test that warnings can be suppressed."""
@@ -264,7 +282,7 @@ x = random.random()
             check_and_warn_randomness(code, detector, suppress_warning=True)
             
             # Warning should be suppressed
-            assert len(w) == 0
+            assert len(_randomness_warnings(w)) == 0
     
     def test_state_updated_when_suppressed(self):
         """Test that session state is still updated when warnings are suppressed."""
@@ -286,7 +304,7 @@ x = random.random()
             warnings.simplefilter("always")
             check_and_warn_randomness(code2, detector, suppress_warning=False)
             
-            assert len(w) == 0
+            assert len(_randomness_warnings(w)) == 0
 
 
 class TestSyntaxErrorHandling:
@@ -978,9 +996,10 @@ class TestPositionalRngCarrierArguments:
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
             check_and_warn_randomness("x = rng.standard_normal(10)", detector)
-        assert len(w) == 1
-        assert issubclass(w[0].category, CashRandomnessWarning)
-        message = str(w[0].message)
+        randomness = _randomness_warnings(w)
+        assert len(randomness) == 1
+        assert issubclass(randomness[0].category, CashRandomnessWarning)
+        message = str(randomness[0].message)
         assert "rng.standard_normal()" in message
         assert "@cash:allow-random" in message
 
@@ -992,4 +1011,4 @@ class TestPositionalRngCarrierArguments:
             check_and_warn_randomness(
                 "x = rng.standard_normal(10)", detector, suppress_warning=True,
             )
-        assert len(w) == 0
+        assert len(_randomness_warnings(w)) == 0
