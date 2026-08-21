@@ -13,6 +13,7 @@ pyplot's globals and cost ~0.04s to build, so caching them is all risk and no
 reward.  These tests pin the user-visible contract, not the implementation.
 """
 import pytest
+from conftest import shows_cached
 
 pytest.importorskip("matplotlib")
 
@@ -118,7 +119,7 @@ def test_ordinary_statements_still_cache_alongside_a_figure(nb_runner):
     # Re-run the ordinary statement: it must come back from cache.
     nb_runner.run_cells([3])
     output = nb_runner.get_output(3)
-    assert "RESTORED" in output, (
+    assert shows_cached(output), (
         f"An ordinary cached statement stopped caching -- the CAS-144 rule over-reached. Got:\n{output}"
     )
 

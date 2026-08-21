@@ -23,6 +23,7 @@ one-repetition test came to confirm the wrong belief.
 ``# @cash:cache-fit`` opts back in to the CAS-138 machinery for users who want it.
 """
 import pytest
+from conftest import shows_cached
 
 pytest.importorskip("sklearn")
 
@@ -74,9 +75,9 @@ def test_bare_fit_not_cached_by_default(nb_runner):
     The badge reason IS the net-neutrality proof: ``skip_cache`` is what gates
     ``_save_to_cache``, so a refused statement never serialises the model at all.
 
-    The fit cell holds exactly ONE statement so a bare ``"RESTORED" not in`` check
+    The fit cell holds exactly ONE statement so a bare ``not shows_cached(...)`` check
     is unambiguous -- a second statement in the same cell (e.g. a ``print``) caches
-    on its own and would put an unrelated ``RESTORED`` line in the same badge.
+    on its own and would put an unrelated ``CACHED`` line in the same badge.
     """
     nb_runner.create_notebook([
         SETUP, DATA, MODEL,
@@ -93,7 +94,7 @@ def test_bare_fit_not_cached_by_default(nb_runner):
 
     nb_runner.run_cell(4)  # isolated re-run must RE-EXECUTE, never restore
     warm = nb_runner.get_output(4)
-    assert "RESTORED" not in warm, (
+    assert not shows_cached(warm), (
         f"bare fit restored from cache without @cash:cache-fit: {warm!r}"
     )
     assert "NOT CACHED" in warm, warm
@@ -127,7 +128,7 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
       binds to a single statement (it walks back over consecutive COMMENT lines
       only), so prints 2 and 3 cached and replayed -- the cell printed a stale
       ``backup_fit True`` next to a live ``same False``. Every print now carries
-      its own directive, and the test asserts nothing in the probe was RESTORED.
+      its own directive, and the test asserts nothing in the probe was CACHED.
     """
     nb_runner.create_notebook([
         SETUP, DATA, MODEL,                       # 1, 2, 3
@@ -145,12 +146,12 @@ def test_bare_fit_alias_survives_warm_reruns(nb_runner):
     for rep in range(4):  # 1 cold + 3 warm; the alias restore lands on warm #2
         nb_runner.run_all()
 
-        assert "RESTORED" not in nb_runner.get_output(5), (
+        assert not shows_cached(nb_runner.get_output(5)), (
             f"rep {rep}: bare fit must not restore by default: "
             f"{nb_runner.get_output(5)!r}"
         )
         out = nb_runner.get_output(6)
-        assert "RESTORED" not in out, (
+        assert not shows_cached(out), (
             f"rep {rep}: the probe cell replayed from cache instead of reading the "
             f"live namespace -- this probe is invalid, not passing: {out!r}"
         )
@@ -186,7 +187,7 @@ def test_cache_fit_annotation_opts_in(nb_runner):
 
     nb_runner.run_cell(4)  # isolated re-run should be a cache hit
     out = nb_runner.get_output(4)
-    assert "RESTORED" in out, f"@cash:cache-fit did not cache the bare fit: {out!r}"
+    assert shows_cached(out), f"@cash:cache-fit did not cache the bare fit: {out!r}"
     assert "fitted 160" in out
 
 
@@ -229,7 +230,7 @@ def test_cache_fit_restores_in_place_when_receiver_is_live(nb_runner):
     nb_runner.run_cell(4)  # backup = clf (aliases the unfitted clf)
 
     nb_runner.run_cell(5)  # cache HIT -> in-place restore onto the shared object
-    assert "RESTORED" in nb_runner.get_output(5), (
+    assert shows_cached(nb_runner.get_output(5)), (
         f"fit cell was not a cache hit after restart: {nb_runner.get_output(5)!r}"
     )
 
@@ -272,7 +273,7 @@ def test_cache_fit_pandas_input_restores_repeatedly(nb_runner):
     for i in range(3):
         nb_runner.run_cell(4)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(4)
-        assert "RESTORED" in out, (
+        assert shows_cached(out), (
             f"pandas cache-fit warm re-run #{i + 1} did not restore: {out!r}"
         )
         # THE discriminator: no upstream constructor re-execution. Without the fix
@@ -324,11 +325,11 @@ def test_cache_fit_make_classification_split_restores_repeatedly(nb_runner):
     for i in range(3):
         nb_runner.run_cell(7)  # isolated warm re-run -- must be a clean cache hit
         out = nb_runner.get_output(7)
-        assert "RESTORED" in out, (
+        assert shows_cached(out), (
             f"make_classification cache-fit warm re-run #{i + 1} did not restore "
             f"(CAS-171): {out!r}"
         )
-        # THE discriminator, and the half a plain "RESTORED" check would miss: a
+        # THE discriminator, and the half a plain shows_cached() check would miss: a
         # full upstream re-derivation restores too, so without this a silent
         # re-run of the whole make_classification -> split chain every warm
         # re-run would pass as a technically-correct hit.
@@ -403,7 +404,7 @@ def test_cache_fit_large_numpy_restores_after_restart(nb_runner):
 
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert "RESTORED" in out, (
+    assert shows_cached(out), (
         f"large cache-fit did not restore from disk after restart (CAS-166): {out!r}"
     )
     assert "fitted 12" in out
@@ -429,7 +430,7 @@ def test_reassign_fit_caches(nb_runner):
 
     nb_runner.run_cell(4)  # isolated re-run should be a cache hit
     out = nb_runner.get_output(4)
-    assert "RESTORED" in out, f"reassign-fit did not cache: {out!r}"
+    assert shows_cached(out), f"reassign-fit did not cache: {out!r}"
 
 
 def test_construct_fit_assign_restores_after_restart(nb_runner):
@@ -456,7 +457,7 @@ def test_construct_fit_assign_restores_after_restart(nb_runner):
 
     nb_runner.run_cell(3)
     out = nb_runner.get_output(3)
-    assert "RESTORED" in out, f"fitted estimator did not restore after restart (CAS-137): {out!r}"
+    assert shows_cached(out), f"fitted estimator did not restore after restart (CAS-137): {out!r}"
     assert "n = 160" in out
 
 

@@ -57,10 +57,10 @@ def test_computed_time_matches_saved_time(nb_runner):
     nb_runner.run_cell(2)  # restore
     restore_badge = _stream_text(nb_runner.get_cell(2))
 
-    exec_m = re.search(r"COMPUTED: df = _mk\(\)\s+\(([\d.]+)s\)", compute_badge)
-    saved_m = re.search(r"RESTORED: df = _mk\(\)\s+\(saved ([\d.]+)s\)", restore_badge)
-    assert exec_m, f"no COMPUTED row for df = _mk():\n{compute_badge}"
-    assert saved_m, f"no RESTORED row for df = _mk():\n{restore_badge}"
+    exec_m = re.search(r"EXECUTED: df = _mk\(\)\s+\(([\d.]+)s\)", compute_badge)
+    saved_m = re.search(r"(?<!NOT )CACHED: df = _mk\(\)\s+\(saved ([\d.]+)s\)", restore_badge)
+    assert exec_m, f"no EXECUTED row for df = _mk():\n{compute_badge}"
+    assert saved_m, f"no CACHED row for df = _mk():\n{restore_badge}"
 
     exec_t, saved_t = float(exec_m.group(1)), float(saved_m.group(1))
     # Both must reflect the ~0.4s compute, not the serialisation-inflated total

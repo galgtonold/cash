@@ -36,10 +36,11 @@ an entry, so it would always recompute and the test could not observe a leak.
 """
 
 import pytest
+from conftest import shows_cached, shows_executed
 
 pytestmark = pytest.mark.upstream
 
-# `%cash_badge print` puts the per-cell status (COMPUTED / RESTORED / NOT CACHED)
+# `%cash_badge print` puts the per-cell status (EXECUTED / CACHED / NOT CACHED)
 # into the cell output so a cache HIT vs a recompute is directly observable.
 SETUP = "import cash\n%cash_on\n%cash_badge print"
 
@@ -60,7 +61,7 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert "COMPUTED" in nb_runner.get_output(3), nb_runner.get_output(3)
+    assert shows_executed(nb_runner.get_output(3)), nb_runner.get_output(3)
     assert "R 110" in nb_runner.get_output(4), nb_runner.get_output(4)
 
     # Unchanged re-run: the consumer must HIT. This proves the statement genuinely
@@ -68,7 +69,7 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
     # 110 -- the CAS-183 failure mode. run_all also rebinds `f` (cell 2 re-executes),
     # so the only thing that can make cell 3 recompute below is a changed key.
     nb_runner.run_all()
-    assert "RESTORED" in nb_runner.get_output(3), nb_runner.get_output(3)
+    assert shows_cached(nb_runner.get_output(3)), nb_runner.get_output(3)
     assert "R 110" in nb_runner.get_output(4), nb_runner.get_output(4)
 
     # Edit ONLY the default literal.
@@ -76,7 +77,7 @@ def test_plain_literal_default_edit_recomputes_consumer(nb_runner):
     nb_runner.run_all()
     consumer = nb_runner.get_output(3)
     out = nb_runner.get_output(4)
-    assert "RESTORED" not in consumer, (
+    assert not shows_cached(consumer), (
         f"consumer served the literal-default result from cache (CAS-186 leak): {consumer!r}"
     )
     assert "R 210" in out, (
@@ -104,12 +105,12 @@ def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
     ])
     nb_runner.start_kernel()
     nb_runner.run_all()
-    assert "COMPUTED" in nb_runner.get_output(4), nb_runner.get_output(4)
+    assert shows_executed(nb_runner.get_output(4)), nb_runner.get_output(4)
     assert "R 10.5" in nb_runner.get_output(5), nb_runner.get_output(5)
 
     # Unchanged re-run: the consumer must HIT (stale result now possible).
     nb_runner.run_all()
-    assert "RESTORED" in nb_runner.get_output(4), nb_runner.get_output(4)
+    assert shows_cached(nb_runner.get_output(4)), nb_runner.get_output(4)
     assert "R 10.5" in nb_runner.get_output(5), nb_runner.get_output(5)
 
     # Change the VALUE the default binds, without touching f's source text.
@@ -117,7 +118,7 @@ def test_enclosing_value_default_change_recomputes_consumer(nb_runner):
     nb_runner.run_all()
     consumer = nb_runner.get_output(4)
     out = nb_runner.get_output(5)
-    assert "RESTORED" not in consumer, (
+    assert not shows_cached(consumer), (
         f"consumer served the enclosing-value default from cache (CAS-186 leak, "
         f"the CAS-183 twin): {consumer!r}"
     )
@@ -145,11 +146,11 @@ def test_unchanged_default_still_hits(nb_runner):
     nb_runner.start_kernel()
     nb_runner.run_all()
     # First run computes and writes the entry (RAM+DISK).
-    assert "COMPUTED" in nb_runner.get_output(4), nb_runner.get_output(4)
+    assert shows_executed(nb_runner.get_output(4)), nb_runner.get_output(4)
 
     # Re-run the consumer in isolation with nothing changed -> must be a cache HIT.
     nb_runner.run_cell(4)
     out = nb_runner.get_output(4)
-    assert "RESTORED" in out, (
+    assert shows_cached(out), (
         f"unchanged default failed to HIT -- over-invalidation regression: {out!r}"
     )

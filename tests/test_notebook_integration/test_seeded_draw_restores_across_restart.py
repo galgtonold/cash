@@ -13,6 +13,7 @@ prove nothing). An SVD over a seeded random matrix clears the floor and draws
 from the global RNG in one statement.
 """
 import pytest
+from conftest import shows_cached
 
 pytestmark = [pytest.mark.restore, pytest.mark.libraries]
 
@@ -50,7 +51,7 @@ def test_seeded_draw_is_restored_from_disk_after_restart(nb_runner):
 
     assert _val(nb_runner) == pytest.approx(cold), "seeded value changed across restart"
     raw = nb_runner.get_raw_output(2)
-    assert "RESTORED" in raw, (
+    assert shows_cached(raw), (
         "seeded draw was recomputed, not restored from disk, after a restart -- "
         f"the restart speedup is lost:\n{raw}"
     )
