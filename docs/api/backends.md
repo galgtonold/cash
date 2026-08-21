@@ -9,7 +9,7 @@ To write your own backend or contribute fixes, see
 
 ## Security
 
-<!-- claim: cash/backends/serialization.py:PickleSerializer @eb457c2f broad="the pickle-executes-code warning is about the serializer as a whole", cash/backends/serialization.py:get_serializer @3dd730a0 -->
+<!-- claim: cash/backends/serialization.py:PickleSerializer @eb457c2f broad="the pickle-executes-code warning is about the serializer as a whole", cash/backends/serialization.py:get_serializer @76cf2c1b -->
 !!! danger "Cached values are pickled — loading a cache runs code"
     Every persistent backend (`FileBackend`, `SQLiteBackend`,
     `RedisBackend`, `S3Backend`) serializes values with **`pickle`**
