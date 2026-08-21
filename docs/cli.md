@@ -10,7 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @73dc853e broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @9184b728 broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |

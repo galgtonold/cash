@@ -128,7 +128,7 @@ flowchart TD
 
 ## Mutation bumps the receiver's lineage
 
-<!-- claim: cash/notebook/cacheability.py @27fe2e57 broad="the three-tier mutation classification spans the module, not one function" -->
+<!-- claim: cash/notebook/cacheability.py @06239b40 broad="the three-tier mutation classification spans the module, not one function" -->
 `items.append(x)` names `items` as a *receiver*, not as an assignment target, so nothing about it would ordinarily move. Cash classifies every standalone method call and, when the call mutates, routes the receiver into the statement's outputs — its lineage is rebuilt from the statement's source, and everything downstream misses.
 
 The classification runs in three tiers, because "does this method mutate?" is not statically decidable in general:
