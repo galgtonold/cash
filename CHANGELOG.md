@@ -14,20 +14,92 @@ top and says nothing about removing an Unreleased heading — so inserting above
 this without folding it in leaves the note orphaned mid-file. It is a note for
 you, not a release entry.
 
+## [0.4.0] - 2026-08-21
+
+The theme is **cash noticing more of what you changed**. Editing a class you
+pass as an argument, a class your class builds, or a constant a helper reads
+all invalidate now — each of them previously returned the old answer. Editing a
+*comment* no longer invalidates anything.
+
+Also: unsaved notebook cells are visible in JupyterLab and VS Code, and cash is
+much cheaper to import and to call.
+
+### Added
+
+- **JupyterLab: unsaved cell edits are seen without saving.** A prebuilt
+  labextension pushes the editor's current cell text to the kernel, so upstream
+  tracking compares what you are *looking at* rather than what was last written
+  to disk. It ships inside the wheel — no separate `pip install`, no
+  `jupyter labextension install`. Disable it from the Extension Manager if you
+  would rather it did not run.
+
+- **VS Code: the same, read from the hot-exit backup.** Where JupyterLab pushes,
+  VS Code is polled: cash locates the notebook's hot-exit backup and reads the
+  unsaved cells out of it, and only trusts a backup that pairs with the file on
+  disk.
+
+- **Cash tells you when it cannot trust the saved notebook.** If the file on disk
+  is provably older than what the kernel ran, the badge says so instead of
+  quietly tracking stale text — and says once per session when freshness cannot
+  be verified at all (no live server, papermill, nbconvert).
+
+- **`cash.mark_opaque(T)` and `@cash.opaque`** opt a type out of code-identity
+  hashing, for when a third-party class churns your keys and you would rather
+  pin the dependency than fold its code.
+
+### Changed
+
+- **The badge uses one word per state.** Rows used to say `RESTORED` /
+  `COMPUTED` while the header above them said `CACHED` / `EXECUTED` for the same
+  state. Everything now reads **`CACHED`**, **`EXECUTED`**, or **`NOT CACHED`**.
+
+  **Migration:** if you assert on badge text in your own tests, update those
+  strings. Note that `CACHED` is a substring of `NOT CACHED`, so a bare
+  `"CACHED" in output` check will match an uncacheable row.
+
+- **Comments and formatting no longer invalidate a cached result.** Code
+  identity is taken over a normalized form of the source, so adding a comment,
+  inserting a blank line, or running a formatter keeps your cache. `# @cash:`
+  directives and docstrings still count — they change behaviour.
+
+- **Much cheaper to import and to call.** `import cash` went from ~10.3s to
+  ~0.3s: IPython, redis, asyncio and pandas were all imported eagerly to answer
+  questions that `sys.modules` answers for free. The first cached call in a
+  process went from ~730ms to ~6ms, and the first `%cash_on` cell from ~700ms to
+  ~170ms, for the same reason. A cache hit on a function with helpers is ~3x
+  cheaper (helper source was re-read and re-tokenized on every call), and
+  restoring a large list of scalars no longer deep-copies element by element.
+
 ### Fixed
 
-- Code reached through a cached function's arguments (a class, a function, or an
-  instance's class) now contributes to the cache key, so editing it invalidates
-  rather than returning the previously cached value. `args_hash` pickles its
-  arguments and pickle serializes a class or function **by reference**, so
-  editing a passed schema class used to hit forever — and hand back the stale
-  class object. `cash.mark_opaque(T)` or `@cash.opaque` opts a type out.
+- **Code reached through a cached function's arguments** (a class, a function, or
+  an instance's class) now contributes to the cache key, so editing it
+  invalidates rather than returning the previously cached value. `args_hash`
+  pickles its arguments and pickle serializes a class or function **by
+  reference**, so editing a passed schema class used to hit forever — and hand
+  back the stale class object.
 
-  **Migration:** this changes the cache key. An entry that passes user code as
-  an argument recomputes **once** on upgrade, and once more on a Python-version
-  change, because the digest is bytecode (measured: the same class body hashes
-  differently under 3.10 and 3.11). Both are one-time recomputes, never wrong
-  answers.
+- **Code reached through *that* code.** Reachability is transitive: if a cached
+  function builds an `A`, and `A`'s `field(default_factory=lambda: B())`
+  constructs a `B`, editing `B` invalidates too. Names the code *loads* are
+  followed; type annotations are not, since they never run. The walk is static,
+  so a class chosen at runtime — pulled from a dict, assigned during execution —
+  is still invisible and needs `depends_on=`.
+
+- **Globals a helper reads.** A cached function whose *helper* reads a module
+  constant now invalidates when that constant changes. Only the cached
+  function's own reads counted before, so a helper returning `CONFIG` served the
+  old answer indefinitely. Accumulators a helper writes stay excluded, as they
+  already were for the cached function itself.
+
+- **Helpers whose source cannot be read** (defined by `exec`, in a REPL, or from
+  a file that moved) contributed *nothing* to the key, so any edit to one went
+  unnoticed. They are digested from their compiled form instead.
+
+**Migration for all four:** these change the cache key, so affected entries
+recompute **once** on upgrade — and once more on a Python-version change, since
+the digest is bytecode (measured: the same class body hashes differently under
+3.10 and 3.11). One-time recomputes, never wrong answers.
 
 ## [0.3.0] - 2026-08-07
 
