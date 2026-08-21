@@ -11,7 +11,7 @@ Outputs:
   - integration_inventory.json   (one record per test function)
   - integration_inventory.md     (human-readable summary)
 
-Run:  python analyze_integration_tests.py
+Run:  python covtools/analyze_integration_tests.py
 """
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-ROOT = Path(__file__).parent
+ROOT = Path(__file__).resolve().parent.parent
 TEST_DIR = ROOT / "tests" / "test_notebook_integration"
 
 
