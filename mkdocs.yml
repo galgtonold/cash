@@ -1,6 +1,6 @@
 site_name: Cash Documentation
 site_url: https://cash-lib.readthedocs.io/
-site_description: Smart caching library for Python with Jupyter notebook integration
+site_description: A Python cache that re-runs only what changed.
 site_author: Cash Contributors
 repo_url: https://github.com/galgtonold/cash
 repo_name: cash

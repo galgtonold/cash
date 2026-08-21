@@ -1,4 +1,4 @@
-"""cash — smart caching library.
+"""cash — a Python cache that re-runs only what changed.
 
 **Canonical import paths:**
 

@@ -1,4 +1,4 @@
-# Cash - Smart Caching for Python
+# Cash — stop re-running work that hasn't changed
 
 Cash is the only Python cache that works at **notebook-statement level**: turn it
 on with `%cash_on`, change one line in a cell, and only that line and its

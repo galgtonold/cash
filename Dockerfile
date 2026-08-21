@@ -1,7 +1,7 @@
 FROM python:3.12-slim
 
 LABEL maintainer="Cash Contributors"
-LABEL description="Cash - Smart caching for Jupyter notebooks"
+LABEL description="A Python cache that re-runs only what changed."
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \

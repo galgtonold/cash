@@ -93,7 +93,7 @@ path = "src/cash/__init__.py"
 [project]
 name = "cash-lib"
 dynamic = ["version"]
-description = "Smart caching for Python — automatic dependency tracking, persistent backends, and statement-level Jupyter notebook caching."
+description = "A Python cache that re-runs only what changed."
 readme = "README.md"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}

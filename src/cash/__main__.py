@@ -306,7 +306,7 @@ def cmd_autoload(args: argparse.Namespace) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog='cash',
-        description='Cash - Smart caching for Jupyter notebooks',
+        description='A Python cache that re-runs only what changed.',
     )
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
 
