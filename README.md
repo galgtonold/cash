@@ -85,24 +85,20 @@ summary = df.describe()
 Re-run it, and Cash puts a badge above the cell saying exactly what it did.
 Here is one from a cell of the same shape — a load, then a summary:
 
-```text
-[Cash] EXECUTED (0.23s, saved 2.85s)
-  CACHED: df = pd.read_csv('sales.csv')  (saved 2.85s)
-  EXECUTED: summary = df.describe()  (0.21s) -> RAM+DISK
-```
+[![A Cash badge above a notebook cell: the pd.read_csv row restored from cache, the df.describe row recomputed](https://raw.githubusercontent.com/galgtonold/cash/main/docs/_badges/status_mixed.png)](https://cash-lib.readthedocs.io/en/latest/badges/)
 
 Two statements, one cell, two different decisions. The file hadn't changed, so
 the load was **restored**; `describe()` had been edited, so only that line
-**ran**. That is what statement-level means in practice — a cell-level cache
-would have had to redo both.
+**ran** — the two rails and the `CACHED 1` / `EXEC 1` chips say which is which.
+That is what statement-level means in practice: a cell-level cache would have
+had to redo both.
 
 - ✅ Nothing changed → every row reads `CACHED`.
 - 🔄 The CSV changed → the rows that read it flip to `EXECUTED`.
 - ⚡ Only the analysis changed → the load stays `CACHED`, the analysis re-runs.
 
-In the notebook this renders as an expandable HTML badge with timings, tier dots
-and per-statement detail; the text form above is what a terminal or log shows.
-Full anatomy in [Reading the Cash badge](https://cash-lib.readthedocs.io/en/latest/badges/).
+In the notebook the badge is expandable — click any row for its cache key,
+storage tier and timing. Full anatomy in [Reading the Cash badge](https://cash-lib.readthedocs.io/en/latest/badges/).
 
 ### In a script
 
