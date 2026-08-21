@@ -122,10 +122,10 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @a63f1105, cash/core.py:Cash._ensure_closure_analyzed @adbb1f94 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @aa81140c, cash/core.py:Cash._ensure_closure_analyzed @adbb1f94 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
-are picked up automatically. Overhead is ~5-30μs *per helper*, paid once for each helper in the
+are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
 transitive call graph on every call. Helpers are resolved
 within the module; name cross-module dependencies with
 [`depends_on=`](#depends_on-explicit-dependency-graph).
@@ -165,7 +165,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @c2035a2e -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @e00247ab -->
 Only globals that are **read** participate — and that includes globals read
 by a **helper** rather than by the cached function itself, so a helper
 returning a module-level `CONFIG` invalidates its caller when that config
@@ -725,7 +725,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @0c1153d9 -->
+<!-- claim: cash/core.py:Cash._explain_call @135def80 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

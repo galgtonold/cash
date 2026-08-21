@@ -119,7 +119,7 @@ on restart.
 
 ## Turning objects into bytes
 
-<!-- claim: cash/backends/serialization.py:get_serializer @3dd730a0, cash/backends/serialization.py:ParquetSerializer, cash/backends/serialization.py:PickleSerializer, cash/backends/serialization.py:CloudPickleSerializer -->
+<!-- claim: cash/backends/serialization.py:get_serializer @76cf2c1b, cash/backends/serialization.py:ParquetSerializer, cash/backends/serialization.py:PickleSerializer, cash/backends/serialization.py:CloudPickleSerializer -->
 To persist a value, Cash serializes it. A small factory — `get_serializer` —
 picks the strategy from the data's type:
 

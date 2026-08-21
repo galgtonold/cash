@@ -285,7 +285,7 @@ Note the `outputs` argument: it is what turns "this statement mutates `df`"
 into "this statement *produces* `df`". Pass `outputs={"df"}` for a statement
 like `df.dropna(inplace=True)` and the mutation stops being a reason at all.
 
-<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @bfe4ea68, cash/notebook/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
+<!-- claim: cash/notebook/statement/derivation_edges.py:is_uncacheable_alias @2e425a0f, cash/notebook/cacheability_decision.py:identity_coupled_reason @77bfb1cc -->
 Two more refusals are decided *after* execution, because they are properties of
 the value rather than the source: a live-alias object (a NumPy view, a pandas
 `groupby` ref-holder) would be decoupled from its base by a round trip, and an
