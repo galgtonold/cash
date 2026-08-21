@@ -42,13 +42,20 @@ Pick the path that matches how you write code — both ride the same engine:
 
 ## Why Cash is different
 
-Most caching tools cache *cells* or *function calls*. Cash caches **statements** — the individual lines inside a cell — and tracks the dependency graph between them.
+Most caching tools key on the **arguments** you pass. Cash also keys on **the code that runs** — a function's own source, the helpers it calls, and the files it reads — so editing any of them recomputes instead of handing back a stale answer.
+
+**Both paths get:**
+
+- **Change-awareness that follows callees.** Edit a plain, undecorated helper your function calls and the next call recomputes. `joblib.Memory` hashes the decorated function's source but not its callees; `diskcache.memoize` and `lru_cache` key on the name and arguments alone, so a body edit doesn't invalidate anything.
+- **File-awareness.** `pd.read_csv`, `np.load`, `open`, … are intercepted. Replace `data.csv` and whatever read it recomputes.
+- **Dependency-awareness.** Cash builds a lineage graph, so touching an upstream value re-runs only what transitively depends on it.
+- **Persistence across processes.** The cache lives on disk by default — a restart, a fresh process, or a shared backend across machines.
+- **Native pandas / numpy / polars hashing**, which `lru_cache` cannot do at all (those objects aren't hashable).
+
+**In a notebook, additionally:**
 
 - **Statement-level, not cell-level.** Change one line in a 20-line cell → that line and its dependents recompute. The other 19 stay cached.
-- **Dependency-aware.** Cash builds a lineage graph. Touch `config` → only cells that read `config` (transitively) re-run.
-- **File-aware.** Cash intercepts `pd.read_csv`, `np.load`, `open`, etc. Replace `data.csv` → dependent cells recompute automatically.
 - **Mutation-aware.** `df.append(...)` and `+=` are detected, so you don't get stale reads.
-- **Survives kernel restarts.** The cache lives on disk by default. Restart, run the cell, get the value back instantly.
 - **Zero-config.** `%cash_on` and you're done. No decorators, no config file.
 
 Cash saves time on **re-runs** — restoring an unchanged result instead of recomputing it, not speeding the first execution up. The more a statement costs to compute relative to the size of its result, the more a restore saves; `%cash_stats` reports your actual numbers, and says so plainly when caching cost you time. See the [benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) for how that plays out on real workloads.
@@ -106,15 +113,31 @@ storage tier and timing. Full anatomy in [Reading the Cash badge](https://cash-l
 
 ### In a script
 
-`@cash.cache` caches any Python function across processes, with the same dependency- and file-awareness. Impure functions (LLM calls, HTTP, file writes) are flagged by default, since their side effects only run on the first call.
+`@cash.cache` caches any Python function across processes — keyed by its
+arguments *and* by the code that produced the result.
 
 ```python
 import cash
+import pandas as pd
+
+def clean(frame):                 # a plain function, not decorated
+    return frame.dropna()
 
 @cash.cache
-def expensive(x):
-    return x ** 2 + sum(range(x))
+def features(path):
+    return clean(pd.read_csv(path))["feature_a"].mean()
 ```
+
+Call `features("data.csv")` once and the result is on disk; call it again — in
+this process or the next one — and it is restored. Now edit `clean`: the next
+call **recomputes**, even though `features`'s own source never changed. Same if
+`data.csv` changes on disk.
+
+That reach into a plain, undecorated helper is what `joblib.Memory` doesn't
+have — it hashes the decorated function's source, but not its callees.
+
+Impure functions (LLM calls, HTTP, file writes) are flagged by default, since
+their side effects only run on the first call.
 
 Full walkthrough in [the decorator guide](https://cash-lib.readthedocs.io/en/latest/decorator/).
 
