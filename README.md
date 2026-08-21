@@ -46,11 +46,11 @@ Most caching tools key on the **arguments** you pass. Cash also keys on **the co
 
 **Both paths get:**
 
-- **Change-awareness that follows callees.** Edit a plain, undecorated helper your function calls and the next call recomputes. `joblib.Memory` hashes the decorated function's source but not its callees; `diskcache.memoize` and `lru_cache` key on the name and arguments alone, so a body edit doesn't invalidate anything.
+- **Change-awareness that follows callees.** It is not only the decorated function's own source that is keyed — edit a plain, undecorated helper it calls, several levels down, and the next call recomputes.
 - **File-awareness.** `pd.read_csv`, `np.load`, `open`, … are intercepted. Replace `data.csv` and whatever read it recomputes.
 - **Dependency-awareness.** Cash builds a lineage graph, so touching an upstream value re-runs only what transitively depends on it.
 - **Persistence across processes.** The cache lives on disk by default — a restart, a fresh process, or a shared backend across machines.
-- **Native pandas / numpy / polars hashing**, which `lru_cache` cannot do at all (those objects aren't hashable).
+- **Native pandas / numpy / polars / PyArrow hashing.** A DataFrame or an array can be an argument or a tracked input, content-hashed rather than keyed by identity.
 
 **In a notebook, additionally:**
 
@@ -59,6 +59,8 @@ Most caching tools key on the **arguments** you pass. Cash also keys on **the co
 - **Zero-config.** `%cash_on` and you're done. No decorators, no config file.
 
 Cash saves time on **re-runs** — restoring an unchanged result instead of recomputing it, not speeding the first execution up. The more a statement costs to compute relative to the size of its result, the more a restore saves; `%cash_stats` reports your actual numbers, and says so plainly when caching cost you time. See the [benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) for how that plays out on real workloads.
+
+Weighing cash against a tool you already use? The [comparison matrix](https://cash-lib.readthedocs.io/en/latest/why-cash/#cash-vs-the-alternatives-youve-tried) does that properly, tool by tool.
 
 ---
 
@@ -133,8 +135,9 @@ this process or the next one — and it is restored. Now edit `clean`: the next
 call **recomputes**, even though `features`'s own source never changed. Same if
 `data.csv` changes on disk.
 
-That reach into a plain, undecorated helper is what `joblib.Memory` doesn't
-have — it hashes the decorated function's source, but not its callees.
+That reach into a plain, undecorated helper — not just the decorated
+function's own source — is what keeps a cached result honest while you
+refactor around it.
 
 Impure functions (LLM calls, HTTP, file writes) are flagged by default, since
 their side effects only run on the first call.
