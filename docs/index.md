@@ -58,7 +58,7 @@ Pick the path that matches how you write code — both ride the same engine:
   <a class="cash-cta-card primary" href="getting-started/quickstart/#in-a-notebook">
     <h3>In a notebook →</h3>
     <p>Add <code>%cash_on</code> and every cell caches itself — statement-level,
-    with a badge above each cell. For interactive work in Jupyter, Colab, or VS Code.</p>
+    with a badge above each cell's output. For interactive work in Jupyter, Colab, or VS Code.</p>
   </a>
   <a class="cash-cta-card" href="getting-started/quickstart/#in-a-script">
     <h3>In a script →</h3>

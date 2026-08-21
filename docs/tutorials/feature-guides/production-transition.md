@@ -8,7 +8,7 @@ Your notebook proves the workflow. Moving to a script for production means swapp
 |---|---|---|
 | **Caching unit** | Statement-level | Function-level |
 | **Activation** | Magic command in a cell | Decorator on a definition |
-| **Visibility** | Cash badges above each cell | `func.cache_info()` / `func.explain(...)` |
+| **Visibility** | Cash badges above each cell's output | `func.cache_info()` / `func.explain(...)` |
 | **Everything else** | File tracking, purity analysis, lineage, TTL, backend choice — identical | Same |
 
 The transition is mechanical: lift each cached statement into a function, decorate it, call it. The cache layer underneath doesn't change. Three things differ — caching unit (statement → function), activation (`%cash_on` → `@cash.cache`), visibility (badges → `cache_info()`). Everything else carries over: auto file tracking ([escape hatch](custom-file-sources.md) for non-standard access), purity analysis ([details](purity-decorators.md)), TTL and other annotations ([details](controlling-cache-behavior.md)), backend choice ([details](choosing-a-backend.md)).

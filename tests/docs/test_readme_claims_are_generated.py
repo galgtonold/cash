@@ -41,15 +41,36 @@ def readme() -> str:
     return README.read_text(encoding="utf-8")
 
 
+def _badge_images(readme: str):
+    """(alt, src, width) for every badge image, markdown or HTML.
+
+    The README uses an HTML <img> rather than markdown because markdown cannot
+    size an image, and the PNG is rendered at 2x for HiDPI -- displayed
+    unsized it reads at exactly double life size. PyPI's sanitiser allows
+    width/alt on <img>, so the HTML survives there too.
+    """
+    out = []
+    for alt, src in re.findall(r"!\[([^\]]*)\]\((https?://[^)]+\.png)\)", readme):
+        out.append((alt, src, None))
+    for tag in re.findall(r"<img\s[^>]*>", readme):
+        src = re.search(r'src="([^"]+)"', tag)
+        alt = re.search(r'alt="([^"]+)"', tag)
+        width = re.search(r'width="(\d+)"', tag)
+        if src and src.group(1).endswith(".png"):
+            out.append((alt.group(1) if alt else "",
+                        src.group(1),
+                        int(width.group(1)) if width else None))
+    return [x for x in out if "_badges/" in x[1]]
+
+
 def test_readme_badge_image_is_committed(readme):
     """The badge picture must be an absolute URL to a PNG that exists here."""
-    urls = re.findall(r"!\[[^\]]*\]\((https?://[^)]+\.png)\)", readme)
-    badge = [u for u in urls if "_badges/" in u]
+    badge = _badge_images(readme)
     assert badge, (
         "the README no longer embeds a badge image from docs/_badges/. If the "
         "badge was moved or replaced, update this test with it -- do not delete it."
     )
-    for url in badge:
+    for _alt, url, _w in badge:
         assert url.startswith(_RAW_PREFIX), (
             f"{url} is not an absolute raw.githubusercontent URL. PyPI renders the "
             "README standalone and cannot resolve repo-relative image paths."
@@ -61,11 +82,28 @@ def test_readme_badge_image_is_committed(readme):
         )
 
 
+def test_readme_badge_image_is_displayed_at_life_size(readme):
+    """A 2x asset shown unsized renders at double the size it has in a notebook.
+
+    The badge is content-sized at 479 CSS px wide (identical at every viewport),
+    so the PNG is 960 px and must carry an explicit width near 480 or GitHub
+    shows it at 2x, filling the column and misrepresenting how big the badge
+    actually is in your notebook.
+    """
+    for _alt, url, width in _badge_images(readme):
+        assert width is not None, (
+            f"{url} has no width attribute, so it renders at 2x life size. "
+            'Use <img width="480" ...> rather than a markdown image.'
+        )
+        assert 300 <= width <= 700, (
+            f"{url} is displayed at {width}px; the badge is 479 CSS px wide in "
+            "reality. Keep the displayed width close to that."
+        )
+
+
 def test_readme_badge_image_has_alt_text(readme):
     """A picture carrying the explanation needs a description for screen readers."""
-    for alt, url in re.findall(r"!\[([^\]]*)\]\((https?://[^)]+\.png)\)", readme):
-        if "_badges/" not in url:
-            continue
+    for alt, url, _w in _badge_images(readme):
         assert len(alt) > 20, f"badge image {url} has thin alt text: {alt!r}"
 
 

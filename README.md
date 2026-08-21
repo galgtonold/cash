@@ -35,7 +35,7 @@ https://github.com/user-attachments/assets/3f376660-aeb5-4794-89cc-532a04f82f32
 
 Pick the path that matches how you write code — both ride the same engine:
 
-- **In a notebook** — add `%cash_on` and every cell caches itself, statement-level, with a badge above each cell. For interactive work in Jupyter, Colab, or VS Code.
+- **In a notebook** — add `%cash_on` and every cell caches itself, statement-level, with a badge above each cell's output. For interactive work in Jupyter, Colab, or VS Code.
 - **In a script** — wrap a function with `@cash.cache` and it caches by its arguments and its own source. For modules, pipelines, and batch jobs.
 
 ---
@@ -82,10 +82,14 @@ df = pd.read_csv("large_dataset.csv")   # tracked: file change → recompute
 summary = df.describe()
 ```
 
-Re-run it, and Cash puts a badge above the cell saying exactly what it did.
+Re-run it, and Cash puts a badge above the cell's output saying exactly what
+it did.
 Here is one from a cell of the same shape — a load, then a summary:
 
-[![A Cash badge above a notebook cell: the pd.read_csv row restored from cache, the df.describe row recomputed](https://raw.githubusercontent.com/galgtonold/cash/main/docs/_badges/status_mixed.png)](https://cash-lib.readthedocs.io/en/latest/badges/)
+<a href="https://cash-lib.readthedocs.io/en/latest/badges/">
+  <img width="480" alt="A Cash badge below a notebook cell: the pd.read_csv row restored from cache, the df.describe row recomputed"
+       src="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_badges/status_mixed.png">
+</a>
 
 Two statements, one cell, two different decisions. The file hadn't changed, so
 the load was **restored**; `describe()` had been edited, so only that line

@@ -7,7 +7,7 @@ below is self-contained.
   <a class="cash-cta-card primary" href="#in-a-notebook">
     <h3>In a notebook →</h3>
     <p><code>%cash_on</code> and every cell caches automatically — statement-level,
-    with a badge above each cell. For interactive work in Jupyter, Colab, or VS Code.</p>
+    with a badge above each cell's output. For interactive work in Jupyter, Colab, or VS Code.</p>
   </a>
   <a class="cash-cta-card" href="#in-a-script">
     <h3>In a script →</h3>

@@ -29,7 +29,7 @@ expensive.cache_info()
 # {'hits': 0, 'misses': 1, 'hit_rate': 0.0, 'total_time_saved': 0.0, 'warnings': []}
 ```
 
-That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `%cash_stats`, and the badge above each cell. On disk, `cash inspect` and `cash clear` cover everything from outside the kernel.
+That's the decorator path. In a notebook the equivalents are `%cash_debug on`, `%cash_stats`, and the badge above each cell's output. On disk, `cash inspect` and `cash clear` cover everything from outside the kernel.
 
 ## Tool 1: `f.explain()` — the diagnostic API
 
