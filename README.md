@@ -128,12 +128,13 @@ def clean(frame):                 # a plain function, not decorated
 @cash.cache
 def features(path):
     return clean(pd.read_csv(path))["feature_a"].mean()
+
+features("large_dataset.csv")     # runs
+features("large_dataset.csv")     # restored — and again in the next process
 ```
 
-Call `features("data.csv")` once and the result is on disk; call it again — in
-this process or the next one — and it is restored. Now edit `clean`: the next
-call **recomputes**, even though `features`'s own source never changed. Same if
-`data.csv` changes on disk.
+Now edit `clean`: the next call **recomputes**, even though `features`'s own
+source never changed. Same if `large_dataset.csv` changes on disk.
 
 That reach into a plain, undecorated helper — not just the decorated
 function's own source — is what keeps a cached result honest while you
