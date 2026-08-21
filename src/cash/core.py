@@ -7,7 +7,6 @@ caching and the `Cash.notebook` bridge for Jupyter integration.
 from __future__ import annotations
 
 import ast
-import asyncio
 import atexit
 import dataclasses
 import functools
@@ -2455,6 +2454,12 @@ class Cash:
             # event and then read the stored result.
             single_flight_event = None
             if self.use_locking:
+                # Imported HERE, not at module scope: asyncio costs ~76ms of a
+                # ~290ms `import cash`, and a synchronous user never needs it.
+                # Inside a running loop it is necessarily already imported, so
+                # this lookup is free exactly where it is used.
+                import asyncio
+
                 try:
                     running_loop = asyncio.get_running_loop()
                 except RuntimeError:
