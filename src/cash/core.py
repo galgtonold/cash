@@ -64,10 +64,28 @@ from .source_norm import bytecode_identity, normalize_source_for_hash
 # Configure Logging
 logger = logging.getLogger(__name__)
 
-try:
-    from IPython import get_ipython
-except ImportError:  # IPython not installed
-    def get_ipython():  # type: ignore[misc]
+def get_ipython():
+    """Return the live IPython shell, or ``None``.
+
+    Resolved on FIRST CALL rather than at import. ``from IPython import
+    get_ipython`` looks cheap but pulls the whole package -- measured at ~4s of
+    the ~10s ``import cash``, most of it ``IPython.terminal.embed``. That cost
+    sits in front of every kernel start and every subprocess a test spawns, and
+    a test running three subprocesses tripped the 30s per-test timeout on
+    imports alone.
+
+    Outside IPython this is the common case and stays cheap: ``sys.modules`` is
+    consulted first, so a plain script never imports IPython at all. Inside a
+    notebook IPython is already imported, so the lookup is free.
+    """
+    ipython_module = sys.modules.get("IPython")
+    if ipython_module is None:
+        # Not already imported. In a notebook it always is, so reaching here
+        # means we are not in one -- do not pay the import to find that out.
+        return None
+    try:
+        return ipython_module.get_ipython()
+    except Exception:  # noqa: BLE001 - never break a call over shell detection
         return None
 
 # Sentinel object used by wrapper helpers to signal a cache miss without

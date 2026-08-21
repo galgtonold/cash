@@ -297,39 +297,63 @@ def _tee_output() -> Generator[Any, None, None]:
 # function-locally at each use site instead, so a genuine display attempt
 # fails loudly with a clear ImportError.  Same rule as
 # ``StatementRestorer._replay_cached_outputs``.
-try:
-    from IPython.utils.io import capture_output
-except ImportError:
-    @contextmanager
-    def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True) -> Generator[Any, None, None]:
-        """Fallback capture_output for when IPython is not available."""
-        class CapturedOutput:
-            def __init__(self):
-                self.stdout = ""
-                self.stderr = ""
-                self.outputs = []
-            def show(self):
-                if self.stdout:
-                    print(self.stdout, end='')
-                if self.stderr:
-                    print(self.stderr, end='', file=sys.stderr)
+@contextmanager
+def _fallback_capture_output(stdout: bool = True, stderr: bool = True, display: bool = True) -> Generator[Any, None, None]:
+    """Fallback capture_output for when IPython is not available."""
+    class CapturedOutput:
+        def __init__(self):
+            self.stdout = ""
+            self.stderr = ""
+            self.outputs = []
+        def show(self):
+            if self.stdout:
+                print(self.stdout, end='')
+            if self.stderr:
+                print(self.stderr, end='', file=sys.stderr)
 
-        captured = CapturedOutput()
-        old_stdout, old_stderr = sys.stdout, sys.stderr
+    captured = CapturedOutput()
+    old_stdout, old_stderr = sys.stdout, sys.stderr
 
+    if stdout:
+        sys.stdout = StringIO()
+    if stderr:
+        sys.stderr = StringIO()
+
+    try:
+        yield captured
         if stdout:
-            sys.stdout = StringIO()
+            captured.stdout = sys.stdout.getvalue()
         if stderr:
-            sys.stderr = StringIO()
+            captured.stderr = sys.stderr.getvalue()
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
 
+_CAPTURE_OUTPUT = None
+
+
+def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True):
+    """Resolve IPython's ``capture_output`` on FIRST USE, not at import.
+
+    Importing this one name pulls in the whole of IPython, which measured at
+    3.4s of the ~10s ``import cash`` took -- and ``import cash`` sits in front
+    of every kernel start and every subprocess a test spawns. A test running
+    three subprocesses therefore spent 30s+ on imports alone and tripped the
+    30s per-test timeout, which reads as a hang rather than as slowness.
+
+    Still resolved for real when a capture is actually requested, so a genuine
+    display attempt keeps working; the stub below is used only when IPython is
+    genuinely absent (base ``cash`` declares no dependencies -- IPython lives
+    in the ``[notebook]`` extra).
+    """
+    global _CAPTURE_OUTPUT
+    if _CAPTURE_OUTPUT is None:
         try:
-            yield captured
-            if stdout:
-                captured.stdout = sys.stdout.getvalue()
-            if stderr:
-                captured.stderr = sys.stderr.getvalue()
-        finally:
-            sys.stdout, sys.stderr = old_stdout, old_stderr
+            from IPython.utils.io import capture_output as _ipy_capture
+            _CAPTURE_OUTPUT = _ipy_capture
+        except ImportError:
+            _CAPTURE_OUTPUT = _fallback_capture_output
+    return _CAPTURE_OUTPUT(stdout=stdout, stderr=stderr, display=display)
+
 
 from ...analytics import AnalyticsManager
 from ..analysis import CodeAnalyzer
