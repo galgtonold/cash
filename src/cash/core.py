@@ -1610,6 +1610,7 @@ class Cash:
             current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
+            current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
             current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
@@ -1725,6 +1726,7 @@ class Cash:
             current_state_hash = folded_defaults
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
+            current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
             # Mirrors `_resolve_cache_key`: without this the predicted key
             # would differ from the one a real call builds for exactly the
             # arguments this feature exists for, so `explain()` would report
@@ -3976,8 +3978,23 @@ class Cash:
                         )
         return parts
 
-    def _fold_read_globals(self, func: Callable, func_name: str, state_hash: str) -> str:
+    def _fold_read_globals(
+        self,
+        func: Callable,
+        func_name: str,
+        state_hash: str,
+        owner_code: Any = None,
+        seen: set | None = None,
+    ) -> str:
         """Fold module-level DATA globals the function reads into the key.
+
+        ``owner_code`` is the code object the DRIFT GUARD is recorded under.
+        It defaults to *func*'s own, which is right when *func* is the cached
+        function. When folding a HELPER's globals it must be the CACHED
+        function's code instead: `_learn_mutating_captures` records drift
+        against the function whose call was observed, so looking it up under
+        the helper's code would never find the entry, fold a drifting
+        accumulator anyway, and miss forever.
 
         A cached function reading a mutable module global (a config constant, a
         dispatch dict of callables) returned stale results when that global
@@ -3999,11 +4016,18 @@ class Cash:
         # A missing provisional entry means "unknown", not "none" -- watch every
         # folded name rather than fold one blind (see `_read_global_data_names`).
         provisional = self._provisional_global_cache.get(code)
-        learned_mutating = self._mutating_globals.get((code, "global"), frozenset())
+        learned_mutating = self._mutating_globals.get(
+            (owner_code if owner_code is not None else code, "global"), frozenset()
+        )
         watch: dict[str, str] = {}
         for name in names:
             if name not in g:
                 continue
+            if seen is not None:
+                pair = (id(g), name)
+                if pair in seen:
+                    continue
+                seen.add(pair)
             if name in learned_mutating:
                 # Observed to drift as a result of calling this function. Folding
                 # it would key the entry on the function's own output and miss
@@ -4050,6 +4074,59 @@ class Cash:
             return state_hash
         payload = ":".join(f"{n}={h}" for n, h in sorted(parts))
         return hashlib.sha256(f"{state_hash}:globals:{payload}".encode('utf-8')).hexdigest()
+
+    def _fold_helper_read_globals(
+        self, func: Callable, func_name: str, state_hash: str
+    ) -> str:
+        """Fold globals the transitive HELPERS read, not just *func*'s own.
+
+        A helper reading module state made its caller stale with no warning::
+
+            THRESHOLD = 5
+            def helper(): return THRESHOLD
+
+            @cash.cache
+            def via_helper(n): return helper()   # THRESHOLD=6 -> HIT -> 5
+
+        The helper's SOURCE was folded, so editing its body invalidated; the
+        DATA it read was invisible. Same fold as the one-level case, applied
+        to the helpers the purity analyzer already walks, so it inherits the
+        written-global exclusion and the drift guard rather than re-deriving
+        them.
+
+        Helpers are re-resolved from ``sys.modules`` per call, matching
+        ``SysModulesHelperResolver``: a redefined helper reads the redefined
+        module's globals.
+        """
+        report = self._purity_reports.get(func_name)
+        if report is None or not report.helper_resolution_paths:
+            return state_hash
+        owner_code = getattr(func, "__code__", None)
+        # Pre-seed with what the cached function itself already folded, so a
+        # global it reads directly is not folded a second time on behalf of a
+        # helper that also reads it.
+        seen: set = set()
+        own_globals = getattr(func, "__globals__", None)
+        if isinstance(own_globals, dict):
+            for name in self._read_global_data_names(func):
+                seen.add((id(own_globals), name))
+        for qual in sorted(report.helper_resolution_paths):
+            module_name, attr_chain = report.helper_resolution_paths[qual]
+            target: Any = sys.modules.get(module_name)
+            if target is None:
+                continue
+            for attr in attr_chain:
+                target = getattr(target, attr, None)
+                if target is None:
+                    break
+            if target is None or target is func or not callable(target):
+                continue
+            if getattr(target, "__globals__", None) is None:
+                continue
+            state_hash = self._fold_read_globals(
+                target, func_name, state_hash, owner_code=owner_code, seen=seen
+            )
+        return state_hash
 
     @staticmethod
     def _is_user_class(cls: Any) -> bool:
