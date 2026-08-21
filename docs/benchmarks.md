@@ -105,7 +105,7 @@ Quoting a single "first run is N× slower" number would be the same mistake as
 quoting a speedup: the ratio is set by how cheap your compute is, not by how
 expensive cash is.
 
-**Where it genuinely doesn't pay: notebooks made of very fast statements.** Our
+**Where it buys you nothing: notebooks made of very fast statements.** Our
 own negative control (`benchmarks/synthetic_micro.ipynb`) is 100 statements of
 microsecond work. With caching on it goes from 7.5 ms to 261 ms — a quarter of
 a second added, on a notebook that finishes instantly either way. That is the
@@ -113,22 +113,36 @@ per-statement bookkeeping and nothing is malfunctioning; the
 [cost model](cost-model.md) correctly declines to store any of it, but it
 cannot make the decision itself free.
 
-The honest way to read that: not "35× slower", which sounds alarming and means
-very little, but "about 250 ms of overhead you have no reason to pay".
+Read that as neither "35× slower" — which sounds alarming and means very
+little — nor as a cost you are paying. A quarter of a second spread across a
+whole notebook sits below what anyone perceives interactively, where you are
+already absorbing kernel round-trips of the same order. Cash gives you nothing
+here, but it does not take anything you would feel either.
 
-**The other way it fails to pay is the opposite shape: results that are large
-but cheap to produce.** A few hundred megabytes that took a second to generate
-costs more to write and read back than to recompute, so there is nothing for
-caching to win. Cash's [cost model](cost-model.md) declines to *persist*
-results like these — which is what stops the loss compounding — but the work
-of sizing and hashing them still happens.
+The same per-statement cost *does* become visible at scale: tens of thousands
+of statements, or `@cash.cache` on a function called in a hot loop. There the
+bookkeeping stops being noise — in that control it is ~2.5 ms per statement
+even though the cost model stores none of them, and a statement that *is*
+stored pays the 5–30 ms above instead. That is a reason to put
+[`# @cash:no-cache`](annotations.md) on the cheap parts, not a reason to leave
+caching off.
+
+**The shape that genuinely costs you is the opposite one: results that are
+large but cheap to produce.** A few hundred megabytes that took a second to
+generate costs more to write and read back than to recompute, so there is
+nothing for caching to win. Cash's [cost model](cost-model.md) declines to
+*persist* results like these — which is what stops the loss compounding —
+but the work of sizing and hashing them still happens.
 
 The pattern behind both: caching pays when compute is expensive relative to
 the result's size. Cheap-and-small and cheap-and-huge are the two ways to be
-on the wrong side of that. If your notebook is either, cash is not the tool
-for it — and `%cash_stats` will say so plainly rather than reporting a phantom
-win. Measure your own case with [`%cash_benchmark`](magics.md#cash_benchmark)
-rather than trusting a figure from someone else's machine.
+on the wrong side of that — but they are not equally bad. Cheap-and-small
+wastes nothing you can feel; cheap-and-huge spends real I/O on results you
+would have been better off recomputing. If your notebook is mostly the second
+shape, cash is not the tool for it — and `%cash_stats` will say so plainly
+rather than reporting a phantom win. Measure your own case with
+[`%cash_benchmark`](magics.md#cash_benchmark) rather than trusting a figure
+from someone else's machine.
 
 ## Measuring your own workload
 
