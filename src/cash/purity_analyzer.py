@@ -615,6 +615,19 @@ def _is_user_code(callee: Any, root_module: str | None) -> bool:
         if root_top and callee_top and root_top == callee_top:
             return True
 
+    # Never analyse cash's own code on a user's behalf. Under ``%cash_on``
+    # the file tracker replaces ``open`` and the pandas readers with cash
+    # shims, so a user function that reads a file resolves its callee to
+    # ``cash.notebook.file_tracker``. In a NORMAL install that lands in
+    # site-packages and the fallback below rejects it; in an EDITABLE
+    # install it does not, so the analyzer walked the shim and reported
+    # cash's own ``_tracker._track_path(...)`` as the user's side effect.
+    # The report is about the user's function, and cash's instrumentation
+    # is never part of it. Placed after the shortcut above so cash
+    # analysing its own functions still recurses.
+    if callee_mod == "cash" or callee_mod.startswith("cash."):
+        return False
+
     # Fall back to the file-path-based check used by the notebook
     # subsystem. Catches editable installs that DON'T share the
     # cached function's package (e.g. user's project depends on a
