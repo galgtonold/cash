@@ -27,8 +27,6 @@ The "should this input be skipped for lineage-check purposes?" predicate
 is inlined as ``_is_lineage_exempt`` — it's purely a property of the
 value (module type, private callable, etc.) and has no production
 override, so no hook indirection is justified.
-
-See ``CONTEXT.md`` entry: *Cacheability decision*.
 """
 from __future__ import annotations
 

@@ -16,9 +16,6 @@ Design rules:
   discriminator.
 * Nodes carry only data the renderer needs. Raw metric dicts and bug-report
   context are absorbed by the view-builder and never leak into the tree.
-
-See CONTEXT.md → ``BadgeView`` for the architectural framing and the list
-of consumers.
 """
 
 from __future__ import annotations

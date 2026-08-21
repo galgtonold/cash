@@ -8,7 +8,7 @@ Single public entry: :meth:`StatementRestorer.restore_from_cache`,
 plus :meth:`StatementRestorer.persist_metadata_only` for the
 small-but-cacheable case where only metadata gets persisted.
 
-**Distinct from the variable-granular Restorer.**  See CONTEXT.md:
+**Distinct from the variable-granular Restorer:**
 
 * :class:`StatementRestorer` (this module) — restores a statement's
   *outputs as a unit*: multiple vars + replayed display data + RNG

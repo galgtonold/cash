@@ -1,6 +1,5 @@
 """The single seam for reading and writing variable lineage.
 
-See ``CONTEXT.md`` (entry: *LineageStore*) for the architectural role.
 See ``docs/architecture_decisions.md`` ADR-007 for the *cache-key* invariant
 this module extends to *lineage state*.
 

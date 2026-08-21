@@ -3,8 +3,8 @@ from __future__ import annotations
 """Notebook simulator: pure-AST + cache-probing replay of upstream cells.
 
 Extracted from ``UpstreamChecker`` so the simulation logic has a clear test
-surface independent of the orchestrator. See CONTEXT.md entry: *NotebookSimulator*
-and ``docs/architecture_decisions.md`` ADR-009.
+surface independent of the orchestrator. See ``docs/architecture_decisions.md``
+ADR-009.
 
 The simulator never executes user code via the IPython kernel. It simulates
 statement-by-statement using AST analysis and the cache backend, producing a

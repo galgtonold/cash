@@ -300,7 +300,7 @@ upstream/_types.py               # was simulator_types.py — leading _ marks IR
 
 **Status:** Accepted
 **Date:** 2026-05-29
-**Context:** `CONTEXT.md` describes `StatementProcessor` as the owner of four sibling classes (`CacheFreshnessChecker`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) sharing one `TrackingState` and one `ProcessResult` schema. The five files lived as flat peers in `src/cash/notebook/`, contradicting the documented ownership story. Additionally, `cache_freshness.py` carried two module-level helpers (`snapshot_file_deps`, `split_file_dep_value`) that are *not* sibling-of-StatementProcessor concerns — they are used by the decorator subsystem (`src/cash/core.py`), the variable-granular `Restorer`, and `upstream/virtual_lineage.py`. Bundling them into `statement/` would force unrelated callers to reach into a package they otherwise don't care about.
+**Context:** The architecture vocabulary described `StatementProcessor` as the owner of four sibling classes (`CacheFreshnessChecker`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) sharing one `TrackingState` and one `ProcessResult` schema. The five files lived as flat peers in `src/cash/notebook/`, contradicting the documented ownership story. Additionally, `cache_freshness.py` carried two module-level helpers (`snapshot_file_deps`, `split_file_dep_value`) that are *not* sibling-of-StatementProcessor concerns — they are used by the decorator subsystem (`src/cash/core.py`), the variable-granular `Restorer`, and `upstream/virtual_lineage.py`. Bundling them into `statement/` would force unrelated callers to reach into a package they otherwise don't care about.
 
 ### Decision
 Collapse the four sibling files plus `StatementProcessor` into one `statement/` package. The package re-exports exactly four production symbols — `StatementProcessor`, `ProcessResult`, `StatementCacheMetadata`, `DecoratorCallMetric` — plus two private symbols for test-patching paths (`_TeeWriter`, `_tee_output`). The siblings (`CacheFreshnessChecker`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) are package-internal.
@@ -320,7 +320,7 @@ notebook/statement/freshness.py   # CacheFreshnessChecker class only; was cache_
 ```
 
 ### Rationale
-- **Locality.** Five files that already form a composition unit (one orchestrator + four owned siblings) become one folder. CONTEXT.md's "four siblings of StatementProcessor" framing now matches the filesystem.
+- **Locality.** Five files that already form a composition unit (one orchestrator + four owned siblings) become one folder. The "four siblings of StatementProcessor" framing now matches the filesystem.
 - **Honest split.** `cache_freshness.py` was carrying two roles: the `CacheFreshnessChecker` class (a true StatementProcessor sibling) and two pure module-level helpers consumed by unrelated subsystems. Splitting the file *before* the move keeps `statement/` from accidentally becoming a dependency of the decorator path. Future maintainers won't see `from cash.notebook.statement.freshness import snapshot_file_deps` in `core.py` and wonder why the decorator is reaching into the notebook's statement package.
 - **Filename context.** The `statement_*` prefixes on four of the files were disambiguators at the flat top level; once inside `statement/`, the parent package provides the context. The class names (`StatementProcessor`, `StatementFileDeps`, `StatementLineageBuilder`, `StatementRestorer`) are unchanged — only the filenames are shortened.
 - **Consistency with ADR-010.** Same pattern: collapse a documented composition unit into a package, expose a small public surface, rename files for context.
@@ -341,7 +341,7 @@ notebook/statement/freshness.py   # CacheFreshnessChecker class only; was cache_
 
 **Status:** Accepted
 **Date:** 2026-05-29
-**Context:** `CONTEXT.md` described `ControlStructureProcessor` as the orchestrator of a strategy pattern: three handler classes (`ForLoopHandler`, `IfHandler`, `TryHandler`) plus a shared-helpers module. The five files (`control_structures.py`, `control_for_handler.py`, `control_if_handler.py`, `control_try_handler.py`, `control_structure_helpers.py`) lived as flat peers in `src/cash/notebook/`. The `control_*` prefix on four of them was doing the work a folder should do.
+**Context:** The architecture vocabulary described `ControlStructureProcessor` as the orchestrator of a strategy pattern: three handler classes (`ForLoopHandler`, `IfHandler`, `TryHandler`) plus a shared-helpers module. The five files (`control_structures.py`, `control_for_handler.py`, `control_if_handler.py`, `control_try_handler.py`, `control_structure_helpers.py`) lived as flat peers in `src/cash/notebook/`. The `control_*` prefix on four of them was doing the work a folder should do.
 
 ### Decision
 Collapse the five files into one `control_structures/` package. Files are renamed to drop the `control_*` prefixes that the package path now provides:
@@ -381,7 +381,7 @@ Internal (not re-exported): the three handler classes, and everything in `helper
 
 **Status:** Accepted
 **Date:** 2026-05-29
-**Context:** `CONTEXT.md` repeatedly refers to "the IPython adapter (`CashMagics`)" as if it were a distinct architectural concept, but the four files that make up the adapter (`magics.py`, `magic_admin.py`, `cell_executor.py`, `error_display.py`) lived as flat peers in `src/cash/notebook/`. The adapter concept was named in prose but not in the filesystem.
+**Context:** The architecture vocabulary repeatedly referred to "the IPython adapter (`CashMagics`)" as if it were a distinct architectural concept, but the four files that make up the adapter (`magics.py`, `magic_admin.py`, `cell_executor.py`, `error_display.py`) lived as flat peers in `src/cash/notebook/`. The adapter concept was named in prose but not in the filesystem.
 
 ### Decision
 Collapse the four files into one `ipython/` package. Files are mostly unchanged in name; `magic_admin.py` drops its `magic_` prefix since the parent path now provides context:
@@ -397,8 +397,8 @@ ipython/error_display.py       # unchanged — show_clean_error
 Public surface: `CashMagics` only. Everything else (`CashAdminMagicsMixin`, `CellExecutor`, the value types `TimingBreakdown` / `StatementSummary` / `CellMetrics` / `CashSession`, `show_clean_error`, the internal sentinels `_EarlyReturn` / `_PipelineSyntaxError` / `_PipelineCompleted`) is package-internal.
 
 ### Rationale
-- **Names a documented concept.** `CONTEXT.md` already says "the IPython adapter"; the package makes that statement structural.
-- **Honest acknowledgement: one adapter, hypothetical seam.** By the *one adapter = hypothetical seam* rule, this is not yet a real seam — only `CashMagics` exists; no Marimo or headless adapter is in flight. Accepted because the **locality** win is real today (four files in one folder) and the **naming** win matches CONTEXT.md vocabulary.
+- **Names a documented concept.** The architecture vocabulary already said "the IPython adapter"; the package makes that statement structural.
+- **Honest acknowledgement: one adapter, hypothetical seam.** By the *one adapter = hypothetical seam* rule, this is not yet a real seam — only `CashMagics` exists; no Marimo or headless adapter is in flight. Accepted because the **locality** win is real today (four files in one folder) and the **naming** win matches the documented vocabulary.
 - **Consistency with ADRs 010-012.** Same pattern: collapse a documented unit into a package, expose a small public surface, drop the `magic_` prefix where the package path provides context.
 
 ### Consequences

@@ -559,9 +559,9 @@ class StatementProcessor:
 
         # Statement-level cache restorer. Hydrates outputs from a cached
         # payload + replays stdout/stderr/rich-outputs.  Distinct from the
-        # variable-granular Restorer in restore.py (owned by CashMagics);
-        # see CONTEXT.md for the unit-of-work distinction.  Stateless w.r.t.
-        # tracking state — receives it per call.
+        # variable-granular Restorer in restore.py (owned by CashMagics) —
+        # see that module's docstring for the unit-of-work distinction.
+        # Stateless w.r.t. tracking state — receives it per call.
         self._stmt_restorer = StatementRestorer(
             shell=shell,
             file_deps=self._file_deps,

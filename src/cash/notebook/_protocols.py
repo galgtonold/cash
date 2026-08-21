@@ -254,8 +254,7 @@ class TrackingState:
 
     # The single seam for reading/writing variable lineage. Wraps
     # ``variable_lineage`` as its backing dict so callers that still mutate
-    # the dict directly during migration stay in sync. See ``CONTEXT.md``
-    # entry: *LineageStore*.
+    # the dict directly during migration stay in sync.
     lineage: "LineageStore" = field(init=False)
 
     def __post_init__(self) -> None:
