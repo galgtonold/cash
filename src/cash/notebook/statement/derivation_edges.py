@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import sys
 from typing import Any, Callable
 
 logger = logging.getLogger(__name__)
@@ -63,8 +64,8 @@ def is_uncacheable_alias(value: Any, user_ns: dict) -> bool:
     not an alias — the over-invalidation guard.
     """
     try:
-        import numpy as np
-        if isinstance(value, np.ndarray) and value.base is not None:
+        np = _imported("numpy")
+        if np is not None and isinstance(value, np.ndarray) and value.base is not None:
             # Only a genuine alias of a NAMED live variable is uncacheable.
             base = value.base
             seen: set[int] = set()
@@ -126,14 +127,32 @@ def detect_derivation_edges(
     _detect_pandas_refholder_edge(derivation_edges, out, value, user_ns)
 
 
+
+def _imported(name: str):
+    """Return module *name* only if it is ALREADY imported, else ``None``.
+
+    These detectors ask type questions -- "is this an ndarray?", "is this a
+    groupby?" -- and importing the library to ask costs far more than the
+    answer is worth. An instance of one of those types cannot exist unless
+    its library is imported, so absence from ``sys.modules`` IS the answer.
+
+    Measured: the FIRST cell executed under ``%cash_on`` cost 707ms, of which
+    ~535ms was `_detect_pandas_refholder_edge` importing pandas for a cell
+    that only summed integers.
+
+    Deliberately not cached: a later cell may ``import pandas``, and from then
+    on these detectors must start seeing its types.
+    """
+    return sys.modules.get(name)
+
+
 def _detect_numpy_view_edge(
     derivation_edges: dict[str, set[str]], out: str, value: Any, user_ns: dict,
 ) -> None:
     """``out`` is a numpy view; a future mutation of ``out`` must bump
     the root base (and any intermediate NAMED view along the ``.base`` chain)."""
-    try:
-        import numpy as np
-    except ImportError:
+    np = _imported("numpy")
+    if np is None:
         return
     if not isinstance(value, np.ndarray) or value.base is None:
         return
@@ -168,6 +187,10 @@ def _pandas_refholder_types() -> tuple[type, ...]:
     global _PANDAS_REFHOLDER_TYPES
     if _PANDAS_REFHOLDER_TYPES is not None:
         return _PANDAS_REFHOLDER_TYPES
+    if _imported("pandas") is None:
+        # No pandas, so no groupby/rolling object can exist. Return WITHOUT
+        # caching: a later cell may import pandas, and this must then resolve.
+        return ()
     types_list: list[type] = []
     try:
         from pandas.core.groupby.generic import DataFrameGroupBy, SeriesGroupBy
