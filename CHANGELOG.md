@@ -14,6 +14,41 @@ top and says nothing about removing an Unreleased heading — so inserting above
 this without folding it in leaves the note orphaned mid-file. It is a note for
 you, not a release entry.
 
+## [0.4.1] - 2026-08-24
+
+A fix release, and the fix is one you could not have seen: **on Windows, cash
+was quietly not caching some of what it computed.**
+
+### Fixed
+
+- **Windows: cache writes were silently discarded.** Replacing a file is atomic
+  on both platforms, but Windows refuses the operation while any handle still
+  has the destination open, where POSIX simply swaps the directory entry and
+  lets the reader finish. Cash expects concurrent readers by design and writes
+  on a background thread, so that collision was routine rather than
+  exceptional. Every occurrence threw the entry away and recomputed the work on
+  the next run.
+
+  Nothing raised, no test went red, and the only report was a log line written
+  at kernel shutdown -- so the symptom was never an error message. It was
+  "cash doesn't seem to save me much." Writes now wait out a briefly-locked
+  destination instead of giving up on it.
+
+  If you are on Windows, this is the release to upgrade to. Nothing on Linux or
+  macOS was affected.
+
+### Added
+
+- **`%cash_stats` reports discarded cache writes.** If a write ever failed, the
+  summary now names the count and the cause instead of leaving you to infer it
+  from savings that never arrive. A discarded write is not a cache miss -- it is
+  a hit that never got the chance to exist, so none of the other counters can
+  show it. `%cash_stats json` carries the same figure as `discarded_writes`.
+
+  A `reset` deliberately does not clear them: a counter is something you may
+  choose to forget, an unresolved fault is not, and those entries are still
+  missing from disk afterwards.
+
 ## [0.4.0] - 2026-08-21
 
 The theme is **cash noticing more of what you changed**. Editing a class you
