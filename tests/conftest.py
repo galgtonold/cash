@@ -564,3 +564,135 @@ def pytest_terminal_summary(terminalreporter):
 # ---------------------------------------------------------------------------
 PERSISTENCE_FLOOR_S = 0.1
 ABOVE_PERSISTENCE_FLOOR_S = 0.2
+
+
+# ---------------------------------------------------------------------------
+# Silent-degradation guard: a discarded cache write must fail the suite.
+#
+# A failed cache write does not raise. The entry is simply absent, the work is
+# recomputed, and every test still passes -- so a cache that has quietly
+# stopped caching looks exactly like one that works. Cash reports it once, from
+# ``_report_failed_writes`` at shutdown, which in a notebook means at kernel
+# death: in practice, never.
+#
+# That is not hypothetical. Windows denied ``os.replace`` whenever a reader
+# held the destination open, discarding writes on effectively every Windows CI
+# job and 10 of 12 consecutive local runs of one test -- green the whole time,
+# and found only by grepping the full logs of PASSING jobs. This guard is the
+# detector that would have caught it on the first run.
+#
+# Delta-snapshotted rather than absolute: a queue outlives the test that made
+# it, so an absolute check would blame whichever test ran next. Attribution can
+# still lag by one test when a write fails after its own test ended -- the
+# message says so rather than asserting a culprit.
+#
+# Opt out with ``@pytest.mark.expects_failed_writes`` for tests that induce a
+# failure deliberately.
+# ---------------------------------------------------------------------------
+def _discarded_write_count():
+    try:
+        from cash.backends._base import discarded_writes
+    except Exception:       # noqa: BLE001 - import cycles during collection
+        return 0
+    return len(discarded_writes())
+
+
+def _discarded_since(n):
+    from cash.backends._base import discarded_writes
+    return discarded_writes()[n:]
+
+
+@pytest.fixture(autouse=True)
+def _no_silently_discarded_cache_writes(request):
+    before = _discarded_write_count()
+    yield
+    if request.node.get_closest_marker("expects_failed_writes"):
+        # Absorb this test's own failures, including the ones still in flight.
+        # Without the drain they land during the NEXT test and get charged to
+        # it -- which is exactly what happened to test_label_consistency.
+        from cash.backends._base import all_pending_writes, reset_discarded_writes
+        for queue in all_pending_writes():
+            try:
+                queue.wait_all()
+            except Exception:   # noqa: BLE001 - a dying queue is not a finding
+                continue
+        reset_discarded_writes(keep=before)
+        return
+    new = _discarded_since(before)
+    if not new:
+        return
+    detail = "\n".join(f"    {key}\n        {exc}" for key, exc in new)
+    pytest.fail(
+        f"{len(new)} cache write(s) failed and were silently discarded.\n"
+        f"The entries are absent, so the work will be recomputed -- a cache "
+        f"that has stopped caching without anything going red.\n"
+        f"(Writes are asynchronous, so a failure can be attributed to the "
+        f"test after the one that caused it.)\n{detail}",
+        pytrace=False,
+    )
+
+
+#: Discarded writes reported back by xdist workers, collected on the controller.
+_WORKER_DISCARDED: list[tuple[str, str]] = []
+
+
+def pytest_testnodedown(node, error):
+    """Collect each xdist worker's discarded writes as it finishes.
+
+    Required because the backstop below runs *per process*. Under ``-n auto``
+    that is a worker, whose ``session.exitstatus`` the controller never reads --
+    so a worker-side failure vanished entirely. Verified: with the bug present,
+    ``-n0`` exited 1 and ``-n4`` exited 0. CI runs ``-n auto``, so without this
+    handoff the guard would have been decorative exactly where it matters.
+    """
+    payload = (getattr(node, "workeroutput", None) or {}).get("cash_discarded_writes")
+    if payload:
+        _WORKER_DISCARDED.extend(tuple(item) for item in payload)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    """Backstop for writes that failed after their own test had finished.
+
+    The per-test fixture cannot see a write still in flight when the test ends.
+    Draining every live queue here catches that tail, at the cost of no
+    attribution -- the right trade for a detector whose job is to ensure the
+    class cannot pass silently.
+    """
+    try:
+        from cash.backends._base import all_pending_writes, discarded_writes
+    except Exception:       # noqa: BLE001
+        return
+    for queue in all_pending_writes():
+        try:
+            queue.wait_all()
+        except Exception:   # noqa: BLE001 - a dying queue is not a finding
+            continue
+
+    leaked = list(discarded_writes())
+
+    # In an xdist worker: hand the findings to the controller and stop. Failing
+    # here would be invisible.
+    workeroutput = getattr(session.config, "workeroutput", None)
+    if workeroutput is not None:
+        workeroutput["cash_discarded_writes"] = [list(item) for item in leaked]
+        return
+
+    leaked = _WORKER_DISCARDED + leaked          # controller, or plain -n0 run
+    if not leaked or exitstatus != 0:
+        return
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line("")
+        reporter.write_line(
+            f"DISCARDED CACHE WRITES: {len(leaked)} write(s) failed and were "
+            f"thrown away during this session.", red=True,
+        )
+        reporter.write_line(
+            "The work was recomputed. Nothing raised at the call site, so this "
+            "is a cache doing less than it appears to.", red=True,
+        )
+        for key, exc in leaked[:10]:
+            reporter.write_line(f"    {key}: {exc}")
+        if len(leaked) > 10:
+            reporter.write_line(f"    ... and {len(leaked) - 10} more")
+    session.exitstatus = 1

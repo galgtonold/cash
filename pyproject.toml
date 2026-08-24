@@ -306,6 +306,7 @@ filterwarnings = [
     "ignore:set_tracking_dicts\\(\\) is deprecated:DeprecationWarning",
 ]
 markers = [
+    "expects_failed_writes: induces a cache-write failure on purpose; exempt from the discarded-write guard",
     "core: Core caching flow (basic variable tracking, cache hit/miss)",
     "loops: For/while loop caching and mutation patterns",
     "control: If/else/elif branch caching and condition changes",

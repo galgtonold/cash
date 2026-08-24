@@ -17,6 +17,11 @@ import logging
 
 import pytest
 
+# Every test here induces a write failure on purpose, which is exactly what
+# the root conftest's discarded-write guard exists to catch. Exempt the module
+# rather than the guard: the guard firing here is it working.
+pytestmark = pytest.mark.expects_failed_writes
+
 from cash.backends._base import PendingWrites
 
 

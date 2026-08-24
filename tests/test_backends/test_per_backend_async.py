@@ -170,6 +170,9 @@ class TestShutdownWaitsForPending:
         assert write_finished[0] <= shutdown_returned_at
 
 
+# Induces write failures deliberately -- see the discarded-write guard in the
+# root conftest.
+@pytest.mark.expects_failed_writes
 class TestFailureSurface:
     """Background write failures must surface on the next get() for that key."""
 
