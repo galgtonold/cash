@@ -6,10 +6,22 @@ badge's row-detail drawer can answer "why did this cell re-run?".
 
 The earlier backend-walking fallback (``_diagnose_miss``) was removed
 because it was O(N²) in cache size and dominated cold-run wall time
-(see the 2026-05-18 overhead analysis). The remaining miss-reason path
-covers only the *cheap* attributions that the cache-check already
-computes as a side effect — TTL and file invalidations. On the empty-key
-"first time seeing this code" path, no miss reason is attached.
+(see the 2026-05-18 overhead analysis). Everything here must stay on the
+cheap side of that line: no attribution may probe the backend.
+
+Covered, and how each stays cheap:
+
+* **TTL and file invalidations** — the cache-check already computes them
+  as a side effect, so the reason is free.
+* **A changed input** — compared against ``executed_input_lineages``,
+  which records what the statement last ran with. An O(inputs) dict walk,
+  never a cache scan. This is the most common reason a statement re-runs
+  and used to be the one the badge could not name.
+
+Deliberately NOT covered: the first run of a statement. Proving the
+absence of an entry is what made the old fallback expensive, and "first
+time" is self-evident to someone running a cell for the first time. The
+test below pins that absence on purpose — it is a decision, not a gap.
 """
 from __future__ import annotations
 
@@ -85,14 +97,46 @@ class TestMissReasonAttribution:
         # RESTORED rows don't have a miss to attribute.
         assert m.get("miss_reason") is None
 
-    def test_changed_input_has_no_miss_reason_attached(self, magics_fixture):
-        """Changing an upstream value invalidates the consumer's cache, but
-        without the O(N²) diagnostic we no longer label why."""
+    def test_changed_input_is_named_on_the_badge(self, magics_fixture):
+        """Changing an upstream value invalidates the consumer -- and says so.
+
+        The reason comes from ``executed_input_lineages`` (what the statement
+        last ran with) versus the current lineage, so naming ``a`` costs an
+        O(inputs) dict walk and no backend access.
+        """
         magics, shell, _backend, _cash = magics_fixture
         magics.cash("", "a = 1")
         magics.cash("", "b = a + 1")
         magics.cash("", "a = 2")
         m = _last_metric(shell, magics, "b = a + 1")
         assert m["status"] == CacheStatus.COMPUTED
-        # No cheap reason fired for this kind of miss.
-        assert m.get("miss_reason") is None
+        assert m.get("miss_reason") == "input changed: a", m.get("miss_reason")
+
+    def test_only_the_input_that_actually_changed_is_named(self, magics_fixture):
+        """Control arm: the reason must discriminate, not list every input.
+
+        Without this, an implementation that named all inputs of any re-run
+        statement would pass the test above while telling the user nothing.
+        """
+        magics, shell, _backend, _cash = magics_fixture
+        magics.cash("", "a = 1")
+        magics.cash("", "c = 100")
+        magics.cash("", "b = a + c")
+        magics.cash("", "a = 2")            # only `a` moves; `c` is untouched
+        m = _last_metric(shell, magics, "b = a + c")
+        assert m["status"] == CacheStatus.COMPUTED
+        assert m.get("miss_reason") == "input changed: a", m.get("miss_reason")
+
+    def test_a_statement_whose_inputs_are_unchanged_is_not_labelled(self, magics_fixture):
+        """Control arm: re-running with nothing changed must stay silent.
+
+        Guards the direction the feature could fail in without any test
+        noticing -- attributing a change that did not happen is worse than
+        attributing nothing, because it sends the reader after the wrong
+        variable.
+        """
+        magics, shell, _backend, _cash = magics_fixture
+        magics.cash("", "a = 1")
+        magics.cash("", "# @cash:no-cache\nb = a + 1")
+        m = _last_metric(shell, magics, "# @cash:no-cache\nb = a + 1")
+        assert m.get("miss_reason") is None, m.get("miss_reason")

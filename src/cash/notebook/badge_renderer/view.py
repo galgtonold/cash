@@ -100,10 +100,24 @@ class StatementRow:
     # expanded detail. Lets a user see whether two re-runs of the same
     # statement landed in the same cache slot.
     cache_key_short: str = ""
-    # One-line attribution for COMPUTED rows: "first time seeing this code",
-    # "input lineage changed (one of: x, y)", "file changed: ...", etc.
-    # Populated by the runtime (statement_processor._diagnose_miss / the
-    # invalidator helpers) so the badge can answer "why did this re-run?"
+    # One-line attribution for COMPUTED rows, so the badge can answer "why did
+    # this re-run?". Only the reasons the runtime works out anyway are here --
+    # the earlier ``_diagnose_miss`` fallback that probed the backend to
+    # explain the rest was O(N^2) in cache size and was deleted in the
+    # 2026-05-18 overhead pass. Nothing may reintroduce a cache walk to fill a
+    # gap below.
+    #
+    # Populated, and by whom:
+    #   "cache TTL expired (...)"      statement/freshness.py
+    #   "file changed: ..."            statement/freshness.py
+    #   "input changed: x, y"          upstream/checker.py, from the backward
+    #                                  scan's pre-execution lineage comparison
+    #   "re-run to restore the random stream"   upstream/checker.py
+    #
+    # Deliberately NOT populated: the first run of a statement. Proving the
+    # absence of an entry is what made the old fallback expensive, and "first
+    # time" is self-evident to someone running a cell for the first time.
+    # ``tests/test_notebook/test_miss_reason.py`` pins that absence on purpose.
     miss_reason: str | None = None
     # RNG role, surfaced as a chip: 'seed' sets a global seed, 'draw' consumes
     # randomness, None for an ordinary statement. ``random_unseeded`` marks a

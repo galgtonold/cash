@@ -835,6 +835,53 @@ class StatementProcessor:
             logger.debug("[PROCESSOR] Failed to import cash module for global instance")
             return None
 
+    def _attribute_input_change(self, metrics: dict, inputs, outputs) -> None:
+        """Name the input whose change forced this statement to recompute.
+
+        An upstream input changing is the most common reason a notebook
+        statement re-runs, and it was the one reason the badge could not name:
+        the row rendered EXECUTED with no attribution. A user with a
+        reproducible slow re-run had nowhere to look but cash's source. (Round-1
+        tester P5 built two minimal repros, disproved both of their own
+        hypotheses, and still could not find out why.)
+
+        Cheap by construction, and it must stay that way. ``TrackingState``
+        already records, per output variable, the input lineages the statement
+        last RAN with -- so the comparison is that record against the current
+        lineages, an O(inputs) dict walk. It never touches the backend. The
+        earlier ``_diagnose_miss`` fallback answered the same question by
+        scanning the cache, was O(N^2) in cache size, dominated cold-run wall
+        time, and was deleted for it in the 2026-05-18 overhead pass. Nothing
+        here may reintroduce that.
+
+        Ordering is load-bearing: ``executed_input_lineages`` is rewritten by
+        ``_post_execute``, which runs AFTER this. Reading it here therefore
+        sees the previous run's inputs, which is the whole point -- once the
+        statement has run, its inputs agree again and the reason is gone.
+
+        Silent when it has nothing to say: a first run has no prior record, and
+        a statement whose inputs all match did not re-run because of them.
+        """
+        try:
+            state = self._tracking_state
+            current = state.variable_lineage
+            wanted = {v for v in (inputs or []) if isinstance(v, str)}
+            for out in (outputs or []):
+                previous = state.executed_input_lineages.get(out)
+                if not previous:
+                    continue
+                stale = sorted(
+                    name for name, was in previous.items()
+                    if name in wanted and name in current and current[name] != was
+                )
+                if stale:
+                    names = ", ".join(stale[:3])
+                    more = f" +{len(stale) - 3} more" if len(stale) > 3 else ""
+                    metrics['miss_reason'] = f"input changed: {names}{more}"
+                    return
+        except (AttributeError, TypeError):  # pragma: no cover - defensive
+            return
+
     def set_tracking_state(self, state: TrackingState) -> None:
         """Wire all tracking dictionaries from a shared :class:`TrackingState`.
 
@@ -1152,6 +1199,8 @@ class StatementProcessor:
         # dominated cold-run cost.
         if not skip_cache and self._freshness.last_miss_reason:
             metrics['miss_reason'] = self._freshness.last_miss_reason
+        elif not skip_cache:
+            self._attribute_input_change(metrics, inputs, outputs)
 
         self._post_execute(
             code, result, inputs, outputs, accessed_files,
@@ -1377,6 +1426,8 @@ class StatementProcessor:
         metrics['inputs'] = [v for v in (inputs or []) if isinstance(v, str)]
         if not skip_cache and self._freshness.last_miss_reason:
             metrics['miss_reason'] = self._freshness.last_miss_reason
+        elif not skip_cache:
+            self._attribute_input_change(metrics, inputs, outputs)
 
         self._post_execute(
             code, result, inputs, outputs, accessed_files,
