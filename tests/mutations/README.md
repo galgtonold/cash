@@ -59,6 +59,17 @@ Against the 56 upstream / invalidation / file-dependency integration files:
 | `file-deps-blind` | 55 failed | 379 calls — covered |
 | `restore-dead` | **0 failed** | 257 calls — **not covered** |
 
+And against the 29 files that explicitly assert `CACHED` / `RESTORED`:
+
+| Mutation | Result | Evidence |
+|---|---|---|
+| `statement-cache-dead` | 21 failed | 2456 calls — covered |
+| `restore-dead` | **0 failed** | 65 calls — **not covered** |
+
+Those two are the reason to keep mutations narrow. Run alone, `restore-dead`
+reads as "the suite never asserts caching", which is false — it asserts it hard
+for the cell you ran. One mutation cannot tell a narrow hole from a broad one.
+
 `restore-dead` disables virtual restore, so every upstream value re-executes
 instead of coming back from cache. Correctness is untouched, which is exactly
 why nothing fails: the answers stay right and only the speed is gone. That is
