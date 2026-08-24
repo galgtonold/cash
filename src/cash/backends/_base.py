@@ -6,8 +6,9 @@ import concurrent.futures
 import contextlib
 import logging
 import threading
-import weakref
 import time
+import warnings
+import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, fields
@@ -114,9 +115,11 @@ class PendingWrites:
       backend can wait for it. If a previous write for the same key is
       still pending, the new submission waits for the old one first —
       this keeps "set k=a; set k=b" ordering deterministic.
-    * ``wait(key)`` blocks until any pending write for that key resolves
-      and re-raises its exception, so failures surface on the next
-      observation of that key.
+    * ``wait(key)`` blocks until any pending write for that key resolves.
+      A failure is reported as a ``CashCacheStoreFailedWarning`` and the
+      future dropped -- never re-raised. See ``wait`` for why: the value was
+      computed successfully, and a cache that destroys it because a write
+      failed is worse than no cache at all.
     * ``shutdown(wait=True)`` blocks until every in-flight write
       completes — called by ``CacheBackend.shutdown()`` (which itself
       runs from Cash's ``atexit`` handler).
@@ -197,41 +200,37 @@ class PendingWrites:
     def wait(self, key: str) -> None:
         """Block until the pending write for *key* (if any) finishes.
 
-        Re-raises any exception the worker raised, so a background write
-        failure surfaces at the next ``get()``/``delete()`` -- but **once**.
-        The failed future is dropped as it is raised.
+        A write that failed is reported as a ``CashCacheStoreFailedWarning``
+        and the failed future is dropped. It is NOT re-raised.
 
-        That "once" is load-bearing. A failed future used to stay in
-        ``_pending`` forever, and ``wait`` is called on every lookup of that
-        key, so a single write failure re-raised on every subsequent
-        ``get()`` for the rest of the session -- including after the
-        underlying condition cleared. A transient antivirus lock or a
-        momentarily full disk permanently bricked one cache key, and the user
-        saw ``CacheBackendError`` raised out of their own function call, with
-        a kernel restart the only way back. A cache making code uncallable is
-        the exact inverse of what a cache is for.
+        This used to re-raise, and that was the single mechanism behind two
+        user-facing bugs. ``wait`` runs on every lookup of a key, so the
+        exception surfaced far from its cause -- and because the failed future
+        stayed in ``_pending``, it surfaced *forever*, long after the
+        underlying condition had cleared. A transient antivirus lock bricked a
+        cached function for the session. On a cold cache it was worse: the
+        first cell wrote, read back, and died on the re-raise before its
+        variable was bound, so the user lost a computation that had already
+        succeeded.
 
-        Dropping it also matches what the entry now IS: the write did not
+        Warning rather than raising is not a softening; it is the policy this
+        project already had. ``CashCacheStoreFailedWarning`` exists for
+        exactly this ("Compute succeeded but the backend rejected the write.
+        Typical causes: ... disk full ..."), and the decorator path has always
+        used it -- see ``Cash._store_result``, which warns and continues with
+        "Compute succeeded; next call will recompute." The backend path simply
+        never adopted it. These two halves of the codebase disagreed, and the
+        decorator half was right: the value exists, and destroying it because
+        a *cache* write failed is the cache making things worse than not being
+        installed.
+
+        Nothing is hidden by this. The failure is recorded in the
+        discarded-writes registry as it happens (``_run_task``), which is what
+        the badge row and ``%cash_stats`` read, and now it warns as well.
+
+        Dropping the future also matches what the entry IS: the write did not
         land, so there is nothing pending. Keeping a completed-and-failed
-        future in a dict named ``_pending`` was the bug in one line.
-
-        The failure is still recorded -- ``_run_task`` appends it to the
-        process-wide discarded-writes registry as it happens, which is what
-        the badge row and ``%cash_stats`` read. Losing the ability to re-raise
-        it forever loses no evidence.
-
-        RAISING AT ALL IS DELIBERATE (owner decision, 2026-08-24). It was
-        argued that a cache should never raise, since the value was computed
-        successfully and discarding it over a failed write is strictly
-        harmful. The counter-argument won, and is worth keeping: a write that
-        keeps failing means a genuinely full or broken disk, and a machine in
-        that state is not usable for the notebook's real work either -- there
-        is nothing kind about hiding it. The distinction the "once" above
-        draws is what makes that safe: a persistent fault keeps raising and
-        keeps saying so, while a transient lock on a perfectly healthy machine
-        raises once and then heals. Do not quietly turn this into a silent
-        degradation; the two cases are different and the code now tells them
-        apart.
+        future in a dict named ``_pending`` was the original bug in one line.
 
         Re-entrancy guard: if the calling thread is the worker thread
         currently processing the same key, we'd be waiting on our own
@@ -245,15 +244,24 @@ class PendingWrites:
         if future is None:
             return
         try:
-            future.result()  # re-raises on failure
-        except BaseException:
+            future.result()
+        except BaseException as exc:      # noqa: BLE001 - reported, never propagated
             with self._lock:
                 # Only drop the future we actually waited on: a later submit
                 # for the same key may already have replaced it, and throwing
                 # that one away would lose a live write.
                 if self._pending.get(key) is future:
                     del self._pending[key]
-            raise
+            # Deferred import: cash.exceptions is a leaf, but importing it at
+            # module scope from a backend base has bitten this package before.
+            from cash.exceptions import CashCacheStoreFailedWarning
+            warnings.warn(
+                f"cash could not store the result for {key!r} "
+                f"({type(exc).__name__}: {exc}). Compute succeeded; the entry "
+                f"is absent and the work will recompute.",
+                CashCacheStoreFailedWarning,
+                stacklevel=3,
+            )
 
     def drain(self, key: str) -> None:
         """Wait for the pending write for *key* and forget it.

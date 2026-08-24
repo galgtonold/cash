@@ -75,11 +75,21 @@ class TestFailureIsRecorded:
         pw = _failing_writes()
         pw.shutdown(wait=True)  # must not raise
 
-    def test_observed_failure_still_raises_at_the_call_site(self):
-        """Reporting at shutdown must not weaken wait(key)'s contract."""
+    def test_observed_failure_warns_at_the_call_site(self):
+        """wait(key) reports the failure -- as a warning, never as a raise.
+
+        This test previously asserted a raise. That contract was the single
+        mechanism behind two user-facing bugs (a transient failure bricking a
+        key for the session, and a cold-cache cell dying before its variable
+        was bound), and it contradicted the decorator path, which has always
+        warned via CashCacheStoreFailedWarning and continued. The reporting
+        requirement this file exists for is unchanged -- only the channel.
+        """
+        from cash.exceptions import CashCacheStoreFailedWarning
+
         pw = _failing_writes()
         try:
-            with pytest.raises(Boom):
+            with pytest.warns(CashCacheStoreFailedWarning, match="disk full"):
                 pw.wait("k-bad")
         finally:
             pw.shutdown(wait=True)

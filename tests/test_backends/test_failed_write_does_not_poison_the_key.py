@@ -29,6 +29,7 @@ from __future__ import annotations
 import pytest
 
 from cash.backends._base import PendingWrites
+from cash.exceptions import CashCacheStoreFailedWarning
 
 pytestmark = pytest.mark.expects_failed_writes
 
@@ -46,7 +47,7 @@ def test_a_failure_surfaces_once_not_forever():
     pw = PendingWrites()
     try:
         _failing(pw)
-        with pytest.raises(Boom):
+        with pytest.warns(CashCacheStoreFailedWarning):
             pw.wait("k")
 
         # Before the fix this raised too, and kept raising for the life of the
@@ -62,7 +63,7 @@ def test_the_key_works_again_once_writes_recover():
     pw = PendingWrites()
     try:
         _failing(pw)
-        with pytest.raises(Boom):
+        with pytest.warns(CashCacheStoreFailedWarning):
             pw.wait("k")
 
         done = []
@@ -102,7 +103,7 @@ def test_an_unrelated_key_is_unaffected():
         ok = []
         pw.submit("good", lambda: ok.append(1))
 
-        with pytest.raises(Boom):
+        with pytest.warns(CashCacheStoreFailedWarning):
             pw.wait("bad")
         pw.wait("good")
 
@@ -123,7 +124,7 @@ def test_the_failure_is_still_recorded_for_reporting():
     pw = PendingWrites()
     try:
         _failing(pw)
-        with pytest.raises(Boom):
+        with pytest.warns(CashCacheStoreFailedWarning):
             pw.wait("k")
         pw.wait("k")          # consumed; still no re-raise
 

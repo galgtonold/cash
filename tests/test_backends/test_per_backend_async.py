@@ -174,16 +174,39 @@ class TestShutdownWaitsForPending:
 # root conftest.
 @pytest.mark.expects_failed_writes
 class TestFailureSurface:
-    """Background write failures must surface on the next get() for that key."""
+    """Background write failures must surface on the next get() for that key.
 
-    def test_failed_write_raises_on_subsequent_get(self, slow_backend, monkeypatch):
+    As a WARNING, not an exception. The value was computed successfully, and a
+    cache that destroys it because its own write failed is worse than no cache
+    -- which is the policy the decorator path has always followed via
+    ``CashCacheStoreFailedWarning``. See ``PendingWrites.wait``.
+    """
+
+    def test_failed_write_warns_on_subsequent_get(self, slow_backend, monkeypatch):
+        from cash.exceptions import CashCacheStoreFailedWarning
+
         def boom(*args, **kwargs):
             raise RuntimeError("simulated backend write failure")
         monkeypatch.setattr(slow_backend, "_do_set_sync", boom)
 
         slow_backend.set("bad-key", "value")  # returns; failure is in flight
-        with pytest.raises(RuntimeError, match="simulated backend write failure"):
+        with pytest.warns(CashCacheStoreFailedWarning, match="simulated backend write failure"):
             slow_backend.get("bad-key")
+
+    def test_a_failed_write_does_not_raise_into_the_caller(self, slow_backend, monkeypatch):
+        """The regression that matters: get() must still return.
+
+        Raising here killed a notebook cell before its variable was bound, so
+        a cache write failure destroyed a computation that had succeeded.
+        """
+        def boom(*args, **kwargs):
+            raise RuntimeError("simulated backend write failure")
+        monkeypatch.setattr(slow_backend, "_do_set_sync", boom)
+
+        slow_backend.set("bad-key", "value")
+        with pytest.warns(Warning):
+            result = slow_backend.get("bad-key")
+        assert result is not None, "get() should still answer (as a miss)"
 
 
 # ---------------------------------------------------------------------------
