@@ -251,7 +251,7 @@ overhead but the gross figure would, it prints a range ("at least … at best �
 instead of picking the flattering end; and when even the gross reading is a
 loss, it says so plainly.
 
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @851d8352 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @1959689d -->
 `%cash_stats` deliberately does not walk the backend — on a disk cache with
 thousands of entries that is an O(N) scan that opens every metadata file, and
 paying it every time you want a hit rate is not a trade worth making. For size

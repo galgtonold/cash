@@ -213,7 +213,7 @@ Set the badge display mode for subsequent cached cells. See
 ```
 
 ### `%cash_stats`
-<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @851d8352 -->
+<!-- claim: cash/notebook/ipython/admin.py:CashAdminMagicsMixin.cash_stats @1959689d -->
 
 Show session-wide cache statistics: counts, hit rate, compute time, and the
 savings broken out as **gross saved**, **cash overhead**, and **net saved**,
@@ -225,6 +225,15 @@ cash's own per-cell overhead is subtracted from the recompute it avoided, and a 
 a plain "cash cost you Xs this session" rather than a phantom win. The command
 deliberately avoids walking the backend so it stays cheap on large on-disk
 caches.
+
+If any cache write failed, a **discarded writes** line names the count and the
+first cause. Those results were never stored, so they recompute every run —
+and none of the counters above can show it, because a discarded write is not a
+miss but a hit that never got the chance to exist. Nothing raises at the time,
+which is why the rest of the summary can look healthy while the cache is
+quietly doing less than it appears to. `%cash_stats reset` does **not** clear
+them: a counter is something you may choose to forget, an unresolved fault is
+not, and the entries are still missing from disk afterwards.
 
 **Signature:** `%cash_stats [mode]`
 
