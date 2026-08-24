@@ -1,3 +1,15 @@
+<!-- Built from docs/_brand/readme-header.html by scripts/build_brand_assets.py.
+     Absolute raw URLs, not relative paths: PyPI renders this same README and
+     does not resolve repo-relative image paths. PyPI's sanitizer also strips
+     <picture>/<source>, which is why the light variant is the inner <img> --
+     it survives as the fallback there, while GitHub honours the dark source. -->
+<picture>
+  <source media="(prefers-color-scheme: dark)"
+          srcset="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_brand/readme-header-dark.png">
+  <img alt="Cash — only recompute what actually changed. Statement-level caching in Jupyter, @cash.cache for any Python function."
+       src="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_brand/readme-header-light.png">
+</picture>
+
 # Cash — stop re-running work that hasn't changed
 
 [![PyPI version](https://img.shields.io/pypi/v/cash-lib.svg)](https://pypi.org/project/cash-lib/)

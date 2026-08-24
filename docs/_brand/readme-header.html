@@ -1,0 +1,104 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  Source for the README header (docs/_brand/readme-header-light.png and
+  -dark.png). Render both with:  python scripts/build_brand_assets.py
+
+  ONE source, two renders. The dark variant is not a separate file: playwright
+  renders this page twice with different prefers-color-scheme, so the two can
+  never drift apart in copy or layout, only in colour. GitHub picks between
+  them with <picture media="(prefers-color-scheme: dark)">, which is why both
+  are needed at all -- a light-background PNG in a dark README is a bright slab.
+
+  The mark's own colours are kept verbatim in light mode. In dark mode the
+  stack is lifted: #006644 on a dark ground is nearly invisible, so the three
+  bars shift up in lightness while keeping their top-dark-to-bottom-pale
+  relationship intact. That is a deliberate, and the only, deviation from the
+  design system's values -- a mark you cannot see is worse than one adjusted
+  to its surface.
+
+  No install pill here (unlike the social card): the README carries the install
+  line immediately below, and repeating it inside the image means it cannot be
+  copied and goes stale independently.
+-->
+<style>
+  :root {
+    --bg-a:    #ffffff;
+    --bg-b:    #f7fbf9;
+    --glow:    #eef8f4;
+    --ink:     #333333;
+    --ink-3:   #666666;
+    --accent:  #006644;
+    --bar-top: #006644;
+    --bar-mid: #6caf95;
+    --bar-low: #cfe6dc;
+    --bolt:    #ffffff;
+    --rule:    #dfe8e4;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg-a:    #0d1117;      /* GitHub's dark canvas, so the card sits flush */
+      --bg-b:    #111a16;
+      --glow:    #15271f;
+      --ink:     #e6edf3;
+      --ink-3:   #9aa8a2;
+      --accent:  #5cb98c;      /* #006644 fails contrast on this ground */
+      --bar-top: #3f9e79;      /* stack lifted, relationship preserved */
+      --bar-mid: #6cbf9c;
+      --bar-low: #a9d8c5;
+      --bolt:    #0d1117;
+      --rule:    #263a32;
+    }
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 280px; }
+  body {
+    font-family: var(--sans);
+    background:
+      radial-gradient(120% 160% at 90% 0%, var(--glow) 0%, rgba(0,0,0,0) 60%),
+      linear-gradient(180deg, var(--bg-a) 0%, var(--bg-b) 100%);
+    display: flex; align-items: center; gap: 40px;
+    padding: 0 64px;
+    position: relative; overflow: hidden;
+  }
+
+  .lockup { display: flex; align-items: center; gap: 20px; flex: none; }
+  .lockup .name {
+    font-size: 68px; font-weight: 700; letter-spacing: -0.045em;
+    color: var(--ink); line-height: 1;
+  }
+
+  .divider { width: 1.5px; align-self: stretch; margin: 62px 0; background: var(--rule); flex: none; }
+
+  .say { display: flex; flex-direction: column; gap: 10px; }
+  .headline {
+    font-size: 35px; line-height: 1.2; font-weight: 700;
+    letter-spacing: -0.02em; color: var(--ink);
+  }
+  .headline em { font-style: normal; color: var(--accent); }
+  .sub { font-size: 22px; line-height: 1.4; color: var(--ink-3); }
+  .sub code {
+    font-family: var(--mono); font-size: 0.88em; color: var(--accent);
+  }
+</style>
+
+<div class="lockup">
+  <svg width="76" height="76" viewBox="0 0 96 96" role="img" aria-label="Cash">
+    <rect x="8" y="62" width="80" height="22" rx="6" fill="var(--bar-low)"/>
+    <rect x="12" y="36" width="72" height="22" rx="6" fill="var(--bar-mid)"/>
+    <rect x="16" y="10" width="64" height="22" rx="6" fill="var(--bar-top)"/>
+    <path d="M49 12 L40 23 L48 23 L47 30 L56 19 L48 19 Z"
+          fill="var(--bolt)" stroke="var(--bar-top)" stroke-width="0.5" stroke-linejoin="round"/>
+  </svg>
+  <div class="name">Cash</div>
+</div>
+
+<div class="divider"></div>
+
+<div class="say">
+  <div class="headline">Only recompute what <em>actually</em> changed.</div>
+  <div class="sub">Statement-level caching in Jupyter, <code>@cash.cache</code> for any Python function.</div>
+</div>

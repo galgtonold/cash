@@ -1,21 +1,27 @@
-"""Drift test: the committed social card must match the HTML it was rendered from.
+"""Drift test: committed brand PNGs must match the HTML they were rendered from.
 
 If this fails, run:
 
-    python scripts/build_social_card.py
+    python scripts/build_brand_assets.py
 
-and commit the regenerated docs/_brand/*.png (and the .stamp beside it).
+and commit the regenerated docs/_brand/*.png (and the .stamp beside each).
 
-Why this asset in particular needs a guard: the social card is what renders when
-the repository is linked from Show HN, Reddit, Discourse or Slack. It is set
-once in the repo's Settings and never appears anywhere a maintainer looks, so a
-card still advertising an old positioning — or an old install name — would go
-unnoticed indefinitely. Nothing you see day to day would be wrong.
+Why these assets in particular need a guard: the social card is set once in the
+repository's Settings and never appears anywhere a maintainer looks, and the
+README header is seen so constantly that it stops being read. Either could go
+on advertising an old positioning -- or an old install name -- indefinitely,
+because nothing you look at day to day would be wrong.
 
 Same chain of custody, and the same reasoning, as test_badge_images_fresh: hash
 the *source*, not the pixels. Headless screenshots are not byte-stable across
 platforms (font hinting differs), so a pixel comparison would fail for reasons
-that have nothing to do with the card being stale.
+that have nothing to do with an asset being stale.
+
+The asset table is read from the build script rather than restated here. Two
+variants share one source (the header renders light and dark from the same
+HTML), so a png -> html mapping guessed from filenames is wrong by
+construction -- and a second copy of the table is one more thing that can
+disagree with the first.
 """
 from __future__ import annotations
 
@@ -26,70 +32,96 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BRAND_DIR = REPO_ROOT / "docs" / "_brand"
-BUILD_SCRIPT = REPO_ROOT / "scripts" / "build_badge_images.py"
+BADGE_SCRIPT = REPO_ROOT / "scripts" / "build_badge_images.py"
+BRAND_SCRIPT = REPO_ROOT / "scripts" / "build_brand_assets.py"
+
+
+def _load(path: Path, name: str):
+    spec = importlib.util.spec_from_file_location(name, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _stamper():
-    """The generator's stamp function, so the halves cannot drift.
+    """The stamp function the builders actually use.
 
-    Note this is *build_badge_images*, not build_social_card: the card builder
-    imports its stamp from there rather than defining a second one. Two stamp
-    implementations that must agree is exactly the shape that broke CI once
-    already, so there is deliberately only ever one.
+    Deliberately build_badge_images': build_brand_assets imports its stamp from
+    there rather than defining a second one. Two stamp implementations that
+    must agree is exactly the shape that reddened CI once already, so there is
+    only ever one.
     """
-    spec = importlib.util.spec_from_file_location("build_badge_images", BUILD_SCRIPT)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod._stamp
+    return _load(BADGE_SCRIPT, "build_badge_images")._stamp
 
 
-def _pngs():
-    return sorted(BRAND_DIR.glob("*.png"))
+def _assets():
+    return _load(BRAND_SCRIPT, "build_brand_assets").ASSETS
 
 
-def test_there_is_a_social_card():
-    """Guards against the glob below silently passing on an empty directory."""
-    assert _pngs(), (
-        "no docs/_brand/*.png found. The repository's social preview is built "
-        "from there; if it was removed on purpose, delete this test and "
-        "scripts/build_social_card.py with it."
-    )
+def test_there_are_brand_assets():
+    """Guards against the parametrize below silently passing on an empty set."""
+    assert _assets(), "build_brand_assets.ASSETS is empty"
+    assert sorted(BRAND_DIR.glob("*.png")), "no docs/_brand/*.png found"
 
 
-@pytest.mark.parametrize("png", _pngs(), ids=lambda p: p.name)
-def test_png_matches_the_html_it_was_rendered_from(png: Path):
-    html = png.with_suffix(".html")
-    stamp = Path(str(png) + ".stamp")
+@pytest.mark.parametrize(
+    "src, out_stem", [(a[0], a[1]) for a in _assets()], ids=lambda v: str(v)
+)
+def test_png_matches_the_html_it_was_rendered_from(src: str, out_stem: str):
+    html = BRAND_DIR / f"{src}.html"
+    png = BRAND_DIR / f"{out_stem}.png"
+    stamp = BRAND_DIR / f"{out_stem}.png.stamp"
 
-    assert html.exists(), f"{png.name} has no source {html.name}"
+    assert html.exists(), f"{out_stem} names a source {html.name} that does not exist"
+    assert png.exists(), f"{png.name} has not been built"
     assert stamp.exists(), (
         f"{png.name} has no .stamp recording which HTML it came from. "
-        "Re-run `python scripts/build_social_card.py`."
+        "Re-run `python scripts/build_brand_assets.py`."
     )
     assert stamp.read_text(encoding="utf-8").strip() == _stamper()(html), (
         f"{png.name} was rendered from an older {html.name}. Re-run "
-        "`python scripts/build_social_card.py` and commit the new PNG."
+        "`python scripts/build_brand_assets.py` and commit the new PNG."
     )
 
 
-def test_the_card_is_the_size_github_expects():
-    """GitHub renders social previews at 1280x640; anything else gets cropped.
+def test_every_committed_png_is_one_the_builder_owns():
+    """An orphan PNG has no source and so can never be found stale."""
+    owned = {f"{a[1]}.png" for a in _assets()}
+    found = {p.name for p in BRAND_DIR.glob("*.png")}
+    assert found == owned, (
+        f"docs/_brand PNGs do not match what the builder produces. "
+        f"orphans: {sorted(found - owned)}, missing: {sorted(owned - found)}"
+    )
 
-    Checked here rather than trusted from the build script, because the value
-    that matters is the one in the committed file.
+
+def test_declared_sizes_match_the_committed_files():
+    """The dimensions that matter are the ones in the file, not in the script.
+
+    GitHub renders the social preview at 2:1 and crops anything else; the
+    README header is wide-and-short by design. Reading the real PNG header
+    catches a viewport change that was never re-rendered.
     """
-    png = BRAND_DIR / "social-card.png"
-    width, height = _png_size(png)
+    for src, out_stem, width, height, _scheme in _assets():
+        actual = _png_size(BRAND_DIR / f"{out_stem}.png")
+        expected = (width * 2, height * 2)      # SCALE = 2
+        assert actual == expected, (
+            f"{out_stem}.png is {actual[0]}x{actual[1]}, expected "
+            f"{expected[0]}x{expected[1]} (declared {width}x{height} at 2x)"
+        )
+
+
+def test_the_social_card_keeps_githubs_two_to_one_ratio():
+    width, height = _png_size(BRAND_DIR / "social-card.png")
     ratio = width / height
     assert abs(ratio - 2.0) < 0.01, (
-        f"social-card.png is {width}x{height} (ratio {ratio:.3f}); GitHub "
-        f"expects 2:1 and will crop anything else."
+        f"social-card.png ratio is {ratio:.3f}; GitHub expects 2:1 and crops "
+        f"anything else."
     )
     assert width >= 1280, f"{width}px wide is below GitHub's 1280 minimum"
 
 
 def _png_size(path: Path) -> tuple[int, int]:
-    """Width and height from the IHDR chunk — no image library needed."""
+    """Width and height from the IHDR chunk -- no image library needed."""
     header = path.read_bytes()[:24]
     assert header[:8] == b"\x89PNG\r\n\x1a\n", f"{path.name} is not a PNG"
     return (int.from_bytes(header[16:20], "big"), int.from_bytes(header[20:24], "big"))
