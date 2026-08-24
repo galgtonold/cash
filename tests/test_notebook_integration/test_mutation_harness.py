@@ -90,7 +90,8 @@ def test_an_unknown_mutation_is_loud_and_harmless(tmp_path):
     assert stdout == "ORIGINAL", stdout
 
 
-@pytest.mark.parametrize("name", ["upstream-dead", "restore-dead", "file-deps-blind"])
+@pytest.mark.parametrize("name", ["upstream-dead", "restore-dead",
+                                 "file-deps-blind", "statement-cache-dead"])
 def test_every_catalogued_mutation_names_a_real_target(name):
     """Guards against a mutation that can never apply because its target moved.
 

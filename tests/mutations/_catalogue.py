@@ -74,6 +74,21 @@ def _file_deps_always_fresh(mod, record) -> None:
     mod.CacheFreshnessChecker._invalidate_if_direct_file_changed = never_invalidates
 
 
+def _statement_cache_always_misses(mod, record) -> None:
+    """The CURRENT cell's statement lookup never finds an entry.
+
+    Distinct from ``restore-dead``, which kills the UPSTREAM virtual restore.
+    Splitting them is the point: a suite can assert hard on one and be blind to
+    the other, and only two separate mutations can tell you which.
+    """
+    def always_miss(self, tracking_state, cache_key, ttl, inputs=None, *a, **kw):
+        record()
+        self.last_miss_reason = None
+        return None, None, 0.0
+
+    mod.CacheFreshnessChecker.check_cache = always_miss
+
+
 CATALOGUE: dict[str, Mutation] = {
     m.name: m for m in (
         Mutation(
@@ -99,6 +114,14 @@ CATALOGUE: dict[str, Mutation] = {
             replaces=("CacheFreshnessChecker._invalidate_if_direct_file_changed",),
             description="file-dependency changes are never noticed",
             apply=_file_deps_always_fresh,
+        ),
+        Mutation(
+            name="statement-cache-dead",
+            target="cash.notebook.statement.freshness",
+            probe="CacheFreshnessChecker",
+            replaces=("CacheFreshnessChecker.check_cache",),
+            description="the current cell's statement lookup never hits",
+            apply=_statement_cache_always_misses,
         ),
     )
 }
