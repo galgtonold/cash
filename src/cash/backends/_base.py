@@ -197,8 +197,28 @@ class PendingWrites:
     def wait(self, key: str) -> None:
         """Block until the pending write for *key* (if any) finishes.
 
-        Re-raises any exception the worker raised, so background write
-        failures surface at the next ``get()``/``delete()``.
+        Re-raises any exception the worker raised, so a background write
+        failure surfaces at the next ``get()``/``delete()`` -- but **once**.
+        The failed future is dropped as it is raised.
+
+        That "once" is load-bearing. A failed future used to stay in
+        ``_pending`` forever, and ``wait`` is called on every lookup of that
+        key, so a single write failure re-raised on every subsequent
+        ``get()`` for the rest of the session -- including after the
+        underlying condition cleared. A transient antivirus lock or a
+        momentarily full disk permanently bricked one cache key, and the user
+        saw ``CacheBackendError`` raised out of their own function call, with
+        a kernel restart the only way back. A cache making code uncallable is
+        the exact inverse of what a cache is for.
+
+        Dropping it also matches what the entry now IS: the write did not
+        land, so there is nothing pending. Keeping a completed-and-failed
+        future in a dict named ``_pending`` was the bug in one line.
+
+        The failure is still recorded -- ``_run_task`` appends it to the
+        process-wide discarded-writes registry as it happens, which is what
+        the badge row and ``%cash_stats`` read. Losing the ability to re-raise
+        it forever loses no evidence.
 
         Re-entrancy guard: if the calling thread is the worker thread
         currently processing the same key, we'd be waiting on our own
@@ -209,8 +229,18 @@ class PendingWrites:
             return
         with self._lock:
             future = self._pending.get(key)
-        if future is not None:
+        if future is None:
+            return
+        try:
             future.result()  # re-raises on failure
+        except BaseException:
+            with self._lock:
+                # Only drop the future we actually waited on: a later submit
+                # for the same key may already have replaced it, and throwing
+                # that one away would lose a live write.
+                if self._pending.get(key) is future:
+                    del self._pending[key]
+            raise
 
     def drain(self, key: str) -> None:
         """Wait for the pending write for *key* and forget it.
