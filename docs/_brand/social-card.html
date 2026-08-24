@@ -1,0 +1,120 @@
+<!doctype html>
+<meta charset="utf-8">
+<!--
+  Source for the GitHub social preview card (docs/_brand/social-card.png).
+  Render it with:  python scripts/build_social_card.py
+
+  Every colour and both marks come from the design system at
+  design/_handoff_extract/cash-design-system/ — the identity is two semantic
+  colours doing all the work (cached-green #006644, executed-ochre #996300) on
+  a near-white surface, with no webfonts. Do not introduce a third accent here;
+  a brand asset that invents colour is how a design system stops being one.
+
+  On the copy: the headline is deliberately path-agnostic. Cash is not only a
+  notebook tool — the same engine is `@cash.cache` on any function — so a card
+  that pitches Jupyter alone undersells half the product.
+
+  The line above the install pill is the differentiator, and it is the one part
+  that has to survive a skim. "CACHED / EXECUTED" state pills lived here first
+  and were cut: out of the badge's context they say exactly what an LRU cache
+  would say, which confirms the wrong mental model at the only moment the card
+  gets. Keying on the code, not just the arguments, is the thing no
+  argument-keyed cache can claim.
+-->
+<style>
+  :root {
+    --green:      #006644;
+    --green-mid:  #6caf95;
+    --green-pale: #cfe6dc;
+    --green-bg:   #e6fffa;
+    --ink:        #333333;
+    --ink-3:      #666666;
+    --rule:       #dddddd;
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1280px; height: 640px; }
+  body {
+    font-family: var(--sans);
+    background:
+      radial-gradient(120% 90% at 88% 10%, #eef8f4 0%, rgba(238,248,244,0) 55%),
+      linear-gradient(180deg, #ffffff 0%, #f7fbf9 100%);
+    display: flex; flex-direction: column;
+    padding: 74px 84px 64px;
+    position: relative; overflow: hidden;
+  }
+
+  /* The mark's own three bars, oversized and bled off the right edge, so the
+     card still reads as cash at the ~440px a link preview actually gets, where
+     the wordmark stops being legible. Keep the SVG's rx: overriding it turns
+     22-unit-tall bars into ovals and the motif stops being the mark. */
+  .motif { position: absolute; right: -150px; top: 74px; opacity: .26; }
+
+  .lockup { display: flex; align-items: center; gap: 26px; }
+  .lockup .name {
+    font-size: 92px; font-weight: 700; letter-spacing: -0.045em;
+    color: var(--ink); line-height: 1;
+  }
+
+  .headline {
+    margin-top: 46px;
+    font-size: 58px; line-height: 1.12; font-weight: 700;
+    letter-spacing: -0.03em; color: var(--ink); max-width: 19ch;
+  }
+  .headline em { font-style: normal; color: var(--green); }
+
+  .sub {
+    margin-top: 24px; font-size: 28px; line-height: 1.45;
+    color: var(--ink-3); max-width: 44ch; font-weight: 400;
+  }
+  .sub code {
+    font-family: var(--mono); font-size: 0.86em; color: var(--green);
+    background: var(--green-bg); padding: 2px 9px; border-radius: 6px;
+  }
+
+  footer {
+    margin-top: auto; padding-top: 40px;
+    display: flex; align-items: center; gap: 18px;
+  }
+  .contrast {
+    font-size: 25px; line-height: 1.45; color: var(--ink-3); max-width: 40ch;
+    border-left: 4px solid var(--green); padding-left: 20px;
+  }
+  .contrast b { color: var(--ink); font-weight: 700; }
+  .install {
+    margin-left: auto; font-family: var(--mono); font-size: 25px;
+    color: var(--ink-3); border: 1.5px solid var(--rule);
+    border-radius: 10px; padding: 12px 22px; background: #fff;
+  }
+  .install b { color: var(--ink); font-weight: 700; }
+</style>
+
+<svg class="motif" width="520" height="390" viewBox="0 0 96 96" fill="none">
+  <rect x="8" y="62" width="80" height="22" rx="6" fill="#cfe6dc"/>
+  <rect x="12" y="36" width="72" height="22" rx="6" fill="#6caf95"/>
+  <rect x="16" y="10" width="64" height="22" rx="6" fill="#006644"/>
+</svg>
+
+<div class="lockup">
+  <svg width="104" height="104" viewBox="0 0 96 96" role="img" aria-label="Cash">
+    <rect x="8" y="62" width="80" height="22" rx="6" fill="#cfe6dc"/>
+    <rect x="12" y="36" width="72" height="22" rx="6" fill="#6caf95"/>
+    <rect x="16" y="10" width="64" height="22" rx="6" fill="#006644"/>
+    <path d="M49 12 L40 23 L48 23 L47 30 L56 19 L48 19 Z"
+          fill="#ffffff" stroke="#006644" stroke-width="0.5" stroke-linejoin="round"/>
+  </svg>
+  <div class="name">Cash</div>
+</div>
+
+<div class="headline">Only recompute what <em>actually</em> changed.</div>
+<div class="sub">Statement-level caching in Jupyter, <code>@cash.cache</code> for any Python
+function. Two lines, zero config.</div>
+
+<footer>
+  <div class="contrast">
+    Most caches key on the arguments you pass.<br>
+    Cash also keys on <b>the code that ran</b>.
+  </div>
+  <span class="install">pip install <b>cash-lib</b></span>
+</footer>
