@@ -28,6 +28,7 @@ from .cell_executor import (
     CellExecutor,
     _EarlyReturn,
     _PipelineSyntaxError,
+    discarded_writes_notification,
 )
 from ..control_structures import ControlStructureProcessor
 from .error_display import show_clean_error as _show_clean_error_impl
@@ -1295,6 +1296,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 publish_display_data(data=output['data'], metadata=output.get('metadata', {}))
             else:
                 display(output)
+
+        # A write that failed and was thrown away is the one loss the rows
+        # cannot express -- see discarded_writes_notification. Appended here,
+        # after execution, because that is when writes fail; both the sync and
+        # async finalizers funnel through this method, so one call covers both.
+        #
+        # Writes are asynchronous, so a failure can surface on the cell AFTER
+        # the one that caused it. Reporting it late is strictly better than the
+        # alternative, which was reporting it at kernel shutdown.
+        row, self._discarded_writes_seen = discarded_writes_notification(
+            getattr(self, '_discarded_writes_seen', 0)
+        )
+        if row is not None:
+            all_metrics = list(all_metrics) + [row]
 
         # Update Interactive Badge with final metrics
         if self._badge_mode == 'html':

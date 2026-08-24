@@ -220,6 +220,49 @@ def unverifiable_notification(tracker) -> dict | None:
     }
 
 
+def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
+    """Badge row said when a cache write failed and was thrown away.
+
+    Returns ``(row_or_None, new_total)`` so the caller can carry the watermark
+    to the next cell.
+
+    A discarded write is the one failure the rest of the badge cannot express.
+    It is not a miss -- a miss is a row that says EXECUTED and tells you so. It
+    is a hit that never got the chance to exist: the entry is absent, the work
+    recomputes every run, and every counter on the badge looks healthy. Windows
+    spent an unknown period doing exactly this on every run (fixed in 0.4.1),
+    and the only report was a logger warning at kernel shutdown, which in a
+    notebook means never.
+
+    Loud on every occurrence rather than once per session, unlike
+    `unverifiable_notification`: that one reports a permanent property of the
+    environment, where this reports work being lost right now, and a second
+    occurrence is a second lost result rather than a repeat of the same news.
+
+    ASCII only and short, for the reasons `staleness_notification` gives -- the
+    print renderer caps a row at 80 characters.
+    """
+    try:
+        from cash.backends._base import discarded_writes
+        total = len(discarded_writes())
+    except Exception:      # noqa: BLE001 - a diagnostic must never break a cell
+        return None, seen_before
+    if total <= seen_before:
+        return None, total
+
+    new = total - seen_before
+    plural = "s" if new != 1 else ""
+    return {
+        'status': 'WARNING',
+        'code': (f"[!] {new} cache write{plural} failed -- not cached, will "
+                 f"recompute. See %cash_stats."),
+        'is_upstream': False,
+        'total_time': 0.0,
+        'execution_time': 0.0,
+        'outputs': [],
+    }, total
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
