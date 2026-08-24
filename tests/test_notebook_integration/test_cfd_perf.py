@@ -9,6 +9,7 @@ exec wrapper — NOT the TeeWriter or cache I/O.
 
 These tests catch performance regressions before they reach production.
 """
+import json
 import os
 import pytest
 import re
@@ -165,9 +166,28 @@ def _running_in_parallel() -> bool:
     return os.environ.get("PYTEST_XDIST_WORKER") is not None
 
 
-def _run_cfd(nb_runner, *, with_cash: bool) -> tuple[float, float, str]:
-    """Run the full CFD notebook and return (wall_time, cpu_time, output)."""
-    nb_runner.create_notebook(SETUP_CELLS + [CFD_LOOP_CELL])
+def _statements_processed(nb_runner, stats_cell: int) -> int | None:
+    """How many statements cash processed, from ``%cash_stats json``.
+
+    A COUNT, and therefore the only figure here that a loaded machine cannot
+    move. See ``test_cfd_loop_statement_count`` for why that matters.
+    """
+    out = nb_runner.get_output(stats_cell)
+    try:
+        blob = json.loads(out[out.index("{"):out.rindex("}") + 1])
+    except (ValueError, json.JSONDecodeError):
+        return None
+    return (blob.get("statements_computed", 0)
+            + blob.get("statements_restored", 0)
+            + blob.get("statements_skipped", 0))
+
+
+def _run_cfd(nb_runner, *, with_cash: bool) -> tuple[float, float, str, int | None]:
+    """Run the full CFD notebook; return (wall, cpu, output, statements)."""
+    cells = SETUP_CELLS + [CFD_LOOP_CELL]
+    if with_cash:
+        cells = cells + ["%cash_stats json"]
+    nb_runner.create_notebook(cells)
     nb_runner.start_kernel(with_cash=with_cash)
 
     for i in range(1, len(SETUP_CELLS) + 1):
@@ -184,9 +204,15 @@ def _run_cfd(nb_runner, *, with_cash: bool) -> tuple[float, float, str]:
         f"Output: {output[:500]}"
     )
 
+    statements = None
+    if with_cash:
+        stats_cell = loop_cell + 1
+        nb_runner.run_cell(stats_cell)
+        statements = _statements_processed(nb_runner, stats_cell)
+
     cpu = _extract_cpu_time(output, wall)
     nb_runner.shutdown()
-    return wall, cpu, output
+    return wall, cpu, output, statements
 
 
 # ---------------------------------------------------------------------------
@@ -199,19 +225,22 @@ def test_cfd_loop_overhead(nb_runner):
     Runs the 5 000-step Navier-Stokes loop with caching ON, then OFF, and
     asserts the overhead is <20 % or <1 s absolute.
 
-    The budget is measured in the kernel's own CPU TIME, not wall clock
-    (CAS-212). This suite runs at ``-n 16``, so the two runs are scheduled
-    against a dozen competing workers and do not get comparable wall time -- a
-    wall-clock comparison is invalid before its assertion is even evaluated,
-    which made this test the only permanent red in an otherwise-green sweep.
-    ``time.process_time()`` counts only this kernel's CPU, so contention
-    cancels and a genuine regression still shows.
+    TIMING IS ASSERTED ONLY IN A SERIAL RUN. ``time.process_time()`` was
+    adopted (CAS-212) on the theory that counting the kernel's own CPU made
+    this load-independent. Measurement disproved that: on 2026-08-24 the same
+    test read 139% overhead inside a ``-n 16`` sweep and 1.1-5.6% isolated,
+    six times running. Process CPU is *less* wall-sensitive, not insensitive --
+    an oversubscribed machine still charges the process for cache thrashing,
+    context switches and page faults. Reproducing that spread cost an
+    interleaved attribution run, which is the price of asserting a number the
+    environment can move.
 
-    Wall clock is still asserted, but only in a serial run where it means
-    something.
+    What is asserted under load instead is a COUNT -- see
+    ``test_cfd_loop_statement_count``. That is the house rule from the
+    read-storm incident: never infer work from wall clock, count invocations.
     """
-    wall_with, cpu_with, _ = _run_cfd(nb_runner, with_cash=True)
-    wall_without, cpu_without, _ = _run_cfd(nb_runner, with_cash=False)
+    wall_with, cpu_with, _, _ = _run_cfd(nb_runner, with_cash=True)
+    wall_without, cpu_without, _, _ = _run_cfd(nb_runner, with_cash=False)
 
     wall_overhead = wall_with - wall_without
     cpu_overhead = cpu_with - cpu_without
@@ -227,20 +256,63 @@ def test_cfd_loop_overhead(nb_runner):
           f"{'(not asserted -- parallel run)' if _running_in_parallel() else ''}")
     print(f"{'='*60}")
 
-    # THE signal: CPU overhead, valid under any load.
+    if _running_in_parallel():
+        pytest.skip(
+            "timing is not measurable under -n: process CPU inflates with "
+            "contention (139% loaded vs 1.1-5.6% isolated, 2026-08-24). The "
+            "load-independent guard is test_cfd_loop_statement_count."
+        )
+
     assert cpu_overhead < max(cpu_without * 0.20, 1.0), (
         f"Caching CPU overhead too high! {cpu_overhead:.2f}s on "
         f"{cpu_without:.2f}s base ({cpu_pct:.1f}%). Must be <20% or <1s."
     )
 
-    # Wall clock also covers costs CPU time cannot see (cache I/O, IPC), so it
-    # is worth asserting -- but only serially, where the two runs are
-    # comparable. Under xdist it is noise and would false-fail.
-    if not _running_in_parallel():
-        assert wall_overhead < max(wall_without * 0.20, 2.0), (
-            f"Caching wall-clock overhead too high! {wall_overhead:.2f}s on "
-            f"{wall_without:.2f}s base. Must be <20% or <2s."
-        )
+    # Wall clock covers costs CPU time cannot see (cache I/O, IPC). Reachable
+    # only serially -- the skip above already returned under xdist, where the
+    # two runs are scheduled against a dozen competing workers and are not
+    # comparable in the first place.
+    assert wall_overhead < max(wall_without * 0.20, 2.0), (
+        f"Caching wall-clock overhead too high! {wall_overhead:.2f}s on "
+        f"{wall_without:.2f}s base. Must be <20% or <2s."
+    )
+
+
+#: Statements cash processes for the whole CFD notebook, measured 2026-08-24:
+#: 35 (setup cells plus one for the 5000-step loop, which is uncacheable and so
+#: handled as a single statement). The number to catch is ~5000 -- cash
+#: deciding to process the loop BODY per iteration, which is what would make
+#: the overhead explode. A ceiling well above the real figure and far below the
+#: failure keeps this from becoming a churn magnet.
+MAX_STATEMENTS = 200
+
+
+@pytest.mark.timeout(180)
+def test_cfd_loop_statement_count(nb_runner):
+    """Cash must not process the 5000-step loop per iteration.
+
+    This is the load-independent half of the overhead budget, and the one that
+    runs under ``-n``. A count cannot be moved by a busy machine, so it is
+    worth asserting everywhere -- whereas the timing above is only meaningful
+    when nothing else competes for the CPU.
+
+    It does not replace the timing assertion, and should not be read as
+    doing so. A count catches the ALGORITHMIC regression -- per-iteration work
+    where there should be none -- which is the shape that actually makes this
+    loop slow. A constant-factor slowdown inside statement analysis leaves the
+    count untouched, and only the serial timing run will see it.
+    """
+    _, _, _, statements = _run_cfd(nb_runner, with_cash=True)
+
+    assert statements is not None, (
+        "could not read %cash_stats json -- the assertion below would be vacuous"
+    )
+    assert statements < MAX_STATEMENTS, (
+        f"cash processed {statements} statements for this notebook (ceiling "
+        f"{MAX_STATEMENTS}). The 5000-step loop is uncacheable and should be "
+        f"handled as ONE statement; a count near the step count means cash is "
+        f"doing per-iteration work, which is what blows up the CPU budget."
+    )
 
 
 def test_cfd_loop_rerun_no_regression(nb_runner):
