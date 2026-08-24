@@ -37,7 +37,12 @@ SCALE = 2
 
 
 def _stamp(html: pathlib.Path) -> str:
-    return hashlib.sha256(html.read_bytes()).hexdigest()[:16]
+    # Newline-normalized rather than raw bytes. The badge HTML lands on disk
+    # as CRLF on Windows (core.autocrlf on checkout, and write_text() in text
+    # mode below) and as LF everywhere else, so hashing the bytes as-read
+    # records the platform that last ran this script instead of the badge's
+    # content -- and the stamp then fails to verify on every other platform.
+    return hashlib.sha256(html.read_bytes().replace(b"\r\n", b"\n")).hexdigest()[:16]
 
 
 def render(names: list[str]) -> int:
