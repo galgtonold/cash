@@ -364,10 +364,21 @@ class CashAdminMagicsMixin:
         # 2026-05-18 overhead pass. Users who want a backend-wide view
         # can run ``%cash_admin`` (or the lower-level inspection tools).
 
+        # Writes that failed and were thrown away. A silent loss: the entry is
+        # absent, so that work recomputes every run, and none of the counters
+        # above can show it -- a discarded write is not a miss, it is a hit that
+        # never got the chance to exist. The only other report is a logger
+        # warning from ``_report_failed_writes`` at shutdown, which in a
+        # notebook means at kernel death, i.e. never. This is the one place a
+        # user asking "is caching working?" can actually be told that it isn't.
+        from cash.backends._base import discarded_writes
+        discarded = discarded_writes()
+
         if mode == 'json':
             import json
             result = {
                 **stats,
+                'discarded_writes': len(discarded),
                 'net_time_saved': net_saved,
                 'net_time_saved_upper_bound': net_upper,
                 # False ⇒ the upper bound rests on baselines nobody re-measured,
@@ -437,6 +448,18 @@ class CashAdminMagicsMixin:
             print("    warm imports), the real figure is nearer the low end. Time "
                   "a run with")
             print("    caching off to settle it.")
+        if discarded:
+            print()
+            print(f"  Discarded writes:    {len(discarded)}  "
+                  f"-- these results were NOT cached")
+            print("    A cache write failed, so that work recomputes every run. "
+                  "Nothing raised")
+            print("    at the time, which is why the numbers above can look "
+                  "healthy anyway.")
+            print(f"    First: {discarded[0][1]}")
+            if len(discarded) > 1:
+                print(f"    ... and {len(discarded) - 1} more.")
+
         print()
         tracked = len(self._tracking_state.variable_lineage)
         print(f"  Tracked variables:   {tracked}")

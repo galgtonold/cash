@@ -46,6 +46,44 @@ def all_pending_writes() -> list[PendingWrites]:
     """Every write queue still accepting work, across all backends."""
     return [q for q in _LIVE_WRITE_QUEUES if not q.is_shutdown()]
 
+
+# Every cache write that failed and was discarded this process, as
+# ``(key, "ExcType: message")``, appended the moment the worker raises.
+#
+# Not a duplicate of ``failed_writes()``: that one can only describe futures
+# still held in ``_pending``, and only once they have completed, so it says
+# nothing about a write whose backend has since been collected, and nothing at
+# all until the future resolves. This is the durable record -- the one a
+# session summary can quote and a test can assert is empty.
+#
+# A plain list, never trimmed: a healthy process appends to it zero times, and
+# a process appending enough to matter has a much louder problem than memory.
+_DISCARDED_WRITES: list[tuple[str, str]] = []
+_DISCARDED_LOCK = threading.Lock()
+
+
+def discarded_writes() -> list[tuple[str, str]]:
+    """Cache writes that failed and were discarded, oldest first.
+
+    Each entry means: that key's work was recomputed rather than served, and
+    nothing raised at the call site. A non-empty list is a cache that is
+    quietly doing less than it appears to.
+    """
+    with _DISCARDED_LOCK:
+        return list(_DISCARDED_WRITES)
+
+
+def reset_discarded_writes(keep: int = 0) -> None:
+    """Drop recorded failures past *keep* (test isolation; not for library use).
+
+    ``keep`` rather than a bare clear so a test that induces failures on
+    purpose can absorb exactly its own -- the writes are asynchronous, so its
+    failures often land after it has finished, and would otherwise be charged
+    to whichever test ran next.
+    """
+    with _DISCARDED_LOCK:
+        del _DISCARDED_WRITES[keep:]
+
 # The metadata channel backends actually see: an opaque dict they round-trip
 # without inspecting (the channel is polymorphic — both CacheMetadata and the
 # notebook layer's StatementCacheMetadata flow through it as plain dicts). The
@@ -110,6 +148,16 @@ class PendingWrites:
         _WORKER_THREAD.active = True
         try:
             return fn(*args, **kwargs)
+        except BaseException as exc:
+            # Record it HERE, as it happens. failed_writes() can only report a
+            # future that has already completed, and _report_failed_writes runs
+            # at shutdown -- in a notebook, at kernel death. Between those, a
+            # discarded write leaves no trace anyone can query, which is how a
+            # cache that had stopped caching on Windows stayed invisible while
+            # every test passed.
+            with _DISCARDED_LOCK:
+                _DISCARDED_WRITES.append((key, f"{type(exc).__name__}: {exc}"))
+            raise
         finally:
             self._tls.current_key = None
             _WORKER_THREAD.active = prev_worker
