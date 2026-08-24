@@ -162,6 +162,7 @@ nav:
     - The decorator path: how-it-works/decorator-path.md
     - Where your cache lives: how-it-works/storage.md
     - Seeing what Cash did: how-it-works/inspecting.md
+    - How cash is tested: how-it-works/testing.md
   - API Reference:
     - Overview: api/index.md
     - Cash class: api/cash.md

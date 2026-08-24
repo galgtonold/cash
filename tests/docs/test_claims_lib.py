@@ -95,7 +95,7 @@ def test_published_pages_excludes_superpowers_and_unbuilt_adr():
     assert "architecture_decisions.md" not in rels
     assert not any(r.startswith("superpowers/") for r in rels)
     assert "index.md" in rels
-    assert len(rels) == 56
+    assert len(rels) == 57      # +1: how-it-works/testing.md
 
 
 # --------------------------------------------------------------------------- #
