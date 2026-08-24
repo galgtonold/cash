@@ -220,6 +220,19 @@ class PendingWrites:
         the badge row and ``%cash_stats`` read. Losing the ability to re-raise
         it forever loses no evidence.
 
+        RAISING AT ALL IS DELIBERATE (owner decision, 2026-08-24). It was
+        argued that a cache should never raise, since the value was computed
+        successfully and discarding it over a failed write is strictly
+        harmful. The counter-argument won, and is worth keeping: a write that
+        keeps failing means a genuinely full or broken disk, and a machine in
+        that state is not usable for the notebook's real work either -- there
+        is nothing kind about hiding it. The distinction the "once" above
+        draws is what makes that safe: a persistent fault keeps raising and
+        keeps saying so, while a transient lock on a perfectly healthy machine
+        raises once and then heals. Do not quietly turn this into a silent
+        degradation; the two cases are different and the code now tells them
+        apart.
+
         Re-entrancy guard: if the calling thread is the worker thread
         currently processing the same key, we'd be waiting on our own
         future. Skip the wait — we're guaranteed up-to-date by virtue
