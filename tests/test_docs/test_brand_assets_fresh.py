@@ -97,17 +97,37 @@ def test_every_committed_png_is_one_the_builder_owns():
 def test_declared_sizes_match_the_committed_files():
     """The dimensions that matter are the ones in the file, not in the script.
 
-    GitHub renders the social preview at 2:1 and crops anything else; the
-    README header is wide-and-short by design. Reading the real PNG header
-    catches a viewport change that was never re-rendered.
+    Reading the real PNG header catches a viewport or scale change that was
+    never re-rendered -- which the stamp cannot, since the stamp only covers
+    the HTML.
     """
-    for src, out_stem, width, height, _scheme in _assets():
+    for _src, out_stem, width, height, scale, _scheme in _assets():
         actual = _png_size(BRAND_DIR / f"{out_stem}.png")
-        expected = (width * 2, height * 2)      # SCALE = 2
+        expected = (width * scale, height * scale)
         assert actual == expected, (
             f"{out_stem}.png is {actual[0]}x{actual[1]}, expected "
-            f"{expected[0]}x{expected[1]} (declared {width}x{height} at 2x)"
+            f"{expected[0]}x{expected[1]} (declared {width}x{height} at {scale}x)"
         )
+
+
+def test_the_social_card_stays_inside_githubs_upload_limits():
+    """GitHub caps the social preview at 1MB and documents 1280x640.
+
+    A 2x card came out 2560x1280 at 822KB -- inside the stated size limit, and
+    the upload still would not take, leaving the Settings preview blank with no
+    error worth noticing. The card is rendered at 1x for that reason, and this
+    pins it: a silent upload failure is expensive to diagnose precisely because
+    nothing anywhere reports it.
+    """
+    png = BRAND_DIR / "social-card.png"
+    size_kb = png.stat().st_size / 1024
+    assert size_kb < 1024, f"social-card.png is {size_kb:.0f}KB; GitHub caps at 1MB"
+
+    width, height = _png_size(png)
+    assert (width, height) == (1280, 640), (
+        f"social-card.png is {width}x{height}; GitHub documents 1280x640 for "
+        f"the social preview, and deviating from it is what broke the upload."
+    )
 
 
 def test_the_social_card_keeps_githubs_two_to_one_ratio():

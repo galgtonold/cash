@@ -67,7 +67,7 @@
 
   .lockup { display: flex; align-items: center; gap: 20px; flex: none; }
   .lockup .name {
-    font-size: 68px; font-weight: 700; letter-spacing: -0.045em;
+    font-size: 76px; font-weight: 700; letter-spacing: -0.045em;
     color: var(--ink); line-height: 1;
   }
 
@@ -75,18 +75,18 @@
 
   .say { display: flex; flex-direction: column; gap: 10px; }
   .headline {
-    font-size: 35px; line-height: 1.2; font-weight: 700;
+    font-size: 42px; line-height: 1.2; font-weight: 700;
     letter-spacing: -0.02em; color: var(--ink);
   }
   .headline em { font-style: normal; color: var(--accent); }
-  .sub { font-size: 22px; line-height: 1.4; color: var(--ink-3); }
+  .sub { font-size: 27px; line-height: 1.4; color: var(--ink-3); }
   .sub code {
     font-family: var(--mono); font-size: 0.88em; color: var(--accent);
   }
 </style>
 
 <div class="lockup">
-  <svg width="76" height="76" viewBox="0 0 96 96" role="img" aria-label="Cash">
+  <svg width="86" height="86" viewBox="0 0 96 96" role="img" aria-label="Cash">
     <rect x="8" y="62" width="80" height="22" rx="6" fill="var(--bar-low)"/>
     <rect x="12" y="36" width="72" height="22" rx="6" fill="var(--bar-mid)"/>
     <rect x="16" y="10" width="64" height="22" rx="6" fill="var(--bar-top)"/>
@@ -100,5 +100,5 @@
 
 <div class="say">
   <div class="headline">Only recompute what <em>actually</em> changed.</div>
-  <div class="sub">Statement-level caching in Jupyter, <code>@cash.cache</code> for any Python function.</div>
+  <div class="sub">Statement-level caching in Jupyter, <code>@cash.cache</code> anywhere else.</div>
 </div>

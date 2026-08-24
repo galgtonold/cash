@@ -43,15 +43,18 @@ import sys
 REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 BRAND_DIR = REPO_ROOT / "docs" / "_brand"
 
-# 2x everywhere: crisp where an asset is shown large (Slack unfurls, the
-# Settings preview, a HiDPI README) and downsampling cleanly where it is not.
-SCALE = 2
-
-#: (source stem, output stem, width, height, colour scheme)
+#: (source stem, output stem, width, height, scale, colour scheme)
+#:
+#: Scale is per-asset, not global. The README header renders at 2x so it stays
+#: crisp on a HiDPI screen, where GitHub displays it well below its natural
+#: width. The social card renders at 1x: GitHub documents 1280x640 as the size
+#: for best display and caps the upload at 1MB, and a 2x card came out
+#: 2560x1280 at 822KB -- inside the stated limit, but it would not take. Match
+#: the documented size exactly rather than argue with the uploader.
 ASSETS = [
-    ("social-card",   "social-card",         1280, 640, "light"),
-    ("readme-header", "readme-header-light", 1280, 280, "light"),
-    ("readme-header", "readme-header-dark",  1280, 280, "dark"),
+    ("social-card",   "social-card",         1280, 640, 1, "light"),
+    ("readme-header", "readme-header-light", 1280, 280, 2, "light"),
+    ("readme-header", "readme-header-dark",  1280, 280, 2, "dark"),
 ]
 
 
@@ -84,14 +87,14 @@ def render() -> int:
     with sync_playwright() as pw:
         browser = pw.chromium.launch()
         try:
-            for src, out_stem, width, height, scheme in ASSETS:
+            for src, out_stem, width, height, scale, scheme in ASSETS:
                 html = BRAND_DIR / f"{src}.html"
                 if not html.exists():
                     print(f"missing {html}", file=sys.stderr)
                     return 1
                 page = browser.new_page(
                     viewport={"width": width, "height": height},
-                    device_scale_factor=SCALE,
+                    device_scale_factor=scale,
                     color_scheme=scheme,
                 )
                 page.goto(html.as_uri())
@@ -106,7 +109,8 @@ def render() -> int:
                 (BRAND_DIR / f"{out_stem}.png.stamp").write_text(
                     stamp(html), encoding="utf-8")
                 print(f"wrote {out.name} ({out.stat().st_size:,} bytes) "
-                      f"{width}x{height}@{SCALE}x {scheme}")
+                      f"{width * scale}x{height * scale} "
+                      f"({width}x{height}@{scale}x, {scheme})")
         finally:
             browser.close()
     return 0

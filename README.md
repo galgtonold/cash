@@ -6,11 +6,9 @@
 <picture>
   <source media="(prefers-color-scheme: dark)"
           srcset="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_brand/readme-header-dark.png">
-  <img alt="Cash — only recompute what actually changed. Statement-level caching in Jupyter, @cash.cache for any Python function."
+  <img alt="Cash — only recompute what actually changed. Statement-level caching in Jupyter, @cash.cache anywhere else."
        src="https://raw.githubusercontent.com/galgtonold/cash/main/docs/_brand/readme-header-light.png">
 </picture>
-
-# Cash — stop re-running work that hasn't changed
 
 [![PyPI version](https://img.shields.io/pypi/v/cash-lib.svg)](https://pypi.org/project/cash-lib/)
 [![Downloads](https://img.shields.io/pepy/dt/cash-lib.svg)](https://pepy.tech/project/cash-lib)
