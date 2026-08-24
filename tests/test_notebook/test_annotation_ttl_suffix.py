@@ -88,4 +88,13 @@ def test_other_directives_are_unaffected_by_the_value_group_change(recwarn):
         ann = parse_annotation_line(line)
         assert ann is not None and getattr(ann, attr) is True, line
 
-    assert not recwarn.list, "a valueless directive warned"
+    # Filtered by category, like its sibling above. Asserting on the whole
+    # recorder made this fail on any ambient warning that happened to land in
+    # the test's window -- on Windows, a GC'd ResourceWarning or a contended
+    # cache write (WinError 5) under xdist. Twice on windows-3.13, never for
+    # the reason the test is about. Name the offenders so the next one is
+    # diagnosable instead of a list of object reprs.
+    offenders = [w for w in recwarn if issubclass(w.category, CashCacheIneffectiveWarning)]
+    assert not offenders, "a valueless directive warned: " + "; ".join(
+        f"{w.category.__name__}: {w.message}" for w in offenders
+    )
