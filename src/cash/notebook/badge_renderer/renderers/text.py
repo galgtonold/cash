@@ -153,6 +153,11 @@ def _iteration_pseudo_row(it: IterationRow) -> StatementRow:
         time_s=it.time_s,
         saved_time_s=it.saved_time_s,
         storage_tiers=it.storage_tiers,
+        # Carry the reasons across the bridge. Omitting them is what made a
+        # loop-body row silent: every helper below reads them off the
+        # StatementRow, so a field missing here is a field that cannot render.
+        miss_reason=it.miss_reason,
+        skipped_reason=it.skipped_reason,
         sub_units=it.sub_units,
     )
 

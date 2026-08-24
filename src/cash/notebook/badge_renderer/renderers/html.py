@@ -1343,8 +1343,16 @@ def _iter_drilldown_html(
         pct = max(1.0, (it.time_s / max_t) * 100)
         vals = [f"<b>{_esc(_fmt_iter_value(v))}</b>" for _, v in it.loop_bindings]
         value_str = f"({', '.join(vals)})" if is_tuple else (vals[0] if vals else "—")
+        # Why this iteration re-ran, as a hover title. The drill-down is a
+        # fixed four-column grid (bullet / key / bar / time) and a fifth column
+        # of prose would wreck it at any realistic reason length, so the
+        # attribution rides on the row instead of taking space from it. Before
+        # this the reason was computed and then discarded for anything inside a
+        # loop -- see IterationRow.
+        why = it.miss_reason or it.skipped_reason
+        title = f' title="{_esc(why)}"' if why else ""
         rows.append(
-            f'<div class="c3-iter-row">'
+            f'<div class="c3-iter-row"{title}>'
             f'<span class="c3-iter-bullet" style="background:{rail};"></span>'
             f'<span class="c3-iter-key">{_esc(var_label)} = {value_str}</span>'
             f'<span class="c3-iter-bar-track"><span style="width:{pct:.1f}%;background:{bar_color};"></span></span>'

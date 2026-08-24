@@ -724,6 +724,8 @@ def _iteration_row(m: dict[str, Any]) -> IterationRow:
         time_s=float(m.get("total_time", 0.0)),
         saved_time_s=float(m.get("saved_time", 0.0) or 0.0),
         storage_tiers=_tup_str(m.get("storage")),
+        miss_reason=m.get("miss_reason") or None,
+        skipped_reason=m.get("skipped_reason") or None,
         loop_bindings=bindings,
         # Same per-call-site grouping as ``_statement_row_from_metric`` (CAS-243
         # task 9) — a loop-body statement's intercepted sub-calls otherwise

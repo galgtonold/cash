@@ -141,6 +141,14 @@ class IterationRow:
     time_s: float
     saved_time_s: float = 0.0
     storage_tiers: tuple[str, ...] = ()
+    # Why this iteration re-ran, or why it was not cached -- the same two
+    # fields ``StatementRow`` carries, for the same reason. They were missing
+    # here, so every reason the runtime worked out was computed and then
+    # dropped on the floor for anything inside a loop: the row rendered with
+    # no attribution at all. Loops are where the expensive work is, which
+    # makes this the worst place to go quiet.
+    miss_reason: str | None = None
+    skipped_reason: str | None = None
     loop_bindings: tuple[tuple[str, Any], ...] = ()
     """Resolved loop variables for this iteration (denormalised onto the row).
 
