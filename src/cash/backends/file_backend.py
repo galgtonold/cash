@@ -439,6 +439,43 @@ class FileBackend(CacheBackend):
             except Exception:  # noqa: BLE001 — see docstring
                 logger.debug("Sibling write for key %r failed", key, exc_info=True)
 
+    # Windows denies a replace whose destination is open; POSIX never does.
+    # Escalating 5/10/20/40/80/160ms -- ~315ms of total patience. Measured
+    # holders released on the first 10ms retry, so this is mostly headroom
+    # for a scanner that grabbed the file a moment longer.
+    _REPLACE_RETRY_DELAYS = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16)
+
+    @classmethod
+    def _replace_with_retry(cls, tmp_path: str, path: str) -> None:
+        """``os.replace``, but tolerant of a destination that is briefly locked.
+
+        The replace is atomic on both platforms, but on Windows it is not
+        always *permitted*: if any handle currently has the destination open,
+        the call fails with ``ERROR_ACCESS_DENIED`` rather than waiting. POSIX
+        just swaps the directory entry and lets the reader finish on the old
+        inode.
+
+        That distinction matters here because this backend expects concurrent
+        readers by design (see ``_atomic_write`` below) and writes on a
+        background thread, so writer and reader collide as a matter of course
+        rather than as an edge case. Before this retry, that surfaced as a
+        WinError 5 on effectively every Windows CI job and on 10 of 12
+        consecutive local runs of one test -- each one discarding the entry and
+        silently recomputing the work, i.e. a cache that quietly stops caching
+        on one platform.
+
+        A persistent denial (a read-only file, a genuinely stuck handle) still
+        raises once the budget is spent: this waits out contention, it does not
+        paper over a real permission problem.
+        """
+        for delay in cls._REPLACE_RETRY_DELAYS:
+            try:
+                os.replace(tmp_path, path)
+                return
+            except PermissionError:
+                time.sleep(delay)
+        os.replace(tmp_path, path)      # out of patience; let it raise
+
     def _atomic_write(self, path: str, payload: bytes, *, use_gzip: bool) -> None:
         """Write *payload* to *path* so no reader can observe a partial file.
 
@@ -464,7 +501,7 @@ class FileBackend(CacheBackend):
             opener = gzip.open if use_gzip else open
             with opener(tmp_path, 'wb') as f:
                 f.write(payload)
-            os.replace(tmp_path, path)
+            self._replace_with_retry(tmp_path, path)
         except BaseException:
             try:
                 os.remove(tmp_path)
