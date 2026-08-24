@@ -30,11 +30,30 @@ python -c "import json,glob; rows=[json.load(open(f)) for f in glob.glob('/tmp/m
 
 Three outcomes, and only the marker tells them apart:
 
-| Failures | Calls | Meaning |
-|---|---|---|
-| some | > 0 | The suite covers this mechanism. |
-| **0** | **> 0** | **The suite does not.** The code ran, broken, and nothing objected. |
-| any | **0** | **Void.** The mutation never executed; the run measured nothing. |
+| Failures | Calls | Changes behaviour? | Meaning |
+|---|---|---|---|
+| some | > 0 | — | The suite covers this mechanism. |
+| **0** | **> 0** | **yes** | **The suite does not.** A real gap. |
+| 0 | > 0 | **no** | **Nothing.** The mutation is inert — see below. |
+| any | **0** | — | **Void.** It never executed; the run measured nothing. |
+
+### The third row is the one that will fool you
+
+`calls > 0` proves the mutated code *ran*. It does **not** prove the mutation
+*mattered*. A function can be called, return something useless, and have its
+failure absorbed by a fallback — in which case zero failures means the code is
+redundant, not that the suite is blind.
+
+That is exactly what happened with `restore-dead` on 2026-08-24. It reported 0
+failures across 362 tests with 257 confirmed calls, which reads like a glaring
+coverage hole. It was filed as one. But putting the badge side by side with and
+without the mutation showed **identical output** — `^CACHED: mid = ... (saved
+0.11s)` either way. Killing `_try_virtual_restore` changes nothing a user or a
+test can see, because the scheduler compensates.
+
+So before reading a zero as a gap, **produce a positive control**: one concrete
+scenario where the mutation visibly changes what cash does. If you cannot, the
+mutation is inert and the run is as uninformative as `calls=0`.
 
 The last row is why the call count exists. "Nothing failed" reads identically
 whether the suite is tolerant or the patch never landed, and those mean
@@ -57,24 +76,22 @@ Against the 56 upstream / invalidation / file-dependency integration files:
 |---|---|---|
 | `upstream-dead` | 47 failed | 98 calls — covered |
 | `file-deps-blind` | 55 failed | 379 calls — covered |
-| `restore-dead` | **0 failed** | 257 calls — **not covered** |
+| `restore-dead` | 0 failed | 257 calls — **inert, see above** |
 
 And against the 29 files that explicitly assert `CACHED` / `RESTORED`:
 
 | Mutation | Result | Evidence |
 |---|---|---|
 | `statement-cache-dead` | 21 failed | 2456 calls — covered |
-| `restore-dead` | **0 failed** | 65 calls — **not covered** |
+| `restore-dead` | 0 failed | 65 calls — **inert, see above** |
 
 Those two are the reason to keep mutations narrow. Run alone, `restore-dead`
 reads as "the suite never asserts caching", which is false — it asserts it hard
 for the cell you ran. One mutation cannot tell a narrow hole from a broad one.
 
-`restore-dead` disables virtual restore, so every upstream value re-executes
-instead of coming back from cache. Correctness is untouched, which is exactly
-why nothing fails: the answers stay right and only the speed is gone. That is
-the same silent-degradation shape as the Windows write bug — cash keeps working
-and quietly stops paying for itself. See the tracker.
+`restore-dead` looked like the headline finding and was not one. Kept in the
+catalogue as the worked example of an inert mutation, since recognising that
+shape is most of the skill in reading these results.
 
 ## Adding a mutation
 
