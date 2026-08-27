@@ -58,7 +58,17 @@ def main() -> int:
             # but setting it here covers anything it spawns in turn.
             env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
             try:
+                # encoding/errors, not bare text=True: PYTHONIOENCODING makes
+                # the CHILD write UTF-8, but the parent still decodes with the
+                # locale codec, so on a Windows console any non-ASCII byte in a
+                # notebook's output raises UnicodeDecodeError inside
+                # communicate()'s reader thread. That thread dies, the
+                # exception is printed by the threading excepthook rather than
+                # raised here, and `p.stdout` comes back empty -- which is
+                # survivable for a run that succeeds and silently loses the
+                # error tail for one that fails.
                 p = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True,
+                                   encoding="utf-8", errors="replace",
                                    timeout=args.timeout, env=env)
             except subprocess.TimeoutExpired:
                 print(f"TIMEOUT {nb} [{mode}]", flush=True)
