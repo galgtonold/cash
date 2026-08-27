@@ -11,11 +11,13 @@ import logging
 import os
 import re
 import sys
+import time
 
 logger = logging.getLogger(__name__)
 
 __all__ = [
     "is_remote_url",
+    "replace_with_retry",
     "normalize_path",
     "resolve_file_dep_path",
     "safe_text",
@@ -240,3 +242,40 @@ def resolve_file_dep_path(stored_path: str) -> str | None:
             return normalize_path(os.path.realpath(candidate))
 
     return None
+
+
+# Windows denies a replace whose destination is open; POSIX never does.
+# Escalating 5/10/20/40/80/160ms -- ~315ms of total patience. Measured
+# holders released on the first 10ms retry, so this is mostly headroom for a
+# scanner that grabbed the file a moment longer.
+REPLACE_RETRY_DELAYS = (0.005, 0.01, 0.02, 0.04, 0.08, 0.16)
+
+
+def replace_with_retry(tmp_path: str, path: str,
+                       delays: tuple[float, ...] = REPLACE_RETRY_DELAYS) -> None:
+    """``os.replace``, but tolerant of a destination that is briefly locked.
+
+    The replace is atomic on both platforms, but on Windows it is not always
+    *permitted*: if any handle currently has the destination open, the call
+    fails with ``ERROR_ACCESS_DENIED`` rather than waiting. POSIX just swaps
+    the directory entry and lets the reader finish on the old inode.
+
+    Shared rather than duplicated because two call sites need it and they sit
+    on opposite sides of the backend/notebook boundary -- the file backend
+    (where it was first measured: a WinError 5 on effectively every Windows CI
+    job and 10 of 12 consecutive local runs of one test, each silently
+    discarding a cache entry) and ``notebook.loop_split.LoopSplitStore``,
+    which had the same tmp-then-replace shape and swallowed the failure at
+    debug level.
+
+    A persistent denial (a read-only file, a genuinely stuck handle) still
+    raises once the budget is spent: this waits out contention, it does not
+    paper over a real permission problem.
+    """
+    for delay in delays:
+        try:
+            os.replace(tmp_path, path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+    os.replace(tmp_path, path)      # out of patience; let it raise

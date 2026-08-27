@@ -43,6 +43,8 @@ import json
 import logging
 import os
 
+from cash.utils import replace_with_retry
+
 logger = logging.getLogger(__name__)
 
 _STORE_FILENAME = "_loop_split.json"
@@ -178,7 +180,15 @@ class LoopSplitStore:
             os.makedirs(os.path.dirname(self._path), exist_ok=True)
             with open(tmp_path, "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
-            os.replace(tmp_path, self._path)
+            # Not a bare os.replace: on Windows the call is DENIED, not
+            # delayed, while any handle has the destination open -- and the
+            # except below swallows that at debug level, so the verdict
+            # vanished from disk while staying in memory. The next session
+            # then loads a store without it, does not split the loop, and
+            # keys the tail differently: a cache miss and a real recompute,
+            # which is precisely what this store exists to prevent. Measured
+            # susceptible with a single reader handle held open (#74).
+            replace_with_retry(tmp_path, self._path)
         except OSError:
             logger.debug("[LOOP_SPLIT] could not persist to %s", self._path)
             with contextlib.suppress(OSError):
