@@ -633,6 +633,10 @@ class Cash:
         # skip re-hashing a possibly-huge input. See ``_hash_arg_payload`` for
         # the read-side validation (weakref identity + lineage). Bounded below.
         self._arg_hash_memo: dict[int, tuple] = {}
+        # Running account of what caching cost vs what it saved, per function.
+        # The decorator always caches by design -- this only ever informs.
+        from cash.effectiveness import EffectivenessLedger
+        self._effectiveness = EffectivenessLedger()
         self._analyzed = set() # Track which functions we've *surfaced* purity for
         # Track which functions have had their graph edges + purity report
         # populated (separate from _analyzed: a dependency can be populated to
@@ -2249,6 +2253,11 @@ class Cash:
             # the rest of the wrapper.
             ttl = self._effective_ttl(func_name, ttl_decl)
 
+            # Everything from here to the hit/miss verdict is cash's own cost,
+            # not the user's work. Two perf_counter pairs measured at 196ns
+            # against a 25.5us floor for the cheapest possible cached call --
+            # 0.8%, so this is not gated behind a heuristic.
+            overhead_t0 = time.perf_counter()
             key_result = self._resolve_cache_key(func, func_name, dynamic_depends_on, args, kwargs, call_start)
             # Snapshot into a LOCAL immediately: a nested cached call would
             # overwrite the instance scratch before this body finishes (CAS-270).
@@ -2260,7 +2269,13 @@ class Cash:
             raw_metadata, cached_data = self.backend.get(cache_key)
             metadata = CacheMetadata.from_dict(raw_metadata) if raw_metadata is not None else None
             hit = self._try_get_cached(cache_key, metadata, cached_data, call_start, args_hash, func_name, ttl)
+            cash_overhead = time.perf_counter() - overhead_t0
             if hit is not _CACHE_MISS:
+                self._note_effectiveness(
+                    func_name, cash_overhead,
+                    body_seconds=getattr(metadata, "body_seconds", None),
+                    was_hit=True,
+                )
                 return self._wrap_iterator_hit(cache_key, metadata, hit)
 
             def _compute_and_store() -> Any:
@@ -2273,8 +2288,14 @@ class Cash:
                 # Watch the global RNG across the call: a draw inside the body is
                 # an input the key cannot see statically.
                 rng_pre = self._capture_rng_pre_state()
+                body_seconds: float | None = None
                 with tracker:
+                    body_t0 = time.perf_counter()
                     res = func(*args, **kwargs)
+                    # The user's own work, isolated. Everything cash does sits
+                    # outside this pair, which is the whole point: it is the
+                    # only number that can answer "did caching pay?".
+                    body_seconds = time.perf_counter() - body_t0
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
                     if is_iter:
@@ -2380,11 +2401,16 @@ class Cash:
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
+                        body_seconds=body_seconds,
                     )
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
+                )
+                self._note_effectiveness(
+                    func_name, cash_overhead,
+                    body_seconds=body_seconds, was_hit=False,
                 )
                 return res
 
@@ -2423,6 +2449,9 @@ class Cash:
             # Inherit the shortest TTL of any TTL'd dependency (see sync wrapper).
             ttl = self._effective_ttl(func_name, ttl_decl)
 
+            # See the sync wrapper: this span is cash's own cost, not the
+            # user's work.
+            overhead_t0 = time.perf_counter()
             key_result = self._resolve_cache_key(
                 func, func_name, dynamic_depends_on, args, kwargs, call_start
             )
@@ -2444,7 +2473,13 @@ class Cash:
                 cache_key, metadata, cached_data, call_start,
                 args_hash, func_name, ttl,
             )
+            cash_overhead = time.perf_counter() - overhead_t0
             if hit is not _CACHE_MISS:
+                self._note_effectiveness(
+                    func_name, cash_overhead,
+                    body_seconds=getattr(metadata, "body_seconds", None),
+                    was_hit=True,
+                )
                 return self._wrap_iterator_hit(cache_key, metadata, hit)
 
             # Async single-flight: with use_locking, coalesce concurrent awaits
@@ -2489,8 +2524,11 @@ class Cash:
                 from cash.notebook.file_tracker import FileAccessTracker
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
                 rng_pre = self._capture_rng_pre_state()
+                body_seconds: float | None = None
                 with tracker:
+                    body_t0 = time.perf_counter()
                     res = await func(*args, **kwargs)
+                    body_seconds = time.perf_counter() - body_t0
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
                     if is_iter:
@@ -2587,11 +2625,16 @@ class Cash:
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
                         auto_file_deps=auto_file_deps,
+                        body_seconds=body_seconds,
                     )
                 self._log_decorator_call(
                     func_name, cache_hit=False,
                     execution_time=execution_time,
                     args_hash=args_hash, cache_key=cache_key,
+                )
+                self._note_effectiveness(
+                    func_name, cash_overhead,
+                    body_seconds=body_seconds, was_hit=False,
                 )
                 return res
 
@@ -5439,6 +5482,37 @@ class Cash:
         )
         return True
 
+    def _note_effectiveness(
+        self,
+        func_name: str,
+        overhead_seconds: float,
+        *,
+        body_seconds: float | None,
+        was_hit: bool,
+    ) -> None:
+        """Account for one call and warn if caching has become a net loss.
+
+        Informational only: the decorator caches because the user asked it
+        to, and deciding otherwise is the notebook cost model's job, not
+        this one. See ``cash.effectiveness`` for when it speaks up.
+
+        ``overhead_seconds`` covers cache-key construction and lookup -- the
+        per-call costs. The one-off store is excluded, deliberately: it is
+        paid once per key rather than per call, and the workload this exists
+        to catch is one that pays a large key cost on every single call.
+        """
+        try:
+            message = self._effectiveness.record(
+                func_name,
+                overhead_seconds=overhead_seconds,
+                body_seconds=body_seconds,
+                was_hit=was_hit,
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must never break a call
+            return
+        if message:
+            warnings.warn(message, CashCacheIneffectiveWarning, stacklevel=3)
+
     def _store_in_cache(
         self,
         cache_key: str,
@@ -5450,6 +5524,7 @@ class Cash:
         args_hash: str,
         execution_time: float = 0.0,
         auto_file_deps: dict[str, dict[str, float]] | None = None,
+        body_seconds: float | None = None,
     ) -> None:
         try:
             serializer = get_serializer(result)
@@ -5464,6 +5539,11 @@ class Cash:
                 # policy gates everything at the 0.1s floor, and script
                 # runs that recompute the same cheap value forever).
                 execution_time=execution_time,
+                # The body's own cost, so a later HIT can tell what it
+                # actually saved. execution_time cannot answer that: it is
+                # measured from the top of the wrapper and includes the
+                # key hashing whose worth is the question.
+                body_seconds=body_seconds,
                 serializer_cls=type(serializer),
                 ttl=ttl,
                 args_hash=args_hash,

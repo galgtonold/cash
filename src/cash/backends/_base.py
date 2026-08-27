@@ -394,6 +394,12 @@ class CacheMetadata:
     storage: list[str] | None = None
     ttl: int | None = None
     execution_time: float | None = None
+    # The function's OWN time, excluding everything cash did around it.
+    # ``execution_time`` is measured from the top of the wrapper and so
+    # includes cache-key hashing and lookup -- fine for reporting what a call
+    # cost, useless for asking whether caching PAID, because the overhead
+    # being judged is inside the number it would be judged against.
+    body_seconds: float | None = None
     outputs: list[str] | None = None
     lineage_hash: str | None = None
     source: str | None = None  # Backend source identifier (e.g. 'RAM', 'disk')

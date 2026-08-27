@@ -173,7 +173,7 @@ backend precisely so existence and size can be established without touching the
 payload. `resolve()` is idempotent: the loader runs at most once.
 
 ??? question "How does cache metadata stay typed without locking the backends in?"
-    <!-- claim: cash/backends/_base.py:CacheMetadata @0076177c, cash/notebook/statement/_metadata.py:StatementCacheMetadata @59339cb6 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
+    <!-- claim: cash/backends/_base.py:CacheMetadata @a4f5854a, cash/notebook/statement/_metadata.py:StatementCacheMetadata @59339cb6 broad="the frozen-dataclass-in, dict-on-the-wire contract is a property of both classes" -->
     Each entry carries metadata — execution time, size, ttl, type. Inside the
     cash layer that metadata is a **frozen dataclass** (`CacheMetadata` for the
     decorator layer, `StatementCacheMetadata` for the notebook layer), so call

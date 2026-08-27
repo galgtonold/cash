@@ -135,11 +135,21 @@ class CashWarning(UserWarning):
 class CashCacheIneffectiveWarning(CashWarning):
     """The cache is not doing anything useful for this call.
 
-    Typical causes: unpicklable args with no registered hasher;
-    dynamic dependency resolver raised; @cash.cache on an async
-    generator; use_locking=True on an async function. The user's
-    function ran (or will run) but its result is not being cached
-    or re-used.
+    Two distinct shapes, both under this category:
+
+    **Structural** - caching cannot work here. Unpicklable args with no
+    registered hasher; a dynamic dependency resolver that raised;
+    ``@cash.cache`` on an async generator; ``use_locking=True`` on an async
+    function; a value too large for any persistent tier. The function ran
+    (or will run) but its result is not being cached or re-used.
+
+    **Economic** - caching works and costs more than it saves. Raised once
+    per function when cache-key construction and lookup have accumulated
+    seconds of real, measured loss against the work they avoid; the usual
+    cause is a large argument being content-hashed in full on every call.
+    Also raised when remote freshness checking outweighs the compute it
+    protects. The decorator does not stop caching on its own -- it was
+    asked to cache, and the notice is informational.
     """
 
 class CashUpstreamSyntaxWarning(CashWarning):
