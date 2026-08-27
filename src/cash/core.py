@@ -5508,8 +5508,15 @@ class Cash:
                 body_seconds=body_seconds,
                 was_hit=was_hit,
             )
-        except Exception:  # noqa: BLE001 - a diagnostic must never break a call
+        except Exception:  # noqa: BLE001 - accounting must never break a call
             return
+        # The warn is deliberately OUTSIDE that guard. Under ``-W error`` it
+        # raises into the caller -- which is the shape this project spent
+        # 8b47cc4 removing from the backend, so it is worth being explicit
+        # that it is different here: there, cash raised on its own initiative
+        # over a failure the user had not asked to hear about. Here the user
+        # configured warnings-as-errors and is entitled to have that honoured.
+        # Swallowing it would silently override their filter, which is worse.
         if message:
             warnings.warn(message, CashCacheIneffectiveWarning, stacklevel=3)
 
