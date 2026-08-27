@@ -142,7 +142,29 @@ def _build_default_tiered(config: "CashConfig") -> TieredBackend:
 
 
 # Compute floor for the smart-persistence stack: nothing under this many
-# seconds is promoted past RAM (disk I/O alone would cost more than rerunning).
+# seconds is promoted past RAM.
+#
+# NOT because "disk I/O costs more than rerunning" -- that was the original
+# rationale here and it is false. Measured on an NVMe volume, a small entry
+# round-trips in 0.61 ms from a cold FileBackend and 0.14 ms warm, so I/O is
+# ~3% of rerunning a 20 ms statement, not more than it.
+#
+# The floor earns its place for a different reason: statements under it are
+# cheap *by definition*, so persisting them buys almost no time and costs a
+# file each. Measured on 01_nyc_taxi_analysis, dropping this to 10 ms:
+#
+#     floor=100ms   restored  9/140   still computed 3.19 s   cache   0.2 MiB
+#     floor= 10ms   restored 15/140   still computed 3.33 s   cache  70.9 MiB
+#
+# Six more statements come back, not one second is saved, and the cache grows
+# 355x. The cost is worse than linear too: FileBackend._ensure_initialized
+# unpickles every .meta file at kernel start, so entry count is paid on every
+# start forever.
+#
+# So: the number is right, the old reason for it was not. Anyone tempted to
+# lower it on the strength of the I/O argument should re-read the table above
+# first -- and if they lower it anyway, measure the cache size and the
+# kernel-start scan, not just the restore count.
 _SMART_PERSIST_COMPUTE_FLOOR_S = 0.1
 
 

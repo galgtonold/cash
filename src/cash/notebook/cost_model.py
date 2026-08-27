@@ -30,6 +30,31 @@ _TYPE_TO_FAMILY: dict[str, str] = {
 # (family, backend_kind, operation) -> (a, b)
 # Fitted from `benchmarks/fit_cost_model.py benchmarks/results/ser_deser_matrix.csv`.
 # _GENERIC entries are copies of the slowest measured family per (backend, op).
+#
+# KNOWN: the disk-deserialize intercepts OVERESTIMATE small payloads by 7-25x.
+# Checked against the frozen matrix these were fitted from -- its own small
+# rows, not a separate experiment:
+#
+#     284 B sparse            measured 0.49 ms   fitted 10.75 ms   21.8x
+#     942 B dict_shallow      measured 0.49 ms   fitted 10.39 ms   21.1x
+#    1000 B bytes             measured 0.48 ms   fitted  9.50 ms   19.8x
+#    1092 B dataframe_numeric measured 0.54 ms   fitted  8.11 ms   15.1x
+#
+# The cause is the fit objective, not the data: one line per family is fitted
+# by ordinary least squares across 284 B to 111 MiB, and OLS minimises ABSOLUTE
+# error, so the 100 MiB points dominate and the intercept absorbs their
+# residual. A relative-error (or log-space) fit would price the small end
+# correctly. Fixing it needs a refit plus re-validation, not an edit here --
+# these numbers are generated, and hand-tuning them would desync them from the
+# matrix they claim to come from.
+#
+# Currently harmless, which is why it is documented rather than fixed:
+# `_SMART_PERSIST_COMPUTE_FLOOR_S` (100 ms) gates every decision below the
+# range where the error lives, and of 504 promotion decisions above that floor
+# only 2 (0.4%) flip if the intercept is corrected to the measured ~0.5 ms --
+# both "promote a 100 MB write to save 250 ms", i.e. the wrong direction.
+#
+# It stops being harmless if that floor is ever lowered. Refit first.
 _COEFFS: dict[tuple[str, str, str], tuple[float, float]] = {
     # ===== Measured families =====
     ("bytes", "disk", "deserialize"): (9.503194e-03, 4.242689e-10),  # R2=0.876
