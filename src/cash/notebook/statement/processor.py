@@ -859,13 +859,36 @@ class StatementProcessor:
         sees the previous run's inputs, which is the whole point -- once the
         statement has run, its inputs agree again and the reason is gone.
 
-        Silent when it has nothing to say: a first run has no prior record, and
-        a statement whose inputs all match did not re-run because of them.
+        Silent when it has nothing to say: a first run has no prior record, a
+        statement whose inputs all match did not re-run because of them, and a
+        name the statement also WRITES is excluded outright -- see the comment
+        on ``wanted`` below for why that comparison cannot be trusted.
+
+        A wrong reason is worse than no reason here. The row rendered EXECUTED
+        with no attribution before this method existed, so failing closed to
+        silence costs a diagnostic; failing open sends the user to inspect a
+        variable that is not the problem.
         """
         try:
             state = self._tracking_state
             current = state.variable_lineage
-            wanted = {v for v in (inputs or []) if isinstance(v, str)}
+            # A name this statement WRITES is not evidence about what it read.
+            # ``executed_input_lineages`` is keyed by output variable name
+            # alone, so every statement writing the same variable shares one
+            # slot and reads back whichever of them ran last. For a chain of
+            # ``df = df[...]`` filters that is always a different statement,
+            # and the mismatch is guaranteed -- 17 of 21 attributions on
+            # 01_nyc_taxi_analysis named an input that was also the
+            # statement's own output, on a run whose cache keys and lineage
+            # sequence were byte-identical to the previous one.
+            #
+            # Dropping only the self-referential names keeps the reason for
+            # the half of the statement that is still sound:
+            # ``df = df.join(other)`` may honestly blame ``other``.
+            wanted = {
+                v for v in (inputs or [])
+                if isinstance(v, str) and v not in set(outputs or [])
+            }
             for out in (outputs or []):
                 previous = state.executed_input_lineages.get(out)
                 if not previous:
