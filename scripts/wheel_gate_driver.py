@@ -132,29 +132,92 @@ for _ in range(240):
 else:
     raise SystemExit("jupyter server never came up")
 
-session = api("sessions", "POST", {
-    "path": NB_NAME, "type": "notebook", "name": NB_NAME,
-    "kernel": {"name": KERNEL_NAME}})
-KERNEL_ID = session["kernel"]["id"]
-SESSION_ID = session["id"]
-print("session", SESSION_ID, "kernel", KERNEL_ID, "kernelspec", KERNEL_NAME, flush=True)
-
 kc = None
+KERNEL_ID = None
+SESSION_ID = None
+
+# A kernel that dies during startup is a HARNESS failure, not a verdict about
+# cash -- and it happens: two consecutive full-gate runs each lost a different
+# scenario to "Kernel died before replying to kernel_info", while every
+# scenario passed when run alone. Booting six kernels at once, each paying a
+# multi-second ``import cash``, is simply enough contention to lose one.
+#
+# Retrying the whole session is the honest response: the gate exists to decide
+# whether a cash invariant held, and reporting ERROR because a kernel failed to
+# start answers a different question. Bounded, and every attempt is printed, so
+# a kernel that dies REPEATEDLY still surfaces instead of being retried away.
+BOOT_ATTEMPTS = 3
 
 
-def connect():
-    global kc
+# Fault injection, so the retry above can be OBSERVED recovering rather than
+# assumed to work. A boot death is rare and load-dependent, so waiting for a
+# real one to prove the path is not a plan. Set CASH_DRIVER_FAIL_BOOTS=N to
+# make the first N attempts raise.
+_FAIL_BOOTS = int(os.environ.get("CASH_DRIVER_FAIL_BOOTS", "0"))
+_boots_attempted = 0
+
+
+def _start_session():
+    global KERNEL_ID, SESSION_ID, kc, _boots_attempted
+    _boots_attempted += 1
+    if _boots_attempted <= _FAIL_BOOTS:
+        raise RuntimeError(
+            f"injected boot failure {_boots_attempted}/{_FAIL_BOOTS} "
+            "(CASH_DRIVER_FAIL_BOOTS)")
+    session = api("sessions", "POST", {
+        "path": NB_NAME, "type": "notebook", "name": NB_NAME,
+        "kernel": {"name": KERNEL_NAME}})
+    KERNEL_ID = session["kernel"]["id"]
+    SESSION_ID = session["id"]
+    print("session", SESSION_ID, "kernel", KERNEL_ID,
+          "kernelspec", KERNEL_NAME, flush=True)
+
     cf = os.path.join(RUNTIME, f"kernel-{KERNEL_ID}.json")
     for _ in range(240):
         if os.path.exists(cf):
             break
         time.sleep(0.25)
     else:
-        raise SystemExit("no connection file " + cf)
+        raise RuntimeError("no connection file " + cf)
     kc = BlockingKernelClient()
     kc.load_connection_file(cf)
     kc.start_channels()
     kc.wait_for_ready(timeout=120)
+
+
+def _discard_dead_session():
+    """Best effort: stop channels and delete the session so the retry is clean.
+
+    A half-started kernel left registered would keep its ports and its entry in
+    the server, and the next attempt would be racing it.
+    """
+    global kc
+    if kc is not None:
+        try:
+            kc.stop_channels()
+        except Exception:
+            pass
+        kc = None
+    if SESSION_ID:
+        try:
+            api(f"sessions/{SESSION_ID}", "DELETE")
+        except Exception:
+            pass
+
+
+def connect():
+    for attempt in range(1, BOOT_ATTEMPTS + 1):
+        try:
+            _start_session()
+            return
+        except Exception as exc:
+            print(f"[boot] attempt {attempt}/{BOOT_ATTEMPTS} failed: "
+                  f"{type(exc).__name__}: {exc}", flush=True)
+            _discard_dead_session()
+            if attempt == BOOT_ATTEMPTS:
+                raise SystemExit(
+                    f"kernel failed to start {BOOT_ATTEMPTS} times: {exc}")
+            time.sleep(2.0 * attempt)
 
 
 connect()
