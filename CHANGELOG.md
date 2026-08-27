@@ -14,6 +14,76 @@ top and says nothing about removing an Unreleased heading — so inserting above
 this without folding it in leaves the note orphaned mid-file. It is a note for
 you, not a release entry.
 
+## [0.5.0] - 2026-08-27
+
+The theme is **cash telling you when it is not helping you.**
+
+A cache that quietly does nothing looks exactly like a cache that is working.
+Everything here is about closing that gap: saying when a write was thrown away,
+naming the input that forced a re-run, and — new in this release — speaking up
+when caching a function costs more than the function does.
+
+Plus two fixes for a failed cache write, which until now could raise an
+exception out of your own call.
+
+### Added
+
+- **`@cash.cache` warns when caching costs more than it saves.** Pass a large
+  DataFrame to a function that does something cheap with it and cash hashes the
+  whole frame to build a cache key — measured at 390ms of hashing to avoid 11ms
+  of work, on *every* call, because the fast path that skips re-hashing an
+  unchanged object only applies to notebook-tracked values. That is a 34x
+  slowdown, and cash used to say nothing about it.
+
+  It now warns once, naming the numbers and a fix that keeps the caching:
+  register a cheaper hasher for the type. It does **not** stop caching — you
+  asked for the decorator, and deciding otherwise is not its job.
+
+  Deliberately hard to trigger: it needs seconds of genuinely accumulated loss,
+  and the overhead has to exceed even the *largest* compute it has seen. A
+  function that is usually fast but occasionally slow is worth caching, and
+  saying otherwise would be a confident wrong answer. Filter it with
+  `warnings.filterwarnings("ignore", category=cash.CashCacheIneffectiveWarning)`.
+
+- **The badge names the input that forced a statement to re-run.** Previously a
+  re-executed row said only that it ran. It now says *why* — `input changed: df`
+  — for the most common reason a notebook statement recomputes.
+
+- **The badge says when a cache write was discarded.** A discarded write is not
+  a miss; it is a hit that never got the chance to exist, so no other counter
+  can show it. Now a row says so directly.
+
+### Fixed
+
+- **A failed cache write no longer raises into your code.** If the backend could
+  not store a result — antivirus holding a file, a full disk, a disconnected
+  network drive — the exception surfaced out of *your* function call. On a cold
+  cache it did so after the value had already been computed, so the work was
+  done and thrown away. Compute now succeeds and the failure is reported as a
+  warning.
+
+- **A failed write no longer breaks that cache key for the rest of the session.**
+  The failure was re-raised on every later lookup of the same key, *including
+  after the underlying condition had cleared* — one transient lock made a cached
+  function uncallable until you restarted the kernel.
+
+- **The badge no longer blames an input the statement writes itself.** In a chain
+  like `df = df[mask]`, every statement writing `df` shared one record, so each
+  compared itself against a different statement's — and reported `input changed:
+  df` on a run where nothing had changed. Measured on a real notebook: 17 of 21
+  such attributions were wrong. A wrong reason is worse than none, so cash now
+  stays quiet rather than guessing.
+
+- **Loop-body rows keep their reason.** Every attribution the runtime worked out
+  for a statement inside a loop was dropped before it reached the badge — and
+  loops are where the expensive work lives.
+
+- **Windows: a loop-split verdict is no longer silently lost.** Same
+  cause as the 0.4.1 write fix — Windows refuses to replace a file while any
+  handle has it open. The verdict survived in memory but vanished from disk, so
+  the next session did not split the loop, keyed it differently, and recomputed
+  it.
+
 ## [0.4.1] - 2026-08-24
 
 A fix release, and the fix is one you could not have seen: **on Windows, cash

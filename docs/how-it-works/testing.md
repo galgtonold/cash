@@ -9,17 +9,17 @@ So the question worth asking before you adopt this is not "does it work?" but
 "how would they know if it didn't?" This page answers that, including the parts
 where the answer is *we wouldn't, and here is what we do about it*.
 
-Figures below are as of 0.4.1. The mechanisms matter more than the counts, and
+Figures below are as of 0.5.0. The mechanisms matter more than the counts, and
 they are the part that does not go stale.
 
 ## The shape of the suite
 
-Roughly **8,500 tests** across three suites, spread over about 1,200 files:
+Roughly **8,800 tests** across three suites, spread over about 1,200 files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | ~3,980 | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | ~4,170 | Real kernels executing real notebooks, cell by cell |
+| Unit | ~4,350 | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Notebook integration | ~4,150 | Real kernels executing real notebooks, cell by cell |
 | Docs | ~330 | The documentation itself — see [below](#the-docs-are-tested-too) |
 
 Every one runs on **15 platform combinations** — Python 3.10 through 3.14, on
@@ -144,7 +144,7 @@ handle has it open; cash expects concurrent readers by design and writes on a
 background thread, so the collision was routine. Each occurrence threw the entry
 away and recomputed the work.
 
-It survived every one of the ~8,500 tests, on every one of the 15 platform
+It survived every one of the ~8,800 tests, on every one of the 15 platform
 combinations, through multiple adversarial rounds. Nothing raised. Nothing went
 red. It was found by reading the full logs of jobs that had *passed*.
 
