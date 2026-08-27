@@ -177,6 +177,7 @@ def _enable_cash(shell, cache_dir: Path, sink: list[StatementMetric],
                     str(r) for r in (result.get("uncacheable_reasons") or [])
                 ],
                 skipped_reason=result.get("skipped_reason"),
+                miss_reason=result.get("miss_reason"),
                 storage=[str(s) for s in (result.get("storage") or [])],
             ))
         except Exception:  # noqa: BLE001 — tee must never break user code

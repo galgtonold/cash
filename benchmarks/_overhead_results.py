@@ -23,6 +23,11 @@ class StatementMetric:
     # which is exactly how the sweep got misread once.
     uncacheable_reasons: list[str] = field(default_factory=list)
     skipped_reason: str | None = None
+    # Why a LOOKUP missed, as opposed to why a value was not stored. Set by
+    # CacheFreshnessChecker via metrics['miss_reason']. Omitting it is how a
+    # sweep can report a large bucket of recomputed statements with no reason
+    # attached at all -- the two fields above only ever explain the write side.
+    miss_reason: str | None = None
     storage: list[str] = field(default_factory=list)
 
 
