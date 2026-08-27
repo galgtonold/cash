@@ -272,10 +272,26 @@ def _key_counter(metrics_by_cell: dict[int, list]) -> dict[tuple[int, str], list
     return out
 
 
+# A statement whose recompute costs less than this is not evidence of
+# anything. cash declines to cache below a ~10ms floor, so near it the cost
+# model's own decision flips on timing noise: the statement can be cached
+# during the control run and refused during the edited one, which this
+# accounting would read as "restored, then recomputed" -- waste, with no
+# invalidation involved at all.
+#
+# That is not hypothetical. It turned the CI floor test red on macos-3.10
+# and nowhere else: `base = np.arange(2_000_000)` costs 2.2ms on a fast box
+# (never cached, never counted) and straddles the floor on a slow one. The
+# margin is 2x the floor so a statement has to be unambiguously worth
+# caching before its recomputation counts against anything.
+MIN_WASTE_SECONDS = 0.020
+
+
 def attribute_waste(
     scenario: EditScenario,
     control_by_cell: dict[int, list],
     edited_by_cell: dict[int, list],
+    min_waste_seconds: float = MIN_WASTE_SECONDS,
 ) -> ScenarioResult:
     """Compare an edited run against the no-edit control.
 
@@ -310,6 +326,11 @@ def attribute_waste(
                 continue
             edited_metric = edited_metrics[position]
             if edited_metric.status != "RESTORED":
+                if (edited_metric.execution_time or 0.0) < min_waste_seconds:
+                    # Too cheap for the verdict to mean anything -- see
+                    # MIN_WASTE_SECONDS. Counting it manufactures waste out of
+                    # the cost model's own threshold noise.
+                    continue
                 wasted.append(WastedStatement(
                     cell_index=cell_index,
                     code=code[:160],
