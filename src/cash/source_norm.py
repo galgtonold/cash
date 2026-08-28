@@ -24,6 +24,12 @@ Deliberately KEPT in the digest:
 * Block structure. INDENT/DEDENT enter the stream as width-independent
   markers, so a 4-space to 2-space reformat is free while dedenting a
   statement out of an ``if`` body -- a real behaviour change -- is not.
+
+Deliberately COLLAPSED, beyond whitespace and comments:
+
+* Numeric literals, to one spelling per value -- see `_canonical_number`.
+  ``0.5`` and ``0.50`` compile to the same constant, so they are the same
+  function. Type is kept, so ``1`` and ``1.0`` stay apart.
 """
 
 import ast
@@ -61,6 +67,47 @@ def _annotation_pattern() -> re.Pattern[str]:
 
         _ANNOTATION_PATTERN = ANNOTATION_PATTERN
     return _ANNOTATION_PATTERN
+
+
+def _canonical_number(text: str) -> str:
+    """Reduce a numeric literal to one spelling per value.
+
+    ``0.5`` and ``0.50`` are the same double -- same bits, same entry in
+    ``co_consts`` -- so a function that swaps one for the other is byte-for-byte
+    the same function once compiled. Hashing the literal's TEXT made that swap
+    throw the cache away, which is the numeric twin of hashing the decorator's
+    arguments. Reported by a user who re-typed ``0.5`` as ``0.50``, watched a
+    long computation re-run, and was told it was floating-point imprecision; it
+    was not, and the two compare exactly equal.
+
+    Covers the same value written as ``0.50`` / ``.5`` / ``5e-1``, and the
+    readability spellings ``1_000`` / ``0x3e8`` / ``0o1750`` / ``0b1111101000``.
+
+    TYPE is preserved, which is the line that matters: ``repr`` distinguishes
+    ``1`` from ``1.0`` and ``1`` from ``1j``, and those really are different
+    values that must keep different keys.
+
+    Parses directly instead of going through ``ast.literal_eval``: this runs
+    per numeric token on every cold normalize, and building an AST per literal
+    is far more than the arithmetic costs. The ``0x``/``0b``/``0o`` test comes
+    before the float test on purpose -- ``0x1e3`` contains an ``e`` and is 483,
+    not a float.
+
+    Falls back to the raw text on anything awkward, notably an integer past
+    ``sys.set_int_max_str_digits`` whose ``repr`` refuses to render. A coarse
+    digest is always safe here; a wrong one is not.
+    """
+    lowered = text.lower()
+    try:
+        if lowered.endswith("j"):
+            return repr(complex(text))
+        if lowered.startswith(("0x", "0b", "0o")):
+            return repr(int(text, 0))
+        if "." in lowered or "e" in lowered:
+            return repr(float(text))
+        return repr(int(text))
+    except (ValueError, OverflowError, MemoryError):
+        return text
 
 
 def _annotation_atom(comment: str) -> str | None:
@@ -114,6 +161,8 @@ def normalize_source_for_hash(source: str) -> str:
             atoms.append(_INDENT)
         elif kind == tokenize.DEDENT:
             atoms.append(_DEDENT)
+        elif kind == tokenize.NUMBER:
+            atoms.append(_canonical_number(tok.string))
         elif kind == tokenize.NEWLINE:
             atoms.append("\n")
         elif kind in (tokenize.NL, tokenize.ENDMARKER):

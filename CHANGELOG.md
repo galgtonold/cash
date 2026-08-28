@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Re-spelling a number no longer throws away the cache.** `0.5` and `0.50`
+  are the same IEEE double — identical bits, identical entry in `co_consts` —
+  but the source digest hashed the literal's *text*, so swapping one for the
+  other recomputed everything. Same for `.5`, `5e-1`, and the readability
+  spellings `1_000`, `0x3e8`, `0o1750`, `0b1111101000`.
+
+  Found by watching a user hit it: he re-typed `0.5` as `0.50`, watched a long
+  computation re-run, and was told it was floating-point imprecision. It was
+  not — the two compare exactly equal.
+
+  Numeric literals are now reduced to one spelling per value, with **type
+  preserved**: `1` and `1.0` are different values and keep different keys, as
+  do `1` and `1j`. Existing entries are keyed on the old digest and recompute
+  once.
+
+
 **Curator: fold this block into the new version section, then delete the block.**
 The release process (`.github/copilot-instructions.md`, "Write the CHANGELOG
 entry FROM the `git log`") tells you to *insert* `## [X.Y.Z] - YYYY-MM-DD` at the
