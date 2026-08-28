@@ -99,6 +99,32 @@ def test_an_indented_decorator_is_stripped():
         "    @_c.cache\n    def work(n):\n        return n + 1\n")
 
 
+def test_async_functions_follow_the_same_rule():
+    """``@cash.cache`` wraps coroutines too, and they are a separate AST node."""
+    bare = "@_c.cache\nasync def work(n):\n    return n + 1\n"
+    configured = "@_c.cache(assume_safe=True)\nasync def work(n):\n    return n + 1\n"
+    assert source_identity_digest(bare) == source_identity_digest(configured)
+    assert source_identity_digest(bare) != BARE, "async is not the sync function"
+
+
+def test_a_stacked_decorator_survives_while_ours_is_stripped():
+    """``@staticmethod`` above ``@cash.cache`` must still be part of identity."""
+    bare = "@staticmethod\n@_c.cache\ndef work(n):\n    return n + 1\n"
+    configured = "@staticmethod\n@_c.cache(ttl=60)\ndef work(n):\n    return n + 1\n"
+    assert source_identity_digest(bare) == source_identity_digest(configured)
+    assert source_identity_digest(bare) != BARE
+
+
+def test_the_decorator_leaves_no_trace_at_all():
+    """The endpoint of the rule, stated once so it cannot drift.
+
+    A cached function digests exactly as the same function would undecorated.
+    Safe because the digest is one component of a key that also carries
+    ``module.qualname`` -- two different functions never meet here.
+    """
+    assert BARE == source_identity_digest("def work(n):\n    return n + 1\n")
+
+
 # Changes that MUST still move the digest. The foreign-decorator arms are the
 # reason the rule is scoped to cash's own decorator rather than to
 # ``decorator_list``: ``@inject(db=prod)`` can absolutely change what the
