@@ -50,8 +50,23 @@ jobs:
       - name: Check package
         run: twine check dist/*
       
+      # Version-locked as a PAIR, and not to the newest of each.
+      #
+      # These must be the lowest majors that run on node24 (node20 is
+      # deprecated on the runners and every release annotated a warning about
+      # it). Read `using:` in each action's own action.yml before changing
+      # these -- download-artifact's v6.0.0 release notes claim node24 support
+      # and its v6 action.yml still says node20, so the release notes are not
+      # the authority here and a one-major bump would have left the warning.
+      #
+      # Deliberately NOT upload@v7 / download@v8: those are the matched pair
+      # for direct uploads, where download stops unzipping unconditionally and
+      # dispatches on Content-Type. That is a real behaviour change on the
+      # release path, and this workflow only ever moves one dist/ between two
+      # jobs -- there is nothing to gain from it. Bump both together or
+      # neither.
       - name: Upload artifact
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v6
         with:
           name: dist
           path: dist/
@@ -64,7 +79,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
@@ -82,7 +97,7 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v7
         with:
           name: dist
           path: dist/
