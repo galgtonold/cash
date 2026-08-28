@@ -17,7 +17,7 @@ any other argument. Two failure modes follow:
 The fix is the same in both cases: tell cash how to summarise your
 type into a cache key.
 
-<!-- claim: cash/core.py:Cash.register_hasher @17ab6a05, cash/core.py:Cash._hash_arg_payload @8be5a896 -->
+<!-- claim: cash/core.py:Cash.register_hasher @5d116e94, cash/core.py:Cash._hash_arg_payload @8be5a896 -->
 ## Register a type-level hasher
 
 ```python

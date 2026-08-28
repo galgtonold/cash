@@ -52,8 +52,10 @@ def register_hasher(
 ) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash.register_hasher @17ab6a05 -->
-Two things happen on registration:
+<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash.register_hasher @5d116e94 -->
+Two things happen on registration — once it is accepted, which for a type Cash
+content-hashes itself means passing `override=True` (see
+[below](#overriding-a-built-in-content-hasher)):
 
 1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first, then a digest of the compiled function, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity. The compiled fallback reads `fn.__code__`, or `fn.__call__.__code__` for a callable instance, and folds the constants, names and local names in alongside `co_code` — `co_code` on its own cannot see `return "alpha"` become `return "omega"`, because a constant load's operand is an index into `co_consts` rather than the value.
 2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object. With `override=True` it goes to `self._override_hashers` instead; a type lives in exactly one of the two, so re-registering it the other way replaces rather than shadows.
@@ -69,14 +71,27 @@ When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which 
 
 ### Overriding a built-in content hasher
 
-Registering a plain hasher for `np.ndarray`, `pd.DataFrame`, or any other type
-Cash content-hashes itself has **no effect** — step 1 runs first, so the
-function is never called. Cash warns when you do it:
+A plain hasher for `np.ndarray`, `pd.DataFrame`, or any other type Cash
+content-hashes itself could never run — step 1 comes first — so Cash
+**rejects** the registration rather than storing something inert:
 
-<!-- test:skip reason="demonstrates a no-op registration; asserting it would assert the absence of an effect" -->
+<!-- test:skip reason="illustrative; the rejection is pinned in tests/test_core/test_hasher_override.py" -->
 ```python
-cash.register_hasher(np.ndarray, my_faster_hasher)   # warns; never runs
+cash.register_hasher(np.ndarray, my_faster_hasher)   # ValueError
 ```
+
+This is an error rather than a warning because there is no configuration in
+which that line does anything: it is dead code you meant to be live. It is
+raised at registration — once, at setup, before any computation depends on
+it — so it cannot surprise you mid-run. The same shape appears in
+[Safety](../../how-it-works/safety.md), where an untrackable dependency
+raises unless you pass `assume_safe=True`.
+
+The applicable types are the ones in the table above: pandas, numpy, polars,
+PyArrow, modin and dask. `Cash.builtin_hashed_family(SomeType)` answers the
+question directly, and returns `None` for anything Cash does not claim —
+including your own subclass of one of them, which is dispatched by its own
+module and has always been yours to hash.
 
 Pass `override=True` and it wins instead:
 

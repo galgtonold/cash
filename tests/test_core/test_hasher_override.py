@@ -13,8 +13,10 @@ cannot work for those types.
 
 Two changes, pinned here:
 
-* a bare registration on such a type warns, at the moment the user can still
-  act on it;
+* a bare registration on such a type is REJECTED with ``ValueError``, at the
+  moment the user can still act on it. A warning was the first version and it
+  is not enough: this is not suboptimal-but-working code, it is code with no
+  configuration in which it does anything, and warnings scroll away;
 * ``override=True`` makes the hasher win, because the escape hatch cash used
   to recommend -- wrap the array in a thin type and hash a version field --
   carries exactly the same risk while costing a signature change through the
@@ -32,7 +34,6 @@ import numpy as np
 import pytest
 
 import cash
-from cash.exceptions import CashCacheIneffectiveWarning
 
 
 @pytest.fixture
@@ -58,44 +59,66 @@ class Tagged:
 
 
 # ---------------------------------------------------------------------------
-# The warning
+# The rejection
 # ---------------------------------------------------------------------------
 
 
-def test_registering_on_a_content_hashed_type_warns(c):
-    caught = _register(c, np.ndarray, lambda a: "v1")
-    assert len(caught) == 1, "the silent no-op is the whole bug"
-    assert isinstance(caught[0], CashCacheIneffectiveWarning)
-    text = str(caught[0])
-    assert "numpy" in text
-    assert "override=True" in text, "a warning with no way out is just noise"
+def test_registering_on_a_content_hashed_type_raises(c):
+    """A warning was the first version, and it is not enough.
 
-
-def test_the_warning_is_about_a_real_no_op(c):
-    """Not a style complaint: assert the hasher genuinely never runs.
-
-    Without this the warning could be firing on something that works fine.
+    This is not a suboptimal-but-working registration -- there is no
+    configuration in which it does anything. Dead code that the user clearly
+    meant to be live is an error, and setup time is the safe place to say so:
+    it fires once, deterministically, before any computation depends on it.
+    Cash already reserves this shape for the untrackable-dependency case,
+    which raises unless the user passes ``assume_safe=True``.
     """
-    calls = []
-    _register(c, np.ndarray, lambda a: calls.append(1) or "v1")
+    with pytest.raises(ValueError) as excinfo:
+        c.register_hasher(np.ndarray, lambda a: "v1")
+    text = str(excinfo.value)
+    assert "numpy" in text
+    assert "override=True" in text, "a refusal with no way forward is a wall"
+    assert "drop the registration" in text, "removing it is the other remedy"
+
+
+def test_the_rejection_names_the_collision_it_is_protecting_against(c):
+    """The message has to say what override COSTS, not just how to pass it."""
+    with pytest.raises(ValueError) as excinfo:
+        c.register_hasher(np.ndarray, lambda a: "v1")
+    assert "share one cache entry" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("family", ["numpy", "pandas"])
+def test_every_content_hashed_family_is_rejected(c, family):
+    """Not a numpy special case -- the rule is the whole built-in table."""
+    if family == "numpy":
+        types = [np.ndarray]
+    else:
+        pd = pytest.importorskip("pandas")
+        types = [pd.DataFrame, pd.Series]
+    for type_ in types:
+        with pytest.raises(ValueError, match=family):
+            c.register_hasher(type_, lambda v: "v1")
+
+
+def test_a_rejected_registration_changes_nothing(c):
+    """Raise before mutating, or a refusal quietly drops a good registration."""
+    _register(c, np.ndarray, lambda a: "kept", override=True)
+    with pytest.raises(ValueError):
+        c.register_hasher(np.ndarray, lambda a: "rejected")
 
     @c.cache(assume_safe=True)
     def f(arr):
         return arr[0, 0]
 
     f(np.zeros((4, 4)))
-    f(np.zeros((4, 4)))
-    assert calls == [], "the hasher ran, so there was nothing to warn about"
+    assert np.ndarray in c._override_hashers, "the refusal ate a valid override"
 
 
-def test_registering_on_an_ordinary_type_is_silent(c):
-    """The control. A warning that fires on everything says nothing."""
+def test_registering_on_an_ordinary_type_is_accepted(c):
+    """The control. A rule that rejects everything protects nothing."""
     assert _register(c, Tagged, lambda t: str(t.payload)) == []
-
-
-def test_the_warning_does_not_repeat_per_registration(c):
-    _register(c, np.ndarray, lambda a: "v1")
-    assert _register(c, np.ndarray, lambda a: "v2") == [], "warn once, not per call"
+    assert Tagged in c._type_hashers
 
 
 @pytest.mark.parametrize(
@@ -110,6 +133,26 @@ def test_pandas_frames_are_claimed_too():
     pd = pytest.importorskip("pandas")
     assert cash.Cash.builtin_hashed_family(pd.DataFrame) == "pandas"
     assert cash.Cash.builtin_hashed_family(pd.Series) == "pandas"
+
+
+def test_pyarrow_tables_are_claimed_too():
+    pa = pytest.importorskip("pyarrow")
+    assert cash.Cash.builtin_hashed_family(pa.Table) == "pyarrow"
+    assert cash.Cash.builtin_hashed_family(pa.RecordBatch) == "pyarrow"
+
+
+def test_a_subclass_in_your_own_module_is_still_yours(c):
+    """The family check is by module PREFIX, and that is load-bearing.
+
+    Cash claims ``numpy.ndarray`` itself, but a subclass defined in user code
+    is dispatched by its own name and module -- so registering a plain hasher
+    for it has always worked, and must keep working.
+    """
+    class MyArray(np.ndarray):
+        pass
+
+    assert cash.Cash.builtin_hashed_family(MyArray) is None
+    assert _register(c, MyArray, lambda a: "mine") == []
 
 
 # ---------------------------------------------------------------------------
@@ -207,30 +250,36 @@ def test_override_beats_a_lineage_hash(c):
 
 
 def test_re_registering_without_override_drops_the_override(c):
-    """Otherwise the old entry keeps winning from the other registry."""
-    _register(c, np.ndarray, lambda a: "override", override=True)
+    """Otherwise the old entry keeps winning from the other registry.
+
+    Uses an ordinary type: a plain re-registration on a content-hashed one is
+    rejected outright, so this rule can only be observed where both forms are
+    legal.
+    """
+    _register(c, Tagged, lambda t: "override", override=True)
     calls = []
-    _register(c, np.ndarray, lambda a: calls.append(1) or "plain")
+    _register(c, Tagged, lambda t: calls.append(1) or "plain")
 
     @c.cache(assume_safe=True)
-    def f(arr):
-        return arr[0, 0]
+    def f(value):
+        return value.payload
 
-    f(np.zeros((4, 4)))
-    assert calls == [], "the discarded override was still being consulted"
+    f(Tagged(1))
+    assert calls, "the discarded override was still being consulted"
 
 
 def test_re_registering_with_override_replaces_the_plain_one(c):
-    _register(c, np.ndarray, lambda a: "plain")
+    _register(c, Tagged, lambda t: "plain")
     calls = []
-    _register(c, np.ndarray, lambda a: calls.append(1) or "override", override=True)
+    _register(c, Tagged, lambda t: calls.append(1) or "override", override=True)
 
     @c.cache(assume_safe=True)
-    def f(arr):
-        return arr[0, 0]
+    def f(value):
+        return value.payload
 
-    f(np.zeros((4, 4)))
+    f(Tagged(1))
     assert calls, "the plain registration shadowed the new override"
+    assert Tagged not in c._type_hashers
 
 
 def test_a_late_registration_is_not_shadowed_by_the_memo(c):

@@ -164,7 +164,7 @@ c.register_hasher(MyModel, lambda model: model.get_fingerprint())
 See [custom hashers](../tutorials/feature-guides/custom-hashers.md) for the full API, including class-hierarchy matching and versioned hashers.
 
 !!! warning "`register_hasher` is a decorator-path feature"
-    <!-- claim: cash/core.py:Cash.register_hasher @17ab6a05, cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
+    <!-- claim: cash/core.py:Cash.register_hasher @5d116e94, cash/notebook/object_hashing.py:compute_hash @61e351a4 -->
     Registered hashers are consulted when hashing `@cash.cache` **call arguments**. The
     notebook path hashes fallback values through `cash.notebook.object_hashing.compute_hash`,
     a pure function with no registry, so a registered hasher does **not** change a

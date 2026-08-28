@@ -14,8 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dask objects. Those run first, so a plain registration for one of those
   types was stored and then never consulted, with nothing said at
   registration and nothing said at call time; the only symptom was that
-  nothing got faster. A bare registration on such a type now warns and names
-  the flag.
+  nothing got faster.
 
   The measured case: a 10000×10000 float64 array is 800 MB, content-hashing
   it costs ~306 ms per call, and a loop of 100 cached calls spent 31 seconds
@@ -30,6 +29,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   change through the whole call chain.
 
 ### Changed
+
+- **BREAKING:** `register_hasher` now raises `ValueError` when the type is one
+  cash content-hashes itself and `override=True` was not passed. Such a
+  registration could never have run — it is dead code the caller meant to be
+  live — so it is refused at setup rather than stored inert. Existing code
+  that registers a redundant hasher for a numpy array or a dataframe will
+  raise on upgrade; the fix is to delete the line (cash already hashes those
+  types correctly) or to pass `override=True`. Applies to the whole built-in
+  table: pandas, numpy, polars, PyArrow, modin, dask. Your own subclass of one
+  of them is not affected — it is dispatched by its own module and has always
+  been yours to hash.
 
 - `CashCacheIneffectiveWarning` for a net-loss function now names
   `override=True`. It already diagnosed the cause correctly ("a large

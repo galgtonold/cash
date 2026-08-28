@@ -170,7 +170,6 @@ def _message(
         f"This usually means a large argument is being hashed in full on every "
         f"call. Register a cheaper hasher for that type "
         f"(cash.register_hasher) to keep caching -- for a type cash "
-        f"fingerprints itself, such as a numpy array or a dataframe, pass "
-        f"override=True as well or it will not be consulted -- or drop the "
-        f"decorator here."
+        f"fingerprints itself, such as a numpy array or a dataframe, that "
+        f"registration needs override=True -- or drop the decorator here."
     )

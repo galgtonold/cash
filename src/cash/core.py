@@ -5339,8 +5339,10 @@ class Cash:
             override: Take precedence over cash's own content hashers.
                 Needed only for the types cash fingerprints itself -- numpy
                 arrays, pandas / polars / PyArrow / modin frames, dask
-                collections -- where those run first and a plain registration
-                is silently never consulted (cash warns when that happens).
+                collections -- where those run first. A plain registration
+                for one of those types is REJECTED with ``ValueError``: it
+                could not have done anything, and saying so at setup beats
+                leaving the user to discover that nothing got faster.
 
                 Off by default because the built-ins read every byte, and a
                 hasher that does not can return a *wrong* cached result
@@ -5375,6 +5377,27 @@ class Cash:
             depends on instance state, prefer a function or lambda
             that closes over the state explicitly.
         """
+        # Rejected BEFORE anything is mutated, so a refused call leaves an
+        # earlier good registration for this type exactly as it was.
+        if not override:
+            family = self.builtin_hashed_family(type_)
+            if family is not None:
+                raise ValueError(
+                    f"cash.register_hasher({type_.__name__}): cash fingerprints "
+                    f"{family} values itself and that runs first, so this hasher "
+                    f"would never be called -- registering it does nothing at "
+                    f"all.\n"
+                    f"Either drop the registration (cash already hashes this "
+                    f"type by content, correctly), or pass override=True to use "
+                    f"yours instead.\n"
+                    f"Be deliberate about override: what your hasher returns "
+                    f"becomes the entire identity of the value, so any two "
+                    f"values it hashes alike share one cache entry and the "
+                    f"second call gets the first one's result. That is right "
+                    f"when you hold a version or content id the value does not "
+                    f"carry, and wrong for something like lambda a: a[0, 0]."
+                )
+
         src_hash = self._hash_callable_source(hasher_fn)
         # One type, one registration: re-registering must not leave the
         # previous entry behind in the other registry, still winning.
@@ -5384,22 +5407,6 @@ class Cash:
             self._override_hashers[type_] = (hasher_fn, src_hash)
         else:
             self._type_hashers[type_] = (hasher_fn, src_hash)
-            family = self.builtin_hashed_family(type_)
-            if family is not None:
-                self._warn_once(
-                    CashCacheIneffectiveWarning,
-                    f"register_hasher:{type_.__module__}.{type_.__name__}",
-                    "",
-                    f"cash.register_hasher({type_.__name__}): cash fingerprints "
-                    f"{family} values itself and that runs first, so this hasher "
-                    f"will never be called and the full contents are still hashed "
-                    f"on every call. Pass override=True to use it instead -- but "
-                    f"then what it returns is the whole identity of the value, so "
-                    f"a hasher that reads only part of one (a corner element, a "
-                    f"length) will serve a cached result from a DIFFERENT value "
-                    f"that happens to match.",
-                    stacklevel=3,
-                )
         # A memoized hash was produced by whichever hasher was in effect
         # before this call; drop them so the new registration is not shadowed
         # for objects already seen.
