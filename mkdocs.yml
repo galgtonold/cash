@@ -145,6 +145,7 @@ nav:
       - Custom Hashers: tutorials/feature-guides/custom-hashers.md
       - Dynamic Dependencies: tutorials/feature-guides/dynamic-dependencies.md
       - Iterator Caching: tutorials/feature-guides/iterator-caching.md
+      - Caching Over a Grid: tutorials/feature-guides/caching-over-a-grid.md
       - Smart Persistence: tutorials/feature-guides/smart-persistence.md
       - Async Caching: tutorials/feature-guides/async-caching.md
       - Thread Safety: tutorials/feature-guides/thread-safety.md

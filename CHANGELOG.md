@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **[Caching over a grid](docs/tutorials/feature-guides/caching-over-a-grid.md)**
+  — a guide for the question "I only made the axis finer, why did it recompute
+  everything?". Covers the case that is already free (going back to a
+  resolution you ran before), why refining is different, the precondition for
+  reuse, two recipes, and when not to bother. Every number in it comes from
+  `benchmarks/bench_grid_refinement.py`.
+
 ### Fixed
 
 - **Re-spelling a number no longer throws away the cache.** `0.5` and `0.50`

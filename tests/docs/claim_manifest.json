@@ -156,6 +156,10 @@
     "anchors": 3,
     "audited": "2026-07-27"
   },
+  "docs/tutorials/feature-guides/caching-over-a-grid.md": {
+    "anchors": 2,
+    "audited": "2026-08-28"
+  },
   "docs/tutorials/feature-guides/choosing-a-backend.md": {
     "anchors": 7,
     "audited": "2026-07-27"
