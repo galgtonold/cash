@@ -7,45 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+**Curator: fold this block into the new version section, then delete the block.**
+The release process (`.github/copilot-instructions.md`, "Write the CHANGELOG
+entry FROM the `git log`") tells you to *insert* `## [X.Y.Z] - YYYY-MM-DD` at the
+top and says nothing about removing an Unreleased heading — so inserting above
+this without folding it in leaves the note orphaned mid-file. It is a note for
+you, not a release entry.
+
+## [0.6.0] - 2026-08-28
+
+The theme is **making cash's own advice work.**
+
+Two of cash's warnings named a remedy that could not be taken. The purity
+warning told you to add `assume_safe=True` — and doing so discarded the cache
+it was warning about. The effectiveness warning correctly diagnosed a large
+argument being hashed on every call, then told you to register a cheaper
+hasher, which for a numpy array or a dataframe was silently ignored. Both are
+fixed here, and the second grew a way to actually do the thing it asks for.
+
+### Breaking
+
+- **`register_hasher` now raises `ValueError`** when the type is one cash
+  content-hashes itself — numpy arrays, pandas / polars / PyArrow / modin
+  frames, dask collections — and `override=True` was not passed. Cash's own
+  hashers run first, so such a registration could never have run: it is dead
+  code the caller meant to be live, and it is refused at setup rather than
+  stored inert.
+
+  Code registering a redundant hasher for one of those types will raise on
+  upgrade. That registration was already doing nothing, so the fix is to
+  delete the line — cash hashes those types correctly on its own — or to pass
+  `override=True`. Your own subclass of one of them is unaffected: the check
+  matches on module prefix, so a subclass defined in your code is dispatched
+  by its own module and has always been yours to hash.
+
 ### Added
 
 - **`register_hasher(..., override=True)`** — take precedence over cash's own
-  content hashers for numpy arrays and pandas / polars / PyArrow / modin /
-  dask objects. Those run first, so a plain registration for one of those
-  types was stored and then never consulted, with nothing said at
-  registration and nothing said at call time; the only symptom was that
-  nothing got faster.
+  content hashers, and over a notebook value's lineage hash.
 
-  The measured case: a 10000×10000 float64 array is 800 MB, content-hashing
-  it costs ~306 ms per call, and a loop of 100 cached calls spent 31 seconds
-  building keys. With an overriding hasher the same loop pays ~0.09 ms per
-  call.
+  A 10000×10000 float64 array is 800 MB; content-hashing it costs ~306 ms per
+  call, so a loop of 100 cached calls spent 31 seconds building keys and
+  nothing else. With an overriding hasher the same loop is instant.
 
-  What it costs is stated plainly, because it is not free: an overriding
-  hasher *is* the identity of the value, so two values it hashes alike share
-  one entry and the second gets the first's result. It is allowed because the
-  workaround cash used to recommend — wrap the array and hash a version field
-  on the wrapper — carries exactly the same risk while forcing a signature
-  change through the whole call chain.
+  What it costs is not hidden: an overriding hasher *becomes* the identity of
+  the value, so any two values it hashes alike share one cache entry and the
+  second call gets the first one's result. That is a wrong answer, not a slow
+  one — right when you hold a version or content id the value does not carry,
+  wrong for `lambda a: a[0, 0]`.
 
-### Changed
-
-- **BREAKING:** `register_hasher` now raises `ValueError` when the type is one
-  cash content-hashes itself and `override=True` was not passed. Such a
-  registration could never have run — it is dead code the caller meant to be
-  live — so it is refused at setup rather than stored inert. Existing code
-  that registers a redundant hasher for a numpy array or a dataframe will
-  raise on upgrade; the fix is to delete the line (cash already hashes those
-  types correctly) or to pass `override=True`. Applies to the whole built-in
-  table: pandas, numpy, polars, PyArrow, modin, dask. Your own subclass of one
-  of them is not affected — it is dispatched by its own module and has always
-  been yours to hash.
-
-- `CashCacheIneffectiveWarning` for a net-loss function now names
-  `override=True`. It already diagnosed the cause correctly ("a large
-  argument is being hashed in full on every call") and then pointed at
-  `register_hasher`, which for the numpy and pandas arguments it fires on
-  most was a dead end.
+  It is allowed because the workaround cash used to recommend — wrap the array
+  in a thin type and hash a version field on the wrapper — carries exactly the
+  same risk, since the wrapper's hasher reads no more of the array than yours
+  does, while costing a signature change through the whole call chain.
 
 ### Fixed
 
@@ -53,28 +67,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inspect.getsource` returns the `@...` lines along with the function, so
   every argument passed to the decorator landed in the function's source
   digest and therefore in its cache key. Adding `assume_safe=True` — which
-  cash's own `CashImpurityWarning` tells you to add — recomputed everything,
-  on exactly the expensive functions that warning fires for. So did `ttl=`,
-  and so did an empty `()`, which is how you can tell this was never a
-  decision about semantics.
+  `CashImpurityWarning` tells you to add — recomputed everything, on exactly
+  the expensive functions that warning fires for. So did `ttl=`, and so did an
+  empty `()`, which is how you can tell this was never a decision about
+  semantics.
 
-  Cash's own `@....cache` decorator is now excluded from the identity
-  digest. The arguments that must still invalidate are unaffected, because
-  none of them travelled through the decorator's text: `depends_on`,
-  `dynamic_depends_on` and `file_depends_on` reach the key as
-  dependency-graph edges, and `ttl` is enforced against entry metadata at
-  read time. Decorators that are not cash's own are still hashed in full —
-  `@inject(db=prod)` can change what a function returns.
+  Cash's own `@....cache` decorator is now excluded from the identity digest.
+  The arguments that must still invalidate are unaffected, because none of
+  them travelled through the decorator's text: `depends_on`,
+  `dynamic_depends_on` and `file_depends_on` reach the key as dependency-graph
+  edges, and `ttl` is enforced against entry metadata at read time. Decorators
+  that are not cash's own are still hashed in full — `@inject(db=prod)` can
+  change what a function returns, and nothing in the source says it does not.
 
-  Existing decorator-path entries are keyed on the old digest and will be
-  recomputed once.
+  Existing decorator-path entries are keyed on the old digest and recompute
+  once.
 
-**Curator: fold this block into the new version section, then delete the block.**
-The release process (`.github/copilot-instructions.md`, "Write the CHANGELOG
-entry FROM the `git log`") tells you to *insert* `## [X.Y.Z] - YYYY-MM-DD` at the
-top and says nothing about removing an Unreleased heading — so inserting above
-this without folding it in leaves the note orphaned mid-file. It is a note for
-you, not a release entry.
+### Changed
+
+- `CashCacheIneffectiveWarning` for a net-loss function now names
+  `override=True`, so the remedy it points at is reachable for the numpy and
+  pandas arguments it fires on most.
 
 ## [0.5.0] - 2026-08-27
 
