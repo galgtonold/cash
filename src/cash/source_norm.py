@@ -26,6 +26,7 @@ Deliberately KEPT in the digest:
   statement out of an ``if`` body -- a real behaviour change -- is not.
 """
 
+import ast
 import functools
 import hashlib
 import io
@@ -34,7 +35,12 @@ import textwrap
 import tokenize
 import types
 
-__all__ = ["bytecode_identity", "normalize_source_for_hash"]
+__all__ = [
+    "bytecode_identity",
+    "normalize_source_for_hash",
+    "source_identity_digest",
+    "strip_cache_decorator",
+]
 
 # Populated on first use from ``cash.notebook.annotations``. Imported
 # lazily because this module sits below the notebook package in the
@@ -119,6 +125,135 @@ def normalize_source_for_hash(source: str) -> str:
             atoms.append(tok.string)
 
     return _SEP.join(atoms)
+
+
+# Every keyword ``Cash.cache`` accepts. A decorator call only counts as
+# cash's own when every keyword it passes appears here, which is what keeps
+# an unrelated third-party ``@something.cache(expire_after=60)`` out of the
+# rule below. ``tests/test_core/test_decorator_arg_identity.py`` pins this
+# against the real signature; a parameter added there and forgotten here
+# merely reverts that parameter to the old over-invalidating behaviour,
+# which is the safe direction to fail in.
+_CACHE_DECORATOR_PARAMS = frozenset({
+    "depends_on", "dynamic_depends_on", "file_depends_on", "ttl", "cache_if",
+    "chunk_max_items", "chunk_max_bytes", "strict", "assume_safe",
+    "allow_random",
+})
+_CACHE_DECORATOR_NAME = "cache"
+
+
+def _is_cache_decorator(node: ast.expr) -> bool:
+    """True when *node* is cash's own ``@....cache`` decorator expression.
+
+    Matches the spellings users actually write -- ``@c.cache``,
+    ``@cash.cache(ttl=60)``, ``@get_cash().cache`` -- by looking at the
+    trailing attribute rather than trying to resolve the receiver, which is
+    a runtime value and not knowable from source.
+
+    A call with positional arguments, or with a keyword cash does not
+    accept, is NOT ours: ``Cash.cache`` is keyword-only past ``func``, so
+    anything else is some other decorator that merely happens to be spelled
+    ``.cache``. ``**kwargs`` likewise disqualifies, since its contents are
+    invisible here.
+    """
+    target = node
+    if isinstance(node, ast.Call):
+        if node.args:
+            return False
+        if any(kw.arg is None or kw.arg not in _CACHE_DECORATOR_PARAMS
+               for kw in node.keywords):
+            return False
+        target = node.func
+    if isinstance(target, ast.Attribute):
+        return target.attr == _CACHE_DECORATOR_NAME
+    return isinstance(target, ast.Name) and target.id == _CACHE_DECORATOR_NAME
+
+
+@functools.lru_cache(maxsize=2048)
+def strip_cache_decorator(source: str) -> str:
+    """Return *source* with cash's own ``@....cache`` decorator removed.
+
+    ``inspect.getsource`` hands back the decorator lines along with the
+    function, so without this the decorator's own arguments land in the
+    function's identity digest and every cache entry keyed on it dies when
+    they change. Nothing about that was designed: the purity analyzer
+    already drops ``decorator_list`` from the same source before analyzing
+    it, and the identity hash simply never got the same treatment.
+
+    It made cash's own advice self-defeating. ``CashImpurityWarning`` says
+    to add ``assume_safe=True`` after auditing -- and doing so recomputed
+    everything, on exactly the expensive functions the warning fires for.
+    An added ``()`` did it too, which is how you can tell this was never a
+    decision about semantics.
+
+    The arguments that MUST still move the key are not lost, because none
+    of them travel through the decorator's text:
+
+    * ``depends_on`` / ``dynamic_depends_on`` / ``file_depends_on`` become
+      dependency-graph edges, and the state hash folds each edge's own
+      source hash (or a file's content) in.
+    * ``ttl`` is enforced against entry metadata at read time.
+    * ``cache_if`` and the ``chunk_max_*`` pair decide whether and how a
+      value is *stored*; an entry already on disk is equally valid either
+      way.
+    * ``strict`` / ``assume_safe`` / ``allow_random`` only ever choose
+      between a warning, an exception, and silence.
+
+    Decorators that are not cash's are kept verbatim: ``@inject(db=prod)``
+    can absolutely change what the function returns, and there is no way to
+    tell from here that it does not.
+
+    Falls back to the input whenever the source will not parse -- a
+    fragment, a mid-edit syntax error. Coarse beats raising from inside a
+    hasher.
+    """
+    # Cheap reject before paying for a parse: an undecorated helper is the
+    # overwhelmingly common case, and this runs per lookup.
+    dedented = textwrap.dedent(source)
+    if not dedented.lstrip().startswith("@"):
+        return source
+
+    try:
+        tree = ast.parse(dedented)
+    except (SyntaxError, ValueError, RecursionError):
+        return source
+    if not tree.body:
+        return source
+    node = tree.body[0]
+    # Functions only. A class's decorators can change the class itself --
+    # ``@dataclass(frozen=True)`` is not cosmetic -- and cash has no reason
+    # to strip them.
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return source
+
+    drop: set[int] = set()
+    for decorator in node.decorator_list:
+        if _is_cache_decorator(decorator):
+            end = decorator.end_lineno or decorator.lineno
+            # The ``@`` shares its line with the expression that follows it,
+            # so the expression's own span covers the whole decorator.
+            drop.update(range(decorator.lineno, end + 1))
+    if not drop:
+        return source
+
+    lines = dedented.splitlines(keepends=True)
+    return "".join(line for i, line in enumerate(lines, 1) if i not in drop)
+
+
+def source_identity_digest(source: str) -> str:
+    """Digest *source* as a callable's cache-key identity.
+
+    The single spelling of "what makes this callable the same callable" for
+    every channel that keys on source text: the decorated function's own
+    registration hash, the live per-call hash of each transitive helper, the
+    helper hashes snapshotted in a purity report, and the function hashes
+    that reach a notebook statement's key. They were four copies of
+    ``sha256(normalize_source_for_hash(src))``; they are one function now so
+    that a rule like `strip_cache_decorator` cannot be applied to three of
+    them.
+    """
+    normalized = normalize_source_for_hash(strip_cache_decorator(source))
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 # Consts that describe themselves exactly under ``repr`` -- no identity, no

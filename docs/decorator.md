@@ -122,7 +122,7 @@ def features(x):  return clean(x) + ...
 def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @aa81140c, cash/core.py:Cash._ensure_closure_analyzed @adbb1f94 -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash._ensure_closure_analyzed @adbb1f94 -->
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
@@ -404,6 +404,20 @@ expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
 Mutually exclusive: `strict` and `assume_safe` — pass both and the
 decorator raises `ValueError` immediately.
+
+**Changing any of these keeps your cache.** The decorator's arguments are
+configuration, not code, so editing one does not change the function's
+identity and does not invalidate entries already stored. Adding
+`assume_safe=True` in response to a purity warning costs you nothing; so
+does adjusting a `ttl` or a chunk size. What *does* invalidate is a change
+to the function's body, to a helper it calls, or to a dependency you
+declared — `depends_on`, `dynamic_depends_on` and `file_depends_on` reach
+the cache key through the dependency graph, so adding, removing or
+re-pointing one still recomputes, as does an edit to a tracked file.
+
+Decorators that are not cash's own are left alone. If `@inject(db=prod)`
+sits above `@cash.cache`, changing it invalidates — cash cannot know it did
+not change the result.
 
 ### `ttl=` — expiration
 

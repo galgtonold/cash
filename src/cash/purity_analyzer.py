@@ -62,7 +62,11 @@ from .notebook.purity import (
     is_pure,
     is_stateful,
 )
-from .source_norm import bytecode_identity, normalize_source_for_hash
+from .source_norm import (
+    bytecode_identity,
+    normalize_source_for_hash,
+    source_identity_digest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -923,9 +927,7 @@ class PurityAnalyzer:
             # helper no longer invalidates its callers, which was the more
             # surprising half of the old behaviour: users expect editing a
             # function to recompute it, not editing something it calls.
-            helper_hashes[qualname] = hashlib.sha256(
-                normalize_source_for_hash(src).encode("utf-8")
-            ).hexdigest()
+            helper_hashes[qualname] = source_identity_digest(src)
 
             _record_resolution_path(func, qualname)
 
@@ -1305,6 +1307,14 @@ def _qualname_of(func: Callable[..., Any]) -> str:
 
 
 def _try_source_hash(func: Callable[..., Any]) -> str | None:
+    """Memo key for the analyzer's own report cache -- NOT a cache key.
+
+    Deliberately the un-stripped form, unlike every channel that goes through
+    ``source_identity_digest``. Nothing downstream keys on this, so folding
+    the decorator in only means two spellings of one function get analyzed
+    twice instead of once, and the narrower input keeps this from quietly
+    becoming a correctness surface.
+    """
     try:
         src = inspect.getsource(func)
     except SOURCE_RETRIEVAL_ERRORS:

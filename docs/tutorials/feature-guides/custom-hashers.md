@@ -46,10 +46,10 @@ That's the entire workflow. `cash.register_hasher` is a top-level helper that pr
 def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str]) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @aa81140c, cash/core.py:Cash.register_hasher @2cc59e2a -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash.register_hasher @2cc59e2a -->
 Two things happen on registration:
 
-1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first, then `fn.__code__.co_code`, then `fn.__call__.__code__.co_code` for callable instances, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity.
+1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first, then a digest of the compiled function, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity. The compiled fallback reads `fn.__code__`, or `fn.__call__.__code__` for a callable instance, and folds the constants, names and local names in alongside `co_code` — `co_code` on its own cannot see `return "alpha"` become `return "omega"`, because a constant load's operand is an index into `co_consts` rather than the value.
 2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object.
 
 <!-- claim: cash/core.py:Cash._hash_arg_payload @a311dda3, cash/core.py:Cash._try_builtin_type_hash @09adf0d5 -->

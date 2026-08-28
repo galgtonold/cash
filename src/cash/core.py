@@ -58,7 +58,7 @@ from .notebook.randomness import (
     describe_random_call,
 )
 from .purity_analyzer import PurityReport, get_analyzer
-from .source_norm import bytecode_identity, normalize_source_for_hash
+from .source_norm import bytecode_identity, source_identity_digest
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -1241,8 +1241,9 @@ class Cash:
 
         Resolution order:
 
-        1. ``inspect.getsource(fn)`` - primary, NORMALIZED via
-           ``normalize_source_for_hash`` so a comment or reformat in a
+        1. ``inspect.getsource(fn)`` - primary, reduced via
+           ``source_identity_digest`` so that a comment, a reformat, or a
+           change to cash's own ``@....cache`` decorator arguments in a
            helper does not invalidate the functions that call it. Works
            for module-level functions and lambdas defined in a
            discoverable source file.
@@ -1271,8 +1272,7 @@ class Cash:
 
         try:
             src = inspect.getsource(fn)
-            normalized = normalize_source_for_hash(src)
-            digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+            digest = source_identity_digest(src)
             if memo_key is not None and len(_SOURCE_HASH_MEMO) < _SOURCE_HASH_MEMO_MAX:
                 _SOURCE_HASH_MEMO[memo_key] = (memo_owner, digest)
             return digest

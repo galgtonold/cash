@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Changing a `@cash.cache` argument no longer throws away the cache.**
+  `inspect.getsource` returns the `@...` lines along with the function, so
+  every argument passed to the decorator landed in the function's source
+  digest and therefore in its cache key. Adding `assume_safe=True` — which
+  cash's own `CashImpurityWarning` tells you to add — recomputed everything,
+  on exactly the expensive functions that warning fires for. So did `ttl=`,
+  and so did an empty `()`, which is how you can tell this was never a
+  decision about semantics.
+
+  Cash's own `@....cache` decorator is now excluded from the identity
+  digest. The arguments that must still invalidate are unaffected, because
+  none of them travelled through the decorator's text: `depends_on`,
+  `dynamic_depends_on` and `file_depends_on` reach the key as
+  dependency-graph edges, and `ttl` is enforced against entry metadata at
+  read time. Decorators that are not cash's own are still hashed in full —
+  `@inject(db=prod)` can change what a function returns.
+
+  Existing decorator-path entries are keyed on the old digest and will be
+  recomputed once.
+
 **Curator: fold this block into the new version section, then delete the block.**
 The release process (`.github/copilot-instructions.md`, "Write the CHANGELOG
 entry FROM the `git log`") tells you to *insert* `## [X.Y.Z] - YYYY-MM-DD` at the
