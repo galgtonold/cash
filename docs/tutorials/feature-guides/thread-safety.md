@@ -40,7 +40,7 @@ def expensive(x):
     ...
 ```
 
-<!-- claim: cash/core.py:Cash.__init__ @1b6f1f8b -->
+<!-- claim: cash/core.py:Cash.__init__ @b8498bbc -->
 The flag is a `Cash`-instance option, not a per-decorator one. All functions registered through this instance go through the lock path on misses; switch instances if you want a mix.
 
 Lock acquisition uses **the cache backend itself** — `self.backend.lock(cache_key)` returns a context manager whose semantics are defined by the backend subclass. See the next section for what each backend implements.

@@ -43,38 +43,75 @@ That's the entire workflow. `cash.register_hasher` is a top-level helper that pr
 
 <!-- test:skip reason="signature illustration only" -->
 ```python
-def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str]) -> None: ...
+def register_hasher(
+    self,
+    type_: type,
+    hasher_fn: Callable[[Any], str],
+    *,
+    override: bool = False,
+) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash.register_hasher @2cc59e2a -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @f4b15959, cash/core.py:Cash.register_hasher @17ab6a05 -->
 Two things happen on registration:
 
 1. The hasher's *source* is hashed via `_hash_callable_source`. Resolution order is `inspect.getsource(fn)` first, then a digest of the compiled function, then `type(fn).__qualname__` as a last resort. The result is a stable hex digest of the hasher's identity. The compiled fallback reads `fn.__code__`, or `fn.__call__.__code__` for a callable instance, and folds the constants, names and local names in alongside `co_code` — `co_code` on its own cannot see `return "alpha"` become `return "omega"`, because a constant load's operand is an index into `co_consts` rather than the value.
-2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object.
+2. The pair `(hasher_fn, src_hash)` is stored in `self._type_hashers[type_]` — an ordinary dict keyed on the type object. With `override=True` it goes to `self._override_hashers` instead; a type lives in exactly one of the two, so re-registering it the other way replaces rather than shadows.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @a311dda3, cash/core.py:Cash._try_builtin_type_hash @09adf0d5 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @8be5a896, cash/core.py:Cash._try_builtin_type_hash @9c5166b5 -->
 When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
-1. **Built-in content hashers, FIRST.** `_try_builtin_type_hash` handles pandas / numpy / polars / PyArrow / modin / dask. These are *content*-derived and therefore byte-stable across processes and kernel restarts, which is what lets a persisted entry survive a restart. They are not a fallback — they take precedence over everything below.
+0. **Hashers registered with `override=True`.** Nothing else is consulted for a type you have explicitly taken over — see [overriding a built-in](#overriding-a-built-in-content-hasher).
+1. **Built-in content hashers.** `_try_builtin_type_hash` handles pandas / numpy / polars / PyArrow / modin / dask. These are *content*-derived and therefore byte-stable across processes and kernel restarts, which is what lets a persisted entry survive a restart. They are not a fallback — they take precedence over everything below.
 2. **Notebook lineage hash.** If the value carries `_cash_lineage_hash` (the output of an upstream cached statement) *and* no built-in content hasher claimed it, that hash is used directly. It sits here rather than first because it is recomputed per session and would not survive a restart.
 3. **Registered type hashers.** Cash iterates `self._type_hashers.items()` in insertion order and tests each with `isinstance(arg, type_)`. First match wins, and `isinstance` makes the dispatch MRO-aware: register on `BaseModel` and every subclass uses it.
 4. **Pickle fallback.** Anything left goes through `pickle.dumps`, and those bytes feed the SHA-256 that yields the args hash.
 
-!!! warning "You cannot override a built-in content hasher"
-    Because step 1 runs first, registering a hasher for `pd.DataFrame`,
-    `np.ndarray`, or any other type Cash already content-hashes has **no
-    effect** — and no error, no warning. The registration succeeds and the
-    function is simply never called:
+### Overriding a built-in content hasher
 
-    <!-- test:skip reason="demonstrates a no-op registration; asserting it would assert the absence of an effect" -->
-    ```python
-    cash.register_hasher(pd.DataFrame, my_faster_hasher)   # silently never runs
-    ```
+Registering a plain hasher for `np.ndarray`, `pd.DataFrame`, or any other type
+Cash content-hashes itself has **no effect** — step 1 runs first, so the
+function is never called. Cash warns when you do it:
 
-    This is deliberate: a custom hasher that sampled a frame would collide two
-    different frames onto one key, and the built-ins are the guarantee against
-    that. If you need different behaviour for a DataFrame argument, wrap it in
-    a thin type of your own and register the hasher on the wrapper.
+<!-- test:skip reason="demonstrates a no-op registration; asserting it would assert the absence of an effect" -->
+```python
+cash.register_hasher(np.ndarray, my_faster_hasher)   # warns; never runs
+```
+
+Pass `override=True` and it wins instead:
+
+<!-- test:skip reason="illustrative; the behaviour is pinned in tests/test_core/test_hasher_override.py" -->
+```python
+cash.register_hasher(np.ndarray, lambda a: FRAME_VERSIONS[id(a)], override=True)
+```
+
+**What you are taking on.** The built-ins read every byte, which is what makes
+them safe: two arrays that differ anywhere get different keys. An overriding
+hasher *becomes* the identity of the value, so any two values it hashes alike
+share one cache entry — and Cash returns the first one's result for the
+second. That is a wrong answer, not a slow one.
+
+So `override=True` is right when you hold an identity the value itself does
+not carry — a content id, a dataset version, an immutable build stamp — and
+wrong for `lambda a: a[0, 0]`, which collides every array sharing a corner.
+
+Why it is allowed at all: the alternative Cash used to recommend was to wrap
+the array in a thin type and hash a version field on the wrapper. That
+carries *exactly* the same risk — the wrapper's hasher reads no more of the
+array than yours does — while costing a signature change through the whole
+call chain. Refusing the direct route bought no safety, only work.
+
+!!! tip "The cost this exists to remove is real"
+    A 10000×10000 float64 array is 800 MB, and content-hashing it costs
+    ~306 ms **per call** — so a loop of 100 cached calls spends 31 seconds
+    doing nothing but building keys. With an overriding hasher the same loop
+    pays ~0.09 ms per call. Cash's own
+    [`CashCacheIneffectiveWarning`](../../decorator.md) fires on this shape
+    after a few seconds of accumulated waste.
+
+    Note the flip side: against a function that genuinely takes six seconds,
+    that same 306 ms is 5% overhead and not worth restructuring for. Reach for
+    this where the arguments are large *relative to the work*.
 
 The returned hash is *not* the raw `hasher_fn(arg)` output — it's `f"{src_hash}:{hasher_fn(arg)}"`. Editing the hasher body invalidates every cache entry that depended on it, even when the hasher's output coincidentally matches the old one. This is by design: a silent change of hashing behaviour without a key change would silently return stale results.
 
@@ -139,7 +176,7 @@ A new `Engine` constructed for the same URL hashes the same way, so the cache su
 
 Cash ships with module-level fingerprinting for the dataframe ecosystem. These are *not* installed via `register_hasher` — they live in `_try_builtin_type_hash`, and as the dispatch order above shows they run **before** the user registry, so for these types the built-in always wins and a user registration is a no-op.
 
-<!-- claim: cash/core.py:Cash._try_builtin_type_hash @09adf0d5 broad="the table enumerates every type the builtin dispatcher recognises" -->
+<!-- claim: cash/core.py:Cash._try_builtin_type_hash @9c5166b5 broad="the table enumerates every type the builtin dispatcher recognises" -->
 | Type | Hash strategy | Source |
 |---|---|---|
 | `pandas.DataFrame`, `pandas.Series` | Schema (column / series / index names) **and** `pd.util.hash_pandas_object(value).values.tobytes()`, SHA-256'd together — so a column rename invalidates even with identical row values | `_try_hash_pandas` |
@@ -202,6 +239,7 @@ When Cash can't hash an argument at all, the warning names the type explicitly a
 | `cash.register_hasher(type_, hasher_fn)` | Module-level helper | Proxies to the global `Cash` singleton's `register_hasher`. Signature: `(type_: type, hasher_fn: Callable[[Any], str]) -> None`. |
 | `Cash.register_hasher(type_, hasher_fn)` | Instance method | Same, but on a user-constructed `Cash(...)`. |
 | `_type_hashers` registry | Private dict | `type → (hasher_fn, src_hash)`. Iterated in insertion order during `isinstance` dispatch. |
+| `_override_hashers` registry | Private dict | Same shape, consulted *before* Cash's own content hashers. Populated by `override=True`; a type lives in exactly one of the two. |
 | Built-in fallbacks | `_try_builtin_type_hash` | Auto-applies to pandas / numpy / polars / PyArrow / modin / dask without registration. User registrations take precedence. |
 | Pickle fallback | `_serialize_args` | `pickle.dumps` + SHA-256 for anything that didn't match a registered or built-in hasher. |
 

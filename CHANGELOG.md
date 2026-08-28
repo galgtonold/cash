@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`register_hasher(..., override=True)`** — take precedence over cash's own
+  content hashers for numpy arrays and pandas / polars / PyArrow / modin /
+  dask objects. Those run first, so a plain registration for one of those
+  types was stored and then never consulted, with nothing said at
+  registration and nothing said at call time; the only symptom was that
+  nothing got faster. A bare registration on such a type now warns and names
+  the flag.
+
+  The measured case: a 10000×10000 float64 array is 800 MB, content-hashing
+  it costs ~306 ms per call, and a loop of 100 cached calls spent 31 seconds
+  building keys. With an overriding hasher the same loop pays ~0.09 ms per
+  call.
+
+  What it costs is stated plainly, because it is not free: an overriding
+  hasher *is* the identity of the value, so two values it hashes alike share
+  one entry and the second gets the first's result. It is allowed because the
+  workaround cash used to recommend — wrap the array and hash a version field
+  on the wrapper — carries exactly the same risk while forcing a signature
+  change through the whole call chain.
+
+### Changed
+
+- `CashCacheIneffectiveWarning` for a net-loss function now names
+  `override=True`. It already diagnosed the cause correctly ("a large
+  argument is being hashed in full on every call") and then pointed at
+  `register_hasher`, which for the numpy and pandas arguments it fires on
+  most was a dead end.
+
 ### Fixed
 
 - **Changing a `@cash.cache` argument no longer throws away the cache.**

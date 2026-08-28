@@ -153,6 +153,13 @@ def _message(
     Naming a remedy that KEEPS the caching matters more than the number: a
     registered hasher fixes the usual cause (a large argument being content
     hashed in full) without giving up the decorator.
+
+    ``override=True`` is named explicitly because the usual culprit is a
+    numpy array or a dataframe, and for exactly those types a plain
+    ``register_hasher`` is silently never consulted. The first version of
+    this message sent a design partner to that dead end: it diagnosed the
+    cause correctly, they registered a hasher, nothing changed, and nothing
+    said why.
     """
     return (
         f"@cash.cache on {func_name!r} is costing more than it saves. "
@@ -162,5 +169,8 @@ def _message(
         f"({per_call_overhead * 1000:.0f}ms of overhead per call). "
         f"This usually means a large argument is being hashed in full on every "
         f"call. Register a cheaper hasher for that type "
-        f"(cash.register_hasher) to keep caching, or drop the decorator here."
+        f"(cash.register_hasher) to keep caching -- for a type cash "
+        f"fingerprints itself, such as a numpy array or a dataframe, pass "
+        f"override=True as well or it will not be consulted -- or drop the "
+        f"decorator here."
     )

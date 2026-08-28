@@ -70,16 +70,18 @@ Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is
 skipped rather than silently pretending it doesn't exist.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @a311dda3 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @8be5a896 -->
 The `args` segment resolves each argument through its own ladder, and the order
 is deliberate:
 
-1. **Built-in content hashers** — pandas, numpy, polars, pyarrow, modin, dask.
+1. **Hashers registered with `override=True`** — a type you have explicitly
+   taken over from Cash, so nothing below is consulted for it.
+2. **Built-in content hashers** — pandas, numpy, polars, pyarrow, modin, dask.
    These hash the argument's *content*, which is byte-stable across processes.
-2. **A lineage-tracked `_cash_lineage_hash`**, for values that carry no content
+3. **A lineage-tracked `_cash_lineage_hash`**, for values that carry no content
    hasher (custom objects).
-3. **Registered hashers** from `cash.register_hasher(...)`.
-4. **A pickle fallback** over the value itself.
+4. **Registered hashers** from `cash.register_hasher(...)`.
+5. **A pickle fallback** over the value itself.
 
 Content comes first *on purpose*. A notebook lineage hash is recomputed per
 session and is not reproducible across a kernel restart, so keying a persisted

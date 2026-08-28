@@ -548,6 +548,32 @@ _SOURCE_HASH_MEMO: dict = {}
 _SOURCE_HASH_MEMO_MAX = 4096
 
 
+def _builtin_hash_family(type_name: str, module: str) -> str | None:
+    """Name the built-in content hasher that claims ``module.type_name``.
+
+    Split out of `Cash._try_builtin_type_hash` so the same question can be
+    asked of a bare TYPE, with no value in hand: ``register_hasher`` needs it
+    to tell a user that the hasher they are registering would never run.
+
+    Matched on module PREFIX, so a user's own subclass defined in their own
+    module is deliberately not claimed -- registering a hasher for it has
+    always worked and still does.
+    """
+    if module.startswith('pandas') and type_name in ('DataFrame', 'Series'):
+        return 'pandas'
+    if type_name == 'ndarray' and module.startswith('numpy'):
+        return 'numpy'
+    if module.startswith('polars'):
+        return 'polars'
+    if module.startswith('pyarrow'):
+        return 'pyarrow'
+    if module.startswith('modin'):
+        return 'modin'
+    if module.startswith('dask'):
+        return 'dask'
+    return None
+
+
 class Cash:
     """Smart caching framework for Python functions and Jupyter notebooks.
 
@@ -731,6 +757,11 @@ class Cash:
         # The source hash is embedded in the args_hash composition so that
         # changing a hasher's body invalidates dependent cache entries.
         self._type_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
+        # Same shape, but consulted BEFORE cash's own content hashers rather
+        # than after them. Separate registry rather than a flag in the tuple
+        # above so the hot path can skip the whole question with one empty
+        # check -- overriding is rare, and every cached call pays for this.
+        self._override_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
 
         # Dedup keys for _warn_once: (category, func_name, arg_type_name).
         # Guarded by _decorator_call_log_lock (already exists for thread safety).
@@ -4597,6 +4628,16 @@ class Cash:
                     if memo_lineage == lineage and wref() is arg:
                         return content_hash
 
+            # Overriding hashers, ahead of everything cash would do itself.
+            # The user has said their identity for this type beats content
+            # hashing, which is the only way to stop re-reading a 800MB array
+            # on every call. Guarded by the emptiness check so the ordinary
+            # case pays one dict truth test, not a loop.
+            if self._override_hashers:
+                for type_, (hasher_fn, src_hash) in self._override_hashers.items():
+                    if isinstance(arg, type_):
+                        return f"{src_hash}:{hasher_fn(arg)}"
+
             builtin_hash = self._try_builtin_type_hash(arg)
             if builtin_hash is not None:
                 if lineage is not None:
@@ -4795,6 +4836,19 @@ class Cash:
             return None
 
     @staticmethod
+    def builtin_hashed_family(type_: type) -> str | None:
+        """Which built-in content hasher claims *type_*, or ``None``.
+
+        The type-level counterpart of `_try_builtin_type_hash`, which can
+        only answer the question about a value it already holds. Used to tell
+        a user at ``register_hasher`` time that the hasher they just handed
+        over would never be consulted -- the moment they can still do
+        something about it.
+        """
+        return _builtin_hash_family(
+            type_.__name__, getattr(type_, '__module__', '') or '')
+
+    @staticmethod
     def _try_builtin_type_hash(value: Any) -> str | None:
         """Attempt to hash common types that may not pickle well.
 
@@ -4808,23 +4862,24 @@ class Cash:
         """
         type_name = type(value).__name__
         module = type(value).__module__ or ''
+        family = _builtin_hash_family(type_name, module)
 
-        if module.startswith('pandas') and type_name in ('DataFrame', 'Series'):
+        if family == 'pandas':
             return Cash._try_hash_pandas(value, type_name)
 
-        if type_name == 'ndarray' and module.startswith('numpy'):
+        if family == 'numpy':
             return Cash._try_hash_numpy(value)
 
-        if module.startswith('polars'):
+        if family == 'polars':
             return Cash._try_hash_polars(value, type_name)
 
-        if module.startswith('pyarrow'):
+        if family == 'pyarrow':
             return Cash._try_hash_pyarrow(value, type_name)
 
-        if module.startswith('modin'):
+        if family == 'modin':
             return Cash._try_hash_modin(value, type_name)
 
-        if module.startswith('dask'):
+        if family == 'dask':
             return Cash._try_hash_dask(value)
 
         # Generators / iterators - cannot hash
@@ -5264,7 +5319,13 @@ class Cash:
             self._decorator_call_log.clear()
         return calls
 
-    def register_hasher(self, type_: type, hasher_fn: Callable[[Any], str]) -> None:
+    def register_hasher(
+        self,
+        type_: type,
+        hasher_fn: Callable[[Any], str],
+        *,
+        override: bool = False,
+    ) -> None:
         """Register a custom hasher for a specific type.
 
         When ``_serialize_args`` encounters an argument of ``type_``, it will
@@ -5275,6 +5336,23 @@ class Cash:
             type_: The Python type to register a hasher for.
             hasher_fn: A callable that takes a value of ``type_`` and returns
                 a deterministic hash string.
+            override: Take precedence over cash's own content hashers.
+                Needed only for the types cash fingerprints itself -- numpy
+                arrays, pandas / polars / PyArrow / modin frames, dask
+                collections -- where those run first and a plain registration
+                is silently never consulted (cash warns when that happens).
+
+                Off by default because the built-ins read every byte, and a
+                hasher that does not can return a *wrong* cached result
+                rather than a slow one. Passing it says you accept that: what
+                you return is the entire identity of the value, and two
+                values sharing it share an entry. That is the right trade
+                when you hold a version, a content id, or an immutable
+                fingerprint the array itself does not carry -- and the wrong
+                one for ``lambda a: a[0, 0]``.
+
+                Overriding hashers are consulted before everything else,
+                including a notebook value's lineage hash.
 
         Example:
 
@@ -5298,7 +5376,34 @@ class Cash:
             that closes over the state explicitly.
         """
         src_hash = self._hash_callable_source(hasher_fn)
-        self._type_hashers[type_] = (hasher_fn, src_hash)
+        # One type, one registration: re-registering must not leave the
+        # previous entry behind in the other registry, still winning.
+        self._type_hashers.pop(type_, None)
+        self._override_hashers.pop(type_, None)
+        if override:
+            self._override_hashers[type_] = (hasher_fn, src_hash)
+        else:
+            self._type_hashers[type_] = (hasher_fn, src_hash)
+            family = self.builtin_hashed_family(type_)
+            if family is not None:
+                self._warn_once(
+                    CashCacheIneffectiveWarning,
+                    f"register_hasher:{type_.__module__}.{type_.__name__}",
+                    "",
+                    f"cash.register_hasher({type_.__name__}): cash fingerprints "
+                    f"{family} values itself and that runs first, so this hasher "
+                    f"will never be called and the full contents are still hashed "
+                    f"on every call. Pass override=True to use it instead -- but "
+                    f"then what it returns is the whole identity of the value, so "
+                    f"a hasher that reads only part of one (a corner element, a "
+                    f"length) will serve a cached result from a DIFFERENT value "
+                    f"that happens to match.",
+                    stacklevel=3,
+                )
+        # A memoized hash was produced by whichever hasher was in effect
+        # before this call; drop them so the new registration is not shadowed
+        # for objects already seen.
+        self._arg_hash_memo.clear()
 
     #: Types whose code must not participate in any cache key. Process-wide,
     #: not per-instance: a marker is a property of the type, and a user who
