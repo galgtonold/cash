@@ -70,50 +70,50 @@ c = Cash(backend=FileBackend(
 c.register_magic()
 ```
 
-One file per entry under `cache_dir`, sharded by SHA-256 of the cache key. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor so a slow write doesn't block the cell. A second thread flushes metadata every `flush_interval` seconds.
+One file per entry under `cache_dir`, named by the SHA-256 of the cache key, holding a small header, the entry's metadata, and then the value. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor so a slow write doesn't block the cell. A second thread flushes metadata every `flush_interval` seconds, rewriting only the metadata region rather than the whole file.
 
-Eviction is LRU on `last_access`. When `_current_size_bytes` exceeds `max_size_bytes`, the oldest entries are dropped until the cache fits under 90% of the cap.
+Eviction is LRU on `last_access`. When the cache exceeds `max_size_bytes`, the oldest entries are dropped until it fits under 90% of the cap.
 
 **Key parameters** — `cache_dir`, `compress` (gzip; usually only worth it for CSV/JSON), `max_size_bytes` (None = unlimited), `flush_interval` (seconds; 0 = flush on every write), `default_ttl` (seconds).
 
 **Gotcha** — uses `pickle` under the hood. Never load a cache directory from an untrusted source. See `SECURITY.md`.
 
-!!! tip "Two files per entry: what it costs, and what it doesn't"
+!!! tip "What a cache costs as it fills, and what it doesn't"
     Measured at 100,000 entries with a 512-byte payload
     (`benchmarks/bench_backend_scale.py`, Windows/NTFS):
 
     | | `FileBackend` | `SQLiteBackend` |
     |---|---|---|
-    | Write one more entry | 1.70 ms | **0.16 ms** |
+    | Write one more entry | 0.70 ms | **0.16 ms** |
     | Read one entry | 0.29 ms | **0.06 ms** |
+    | Read one entry's metadata | 0.06 ms | **0.01 ms** |
     | Open the cache in a new process | 1.2 ms | **0.1 ms** |
-    | Files on disk | 200,085 | **3** |
+    | Files on disk | 100,001 | **3** |
     | Disk used | **66.7 MB** | 91.7 MB |
 
     **Reads and writes do not degrade as the directory fills.** From 0 to
-    100,000 entries a `FileBackend` write stays at ~1.4–1.7 ms and a read at
-    ~0.25–0.29 ms — the filename comes from the key, so neither operation ever
-    walks the directory. Sharding the layout into subdirectories would buy
-    nothing, because nothing enumerates.
+    100,000 entries a `FileBackend` write and read stay flat — the filename
+    comes from the key, so neither operation ever walks the directory.
+    Sharding the layout into subdirectories would buy nothing, because nothing
+    enumerates.
 
-    **Why SQLite is ~10× faster per small write.** A `FileBackend` write is
-    four filesystem metadata operations per file, twice over — create the temp
-    file (121 µs), write it (133 µs), rename it into place (156 µs), stat it
-    (21 µs) — and cash writes both a `.data` and a `.meta`. Roughly two-thirds
-    of that is namespace churn rather than data: creating a name and moving a
-    name. A SQLite write is one `INSERT` plus one WAL commit against an
-    already-open file handle: **14.6 µs**, no file creation, no rename, no
-    directory-index update. Neither backend calls `fsync` (SQLite runs
-    `synchronous=NORMAL`), so both survive a process crash and neither
-    guarantees survival of a power cut. Turning on `synchronous=FULL` costs
-    SQLite 2.0 ms per write and reverses the comparison outright.
+    **Opening the cache is flat too.** It used to cost a full directory walk
+    (308 ms at 100k, ~3.1 µs per entry) to total the bytes for the eviction
+    cap. That walk now happens on the first *write*, on the background write
+    thread, so a fresh process pays ~1.2 ms whatever the directory holds and a
+    run that only reads — a kernel restart replaying from cache — never walks
+    it at all.
 
-    Opening the cache used to scale too — 308 ms at 100k, ~3.1 µs per entry —
-    because the eviction cap's byte total was computed by walking the whole
-    directory on the first cache operation. That walk is now deferred to the
-    first *write*, and runs on the background write thread, so a fresh process
-    pays ~1.2 ms whatever the directory holds. A run that only reads — a
-    kernel restart replaying from cache — never walks it at all.
+    **Why SQLite is faster per small write.** A `FileBackend` write is four
+    filesystem metadata operations — create a temp file (121 µs), write it
+    (133 µs), rename it into place (156 µs), stat it (21 µs) — of which about
+    two thirds is namespace churn rather than data. A SQLite write is one
+    `INSERT` plus one WAL commit against an already-open file handle: **14.6
+    µs**, no file creation, no rename, no directory-index update. Neither
+    backend calls `fsync` (SQLite runs `synchronous=NORMAL`), so both survive
+    a process crash and neither guarantees survival of a power cut. Turning on
+    `synchronous=FULL` costs SQLite 2.0 ms per write and reverses the
+    comparison outright.
 
 !!! warning "The ranking inverts with payload size"
     The table above uses 512-byte values, which is the size at which SQLite
@@ -121,19 +121,19 @@ Eviction is LRU on `last_access`. When `_current_size_bytes` exceeds `max_size_b
 
     | Value size | File write | SQLite write | File read | SQLite read |
     |---|---|---|---|---|
-    | 512 B | 1.31 ms | **0.09 ms** | 0.23 ms | **0.06 ms** |
+    | 512 B | 0.70 ms | **0.16 ms** | 0.23 ms | **0.06 ms** |
     | 32 KB | 1.37 ms | **0.14 ms** | 0.26 ms | **0.07 ms** |
     | 128 KB | 1.51 ms | **0.29 ms** | 0.28 ms | **0.14 ms** |
     | 512 KB | 1.79 ms | **1.03 ms** | 0.42 ms | 0.44 ms |
-    | 1 MB | 2.25 ms | 2.04 ms | **0.75 ms** | 2.42 ms |
+    | 1 MB | 1.89 ms | 2.01 ms | **0.91 ms** | 2.41 ms |
     | 4 MB | **3.86 ms** | 20.5 ms | **2.00 ms** | 10.6 ms |
-    | 16 MB | **11.2 ms** | 67.3 ms | **7.31 ms** | 39.5 ms |
+    | 16 MB | **13.4 ms** | 60.1 ms | **10.2 ms** | 38.5 ms |
 
     Reads cross over around **512 KB** and writes around **1 MB**; past 2 MB
-    `FileBackend` is 5–6× faster on both and stays there. `FileBackend`'s cost
-    is a fixed ~0.9 ms of namespace work plus one sequential write, so it grows
-    slowly with size; SQLite has to move the value through its pager and WAL,
-    so a big value is paid for roughly twice.
+    `FileBackend` is 4–5× faster on both and stays there. `FileBackend` pays a
+    fixed cost in filesystem bookkeeping plus one sequential write, so it grows
+    slowly with size; SQLite moves the value through its pager and WAL, so a
+    big value is paid for roughly twice.
 
     This matters because cached values in a notebook are DataFrames, arrays and
     fitted models. **512 bytes is the unrepresentative case.** If your cached
@@ -148,6 +148,29 @@ Eviction is LRU on `last_access`. When `_current_size_bytes` exceeds `max_size_b
     Switch to `SQLiteBackend` when your entries are genuinely small *and*
     numerous — thousands of sub-100 KB values — or when you would rather back
     up one file than a directory of hundreds of thousands.
+
+!!! note "Reading metadata never reads the value"
+    `get_metadata()` exists so listings, badges and upstream simulation can
+    inspect an entry they have no intention of restoring. On every backend it
+    now costs what the metadata costs, not what the value costs:
+
+    | Entry size | `FileBackend` | `SQLiteBackend` |
+    |---|---|---|
+    | 512 B | 0.056 ms | 0.012 ms |
+    | 1 MB | 0.099 ms | 0.067 ms |
+    | 16 MB | 0.226 ms | 0.091 ms |
+
+    against 10.2 ms and 38.5 ms respectively to read the 16 MB *value*. The
+    file layout puts a length-prefixed header in front of the metadata so a
+    read can stop after it; SQLite selects one column and declares the payload
+    column last, because it lays a row out in declaration order and reading a
+    column walks past everything before it.
+
+    The remote backends were the same story with a bill attached. Reading one
+    4 MB entry's metadata used to transfer 4,194,457 bytes on S3 (plus a second
+    request) and 4,194,460 on Redis, to return about 150 bytes of answer — so
+    every badge drawn and every upstream simulation after a kernel restart
+    pulled its entries across the network in full.
 
 ## `SQLiteBackend`
 
