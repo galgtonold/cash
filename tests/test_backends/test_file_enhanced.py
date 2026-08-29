@@ -102,7 +102,14 @@ class TestFileBackendEnhanced:
         backend.shutdown()
         
     def test_size_init(self, tmp_path):
-        """Verify size initializes correctly from existing files."""
+        """A second backend must account for what the first one left on disk.
+
+        The total is established lazily now -- on the first write, the only
+        thing that reads it -- so this triggers it with a ``set`` rather than
+        a ``list_entries``. What is pinned is unchanged: without the
+        pre-existing bytes, eviction would only ever see this process's own
+        writes and the directory would grow past its cap forever.
+        """
         # 1. Create backend, write stuff
         b1 = FileBackend(str(tmp_path))
         b1.set("k1", "v1")
@@ -110,11 +117,16 @@ class TestFileBackendEnhanced:
         size = b1._current_size_bytes
 
         assert size > 0
-        
-        # 2. Re-create backend (lazy init: trigger with a cache operation)
-        b2 = FileBackend(str(tmp_path))
-        b2.list_entries()  # triggers _ensure_initialized()
-        assert b2._current_size_bytes == size
+
+        # 2. Re-create backend over the same directory and make it need a total
+        b2 = FileBackend(str(tmp_path), max_size_bytes=10 ** 9)
+        b2.set("k2", "v2")
+        b2._writes.wait_all()
+
+        on_disk = sum(f.stat().st_size for f in tmp_path.iterdir()
+                      if f.suffix in (".meta", ".data"))
+        assert b2._current_size_bytes == on_disk
+        assert b2._current_size_bytes > size, "k1's bytes were not counted"
         b2.shutdown()
 
 

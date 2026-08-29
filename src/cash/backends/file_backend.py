@@ -150,6 +150,9 @@ class FileBackend(CacheBackend):
         # Whether _metadata_cache holds EVERY entry on disk. False after a
         # plain size scan; set once the eviction path has loaded them all.
         self._metadata_loaded = False
+        # Whether _current_size_bytes is an absolute on-disk total (True) or
+        # only this process's running delta (False). See _ensure_size_scanned.
+        self._size_scanned = False
         self._lock = threading.RLock()
         self._flush_interval = flush_interval
         self._stop_event = threading.Event()
@@ -166,10 +169,15 @@ class FileBackend(CacheBackend):
         self._init_lock = threading.Lock()
 
     def _ensure_initialized(self) -> None:
-        """Lazily create cache directory, scan stats, and start flusher thread.
+        """Lazily create cache directory, check the format stamp, start the flusher.
 
-        Thread-safe via double-checked locking so the heavy I/O only
-        happens once, on first real cache operation.
+        Thread-safe via double-checked locking so this only happens once, on
+        the first real cache operation.
+
+        Deliberately O(1) in the number of entries. This runs on the CALLER's
+        thread -- the first ``get`` of the session waits for it -- so nothing
+        that walks the directory belongs here. The byte total that used to be
+        computed at this point is now deferred to ``_ensure_size_scanned``.
         """
         if self._initialized:
             return
@@ -178,7 +186,6 @@ class FileBackend(CacheBackend):
                 return
             os.makedirs(self.cache_dir, exist_ok=True)
             self._check_format_version()
-            self._init_stats()
             if self._flush_interval > 0:
                 self._flusher_thread = threading.Thread(
                     target=self._flush_periodically, daemon=True,
@@ -244,31 +251,14 @@ class FileBackend(CacheBackend):
                     exc_info=True,
                 )
 
-    def _init_stats(self) -> None:
-        """Total the directory's bytes. Metadata is NOT loaded here.
+    def _scan_size_bytes(self) -> int:
+        """Total the directory's bytes with ``scandir`` + ``stat``.
 
-        This runs once per process, on the first cache operation, and it used
-        to ``open()`` and unpickle every ``.meta`` in the directory to prefill
-        ``_metadata_cache``. That is linear in the number of entries and it
-        dominated startup: measured at 98ms for 1k entries, 490ms for 5k and
-        2.1s for 20k -- about 0.105ms each, so ~10s at 100k and ~100s at 1M,
-        paid by every process however few keys it touches.
-
-        It was also pure prefetch. ``get`` already falls back to reading the
-        ``.meta`` from disk on a cache miss and populates the entry itself, so
-        nothing here was needed for correctness -- a script touching ten keys
-        out of a hundred thousand paid a hundred thousand file reads to save
-        ten. And holding every entry's metadata costs ~1.7KB each: 172MB at
-        100k entries, 1.7GB at 1M.
-
-        A ``scandir`` + ``stat`` gives the same byte total 31x faster (2037ms
-        -> 65ms at 20k, identical totals), because the size cap only ever
-        needed the sizes.
-
-        The LRU still needs the metadata, so ``_check_and_evict`` loads it on
-        demand via `_ensure_metadata_loaded`. That defers the cost to the
-        processes that actually evict rather than charging every process that
-        opens the cache.
+        This is the one operation whose cost still scales with the number of
+        entries: about 3.5us each, so ~70ms at 20k, ~0.35s at 100k and ~3.5s
+        at 1M. It reads no file *contents* -- an earlier version unpickled
+        every ``.meta`` here, which was 30x slower again (2037ms vs 65ms at
+        20k) and built a metadata cache nothing had asked for.
         """
         total_size = 0
         try:
@@ -285,8 +275,41 @@ class FileBackend(CacheBackend):
                         continue
         except OSError:
             logger.debug("Could not scan %s for size", self.cache_dir, exc_info=True)
-        self._current_size_bytes = total_size
-        self._metadata_loaded = False
+        return total_size
+
+    def _ensure_size_scanned(self) -> None:
+        """Establish the on-disk byte total, once, for the size cap.
+
+        ``_check_and_evict`` is the only thing that ever reads that total, so
+        only a process that WRITES needs it. It used to be computed at open
+        time, by every process, on the calling thread of its first cache
+        operation -- so a read-only run (the kernel-restart replay that cash
+        exists to make fast) paid a full directory walk for a number it never
+        consulted: ~0.35s at 100k entries, ~3.5s at 1M, before the first cell
+        could return.
+
+        Deferring it here moves that cost twice over: it is paid only when
+        something is actually written, and it is paid on the ``PendingWrites``
+        worker rather than the caller, so no cell blocks on it either way.
+
+        The walk runs OUTSIDE ``_lock`` -- holding that across seconds of stat
+        calls would stall every concurrent ``get``. The result therefore
+        supersedes the running delta rather than adding to it: by the time
+        ``_check_and_evict`` calls this the write that triggered it is already
+        on disk, so the directory is the truth and whatever this process had
+        counted so far is a subset of it. A ``delete`` landing mid-walk may be
+        counted as still present, leaving the total high by that entry until
+        the next one -- the same slightly-early-eviction direction the
+        per-entry ``stat`` failure above already accepts.
+        """
+        if self._size_scanned:
+            return
+        scanned = self._scan_size_bytes()
+        with self._lock:
+            if self._size_scanned:
+                return
+            self._current_size_bytes = scanned
+            self._size_scanned = True
 
     def _ensure_metadata_loaded(self) -> None:
         """Populate ``_metadata_cache`` from disk, once, for LRU ordering.
@@ -728,7 +751,16 @@ class FileBackend(CacheBackend):
 
     def _check_and_evict(self) -> None:
         """Evict items if over max size."""
-        if not self._max_size_bytes or self._current_size_bytes <= self._max_size_bytes:
+        if not self._max_size_bytes:
+            return
+
+        # The byte total is established HERE, not at open time: this is the
+        # only thing that reads it, so a process that never writes must never
+        # pay the directory walk that produces it. Latched, so a write-heavy
+        # session pays one walk, not one per write.
+        self._ensure_size_scanned()
+
+        if self._current_size_bytes <= self._max_size_bytes:
             return
 
         # Ranking by last access needs every entry, including the ones this
