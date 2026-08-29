@@ -21,6 +21,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 import cash
 from cash.utils import resolve_main_module
 
@@ -129,6 +131,77 @@ def test_two_scripts_with_different_names_stay_apart(tmp_path):
         """)
     assert _run(tmp_path / "alpha.py", tmp_path).stdout.strip() == "10"
     assert _run(tmp_path / "beta.py", tmp_path).stdout.strip() == "999"
+
+
+# ---------------------------------------------------------------------------
+# The decorator's ordinary promises, for a function defined in __main__
+# ---------------------------------------------------------------------------
+#
+# Renaming a function renames the key into the dependency graph, the purity
+# reports, ``helper_resolution_paths``, ``source_hashes`` and
+# ``_purity_modes``. The rest of the suite defines its functions inside test
+# modules, so none of it exercises those lookups under ``__main__`` -- the
+# whole suite passed while this path was unchecked.
+#
+# The sharpest risk is ``helper_resolution_paths``, now KEYED by the
+# normalised name while its module VALUE stays ``__main__`` because it is a
+# ``sys.modules`` lookup. A mismatch there fails re-resolution quietly, and an
+# edited helper stops invalidating -- a stale answer, not a miss. Hence
+# ``[a helper edited]``, and hence every arm asserting the VALUE and not just
+# whether it ran.
+
+PROGRAM = """
+    import time
+    import cash
+
+    c = cash.Cash(cache_dir="cache")
+
+    THRESHOLD = {threshold}
+
+    def helper(n):
+        return n + {helper_const}
+
+    @c.cache(assume_safe=True)
+    def work(n):{extra}
+        time.sleep(0.3)
+        print("COMPUTED")
+        return helper(n) + THRESHOLD + {body_const}
+
+    if __name__ == "__main__":
+        print("RESULT", work(1))
+"""
+
+
+def _program(tmp_path, **kw):
+    params = {"threshold": 0, "helper_const": 1, "body_const": 0, "extra": ""}
+    params.update(kw)
+    _script(tmp_path, "prog", PROGRAM.format(**params))
+    done = _run(tmp_path / "prog.py", tmp_path)
+    assert done.returncode == 0, done.stderr
+    value = next(line.split()[1] for line in done.stdout.splitlines()
+                 if line.startswith("RESULT"))
+    return "COMPUTED" in done.stdout, value
+
+
+# work(1) == helper(1) + THRESHOLD + body_const == (1 + helper_const) + ...
+@pytest.mark.parametrize(("label", "second", "recomputes", "value"), [
+    ("nothing changed", {}, False, "2"),
+    ("a comment added", {"extra": "\n        # a note"}, False, "2"),
+    ("the body edited", {"body_const": 5}, True, "7"),
+    ("a helper edited", {"helper_const": 9}, True, "10"),
+    ("a read global changed", {"threshold": 7}, True, "9"),
+])
+def test_the_decorator_keeps_its_promises_under_main(
+        tmp_path, label, second, recomputes, value):
+    ran, _ = _program(tmp_path)
+    assert ran, "the priming run should have computed"
+
+    ran, got = _program(tmp_path, **second)
+    assert ran is recomputes, (
+        f"{label}: {'recomputed' if ran else 'restored'}, wanted "
+        f"{'recompute' if recomputes else 'restore'}"
+    )
+    assert got == value, f"{label}: wrong answer ({got}, wanted {value})"
 
 
 # ---------------------------------------------------------------------------
