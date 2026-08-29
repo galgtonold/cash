@@ -16,7 +16,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reuse, two recipes, and when not to bother. Every number in it comes from
   `benchmarks/bench_grid_refinement.py`.
 
+- **`cash inspect` groups by function, and `cash clear --function` drops one.**
+  Someone short on disk had two options: keep the whole cache or delete it.
+  `inspect` now leads with a per-function table sorted by size — the question
+  that sends people there is "what is filling my disk?" — and `--function NAME`
+  drills in or clears. An unambiguous trailing segment is enough, so
+  `--function work` finds `__main__.work`. `cash clear` with no arguments
+  prints its help instead of naming two of its three options in one line.
+
+- **`summary=True` prints a per-function hit/miss table when a process exits.**
+  A notebook says per statement whether it ran or restored; a script said
+  nothing, so a user who wanted to know added `print` calls to each branch. Off
+  by default, and reachable four ways from one config field —
+  `cash.configure(summary=True)`, `Cash(summary=True)`, `CASH_SUMMARY=1`, or a
+  TOML key. The env var is the one that needs no edit to the script you are
+  already running.
+
 ### Fixed
+
+- **Running a script and importing it now share one cache.** A function
+  defined in the script you ran belongs to module `__main__`, so
+  `python model.py` keyed it `__main__.work` while `import model` keyed the
+  same function, same source, same arguments as `model.work` — two entries for
+  one computation, on the ordinary path of developing behind an
+  `if __name__ == "__main__"` block and later importing it. Cash resolves
+  `__main__` through the defining file's name so the two agree. This also
+  *reduces* cross-script collisions: every script alike used to be `__main__`;
+  now only two scripts with the same filename meet. A REPL, `python -c`, a
+  frozen app and a Jupyter kernel have no defining file and stay `__main__`.
+  Entries written under the old prefix recompute once.
+
+- **`show_stats()` in a script prints something useful.** Its documented "prints
+  a text summary instead" fallback sat behind `except (ImportError,
+  RuntimeError)` while the dashboard printed its own failure and returned
+  normally — the fallback was unreachable, so the documented behaviour had
+  never once happened. It prints the same per-function table now.
 
 - **Re-spelling a number no longer throws away the cache.** `0.5` and `0.50`
   are the same IEEE double — identical bits, identical entry in `co_consts` —
