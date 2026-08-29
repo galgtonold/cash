@@ -20,8 +20,6 @@ import subprocess
 import sys
 import textwrap
 
-import pytest
-
 import cash
 
 
