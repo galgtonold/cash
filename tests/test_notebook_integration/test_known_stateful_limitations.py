@@ -25,13 +25,16 @@ import pytest
 pytestmark = pytest.mark.upstream
 
 
-@pytest.mark.xfail(reason="Hidden global mutation via a function the cell does not "
-                          "name: cash cannot see that tick() mutates the global "
-                          "`c`, so on an isolated re-run `c` is not restored to its "
-                          "cell-entry base and the call advances it again. The "
-                          "@stateful decorator forces re-execution but still reads "
-                          "the advanced global. Fundamental impure-function limit.",
-                   strict=False)
+# FIXED: an isolated re-run runs the cell from its ENTRY state, not from the
+# state the previous run left behind, so a hidden global write no longer
+# accumulates. Probed across four consecutive re-runs of the cell, every one
+# reporting `r= 1 c= {'n': 1}` -- idempotent, and identical to the first run.
+#
+# The marker this replaces asserted the opposite, and was xpassing rather than
+# failing only because it was declared `strict=False`. Same shape as the
+# stress-batch tests that asserted the doubling: a test can go on describing a
+# bug long after the bug is gone, and an xfail is the one kind that stays
+# quiet while it does.
 def test_function_hidden_global_mutation_rerun(nb_runner):
     nb_runner.create_notebook([
         "c = {'n': 0}\ndef tick():\n    c['n'] += 1\n    return c['n']",
