@@ -57,6 +57,28 @@ A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default
 
 **Gotcha** — kernel restart wipes everything. There is no on-disk fallback. Pair it with `TieredBackend` if you also want persistence.
 
+!!! warning "Caching a value holds it twice"
+    Reads and writes deep-copy, so a cached value exists in RAM **twice**:
+    once as your variable, once in the cache. Measured with
+    `benchmarks/bench_memory.py`, caching a 256 MB array leaves 512 MB
+    resident — **2.0×**, and the same ratio at 64 MB.
+
+    The copy is deliberate: a cache that hands back a shared reference is one
+    a later mutation corrupts silently, and the failure would show up as a
+    wrong answer rather than a slow one. But it means the RAM tier is not
+    free, and on a machine where the frame already fits only just, caching it
+    is what runs you out.
+
+    Small entries pay a fixed cost instead of a multiple — about 1.2–3.8 KB
+    each including metadata and bookkeeping, so a cache of many small results
+    costs roughly its entry count rather than its byte count.
+
+    `max_size_bytes` and `max_memory_percent` are what bound this; the
+    defaults scale `max_memory_percent` to the machine. If you are caching
+    values that are large relative to RAM, set `max_size_bytes` on the RAM
+    tier explicitly rather than relying on the pressure check, which only runs
+    every `check_interval` writes.
+
 ## `FileBackend`
 
 ```python
