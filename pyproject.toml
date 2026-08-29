@@ -194,6 +194,14 @@ dev = [
     "ipykernel",
     "pandas",
     "pyarrow>=13.0",
+    # polars and dask are OPTIONAL for users but not for CI: cash ships a
+    # content hasher for each, and an untested hasher is how a polars
+    # LazyFrame came to be identified by its query plan instead of its
+    # data -- two frames over different values printed the same plan and
+    # collided into a wrong cached answer. 4 MB and 6 MB installed, next
+    # to the pandas/numpy already here.
+    "polars>=1.0,<3",
+    "dask[dataframe]",
     # scipy is used by tests/test_notebook/test_size_estimator.py to
     # exercise the csr/csc/coo branches of _estimate_object_size.
     "scipy",
