@@ -59,6 +59,7 @@ from .notebook.randomness import (
 )
 from .purity_analyzer import PurityReport, get_analyzer
 from .source_norm import bytecode_identity, source_identity_digest
+from .utils import resolve_main_module
 
 # Configure Logging
 logger = logging.getLogger(__name__)
@@ -862,10 +863,15 @@ class Cash:
         when different modules define functions with the same ``__qualname__``
         (e.g. a notebook's ``dep()`` vs a library module's ``dep()``).
 
+        ``__main__`` is resolved to the name the module would have when
+        imported — see `_main_module_name`.
+
         Opaque callables such as ``functools.partial`` lack both ``__qualname__``
         and ``__name__``; fall back to ``repr`` so keying them never crashes.
         """
         module = getattr(func, '__module__', None) or '__unknown__'
+        if module == '__main__':
+            module = resolve_main_module(func)
         qualname = (
             getattr(func, '__qualname__', None)
             or getattr(func, '__name__', None)

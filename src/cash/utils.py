@@ -7,11 +7,13 @@ Notebook-specific I/O and Jupyter Server HTTP discovery live in
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import re
 import sys
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -279,3 +281,49 @@ def replace_with_retry(tmp_path: str, path: str,
         except PermissionError:
             time.sleep(delay)
     os.replace(tmp_path, path)      # out of patience; let it raise
+
+
+@functools.lru_cache(maxsize=8)
+def _module_stem(path: str) -> str:
+    """The module name a file would have if it were imported."""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def resolve_main_module(func: Any) -> str:
+    """What to call ``__main__`` when qualifying *func* for a cache key.
+
+    A function defined in the script you ran belongs to module ``__main__``,
+    so ``python model.py`` keyed it as ``__main__.work`` while ``import model``
+    keyed the same function, same source, same arguments as ``model.work``.
+    Two entries, one computation -- and the common shape is exactly that:
+    develop a script behind an ``if __name__ == "__main__"`` block, run it
+    while testing, then import it from a driver and recompute everything.
+
+    Resolving through ``__file__`` to the name the module would have on import
+    makes those two agree, and it strictly REDUCES collisions on the other
+    axis: today every script alike is ``__main__``, so two unrelated scripts
+    with a same-named function meet; afterwards only two scripts with the same
+    FILENAME do. (They still separate on source, helpers and read globals --
+    the module name is a coarse guard on top of the state hash, not the thing
+    doing the work.)
+
+    Read from the FUNCTION's own globals, not ``sys.modules['__main__']``.
+    Those are the same file for an ordinary ``python model.py``, and they are
+    not under ``runpy`` or ``exec``, where the entry point is one file and the
+    module claiming ``__main__`` is another -- taking the entry point there
+    names the function after a file it was not defined in.
+
+    Shared by ``Cash._get_func_key`` and the purity analyzer's
+    ``_qualname_of``. Both feed the same cache key from different directions,
+    and normalising only one of them leaves the state hash disagreeing between
+    a direct run and an import while the function name agrees -- which is
+    exactly the half-fixed state this function exists to prevent.
+
+    Returns ``__main__`` unchanged when there is no ``__file__``: a REPL,
+    ``python -c``, a frozen app, and a Jupyter kernel, where ``__main__`` is
+    the user namespace rather than a file and there is no import to agree with.
+    """
+    path = (getattr(func, '__globals__', None) or {}).get('__file__')
+    if not isinstance(path, str) or not path:
+        return '__main__'
+    return _module_stem(path) or '__main__'

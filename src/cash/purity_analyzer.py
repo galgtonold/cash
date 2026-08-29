@@ -67,6 +67,7 @@ from .source_norm import (
     normalize_source_for_hash,
     source_identity_digest,
 )
+from .utils import resolve_main_module
 
 logger = logging.getLogger(__name__)
 
@@ -1301,7 +1302,19 @@ def _module_modified_globals(module: Any) -> frozenset[str]:
 
 
 def _qualname_of(func: Callable[..., Any]) -> str:
+    """Name a callable for ``helper_source_hashes``.
+
+    ``__main__`` is resolved the same way ``Cash._get_func_key`` resolves it.
+    These keys are folded into the state hash as ``helper:{qual}:{digest}``, so
+    leaving this one alone made a direct run and an import disagree on the KEY
+    while agreeing on the digest -- the function name matched, the state hash
+    did not, and the entry still missed. Deliberately NOT applied to
+    ``helper_paths``, whose module string is looked up in ``sys.modules`` at
+    runtime and has to stay ``__main__`` to resolve.
+    """
     module = getattr(func, "__module__", None) or "<unknown>"
+    if module == "__main__":
+        module = resolve_main_module(func)
     qualname = getattr(func, "__qualname__", None) or getattr(func, "__name__", "<callable>")
     return f"{module}.{qualname}"
 
