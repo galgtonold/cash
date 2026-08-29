@@ -74,6 +74,22 @@ def timed_read(backend, key: str) -> float:
     return time.perf_counter() - t
 
 
+def timed_meta_read(backend, key: str) -> float:
+    """Metadata WITHOUT the value -- what listing and badges cost.
+
+    On its own ledger because it is the number that decided whether one
+    file per entry was safe. Entries were split in two precisely so this
+    would not scale with the payload; a single file only works because the
+    header lets the read stop after the metadata region.
+    """
+    cache = getattr(backend, "_metadata_cache", None)
+    if cache is not None:
+        cache.pop(key, None)                 # force a real read, not the cache
+    t = time.perf_counter()
+    backend.get_metadata(key)
+    return time.perf_counter() - t
+
+
 def open_cost(kind: str, root: Path) -> float:
     """First operation in a FRESH process -- what a script pays at startup.
 
@@ -138,7 +154,7 @@ def main() -> int:
         print(f"  payload = {PAYLOAD:,}B, {ROUNDS} rounds, median")
         print()
         print(f"  {'entries':>8}  {'backend':<8}{'write':>10}{'read':>10}"
-              f"{'open':>11}{'files':>10}{'on disk':>11}{'per entry':>12}")
+              f"{'meta':>10}{'open':>11}{'files':>10}{'on disk':>11}{'per entry':>12}")
         for n in counts:
             # Fill both arms to N before measuring either.
             for k in kinds:
@@ -149,20 +165,25 @@ def main() -> int:
 
             writes = {k: [] for k in kinds}
             reads = {k: [] for k in kinds}
+            metas = {k: [] for k in kinds}
             for r in range(ROUNDS):
                 for k in kinds:                       # interleaved
                     writes[k].append(timed_write(backends[k], f"probe_{n}_{r}"))
                     if n:
                         reads[k].append(timed_read(backends[k], f"k{n // 2}"))
+                        if hasattr(backends[k], "get_metadata"):
+                            metas[k].append(timed_meta_read(backends[k], f"k{n // 2}"))
 
             for k in kinds:
                 files, size = dir_stats(roots[k])
                 w = statistics.median(writes[k]) * 1000
                 rd = statistics.median(reads[k]) * 1000 if reads[k] else float("nan")
+                md = statistics.median(metas[k]) * 1000 if metas[k] else float("nan")
                 op = float("nan") if args.skip_open else open_cost(k, roots[k]) * 1000
                 rd_s = "     -" if rd != rd else f"{rd:>7.3f}ms"
                 op_s = "        -" if op != op else f"{op:>7.1f}ms"
-                print(f"  {n:>8,}  {k:<8}{w:>8.2f}ms{rd_s:>10}{op_s:>11}"
+                md_s = "     -" if md != md else f"{md:>7.3f}ms"
+                print(f"  {n:>8,}  {k:<8}{w:>8.2f}ms{rd_s:>10}{md_s:>10}{op_s:>11}"
                       f"{files:>10,}{size/1e6:>9.1f}MB"
                       f"{(size / n if n else 0):>10,.0f}B/e")
             print()
