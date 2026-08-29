@@ -15,6 +15,7 @@ from cash.__main__ import (
     HOOK_FILENAME,
     HOOK_MARKER,
 )
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def _autoload_on(*, mode="active", profile="default", force=False):
@@ -75,9 +76,7 @@ class TestCLIInspect:
 
         # Create some fake cache files
         meta = {'key': 'test_key', 'created_at': time.time(), 'outputs': ['x', 'y']}
-        with open(cache_dir / "abc123.meta", 'wb') as f:
-            pickle.dump(meta, f)
-        (cache_dir / "abc123.data").write_bytes(b"fake data")
+        (cache_dir / f"abc123{ENTRY_SUFFIX}").write_bytes(pack_entry(meta, b"fake data"))
 
         from types import SimpleNamespace
         cmd_inspect(SimpleNamespace(path=str(cache_dir)))
@@ -279,8 +278,7 @@ class TestCLIInspectNotebook:
             'created_at': 1700000000.0,
             'outputs': ['result', 'df']
         }
-        with open(cache_dir / "entry1.meta", 'wb') as f:
-            pickle.dump(meta, f)
+        (cache_dir / f"entry1{ENTRY_SUFFIX}").write_bytes(pack_entry(meta, b""))
 
         from cash.__main__ import _inspect_cache_dir
         _inspect_cache_dir(str(cache_dir))

@@ -34,6 +34,7 @@ import time
 
 from cash.backends import FileBackend
 from cash.backends.file_backend import CACHE_FORMAT_VERSION
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def _seed(cache_dir, n, payload=b"x" * 256):
@@ -47,19 +48,17 @@ def _seed(cache_dir, n, payload=b"x" * 256):
     cache_dir.mkdir(parents=True, exist_ok=True)
     (cache_dir / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION),
                                              encoding="utf-8")
-    paths = FileBackend(str(cache_dir))._get_paths
+    path_of = FileBackend(str(cache_dir))._get_path
     keys = []
     for i in range(n):
         key = f"mod.f:state:{i}:args"
         keys.append(key)
-        meta_path, data_path = paths(key)
-        with open(meta_path, "wb") as fh:
-            pickle.dump({"key": key, "size": len(payload),
-                         "created_at": time.time(),
-                         "last_access": time.time() + i,
-                         "access_count": 1, "storage": ["DISK"]}, fh)
-        with open(data_path, "wb") as fh:
-            fh.write(payload)
+        meta = {"key": key, "size": len(payload),
+                "created_at": time.time(),
+                "last_access": time.time() + i,
+                "access_count": 1, "storage": ["DISK"]}
+        with open(path_of(key), "wb") as fh:
+            fh.write(pack_entry(meta, payload))
     return keys
 
 
@@ -122,14 +121,14 @@ def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
     """
     cache = tmp_path / "cache"
     _seed(cache, 60, payload=b"x" * 5_000)
-    before = len(list(cache.glob("*.data")))
+    before = len(list(cache.glob(f"*{ENTRY_SUFFIX}")))
 
     tight = FileBackend(str(cache), max_size_bytes=100_000)
     tight.set("newcomer", b"y" * 5_000,
               {"size": 5_000, "created_at": time.time(), "last_access": time.time()})
     tight._writes.wait_all()
 
-    after = len(list(cache.glob("*.data")))
+    after = len(list(cache.glob(f"*{ENTRY_SUFFIX}")))
     assert after < before, (
         "eviction freed nothing: it can only see keys this process touched"
     )
@@ -152,8 +151,8 @@ def test_deleting_an_untouched_key_updates_the_size(tmp_path):
     before = backend._current_size_bytes
 
     victim = "mod.f:state:3:args"              # never touched by this process
-    meta_path, data_path = backend._get_paths(victim)
-    on_disk = os.path.getsize(meta_path) + os.path.getsize(data_path)
+
+    on_disk = os.path.getsize(backend._get_path(victim))
 
     backend.delete(victim)
     assert backend._current_size_bytes == before - on_disk, (
@@ -182,7 +181,7 @@ def _count_scans(backend):
 
 def _on_disk(cache_dir):
     return sum(f.stat().st_size for f in cache_dir.iterdir()
-               if f.suffix in (".meta", ".data"))
+               if f.suffix == ENTRY_SUFFIX)
 
 
 def test_a_read_only_process_never_walks_the_directory(tmp_path):
@@ -257,3 +256,37 @@ def test_the_first_write_establishes_the_total_exactly_once(tmp_path):
 
     assert len(scans) == 1, "the walk repeated; it is supposed to latch"
     assert backend._current_size_bytes == _on_disk(cache)
+
+
+def test_eviction_frees_what_it_needs_and_not_much_more(tmp_path):
+    """Eviction used to measure each victim in the wrong unit.
+
+    The loop worked down a shortfall computed from the TOTAL entry bytes --
+    header, metadata and payload -- while crediting each eviction with only
+    the victim's ``size``, which is the payload alone. Every eviction looked
+    smaller than it was, so the loop kept taking entries after it already had
+    enough.
+
+    The payload here is deliberately small next to an entry's fixed overhead,
+    which is what makes the discrepancy loud: crediting ~100 bytes for an
+    eviction that frees ~300 over-evicts roughly threefold. With two files per
+    entry the same gap existed and was small enough to hide.
+    """
+    cache = tmp_path / "cache"
+    _seed(cache, 40, payload=b"x" * 100)
+    entry_bytes = _on_disk(cache) / 40
+
+    # Over the cap by about two entries' worth.
+    cap = int(entry_bytes * 30)
+    backend = FileBackend(str(cache), max_size_bytes=cap)
+    backend.set("newcomer", b"y" * 100,
+                {"size": 100, "created_at": time.time(), "last_access": time.time()})
+    backend._writes.wait_all()
+
+    target = cap * 0.9
+    remaining = _on_disk(cache)
+    assert remaining <= target, "eviction did not get under the cap"
+    assert remaining > target - 2 * entry_bytes, (
+        f"evicted down to {remaining:.0f} bytes when {target:.0f} would have "
+        f"done -- about {(target - remaining) / entry_bytes:.0f} entries too many"
+    )

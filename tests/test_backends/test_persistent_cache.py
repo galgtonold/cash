@@ -2,6 +2,7 @@
 import os
 from cash import Cash
 from cash.backends import FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 def test_persistence_across_instances(temp_cache_dir):
     """Test that cached values persist across Cash instances."""
@@ -60,9 +61,6 @@ def test_persistence_simple(temp_cache_dir):
     files = os.listdir(temp_cache_dir)
     assert len(files) > 0, "Cache directory should not be empty"
     
-    # Should have both .data and .meta files
-    data_files = [f for f in files if f.endswith('.data')]
-    meta_files = [f for f in files if f.endswith('.meta')]
-    
-    assert len(data_files) > 0, "Should have .data files"
-    assert len(meta_files) > 0, "Should have .meta files"
+    # One file per entry, holding both the metadata and the payload.
+    entry_files = [f for f in files if f.endswith(ENTRY_SUFFIX)]
+    assert entry_files, f"expected entry files, got {files}"

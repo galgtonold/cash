@@ -18,6 +18,12 @@ from cash.exceptions import CacheBackendError
 from cash.utils import replace_with_retry
 
 from ._base import CacheBackend, MetadataDict, PendingWrites
+from .entry_format import (
+    ENTRY_SUFFIX,
+    pack_entry,
+    read_entry,
+    update_metadata_in_place,
+)
 from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
@@ -74,16 +80,22 @@ def _sibling_writers(cache_dir: str, own: PendingWrites) -> list[PendingWrites]:
 
 __all__ = ["FileBackend", "CACHE_FORMAT_VERSION"]
 
-# Version of the on-disk cache format (the ``*.meta`` / ``*.data`` pickle
-# layout). Bump this **whenever a change makes caches written by an older
+# Live entries. One file each; see ``entry_format``.
+_ENTRY_GLOB = f"*{ENTRY_SUFFIX}"
+# Everything a format migration has to sweep up, including the
+# ``.meta``/``.data`` pair that entries were stored as before v2.
+_ALL_ENTRY_GLOBS = (_ENTRY_GLOB, "*.meta", "*.data")
+
+# Version of the on-disk cache format (the ``*.entry`` layout described in
+# ``entry_format``; v1 was a ``*.meta`` / ``*.data`` pair). Bump this **whenever a change makes caches written by an older
 # build undecodable or liable to be misread** by a newer one. On init,
 # FileBackend compares this against the stamp it finds in the cache dir and
 # auto-invalidates a mismatched cache rather than silently decoding a stale
 # layout — automating the "run %cash_repair --full after upgrading" step.
-CACHE_FORMAT_VERSION = 1
+CACHE_FORMAT_VERSION = 2
 
-# Filename of the per-directory format stamp. Has no ``.meta``/``.data``
-# extension so it is invisible to entry globs (listing, sizing, clearing).
+# Filename of the per-directory format stamp. Has no entry extension so it
+# is invisible to entry globs (listing, sizing, clearing).
 _VERSION_FILENAME = "CACHE_VERSION"
 
 
@@ -199,8 +211,8 @@ class FileBackend(CacheBackend):
         Compares the format stamp in the cache directory against
         :data:`CACHE_FORMAT_VERSION`. If they differ — including a cache
         written by a pre-stamp build (no marker) that still holds entries —
-        the existing ``*.meta`` / ``*.data`` entries are removed so a stale
-        layout can never be decoded as if it were current. The marker is then
+        the existing entry files are removed so a stale layout can never be
+        decoded as if it were current. The marker is then
         (re)written with the current version.
 
         A fresh or empty directory is simply stamped: no entries means there
@@ -221,8 +233,8 @@ class FileBackend(CacheBackend):
         if stored != CACHE_FORMAT_VERSION:
             entry_files = [
                 f
-                for ext in ("*.meta", "*.data")
-                for f in glob.glob(os.path.join(self.cache_dir, ext))
+                for pattern in _ALL_ENTRY_GLOBS
+                for f in glob.glob(os.path.join(self.cache_dir, pattern))
             ]
             if entry_files:
                 logger.warning(
@@ -257,14 +269,14 @@ class FileBackend(CacheBackend):
         This is the one operation whose cost still scales with the number of
         entries: about 3.5us each, so ~70ms at 20k, ~0.35s at 100k and ~3.5s
         at 1M. It reads no file *contents* -- an earlier version unpickled
-        every ``.meta`` here, which was 30x slower again (2037ms vs 65ms at
-        20k) and built a metadata cache nothing had asked for.
+        every entry's metadata here, which was 30x slower again (2037ms vs
+        65ms at 20k) and built a metadata cache nothing had asked for.
         """
         total_size = 0
         try:
             with os.scandir(self.cache_dir) as entries:
                 for entry in entries:
-                    if not entry.name.endswith((".meta", ".data")):
+                    if not entry.name.endswith(ENTRY_SUFFIX):
                         continue
                     try:
                         total_size += entry.stat().st_size
@@ -320,13 +332,11 @@ class FileBackend(CacheBackend):
         """
         if self._metadata_loaded:
             return
-        for meta_path in glob.glob(os.path.join(self.cache_dir, "*.meta")):
+        for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
             try:
-                with open(meta_path, 'rb') as f:
-                    meta = pickle.load(f)
+                meta, _ = read_entry(path, with_payload=False)
             except UNREADABLE_ENTRY:
-                logger.debug("Skipping unreadable metadata file %s", meta_path,
-                             exc_info=True)
+                logger.debug("Skipping unreadable entry %s", path, exc_info=True)
                 continue
             key = meta.get('key')
             if key and key not in self._metadata_cache:
@@ -342,7 +352,20 @@ class FileBackend(CacheBackend):
             self._flush_metadata()
 
     def _flush_metadata(self) -> None:
-        """Write dirty metadata to disk."""
+        """Write dirty metadata back into each entry, in place.
+
+        Every ``get`` bumps ``last_access`` and ``access_count`` and marks the
+        key dirty, so this runs over recently-read entries every
+        ``flush_interval`` seconds. With metadata and payload sharing a file,
+        rewriting the whole entry to record an access would mean rewriting the
+        payload: a session that reads a 100MB frame would rewrite 100MB every
+        few seconds. ``update_metadata_in_place`` writes only the header and
+        the metadata region, which is what the reserved slack is for.
+
+        If metadata has outgrown that slack the update is skipped rather than
+        forced. What is lost is LRU precision for one entry until it is next
+        written -- never a value, and never correctness.
+        """
         with self._lock:
             if not self._dirty_metadata:
                 return
@@ -353,21 +376,18 @@ class FileBackend(CacheBackend):
         for key in keys_to_flush:
             try:
                 meta = self._metadata_cache.get(key)
-                if meta:
-                    meta_path, _ = self._get_paths(key)
-                    with open(meta_path, 'wb') as f:
-                        pickle.dump(meta, f)
+                if meta and not update_metadata_in_place(self._get_path(key), meta):
+                    logger.debug(
+                        "Metadata for %r no longer fits its reserved region; "
+                        "access stats not flushed", key,
+                    )
             except (OSError, pickle.PickleError) as exc:
                 logger.debug("Failed to flush metadata for key %r: %s", key, exc)
 
-    def _get_paths(self, key: str) -> tuple[str, str]:
+    def _get_path(self, key: str) -> str:
         import hashlib
         safe_name = hashlib.sha256(key.encode('utf-8')).hexdigest()
-        return (
-            os.path.join(self.cache_dir, f"{safe_name}.meta"),
-            os.path.join(self.cache_dir, f"{safe_name}.data")
-        )
-
+        return os.path.join(self.cache_dir, f"{safe_name}{ENTRY_SUFFIX}")
     def get_metadata(self, key: str) -> dict | None:
         """Get only metadata for a cache key without deserializing the value.
 
@@ -376,6 +396,10 @@ class FileBackend(CacheBackend):
         Also returns metadata-only entries (where data was skipped due to
         size-aware caching) — these still carry execution_time, output_lineages,
         etc. for badge display and upstream simulation.
+
+        Reads the header and the metadata region and stops there, so this
+        costs the same for a 200MB entry as for a 200-byte one. That property
+        is the reason metadata and payload can share a file at all.
 
         Returns:
             Metadata dict if key exists, None otherwise.
@@ -386,16 +410,18 @@ class FileBackend(CacheBackend):
         self._writes.wait(key)
         cached_meta = self._metadata_cache.get(key)
 
-        meta_path, data_path = self._get_paths(key)
-        if not os.path.exists(meta_path):
-            return None
+        path = self._get_path(key)
 
         try:
-            if cached_meta:
+            if cached_meta is not None:
+                # Cheaper than reopening, but it still has to exist: a delete
+                # by another process must read as absent, not as this
+                # process's stale copy.
+                if not os.path.exists(path):
+                    return None
                 metadata = cached_meta
             else:
-                with open(meta_path, 'rb') as f:
-                    metadata = pickle.load(f)
+                metadata, _ = read_entry(path, with_payload=False)
                 self._metadata_cache[key] = metadata
 
             ttl = metadata.get('ttl', self._default_ttl)
@@ -405,34 +431,50 @@ class FileBackend(CacheBackend):
                     return None
 
             return metadata
+        except FileNotFoundError:
+            return None
         except UNREADABLE_ENTRY:
             logger.debug("Unreadable metadata for key %s; treating as absent", key, exc_info=True)
             return None
-
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._ensure_initialized()
         # Wait for any in-flight write for this key so we never return
         # stale-or-missing data when get() races set().
         self._wait_for_writes(key)
-        # Check memory cache first for metadata
+        # Check memory cache first for metadata. The cached dict is preferred
+        # over the one on disk even though we are about to read the file
+        # anyway: callers hold it, `get` mutates it in place, and the flusher
+        # writes THAT object back. Replacing it with a fresh dict per read
+        # would drop every unflushed access update on the floor.
         cached_meta = self._metadata_cache.get(key)
 
-        meta_path, data_path = self._get_paths(key)
+        path = self._get_path(key)
 
-        if not os.path.exists(meta_path) or not os.path.exists(data_path):
-            # Cleanup specific inconsistency
+        try:
+            on_disk, payload = read_entry(path, with_payload=True)
+        except FileNotFoundError:
             if key in self._metadata_cache:
                 with self._lock:
-                    del self._metadata_cache[key]
+                    self._metadata_cache.pop(key, None)
+            return None, None
+        except UNREADABLE_ENTRY as exc:
+            logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
 
         try:
-            if cached_meta:
+            if cached_meta is not None:
                 metadata = cached_meta
             else:
-                with open(meta_path, 'rb') as f:
-                    metadata = pickle.load(f)
+                metadata = on_disk
                 self._metadata_cache[key] = metadata
+
+            # A metadata-only entry (the value was too large to persist) has
+            # no payload. It is a HIT for `get_metadata`, which wants the
+            # execution time and lineages, and a MISS here, because there is
+            # nothing to restore. With two files that fell out of requiring
+            # both to exist; with one it has to be asked explicitly.
+            if metadata.get('metadata_only'):
+                return None, None
 
             ttl = metadata.get('ttl', self._default_ttl)
             if ttl is not None:
@@ -449,22 +491,16 @@ class FileBackend(CacheBackend):
             with self._lock:
                 self._dirty_metadata.add(key)
 
-            # Check for compression
-            is_compressed = metadata.get('compressed', False)
-            opener = gzip.open if is_compressed else open
+            if metadata.get('compressed', False):
+                try:
+                    payload = gzip.decompress(payload)
+                except (OSError, gzip.BadGzipFile, EOFError):
+                    # Flag says compressed but the bytes are not. Fall through
+                    # with the raw bytes, as the two-file path did.
+                    logger.debug("Entry for %r flagged compressed but is not", key)
 
             serializer_cls = metadata.get('serializer_cls', PickleSerializer)
-            serializer = serializer_cls()
-
-            try:
-                with opener(data_path, 'rb') as f:
-                    data_bytes = f.read()
-                    value = serializer.deserialize(data_bytes)
-            except (OSError, gzip.BadGzipFile):
-                # Fallback
-                with open(data_path, 'rb') as f:
-                    data_bytes = f.read()
-                    value = serializer.deserialize(data_bytes)
+            value = serializer_cls().deserialize(payload)
 
             metadata.setdefault('source', self.source_label)
             return metadata, value
@@ -484,7 +520,6 @@ class FileBackend(CacheBackend):
             # caller with "Ran out of input" instead of degrading to a miss.
             logger.debug("Cache get failed for key %r: %s", key, exc)
             return None, None
-
     def _wait_for_writes(self, key: str) -> None:
         """Wait for every live write to *key* in this cache directory.
 
@@ -522,30 +557,34 @@ class FileBackend(CacheBackend):
         """
         replace_with_retry(tmp_path, path)
 
-    def _atomic_write(self, path: str, payload: bytes, *, use_gzip: bool) -> None:
+    def _atomic_write(self, path: str, payload: bytes) -> None:
         """Write *payload* to *path* so no reader can observe a partial file.
 
         A plain ``open(path, 'wb')`` makes the file visible the instant it is
         created — while it still holds zero or half its bytes. Any concurrent
         reader (a second Cash instance, or another process sharing the cache
-        directory) can pass ``get()``'s ``os.path.exists`` check and then
-        unpickle a truncated file. That is what surfaced on the macOS CI
-        runners as ``EOFError: Ran out of input``.
+        directory) can pass ``get()``'s existence check and then unpickle a
+        truncated file. That is what surfaced on the macOS CI runners as
+        ``EOFError: Ran out of input``.
 
         Writing to a temp file in the SAME directory and renaming makes the
         entry appear all at once: a reader sees either the previous contents or
         the complete new ones, never a torn mixture. ``os.replace`` is atomic on
         POSIX and on Windows, and same-directory keeps it a rename rather than a
         cross-filesystem copy.
+
+        Takes no compression flag. Compression applies to the payload region
+        of an entry, not to the file: the header and metadata must stay
+        readable without inflating anything, or a metadata read would have to
+        decompress the value it exists to avoid touching.
         """
         directory = os.path.dirname(path) or '.'
-        # mkstemp in the target directory; the leading dot keeps the partial out
-        # of the ``*.data`` / ``*.meta`` globs the backend scans.
+        # mkstemp in the target directory; the leading dot keeps the partial
+        # out of the ``*.entry`` glob the backend scans.
         fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.tmp-', suffix='.part')
         os.close(fd)
         try:
-            opener = gzip.open if use_gzip else open
-            with opener(tmp_path, 'wb') as f:
+            with open(tmp_path, 'wb') as f:
                 f.write(payload)
             self._replace_with_retry(tmp_path, path)
         except BaseException:
@@ -555,14 +594,35 @@ class FileBackend(CacheBackend):
                 logger.debug("Could not remove partial write %s", tmp_path, exc_info=True)
             raise
 
-    def _write_cache_files(self, key: str, meta_path: str, data_path: str, metadata: dict, serialized_value: bytes) -> None:
-        """Write serialized data and metadata to disk, updating size tracking.
+    def _write_cache_files(self, key: str, path: str, metadata: dict,
+                           serialized_value: bytes) -> None:
+        """Write one entry -- metadata and payload -- and update size tracking.
+
+        One file, one atomic rename. The two-file version had to write the
+        data first and the metadata second, and reason about a reader that
+        caught the gap; there is no gap to reason about now.
 
         Raises:
             OSError, pickle.PickleError, ValueError: on write failure (caller handles cleanup).
         """
+        payload = gzip.compress(serialized_value) if self.compress else serialized_value
+        # ``size`` means the bytes the value occupies, post-compression --
+        # what the old code learned by stat-ing the data file it had just
+        # written. We already know it, so the stat is gone.
+        metadata['size'] = len(payload)
+        blob = pack_entry(metadata, payload)
+
+        # Exact, and one syscall: what this entry costs today, so a rewrite
+        # subtracts what was really there. The old code subtracted the cached
+        # ``size`` plus the NEW metadata size as a proxy, and subtracted
+        # nothing at all for a key this process had never written.
         try:
-            self._atomic_write(data_path, serialized_value, use_gzip=self.compress)
+            old_entry_bytes = os.path.getsize(path)
+        except OSError:
+            old_entry_bytes = 0
+
+        try:
+            self._atomic_write(path, blob)
         except FileNotFoundError:
             # The cache dir vanished under a live process. The README suggests
             # deleting ./.cash to wipe the cache, and doing that with the kernel
@@ -570,36 +630,12 @@ class FileBackend(CacheBackend):
             # instead of simply recreating the directory. Recreate + retry once;
             # costs nothing on the normal path.
             os.makedirs(self.cache_dir, exist_ok=True)
-            self._atomic_write(data_path, serialized_value, use_gzip=self.compress)
-
-        try:
-            actual_data_size = os.path.getsize(data_path)
-            metadata['size'] = actual_data_size
-        except OSError:
-            # Fall back to serialized byte count if stat fails
-            metadata['size'] = len(serialized_value)
-            logger.debug("Could not stat data file %s; using serialized length", data_path, exc_info=True)
-
-        # Data lands before metadata, and each lands atomically. get() requires
-        # BOTH files, so the worst a concurrent reader can observe is
-        # data-without-metadata — which it reports as a clean miss.
-        self._atomic_write(meta_path, pickle.dumps(metadata), use_gzip=False)
-
-        try:
-            actual_meta_size = os.path.getsize(meta_path)
-        except OSError:
-            actual_meta_size = 0
+            self._atomic_write(path, blob)
 
         with self._lock:
-            # Handle replacement: subtract old size
-            if key in self._metadata_cache:
-                old_meta = self._metadata_cache[key]
-                self._current_size_bytes -= old_meta.get('size', 0)
-                # Subtract estimated old meta size (using new as proxy)
-                self._current_size_bytes -= actual_meta_size
-
+            self._current_size_bytes -= old_entry_bytes
             self._metadata_cache[key] = metadata
-            self._current_size_bytes += metadata['size'] + actual_meta_size
+            self._current_size_bytes += len(blob)
 
             # Stamp the write order so _check_and_evict can spot a just-written
             # entry being evicted almost immediately (the treadmill signature).
@@ -611,7 +647,7 @@ class FileBackend(CacheBackend):
         in the background. ``set()`` returns once the bytes are captured;
         a subsequent ``get(key)`` waits for the write."""
         self._ensure_initialized()
-        meta_path, data_path = self._get_paths(key)
+        path = self._get_path(key)
 
         metadata = self._init_metadata(metadata, key)
 
@@ -636,34 +672,31 @@ class FileBackend(CacheBackend):
 
         # Freeze a copy of metadata for the background write — the caller
         # can mutate the original after we return without affecting the
-        # written meta-file.
+        # written entry.
         meta_for_write = dict(metadata)
         self._writes.submit(
             key, self._do_set_sync,
-            key, meta_path, data_path, meta_for_write, serialized_value,
+            key, path, meta_for_write, serialized_value,
         )
 
-    def _do_set_sync(self, key: str, meta_path: str, data_path: str,
-                     metadata: dict, serialized_value: bytes) -> None:
+    def _do_set_sync(self, key: str, path: str, metadata: dict,
+                     serialized_value: bytes) -> None:
         """The actual disk write — runs in the PendingWrites worker thread.
 
-        Failures clean up any partial files and re-raise. The exception
+        Failures clean up any partial file and re-raise. The exception
         is stored on the future and surfaces on the next ``get(key)``
         (or ``shutdown()``).
         """
         try:
-            self._write_cache_files(key, meta_path, data_path, metadata, serialized_value)
+            self._write_cache_files(key, path, metadata, serialized_value)
             if self._max_size_bytes:
                 self._check_and_evict()
         except (OSError, pickle.PickleError, ValueError) as exc:
             logger.debug("Cache set failed for key %r, cleaning up: %s", key, exc)
             try:
-                if os.path.exists(data_path):
-                    os.remove(data_path)
-                if os.path.exists(meta_path):
-                    os.remove(meta_path)
+                os.remove(path)
             except OSError:
-                logger.debug("Cleanup of partial cache files failed for key %r", key, exc_info=True)
+                logger.debug("Cleanup of partial cache file failed for key %r", key, exc_info=True)
             raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
 
     def set_metadata_only(self, key: str, metadata: dict) -> None:
@@ -673,20 +706,23 @@ class FileBackend(CacheBackend):
         but we still want to retain execution_time, output_lineages, etc.
         for badge display and upstream simulation after kernel restart.
 
-        Will NOT overwrite an existing entry that has full data (both .meta and .data),
+        Will NOT overwrite an existing entry that carries a real payload,
         since that entry is more valuable.
         """
         self._ensure_initialized()
         # Wait for any in-flight async set() for this key to land first —
-        # otherwise the existence check below races a not-yet-flushed full
-        # write, sees no files, and clobbers the (more valuable) full entry
-        # with a metadata-only one. get()/get_metadata()/delete() synchronise
-        # the same way.
+        # otherwise the check below races a not-yet-flushed full write, sees
+        # nothing, and clobbers the (more valuable) full entry with a
+        # metadata-only one. get()/get_metadata()/delete() synchronise the
+        # same way.
         self._writes.wait(key)
-        meta_path, data_path = self._get_paths(key)
+        path = self._get_path(key)
 
-        # Don't overwrite a full cache entry (has both .meta and .data)
-        if os.path.exists(meta_path) and os.path.exists(data_path):
+        try:
+            existing, _ = read_entry(path, with_payload=False)
+        except UNREADABLE_ENTRY:
+            existing = None
+        if existing is not None and not existing.get('metadata_only'):
             return
 
         metadata = dict(metadata)  # Don't mutate caller's dict
@@ -698,8 +734,7 @@ class FileBackend(CacheBackend):
         metadata.setdefault('size', 0)
 
         try:
-            with open(meta_path, 'wb') as f:
-                pickle.dump(metadata, f)
+            self._atomic_write(path, pack_entry(metadata, b""))
             with self._lock:
                 self._metadata_cache[key] = metadata
         except OSError as exc:
@@ -710,20 +745,16 @@ class FileBackend(CacheBackend):
         # Drain any pending write for this key — otherwise the write
         # could fire after the delete and leave a ghost entry.
         self._writes.drain(key)
-        meta_path, data_path = self._get_paths(key)
+        path = self._get_path(key)
 
-        # Measured from the files rather than taken from the metadata cache.
+        # Measured from the file rather than taken from the metadata cache.
         # The cached figure is only present for keys THIS process has touched,
-        # so with metadata now loaded lazily an uncached key would have
-        # subtracted 0 and drifted the total upward forever. Statting also
-        # counts the .meta bytes, which the cached ``size`` never included --
-        # a small pre-existing leak on every delete.
-        size_to_remove = 0
-        for path in (meta_path, data_path):
-            try:
-                size_to_remove += os.path.getsize(path)
-            except OSError:
-                continue
+        # so with metadata loaded lazily an uncached key would have subtracted
+        # 0 and drifted the total upward forever.
+        try:
+            size_to_remove = os.path.getsize(path)
+        except OSError:
+            size_to_remove = 0
 
         with self._lock:
             if key in self._metadata_cache:
@@ -733,16 +764,12 @@ class FileBackend(CacheBackend):
             self._write_seq_by_key.pop(key, None)
             self._current_size_bytes -= size_to_remove
 
-        if os.path.exists(meta_path):
-            try:
-                os.remove(meta_path)
-            except OSError as exc:
-                logger.debug("Failed to remove metadata file %s: %s", meta_path, exc)
-        if os.path.exists(data_path):
-            try:
-                os.remove(data_path)
-            except OSError as exc:
-                logger.debug("Failed to remove data file %s: %s", data_path, exc)
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.debug("Failed to remove cache entry %s: %s", path, exc)
 
     # Evict-after-write is only a treadmill signal if the evicted entry was
     # written within roughly this many writes — something older getting
@@ -773,28 +800,33 @@ class FileBackend(CacheBackend):
         keys_to_delete = []
         evicted_recent = False
         with self._lock:
-            items = []
-            for k, m in self._metadata_cache.items():
-                items.append((m.get('last_access', 0), k, m.get('size', 0)))
+            # Oldest access first. Only the ORDER is decided here; how many to
+            # take is decided as they go, against the running byte total.
+            order = sorted(
+                (m.get('last_access', 0), k)
+                for k, m in self._metadata_cache.items()
+            )
 
-            items.sort(key=lambda x: x[0])
-
-            evicted_size = 0
-            needed = self._current_size_bytes - (self._max_size_bytes * 0.9)
-
-            for _last_access, key, size in items:
-                if evicted_size >= needed:
-                    break
-                keys_to_delete.append(key)
-                evicted_size += size
-                # Was this entry written only a couple of ops ago?
-                written_at = self._write_seq_by_key.get(key)
-                if written_at is not None and self._write_seq - written_at <= self._EVICT_WARN_RECENT_OPS:
-                    evicted_recent = True
-
-        # Delete outside the first lock scope (delete acquires lock)
-        for key in keys_to_delete:
+        target = self._max_size_bytes * 0.9
+        for _last_access, key in order:
+            if self._current_size_bytes <= target:
+                break
+            # Was this entry written only a couple of ops ago?
+            written_at = self._write_seq_by_key.get(key)
+            if written_at is not None and self._write_seq - written_at <= self._EVICT_WARN_RECENT_OPS:
+                evicted_recent = True
+            # `delete` subtracts what the file actually weighed, so the loop
+            # above stops as soon as enough has really been freed.
+            #
+            # It used to accumulate each victim's ``size`` instead, which is
+            # the PAYLOAD length -- while the total it was working down from
+            # counted whole entries, header and metadata included. Every
+            # eviction therefore looked smaller than it was, and the loop took
+            # more entries than it needed. With two files per entry the gap
+            # was small enough to hide; it surfaced as soon as an entry's
+            # fixed overhead grew.
             self.delete(key)
+            keys_to_delete.append(key)
 
         if evicted_recent:
             self._warn_evict_after_write(len(keys_to_delete))
@@ -846,8 +878,8 @@ class FileBackend(CacheBackend):
         # Drain pending writes so they don't fire after the clear and
         # resurrect entries we just removed from disk.
         self._writes.wait_all()
-        for ext in ["*.meta", "*.data"]:
-            for f in glob.glob(os.path.join(self.cache_dir, ext)):
+        for pattern in _ALL_ENTRY_GLOBS:
+            for f in glob.glob(os.path.join(self.cache_dir, pattern)):
                 try:
                     os.remove(f)
                 except OSError:
@@ -876,31 +908,24 @@ class FileBackend(CacheBackend):
         # flight would be invisible.
         self._writes.wait_all()
         entries = []
-        for meta_path in glob.glob(os.path.join(self.cache_dir, "*.meta")):
+        for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
             try:
-                with open(meta_path, 'rb') as f:
-                    metadata = pickle.load(f)
-                    entries.append(metadata)
+                metadata, _ = read_entry(path, with_payload=False)
+                entries.append(metadata)
             except UNREADABLE_ENTRY:
-                logger.debug("Skipping unreadable metadata file %s in list_entries", meta_path, exc_info=True)
+                logger.debug("Skipping unreadable entry %s in list_entries", path, exc_info=True)
         return entries
 
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         self._ensure_initialized()
         self._writes.wait_all()
         count = 0
-        for meta_path in glob.glob(os.path.join(self.cache_dir, "*.meta")):
+        for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
             try:
-                with open(meta_path, 'rb') as f:
-                    metadata = pickle.load(f)
-
+                metadata, _ = read_entry(path, with_payload=False)
                 if is_expired(metadata):
-                    # Delete both
-                    data_path = meta_path.replace(".meta", ".data")
-                    os.remove(meta_path)
-                    if os.path.exists(data_path):
-                        os.remove(data_path)
+                    os.remove(path)
                     count += 1
             except UNREADABLE_ENTRY:
-                logger.debug("Skipping unreadable metadata file %s during cleanup", meta_path, exc_info=True)
+                logger.debug("Skipping unreadable entry %s during cleanup", path, exc_info=True)
         return count

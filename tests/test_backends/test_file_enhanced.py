@@ -2,6 +2,7 @@ import time
 import os
 import pickle
 from cash.backends import FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 class TestFileBackendEnhanced:
     
@@ -13,9 +14,8 @@ class TestFileBackendEnhanced:
         backend._writes.wait_all()  # drain async data write before reading the meta file
 
         # Get initial metadata access time
-        meta_path = os.path.join(tmp_path, backend._get_paths("key1")[0])
-        with open(meta_path, 'rb') as f:
-            meta_initial = pickle.load(f)
+        meta_path = backend._get_path("key1")
+        meta_initial, _ = read_entry(meta_path, with_payload=False)
         
         # Wait a bit to ensure distinct timestamp
         time.sleep(1.0)
@@ -33,9 +33,10 @@ class TestFileBackendEnhanced:
         # Wait for flush
         time.sleep(1.0)
         
-        # Check disk
-        with open(meta_path, 'rb') as f:
-            meta_updated = pickle.load(f)
+        # Check disk. Reading the metadata region alone is what makes the
+        # in-place flush observable: the flusher rewrites only that region,
+        # never the payload.
+        meta_updated, _ = read_entry(meta_path, with_payload=False)
             
         assert meta_updated["last_access"] > meta_initial["last_access"]
         
@@ -124,7 +125,7 @@ class TestFileBackendEnhanced:
         b2._writes.wait_all()
 
         on_disk = sum(f.stat().st_size for f in tmp_path.iterdir()
-                      if f.suffix in (".meta", ".data"))
+                      if f.suffix == ENTRY_SUFFIX)
         assert b2._current_size_bytes == on_disk
         assert b2._current_size_bytes > size, "k1's bytes were not counted"
         b2.shutdown()

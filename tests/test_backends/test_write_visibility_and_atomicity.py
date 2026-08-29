@@ -23,6 +23,7 @@ import pytest
 
 from cash.backends._base import PendingWrites
 from cash.backends.file_backend import FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 SLOW = 0.5  # long enough that an unsynchronised reader loses the race every time
@@ -150,12 +151,12 @@ class TestAtomicWrites:
     def test_target_is_untouched_when_the_rename_fails(self, tmp_path, monkeypatch):
         backend = FileBackend(cache_dir=str(tmp_path / "c"))
         backend._ensure_initialized()
-        target = os.path.join(backend.cache_dir, "probe.data")
+        target = os.path.join(backend.cache_dir, f"probe{ENTRY_SUFFIX}")
 
         monkeypatch.setattr(os, "replace",
                             lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
         with pytest.raises(OSError):
-            backend._atomic_write(target, b"x" * 4096, use_gzip=False)
+            backend._atomic_write(target, b"x" * 4096)
 
         assert not os.path.exists(target), "payload was streamed into the live path"
         leftovers = [p for p in os.listdir(backend.cache_dir) if p.endswith(".part")]
@@ -164,13 +165,13 @@ class TestAtomicWrites:
     def test_existing_entry_survives_a_failed_rewrite(self, tmp_path, monkeypatch):
         backend = FileBackend(cache_dir=str(tmp_path / "c"))
         backend._ensure_initialized()
-        target = os.path.join(backend.cache_dir, "probe.data")
-        backend._atomic_write(target, b"original", use_gzip=False)
+        target = os.path.join(backend.cache_dir, f"probe{ENTRY_SUFFIX}")
+        backend._atomic_write(target, b"original")
 
         monkeypatch.setattr(os, "replace",
                             lambda *a, **kw: (_ for _ in ()).throw(OSError("boom")))
         with pytest.raises(OSError):
-            backend._atomic_write(target, b"replacement", use_gzip=False)
+            backend._atomic_write(target, b"replacement")
 
         with open(target, "rb") as f:
             assert f.read() == b"original"
@@ -184,47 +185,55 @@ class TestAtomicWrites:
         stray = os.path.join(backend.cache_dir, ".tmp-orphan.part")
         with open(stray, "wb") as f:
             f.write(b"junk")
-        for ext in ("*.meta", "*.data"):
-            assert stray not in _glob.glob(os.path.join(backend.cache_dir, ext))
+        assert stray not in _glob.glob(
+            os.path.join(backend.cache_dir, f"*{ENTRY_SUFFIX}"))
         assert backend.get("k")[1] == "v"
 
 
 class TestUnreadableEntryDegradesToMiss:
     """An entry that cannot be read is an entry that is absent.
 
-    Writes are deliberately NOT atomic (see the note in _write_cache_files), so
-    a concurrent reader can still open a data file between its creation and its
-    bytes landing, and a cache directory can hold a partial file left by a
-    killed process or a full disk. ``EOFError`` subclasses Exception directly —
-    not OSError, not ValueError — so it escaped ``get()``'s handler and reached
-    the user as "Ran out of input" instead of a recompute. That is what
+    A cache directory can hold a partial file left by a killed process or a
+    full disk. ``EOFError`` subclasses Exception directly -- not OSError, not
+    ValueError -- so it escaped ``get()``'s handler and reached the user as
+    "Ran out of input" instead of a recompute. That is what
     test_registry_identity and test_tiered hit on the macOS runners.
 
-    Zero length, not half: a half-written pickle raises UnpicklingError, which
-    was already caught. Only an empty file produces the actual CI signature.
+    Two shapes, now that an entry is one file: a zero-length file, which loses
+    the header too, and a file cut back to its header and metadata, which
+    reads as a valid entry whose payload is empty. A half-written pickle
+    raises UnpicklingError, which was always caught; only these produce the CI
+    signature.
     """
 
-    def test_empty_data_file_is_a_miss(self, tmp_path):
+    def test_empty_entry_file_is_a_miss(self, tmp_path):
         backend = FileBackend(cache_dir=str(tmp_path / "c"))
         backend.set("k", {"big": list(range(1000))})
         assert backend.get("k")[1] is not None  # settles the write
 
-        _, data_path = backend._get_paths("k")
-        with open(data_path, "wb"):
+        with open(backend._get_path("k"), "wb"):
             pass
         backend._metadata_cache.pop("k", None)
 
         metadata, value = backend.get("k")
         assert value is None and metadata is None
 
-    def test_empty_metadata_file_is_a_miss(self, tmp_path):
-        backend = FileBackend(cache_dir=str(tmp_path / "c"))
-        backend.set("k", "v")
-        assert backend.get("k")[1] == "v"
+    def test_an_entry_truncated_to_its_metadata_is_a_miss(self, tmp_path):
+        """The header and metadata survive; the payload does not.
 
-        meta_path, _ = backend._get_paths("k")
-        with open(meta_path, "wb"):
-            pass
+        The arm the single-file layout added: the entry still parses, so
+        nothing upstream reports a problem, and the empty payload has to be
+        caught where the value is deserialized.
+        """
+        backend = FileBackend(cache_dir=str(tmp_path / "c"))
+        backend.set("k", {"big": list(range(1000))})
+        assert backend.get("k")[1] is not None
+
+        path = backend._get_path("k")
+        _meta, payload = read_entry(path, with_payload=True)
+        assert payload, "fixture is wrong: there was no payload to remove"
+        with open(path, "r+b") as fh:
+            fh.truncate(os.path.getsize(path) - len(payload))
         backend._metadata_cache.pop("k", None)
 
         assert backend.get("k") == (None, None)
@@ -235,8 +244,7 @@ class TestUnreadableEntryDegradesToMiss:
         backend.set("k", "original")
         assert backend.get("k")[1] == "original"
 
-        _, data_path = backend._get_paths("k")
-        with open(data_path, "wb"):
+        with open(backend._get_path("k"), "wb"):
             pass
         backend._metadata_cache.pop("k", None)
         assert backend.get("k") == (None, None)

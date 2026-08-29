@@ -1,6 +1,6 @@
 """Cache-format versioning for the on-disk FileBackend.
 
-The on-disk layout (``*.meta`` / ``*.data`` pickle pairs) can change shape
+The on-disk layout (one ``*.entry`` file per entry) can change shape
 between Cash versions. To avoid silently decoding a stale layout after an
 upgrade, FileBackend stamps the cache directory with the format version it
 wrote and, on init, **auto-invalidates** any cache whose stamp doesn't match
@@ -15,14 +15,23 @@ import os
 import pickle
 
 from cash.backends.file_backend import CACHE_FORMAT_VERSION, FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 VERSION_FILENAME = "CACHE_VERSION"
 
 
 def _entry_files(cache_dir: str) -> list[str]:
-    return glob.glob(os.path.join(cache_dir, "*.meta")) + glob.glob(
-        os.path.join(cache_dir, "*.data")
-    )
+    """Every entry file, current layout or legacy.
+
+    v2 is one ``*.entry`` per entry; v1 was a ``*.meta`` / ``*.data`` pair.
+    A migration test has to see both, or it would report a wipe that only
+    removed the half it knew to look for.
+    """
+    return [
+        f
+        for pattern in (f"*{ENTRY_SUFFIX}", "*.meta", "*.data")
+        for f in glob.glob(os.path.join(cache_dir, pattern))
+    ]
 
 
 def test_fresh_cache_stamps_current_version(tmp_path):

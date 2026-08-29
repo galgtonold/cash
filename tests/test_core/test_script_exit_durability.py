@@ -12,6 +12,7 @@ import subprocess
 import sys
 import textwrap
 from pathlib import Path
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def test_decorator_writes_survive_script_exit(tmp_path: Path):
@@ -46,10 +47,8 @@ def test_decorator_writes_survive_script_exit(tmp_path: Path):
     # After the script exits, the cache directory must contain the files.
     assert cache_dir.exists(), f"cache dir missing: stdout={proc.stdout!r} stderr={proc.stderr!r}"
     files = list(cache_dir.iterdir())
-    data_files = [f for f in files if f.suffix == ".data"]
-    meta_files = [f for f in files if f.suffix == ".meta"]
-    assert data_files, f"no .data files survived script exit: {files}"
-    assert meta_files, f"no .meta files survived script exit: {files}"
+    entry_files = [f for f in files if f.suffix == ENTRY_SUFFIX]
+    assert entry_files, f"no entry files survived script exit: {files}"
 
 
 def test_cache_value_readable_in_second_script(tmp_path: Path):

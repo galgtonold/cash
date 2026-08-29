@@ -12,6 +12,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from cash.backends.entry_format import ENTRY_SUFFIX, read_entry
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,7 +68,7 @@ def _format_bytes(size_bytes: int) -> str:
 
 @dataclass
 class _Entry:
-    """One cache entry on disk: its ``.meta``, its ``.data``, and who wrote it."""
+    """One cache entry on disk: its file, its key, and who wrote it."""
     stem: str
     function: str
     key: str
@@ -102,27 +104,28 @@ def _function_of(key: str) -> str:
 
 
 def _scan_entries(cache_path: Path) -> list[_Entry]:
-    """Read every ``.meta`` in *cache_path* and pair it with its payload."""
+    """Read every entry's metadata in *cache_path*.
+
+    Only the metadata region of each file is read, never the payload, so
+    listing a cache full of large frames costs the same as listing one full
+    of small ones.
+    """
     entries: list[_Entry] = []
-    for meta_file in cache_path.glob('*.meta'):
+    for entry_file in cache_path.glob(f'*{ENTRY_SUFFIX}'):
         try:
-            with open(meta_file, 'rb') as fh:
-                metadata = pickle.load(fh)
+            metadata, _ = read_entry(str(entry_file), with_payload=False)
         except (OSError, pickle.UnpicklingError, EOFError, ValueError) as exc:
-            logger.debug("Failed to read cache metadata from %s: %s", meta_file, exc)
+            logger.debug("Failed to read cache metadata from %s: %s", entry_file, exc)
             continue
         key = metadata.get('key') or ''
-        size = meta_file.stat().st_size
-        data_file = meta_file.with_suffix('.data')
-        if data_file.exists():
-            size += data_file.stat().st_size
+        stat = entry_file.stat()
         outputs = metadata.get('outputs') or ()
         entries.append(_Entry(
-            stem=meta_file.stem,
+            stem=entry_file.stem,
             function=_function_of(key),
             key=key,
-            size=size,
-            mtime=meta_file.stat().st_mtime,
+            size=stat.st_size,
+            mtime=stat.st_mtime,
             saves=float(metadata.get('execution_time') or 0.0),
             uses=int(metadata.get('access_count') or 0),
             outputs=tuple(str(o) for o in outputs),
@@ -349,17 +352,16 @@ def _clear_function(cache_dir: str, wanted: str) -> None:
 
 
 def _remove_entry_files(cache_path: Path, stem: str) -> None:
-    """Delete one entry's ``.meta`` and ``.data``, surviving a locked file."""
-    for suffix in ('.meta', '.data'):
-        path = cache_path / f"{stem}{suffix}"
-        try:
-            path.unlink()
-        except FileNotFoundError:
-            continue
-        except OSError as exc:
-            # Antivirus or another process holding it. Partial progress still
-            # frees space, and saying so beats a traceback part way through.
-            print(f"  could not remove {path.name}: {exc}")
+    """Delete one entry's file, surviving a locked one."""
+    path = cache_path / f"{stem}{ENTRY_SUFFIX}"
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        # Antivirus or another process holding it. Partial progress still
+        # frees space, and saying so beats a traceback part way through.
+        print(f"  could not remove {path.name}: {exc}")
 
 
 def _clear_entry(cache_dir: str, wanted: str) -> None:

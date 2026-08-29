@@ -26,6 +26,7 @@ import time
 import pytest
 
 from cash.backends.file_backend import FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def _backend(tmp_path):
@@ -40,7 +41,7 @@ def test_a_transient_permission_error_does_not_lose_the_write(tmp_path, monkeypa
     payload lands anyway.
     """
     backend = _backend(tmp_path)
-    target = str(tmp_path / "cache" / "entry.data")
+    target = str(tmp_path / "cache" / f"entry{ENTRY_SUFFIX}")
     os.makedirs(os.path.dirname(target), exist_ok=True)
 
     real_replace = os.replace
@@ -53,7 +54,7 @@ def test_a_transient_permission_error_does_not_lose_the_write(tmp_path, monkeypa
         return real_replace(src, dst, *a, **kw)
 
     monkeypatch.setattr(os, "replace", flaky_replace)
-    backend._atomic_write(target, b"payload-that-must-survive", use_gzip=False)
+    backend._atomic_write(target, b"payload-that-must-survive")
 
     assert calls["n"] == 4, "expected three denials then a success"
     with open(target, "rb") as f:
@@ -63,7 +64,7 @@ def test_a_transient_permission_error_does_not_lose_the_write(tmp_path, monkeypa
 def test_a_permanent_permission_error_still_raises(tmp_path, monkeypatch):
     """Retrying must not turn a genuine, persistent denial into silence."""
     backend = _backend(tmp_path)
-    target = str(tmp_path / "cache" / "entry.data")
+    target = str(tmp_path / "cache" / f"entry{ENTRY_SUFFIX}")
     os.makedirs(os.path.dirname(target), exist_ok=True)
 
     def always_denied(src, dst, *a, **kw):
@@ -71,7 +72,7 @@ def test_a_permanent_permission_error_still_raises(tmp_path, monkeypatch):
 
     monkeypatch.setattr(os, "replace", always_denied)
     with pytest.raises(PermissionError):
-        backend._atomic_write(target, b"nope", use_gzip=False)
+        backend._atomic_write(target, b"nope")
 
     leftovers = [p for p in os.listdir(os.path.dirname(target)) if ".part" in p]
     assert not leftovers, f"partial files left behind: {leftovers}"
@@ -81,7 +82,7 @@ def test_a_permanent_permission_error_still_raises(tmp_path, monkeypatch):
 def test_a_real_windows_reader_holding_the_destination_does_not_lose_the_write(tmp_path):
     """The actual production collision, provoked rather than injected."""
     backend = _backend(tmp_path)
-    target = str(tmp_path / "cache" / "entry.data")
+    target = str(tmp_path / "cache" / f"entry{ENTRY_SUFFIX}")
     os.makedirs(os.path.dirname(target), exist_ok=True)
     with open(target, "wb") as f:
         f.write(b"old")
@@ -97,7 +98,7 @@ def test_a_real_windows_reader_holding_the_destination_does_not_lose_the_write(t
     t.start()
     holder_open.wait(timeout=5)
 
-    backend._atomic_write(target, b"new", use_gzip=False)
+    backend._atomic_write(target, b"new")
     t.join()
 
     with open(target, "rb") as f:

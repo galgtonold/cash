@@ -6,6 +6,7 @@ This ensures badge timing info survives kernel restarts.
 """
 import os
 import pickle
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 class TestFileBackendMetadataOnly:
@@ -24,10 +25,11 @@ class TestFileBackendMetadataOnly:
         }
         backend.set_metadata_only('test_key', metadata)
 
-        # Should create .meta file
-        meta_path, data_path = backend._get_paths('test_key')
-        assert os.path.exists(meta_path), ".meta file should exist"
-        assert not os.path.exists(data_path), ".data file should NOT exist"
+        path = backend._get_path('test_key')
+        assert os.path.exists(path), "the entry file should exist"
+        stored, payload = read_entry(path, with_payload=True)
+        assert payload == b"", "a metadata-only entry must hold no payload"
+        assert stored['metadata_only'] is True
 
     def test_set_metadata_only_marks_metadata_only_flag(self, tmp_path):
         """Stored metadata should have metadata_only=True."""
@@ -36,9 +38,7 @@ class TestFileBackendMetadataOnly:
         backend = FileBackend(cache_dir=str(tmp_path))
         backend.set_metadata_only('test_key', {'execution_time': 2.0})
 
-        meta_path, _ = backend._get_paths('test_key')
-        with open(meta_path, 'rb') as f:
-            stored = pickle.load(f)
+        stored, _ = read_entry(backend._get_path('test_key'), with_payload=False)
 
         assert stored['metadata_only'] is True
         assert stored['size'] == 0

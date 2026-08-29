@@ -24,14 +24,14 @@ import sys
 import pytest
 
 from cash.__main__ import _function_of, _resolve_function, _scan_entries
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 def _write_entry(cache_dir, stem, key, payload=b"x" * 100, **meta):
     cache_dir.mkdir(parents=True, exist_ok=True)
     record = {"key": key, "created_at": 0, "outputs": []}
     record.update(meta)
-    (cache_dir / f"{stem}.meta").write_bytes(pickle.dumps(record))
-    (cache_dir / f"{stem}.data").write_bytes(payload)
+    (cache_dir / f"{stem}{ENTRY_SUFFIX}").write_bytes(pack_entry(record, payload))
 
 
 def _cli(*args, cwd):
@@ -111,7 +111,7 @@ def test_unreadable_metadata_is_skipped_not_fatal(tmp_path):
     """One corrupt file must not cost you the report for everything else."""
     cache = tmp_path / ".cash"
     _write_entry(cache, "good", "mod.f:1:2:3")
-    (cache / "bad.meta").write_bytes(b"not a pickle")
+    (cache / f"bad{ENTRY_SUFFIX}").write_bytes(b"not a pickle")
     assert [e.function for e in _scan_entries(cache)] == ["mod.f"]
 
 
@@ -136,7 +136,7 @@ def test_clear_function_removes_only_that_function(tmp_path):
     assert "Cleared 1 entry" in result.stdout, "pluralisation"
     remaining = {e.function for e in _scan_entries(cache)}
     assert remaining == {"mod.kept"}
-    assert not (cache / "a1.data").exists(), "the payload outlived its metadata"
+    assert not (cache / f"a1{ENTRY_SUFFIX}").exists(), "the entry outlived the clear"
 
 
 def test_clear_with_no_arguments_prints_help(tmp_path):
@@ -226,7 +226,7 @@ def test_one_entry_can_be_dropped_by_id_prefix(tmp_path):
     assert result.returncode == 0, result.stdout
     remaining = [e.stem for e in _scan_entries(cache)]
     assert len(remaining) == 1 and remaining[0].startswith("fedcba")
-    assert not (cache / ("abcdef" + "0" * 58 + ".data")).exists(),         "the payload outlived its metadata"
+    assert not (cache / ("abcdef" + "0" * 58 + ENTRY_SUFFIX)).exists(),         "the entry outlived the clear"
 
 
 def test_an_ambiguous_entry_prefix_refuses_and_lists(tmp_path):

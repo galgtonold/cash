@@ -6,6 +6,7 @@ from cash.backends import (
     InMemoryBackend, FileBackend, CascadingBackend
 )
 from cash.backends.serialization import PickleSerializer, CloudPickleSerializer, get_serializer
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 
 class TestInMemoryBackendAdvanced:
@@ -204,32 +205,38 @@ class TestFileBackendAdvanced:
         # We can't assert exact count but it should be less than 20
         b.shutdown()
 
-    def test_get_corrupted_meta(self, tmp_path):
-        """Corrupted metadata file returns None gracefully."""
+    def test_get_corrupted_header_is_a_miss(self, tmp_path):
+        """An entry whose header is garbage returns None gracefully."""
         b = FileBackend(str(tmp_path / "cache"))
         b.set("key1", "value", {"info": "test"})
         # Drain the async write before corrupting the file — otherwise the
         # still-in-flight write lands AFTER our corruption and undoes it.
         b._writes.wait_all()
-        safe_name = hashlib.sha256("key1".encode()).hexdigest()
-        meta_path = os.path.join(str(tmp_path / "cache"), f"{safe_name}.meta")
-        with open(meta_path, "wb") as f:
+        with open(b._get_path("key1"), "wb") as f:
             f.write(b"corrupted data")
         if hasattr(b, '_metadata_cache'):
             b._metadata_cache.clear()
         meta, data = b.get("key1")
         assert data is None or meta is None
 
-    def test_get_corrupted_data(self, tmp_path):
-        """Corrupted data file returns None gracefully."""
+    def test_get_corrupted_payload_is_a_miss(self, tmp_path):
+        """A readable header over an unusable payload returns None gracefully.
+
+        Distinct from the arm above now that both live in one file: here the
+        metadata parses fine, so nothing rejects the entry before the value is
+        deserialized, and the failure has to be caught there.
+        """
         b = FileBackend(str(tmp_path / "cache"))
         b.set("key1", "value", {"info": "test"})
         # Drain before corrupting.
         b._writes.wait_all()
-        safe_name = hashlib.sha256("key1".encode()).hexdigest()
-        data_path = os.path.join(str(tmp_path / "cache"), f"{safe_name}.data")
-        with open(data_path, "wb") as f:
+        path = b._get_path("key1")
+        _meta, payload = read_entry(path, with_payload=True)
+        with open(path, "r+b") as f:
+            f.truncate(os.path.getsize(path) - len(payload))
+            f.seek(0, os.SEEK_END)
             f.write(b"corrupted data")
+        b._metadata_cache.clear()
         meta, data = b.get("key1")
         assert data is None
 

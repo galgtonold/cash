@@ -4,6 +4,7 @@ from cash import Cash
 
 
 from cash.backends import FileBackend
+from cash.backends.entry_format import ENTRY_SUFFIX, pack_entry, read_entry
 
 def test_compression_enabled(temp_cache_dir):
     """Test that compression reduces file size for compressible data."""
@@ -20,7 +21,7 @@ def test_compression_enabled(temp_cache_dir):
     assert len(entries) == 1
 
     files = os.listdir(temp_cache_dir)
-    data_file = [f for f in files if f.endswith('.data')][0]
+    data_file = [f for f in files if f.endswith(ENTRY_SUFFIX)][0]
     data_path = os.path.join(temp_cache_dir, data_file)
     file_size = os.path.getsize(data_path)
 
@@ -40,7 +41,7 @@ def test_compression_disabled(temp_cache_dir):
     # Drain pending writes so the on-disk file exists.
     backend.list_entries()
     files = os.listdir(temp_cache_dir)
-    data_file = [f for f in files if f.endswith('.data')][0]
+    data_file = [f for f in files if f.endswith(ENTRY_SUFFIX)][0]
     data_path = os.path.join(temp_cache_dir, data_file)
     file_size = os.path.getsize(data_path)
 
