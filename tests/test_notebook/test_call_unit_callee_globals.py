@@ -337,8 +337,9 @@ class TestPayloadLivesOnTheValueNotInMetadata:
     """CAS-260: the captured globals ride on the VALUE, with only a plain bool
     in metadata.
 
-    Metadata is eagerly unpickled for every entry at startup
-    (``FileBackend._init_stats``) and held for the process lifetime, so a user
+    Metadata is unpickled for every entry in the directory the first time
+    eviction runs (``FileBackend._ensure_metadata_loaded``) and held for the
+    process lifetime, so a user
     object there is deserialised whether or not it is used, and kept forever. A
     survey of 5859 real metadata files found 31 of 33 fields are plain
     builtins; this must not become the third exception.

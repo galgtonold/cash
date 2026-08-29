@@ -19,7 +19,7 @@ You can change backends at any time by constructing a different `Cash(...)` inst
 Walk through these questions top to bottom and stop at the first match:
 
 - **Single user, single machine, single process** → the default `TieredBackend` (in-memory L1 + on-disk L2). Just call `Cash()` with no backend argument.
-- **Single machine, multi-process or multi-script** (e.g. several Jupyter kernels, a notebook + a CLI script) → `FileBackend` or `SQLiteBackend`. SQLite is better when you have many small entries and need concurrent readers.
+- **Single machine, multi-process or multi-script** (e.g. several Jupyter kernels, a notebook + a CLI script) → `FileBackend` or `SQLiteBackend`. SQLite is better when your entries are both many and *small* (thousands of sub-100 KB values) or you need concurrent readers; File is better once values reach a megabyte.
 - **Multiple machines, low latency, shared state** (team, microservices, Airflow workers on the same VPC) → `RedisBackend`. See [Sharing a cache](sharing-caches.md) for what actually produces cross-machine hits once the store is shared.
 - **Cloud pipelines, durable, multi-region** (CI artefacts, S3-backed Lambda jobs) → `S3Backend`.
 - **Throwaway experiments, persistence explicitly unwanted** (one-off notebooks, fuzzing, integration tests) → `InMemoryBackend` alone.
@@ -79,37 +79,75 @@ Eviction is LRU on `last_access`. When `_current_size_bytes` exceeds `max_size_b
 **Gotcha** — uses `pickle` under the hood. Never load a cache directory from an untrusted source. See `SECURITY.md`.
 
 !!! tip "Two files per entry: what it costs, and what it doesn't"
-    Measured at 20,000 entries with a 512-byte payload
+    Measured at 100,000 entries with a 512-byte payload
     (`benchmarks/bench_backend_scale.py`, Windows/NTFS):
 
     | | `FileBackend` | `SQLiteBackend` |
     |---|---|---|
-    | Write one more entry | 1.45 ms | **0.14 ms** |
-    | Read one entry | 0.26 ms | **0.06 ms** |
-    | Open the cache in a new process | 61 ms | **0.1 ms** |
-    | Files on disk | 40,057 | **3** |
-    | Disk used | **13.3 MB** | 21.6 MB |
+    | Write one more entry | 1.70 ms | **0.16 ms** |
+    | Read one entry | 0.29 ms | **0.06 ms** |
+    | Open the cache in a new process | 1.2 ms | **0.1 ms** |
+    | Files on disk | 200,085 | **3** |
+    | Disk used | **66.7 MB** | 91.7 MB |
 
     **Reads and writes do not degrade as the directory fills.** From 0 to
-    20,000 entries a `FileBackend` write stays at ~1.4 ms and a read at
-    ~0.25 ms — the filename comes from the key, so neither operation walks the
-    directory.
+    100,000 entries a `FileBackend` write stays at ~1.4–1.7 ms and a read at
+    ~0.25–0.29 ms — the filename comes from the key, so neither operation ever
+    walks the directory. Sharding the layout into subdirectories would buy
+    nothing, because nothing enumerates.
 
-    What *does* scale is **opening** the cache: 1.2 ms empty, 61 ms at 20k,
-    about 3.5 µs per entry, so roughly 0.35 s at 100k and 3.5 s at 1M. That is
-    the size total for the eviction cap, and it is paid once per process.
+    **Why SQLite is ~10× faster per small write.** A `FileBackend` write is
+    four filesystem metadata operations per file, twice over — create the temp
+    file (121 µs), write it (133 µs), rename it into place (156 µs), stat it
+    (21 µs) — and cash writes both a `.data` and a `.meta`. Roughly two-thirds
+    of that is namespace churn rather than data: creating a name and moving a
+    name. A SQLite write is one `INSERT` plus one WAL commit against an
+    already-open file handle: **14.6 µs**, no file creation, no rename, no
+    directory-index update. Neither backend calls `fsync` (SQLite runs
+    `synchronous=NORMAL`), so both survive a process crash and neither
+    guarantees survival of a power cut. Turning on `synchronous=FULL` costs
+    SQLite 2.0 ms per write and reverses the comparison outright.
 
-    `SQLiteBackend` is faster on every operation and is one file rather than
-    tens of thousands, at the price of about 1.6× the disk at this size (its
-    fixed overhead amortises: 5.0 KB per entry at 1k, 1.1 KB at 20k, against a
-    flat ~670 B for `FileBackend`). `FileBackend` stays the default because a
-    cache directory you can open in a file browser — and see the sizes of, and
-    delete by hand — is worth real money in trust, and the per-operation
-    numbers do not force the switch.
+    Opening the cache used to scale too — 308 ms at 100k, ~3.1 µs per entry —
+    because the eviction cap's byte total was computed by walking the whole
+    directory on the first cache operation. That walk is now deferred to the
+    first *write*, and runs on the background write thread, so a fresh process
+    pays ~1.2 ms whatever the directory holds. A run that only reads — a
+    kernel restart replaying from cache — never walks it at all.
 
-    Switch when opening the cache starts to hurt: a short script run often
-    against a very large cache, where a fixed startup cost is a large share of
-    the run.
+!!! warning "The ranking inverts with payload size"
+    The table above uses 512-byte values, which is the size at which SQLite
+    looks best. Across payload sizes (`--payload`, same benchmark):
+
+    | Value size | File write | SQLite write | File read | SQLite read |
+    |---|---|---|---|---|
+    | 512 B | 1.31 ms | **0.09 ms** | 0.23 ms | **0.06 ms** |
+    | 32 KB | 1.37 ms | **0.14 ms** | 0.26 ms | **0.07 ms** |
+    | 128 KB | 1.51 ms | **0.29 ms** | 0.28 ms | **0.14 ms** |
+    | 512 KB | 1.79 ms | **1.03 ms** | 0.42 ms | 0.44 ms |
+    | 1 MB | 2.25 ms | 2.04 ms | **0.75 ms** | 2.42 ms |
+    | 4 MB | **3.86 ms** | 20.5 ms | **2.00 ms** | 10.6 ms |
+    | 16 MB | **11.2 ms** | 67.3 ms | **7.31 ms** | 39.5 ms |
+
+    Reads cross over around **512 KB** and writes around **1 MB**; past 2 MB
+    `FileBackend` is 5–6× faster on both and stays there. `FileBackend`'s cost
+    is a fixed ~0.9 ms of namespace work plus one sequential write, so it grows
+    slowly with size; SQLite has to move the value through its pager and WAL,
+    so a big value is paid for roughly twice.
+
+    This matters because cached values in a notebook are DataFrames, arrays and
+    fitted models. **512 bytes is the unrepresentative case.** If your cached
+    values are megabytes, `FileBackend` is not the compromise — it is the
+    faster backend.
+
+    `FileBackend` is the default for that reason and one more: a cache
+    directory you can open in a file browser, see the sizes of, and delete by
+    hand is worth real money in trust while you are still deciding whether to
+    rely on the tool.
+
+    Switch to `SQLiteBackend` when your entries are genuinely small *and*
+    numerous — thousands of sub-100 KB values — or when you would rather back
+    up one file than a directory of hundreds of thousands.
 
 ## `SQLiteBackend`
 
@@ -124,14 +162,14 @@ c = Cash(backend=SQLiteBackend(
 c.register_magic()
 ```
 
-One SQLite database file holds every entry. Better than `FileBackend` when you have thousands of small entries — directory enumeration starts to drag, but a single indexed table doesn't. WAL journal mode is on by default for concurrent readers.
+One SQLite database file holds every entry. Better than `FileBackend` for thousands of *small* entries, because a `FileBackend` write costs eight filesystem metadata operations against a single indexed insert — not because of directory size, which neither backend's read or write path is sensitive to. The advantage reverses above roughly 512 KB per value; see the measurements under `FileBackend`. WAL journal mode is on by default for concurrent readers.
 
 Like `FileBackend`, writes are split: serialize on the calling thread, INSERT on the background worker. Eviction is LRU based on `last_access`, triggered when total size crosses `max_size_bytes`.
 
 **Key parameters** — `db_path`, `default_ttl`, `max_size_bytes`, `wal_mode` (default True).
 
 <!-- claim: cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
-**When SQLite beats File** — many small entries (thousands), concurrent reads from multiple processes, or you want one file to back up rather than a directory tree. Note the **100 MiB per-entry promotion cap** when used inside a tiered stack — values larger than that skip SQLite and go straight to the next tier.
+**When SQLite beats File** — many entries that are individually small (under ~512 KB), concurrent reads from multiple processes, or you want one file to back up rather than a directory tree. Above ~1 MB per value `FileBackend` is several times faster on both reads and writes. Note the **100 MiB per-entry promotion cap** when used inside a tiered stack — values larger than that skip SQLite and go straight to the next tier.
 
 ## `TieredBackend` (the default)
 

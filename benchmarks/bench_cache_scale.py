@@ -7,9 +7,12 @@ the fix (if any) is aimed at something measured.
 
 What to watch:
 
-* **First access** pays ``_init_stats()``, which reads every ``.meta`` in the
-  directory to total the size and seed the LRU. That is per PROCESS, so a
-  script that runs for two seconds pays it in full every time.
+* **First access** should now be flat. It used to pay a full directory walk
+  -- once to unpickle every ``.meta`` and seed the LRU, later just to
+  ``stat`` them and total the bytes -- per PROCESS, so a script that ran for
+  two seconds paid it in full every time. Both are deferred now: the metadata
+  to the eviction path, the byte total to the first write. A row that grows
+  with the entry count here is a regression.
 * **Steady-state get/set** should be flat: the filename is derived from the
   key, so the lookup is one ``open()`` and the filesystem's own directory
   index does the work.
@@ -55,7 +58,11 @@ def build_directory(cache_dir: Path, n: int, payload: bytes) -> float:
 
 
 def time_first_access(cache_dir: Path) -> float:
-    """Cost of the first operation on a fresh backend -- i.e. _init_stats()."""
+    """Cost of the first operation on a fresh backend.
+
+    Should be constant. Everything that once made it linear in the directory
+    size now happens on demand, and a read never triggers any of it.
+    """
     script = (
         "import sys, time\n"
         "from cash.backends import FileBackend\n"
@@ -134,10 +141,9 @@ def main() -> int:
             build = build_directory(cache_dir, n, payload)
             # The FIRST read of a newly written file costs ~13 ms on this
             # machine (Defender scanning it) against ~0.13 ms warm -- 100x, and
-            # it would land on cash's ledger. `_init_stats` reads every .meta,
-            # so running it twice warms them for free; the SECOND number is the
-            # per-process cost a real user pays, where the scan already
-            # happened at write time.
+            # it would land on cash's ledger. Running the access twice warms
+            # whatever it touches; the SECOND number is the per-process cost a
+            # real user pays, on files the machine has already seen.
             time_first_access(cache_dir)          # discard: pays the AV tax
             first = time_first_access(cache_dir)
             get, put = time_steady_state(cache_dir, n)

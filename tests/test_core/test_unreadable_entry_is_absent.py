@@ -3,9 +3,11 @@
 Reported live: opening a notebook in a fresh venv without numpy raised
 ``ModuleNotFoundError`` out of ``%cash_on`` and killed the cell. The cache held
 an entry whose metadata carried ``size = numpy.int64(...)`` -- written by an
-environment that had numpy -- and ``FileBackend._init_stats`` unpickles every
-metadata file at startup behind a guard that caught only
-``(OSError, pickle.PickleError)``.
+environment that had numpy -- and ``FileBackend`` unpickled every metadata
+file at startup behind a guard that caught only
+``(OSError, pickle.PickleError)``. Startup no longer reads them, but the
+eviction path still walks them all, so the guard is what keeps one poisoned
+file from taking down a session.
 
 Two independent defects, so two independent sets of tests:
 
@@ -70,8 +72,8 @@ def _write_and_settle(cache_dir, key="good", value=None):
 
 
 def test_a_poisoned_entry_does_not_break_startup(tmp_path):
-    """``_init_stats`` runs over every entry at startup -- one bad file there
-    took down the whole session."""
+    """Opening a cache must survive a poisoned entry -- one bad file used to
+    take down the whole session."""
     _write_and_settle(tmp_path)
     _poison(tmp_path)
 
