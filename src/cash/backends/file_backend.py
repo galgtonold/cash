@@ -682,20 +682,24 @@ class FileBackend(CacheBackend):
                      serialized_value: bytes) -> None:
         """The actual disk write — runs in the PendingWrites worker thread.
 
-        Failures clean up any partial file and re-raise. The exception
-        is stored on the future and surfaces on the next ``get(key)``
-        (or ``shutdown()``).
+        A failure re-raises and touches nothing. The exception is stored on
+        the future and surfaces on the next ``get(key)`` (or ``shutdown()``).
+
+        It used to ``os.remove(path)`` first, to clear a partial write. That
+        was right when an entry was two files and a failure could leave one of
+        them behind. With one file written through a temp and renamed, the
+        destination is either the PREVIOUS entry -- untouched, because the
+        rename never happened -- or absent, and ``_atomic_write`` removes its
+        own temp on the way out. So the cleanup had nothing to clean and
+        deleted a value that was still good, which is precisely the guarantee
+        writing through a temp file exists to provide.
         """
         try:
             self._write_cache_files(key, path, metadata, serialized_value)
             if self._max_size_bytes:
                 self._check_and_evict()
         except (OSError, pickle.PickleError, ValueError) as exc:
-            logger.debug("Cache set failed for key %r, cleaning up: %s", key, exc)
-            try:
-                os.remove(path)
-            except OSError:
-                logger.debug("Cleanup of partial cache file failed for key %r", key, exc_info=True)
+            logger.debug("Cache set failed for key %r: %s", key, exc)
             raise CacheBackendError(f"Cache set failed for key {key!r}: {exc}") from exc
 
     def set_metadata_only(self, key: str, metadata: dict) -> None:

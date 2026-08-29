@@ -260,3 +260,126 @@ def test_pickle_roundtrip_is_unaffected(tmp_path):
     backend.set("k", payload)
     assert backend.get("k")[1] == payload
     assert pickle.loads(pickle.dumps(payload)) == payload
+
+
+class TestAFailedWriteDoesNotDestroyWhatWasThere:
+    """What writing through a temp file is actually FOR.
+
+    The destination is untouched until the rename, so a write that fails --
+    a full disk, a denied replace, a killed process -- leaves whatever was
+    cached before exactly where it was. That is the guarantee; "no torn
+    reads" is a consequence of it.
+
+    It was not pinned by anything. Making ``_atomic_write`` write straight to
+    the destination failed only two tests about the replace RETRY and three
+    about file-dependency tracking; nothing asserted the guarantee itself, so
+    it could have been optimised away silently.
+    """
+
+    @pytest.mark.expects_failed_writes
+    def test_a_failed_rewrite_leaves_the_previous_value_readable(
+        self, tmp_path, monkeypatch,
+    ):
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+        backend.set("k", "v1")
+        backend._writes.wait_all()
+        assert backend.get("k")[1] == "v1"
+
+        def denied(tmp, dest):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(FileBackend, "_replace_with_retry", staticmethod(denied))
+
+        backend.set("k", "v2")
+        backend._writes.wait_all()          # this write fails
+        backend._metadata_cache.pop("k", None)   # force a read from disk
+
+        assert backend.get("k")[1] == "v1", (
+            "a failed rewrite destroyed the value that was already cached -- "
+            "the destination was never overwritten, so there was nothing to "
+            "clean up and the old entry should still be there"
+        )
+
+    @pytest.mark.expects_failed_writes
+    def test_a_failed_first_write_leaves_no_entry_behind(self, tmp_path, monkeypatch):
+        """The control: with nothing to preserve, a failure leaves nothing.
+
+        Without this, simply never cleaning up would pass the arm above while
+        leaving half-written files in the directory.
+        """
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+
+        def denied(tmp, dest):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(FileBackend, "_replace_with_retry", staticmethod(denied))
+
+        backend.set("fresh", "v1")
+        backend._writes.wait_all()
+
+        assert backend.get("fresh") == (None, None)
+        leftovers = [f for f in os.listdir(backend.cache_dir)
+                     if f.endswith(ENTRY_SUFFIX) or f.endswith(".part")]
+        assert leftovers == [], f"partial files left behind: {leftovers}"
+
+    @pytest.mark.expects_failed_writes
+    def test_a_write_that_dies_halfway_leaves_the_previous_value_readable(
+        self, tmp_path, monkeypatch,
+    ):
+        """The disk fills up mid-write. The entry that was already there survives.
+
+        This is the arm that pins ATOMICITY rather than the cleanup around it:
+        it fails the payload write itself, so it distinguishes writing through
+        a temp file from writing straight to the destination. The sibling arm
+        above fails the rename, which a direct write would never reach.
+
+        Not a concurrency test, and deliberately so. The in-process race is
+        already impossible -- ``_wait_for_writes`` makes a reader wait for any
+        live write to the same directory -- so what remains is a writer that
+        stops halfway: a full disk, a killed kernel, a denied replace. That
+        needs no threads and no timing to reproduce.
+        """
+        import cash.backends.file_backend as fb
+
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+        backend.set("k", "v1")
+        backend._writes.wait_all()
+        assert backend.get("k")[1] == "v1"
+
+        real_open = open
+        armed = {"on": False}
+
+        class _DiesHalfway:
+            def __init__(self, fh):
+                self._fh = fh
+
+            def write(self, data):
+                self._fh.write(data[:len(data) // 2])
+                raise OSError("No space left on device")
+
+            def __getattr__(self, name):
+                return getattr(self._fh, name)
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return self._fh.__exit__(*exc)
+
+        def failing_open(path, mode="r", *a, **kw):
+            fh = real_open(path, mode, *a, **kw)
+            if armed["on"] and "w" in mode and "b" in mode:
+                return _DiesHalfway(fh)
+            return fh
+
+        monkeypatch.setattr(fb, "open", failing_open, raising=False)
+        armed["on"] = True
+        backend.set("k", "v2")
+        backend._writes.wait_all()
+        armed["on"] = False
+
+        backend._metadata_cache.pop("k", None)   # force a read from disk
+        assert backend.get("k")[1] == "v1", (
+            "a write that died halfway destroyed the value that was already "
+            "cached; the destination must not be touched until the swap"
+        )
