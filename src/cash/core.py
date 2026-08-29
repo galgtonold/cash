@@ -663,6 +663,14 @@ class Cash:
         # The decorator always caches by design -- this only ever informs.
         from cash.effectiveness import EffectivenessLedger
         self._effectiveness = EffectivenessLedger()
+        if self.config.summary:
+            # Registered per instance rather than once per process: two Cash
+            # instances are two independent caches, and each should account for
+            # itself. ``run_summary`` returns "" when nothing was called, so an
+            # unused instance prints nothing. (``atexit`` is imported at module
+            # level; a local import here would shadow it for the whole method,
+            # including the ``atexit.register(self.shutdown)`` further down.)
+            atexit.register(self._print_run_summary)
         self._analyzed = set() # Track which functions we've *surfaced* purity for
         # Track which functions have had their graph edges + purity report
         # populated (separate from _analyzed: a dependency can be populated to
@@ -756,6 +764,9 @@ class Cash:
         # Custom type hasher registry: maps type -> (callable(value) -> str, source hash).
         # The source hash is embedded in the args_hash composition so that
         # changing a hasher's body invalidates dependent cache entries.
+        # func_name -> the live stats dict of its wrapper. Populated by
+        # ``_wrap_with_stats``; read by the end-of-run summary.
+        self._function_stats: dict[str, dict[str, Any]] = {}
         self._type_hashers: dict[type, tuple[Callable[[Any], str], str]] = {}
         # Same shape, but consulted BEFORE cash's own content hashers rather
         # than after them. Separate registry rather than a flag in the tuple
@@ -2716,6 +2727,10 @@ class Cash:
           for that specific call (sync, even on async wrappers).
         """
         _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0}
+        # Shared by reference with the end-of-run summary, which otherwise has
+        # no way to reach a per-wrapper closure. Last registration wins for a
+        # redefined function, which matches what `cache_info()` reports.
+        self._function_stats[func_name] = _stats
 
         def _drain_stats() -> None:
             with self._decorator_call_log_lock:
@@ -5920,24 +5935,75 @@ class Cash:
         from .ui.explorer import CacheExplorer
         return CacheExplorer(self)
 
+    def run_summary(self) -> str:
+        """A per-function hit/miss table for this process, or ``""``.
+
+        Empty when no cached function was ever called, so a caller can print
+        this unconditionally without emitting a header over nothing.
+        """
+        rows = [(name, s) for name, s in self._function_stats.items()
+                if s['hits'] or s['misses']]
+        if not rows:
+            return ""
+        rows.sort(key=lambda r: r[1]['total_time_saved'], reverse=True)
+
+        hits = sum(s['hits'] for _, s in rows)
+        calls = hits + sum(s['misses'] for _, s in rows)
+        saved = sum(s['total_time_saved'] for _, s in rows)
+        width = min(44, max(len(name) for name, _ in rows))
+
+        def _fit(name: str) -> str:
+            # Keep the TAIL. A name is ``module.qualname``, so for anything
+            # nested -- a closure, a method, a test helper -- the part that
+            # identifies it is at the end, and truncating from the right threw
+            # away the function name and kept the package path.
+            return name if len(name) <= width else "..." + name[-(width - 3):]
+
+        lines = [f"cash: {hits} of {calls} calls restored, {saved:.1f}s saved"]
+        for name, stat in rows:
+            # Pad the whole "N hits," token, not the word: padding the word
+            # puts the space before the comma ("1 hit ,").
+            hit_col = f"{stat['hits']} {'hit' if stat['hits'] == 1 else 'hits'},"
+            miss_col = f"{stat['misses']} {'miss' if stat['misses'] == 1 else 'misses'}"
+            saved_col = (f"{stat['total_time_saved']:.1f}s saved"
+                         if stat['total_time_saved'] else "-")
+            lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}"
+                         f"{miss_col:<12}{saved_col}")
+        return "\n".join(lines)
+
+    def _print_run_summary(self) -> None:
+        """``atexit`` hook for ``summary=True``. Must never raise.
+
+        Interpreter shutdown tears modules down underneath handlers, so a
+        diagnostic that explodes here would turn a finished run into a
+        traceback the user cannot act on.
+        """
+        try:
+            text = self.run_summary()
+            if text:
+                print(text)
+        except Exception:  # noqa: BLE001 - a summary must not fail a finished run
+            pass
+
     def show_stats(self) -> None:
         """Display the interactive analytics dashboard.
 
         Requires IPython/Jupyter and ipywidgets. In script environments,
-        prints a text summary instead.
+        prints the same per-function table ``summary=True`` prints at exit.
         """
-        try:
-            from .ui.dashboard import show_analytics_dashboard
-            show_analytics_dashboard()
-        except (ImportError, RuntimeError):
-            # Fallback for script environments
-            n_funcs = len(self.functions)
-            n_sources = len(self.data_sources)
-            backend_name = type(self.backend).__name__
-            print("Cash Statistics:")
-            print(f"  Backend: {backend_name}")
-            print(f"  Cached functions: {n_funcs}")
-            print(f"  Data sources: {n_sources}")
+        from .ui.dashboard import HAS_WIDGETS, show_analytics_dashboard
+        # Asking the dashboard whether it CAN run, rather than calling it and
+        # catching. It prints "ipywidgets is required" and returns normally, so
+        # the except-ImportError fallback this replaces was unreachable: the
+        # documented script behaviour never once happened.
+        if HAS_WIDGETS:
+            try:
+                show_analytics_dashboard()
+                return
+            except (ImportError, RuntimeError):
+                pass
+        text = self.run_summary()
+        print(text if text else "cash: no cached function has been called yet.")
 
     def register_magic(self) -> None:
         """Register IPython magic commands (``%cash_on``, ``%%cash``, etc.)."""

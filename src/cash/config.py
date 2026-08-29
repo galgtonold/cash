@@ -194,6 +194,21 @@ class CashConfig:
     Hot field - flippable at runtime via ``cash.configure(persist_all=True)``
     or the ``%cash_persist on`` magic."""
 
+    summary: bool = False
+    """Print a per-function hit/miss summary when the process exits.
+
+    Off by default -- a library that prints uninvited is a library people
+    filter. On, it answers the question a script user cannot otherwise
+    answer: *which parts of my run recomputed just now?* A notebook shows
+    that per statement in the badge; a script showed nothing, and the user
+    who needed it resorted to adding ``print`` calls to each branch.
+
+    Reachable four ways from this one field, because the config layer maps
+    every field to an env var and a TOML key: ``cash.configure(summary=True)``,
+    ``Cash(summary=True)``, ``CASH_SUMMARY=1``, or ``summary = true`` in
+    ``cash.toml``. The env var matters most -- it is the only one that needs
+    no edit to the code you are already running."""
+
     smart_persistence: bool = True
     """When True (default), the tiered backend decides per-entry
     whether to persist past RAM based on compute time vs storage
