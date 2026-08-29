@@ -811,6 +811,26 @@ class FileBackend(CacheBackend):
         for _last_access, key in order:
             if self._current_size_bytes <= target:
                 break
+            # Never evict a key that has a write in flight.
+            #
+            # `delete` drains that write, and this loop runs ON the single
+            # PendingWrites worker -- so draining a write QUEUED BEHIND the
+            # one currently executing waits for a task that cannot start until
+            # this one returns. The write thread hangs permanently, and the
+            # atexit flush behind it hangs with it.
+            #
+            # Reachable without contriving anything: a key's cached
+            # `last_access` is still its PREVIOUS write's, because the queued
+            # write has not updated it yet, so re-computing a long-idle entry
+            # while the cache sits near its cap makes that entry the obvious
+            # LRU victim. Reproduced against a 6KB cap; the process never
+            # exited.
+            #
+            # Skipping is also right on the merits. An entry being written
+            # right now is the newest thing in the cache, not the oldest, and
+            # the next write re-checks the cap anyway.
+            if self._writes.has_pending(key):
+                continue
             # Was this entry written only a couple of ops ago?
             written_at = self._write_seq_by_key.get(key)
             if written_at is not None and self._write_seq - written_at <= self._EVICT_WARN_RECENT_OPS:

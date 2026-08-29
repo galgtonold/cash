@@ -30,7 +30,10 @@ from __future__ import annotations
 
 import os
 import pickle
+import threading
 import time
+
+import pytest
 
 from cash.backends import FileBackend
 from cash.backends.file_backend import CACHE_FORMAT_VERSION
@@ -290,3 +293,59 @@ def test_eviction_frees_what_it_needs_and_not_much_more(tmp_path):
         f"evicted down to {remaining:.0f} bytes when {target:.0f} would have "
         f"done -- about {(target - remaining) / entry_bytes:.0f} entries too many"
     )
+
+
+@pytest.mark.timeout(60)
+def test_eviction_never_waits_on_a_write_it_cannot_reach(tmp_path):
+    """Evicting a key with a queued write used to hang the process forever.
+
+    `_check_and_evict` runs ON the single PendingWrites worker, and evicting
+    calls `delete`, which drains that key's pending write. A write QUEUED
+    BEHIND the one currently executing can only run on that same worker -- so
+    the worker waits for a task that cannot start until it returns. The write
+    thread hangs permanently, and the atexit flush behind it hangs with it.
+
+    Reachable without contriving anything: a key's cached `last_access` is
+    still its PREVIOUS write's, because the queued write has not updated it
+    yet. Re-computing a long-idle entry while the cache sits near its cap
+    therefore makes that entry the obvious LRU victim.
+
+    The timeout marker is the real assertion -- without the fix this test does
+    not fail, it hangs -- but the arms below say what should have happened, so
+    a future change that completes for the wrong reason still gets caught.
+    """
+    payload = b"x" * 4000
+    cache = tmp_path / "cache"
+
+    def meta(when):
+        return {"size": len(payload), "created_at": when, "last_access": when}
+
+    # Cap that two entries exceed, so the second write must evict the first.
+    backend = FileBackend(str(cache), max_size_bytes=6_000, flush_interval=0)
+
+    # Seed the victim: on disk, in the metadata cache, with the oldest access.
+    backend.set("victim", payload, meta(1.0))
+    backend._writes.wait_all()
+
+    running = threading.Event()
+    real_write = backend._write_cache_files
+
+    def slow_for_newcomer(key, *args, **kwargs):
+        if key == "newcomer":
+            running.set()
+            time.sleep(1.0)        # hold the worker so the resubmit queues up
+        return real_write(key, *args, **kwargs)
+
+    backend._write_cache_files = slow_for_newcomer
+
+    backend.set("newcomer", payload, meta(50.0))
+    assert running.wait(10), "the slow write never started; fixture is broken"
+    backend.set("victim", payload, meta(2.0))   # queued BEHIND newcomer
+
+    backend._writes.wait_all()                  # hangs forever without the fix
+
+    assert backend.get("victim")[1] == payload, (
+        "the key with a queued write was evicted; its write should have "
+        "protected it, being the newest thing in the cache"
+    )
+    backend.shutdown()

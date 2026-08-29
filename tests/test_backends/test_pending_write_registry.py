@@ -20,6 +20,7 @@ without a trace.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -114,3 +115,42 @@ def test_the_registry_does_not_grow_across_many_keys(writes):
         assert len(writes._pending) == 0, (
             f"after batch {batch} the registry holds {len(writes._pending)}"
         )
+
+
+def test_has_pending_sees_an_in_flight_write(writes):
+    """`_check_and_evict` asks this before evicting, and must get it right.
+
+    Evicting a key with a queued write deadlocks the single worker -- the
+    delete drains a write that cannot start until the delete returns.
+    """
+    started = threading.Event()
+
+    def slow():
+        started.set()
+        time.sleep(0.5)
+
+    writes.submit("slow", slow)
+    assert started.wait(5)
+    assert writes.has_pending("slow") is True
+    writes.wait_all()
+    assert writes.has_pending("slow") is False
+
+
+def test_has_pending_is_false_for_a_key_never_written(writes):
+    assert writes.has_pending("never") is False
+
+
+@pytest.mark.expects_failed_writes
+def test_a_failed_write_does_not_read_as_pending(writes):
+    """Failed futures are RETAINED so `wait` can report them, but they are done.
+
+    Counting one as pending would make its key permanently unevictable, so the
+    cache could never get back under its cap after a single failed write.
+    """
+    def boom():
+        raise OSError("disk full")
+
+    writes.submit("doomed", boom)
+    writes.wait_all()
+    assert "doomed" in writes._pending, "the failure record was dropped"
+    assert writes.has_pending("doomed") is False

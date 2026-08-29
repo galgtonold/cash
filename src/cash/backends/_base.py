@@ -327,6 +327,21 @@ class PendingWrites:
             except Exception:  # noqa: BLE001 — we're about to delete, exception is moot
                 pass
 
+    def has_pending(self, key: str) -> bool:
+        """Is there an UNFINISHED write for *key* on this queue?
+
+        Lets a caller avoid an operation that would have to wait for that
+        write -- which matters because this queue has a single worker, so a
+        wait issued FROM the worker can never be satisfied.
+
+        A completed-but-failed future does not count. Those are retained in
+        ``_pending`` on purpose so ``wait`` can report them, but waiting on one
+        returns immediately.
+        """
+        with self._lock:
+            future = self._pending.get(key)
+            return future is not None and not future.done()
+
     def pending_count(self) -> int:
         """How many writes are still in flight. Useful for status panels."""
         with self._lock:
