@@ -11,6 +11,7 @@ import tempfile
 import threading
 import time
 import weakref
+from collections import deque
 from collections.abc import Callable
 from typing import Any
 
@@ -158,10 +159,17 @@ class FileBackend(CacheBackend):
         self._write_seq_by_key: dict[str, int] = {}
         self._warned_evict_after_write = False
         self._dirty_metadata: set[str] = set()
-        self._metadata_cache: dict[str, dict] = {}  # partial cache for LRU tracking
-        # Whether _metadata_cache holds EVERY entry on disk. False after a
-        # plain size scan; set once the eviction path has loaded them all.
-        self._metadata_loaded = False
+        # Metadata for the keys THIS process has touched. Not every entry on
+        # disk: eviction used to need that and no longer does, so this stays
+        # bounded by the session's working set rather than the directory.
+        self._metadata_cache: dict[str, dict] = {}
+        # The way back from a filename to its key, for the entries above. A
+        # filename is a SHA-256 of the key, so eviction -- which ranks by
+        # walking the directory -- cannot recover the key any other way.
+        self._paths: dict[str, str] = {}
+        # Eviction candidates, oldest first, consumed across passes and
+        # rebuilt when empty. See _rebuild_evict_queue for why it is a queue.
+        self._evict_queue: deque[str] = deque()
         # Whether _current_size_bytes is an absolute on-disk total (True) or
         # only this process's running delta (False). See _ensure_size_scanned.
         self._size_scanned = False
@@ -323,28 +331,6 @@ class FileBackend(CacheBackend):
             self._current_size_bytes = scanned
             self._size_scanned = True
 
-    def _ensure_metadata_loaded(self) -> None:
-        """Populate ``_metadata_cache`` from disk, once, for LRU ordering.
-
-        Only the eviction path needs to see entries this process never
-        touched: it has to rank ALL of them by last access to pick a victim.
-        Everything else reads metadata per key, on demand.
-        """
-        if self._metadata_loaded:
-            return
-        for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
-            try:
-                meta, _ = read_entry(path, with_payload=False)
-            except UNREADABLE_ENTRY:
-                logger.debug("Skipping unreadable entry %s", path, exc_info=True)
-                continue
-            key = meta.get('key')
-            if key and key not in self._metadata_cache:
-                # Never overwrite a live entry: this process's copy is newer
-                # than whatever is on disk for a key it has already written.
-                self._metadata_cache[key] = meta
-        self._metadata_loaded = True
-
     def _flush_periodically(self) -> None:
         while not self._stop_event.is_set():
             if self._stop_event.wait(self._flush_interval):
@@ -384,6 +370,19 @@ class FileBackend(CacheBackend):
             except (OSError, pickle.PickleError) as exc:
                 logger.debug("Failed to flush metadata for key %r: %s", key, exc)
 
+    def _remember(self, key: str, metadata: dict) -> None:
+        """Cache one entry's metadata, and the way back from its filename.
+
+        Eviction ranks entries by walking the directory, which yields paths.
+        A filename is a SHA-256 of the key, so nothing recovers the key from
+        it -- this map is how an evicted path finds the in-process bookkeeping
+        that belongs to it. It only ever holds the keys this process has
+        touched, which is exactly the set that HAS any bookkeeping.
+        """
+        with self._lock:
+            self._metadata_cache[key] = metadata
+            self._paths[self._get_path(key)] = key
+
     def _get_path(self, key: str) -> str:
         import hashlib
         safe_name = hashlib.sha256(key.encode('utf-8')).hexdigest()
@@ -422,7 +421,7 @@ class FileBackend(CacheBackend):
                 metadata = cached_meta
             else:
                 metadata, _ = read_entry(path, with_payload=False)
-                self._metadata_cache[key] = metadata
+                self._remember(key, metadata)
 
             ttl = metadata.get('ttl', self._default_ttl)
             if ttl is not None:
@@ -466,7 +465,7 @@ class FileBackend(CacheBackend):
                 metadata = cached_meta
             else:
                 metadata = on_disk
-                self._metadata_cache[key] = metadata
+                self._remember(key, metadata)
 
             # A metadata-only entry (the value was too large to persist) has
             # no payload. It is a HIT for `get_metadata`, which wants the
@@ -634,7 +633,7 @@ class FileBackend(CacheBackend):
 
         with self._lock:
             self._current_size_bytes -= old_entry_bytes
-            self._metadata_cache[key] = metadata
+            self._remember(key, metadata)
             self._current_size_bytes += len(blob)
 
             # Stamp the write order so _check_and_evict can spot a just-written
@@ -736,7 +735,7 @@ class FileBackend(CacheBackend):
         try:
             self._atomic_write(path, pack_entry(metadata, b""))
             with self._lock:
-                self._metadata_cache[key] = metadata
+                self._remember(key, metadata)
         except OSError as exc:
             logger.debug("Failed to write metadata-only entry for key %r: %s", key, exc)
 
@@ -757,11 +756,10 @@ class FileBackend(CacheBackend):
             size_to_remove = 0
 
         with self._lock:
-            if key in self._metadata_cache:
-                del self._metadata_cache[key]
-            if key in self._dirty_metadata:
-                self._dirty_metadata.remove(key)
+            self._metadata_cache.pop(key, None)
+            self._dirty_metadata.discard(key)
             self._write_seq_by_key.pop(key, None)
+            self._paths.pop(path, None)
             self._current_size_bytes -= size_to_remove
 
         try:
@@ -775,6 +773,98 @@ class FileBackend(CacheBackend):
     # written within roughly this many writes — something older getting
     # evicted is healthy LRU, not thrash. Only writes bump the counter.
     _EVICT_WARN_RECENT_OPS = 3
+
+    def _rebuild_evict_queue(self) -> None:
+        """Rank every entry for eviction from one ``scandir``, oldest first.
+
+        This used to open and unpickle every entry in the directory to sort by
+        ``last_access``, which cost 44us per entry warm -- 0.9s at 20k, ~4.4s
+        at 100k -- on the write worker, so every queued write waited behind
+        it. It also kept all that metadata in RAM for the process lifetime,
+        about 1.7KB an entry, 170MB at 100k.
+
+        ``scandir`` answers the same question at 1.6us per entry (31ms at 20k,
+        180ms at 100k -- 25x) and holds ~100 bytes each, because mtime IS
+        last access: recording a read rewrites the header in place, so the
+        file's modification time moves with it, and an entry nobody has read
+        keeps its write time, which is exactly what LRU wants for it.
+
+        The ranking is a QUEUE, consumed across many eviction passes and
+        rebuilt only when it runs out. That matters more than the per-entry
+        cost: in steady state a full cache evicts on most writes, so a
+        directory walk per pass would be far worse than the walk-once-and-hold
+        design it replaces, however cheap the walk.
+        """
+        ranks: dict[str, float] = {}
+        try:
+            with os.scandir(self.cache_dir) as entries:
+                for entry in entries:
+                    if not entry.name.endswith(ENTRY_SUFFIX):
+                        continue
+                    try:
+                        ranks[entry.path] = entry.stat().st_mtime
+                    except OSError:
+                        # Vanished between the listing and the stat. One
+                        # missing candidate is a slightly-late eviction.
+                        continue
+        except OSError:
+            logger.debug("Could not scan %s to rank evictions", self.cache_dir,
+                         exc_info=True)
+
+        # Where this process knows better, use what it knows. A read updates
+        # `last_access` in memory at once but only reaches mtime when the
+        # flusher writes it back -- up to `flush_interval` later, and never at
+        # all when the flusher is switched off. Ranking on mtime alone would
+        # then degrade to eviction by write order, and a just-read entry would
+        # be taken ahead of one nobody has touched.
+        #
+        # The two are directly comparable: `st_mtime` and `time.time()` are
+        # both seconds since the epoch.
+        with self._lock:
+            for path, key in self._paths.items():
+                if path not in ranks:
+                    continue
+                meta = self._metadata_cache.get(key)
+                last_access = meta.get('last_access') if meta else None
+                if last_access is not None and last_access > ranks[path]:
+                    ranks[path] = last_access
+
+        # A deque: this is drained from the front across many passes, and
+        # list.pop(0) would make that quadratic in a large cache.
+        self._evict_queue = deque(
+            path for path, _rank in sorted(ranks.items(), key=lambda kv: kv[1])
+        )
+
+    def _forget_path(self, path: str) -> int:
+        """Remove one entry BY PATH, returning the bytes freed.
+
+        Eviction ranks by path because that is what a directory walk yields;
+        a filename is a SHA-256 of the key and does not lead back to it. The
+        in-process bookkeeping is keyed by key, so ``_paths`` carries the way
+        back for the entries this process has actually touched -- which is
+        every entry whose bookkeeping there is anything to clean up.
+        """
+        try:
+            freed = os.path.getsize(path)
+        except OSError:
+            freed = 0
+
+        key = self._paths.get(path)
+        with self._lock:
+            if key is not None:
+                self._metadata_cache.pop(key, None)
+                self._dirty_metadata.discard(key)
+                self._write_seq_by_key.pop(key, None)
+                self._paths.pop(path, None)
+            self._current_size_bytes -= freed
+
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            logger.debug("Failed to remove cache entry %s: %s", path, exc)
+        return freed
 
     def _check_and_evict(self) -> None:
         """Evict items if over max size."""
@@ -790,27 +880,29 @@ class FileBackend(CacheBackend):
         if self._current_size_bytes <= self._max_size_bytes:
             return
 
-        # Ranking by last access needs every entry, including the ones this
-        # process never touched -- otherwise a fresh process would evict only
-        # from the handful of keys it happens to have read, and free almost
-        # nothing. Loaded here rather than at startup so only the processes
-        # that actually evict pay for it.
-        self._ensure_metadata_loaded()
-
-        keys_to_delete = []
-        evicted_recent = False
-        with self._lock:
-            # Oldest access first. Only the ORDER is decided here; how many to
-            # take is decided as they go, against the running byte total.
-            order = sorted(
-                (m.get('last_access', 0), k)
-                for k, m in self._metadata_cache.items()
-            )
-
         target = self._max_size_bytes * 0.9
-        for _last_access, key in order:
-            if self._current_size_bytes <= target:
-                break
+        evicted_recent = False
+        n_evicted = 0
+        rebuilt = False
+
+        while self._current_size_bytes > target:
+            if not self._evict_queue:
+                if rebuilt:
+                    # Every candidate that existed when this pass began has
+                    # been considered, and the cache is still over its cap --
+                    # everything left is either in flight or newer than the
+                    # ranking. Rebuilding again would rank the same entries
+                    # and skip them the same way, forever; the next write
+                    # re-examines with a fresh ranking.
+                    break
+                self._rebuild_evict_queue()
+                rebuilt = True
+                if not self._evict_queue:
+                    break
+
+            path = self._evict_queue.popleft()
+            key = self._paths.get(path)
+
             # Never evict a key that has a write in flight.
             #
             # `delete` drains that write, and this loop runs ON the single
@@ -819,37 +911,29 @@ class FileBackend(CacheBackend):
             # this one returns. The write thread hangs permanently, and the
             # atexit flush behind it hangs with it.
             #
-            # Reachable without contriving anything: a key's cached
-            # `last_access` is still its PREVIOUS write's, because the queued
-            # write has not updated it yet, so re-computing a long-idle entry
-            # while the cache sits near its cap makes that entry the obvious
-            # LRU victim. Reproduced against a 6KB cap; the process never
-            # exited.
+            # Reachable without contriving anything: an entry's mtime is still
+            # its PREVIOUS write's, because the queued write has not landed
+            # yet, so re-computing a long-idle entry while the cache sits near
+            # its cap makes that entry the obvious LRU victim. Reproduced
+            # against a 6KB cap; the process never exited.
             #
             # Skipping is also right on the merits. An entry being written
             # right now is the newest thing in the cache, not the oldest, and
-            # the next write re-checks the cap anyway.
-            if self._writes.has_pending(key):
+            # the next write re-checks the cap anyway. A path this process has
+            # never touched cannot have a write in flight here.
+            if key is not None and self._writes.has_pending(key):
                 continue
+
             # Was this entry written only a couple of ops ago?
-            written_at = self._write_seq_by_key.get(key)
+            written_at = self._write_seq_by_key.get(key) if key else None
             if written_at is not None and self._write_seq - written_at <= self._EVICT_WARN_RECENT_OPS:
                 evicted_recent = True
-            # `delete` subtracts what the file actually weighed, so the loop
-            # above stops as soon as enough has really been freed.
-            #
-            # It used to accumulate each victim's ``size`` instead, which is
-            # the PAYLOAD length -- while the total it was working down from
-            # counted whole entries, header and metadata included. Every
-            # eviction therefore looked smaller than it was, and the loop took
-            # more entries than it needed. With two files per entry the gap
-            # was small enough to hide; it surfaced as soon as an entry's
-            # fixed overhead grew.
-            self.delete(key)
-            keys_to_delete.append(key)
+
+            if self._forget_path(path):
+                n_evicted += 1
 
         if evicted_recent:
-            self._warn_evict_after_write(len(keys_to_delete))
+            self._warn_evict_after_write(n_evicted)
 
     def _promotion_size_cap(self) -> int | None:
         """Refuse (skip) any single object larger than half this tier's cap.
@@ -909,6 +993,8 @@ class FileBackend(CacheBackend):
             self._metadata_cache.clear()
             self._dirty_metadata.clear()
             self._write_seq_by_key.clear()
+            self._paths.clear()
+            self._evict_queue.clear()
             self._current_size_bytes = 0
 
     def shutdown(self) -> None:

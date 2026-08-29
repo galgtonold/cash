@@ -77,7 +77,10 @@ def test_opening_a_cache_does_not_read_every_entry(tmp_path):
         f"init loaded {len(backend._metadata_cache)} metadata entries; it should "
         f"load none, and `get` should have cached only the key it was asked for"
     )
-    assert backend._metadata_loaded is False
+    assert not backend._evict_queue, (
+        "opening a cache ranked it for eviction; only a write that trips the "
+        "cap should pay for that"
+    )
 
 
 def test_the_size_total_is_still_right(tmp_path):
@@ -96,6 +99,8 @@ def test_the_size_total_is_still_right(tmp_path):
     backend._writes.wait_all()
 
     assert backend._current_size_bytes == _on_disk(cache)
+
+
 def test_a_key_is_still_readable_without_being_preloaded(tmp_path):
     """`get` reads the metadata itself -- that is why the prefetch was optional.
 
@@ -117,10 +122,13 @@ def test_a_key_is_still_readable_without_being_preloaded(tmp_path):
 
 
 def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
-    """The correctness risk of loading lazily, and the reason for the on-demand load.
+    """The correctness risk of ranking lazily, and the reason for the walk.
 
     A fresh process ranking only the handful of keys it happens to have read
     would free almost nothing and let the directory grow past its cap forever.
+    Ranking comes from a directory walk precisely so it sees entries this
+    process has never heard of -- entries whose keys it cannot even name,
+    since a filename is a SHA-256 of the key.
     """
     cache = tmp_path / "cache"
     _seed(cache, 60, payload=b"x" * 5_000)
@@ -135,7 +143,10 @@ def test_eviction_reaches_entries_this_process_never_touched(tmp_path):
     assert after < before, (
         "eviction freed nothing: it can only see keys this process touched"
     )
-    assert tight._metadata_loaded is True, "eviction did not load the metadata"
+    assert len(tight._metadata_cache) <= 1, (
+        f"eviction pulled {len(tight._metadata_cache)} entries into memory; it "
+        f"ranks from the directory now and should hold nothing extra"
+    )
     assert tight._current_size_bytes <= 100_000 * 1.1
 
 
@@ -347,5 +358,103 @@ def test_eviction_never_waits_on_a_write_it_cannot_reach(tmp_path):
     assert backend.get("victim")[1] == payload, (
         "the key with a queued write was evicted; its write should have "
         "protected it, being the newest thing in the cache"
+    )
+    backend.shutdown()
+
+
+def test_ranking_reads_no_entry_files(tmp_path):
+    """Eviction ranks from a directory walk, not from opening every entry.
+
+    It used to open and unpickle each one to sort by ``last_access``: 44us an
+    entry warm, ~4.4s at 100k, on the write worker with every queued write
+    behind it -- and it kept all that metadata in RAM afterwards, ~1.7KB each.
+    A walk answers the same question at 1.6us an entry.
+
+    Counted, not timed: the claim is "does not open files", which a counter
+    states exactly and a stopwatch only suggests.
+    """
+    cache = tmp_path / "cache"
+    _seed(cache, 40, payload=b"x" * 2_000)
+
+    backend = FileBackend(str(cache), max_size_bytes=40_000)
+    opened = []
+    import cash.backends.entry_format as ef
+    real = ef.read_entry
+
+    def counting_read(path, **kw):
+        opened.append(path)
+        return real(path, **kw)
+
+    ef.read_entry = counting_read
+    try:
+        backend._rebuild_evict_queue()
+    finally:
+        ef.read_entry = real
+
+    assert len(backend._evict_queue) == 40, len(backend._evict_queue)
+    assert opened == [], f"ranking opened {len(opened)} entry files"
+    assert backend._metadata_cache == {}, "ranking pulled metadata into memory"
+
+
+def test_ranking_is_oldest_first(tmp_path):
+    """mtime IS last access: recording a read rewrites the header in place."""
+    cache = tmp_path / "cache"
+    backend = FileBackend(str(cache), flush_interval=0)
+    for name in ("old", "mid", "new"):
+        backend.set(name, b"x" * 100, {"size": 100})
+        backend._writes.wait_all()
+        time.sleep(0.02)
+
+    backend._rebuild_evict_queue()
+    order = [backend._paths[p] for p in backend._evict_queue]
+    assert order == ["old", "mid", "new"], order
+
+    # Reading the oldest must move it to the back.
+    time.sleep(0.02)
+    backend.get("old")
+    backend._rebuild_evict_queue()
+    order = [backend._paths[p] for p in backend._evict_queue]
+    assert order == ["mid", "new", "old"], (
+        f"a read did not refresh the ranking: {order}"
+    )
+    backend.shutdown()
+
+
+def test_the_ranking_is_reused_across_eviction_passes(tmp_path):
+    """A full cache evicts on most writes; ranking per write would be worse.
+
+    Measured in steady state: eviction is entered on ~100% of writes once the
+    cache is full, and frees about one entry per write (conservation -- one
+    goes in, one comes out). Walking the directory each time would put a
+    directory walk on nearly every write, which is what the old load-once
+    design was avoiding by never refreshing at all.
+    """
+    cache = tmp_path / "cache"
+    payload = b"x" * 400
+    backend = FileBackend(str(cache), flush_interval=0)
+    backend.set("probe", payload, {"size": len(payload)})
+    backend._writes.wait_all()
+    entry_bytes = os.path.getsize(backend._get_path("probe"))
+    backend.shutdown()
+
+    cache2 = tmp_path / "cache2"
+    backend = FileBackend(str(cache2), flush_interval=0,
+                          max_size_bytes=entry_bytes * 40)
+    rebuilds = []
+    real = backend._rebuild_evict_queue
+
+    def counted():
+        rebuilds.append(1)
+        return real()
+
+    backend._rebuild_evict_queue = counted
+
+    for i in range(200):
+        backend.set(f"k{i}", payload, {"size": len(payload)})
+    backend._writes.wait_all()
+
+    assert len(rebuilds) < 20, (
+        f"{len(rebuilds)} directory walks for 200 writes; the ranking is "
+        f"supposed to be drained across passes, not rebuilt per eviction"
     )
     backend.shutdown()

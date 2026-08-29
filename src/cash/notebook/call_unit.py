@@ -1399,11 +1399,11 @@ class CallUnit:
         # so an ordinary cached call keeps writing the same sparse entry.
         #
         # The payload rides on the VALUE; metadata gets only a plain bool.
-        # Metadata is unpickled for EVERY entry in the directory the first
-        # time eviction runs (`FileBackend._ensure_metadata_loaded`, to rank
-        # by last access) and held in `_metadata_cache` for the process
-        # lifetime -- so a user object there is deserialised whether or not it
-        # is ever used, and kept forever. A
+        # Metadata is unpickled for EVERY entry in the directory by anything
+        # that surveys the cache -- `list_entries`, which `%cash_on` and the
+        # CLI both call -- so a user object there is deserialised whether or
+        # not it is ever used. Eviction used to do this too, on the write
+        # worker, and no longer does: it ranks from a directory walk. A
         # survey of 5859 real metadata files found 31 of 33 fields are plain
         # builtins; the two that were not are a cash-owned serializer class and
         # a `numpy.int64` that leaked in as `size` and made those files

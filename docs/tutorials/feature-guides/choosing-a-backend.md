@@ -72,7 +72,7 @@ c.register_magic()
 
 One file per entry under `cache_dir`, named by the SHA-256 of the cache key, holding a small header, the entry's metadata, and then the value. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor so a slow write doesn't block the cell. A second thread flushes metadata every `flush_interval` seconds, rewriting only the metadata region rather than the whole file.
 
-Eviction is LRU on `last_access`. When the cache exceeds `max_size_bytes`, the oldest entries are dropped until it fits under 90% of the cap.
+Eviction is LRU. When the cache exceeds `max_size_bytes`, the oldest entries are dropped until it fits under 90% of the cap — and the ranking comes from one `scandir`, not from opening every entry, because a file's mtime *is* its last access (recording a read rewrites the header in place). That ranking is a queue drained across many eviction passes, which matters: once a cache is full it evicts on most writes, so re-ranking per pass would put a directory walk on nearly every write.
 
 **Key parameters** — `cache_dir`, `compress` (gzip; usually only worth it for CSV/JSON), `max_size_bytes` (None = unlimited), `flush_interval` (seconds; 0 = flush on every write), `default_ttl` (seconds).
 
@@ -103,6 +103,13 @@ Eviction is LRU on `last_access`. When the cache exceeds `max_size_bytes`, the o
     thread, so a fresh process pays ~1.2 ms whatever the directory holds and a
     run that only reads — a kernel restart replaying from cache — never walks
     it at all.
+
+    **The first eviction is flat-ish too.** Ranking used to open and unpickle
+    every entry in the directory: 44 µs each, ~0.9 s at 20k and ~4.4 s at 100k,
+    on the write worker with every queued write behind it — and it then held
+    all that metadata in RAM, roughly 1.7 KB an entry. Ranking from `scandir`
+    costs **1.6 µs an entry** (32 ms at 20k, 180 ms at 100k) and holds none of
+    it.
 
     **Why SQLite is faster per small write.** A `FileBackend` write is four
     filesystem metadata operations — create a temp file (121 µs), write it
