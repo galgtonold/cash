@@ -171,8 +171,17 @@ def main() -> int:
                     writes[k].append(timed_write(backends[k], f"probe_{n}_{r}"))
                     if n:
                         reads[k].append(timed_read(backends[k], f"k{n // 2}"))
-                        if hasattr(backends[k], "get_metadata"):
-                            metas[k].append(timed_meta_read(backends[k], f"k{n // 2}"))
+
+            # Metadata reads get their OWN pass, not a third measurement inside
+            # the round above. Timed there, each one landed immediately after a
+            # write and a read of the same entry -- 13ms and 10ms of page-cache
+            # churn at a 16MB payload -- and reported 0.226ms where an isolated
+            # read of a 1GB entry measures 0.035ms. The operation is flat in
+            # payload size; the interleaving was not.
+            for r in range(ROUNDS):
+                for k in kinds:
+                    if n and hasattr(backends[k], "get_metadata"):
+                        metas[k].append(timed_meta_read(backends[k], f"k{n // 2}"))
 
             for k in kinds:
                 files, size = dir_stats(roots[k])

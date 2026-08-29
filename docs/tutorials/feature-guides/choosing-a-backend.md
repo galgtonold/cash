@@ -86,7 +86,7 @@ Eviction is LRU on `last_access`. When the cache exceeds `max_size_bytes`, the o
     |---|---|---|
     | Write one more entry | 0.70 ms | **0.16 ms** |
     | Read one entry | 0.29 ms | **0.06 ms** |
-    | Read one entry's metadata | 0.06 ms | **0.01 ms** |
+    | Read one entry's metadata | 0.05 ms | **0.01 ms** |
     | Open the cache in a new process | 1.2 ms | **0.1 ms** |
     | Files on disk | 100,001 | **3** |
     | Disk used | **66.7 MB** | 91.7 MB |
@@ -156,15 +156,17 @@ Eviction is LRU on `last_access`. When the cache exceeds `max_size_bytes`, the o
 
     | Entry size | `FileBackend` | `SQLiteBackend` |
     |---|---|---|
-    | 512 B | 0.056 ms | 0.012 ms |
-    | 1 MB | 0.099 ms | 0.067 ms |
-    | 16 MB | 0.226 ms | 0.091 ms |
+    | 512 B | 0.047 ms | 0.008 ms |
+    | 1 MB | 0.044 ms | 0.008 ms |
+    | 16 MB | 0.046 ms | 0.008 ms |
+    | 1 GB | 0.035 ms | — |
 
-    against 10.2 ms and 38.5 ms respectively to read the 16 MB *value*. The
-    file layout puts a length-prefixed header in front of the metadata so a
-    read can stop after it; SQLite selects one column and declares the payload
-    column last, because it lays a row out in declaration order and reading a
-    column walks past everything before it.
+    Flat — not "grows slowly", flat. Reading the *value* of that 16 MB entry
+    costs 10.4 ms and 38.7 ms respectively, so the gap widens without limit as
+    entries get bigger. The file layout puts a length-prefixed header in front
+    of the metadata so a read can stop after it; SQLite selects one column and
+    declares the payload column last, because it lays a row out in declaration
+    order and reading a column walks past everything before it.
 
     The remote backends were the same story with a bill attached. Reading one
     4 MB entry's metadata used to transfer 4,194,457 bytes on S3 (plus a second
