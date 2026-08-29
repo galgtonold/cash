@@ -5,8 +5,11 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import pickle
 import shutil
 import sys
+import time
+from dataclasses import dataclass
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -61,22 +64,116 @@ def _format_bytes(size_bytes: int) -> str:
     return f"{size_bytes / (1024**3):.2f} GB"
 
 
+@dataclass
+class _Entry:
+    """One cache entry on disk: its ``.meta``, its ``.data``, and who wrote it."""
+    stem: str
+    function: str
+    key: str
+    size: int
+    mtime: float
+
+
+def _function_of(key: str) -> str:
+    """The function a cache key belongs to.
+
+    Decorator keys are ``{module.qualname}:{state}:{dynamic}:{args}``, so the
+    owner is simply the first segment -- no extra metadata needed to group a
+    cache directory by function. Notebook statements are keyed ``stmt:<sha>``
+    and have no function to name, so they are collected under one heading
+    rather than reported as a function called "stmt".
+    """
+    if key.startswith('stmt:'):
+        return '(notebook statements)'
+    return key.split(':', 1)[0] if ':' in key else '(unknown)'
+
+
+def _scan_entries(cache_path: Path) -> list[_Entry]:
+    """Read every ``.meta`` in *cache_path* and pair it with its payload."""
+    entries: list[_Entry] = []
+    for meta_file in cache_path.glob('*.meta'):
+        try:
+            with open(meta_file, 'rb') as fh:
+                metadata = pickle.load(fh)
+        except (OSError, pickle.UnpicklingError, EOFError, ValueError) as exc:
+            logger.debug("Failed to read cache metadata from %s: %s", meta_file, exc)
+            continue
+        key = metadata.get('key') or ''
+        size = meta_file.stat().st_size
+        data_file = meta_file.with_suffix('.data')
+        if data_file.exists():
+            size += data_file.stat().st_size
+        entries.append(_Entry(
+            stem=meta_file.stem,
+            function=_function_of(key),
+            key=key,
+            size=size,
+            mtime=meta_file.stat().st_mtime,
+        ))
+    return entries
+
+
+def _age(mtime: float) -> str:
+    seconds = max(0.0, time.time() - mtime)
+    for limit, divisor, unit in ((60, 1, "s"), (3600, 60, "min"),
+                                 (86400, 3600, "h")):
+        if seconds < limit:
+            return f"{int(seconds // divisor)}{unit} ago"
+    return f"{int(seconds // 86400)}d ago"
+
+
+def _resolve_function(entries: list[_Entry], wanted: str) -> str | None:
+    """Map what the user typed onto one function name, or explain why not.
+
+    A decorator key carries the full ``module.qualname``, and for a function
+    defined in the script you ran that module is ``__main__`` -- which nobody
+    wants to type. So an unambiguous trailing segment is accepted too:
+    ``--function work`` finds ``__main__.work``. Ambiguity is reported with
+    the candidates rather than resolved by guessing, because the two remedies
+    (clear one, clear the other) are not interchangeable.
+    """
+    names = sorted({e.function for e in entries})
+    if wanted in names:
+        return wanted
+    matches = [n for n in names if n.rsplit('.', 1)[-1] == wanted
+               or n.endswith('.' + wanted)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        print(f"No cached function matches {wanted!r}.")
+        if names:
+            print("Cached functions:")
+            for name in names:
+                print(f"  {name}")
+        return None
+    # ASCII only in CLI output: an em-dash renders as "?" on a cp1252 Windows
+    # console, which is where a lot of these users are.
+    print(f"{wanted!r} is ambiguous - it matches:")
+    for name in matches:
+        print(f"  {name}")
+    print("Pass the full name.")
+    return None
+
+
 def cmd_inspect(args: argparse.Namespace) -> None:
     """Inspect cache for a notebook or cache directory."""
     target = args.path
+    # getattr, not attribute access: a flag added here must not break a
+    # caller that builds its own Namespace without it.
+    only_function = getattr(args, "function", None)
 
     if target and os.path.isfile(target) and target.endswith('.ipynb'):
+        if only_function:
+            print("--function applies to a cache directory, not a notebook.")
+            sys.exit(2)
         _inspect_notebook(target)
-    elif target and os.path.isdir(target):
-        _inspect_cache_dir(target)
-    else:
-        # Default to .cash directory
-        default_dir = ".cash"
-        if os.path.isdir(default_dir):
-            _inspect_cache_dir(default_dir)
-        else:
-            print("No cache found. Specify a notebook or cache directory.")
-            sys.exit(1)
+        return
+
+    cache_dir = target if (target and os.path.isdir(target)) else ".cash"
+    if not os.path.isdir(cache_dir):
+        print("No cache found. Specify a notebook or cache directory.")
+        sys.exit(1)
+    _inspect_cache_dir(cache_dir, only_function=only_function)
 
 
 def _inspect_notebook(notebook_path: str) -> None:
@@ -116,60 +213,101 @@ def _inspect_notebook(notebook_path: str) -> None:
         print("  Cache: not found (no .cash directory)")
 
 
-def _inspect_cache_dir(cache_dir: str) -> None:
-    """Inspect a cache directory."""
+def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None:
+    """Inspect a cache directory.
+
+    The default view is a per-function table sorted by SIZE, because the
+    question that sends anyone here is "what is filling my disk, and what can
+    I afford to drop?". A user who wanted that used to get a file-extension
+    histogram and had to go to the file explorer instead.
+    """
     cache_path = Path(cache_dir)
+    total_size = sum(f.stat().st_size for f in cache_path.rglob('*') if f.is_file())
+    entries = _scan_entries(cache_path)
+
     print(f"Cache directory: {cache_path}")
 
-    # Count files and total size
-    total_size = 0
-    file_count = 0
-    meta_count = 0
-    data_extensions = {}
+    if only_function is not None:
+        resolved = _resolve_function(entries, only_function)
+        if resolved is None:
+            sys.exit(1)
+        owned = sorted((e for e in entries if e.function == resolved),
+                       key=lambda e: e.size, reverse=True)
+        owned_size = sum(e.size for e in owned)
+        noun = "entry" if len(owned) == 1 else "entries"
+        print(f"  {resolved} - {len(owned)} {noun}, {_format_bytes(owned_size)}\n")
+        print(f"  {'ENTRY':<20}{'SIZE':>12}   LAST USED")
+        for entry in owned:
+            print(f"  {entry.stem[:16]:<20}{_format_bytes(entry.size):>12}   {_age(entry.mtime)}")
+        return
 
-    for f in cache_path.rglob('*'):
-        if f.is_file():
-            size = f.stat().st_size
-            total_size += size
-            file_count += 1
-            ext = f.suffix
-            if ext == '.meta':
-                meta_count += 1
-            data_extensions[ext] = data_extensions.get(ext, 0) + 1
+    functions: dict[str, list[_Entry]] = {}
+    for entry in entries:
+        functions.setdefault(entry.function, []).append(entry)
 
-    print(f"  Total files: {file_count}")
-    print(f"  Total size:  {_format_bytes(total_size)}")
-    print(f"  Cache entries: ~{meta_count}")
+    print(f"  Total size: {_format_bytes(total_size)}    "
+          f"Entries: {len(entries)}    Functions: {len(functions)}")
 
-    if data_extensions:
-        print(f"  File types: {dict(sorted(data_extensions.items()))}")
+    if not functions:
+        print("\n  (no readable entries)")
+        return
 
-    # Try reading some metadata
-    meta_files = list(cache_path.glob('*.meta'))
-    if meta_files:
-        print("\n  Recent entries:")
-        import pickle
-        shown = 0
-        for mf in sorted(meta_files, key=lambda f: f.stat().st_mtime, reverse=True)[:5]:
+    ranked = sorted(functions.items(),
+                    key=lambda kv: sum(e.size for e in kv[1]), reverse=True)
+    print(f"\n  {'FUNCTION':<40}{'ENTRIES':>9}{'SIZE':>12}   LAST USED")
+    for name, owned in ranked:
+        newest = max(e.mtime for e in owned)
+        print(f"  {name[:40]:<40}{len(owned):>9}"
+              f"{_format_bytes(sum(e.size for e in owned)):>12}   {_age(newest)}")
+    print("\n  cash inspect --function NAME   to list one function's entries")
+    print("  cash clear   --function NAME   to drop them")
+
+
+def _clear_function(cache_dir: str, wanted: str) -> None:
+    """Delete every entry belonging to one cached function.
+
+    The alternative for someone short on disk used to be all-or-nothing: keep
+    a cache they cannot afford or delete work they still want. Dropping the
+    one function they are finished with is the decision they actually wanted
+    to make.
+    """
+    cache_path = Path(cache_dir)
+    if not cache_path.is_dir():
+        print(f"No cache directory at {cache_dir}")
+        sys.exit(1)
+    entries = _scan_entries(cache_path)
+    resolved = _resolve_function(entries, wanted)
+    if resolved is None:
+        sys.exit(1)
+
+    owned = [e for e in entries if e.function == resolved]
+    freed = sum(e.size for e in owned)
+    removed = 0
+    for entry in owned:
+        for suffix in ('.meta', '.data'):
+            path = cache_path / f"{entry.stem}{suffix}"
             try:
-                with open(mf, 'rb') as f:
-                    metadata = pickle.load(f)
-                key = metadata.get('key', mf.stem[:16] + '...')
-                created = metadata.get('created_at', 'unknown')
-                if isinstance(created, (int, float)):
-                    from datetime import datetime
-                    created = datetime.fromtimestamp(created).strftime('%Y-%m-%d %H:%M')
-                outputs = metadata.get('outputs', [])
-                print(f"    [{created}] {key[:50]}  -> {', '.join(outputs) if outputs else 'no outputs'}")
-                shown += 1
-            except (OSError, pickle.UnpicklingError, EOFError, ValueError) as exc:
-                logger.debug("Failed to read cache metadata from %s: %s", mf, exc)
-        if shown == 0:
-            print("    (could not read metadata)")
+                path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError as exc:
+                # A locked file (antivirus, another process) must not abort the
+                # rest: partial progress still frees space, and saying so beats
+                # a traceback halfway through.
+                print(f"  could not remove {path.name}: {exc}")
+        removed += 1
+    noun = "entry" if removed == 1 else "entries"
+    print(f"Cleared {removed} {noun} for {resolved} ({_format_bytes(freed)} freed)")
 
 
 def cmd_clear(args: argparse.Namespace) -> None:
     """Clear cache."""
+    only_function = getattr(args, "function", None)
+    if only_function:
+        target = args.path if (args.path and os.path.isdir(args.path)) else ".cash"
+        _clear_function(target, only_function)
+        return
+
     if args.all:
         # Clear default .cash directory
         cache_dir = ".cash"
@@ -182,8 +320,14 @@ def cmd_clear(args: argparse.Namespace) -> None:
 
     target = args.path
     if not target:
-        print("Specify a path or use --all to clear all caches")
-        sys.exit(1)
+        # The one-liner this replaces named two of the three options and
+        # left the user to guess the rest; the help text is the list.
+        parser = getattr(args, "clear_parser", None)
+        if parser is not None:
+            parser.print_help()
+        else:
+            print("Specify a path, --function NAME, or --all.")
+        sys.exit(2)
 
     if os.path.isdir(target):
         shutil.rmtree(target)
@@ -321,13 +465,19 @@ def main() -> None:
     # inspect
     sub_inspect = subparsers.add_parser('inspect', help='Inspect cache for a notebook or directory')
     sub_inspect.add_argument('path', nargs='?', default=None, help='Notebook (.ipynb) or cache directory path')
+    sub_inspect.add_argument('--function', default=None, metavar='NAME',
+                             help="List one function's entries. An unambiguous "
+                                  'trailing segment is enough ("work" finds "__main__.work").')
     sub_inspect.set_defaults(func=cmd_inspect)
 
     # clear
     sub_clear = subparsers.add_parser('clear', help='Clear cache')
     sub_clear.add_argument('path', nargs='?', default=None, help='Notebook or cache directory to clear')
     sub_clear.add_argument('--all', action='store_true', help='Clear all caches in current directory')
-    sub_clear.set_defaults(func=cmd_clear)
+    sub_clear.add_argument('--function', default=None, metavar='NAME',
+                           help="Clear only this function's entries, leaving the rest "
+                                'of the cache intact.')
+    sub_clear.set_defaults(func=cmd_clear, clear_parser=sub_clear)
 
     # autoload on|off
     sub_autoload = subparsers.add_parser(
@@ -335,7 +485,7 @@ def main() -> None:
         help='Toggle whether cash auto-loads in every new IPython/Jupyter kernel',
         description=(
             'Install or remove an IPython startup hook so cash is loaded (and optionally '
-            'enabled) automatically in every new kernel — no `import cash` needed per notebook.'
+            'enabled) automatically in every new kernel - no `import cash` needed per notebook.'
         ),
     )
     sub_autoload.add_argument(

@@ -82,8 +82,8 @@ class TestCLIInspect:
         from types import SimpleNamespace
         cmd_inspect(SimpleNamespace(path=str(cache_dir)))
         captured = capsys.readouterr()
-        assert "Total files:" in captured.out
-        assert "Cache entries:" in captured.out
+        assert "Total size:" in captured.out
+        assert "Entries:" in captured.out
 
     def test_inspect_nonexistent(self, capsys, tmp_path, monkeypatch):
         """Inspect nonexistent path should fail gracefully."""
@@ -285,10 +285,10 @@ class TestCLIInspectNotebook:
         from cash.__main__ import _inspect_cache_dir
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
-        assert "Total files: 1" in captured.out
-        assert "Cache entries: ~1" in captured.out
-        assert "Recent entries:" in captured.out
-        assert "result, df" in captured.out
+        assert "Entries: 1" in captured.out
+        # A statement key has no function to name, so it groups under one
+        # heading rather than being reported as a function called "stmt".
+        assert "(notebook statements)" in captured.out
 
     def test_inspect_cache_dir_empty(self, tmp_path, capsys):
         """Inspect empty cache directory."""
@@ -298,7 +298,8 @@ class TestCLIInspectNotebook:
         from cash.__main__ import _inspect_cache_dir
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
-        assert "Total files: 0" in captured.out
+        assert "Entries: 0" in captured.out
+        assert "(no readable entries)" in captured.out
 
     def test_inspect_cache_dir_corrupt_meta(self, tmp_path, capsys):
         """Inspect cache dir with unreadable metadata files."""
@@ -309,7 +310,10 @@ class TestCLIInspectNotebook:
         from cash.__main__ import _inspect_cache_dir
         _inspect_cache_dir(str(cache_dir))
         captured = capsys.readouterr()
-        assert "could not read metadata" in captured.out
+        # One corrupt file must not cost the report for everything else;
+        # it is skipped, and the directory still totals correctly.
+        assert "Entries: 0" in captured.out
+        assert "Total size:" in captured.out
 
 
 @pytest.fixture
