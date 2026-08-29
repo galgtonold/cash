@@ -679,10 +679,44 @@ def get_text_output(cell, filter_debug: bool = True) -> str:
                          '_DEBUG]', '[PROXY_CELL_ID]', '[CELL_CHANGED]', '[CELL_UNCHANGED]',
                          '[CELL_ID]', '[STATE]', '[ENSURE_STATE', '[SKIP_',
                          'Cash:', 'cache_key: stmt:', '| source_hash:']
-        filtered_lines = [
-            line for line in raw_text.split('\n')
-            if not any(marker in line for marker in debug_markers)
+
+        # cash's own WARNINGS, which reach stderr and therefore land in the
+        # cell's outputs. They have to go for the same reason the debug lines
+        # do, and more sharply for the oracle harnesses: those compare a
+        # cash-ON kernel's output against a cash-OFF one, and a cash warning
+        # is by construction present in the first and impossible in the
+        # second -- so any warning turns a correct run into a failure. It has
+        # to be load-dependent to show up as a flake, and the write-failure
+        # warning is exactly that.
+        #
+        # Matched on the CATEGORY name rather than the message. The message
+        # texts are inconsistent about case ('Cash: the disk cache evicted'
+        # against 'cash could not store the result'), so the existing 'Cash:'
+        # marker catches some and misses others, while a bare 'cash' would
+        # drop legitimate user output the way a bare '[DEBUG]' would.
+        cash_warning_markers = [
+            'CashWarning:', 'CashCacheIneffectiveWarning:',
+            'CashUpstreamSyntaxWarning:', 'CashCacheStoreFailedWarning:',
+            'CashImpurityWarning:',
         ]
+
+        filtered_lines = []
+        drop_continuation = False
+        for line in raw_text.split('\n'):
+            # Python prints a warning as two lines: the location + category +
+            # message, then the offending source line, indented. Dropping only
+            # the first leaves a stray '  warnings.warn(' behind, which
+            # diverges from the oracle just as loudly.
+            if drop_continuation:
+                drop_continuation = False
+                if line[:1] in (' ', '\t') and line.strip():
+                    continue
+            if any(marker in line for marker in debug_markers):
+                continue
+            if any(marker in line for marker in cash_warning_markers):
+                drop_continuation = True
+                continue
+            filtered_lines.append(line)
         return "\n".join(filtered_lines).strip()
     
     return raw_text.strip()
