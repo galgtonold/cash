@@ -1,5 +1,10 @@
 # `%cash_on` — notebook caching guide
 
+!!! info "This is the notebook path"
+    `%cash_on` is a Jupyter magic and does nothing in a plain `.py`
+    file. For a script, decorate the slow functions instead - see the
+    [decorator guide](decorator.md).
+
 This page is the cohesive walkthrough of notebook caching: how `%cash_on`
 turns a normal Jupyter session into a cached one, what "statement-level"
 actually buys you, and the behaviors that are unique to running inside a live

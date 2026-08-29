@@ -97,14 +97,29 @@ gracefully: it emits a `CashCacheIneffectiveWarning` naming the offending
 argument type, and runs the function uncached.
 
 ??? question "Why is the `func` segment module-qualified?"
-    <!-- claim: cash/core.py:Cash._get_func_key @0f005572 -->
+    <!-- claim: cash/core.py:Cash._get_func_key @6285ab22 -->
     Cash keys functions on `f"{func.__module__}.{func.__qualname__}"`, not
     `__qualname__` alone. Early on, bare qualnames collided: a notebook cell's
     `dep()` and a helper module's `dep()` produced the *same* key, so a call to
     one could return the other's cached result — a silent wrong answer. Folding
-    in `__module__` makes the key unique (`__main__.dep` vs `my_utils.dep`).
+    in `__module__` makes the key unique (`analysis.dep` vs `my_utils.dep`).
     `__module__` is set correctly by Python for every function type, so it's a
     stable, free disambiguator.
+
+    **`__main__` is resolved to a filename.** A function defined in the script
+    you ran belongs to module `__main__`, so `python model.py` keyed it
+    `__main__.work` while `import model` keyed the same function, same source,
+    same arguments as `model.work` — two entries for one computation, on the
+    very ordinary path of developing a script behind an
+    `if __name__ == "__main__"` block and later importing it from a driver.
+    Cash resolves `__main__` through the defining file's name so those two
+    agree. It also *reduces* collisions: every script alike used to be
+    `__main__`, so two unrelated scripts with a same-named function met;
+    now only two scripts with the same **filename** do — and the state hash
+    (source, helpers, read globals) still separates those.
+
+    A REPL, `python -c`, a frozen app and a Jupyter kernel have no defining
+    file, so they stay `__main__` — there is no import for them to agree with.
 
 ## The bridge to notebook caching
 

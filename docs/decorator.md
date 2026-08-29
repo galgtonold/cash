@@ -1,5 +1,11 @@
 # `@cash.cache` — decorator guide
 
+!!! info "This is the script path"
+    Everything here works in a plain `.py` file - no Jupyter, no magics.
+    **You do not need `%cash_on`**, which is the notebook path and is
+    covered in [Notebook caching](notebook_caching_api.md). The two
+    compose, but neither requires the other.
+
 This page is the cohesive walkthrough of `@cash.cache`: when to use it,
 **what invalidates a cached result by default**, what every parameter adds
 on top, the wrapper methods you can call on a decorated function, and the
@@ -80,6 +86,55 @@ def slow_square(n):
 slow_square(1000)      # first call on this instance — computes
 slow_square(1000)      # cache hit, from ./my_app_cache
 ```
+
+---
+
+## Seeing what it did
+
+A notebook shows a badge on every statement. A script shows nothing by
+default, which makes it easy to assume caching is working when it isn't — so
+there are three ways to look.
+
+**What recomputed just now?** Set `CASH_SUMMARY=1` and a per-function table
+prints when the process exits. No code change, which is the point:
+
+```bash
+CASH_SUMMARY=1 python model.py
+```
+
+```
+cash: 4 of 5 calls restored, 41.2s saved
+  __main__.ray_component   3 hits,   1 miss     41.2s saved
+  __main__.build_grid      1 hit,    0 misses    0.3s saved
+```
+
+`cash.configure(summary=True)`, `Cash(summary=True)` and a `summary = true`
+TOML key do the same thing; `f.cache_info()` gives one function's numbers
+directly.
+
+**What is on disk, and what is it costing me?**
+
+```bash
+cash inspect
+```
+
+```
+Cache directory: .cash
+  Total size: 1.68 GB    Entries: 412    Functions: 6
+
+  FUNCTION                      ENTRIES        SIZE   LAST USED
+  __main__.ray_component            180     1.21 GB   2 min ago
+  __main__.build_grid                97      310 MB   2 min ago
+```
+
+**Drop one function's entries** when you're out of disk but still want the
+rest:
+
+```bash
+cash clear --function build_grid
+```
+
+See the [CLI reference](cli.md) for the full set.
 
 ---
 

@@ -10,7 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @9184b728 broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @9fdd81ae broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
@@ -191,13 +191,13 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
-<!-- claim: cash/__main__.py:cmd_inspect @9eed112e, cash/__main__.py:_inspect_cache_dir @be5b4bea, cash/__main__.py:_inspect_notebook @06ba3efe -->
-### `cash inspect [path]`
+<!-- claim: cash/__main__.py:cmd_inspect @f70de23e, cash/__main__.py:_inspect_cache_dir @076aec1f, cash/__main__.py:_inspect_notebook @06ba3efe -->
+### `cash inspect [path] [--function NAME]`
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
 directory.
 
-**Usage:** `cash inspect [path]`
+**Usage:** `cash inspect [path] [--function NAME]`
 
 **Arguments:**
 
@@ -221,13 +221,30 @@ cash inspect ./notebooks/analysis.ipynb
 cash inspect /tmp/some-cache-dir
 ```
 
+- `--function NAME` — *Optional.* List one function's individual entries
+  instead of the per-function overview. An unambiguous trailing segment is
+  enough: `--function work` finds `__main__.work`. An ambiguous one prints the
+  candidates and exits 1; an unknown one prints the functions that *are*
+  cached.
+
 **Output for a cache directory:**
 
-- Total file count and total size (human-readable: B/KB/MB/GB).
-- Approximate cache-entry count (number of `.meta` files).
-- A breakdown of file extensions and their counts.
-- Up to 5 most-recent cache entries, each shown with timestamp, cache key
-  prefix, and the names of the variables it produced.
+A per-function table, sorted by size — because the question that sends people
+here is "what is filling my disk, and what can I afford to drop?":
+
+```
+Cache directory: .cash
+  Total size: 13.7 MB    Entries: 3    Functions: 2
+
+  FUNCTION                      ENTRIES        SIZE   LAST USED
+  __main__.heavy_field                2     13.7 MB   2 min ago
+  __main__.small_helper               1       620 B   2 min ago
+```
+
+The grouping needs no extra bookkeeping: a decorator cache key is
+`{module.qualname}:{state}:{dynamic}:{args}`, so the owning function is the
+first segment of every key on disk. Notebook statements are keyed `stmt:<sha>`
+and have no function to name, so they group under `(notebook statements)`.
 
 **Output for a notebook:**
 
@@ -243,17 +260,18 @@ cash inspect /tmp/some-cache-dir
   `nbformat not installed. Install with: pip install nbformat` and continues
   cleanly (exit 0).
 - Cache metadata is read via `pickle`. Corrupted or unreadable `.meta` files
-  are silently skipped (logged at debug level); if none of the recent entries
-  can be read, the section shows `(could not read metadata)`.
+  are skipped (logged at debug level) rather than aborting the report — one
+  bad file must not cost you the totals for everything else. When nothing is
+  readable the table is replaced by `(no readable entries)`.
 
 ---
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @23843bc2 -->
-### `cash clear [path] [--all]`
+<!-- claim: cash/__main__.py:cmd_clear @abe15a42 -->
+### `cash clear [path] [--all] [--function NAME]`
 
-Delete a cache directory.
+Delete a cache directory, or just one function's entries.
 
 !!! warning "Destructive without confirmation"
     `cash clear` calls `shutil.rmtree()` immediately on the resolved
@@ -261,7 +279,7 @@ Delete a cache directory.
     — running the command deletes the cache as soon as you press enter. Be
     sure of the target before you run it, especially in CI.
 
-**Usage:** `cash clear [path] [--all]`
+**Usage:** `cash clear [path] [--all] [--function NAME]`
 
 **Arguments:**
 
@@ -274,10 +292,15 @@ Delete a cache directory.
 - `--all` — *Optional.* Clear `./.cash` in the current working directory.
   When set, any `path` argument is ignored. If `./.cash` doesn't exist,
   prints `No .cash directory found in current directory` and exits 0.
+- `--function NAME` — *Optional.* Delete only that function's entries and
+  leave the rest of the cache intact — the alternative to keeping a cache you
+  cannot afford or deleting work you still want. Resolves names exactly as
+  `cash inspect --function` does. Takes precedence over `--all`.
 
 **Examples:**
 
 ```bash
+cash clear --function ray.build_grid   # drop one function, keep the rest
 cash clear --all                       # nuke ./.cash
 cash clear ./.cash                     # same thing, explicit
 cash clear ./notebooks/analysis.ipynb  # nuke the sibling .cash next to the notebook
@@ -286,9 +309,8 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 **Behaviour notes:**
 
-- If neither `path` nor `--all` is supplied, cash prints
-  `Specify a path or use --all to clear all caches` and exits 1 without
-  touching anything.
+- If none of `path`, `--all` or `--function` is supplied, cash prints the
+  `cash clear` help and exits 2 without touching anything.
 - The no-op "nothing to clear" message paths (no `./.cash`, no sibling cache)
   exit 0; they're treated as success, not failure.
 

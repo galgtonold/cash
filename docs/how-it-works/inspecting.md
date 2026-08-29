@@ -190,7 +190,7 @@ print(load.explain(1000))
 own `details` (which files changed, which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @a28b87be, cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b, cash/core.py:Cash._log_decorator_call @55a1f795 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @d0900d46, cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b, cash/core.py:Cash._log_decorator_call @55a1f795 -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was
@@ -262,23 +262,28 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @9184b728, cash/__main__.py:cmd_info @c6a1b14a, cash/__main__.py:_inspect_cache_dir @be5b4bea -->
+<!-- claim: cash/__main__.py:main @9fdd81ae, cash/__main__.py:cmd_info @c6a1b14a, cash/__main__.py:_inspect_cache_dir @076aec1f -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from
-cash inspect [path]     # entry count, total size, file breakdown, recent entries
+cash inspect [path]     # total size + a per-function table, sorted by size
 cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-<!-- claim: cash/__main__.py:cmd_clear @23843bc2 -->
+<!-- claim: cash/__main__.py:cmd_clear @abe15a42 -->
 !!! warning "`cash clear` deletes a whole directory"
     `cash clear` is directory-granular, not notebook-granular. Pointing it at a
     notebook (`cash clear analysis.ipynb`) removes the entire `.cash/` folder
     sitting next to that notebook — including the entries belonging to every
     *other* notebook in the same folder, since they all share it. `--all` does
-    the same to `./.cash` in the current working directory. There is no
-    per-notebook or per-variable clear from the CLI.
+    the same to `./.cash` in the current working directory. There is still no
+    per-notebook or per-variable clear.
+
+    `--function NAME` is the one exception: it deletes just that function's
+    entries and leaves the rest of the directory alone. It works on decorator
+    entries, which carry the owning function in their key; notebook statements
+    do not, and group under `(notebook statements)`.
 
 For the thresholds that actually drive persistence, see
 [Where your cache lives](storage.md).

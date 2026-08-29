@@ -38,7 +38,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @e91ce30c broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @8f155618 broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -84,6 +84,7 @@ cash tracked automatically, where there is no source object on which to set
 | Field | Env var | Default | Description |
 |---|---|---|---|
 | `debug` | `CASH_DEBUG` | `false` | Verbose `[CACHE]` / `[UPSTREAM_DEBUG]` / `[LINEAGE_DEBUG]` log lines. |
+| `summary` | `CASH_SUMMARY` | `false` | Print a per-function hit/miss table when the process exits. The one spelling that needs no edit to the script you are running: `CASH_SUMMARY=1 python model.py`. A notebook shows this per statement in the badge; a script otherwise shows nothing. |
 
 ### Backend selection — simple mode
 
