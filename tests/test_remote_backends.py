@@ -70,25 +70,20 @@ class TestS3Backend(unittest.TestCase):
         self.backend.bucket = "test-bucket"
 
     def test_get(self):
+        """One object per entry, so one GET."""
+        from cash.backends.entry_format import pack_entry
+
         metadata = {'key': 'k', 'size': 10}
-        meta_bytes = pickle.dumps(metadata)
         original_data = "data"
-        data_bytes = pickle.dumps(original_data)
-        
-        # Mock get_object response
-        def get_object_side_effect(Bucket, Key):
-            if Key.endswith('.meta'):
-                body = MagicMock()
-                body.read.return_value = meta_bytes
-                return {'Body': body}
-            elif Key.endswith('.data'):
-                body = MagicMock()
-                body.read.return_value = data_bytes
-                return {'Body': body}
-            return None
-            
+        blob = pack_entry(metadata, pickle.dumps(original_data))
+
+        def get_object_side_effect(Bucket, Key, Range=None):
+            body = MagicMock()
+            body.read.return_value = blob if Range is None else blob[:8192]
+            return {'Body': body}
+
         self.backend.s3.get_object.side_effect = get_object_side_effect
-        
+
         m, d = self.backend.get("k")
         # get() now injects source=S3 on bare-backend reads.
         self.assertIsNotNone(m)
@@ -96,22 +91,23 @@ class TestS3Backend(unittest.TestCase):
         self.assertEqual(m['size'], 10)
         self.assertEqual(m['source'], 'S3')
         self.assertEqual(d, original_data)
+        self.assertEqual(self.backend.s3.get_object.call_count, 1)
 
     def test_set(self):
+        """One PUT, to one key, carrying both the metadata and the value."""
+        from cash.backends.entry_format import unpack_entry
+
         self.backend.set("k", "data", {})
-        
-        self.assertEqual(self.backend.s3.put_object.call_count, 2)
-        # Check calls
-        calls = self.backend.s3.put_object.call_args_list
-        # One for data, one for meta
-        keys = [c[1]['Key'] for c in calls]
-        self.assertIn("cash/k.data", keys)
-        self.assertIn("cash/k.meta", keys)
-        
-        # Verify data was serialized
-        # Find the call for data
-        data_call = [c for c in calls if c[1]['Key'] == "cash/k.data"][0]
-        self.assertEqual(pickle.loads(data_call[1]['Body']), "data")
+        self.backend._writes.wait_all()
+
+        self.assertEqual(self.backend.s3.put_object.call_count, 1)
+        call = self.backend.s3.put_object.call_args
+        self.assertEqual(call[1]['Key'], "cash/k.entry")
+
+        meta, payload = unpack_entry(call[1]['Body'], with_payload=True)
+        self.assertEqual(meta['key'], 'k')
+        self.assertEqual(pickle.loads(payload), "data")
+
 
 if __name__ == '__main__':
     unittest.main()

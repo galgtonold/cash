@@ -9,6 +9,13 @@ from typing import Any
 from cash.exceptions import CacheBackendError, DependencyNotFoundError
 
 from ._base import CacheBackend, MetadataDict, PendingWrites
+from .entry_format import (
+    ENTRY_SUFFIX,
+    CorruptEntry,
+    metadata_span,
+    pack_entry,
+    unpack_entry,
+)
 from .serialization import PickleSerializer, Serializer
 
 try:
@@ -53,60 +60,86 @@ class S3Backend(CacheBackend):
         # cell that produced the value.
         self._writes = PendingWrites()
 
-    def _get_keys(self, key: str) -> tuple[str, str]:
-        # S3 keys (paths)
-        return f"{self.prefix}{key}.meta", f"{self.prefix}{key}.data"
+    #: Bytes fetched from the front of an object when only its metadata is
+    #: wanted. Metadata runs a few hundred bytes, so one ranged GET covers it
+    #: with room to spare; anything larger gets a second request rather than a
+    #: wrong answer.
+    METADATA_PREFETCH_BYTES = 8192
+
+    def _get_key(self, key: str) -> str:
+        """One object per entry.
+
+        It was two, a ``.meta`` and a ``.data``, which cost two requests for
+        every read, write and delete -- and made reading metadata download the
+        whole value. S3 has ranged GETs and the entry format has a
+        length-prefixed header; together they make a metadata read one small
+        request.
+
+        Objects written by an older build use the ``.meta``/``.data`` suffixes
+        and are simply invisible here: nothing reads them, so no migration
+        runs against someone's bucket. They keep occupying storage until
+        ``clear()`` (which sweeps the whole prefix) or a lifecycle rule
+        removes them.
+        """
+        return f"{self.prefix}{key}{ENTRY_SUFFIX}"
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         # Wait for any pending write for this key.
         self._writes.wait(key)
-        meta_key, data_key = self._get_keys(key)
+        obj_key = self._get_key(key)
 
         try:
-            # Get metadata
-            meta_obj = self.s3.get_object(Bucket=self.bucket, Key=meta_key)
-            meta_bytes = meta_obj['Body'].read()
-            metadata = pickle.loads(meta_bytes)
-
-            # Get data
-            data_obj = self.s3.get_object(Bucket=self.bucket, Key=data_key)
-            data_bytes = data_obj['Body'].read()
-
-            # Deserialize
-            serializer_cls = metadata.get('serializer_cls', PickleSerializer)
-            serializer = serializer_cls()
-            value = serializer.deserialize(data_bytes)
-
-            metadata.setdefault('source', self.source_label)
-            return metadata, value
+            obj = self.s3.get_object(Bucket=self.bucket, Key=obj_key)
+            metadata, payload = unpack_entry(obj['Body'].read(), with_payload=True)
         except self.botocore_exceptions.ClientError as e:
             error_code = e.response.get('Error', {}).get('Code', '')
             if error_code in ('404', 'NoSuchKey'):
                 return None, None
             raise CacheBackendError(f"S3 get() failed for key {key!r}: {e}") from e
-        except (pickle.UnpicklingError, KeyError, TypeError, OSError) as e:
-            logger.debug("S3 get() deserialization error for key: %s", e)
+        except (CorruptEntry, pickle.UnpicklingError, KeyError, TypeError, OSError) as e:
+            logger.debug("S3 get() deserialization error for key %s: %s", key, e)
             return None, None
 
-    def get_metadata(self, key: str) -> MetadataDict | None:
-        """GET the metadata object only.
-
-        The base implementation performs a full ``get()`` and discards the
-        value, which on S3 costs an extra request AND pulls the entire cached
-        object across the network -- measured at 4,194,457 bytes downloaded
-        for a 4MB entry, to return roughly 150 bytes of metadata. Both halves
-        of that are billed.
-
-        A metadata object with no data object still reports, matching the file
-        backend: an entry whose value was too large to persist keeps its
-        execution time and lineages for badges and upstream simulation.
-        """
-        self._writes.wait(key)
-        meta_key, _data_key = self._get_keys(key)
+        # A metadata-only entry carries no value to restore; get_metadata
+        # still reports it, for badges and upstream simulation.
+        if metadata.get('metadata_only'):
+            return None, None
 
         try:
-            meta_obj = self.s3.get_object(Bucket=self.bucket, Key=meta_key)
-            metadata = pickle.loads(meta_obj['Body'].read())
+            serializer_cls = metadata.get('serializer_cls', PickleSerializer)
+            value = serializer_cls().deserialize(payload)
+        except (pickle.UnpicklingError, AttributeError, ImportError,
+                EOFError, TypeError, ValueError) as e:
+            logger.debug("S3 get() could not restore the value for %s: %s", key, e)
+            return None, None
+
+        metadata.setdefault('source', self.source_label)
+        return metadata, value
+
+    def get_metadata(self, key: str) -> MetadataDict | None:
+        """One ranged GET of the front of the object.
+
+        The base implementation performs a full ``get()`` and discards the
+        value -- two requests and the whole cached object over the network,
+        measured at 4,194,457 bytes for a 4MB entry to return about 150 bytes
+        of answer. Both halves of that are billed.
+        """
+        self._writes.wait(key)
+        obj_key = self._get_key(key)
+
+        try:
+            head = self._ranged_get(obj_key, self.METADATA_PREFETCH_BYTES)
+            try:
+                metadata, _ = unpack_entry(head, with_payload=False)
+            except CorruptEntry:
+                # Widen only if the header says the metadata really is longer
+                # than the prefetch. Anything else is a corrupt object, and
+                # asking again would not help.
+                span = metadata_span(head)
+                if span <= len(head):
+                    raise
+                head = self._ranged_get(obj_key, span)
+                metadata, _ = unpack_entry(head, with_payload=False)
         except self.botocore_exceptions.ClientError as e:
             error_code = e.response.get('Error', {}).get('Code', '')
             if error_code in ('404', 'NoSuchKey'):
@@ -114,16 +147,22 @@ class S3Backend(CacheBackend):
             raise CacheBackendError(
                 f"S3 get_metadata() failed for key {key!r}: {e}"
             ) from e
-        except (pickle.UnpicklingError, KeyError, TypeError, OSError) as e:
-            logger.debug("S3 get_metadata() deserialization error for key: %s", e)
+        except (CorruptEntry, pickle.UnpicklingError, KeyError, TypeError, OSError) as e:
+            logger.debug("S3 get_metadata() error for key %s: %s", key, e)
             return None
 
         metadata.setdefault('source', self.source_label)
         return metadata
 
+    def _ranged_get(self, obj_key: str, nbytes: int) -> bytes:
+        """The first *nbytes* of an object. S3 clamps a range past the end."""
+        obj = self.s3.get_object(Bucket=self.bucket, Key=obj_key,
+                                 Range=f"bytes=0-{nbytes - 1}")
+        return obj['Body'].read()
+
     def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
-        """Serialize on the calling thread, run the S3 PUTs in background."""
-        meta_key, data_key = self._get_keys(key)
+        """Serialize on the calling thread, run the S3 PUT in background."""
+        obj_key = self._get_key(key)
 
         metadata = self._init_metadata(metadata, key)
 
@@ -136,65 +175,58 @@ class S3Backend(CacheBackend):
         metadata['size'] = len(serialized_value)
         if 'storage' not in metadata:
             metadata['storage'] = [self.source_label]
-        meta_bytes = pickle.dumps(metadata)
 
         self._writes.submit(
             key, self._do_set_sync,
-            meta_key, data_key, meta_bytes, serialized_value,
+            obj_key, pack_entry(dict(metadata), serialized_value),
         )
 
-    def _do_set_sync(self, meta_key: str, data_key: str,
-                     meta_bytes: bytes, serialized_value: bytes) -> None:
-        """The actual S3 PUTs — runs in the PendingWrites worker thread."""
+    def _do_set_sync(self, obj_key: str, blob: bytes) -> None:
+        """The actual S3 PUT -- runs in the PendingWrites worker thread.
+
+        One object, so one request, and no ordering to reason about. The
+        two-object version had to PUT the data first and the metadata second
+        so a reader could never find metadata pointing at a payload that was
+        not there yet, and had to delete the orphan when the second PUT
+        failed.
+        """
         try:
-            self.s3.put_object(Bucket=self.bucket, Key=data_key, Body=serialized_value)
-            # Upload metadata (only after data succeeds)
-            self.s3.put_object(Bucket=self.bucket, Key=meta_key, Body=meta_bytes)
+            self.s3.put_object(Bucket=self.bucket, Key=obj_key, Body=blob)
         except self.botocore_exceptions.ClientError as e:
-            # If data wrote but meta failed, the orphan is harmless
-            # (we need meta to find it). Best-effort cleanup of the data
-            # blob so we don't leak storage.
-            try:
-                self.s3.delete_object(Bucket=self.bucket, Key=data_key)
-            except self.botocore_exceptions.ClientError:
-                logger.warning("Failed to clean up partial S3 write for key %s", data_key)
             raise CacheBackendError(f"S3 Write Error: {e}") from e
 
-    #: Error codes that mean "this endpoint has no batch delete", as opposed
-    #: to "the delete failed". Only these fall back to one request per object;
-    #: anything else is a real failure and is raised.
-    _NO_BATCH_DELETE = frozenset({'NotImplemented', 'MethodNotAllowed', '501', '405'})
+    def set_metadata_only(self, key: str, metadata: dict) -> None:
+        """Store metadata with no value, for an entry too large to persist.
+
+        Will NOT overwrite an entry that carries a real payload.
+        """
+        self._writes.wait(key)
+        obj_key = self._get_key(key)
+
+        existing = self.get_metadata(key)
+        if existing is not None and not existing.get('metadata_only'):
+            return
+
+        metadata = dict(metadata)
+        metadata['key'] = key
+        metadata['metadata_only'] = True
+        metadata.setdefault('size', 0)
+
+        try:
+            self.s3.put_object(Bucket=self.bucket, Key=obj_key,
+                               Body=pack_entry(metadata, b""))
+        except self.botocore_exceptions.ClientError as e:
+            logger.debug("Failed to write metadata-only entry for key %r: %s", key, e)
 
     def delete(self, key: str) -> None:
         # Drain any pending write so the delete actually deletes.
         self._writes.drain(key)
-        meta_key, data_key = self._get_keys(key)
         try:
-            # One request for both objects. S3 has had DeleteObjects for as
-            # long as it has had DeleteObject, and an entry is always two
-            # objects, so this halves the request count of every eviction.
-            self.s3.delete_objects(
-                Bucket=self.bucket,
-                Delete={'Objects': [{'Key': meta_key}, {'Key': data_key}]},
-            )
+            self.s3.delete_object(Bucket=self.bucket, Key=self._get_key(key))
         except self.botocore_exceptions.ClientError as e:
-            error_code = e.response.get('Error', {}).get('Code', '')
-            if error_code not in self._NO_BATCH_DELETE:
-                raise CacheBackendError(
-                    f"S3 delete failed for key '{key}': {e}"
-                ) from e
-            # An S3-compatible endpoint without the batch API. Fall back
-            # rather than fail: the point was to save a request, not to
-            # require one particular implementation.
-            logger.debug("Batch delete unavailable (%s); deleting individually",
-                         error_code)
-            try:
-                self.s3.delete_object(Bucket=self.bucket, Key=meta_key)
-                self.s3.delete_object(Bucket=self.bucket, Key=data_key)
-            except self.botocore_exceptions.ClientError as inner:
-                raise CacheBackendError(
-                    f"S3 delete failed for key '{key}': {inner}"
-                ) from inner
+            raise CacheBackendError(
+                f"S3 delete failed for key '{key}': {e}"
+            ) from e
 
     def clear(self) -> None:
         self._writes.wait_all()
@@ -232,13 +264,20 @@ class S3Backend(CacheBackend):
                 if 'Contents' in page:
                     for obj in page['Contents']:
                         key = obj['Key']
-                        if key.endswith('.meta'):
-                            try:
-                                meta_obj = self.s3.get_object(Bucket=self.bucket, Key=key)
-                                meta_bytes = meta_obj['Body'].read()
-                                entries.append(pickle.loads(meta_bytes))
-                            except (pickle.UnpicklingError, self.botocore_exceptions.ClientError, KeyError) as e:
-                                logger.debug("Failed to deserialize S3 metadata for key %s: %s", key, e)
+                        if not key.endswith(ENTRY_SUFFIX):
+                            continue        # a stray, or a pre-v2 .meta/.data
+                        try:
+                            # Ranged: listing a cache must not download it. The
+                            # two-object version fetched whole .meta objects,
+                            # which was already bounded -- this keeps that
+                            # property now that metadata shares an object with
+                            # the value.
+                            head = self._ranged_get(key, self.METADATA_PREFETCH_BYTES)
+                            metadata, _ = unpack_entry(head, with_payload=False)
+                            entries.append(metadata)
+                        except (CorruptEntry, pickle.UnpicklingError,
+                                self.botocore_exceptions.ClientError, KeyError) as e:
+                            logger.debug("Skipping unreadable S3 entry %s: %s", key, e)
         except self.botocore_exceptions.ClientError as e:
             raise CacheBackendError(
                 f"S3 list_entries failed for prefix '{self.prefix}': {e}"

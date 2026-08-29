@@ -66,21 +66,24 @@ def test_redis_set(redis_backend):
 
 
 def test_s3_get(s3_backend):
+    """One object per entry, so one GET.
+
+    The mock is fed a real packed entry rather than a bare pickle: the
+    backend now parses a header, and a fixture that hands it loose metadata
+    bytes would be testing a format that no longer exists.
+    """
+    from cash.backends.entry_format import pack_entry
+
     metadata = {'key': 'k', 'size': 10}
-    meta_bytes = pickle.dumps(metadata)
-    original_data = 'data'
-    data_bytes = pickle.dumps(original_data)
-    
-    def get_object_side_effect(Bucket, Key):
+    blob = pack_entry(metadata, pickle.dumps('data'))
+
+    def get_object_side_effect(Bucket, Key, Range=None):
         body = MagicMock()
-        if Key.endswith('.meta'):
-            body.read.return_value = meta_bytes
-        elif Key.endswith('.data'):
-            body.read.return_value = data_bytes
+        body.read.return_value = blob if Range is None else blob[:8192]
         return {'Body': body}
-    
+
     s3_backend.s3.get_object.side_effect = get_object_side_effect
-    
+
     m, d = s3_backend.get('k')
     # get() now injects source=S3 on bare-backend reads (see
     # test_label_consistency.py), so check the stored fields survive and
@@ -88,15 +91,20 @@ def test_s3_get(s3_backend):
     assert m is not None
     assert m['key'] == 'k' and m['size'] == 10
     assert m['source'] == 'S3'
-    assert d == original_data
+    assert d == 'data'
+    assert s3_backend.s3.get_object.call_count == 1
+
+    # And the metadata-only read asks for a range instead of the object.
+    s3_backend.s3.get_object.reset_mock()
+    assert s3_backend.get_metadata('k')['key'] == 'k'
+    assert s3_backend.s3.get_object.call_count == 1
+    assert s3_backend.s3.get_object.call_args[1]['Range'] == 'bytes=0-8191'
 
 
 def test_s3_set(s3_backend):
+    """One PUT, to one key."""
     s3_backend.set('k', 'data', {})
-    
-    assert s3_backend.s3.put_object.call_count == 2
-    
-    calls = s3_backend.s3.put_object.call_args_list
-    keys = [c[1]['Key'] for c in calls]
-    assert 'cash/k.data' in keys
-    assert 'cash/k.meta' in keys
+    s3_backend._writes.wait_all()
+
+    assert s3_backend.s3.put_object.call_count == 1
+    assert s3_backend.s3.put_object.call_args[1]['Key'] == 'cash/k.entry'

@@ -69,19 +69,29 @@ def _wire(backend):
 # ---------------------------------------------------------------------------
 
 def test_s3_reading_metadata_does_not_download_the_value(s3):
-    """The hole: inspecting an entry pulled the whole object across the wire."""
+    """The hole: inspecting an entry pulled the whole object across the wire.
+
+    One ranged GET now fetches the front of the object. The prefetch is
+    deliberately generous (8KB against ~200 bytes of metadata) because on S3
+    a request costs orders of magnitude more than the bytes: paying for 8KB
+    beats risking a second round trip.
+    """
+    from cash.backends.s3_backend import S3Backend
+
     payload = _seed(s3)
 
     meta = s3.get_metadata("k")
 
     assert meta is not None and meta["execution_time"] == 1.0
     wire = _wire(s3)
-    assert wire.bytes_out < 4096, (
-        f"downloaded {wire.bytes_out:,} bytes of a {len(payload):,}-byte value "
-        f"to read its metadata"
-    )
     assert wire.round_trips == 1, (
         f"{wire.round_trips} requests to read metadata: {dict(wire.calls)}"
+    )
+    assert wire.bytes_out <= S3Backend.METADATA_PREFETCH_BYTES, (
+        f"downloaded {wire.bytes_out:,} bytes, more than the prefetch"
+    )
+    assert wire.bytes_out < len(payload) / 100, (
+        f"downloaded {wire.bytes_out:,} bytes of a {len(payload):,}-byte value"
     )
 
 
@@ -93,6 +103,28 @@ def test_s3_reading_the_value_still_downloads_it(s3):
 
     assert value == payload and metadata is not None
     assert _wire(s3).bytes_out >= len(payload)
+
+
+def test_s3_metadata_larger_than_the_prefetch_costs_a_second_request(s3):
+    """Correctness above speed: a fat entry must still read, not fail.
+
+    Notebook entries can carry outputs, lineages and source code. If one ever
+    outgrows the prefetch the backend asks again for exactly the span the
+    header declares, rather than reporting a readable entry as absent.
+    """
+    from cash.backends.s3_backend import S3Backend
+
+    fat = {"execution_time": 1.0, "code": "x" * (S3Backend.METADATA_PREFETCH_BYTES * 2)}
+    s3.set("fat", b"v" * 1000, fat)
+    s3._writes.wait_all()
+    _wire(s3).reset()
+
+    meta = s3.get_metadata("fat")
+
+    assert meta is not None and len(meta["code"]) == S3Backend.METADATA_PREFETCH_BYTES * 2
+    assert _wire(s3).calls["get_object"] == 2, (
+        "the widened re-read did not happen"
+    )
 
 
 def test_s3_delete_is_one_request(s3):
@@ -107,29 +139,8 @@ def test_s3_delete_is_one_request(s3):
     assert s3.get("k") == (None, None)
 
 
-def test_s3_delete_falls_back_when_the_endpoint_has_no_batch_api(s3):
-    """S3-compatible stores are not all S3. The saving must not be a hard requirement.
-
-    The narrow arm matters: only "this endpoint cannot batch" falls back. A
-    permission error or a missing bucket must still raise, or a delete that
-    genuinely failed would be retried once and then reported as success.
-    """
-    wire = _wire(s3)
-    _seed(s3, payload=b"x" * 100)
-
-    def unsupported(**_kw):
-        wire.record("delete_objects")
-        raise _client_error_code("NotImplemented")
-
-    s3.s3.delete_objects = unsupported
-    s3.delete("k")
-
-    assert wire.calls["delete_object"] == 2, "the fallback did not run"
-    assert s3.get("k") == (None, None), "the entry survived the fallback"
-
-
-def test_s3_delete_still_raises_on_a_real_failure(s3):
-    """The control for the arm above."""
+def test_s3_delete_raises_on_a_real_failure(s3):
+    """A delete that genuinely failed must not read as success."""
     from cash.exceptions import CacheBackendError
 
     _seed(s3, payload=b"x" * 100)
@@ -137,7 +148,7 @@ def test_s3_delete_still_raises_on_a_real_failure(s3):
     def denied(**_kw):
         raise _client_error_code("AccessDenied")
 
-    s3.s3.delete_objects = denied
+    s3.s3.delete_object = denied
     with pytest.raises(CacheBackendError):
         s3.delete("k")
 
@@ -145,24 +156,41 @@ def test_s3_delete_still_raises_on_a_real_failure(s3):
 def _client_error_code(code: str):
     import botocore.exceptions
     return botocore.exceptions.ClientError(
-        {"Error": {"Code": code, "Message": code}}, "DeleteObjects")
+        {"Error": {"Code": code, "Message": code}}, "DeleteObject")
 
 
-def test_s3_a_write_and_a_read_are_each_bounded(s3):
-    """Pins the per-operation request count so a regression is loud.
+def test_s3_a_write_and_a_read_are_each_one_request(s3):
+    """It was two of each: an entry was two objects.
 
-    Not 1 for either: an entry is two objects, and the write orders them
-    deliberately -- data first, metadata second -- so a reader can never find
-    metadata pointing at a payload that is not there yet.
+    The write also had an ordering constraint -- data first, metadata second,
+    so a reader could never find metadata pointing at a payload that was not
+    there yet -- and a cleanup path for when the second PUT failed. One object
+    removes the constraint along with the request.
     """
     wire = _wire(s3)
     s3.set("k2", b"x" * 100, {"execution_time": 1.0})
     s3._writes.wait_all()
-    assert wire.calls["put_object"] == 2
+    assert wire.calls["put_object"] == 1, dict(wire.calls)
 
     wire.reset()
-    s3.get("k2")
-    assert wire.calls["get_object"] == 2
+    metadata, value = s3.get("k2")
+    assert value == b"x" * 100
+    assert wire.calls["get_object"] == 1, dict(wire.calls)
+
+
+def test_s3_listing_does_not_download_the_values(s3):
+    """`list_entries` reports every entry; it must not fetch every payload."""
+    for i in range(5):
+        s3.set(f"e{i}", b"v" * (512 * 1024), {"execution_time": 1.0})
+    s3._writes.wait_all()
+    _wire(s3).reset()
+
+    entries = s3.list_entries()
+
+    assert len(entries) == 5, entries
+    assert _wire(s3).bytes_out < 5 * 512 * 1024 / 10, (
+        f"listing 5 entries transferred {_wire(s3).bytes_out:,} bytes"
+    )
 
 
 # ---------------------------------------------------------------------------

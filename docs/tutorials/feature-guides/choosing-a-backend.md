@@ -172,7 +172,9 @@ Eviction is LRU on `last_access`. When the cache exceeds `max_size_bytes`, the o
     4 MB entry's metadata used to transfer 4,194,457 bytes on S3 (plus a second
     request) and 4,194,460 on Redis, to return about 150 bytes of answer — so
     every badge drawn and every upstream simulation after a kernel restart
-    pulled its entries across the network in full.
+    pulled its entries across the network in full. S3 now serves it from a
+    ranged GET of the object's first 8 KB; Redis fetches the metadata key
+    alone.
 
 ## `SQLiteBackend`
 
@@ -265,7 +267,28 @@ c = Cash(backend=S3Backend(
 c.register_magic()
 ```
 
-Two S3 objects per entry — `{prefix}{key}.meta` and `{prefix}{key}.data` — uploaded in sequence with the data going first so a partial failure never leaves a metadata pointer to a missing payload.
+One S3 object per entry — `{prefix}{key}.entry` — carrying the same header, metadata and payload layout the file backend uses.
+
+!!! tip "One object, one request"
+    Entries used to be two objects, a `.meta` and a `.data`, which cost **two
+    requests for every read, write and delete**, and meant the write had to
+    order them (data first, so a reader could never find metadata pointing at
+    a payload that was not there yet) and clean up the orphan when the second
+    PUT failed. All of that is gone: one object is one request, and it either
+    lands or it does not.
+
+    Reading an entry's *metadata* is now a **ranged GET** of the first 8 KB,
+    so a badge or a listing costs one small request instead of two large ones.
+    Against a 4 MB entry that is 8 KB transferred where it used to be
+    4,194,457 — and on S3 both the request and the bytes are billed. If an
+    entry's metadata ever exceeds the prefetch, the backend asks again for
+    exactly the span the header declares rather than reporting the entry
+    absent.
+
+    **Objects written before this change are invisible, not migrated.** They
+    use the old suffixes, so nothing reads them and no migration runs against
+    your bucket — but they keep occupying storage until `clear()` (which
+    sweeps the whole prefix) or an S3 lifecycle rule removes them.
 
 **Key parameters** — `bucket` (required), `prefix` (default `cash/`), `max_pool_connections`, `retries`, plus any kwargs accepted by `boto3.client('s3', ...)` (region, profile, credentials).
 

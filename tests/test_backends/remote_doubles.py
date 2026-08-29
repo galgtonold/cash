@@ -88,10 +88,30 @@ class FakeS3Client(_Recorder):
 
     def list_objects_v2(self, Bucket, Prefix="", **_kw):  # noqa: N803
         self.record("list_objects_v2")
-        contents = [{"Key": k, "Size": len(v)}
-                    for (b, k), v in self.store.items()
-                    if b == Bucket and k.startswith(Prefix)]
-        return {"Contents": contents, "KeyCount": len(contents)}
+        return {"Contents": self._contents(Bucket, Prefix),
+                "KeyCount": len(self._contents(Bucket, Prefix))}
+
+    def get_paginator(self, operation_name):
+        if operation_name != "list_objects_v2":
+            raise NotImplementedError(operation_name)
+        return _FakePaginator(self)
+
+    def _contents(self, bucket, prefix):
+        return [{"Key": k, "Size": len(v)}
+                for (b, k), v in self.store.items()
+                if b == bucket and k.startswith(prefix)]
+
+
+class _FakePaginator:
+    """One page, one request -- which is what a real paginator costs."""
+
+    def __init__(self, client: FakeS3Client):
+        self._client = client
+
+    def paginate(self, Bucket, Prefix="", **_kw):  # noqa: N803
+        self._client.record("list_objects_v2")
+        contents = self._client._contents(Bucket, Prefix)
+        yield {"Contents": contents} if contents else {"KeyCount": 0}
 
 
 class _Body:

@@ -62,6 +62,8 @@ __all__ = [
     "pack_entry",
     "packed_size",
     "read_entry",
+    "unpack_entry",
+    "metadata_span",
     "update_metadata_in_place",
 ]
 
@@ -101,6 +103,47 @@ def packed_size(metadata: dict[str, Any], payload_len: int) -> int:
     against the ~21us the ``stat`` it replaces takes.
     """
     return HEADER_SIZE + len(pickle.dumps(metadata)) + META_SLACK + payload_len
+
+
+def unpack_entry(blob: bytes, *, with_payload: bool) -> tuple[dict[str, Any], bytes | None]:
+    """Parse an entry that is already in memory.
+
+    What a remote backend has: bytes handed back by a GET, not a file it can
+    seek in. With ``with_payload=False`` the *blob* may be a PREFIX of the
+    entry -- enough to cover the header and metadata region and no more --
+    which is how a ranged GET reads metadata without downloading the value.
+
+    Raises :class:`CorruptEntry` if the prefix is too short to hold the
+    metadata it declares, so a caller that guessed a prefetch size too small
+    can widen it and retry rather than silently returning nothing.
+    """
+    if len(blob) < HEADER_SIZE:
+        raise CorruptEntry(f"truncated header ({len(blob)} bytes)")
+    magic, meta_len, meta_cap = HEADER.unpack(blob[:HEADER_SIZE])
+    if magic != MAGIC:
+        raise CorruptEntry(f"bad magic {magic!r}")
+    if meta_len > meta_cap:
+        raise CorruptEntry(f"meta_len {meta_len} > cap {meta_cap}")
+    end = HEADER_SIZE + meta_len
+    if len(blob) < end:
+        raise CorruptEntry(
+            f"have {len(blob)} bytes, metadata needs {end}")
+    metadata = pickle.loads(blob[HEADER_SIZE:end])
+    if not with_payload:
+        return metadata, None
+    return metadata, blob[HEADER_SIZE + meta_cap:]
+
+
+def metadata_span(blob: bytes) -> int:
+    """Bytes needed from the front of an entry to read its metadata.
+
+    Lets a caller check whether a fixed-size prefetch covered the metadata,
+    and ask for exactly the right amount if it did not.
+    """
+    if len(blob) < HEADER_SIZE:
+        raise CorruptEntry(f"truncated header ({len(blob)} bytes)")
+    _magic, _meta_len, meta_cap = HEADER.unpack(blob[:HEADER_SIZE])
+    return HEADER_SIZE + meta_cap
 
 
 def read_entry(path: str, *, with_payload: bool) -> tuple[dict[str, Any], bytes | None]:
