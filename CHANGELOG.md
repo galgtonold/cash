@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Opening a large cache directory no longer reads every entry.**
+  `FileBackend` ran a full scan on the first cache operation of every process,
+  `open()`ing and unpickling every `.meta` to prefill an in-memory metadata
+  cache. That is linear in the entry count and dominated startup — measured at
+  98 ms for 1k entries, 490 ms for 5k, 2.1 s for 20k, so roughly 10 s at 100k
+  and 100 s at 1M, paid by every process however few keys it touched. It also
+  held ~1.7 KB per entry in RAM: 172 MB at 100k, 1.7 GB at 1M.
+
+  It was pure prefetch — `get` already reads an entry's metadata from disk when
+  it isn't cached. The size cap only ever needed the sizes, which
+  `scandir`/`stat` supplies 31× faster. Startup is now **20–30× faster**
+  (98→4.9 ms, 490→17.8 ms, 2110→68.1 ms) and flat in memory. Eviction still
+  needs to rank every entry, so it loads the metadata on demand: the cost moves
+  to the processes that actually evict.
+
+  Lookups were never affected and remain flat — `get` ~75 µs and `set` ~6 µs
+  regardless of entry count.
+
+- **`delete` now measures what it removed.** It took the size from the metadata
+  cache, so an entry this process had never read subtracted 0 and drifted the
+  running total upward. It also never subtracted the `.meta` bytes, a small
+  leak on every delete.
+
+
 - **A polars `LazyFrame` argument no longer collides with a different one.**
   It was identified by `explain()` — the human-readable *query plan* — and two
   frames over different in-memory data print identically

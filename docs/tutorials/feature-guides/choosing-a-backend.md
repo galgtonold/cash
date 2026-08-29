@@ -78,6 +78,27 @@ Eviction is LRU on `last_access`. When `_current_size_bytes` exceeds `max_size_b
 
 **Gotcha** — uses `pickle` under the hood. Never load a cache directory from an untrusted source. See `SECURITY.md`.
 
+!!! tip "Past ~50k entries, prefer `SQLiteBackend`"
+    Two files per entry in one flat directory is fine at a few thousand and
+    stops being fine well before a million. Measured at 20,000 entries
+    (`benchmarks/bench_cache_scale.py`, Windows/NTFS):
+
+    | | `FileBackend` | `SQLiteBackend` |
+    |---|---|---|
+    | Writing 20k entries | 31.7 s | **1.9 s** |
+    | First access in a new process | 57.5 ms | **4.2 ms** |
+    | Files on disk | **40,001** | 1 |
+    | Size on disk | **13.5 MB** | 17.7 MB |
+
+    Lookups themselves stay flat either way — the filename comes from the key,
+    so `get` is ~75 µs and `set` ~6 µs regardless of how many entries exist.
+    What degrades is everything that touches the *directory*: creating entries,
+    and any tool that enumerates them.
+
+    `SQLiteBackend` trades a little disk for one file and an index. The
+    crossover is roughly where directory operations start to dominate your
+    workload rather than a specific count — 50k is a reasonable place to switch.
+
 ## `SQLiteBackend`
 
 ```python
