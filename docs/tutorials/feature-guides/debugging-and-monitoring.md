@@ -195,8 +195,8 @@ The opposite mystery: you edited code, but Cash is serving a stale value. Call `
 cash inspect ./.cash
 ```
 
-<!-- claim: cash/__main__.py:_inspect_cache_dir @076aec1f -->
-The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME`, and drop it with `cash clear --function NAME` when you are finished with it. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
+<!-- claim: cash/__main__.py:_inspect_cache_dir @24ec3843 -->
+The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME` — each row shows what that entry *saves* alongside its size, so you can tell a cheap 5 MB entry from a 900-byte one worth 41 seconds — and drop what you no longer want with `cash clear --function NAME` or `cash clear --entry ID`. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
 <!-- claim: cash/analytics.py:AnalyticsManager.__init__ @db5dc0e8 -->
 !!! note "The `~/.cash/analytics.db` telemetry file"

@@ -10,7 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @9fdd81ae broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @88959c97 broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
@@ -191,7 +191,7 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
-<!-- claim: cash/__main__.py:cmd_inspect @f70de23e, cash/__main__.py:_inspect_cache_dir @076aec1f, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @f70de23e, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]`
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -223,9 +223,23 @@ cash inspect /tmp/some-cache-dir
 
 - `--function NAME` — *Optional.* List one function's individual entries
   instead of the per-function overview. An unambiguous trailing segment is
-  enough: `--function work` finds `__main__.work`. An ambiguous one prints the
-  candidates and exits 1; an unknown one prints the functions that *are*
-  cached.
+  enough: `--function work` finds `__main__.work`. `notebook` (or
+  `statements`) selects the `(notebook statements)` group without its
+  brackets. An ambiguous name prints the candidates and exits 1; an unknown
+  one prints the functions that *are* cached.
+
+  Each row says what the entry is **worth**, not just how big it is:
+
+  ```
+  ENTRY             SAVES       SIZE   USES   LAST USED   PRODUCES
+  aaaaaaaaaaaa      12.5s     4.0 KB     3x   2 min ago   df, model
+  bbbbbbbbbbbb       0.4s     1.0 KB     1x   2 min ago   scores
+  ```
+
+  `SAVES` is the recorded execution time — what you lose by deleting it —
+  which together with `SIZE` and `USES` is the whole trade. `PRODUCES` names
+  the variables a notebook statement produced, and is omitted when no entry
+  in the group has any.
 
 **Output for a cache directory:**
 
@@ -268,7 +282,7 @@ and have no function to name, so they group under `(notebook statements)`.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @abe15a42 -->
+<!-- claim: cash/__main__.py:cmd_clear @f0272005 -->
 ### `cash clear [path] [--all] [--function NAME]`
 
 Delete a cache directory, or just one function's entries.
@@ -295,12 +309,19 @@ Delete a cache directory, or just one function's entries.
 - `--function NAME` — *Optional.* Delete only that function's entries and
   leave the rest of the cache intact — the alternative to keeping a cache you
   cannot afford or deleting work you still want. Resolves names exactly as
-  `cash inspect --function` does. Takes precedence over `--all`.
+  `cash inspect --function` does, including `notebook`. Takes precedence over
+  `--all`.
+- `--entry ID` — *Optional.* Delete a single entry, using an id from
+  `cash inspect --function NAME`. Any unambiguous prefix works, like a short
+  commit hash; an ambiguous one lists the matches and deletes nothing. Takes
+  precedence over `--function`.
 
 **Examples:**
 
 ```bash
+cash clear --entry a1b2c3              # drop one entry
 cash clear --function ray.build_grid   # drop one function, keep the rest
+cash clear --function notebook         # drop the notebook statements only
 cash clear --all                       # nuke ./.cash
 cash clear ./.cash                     # same thing, explicit
 cash clear ./notebooks/analysis.ipynb  # nuke the sibling .cash next to the notebook

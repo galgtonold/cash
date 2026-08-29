@@ -168,7 +168,7 @@ cold, which is correct but slow. Options, in increasing order of setup:
   [Sharing a cache](sharing-caches.md) first, because a file-reading *notebook
   statement* still won't hit across machines, and the paths recorded by
   `@cash.cache` have to resolve the same way on each runner.
-<!-- claim: cash/__main__.py:cmd_clear @abe15a42 -->
+<!-- claim: cash/__main__.py:cmd_clear @f0272005 -->
 - Start clean deliberately with `python -m cash clear --all`, when a run must
   not be influenced by earlier state. The `--all` matters: bare
   `python -m cash clear` takes no default target, prints a usage line and

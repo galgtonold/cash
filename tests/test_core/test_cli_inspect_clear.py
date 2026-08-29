@@ -26,10 +26,11 @@ import pytest
 from cash.__main__ import _function_of, _resolve_function, _scan_entries
 
 
-def _write_entry(cache_dir, stem, key, payload=b"x" * 100):
+def _write_entry(cache_dir, stem, key, payload=b"x" * 100, **meta):
     cache_dir.mkdir(parents=True, exist_ok=True)
-    (cache_dir / f"{stem}.meta").write_bytes(
-        pickle.dumps({"key": key, "created_at": 0, "outputs": []}))
+    record = {"key": key, "created_at": 0, "outputs": []}
+    record.update(meta)
+    (cache_dir / f"{stem}.meta").write_bytes(pickle.dumps(record))
     (cache_dir / f"{stem}.data").write_bytes(payload)
 
 
@@ -159,3 +160,90 @@ def test_cli_output_is_ascii(tmp_path):
                  ["clear", str(cache), "--function", "mod.f"]):
         out = _cli(*argv, cwd=tmp_path).stdout
         assert out.isascii(), f"non-ascii in `cash {' '.join(argv)}` output"
+
+
+# ---------------------------------------------------------------------------
+# Choosing between entries, and dropping one
+# ---------------------------------------------------------------------------
+#
+# The first version of the drill-down listed an opaque id, a size and an age.
+# That is enough to see that entries exist and not enough to decide anything
+# about them, and there was no way to act on one anyway. The metadata already
+# held what the decision turns on -- `execution_time`, `access_count`,
+# `outputs` -- and none of it was being read.
+
+
+def test_the_entry_view_shows_what_an_entry_is_worth(tmp_path):
+    """Bytes say what you get back; seconds say what it costs you to lose."""
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "aa" * 32, "mod.f:1:2:3", payload=b"x" * 5000,
+                 execution_time=0.2, access_count=1)
+    _write_entry(cache, "bb" * 32, "mod.f:9:2:3", payload=b"x" * 100,
+                 execution_time=41.2, access_count=7)
+    out = _cli("inspect", str(cache), "--function", "mod.f", cwd=tmp_path).stdout
+    assert "SAVES" in out and "USES" in out
+    assert "41.2s" in out, "the entry worth keeping does not say so"
+    assert "0.2s" in out
+    assert "7x" in out
+
+
+def test_notebook_entries_name_the_variables_they_produced(tmp_path):
+    """A statement has no function name, but it does have outputs."""
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "aa" * 32, "stmt:9f8e", outputs=["df", "model"],
+                 execution_time=12.5)
+    out = _cli("inspect", str(cache), "--function", "notebook", cwd=tmp_path).stdout
+    assert "PRODUCES" in out
+    assert "df, model" in out
+
+
+@pytest.mark.parametrize("alias", ["notebook", "notebooks", "statements",
+                                   "(notebook statements)"])
+def test_the_notebook_group_is_addressable_without_its_brackets(tmp_path, alias):
+    """The heading reads as prose in a table; typing it should not require that."""
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "aa" * 32, "stmt:9f8e")
+    result = _cli("inspect", str(cache), "--function", alias, cwd=tmp_path)
+    assert result.returncode == 0, result.stdout
+    assert "notebook statements" in result.stdout
+
+
+def test_the_notebook_group_can_be_cleared_on_its_own(tmp_path):
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "aa" * 32, "stmt:9f8e")
+    _write_entry(cache, "bb" * 32, "mod.kept:1:2:3")
+    result = _cli("clear", str(cache), "--function", "notebook", cwd=tmp_path)
+    assert result.returncode == 0, result.stdout
+    assert {e.function for e in _scan_entries(cache)} == {"mod.kept"}
+
+
+def test_one_entry_can_be_dropped_by_id_prefix(tmp_path):
+    """Ids are SHA-256 stems; a prefix is the only usable handle."""
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "abcdef" + "0" * 58, "mod.f:1:2:3")
+    _write_entry(cache, "fedcba" + "0" * 58, "mod.f:9:2:3")
+    result = _cli("clear", str(cache), "--entry", "abc", cwd=tmp_path)
+    assert result.returncode == 0, result.stdout
+    remaining = [e.stem for e in _scan_entries(cache)]
+    assert len(remaining) == 1 and remaining[0].startswith("fedcba")
+    assert not (cache / ("abcdef" + "0" * 58 + ".data")).exists(),         "the payload outlived its metadata"
+
+
+def test_an_ambiguous_entry_prefix_refuses_and_lists(tmp_path):
+    """Deleting the wrong entry is not recoverable, so never guess."""
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "aa" * 32, "mod.f:1:2:3")
+    _write_entry(cache, "ab" + "a" * 62, "mod.f:9:2:3")
+    result = _cli("clear", str(cache), "--entry", "a", cwd=tmp_path)
+    assert result.returncode == 1
+    assert "ambiguous" in result.stdout
+    assert len(_scan_entries(cache)) == 2, "a refusal deleted something"
+
+
+def test_an_unknown_entry_id_says_how_to_find_one(tmp_path):
+    cache = tmp_path / ".cash"
+    _write_entry(cache, "aa" * 32, "mod.f:1:2:3")
+    result = _cli("clear", str(cache), "--entry", "zzzz", cwd=tmp_path)
+    assert result.returncode == 1
+    assert "cash inspect --function" in result.stdout
+    assert len(_scan_entries(cache)) == 1

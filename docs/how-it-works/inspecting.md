@@ -262,7 +262,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @9fdd81ae, cash/__main__.py:cmd_info @c6a1b14a, cash/__main__.py:_inspect_cache_dir @076aec1f -->
+<!-- claim: cash/__main__.py:main @88959c97, cash/__main__.py:cmd_info @c6a1b14a, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from
@@ -271,7 +271,7 @@ cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-<!-- claim: cash/__main__.py:cmd_clear @abe15a42 -->
+<!-- claim: cash/__main__.py:cmd_clear @f0272005 -->
 !!! warning "`cash clear` deletes a whole directory"
     `cash clear` is directory-granular, not notebook-granular. Pointing it at a
     notebook (`cash clear analysis.ipynb`) removes the entire `.cash/` folder
@@ -283,7 +283,10 @@ cash autoload on|off    # load cash in every new kernel via an IPython startup h
     `--function NAME` is the one exception: it deletes just that function's
     entries and leaves the rest of the directory alone. It works on decorator
     entries, which carry the owning function in their key; notebook statements
-    do not, and group under `(notebook statements)`.
+    do not, and group under `(notebook statements)` — addressable as
+    `--function notebook`, so they can be dropped without touching the
+    decorator entries beside them. `--entry ID` goes one level finer and
+    deletes a single entry.
 
 For the thresholds that actually drive persistence, see
 [Where your cache lives](storage.md).

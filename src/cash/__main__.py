@@ -72,6 +72,19 @@ class _Entry:
     key: str
     size: int
     mtime: float
+    # What the entry is WORTH, which is the number a delete decision turns on:
+    # bytes alone say what you get back, not what it costs you to lose.
+    saves: float = 0.0
+    uses: int = 0
+    outputs: tuple[str, ...] = ()
+
+
+# What a user may type instead of the literal ``(notebook statements)`` group
+# heading. The heading has to read as prose in a table; it should not have to
+# be typed with its brackets to be addressable.
+NOTEBOOK_GROUP = '(notebook statements)'
+_NOTEBOOK_ALIASES = frozenset({'notebook', 'notebooks', 'statements',
+                               'notebook statements'})
 
 
 def _function_of(key: str) -> str:
@@ -103,14 +116,38 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
         data_file = meta_file.with_suffix('.data')
         if data_file.exists():
             size += data_file.stat().st_size
+        outputs = metadata.get('outputs') or ()
         entries.append(_Entry(
             stem=meta_file.stem,
             function=_function_of(key),
             key=key,
             size=size,
             mtime=meta_file.stat().st_mtime,
+            saves=float(metadata.get('execution_time') or 0.0),
+            uses=int(metadata.get('access_count') or 0),
+            outputs=tuple(str(o) for o in outputs),
         ))
     return entries
+
+
+def _resolve_entry(entries: list[_Entry], wanted: str) -> _Entry | None:
+    """Find one entry by id, accepting any unambiguous prefix.
+
+    The ids are SHA-256 stems, so nobody is going to type one; a prefix is the
+    only usable handle, the same bargain a short commit hash makes.
+    """
+    matches = [e for e in entries if e.stem.startswith(wanted)]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        print(f"No cache entry starts with {wanted!r}.")
+        print("Run `cash inspect --function NAME` to list entry ids.")
+        return None
+    print(f"{wanted!r} is ambiguous - it matches {len(matches)} entries:")
+    for entry in matches[:10]:
+        print(f"  {entry.stem[:16]}  {entry.function}")
+    print("Use more characters.")
+    return None
 
 
 def _age(mtime: float) -> str:
@@ -135,6 +172,8 @@ def _resolve_function(entries: list[_Entry], wanted: str) -> str | None:
     names = sorted({e.function for e in entries})
     if wanted in names:
         return wanted
+    if wanted.strip().lower() in _NOTEBOOK_ALIASES and NOTEBOOK_GROUP in names:
+        return NOTEBOOK_GROUP
     matches = [n for n in names if n.rsplit('.', 1)[-1] == wanted
                or n.endswith('.' + wanted)]
     if len(matches) == 1:
@@ -236,9 +275,24 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
         owned_size = sum(e.size for e in owned)
         noun = "entry" if len(owned) == 1 else "entries"
         print(f"  {resolved} - {len(owned)} {noun}, {_format_bytes(owned_size)}\n")
-        print(f"  {'ENTRY':<20}{'SIZE':>12}   LAST USED")
+
+        # SAVES is the column a delete decision actually turns on: bytes say
+        # what you get back, seconds say what it costs you to lose. The old
+        # view showed an opaque id, a size and an age -- enough to see that
+        # entries exist, not enough to choose between them.
+        shows_outputs = any(e.outputs for e in owned)
+        header = (f"  {'ENTRY':<14}{'SAVES':>9}{'SIZE':>11}{'USES':>7}"
+                  f"   {'LAST USED':<12}")
+        print((header + "PRODUCES") if shows_outputs else header.rstrip())
         for entry in owned:
-            print(f"  {entry.stem[:16]:<20}{_format_bytes(entry.size):>12}   {_age(entry.mtime)}")
+            saves = f"{entry.saves:.1f}s" if entry.saves else "-"
+            produces = ", ".join(entry.outputs) if shows_outputs else ""
+            row = (f"  {entry.stem[:12]:<14}{saves:>9}"
+                   f"{_format_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
+                   f"   {_age(entry.mtime):<12}{produces}")
+            print(row.rstrip())
+        print("\n  cash clear --entry ID   to drop one of these "
+              "(any unambiguous prefix)")
         return
 
     functions: dict[str, list[_Entry]] = {}
@@ -261,6 +315,10 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
               f"{_format_bytes(sum(e.size for e in owned)):>12}   {_age(newest)}")
     print("\n  cash inspect --function NAME   to list one function's entries")
     print("  cash clear   --function NAME   to drop them")
+    if NOTEBOOK_GROUP in functions:
+        # The heading reads as prose in the table; say plainly that it is
+        # addressable without having to type the brackets.
+        print("  --function notebook            for the notebook statements")
 
 
 def _clear_function(cache_dir: str, wanted: str) -> None:
@@ -284,24 +342,48 @@ def _clear_function(cache_dir: str, wanted: str) -> None:
     freed = sum(e.size for e in owned)
     removed = 0
     for entry in owned:
-        for suffix in ('.meta', '.data'):
-            path = cache_path / f"{entry.stem}{suffix}"
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                continue
-            except OSError as exc:
-                # A locked file (antivirus, another process) must not abort the
-                # rest: partial progress still frees space, and saying so beats
-                # a traceback halfway through.
-                print(f"  could not remove {path.name}: {exc}")
+        _remove_entry_files(cache_path, entry.stem)
         removed += 1
     noun = "entry" if removed == 1 else "entries"
     print(f"Cleared {removed} {noun} for {resolved} ({_format_bytes(freed)} freed)")
 
 
+def _remove_entry_files(cache_path: Path, stem: str) -> None:
+    """Delete one entry's ``.meta`` and ``.data``, surviving a locked file."""
+    for suffix in ('.meta', '.data'):
+        path = cache_path / f"{stem}{suffix}"
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            # Antivirus or another process holding it. Partial progress still
+            # frees space, and saying so beats a traceback part way through.
+            print(f"  could not remove {path.name}: {exc}")
+
+
+def _clear_entry(cache_dir: str, wanted: str) -> None:
+    """Delete a single cache entry by id."""
+    cache_path = Path(cache_dir)
+    if not cache_path.is_dir():
+        print(f"No cache directory at {cache_dir}")
+        sys.exit(1)
+    entry = _resolve_entry(_scan_entries(cache_path), wanted)
+    if entry is None:
+        sys.exit(1)
+    _remove_entry_files(cache_path, entry.stem)
+    print(f"Cleared entry {entry.stem[:12]} from {entry.function} "
+          f"({_format_bytes(entry.size)} freed)")
+
+
 def cmd_clear(args: argparse.Namespace) -> None:
     """Clear cache."""
+    only_entry = getattr(args, "entry", None)
+    if only_entry:
+        target = args.path if (args.path and os.path.isdir(args.path)) else ".cash"
+        _clear_entry(target, only_entry)
+        return
+
     only_function = getattr(args, "function", None)
     if only_function:
         target = args.path if (args.path and os.path.isdir(args.path)) else ".cash"
@@ -466,7 +548,7 @@ def main() -> None:
     sub_inspect = subparsers.add_parser('inspect', help='Inspect cache for a notebook or directory')
     sub_inspect.add_argument('path', nargs='?', default=None, help='Notebook (.ipynb) or cache directory path')
     sub_inspect.add_argument('--function', default=None, metavar='NAME',
-                             help="List one function's entries. An unambiguous "
+                             help="List one function's entries, with what each one saves. An unambiguous "
                                   'trailing segment is enough ("work" finds "__main__.work").')
     sub_inspect.set_defaults(func=cmd_inspect)
 
@@ -476,7 +558,12 @@ def main() -> None:
     sub_clear.add_argument('--all', action='store_true', help='Clear all caches in current directory')
     sub_clear.add_argument('--function', default=None, metavar='NAME',
                            help="Clear only this function's entries, leaving the rest "
-                                'of the cache intact.')
+                                'of the cache intact. "notebook" selects the '
+                                'notebook statements.')
+    sub_clear.add_argument('--entry', default=None, metavar='ID',
+                           help='Clear one entry by id, as listed by '
+                                '`cash inspect --function NAME`. Any unambiguous '
+                                'prefix works. Takes precedence over --function.')
     sub_clear.set_defaults(func=cmd_clear, clear_parser=sub_clear)
 
     # autoload on|off

@@ -21,8 +21,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `inspect` now leads with a per-function table sorted by size — the question
   that sends people there is "what is filling my disk?" — and `--function NAME`
   drills in or clears. An unambiguous trailing segment is enough, so
-  `--function work` finds `__main__.work`. `cash clear` with no arguments
-  prints its help instead of naming two of its three options in one line.
+  `--function work` finds `__main__.work`, and `notebook` selects the
+  notebook statements without their brackets. Each entry row shows what it
+  *saves* and how often it has been used, not just its size — a 900-byte entry
+  worth 41 seconds and a 5 MB one worth 0.2 seconds are the same size problem
+  and opposite keep decisions. `cash clear --entry ID` drops a single entry by
+  any unambiguous id prefix. `cash clear` with no arguments prints its help
+  instead of naming two of its three options in one line.
 
 - **`summary=True` prints a per-function hit/miss table when a process exits.**
   A notebook says per statement whether it ran or restored; a script said
