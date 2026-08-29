@@ -46,7 +46,7 @@ def test_probe_entries_on_disk_after_shutdown(nb_runner, tmp_path):
 
     def counts(label):
         files = os.listdir(cache_dir) if cache_dir.exists() else []
-        data = [f for f in files if f.endswith(".data")]
+        data = [f for f in files if f.endswith(".entry")]
         meta = [f for f in files if f.endswith(".meta")]
         part = [f for f in files if f.endswith(".part")]
         print(f"  {label}: {len(data)} .data  {len(meta)} .meta  {len(part)} .part",

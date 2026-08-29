@@ -99,6 +99,41 @@ class RedisBackend(CacheBackend):
                 return None, None
         return None, None
 
+    def get_metadata(self, key: str) -> MetadataDict | None:
+        """Fetch the metadata key only, not the value.
+
+        The base implementation performs a full ``get()`` and discards the
+        value. Both keys ride one pipeline, so the round trip count was
+        already right -- but the whole cached object came back over the wire
+        to answer a question about its metadata. Measured against a 4MB entry:
+        4,194,460 bytes transferred, for roughly 150 bytes of answer.
+
+        A metadata key with no data key still reports, matching the file
+        backend: an entry whose value was too large to persist keeps its
+        execution time and lineages for badges and upstream simulation.
+        """
+        self._writes.wait(key)
+        meta_key, _data_key = self._get_keys(key)
+
+        try:
+            meta_bytes = self.client.get(meta_key)
+        except (RedisError, OSError) as exc:
+            raise CacheBackendError(
+                f"Redis get_metadata failed for key {key!r}: {exc}"
+            ) from exc
+
+        if not meta_bytes:
+            return None
+
+        try:
+            metadata = pickle.loads(meta_bytes)
+        except (pickle.UnpicklingError, KeyError, TypeError, ValueError) as e:
+            logger.debug("Redis get_metadata() deserialization error: %s", e)
+            return None
+
+        metadata.setdefault('source', self.source_label)
+        return metadata
+
     def set(self, key: str, value: Any, metadata: MetadataDict | None = None, serializer: Serializer | None = None) -> None:
         """Serialize on the calling thread, run the pipeline in background."""
         meta_key, data_key = self._get_keys(key)

@@ -215,7 +215,7 @@ def _why(work_dir):
     cache_dir = work_dir / ".cash"
     if not cache_dir.exists():
         return "no .cash directory: nothing was ever stored"
-    entries = list(cache_dir.glob("*.meta"))
+    entries = list(cache_dir.glob("*.entry"))
     split = (cache_dir / "_loop_split.json")
     return (f"{len(entries)} cache entries on disk; "
             f"split store {'present' if split.exists() else 'absent'}")

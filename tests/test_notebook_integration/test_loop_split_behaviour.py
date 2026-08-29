@@ -136,7 +136,7 @@ def _why(work_dir):
     import json
     store = work_dir / ".cash" / "_loop_split.json"
     if not store.exists():
-        entries = list((work_dir / ".cash").glob("*.meta")) if (
+        entries = list((work_dir / ".cash").glob("*.entry")) if (
             work_dir / ".cash").exists() else []
         return f"no split verdict recorded; {len(entries)} cache entries on disk"
     try:

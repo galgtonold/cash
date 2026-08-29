@@ -14,6 +14,7 @@ the race against process death), which is precisely how this went unnoticed.
 import os
 
 import pytest
+from cash.backends.entry_format import ENTRY_SUFFIX
 
 pytestmark = [pytest.mark.integration, pytest.mark.timeout(120)]
 
@@ -41,10 +42,9 @@ def _chain_cells(cache_dir: str):
 def test_every_cached_entry_is_on_disk_when_the_cell_returns(nb_runner, tmp_path):
     """No entry may still be queued once the cell that produced it is done.
 
-    Three cached functions x three arguments = nine entries, each needing a
-    ``.data`` and a ``.meta``. Counted while the kernel is still running, so a
-    shortfall means work was left in the write queue where a kill would take
-    it.
+    Three cached functions x three arguments = nine entries, one file each.
+    Counted while the kernel is still running, so a shortfall means work was
+    left in the write queue where a kill would take it.
     """
     cache_dir = str(tmp_path / "cache")
     nb_runner.create_notebook(_chain_cells(cache_dir))
@@ -54,17 +54,12 @@ def test_every_cached_entry_is_on_disk_when_the_cell_returns(nb_runner, tmp_path
     assert "RESULT vals=[114, 116, 118]" in nb_runner.get_output(3)
 
     files = os.listdir(cache_dir)
-    data = sorted(f for f in files if f.endswith(".data"))
-    meta = sorted(f for f in files if f.endswith(".meta"))
+    entries = sorted(f for f in files if f.endswith(ENTRY_SUFFIX))
 
-    assert len(data) == 9, (
-        f"only {len(data)}/9 entries reached disk before the cell finished; "
+    assert len(entries) == 9, (
+        f"only {len(entries)}/9 entries reached disk before the cell finished; "
         f"a kernel killed now would lose the rest. Files: {sorted(files)}"
     )
-    assert len(meta) == 9, (
-        f"{len(data)} data files but {len(meta)} metadata files — an entry "
-        "with only half its files reads as a permanent miss"
+    assert not [f for f in files if f.endswith((".meta", ".data"))], (
+        f"a half-written entry in the pre-v2 two-file layout: {sorted(files)}"
     )
-    # Every data file has its metadata sibling: a half-written entry is
-    # indistinguishable from an absent one to get().
-    assert {f[:-5] for f in data} == {f[:-5] for f in meta}

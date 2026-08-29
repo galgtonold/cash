@@ -42,7 +42,7 @@ def _chain_cells(cache_dir: str, sleep: float = 0.15):
 
 def _counts(cache_dir):
     files = os.listdir(cache_dir) if os.path.isdir(cache_dir) else []
-    return (len([f for f in files if f.endswith(".data")]),
+    return (len([f for f in files if f.endswith(".entry")]),
             len([f for f in files if f.endswith(".meta")]),
             len([f for f in files if f.endswith(".part")]))
 
