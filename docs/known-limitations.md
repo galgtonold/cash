@@ -231,6 +231,40 @@ w = Widget()                     # cell 2 — re-run: count climbs past 2
 
 Note this needs the counter to be advanced from *both* cells. A class variable only appended to from one cell is handled correctly.
 
+### Mutating a cached result before passing it on — `@cash.cache` outside a notebook
+
+Unlike everything else on this page, this one needs **no isolated re-run** — and it does **not** happen in a notebook. It applies to `@cash.cache` used in a plain script or module, where nothing is tracking statements.
+
+When a cached function returns a value that can carry attributes (a pandas `DataFrame` or `Series`, a polars frame, a PyArrow `Table`, most ordinary objects), cash tags it so that a *downstream* cached call can skip re-hashing it — which is what keeps passing a large frame between cached functions cheap. The tag is written when the value is produced. In a notebook, cash updates it whenever a statement mutates the value. In a plain script there are no statements to watch, so it is never updated:
+
+<!-- test:skip reason="illustrative: demonstrates a known stale-result limitation" -->
+```python
+@c.cache
+def load():
+    return pd.DataFrame({"a": [1, 2, 3]})
+
+@c.cache
+def total(df):
+    return int(df["a"].sum())
+
+df = load()
+total(df)              # 6
+
+df.loc[0, "a"] = 100   # in-place: the tag does not move
+total(df)              # 6 again — the frame now sums to 105
+```
+
+The second `total(df)` reuses the hash computed before the mutation, so it looks like the same argument and returns the earlier result.
+
+**What to do:** rebind instead of mutating in place (`df = df.assign(a=...)`), which produces a new object and a fresh hash. If you must mutate, either pass a copy (`total(df.copy())`) or register a hasher for the type so content is always consulted:
+
+<!-- test:skip reason="illustrative: needs a user-supplied hasher for the type" -->
+```python
+cash.register_hasher(pd.DataFrame, my_hasher, override=True)
+```
+
+Numpy arrays are not affected — they cannot carry the tag, so they are always content-hashed. That is also why passing a large array between cached functions costs more than passing a large frame.
+
 ### A function that calls one defined in a later cell
 
 cash follows dependencies *upward*. A function whose body calls a name bound in a
