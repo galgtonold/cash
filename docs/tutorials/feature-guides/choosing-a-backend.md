@@ -70,7 +70,7 @@ c = Cash(backend=FileBackend(
 c.register_magic()
 ```
 
-One file per entry under `cache_dir`, named by the SHA-256 of the cache key, holding a small header, the entry's metadata, and then the value. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor so a slow write doesn't block the cell. A second thread flushes metadata every `flush_interval` seconds, rewriting only the metadata region rather than the whole file.
+One file per entry under `cache_dir`, named by the SHA-256 of the cache key, holding a small header, the entry's metadata, and then the value. Writes are split: serialization happens on the calling thread, the actual disk write runs on a background executor. In a notebook that buys less than it sounds — `%cash_on` flushes pending writes at the end of every cell, so a killed kernel cannot lose them, which means write cost lands on your clock once per cell rather than disappearing. A second thread flushes metadata every `flush_interval` seconds, rewriting only the metadata region rather than the whole file.
 
 Eviction is LRU. When the cache exceeds `max_size_bytes`, the oldest entries are dropped until it fits under 90% of the cap — and the ranking comes from one `scandir`, not from opening every entry, because a file's mtime *is* its last access (recording a read rewrites the header in place). That ranking is a queue drained across many eviction passes, which matters: once a cache is full it evicts on most writes, so re-ranking per pass would put a directory walk on nearly every write.
 
@@ -84,12 +84,12 @@ Eviction is LRU. When the cache exceeds `max_size_bytes`, the oldest entries are
 
     | | `FileBackend` | `SQLiteBackend` |
     |---|---|---|
-    | Write one more entry | 0.70 ms | **0.16 ms** |
-    | Read one entry | 0.29 ms | **0.06 ms** |
+    | Write one more entry | 0.59 ms | **0.18 ms** |
+    | Read one entry | 0.27 ms | **0.06 ms** |
     | Read one entry's metadata | 0.05 ms | **0.01 ms** |
-    | Open the cache in a new process | 1.2 ms | **0.1 ms** |
-    | Files on disk | 100,001 | **3** |
-    | Disk used | **66.7 MB** | 91.7 MB |
+    | Open the cache in a new process | 1.1 ms | **0.1 ms** |
+    | Files on disk | one per entry | **3** |
+    | Disk used | **74.3 MB** | 91.8 MB |
 
     **Reads and writes do not degrade as the directory fills.** From 0 to
     100,000 entries a `FileBackend` write and read stay flat — the filename
@@ -111,16 +111,25 @@ Eviction is LRU. When the cache exceeds `max_size_bytes`, the oldest entries are
     costs **1.6 µs an entry** (32 ms at 20k, 180 ms at 100k) and holds none of
     it.
 
-    **Why SQLite is faster per small write.** A `FileBackend` write is four
-    filesystem metadata operations — create a temp file (121 µs), write it
-    (133 µs), rename it into place (156 µs), stat it (21 µs) — of which about
-    two thirds is namespace churn rather than data. A SQLite write is one
-    `INSERT` plus one WAL commit against an already-open file handle: **14.6
-    µs**, no file creation, no rename, no directory-index update. Neither
-    backend calls `fsync` (SQLite runs `synchronous=NORMAL`), so both survive
-    a process crash and neither guarantees survival of a power cut. Turning on
+    **Why SQLite is faster per small write.** Rewriting an existing entry goes
+    through a temp file and a rename — create the temp (121 µs), write it
+    (133 µs), rename it into place (156 µs) — of which about two thirds is
+    namespace churn rather than data. A SQLite write is one `INSERT` plus one
+    WAL commit against an already-open file handle: **14.6 µs**, no file
+    creation, no rename, no directory-index update. Neither backend calls
+    `fsync` (SQLite runs `synchronous=NORMAL`), so both survive a process crash
+    and neither guarantees survival of a power cut. Turning on
     `synchronous=FULL` costs SQLite 2.0 ms per write and reverses the
     comparison outright.
+
+    **A brand-new entry skips most of that.** The temp file exists so a failed
+    write cannot destroy what was already cached; a key that does not exist yet
+    has nothing to preserve, so it is created directly with `O_EXCL` and its
+    header written last, and a half-written entry reads as a clean miss. That
+    is time you actually wait for: `%cash_on` flushes pending writes at the end
+    of every cell so a killed kernel cannot lose them. Measured back to back on
+    that flush, an entry costs **329 µs instead of 578 µs**, so a cell caching
+    200 entries waits ~66 ms rather than ~116 ms.
 
 !!! warning "The ranking inverts with payload size"
     The table above uses 512-byte values, which is the size at which SQLite
@@ -128,16 +137,15 @@ Eviction is LRU. When the cache exceeds `max_size_bytes`, the oldest entries are
 
     | Value size | File write | SQLite write | File read | SQLite read |
     |---|---|---|---|---|
-    | 512 B | 0.70 ms | **0.16 ms** | 0.23 ms | **0.06 ms** |
-    | 32 KB | 1.37 ms | **0.14 ms** | 0.26 ms | **0.07 ms** |
-    | 128 KB | 1.51 ms | **0.29 ms** | 0.28 ms | **0.14 ms** |
-    | 512 KB | 1.79 ms | **1.03 ms** | 0.42 ms | 0.44 ms |
-    | 1 MB | 1.89 ms | 2.01 ms | **0.91 ms** | 2.41 ms |
-    | 4 MB | **3.86 ms** | 20.5 ms | **2.00 ms** | 10.6 ms |
-    | 16 MB | **13.4 ms** | 60.1 ms | **10.2 ms** | 38.5 ms |
+    | 512 B | 0.36 ms | **0.09 ms** | 0.28 ms | **0.05 ms** |
+    | 32 KB | 0.44 ms | **0.13 ms** | 0.25 ms | **0.07 ms** |
+    | 128 KB | 0.47 ms | **0.26 ms** | 0.28 ms | **0.08 ms** |
+    | 512 KB | 1.09 ms | 1.10 ms | 0.58 ms | **0.57 ms** |
+    | 1 MB | **1.86 ms** | 2.47 ms | **1.13 ms** | 2.92 ms |
+    | 4 MB | **4.38 ms** | 21.6 ms | **2.67 ms** | 11.6 ms |
 
-    Reads cross over around **512 KB** and writes around **1 MB**; past 2 MB
-    `FileBackend` is 4–5× faster on both and stays there. `FileBackend` pays a
+    Both cross over around **512 KB**; past 1 MB `FileBackend` is several times
+    faster on both and the gap widens with size. `FileBackend` pays a
     fixed cost in filesystem bookkeeping plus one sequential write, so it grows
     slowly with size; SQLite moves the value through its pager and WAL, so a
     big value is paid for roughly twice.
