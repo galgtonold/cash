@@ -6,6 +6,10 @@ whether to shard the file layout, change the default, or leave both alone:
 1. **The first write into an empty cache** -- the floor.
 2. **A write once N entries are already there** -- does it degrade, and how fast.
 3. **The same for reads and for opening the cache in a fresh process.**
+4. **All of the above at a different payload size** (``--payload``), because
+   the file/sqlite ranking INVERTS somewhere between 512B and 1MB and a
+   single-size table would have recommended the wrong backend for half the
+   workloads.
 
 Arms are INTERLEAVED per round: file, sqlite, file, sqlite. Sequential arms
 would charge whichever backend happened to run during background load, and
@@ -19,6 +23,7 @@ an earlier version of this reported 3.5 SECONDS per write.
 
 Usage:
     python benchmarks/bench_backend_scale.py [--counts 0,1000,5000,20000]
+    python benchmarks/bench_backend_scale.py --counts 200 --payload 1048576
 """
 from __future__ import annotations
 
@@ -33,6 +38,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 ROUNDS = 7
+PAYLOAD = 512          # overridden by --payload
 
 
 def make_backend(kind: str, root: Path):
@@ -45,7 +51,7 @@ def make_backend(kind: str, root: Path):
 
 def _meta():
     now = time.time()
-    return {"size": 512, "created_at": now, "last_access": now}
+    return {"size": PAYLOAD, "created_at": now, "last_access": now}
 
 
 def drain(backend) -> None:
@@ -57,7 +63,7 @@ def drain(backend) -> None:
 def timed_write(backend, key: str) -> float:
     drain(backend)                       # clear the backlog BEFORE timing
     t = time.perf_counter()
-    backend.set(key, b"x" * 512, _meta())
+    backend.set(key, b"x" * PAYLOAD, _meta())
     drain(backend)                       # ...and drain only this one
     return time.perf_counter() - t
 
@@ -109,8 +115,15 @@ def dir_stats(root: Path) -> tuple[int, int]:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--counts", default="0,1000,5000,20000")
+    ap.add_argument("--skip-open", action="store_true",
+                    help="skip the fresh-process open measurement; it costs four "
+                         "subprocess launches per row, each paying a full import cash")
+    ap.add_argument("--payload", type=int, default=512,
+                    help="bytes per cached value; the file/sqlite ranking inverts with this")
     args = ap.parse_args()
     counts = [int(c) for c in args.counts.split(",")]
+    global PAYLOAD
+    PAYLOAD = args.payload
 
     kinds = ("file", "sqlite")
     root = Path(tempfile.mkdtemp(prefix="cash_backend_scale_"))
@@ -121,13 +134,16 @@ def main() -> int:
         backends = {k: make_backend(k, roots[k]) for k in kinds}
         filled = {k: 0 for k in kinds}
 
+        print()
+        print(f"  payload = {PAYLOAD:,}B, {ROUNDS} rounds, median")
+        print()
         print(f"  {'entries':>8}  {'backend':<8}{'write':>10}{'read':>10}"
               f"{'open':>11}{'files':>10}{'on disk':>11}{'per entry':>12}")
         for n in counts:
             # Fill both arms to N before measuring either.
             for k in kinds:
                 while filled[k] < n:
-                    backends[k].set(f"k{filled[k]}", b"x" * 512, _meta())
+                    backends[k].set(f"k{filled[k]}", b"x" * PAYLOAD, _meta())
                     filled[k] += 1
                 drain(backends[k])
 
@@ -143,9 +159,10 @@ def main() -> int:
                 files, size = dir_stats(roots[k])
                 w = statistics.median(writes[k]) * 1000
                 rd = statistics.median(reads[k]) * 1000 if reads[k] else float("nan")
-                op = open_cost(k, roots[k]) * 1000
+                op = float("nan") if args.skip_open else open_cost(k, roots[k]) * 1000
                 rd_s = "     -" if rd != rd else f"{rd:>7.3f}ms"
-                print(f"  {n:>8,}  {k:<8}{w:>8.2f}ms{rd_s:>10}{op:>9.1f}ms"
+                op_s = "        -" if op != op else f"{op:>7.1f}ms"
+                print(f"  {n:>8,}  {k:<8}{w:>8.2f}ms{rd_s:>10}{op_s:>11}"
                       f"{files:>10,}{size/1e6:>9.1f}MB"
                       f"{(size / n if n else 0):>10,.0f}B/e")
             print()
