@@ -281,6 +281,39 @@ data = my_reader.load('sensor.bin')    # CACHED — the old contents
 
 (`cash.register_hasher()` does *not* help here — it teaches the **decorator** how to hash an argument of a custom *type*, which is a different problem from fingerprinting a file on disk.)
 
+### A polars `LazyFrame` that reads from a file
+
+<!-- claim: cash/core.py:Cash._try_hash_polars @f536c058 -->
+A `LazyFrame` is identified by `serialize()`, which carries the query plan **and
+any data the plan closes over**. That is exact for a frame built from memory:
+`pl.DataFrame({"x": [1, 2, 3]}).lazy()` and the same over `[10, 20, 30]` get
+different keys, even though `explain()` prints both as
+`DF ["x"]; PROJECT */1 COLUMNS`.
+
+A plan that reads from a **source** is different. `pl.scan_csv("data.csv")`
+serializes the *path*, not the file's contents, so editing that file in place
+does not move the key:
+
+<!-- test:skip reason="illustrative; the behaviour is pinned as a strict xfail in tests/test_core/test_lazy_frame_identity.py" -->
+```python
+@cash.cache
+def total(frame):
+    return int(frame.collect()["x"].sum())
+
+total(pl.scan_csv("data.csv"))   # computes
+# ...edit data.csv in place...
+total(pl.scan_csv("data.csv"))   # CACHED — the old contents
+```
+
+Closing this would mean collecting the frame just to build a cache key, which
+defeats the point of a `LazyFrame` and can be arbitrarily expensive.
+
+**What to do:** collect before passing (`total(pl.scan_csv(p).collect())`), which
+puts you on the content-hashed eager path, or name the file:
+`@cash.cache(file_depends_on="data.csv")`.
+
+---
+
 ---
 
 ## A loop variable mutated before it's read collides with an earlier iteration

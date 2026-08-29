@@ -138,7 +138,8 @@ The decorator path's built-in type hashers (`Cash._try_builtin_type_hash`) cover
 |------|--------|------------------|
 | `DataFrame`, `Series` | pandas | schema labels + `pd.util.hash_pandas_object()` |
 | `ndarray` | numpy | shape + dtype + **all** bytes (object arrays: stable repr) |
-| `DataFrame`, `Series`, `LazyFrame` | polars | `hash_rows()` / `hash()` / `explain()` |
+| `DataFrame`, `Series` | polars | `hash_rows()` / `hash()` |
+| `LazyFrame` | polars | `serialize()` — the plan **and** the data it closes over. Not `explain()`: two frames over different in-memory data print the same plan, so they collided into a wrong hit. A plan reading from a file still serializes the *path*, not the contents — see [known limitations](../known-limitations.md). |
 | `Table`, `RecordBatch` | PyArrow | schema + row count + every column buffer |
 | `DataFrame`, `Series` | modin | convert to pandas, then hash |
 | any collection | dask | `__dask_keys__()` task-graph key hash |

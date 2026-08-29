@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A polars `LazyFrame` argument no longer collides with a different one.**
+  It was identified by `explain()` — the human-readable *query plan* — and two
+  frames over different in-memory data print identically
+  (`DF ["x"]; PROJECT */1 COLUMNS`), so the second call was served the first's
+  cached result. A wrong answer, reachable in three lines. `LazyFrame` is now
+  identified by `serialize()`, which carries the plan *and* the data it closes
+  over, and is byte-identical across processes so persisted entries still hit.
+
+  Found while asking whether SHA-256 collisions were worth worrying about.
+  They are not — the risk was never the hash, it was the two places identity
+  was not derived from content at all. dask was the other suspect and is fine:
+  `__dask_keys__()` carries a data-derived token.
+
+  **Still open, and documented rather than hidden:** a plan that reads from a
+  source (`scan_csv`, `scan_parquet`, …) serializes the *path*, not the file's
+  contents, so editing that file in place does not move the key. Closing it
+  would mean collecting the frame to build a cache key. Collect before
+  passing, or name the file with `file_depends_on=`.
+
 ### Added
 
 - **[Caching over a grid](docs/tutorials/feature-guides/caching-over-a-grid.md)**

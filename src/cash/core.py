@@ -4794,7 +4794,25 @@ class Cash:
 
     @staticmethod
     def _try_hash_polars(value: Any, type_name: str) -> str | None:
-        """Hash a polars DataFrame, Series, or LazyFrame."""
+        """Hash a polars DataFrame, Series, or LazyFrame.
+
+        A ``LazyFrame`` is identified by ``serialize()``, not ``explain()``.
+        ``explain()`` renders the human-readable QUERY PLAN, and two frames
+        over different in-memory data print identically -- both
+        ``pl.DataFrame({"x": [1, 2, 3]}).lazy()`` and the same over
+        ``[10, 20, 30]`` are ``DF ["x"]; PROJECT */1 COLUMNS``, so the second
+        call was served the first's result. A wrong answer, reachable in three
+        lines. ``serialize()`` carries the plan *and* the data the plan closes
+        over, and is byte-identical across processes, so persisted entries
+        still hit after a restart.
+
+        KNOWN GAP: a plan that reads from an external source
+        (``scan_csv``/``scan_parquet``/...) serializes the PATH, not the file's
+        contents, so editing that file in place does not move the key. Closing
+        that would mean collecting the frame to build a cache key, which
+        defeats the point of a LazyFrame and can be arbitrarily expensive.
+        Collect before passing, or name the file with ``file_depends_on=``.
+        """
         try:
             import polars as pl
             if isinstance(value, pl.DataFrame):
@@ -4806,7 +4824,17 @@ class Cash:
                     value.hash().to_list().__repr__().encode('utf-8')
                 ).hexdigest()
             if isinstance(value, pl.LazyFrame):
-                return hashlib.sha256(str(value.explain()).encode('utf-8')).hexdigest()
+                try:
+                    return hashlib.sha256(value.serialize()).hexdigest()
+                except Exception:  # noqa: BLE001 - polars raises its own types
+                    # A polars whose serialize() is missing or refuses this
+                    # plan. The plan digest is unsound, but it is what the
+                    # previous behaviour was; degrading to it beats declining
+                    # to cache on a version difference.
+                    logger.debug("polars LazyFrame serialize() unavailable; "
+                                 "falling back to the plan digest")
+                    return hashlib.sha256(
+                        str(value.explain()).encode('utf-8')).hexdigest()
         except (ImportError, TypeError, ValueError, AttributeError):
             logger.debug("Failed to hash polars %s", type_name)
         return None
