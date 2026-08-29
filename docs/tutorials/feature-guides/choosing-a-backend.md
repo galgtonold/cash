@@ -78,26 +78,38 @@ Eviction is LRU on `last_access`. When `_current_size_bytes` exceeds `max_size_b
 
 **Gotcha** — uses `pickle` under the hood. Never load a cache directory from an untrusted source. See `SECURITY.md`.
 
-!!! tip "Past ~50k entries, prefer `SQLiteBackend`"
-    Two files per entry in one flat directory is fine at a few thousand and
-    stops being fine well before a million. Measured at 20,000 entries
-    (`benchmarks/bench_cache_scale.py`, Windows/NTFS):
+!!! tip "Two files per entry: what it costs, and what it doesn't"
+    Measured at 20,000 entries with a 512-byte payload
+    (`benchmarks/bench_backend_scale.py`, Windows/NTFS):
 
     | | `FileBackend` | `SQLiteBackend` |
     |---|---|---|
-    | Writing 20k entries | 31.7 s | **1.9 s** |
-    | First access in a new process | 57.5 ms | **4.2 ms** |
-    | Files on disk | **40,001** | 1 |
-    | Size on disk | **13.5 MB** | 17.7 MB |
+    | Write one more entry | 1.45 ms | **0.14 ms** |
+    | Read one entry | 0.26 ms | **0.06 ms** |
+    | Open the cache in a new process | 61 ms | **0.1 ms** |
+    | Files on disk | 40,057 | **3** |
+    | Disk used | **13.3 MB** | 21.6 MB |
 
-    Lookups themselves stay flat either way — the filename comes from the key,
-    so `get` is ~75 µs and `set` ~6 µs regardless of how many entries exist.
-    What degrades is everything that touches the *directory*: creating entries,
-    and any tool that enumerates them.
+    **Reads and writes do not degrade as the directory fills.** From 0 to
+    20,000 entries a `FileBackend` write stays at ~1.4 ms and a read at
+    ~0.25 ms — the filename comes from the key, so neither operation walks the
+    directory.
 
-    `SQLiteBackend` trades a little disk for one file and an index. The
-    crossover is roughly where directory operations start to dominate your
-    workload rather than a specific count — 50k is a reasonable place to switch.
+    What *does* scale is **opening** the cache: 1.2 ms empty, 61 ms at 20k,
+    about 3.5 µs per entry, so roughly 0.35 s at 100k and 3.5 s at 1M. That is
+    the size total for the eviction cap, and it is paid once per process.
+
+    `SQLiteBackend` is faster on every operation and is one file rather than
+    tens of thousands, at the price of about 1.6× the disk at this size (its
+    fixed overhead amortises: 5.0 KB per entry at 1k, 1.1 KB at 20k, against a
+    flat ~670 B for `FileBackend`). `FileBackend` stays the default because a
+    cache directory you can open in a file browser — and see the sizes of, and
+    delete by hand — is worth real money in trust, and the per-operation
+    numbers do not force the switch.
+
+    Switch when opening the cache starts to hurt: a short script run often
+    against a very large cache, where a fixed startup cost is a large share of
+    the run.
 
 ## `SQLiteBackend`
 
