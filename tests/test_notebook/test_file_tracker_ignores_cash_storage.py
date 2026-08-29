@@ -29,7 +29,7 @@ this one through a cache that would not settle.
 """
 import pytest
 
-from cash.notebook.file_tracker import FileAccessTracker
+from cash.notebook.file_tracker import FileAccessTracker, register_cache_dir
 
 
 @pytest.fixture
@@ -78,3 +78,61 @@ def test_the_two_are_separated_within_one_tracker_window(workspace):
     )
     assert any(t.endswith("real_data.csv") for t in tracked), tracked
     assert not [t for t in tracked if "/.cash/" in t], tracked
+
+
+class TestACacheDirectoryNotCalledDotCash:
+    """The segment guard only recognises `.cash` and `_global_cash` by NAME.
+
+    Any other ``cache_dir`` -- one from configuration, a temp directory, an
+    absolute path -- went unguarded, so cash's own entry files became
+    dependencies of the user's functions. It stayed invisible while entries
+    were renamed into place, because a renamed file is only ever observed at
+    its final size. Writing a new entry in place made it visible immediately:
+    ``O_CREAT`` leaves the file briefly at zero length and the next check
+    reports "size changed", so a fresh process missed on the first call to
+    every cached function.
+
+    Backends register their directory now, so the guard does not depend on
+    what it is called.
+    """
+
+    def test_an_entry_in_an_oddly_named_cache_dir_is_not_tracked(self, tmp_path):
+        cache = tmp_path / "my-caches" / "project-a"
+        cache.mkdir(parents=True)
+        entry = cache / ("a" * 64 + ".entry")
+        entry.write_bytes(b"cached")
+
+        assert _tracked(tmp_path, entry), (
+            "fixture is wrong: this should be tracked before registering"
+        )
+
+        register_cache_dir(str(cache))
+        assert not _tracked(tmp_path, entry), (
+            "cash's own entry file is still a user-visible dependency"
+        )
+
+    def test_user_data_beside_the_cache_is_still_tracked(self, tmp_path):
+        """The control, and the reason the guard checks the FILENAME too.
+
+        ``Cash(cache_dir=".")`` is enough to put the cache in a directory that
+        also holds the user's data. Ignoring everything under a registered
+        directory would drop a real dependency and serve a stale value
+        silently -- much worse than the bug the guard exists to prevent, where
+        an extra dependency only costs a recompute.
+        """
+        cache = tmp_path / "workspace"
+        cache.mkdir()
+        register_cache_dir(str(cache))
+
+        data = cache / "data.csv"
+        data.write_text("a,b\n1,2\n")
+        entry = cache / ("b" * 64 + ".entry")
+        entry.write_bytes(b"cached")
+
+        seen = _tracked(tmp_path, data, entry)
+        assert str(data).replace("\\", "/") in seen, (
+            f"a user data file living beside the cache was ignored: {seen}"
+        )
+        assert str(entry).replace("\\", "/") not in seen, (
+            f"cash's own entry file was tracked: {seen}"
+        )

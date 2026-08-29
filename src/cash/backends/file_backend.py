@@ -21,6 +21,7 @@ from cash.utils import replace_with_retry
 from ._base import CacheBackend, MetadataDict, PendingWrites
 from .entry_format import (
     ENTRY_SUFFIX,
+    metadata_span,
     pack_entry,
     read_entry,
     update_metadata_in_place,
@@ -46,6 +47,13 @@ _WRITERS_BY_DIR: dict[str, weakref.WeakSet] = {}
 _WRITERS_LOCK = threading.Lock()
 
 
+def _write_all(fd: int, data: bytes) -> None:
+    """``os.write`` until every byte is out; it may write fewer than asked."""
+    view = memoryview(data)
+    while view:
+        view = view[os.write(fd, view):]
+
+
 def _writer_scope(cache_dir: str) -> str:
     """Normalized identity of a cache directory.
 
@@ -60,6 +68,17 @@ def _writer_scope(cache_dir: str) -> str:
 
 def _register_writer(cache_dir: str, writes: PendingWrites) -> None:
     scope = _writer_scope(cache_dir)
+    # Tell the file tracker this directory is cash's own storage, so its entry
+    # files never become dependencies of the user's code. The tracker's other
+    # guard matches the NAME `.cash` or `_global_cash`; any other cache_dir
+    # needs telling. Imported here rather than at module scope: the backends
+    # must stay importable without the notebook layer.
+    try:
+        from cash.notebook.file_tracker import register_cache_dir
+        register_cache_dir(cache_dir)
+    except Exception:  # noqa: BLE001 - tracking is best-effort, storage is not
+        logger.debug("Could not register %s with the file tracker", cache_dir,
+                     exc_info=True)
     with _WRITERS_LOCK:
         bucket = _WRITERS_BY_DIR.get(scope)
         if bucket is None:
@@ -593,6 +612,81 @@ class FileBackend(CacheBackend):
                 logger.debug("Could not remove partial write %s", tmp_path, exc_info=True)
             raise
 
+    def _write_new_in_place(self, path: str, blob: bytes) -> bool:
+        """Write a BRAND NEW entry directly, header last. False if one exists.
+
+        Writing through a temp file and renaming costs ~470us of syscalls per
+        entry against ~174us writing straight to the destination -- create the
+        temp (123us), write it (133us), rename it (156us) -- and that lands on
+        the user's clock, not on a background thread: ``%cash_on`` drains every
+        write queue at the end of every cell, so a cell caching 200 entries
+        waits ~116ms for them. Roughly 470us of each 578us is this protocol.
+
+        What the temp-and-rename buys is a single guarantee: **the destination
+        is untouched until the swap**, so a write that dies halfway leaves
+        whatever was cached before exactly where it was. A key that does not
+        exist yet has nothing to preserve, so the guarantee is vacuous for it
+        and the cost is pure. ``O_EXCL`` is what makes "does not exist yet"
+        true rather than hoped-for: it tests and claims the name in one
+        syscall, so two processes racing to create the same new entry cannot
+        both take this path -- the loser gets ``FileExistsError`` and falls
+        back to the safe one.
+
+        The header goes LAST. Seeking past it leaves those bytes zero, so the
+        magic does not match and a concurrent reader gets a clean miss rather
+        than a half-entry; by the time the header is readable the payload is
+        already there. ``BufferedWriter.seek`` flushes, so the two writes
+        cannot reach a reader out of order.
+
+        A process killed mid-write leaves a headerless ``.entry`` behind. It
+        reads as a miss, and the next write of that key finds it, fails
+        ``O_EXCL``, and replaces it through the safe path -- so it heals
+        itself rather than needing a repair pass.
+        """
+        flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
+        try:
+            fd = os.open(path, flags)
+        except FileExistsError:
+            return False            # something is there; it must survive a failure
+        except OSError:
+            return False            # no directory, no permission -- let the safe path report it
+
+        split = metadata_span(blob)
+        try:
+            # Raw fd writes, NOT os.fdopen. The file tracker patches
+            # ``builtins.open`` and ``io.open``, and ``os.fdopen`` goes
+            # through the latter -- so opening the entry file that way makes
+            # cash's own storage a dependency of the user's function, and the
+            # cache never hits again. The old path escaped that only by
+            # accident: ``os.replace`` is not a patched API, so the entry file
+            # was never opened under its real name. The guard that should
+            # catch this matches on the directory being named `.cash` or
+            # `_global_cash`, so any other `cache_dir` goes unprotected.
+            #
+            # Writing the fd directly keeps cash's storage out of the patched
+            # surface entirely, which is the property that should hold whatever
+            # the directory is called. It also removes the buffering, so the
+            # payload and the header reach the page cache in program order
+            # without depending on when a BufferedWriter chooses to flush.
+            os.lseek(fd, split, os.SEEK_SET)
+            _write_all(fd, blob[split:])        # payload
+            os.lseek(fd, 0, os.SEEK_SET)
+            _write_all(fd, blob[:split])        # header + metadata, last
+            os.close(fd)
+        except BaseException:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            # Ours, and incomplete. Nothing else can be looking at it as a
+            # valid entry -- the header was never written.
+            try:
+                os.remove(path)
+            except OSError:
+                logger.debug("Could not remove partial write %s", path, exc_info=True)
+            raise
+        return True
+
     def _write_cache_files(self, key: str, path: str, metadata: dict,
                            serialized_value: bytes) -> None:
         """Write one entry -- metadata and payload -- and update size tracking.
@@ -621,7 +715,13 @@ class FileBackend(CacheBackend):
             old_entry_bytes = 0
 
         try:
-            self._atomic_write(path, blob)
+            # A key that does not exist yet has nothing to preserve, so it
+            # skips the temp-and-rename dance. Anything else -- including a
+            # concurrent creator that won the O_EXCL race -- takes the safe
+            # path, because there a failed write must not destroy what is
+            # already cached.
+            if not self._write_new_in_place(path, blob):
+                self._atomic_write(path, blob)
         except FileNotFoundError:
             # The cache dir vanished under a live process. The README suggests
             # deleting ./.cash to wipe the cache, and doing that with the kernel
@@ -629,7 +729,8 @@ class FileBackend(CacheBackend):
             # instead of simply recreating the directory. Recreate + retry once;
             # costs nothing on the normal path.
             os.makedirs(self.cache_dir, exist_ok=True)
-            self._atomic_write(path, blob)
+            if not self._write_new_in_place(path, blob):
+                self._atomic_write(path, blob)
 
         with self._lock:
             self._current_size_bytes -= old_entry_bytes

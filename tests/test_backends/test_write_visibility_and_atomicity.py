@@ -14,6 +14,7 @@ regression was invisible on Windows and only showed up on Linux and macOS.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import pickle
 import threading
@@ -262,6 +263,60 @@ def test_pickle_roundtrip_is_unaffected(tmp_path):
     assert pickle.loads(pickle.dumps(payload)) == payload
 
 
+@contextlib.contextmanager
+def _writes_die_halfway():
+    """Every binary write inside the file backend fails after half its bytes.
+
+    The disk filling up mid-write, which is the failure both write paths have
+    to survive: the temp-and-rename one used for a key that already exists,
+    and the in-place one used for a key that does not.
+    """
+    import cash.backends.file_backend as fb
+
+    real_open = open
+
+    class _DiesHalfway:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def write(self, data):
+            self._fh.write(data[:len(data) // 2])
+            raise OSError("No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self._fh.__exit__(*exc)
+
+    def failing_open(path, mode="r", *a, **kw):
+        fh = real_open(path, mode, *a, **kw)
+        return _DiesHalfway(fh) if ("w" in mode and "b" in mode) else fh
+
+    # The in-place path for a NEW key writes the file descriptor raw, on
+    # purpose -- ``os.fdopen`` goes through ``io.open``, which the file tracker
+    # patches, and cash's own storage must not touch that surface. So the
+    # failure has to be injected at cash's own write helper rather than at
+    # ``open``; patching ``os.write`` itself would break every unrelated write
+    # in the process for the duration.
+    real_write_all = fb._write_all
+
+    def failing_write_all(fd, data):
+        real_write_all(fd, data[:len(data) // 2])
+        raise OSError("No space left on device")
+
+    fb.open = failing_open
+    fb._write_all = failing_write_all
+    try:
+        yield
+    finally:
+        del fb.open
+        fb._write_all = real_write_all
+
+
 class TestAFailedWriteDoesNotDestroyWhatWasThere:
     """What writing through a temp file is actually FOR.
 
@@ -301,21 +356,21 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
         )
 
     @pytest.mark.expects_failed_writes
-    def test_a_failed_first_write_leaves_no_entry_behind(self, tmp_path, monkeypatch):
+    def test_a_failed_first_write_leaves_no_entry_behind(self, tmp_path):
         """The control: with nothing to preserve, a failure leaves nothing.
 
         Without this, simply never cleaning up would pass the arm above while
         leaving half-written files in the directory.
+
+        The failure is injected at the WRITE, not at the rename, because a
+        brand-new key does not go through a rename -- it is written in place,
+        header last. A control that broke the rename would quietly stop
+        forcing a failure at all on exactly the path it is meant to cover.
         """
         backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
-
-        def denied(tmp, dest):
-            raise OSError("disk full")
-
-        monkeypatch.setattr(FileBackend, "_replace_with_retry", staticmethod(denied))
-
-        backend.set("fresh", "v1")
-        backend._writes.wait_all()
+        with _writes_die_halfway():
+            backend.set("fresh", "v1")
+            backend._writes.wait_all()
 
         assert backend.get("fresh") == (None, None)
         leftovers = [f for f in os.listdir(backend.cache_dir)
@@ -383,3 +438,107 @@ class TestAFailedWriteDoesNotDestroyWhatWasThere:
             "a write that died halfway destroyed the value that was already "
             "cached; the destination must not be touched until the swap"
         )
+
+
+class TestNewEntriesSkipTheRename:
+    """A key that does not exist yet has nothing to preserve.
+
+    Temp-and-rename exists so a failed write cannot destroy what was already
+    cached. For a brand-new key there is nothing there, so the guarantee is
+    vacuous and its ~300us of syscalls per entry are pure cost -- on the
+    user's clock, since ``%cash_on`` drains every write queue at the end of
+    every cell.
+    """
+
+    def test_a_new_key_is_written_without_a_temp_file(self, tmp_path):
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+        renames = []
+        monkey = FileBackend._replace_with_retry
+
+        def counted(tmp, dest):
+            renames.append(dest)
+            return monkey(tmp, dest)
+
+        FileBackend._replace_with_retry = staticmethod(counted)
+        try:
+            backend.set("fresh", "v1")
+            backend._writes.wait_all()
+        finally:
+            FileBackend._replace_with_retry = staticmethod(monkey)
+
+        assert backend.get("fresh")[1] == "v1"
+        assert renames == [], "a brand-new entry went through a rename"
+
+    def test_an_existing_key_still_goes_through_the_rename(self, tmp_path):
+        """The safety half. Overwriting is where the guarantee has teeth."""
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+        backend.set("k", "v1")
+        backend._writes.wait_all()
+
+        renames = []
+        monkey = FileBackend._replace_with_retry
+
+        def counted(tmp, dest):
+            renames.append(dest)
+            return monkey(tmp, dest)
+
+        FileBackend._replace_with_retry = staticmethod(counted)
+        try:
+            backend.set("k", "v2")
+            backend._writes.wait_all()
+        finally:
+            FileBackend._replace_with_retry = staticmethod(monkey)
+
+        assert backend.get("k")[1] == "v2"
+        assert len(renames) == 1, (
+            "rewriting an existing entry skipped the rename; a failed write "
+            "would then destroy the value that was already cached"
+        )
+
+    def test_a_new_entry_is_never_readable_before_it_is_complete(self, tmp_path):
+        """The header goes last, so a half-written entry has no valid header.
+
+        Simulated rather than raced: the write is interrupted after the
+        payload and before the header, which is exactly the window a
+        concurrent reader could land in. What it must see is a clean miss --
+        not a torn value, and not an exception.
+        """
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+        backend.get("anything")               # creates the directory
+        path = backend._get_path("k")
+
+        blob = pack_entry({"key": "k", "size": 4}, b"vvvv")
+        split = len(blob) - 4
+        with open(path, "wb") as fh:          # payload only, no header yet
+            fh.seek(split)
+            fh.write(blob[split:])
+
+        assert backend.get("k") == (None, None), (
+            "an entry with no header read as present"
+        )
+        with pytest.raises(Exception):
+            read_entry(path, with_payload=False)
+
+    @pytest.mark.expects_failed_writes
+    def test_an_interrupted_new_write_heals_on_the_next_attempt(self, tmp_path):
+        """A killed process leaves a headerless file. It must not be permanent.
+
+        The next write of that key finds it, fails ``O_EXCL``, and replaces it
+        through the safe path -- so the entry repairs itself rather than
+        needing a repair pass.
+        """
+        backend = FileBackend(cache_dir=str(tmp_path / "c"), flush_interval=0)
+        with _writes_die_halfway():
+            backend.set("k", "v1")
+            backend._writes.wait_all()
+
+        # Leave the wreckage behind, as a killed process would.
+        path = backend._get_path("k")
+        with open(path, "wb") as fh:
+            fh.write(b"\x00" * 64)
+        assert backend.get("k") == (None, None)
+
+        backend._metadata_cache.pop("k", None)
+        backend.set("k", "v2")
+        backend._writes.wait_all()
+        assert backend.get("k")[1] == "v2", "the entry did not heal"
