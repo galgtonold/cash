@@ -27,6 +27,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Lookups were never affected and remain flat — `get` ~75 µs and `set` ~6 µs
   regardless of entry count.
 
+- **A finished cache write is no longer remembered forever.** The async write
+  registry kept one future per distinct key for the life of the backend — after
+  20,000 writes it held 20,000 futures with nothing in flight. `wait_all` walks
+  that registry, so it was O(every key ever written) rather than O(in flight):
+  profiling 20 writes against a 20k-entry cache showed 400,210 calls to
+  `Future.result`, about 20,010 per write. One write with 20k entries present
+  went from **7.05 ms to 2.51 ms**, against a measured raw-filesystem floor of
+  ~2.1 ms for the same two-file write. Failed writes are still retained — they
+  are the only record that a write was discarded.
+
 - **`delete` now measures what it removed.** It took the size from the metadata
   cache, so an entry this process had never read subtracted 0 and drifted the
   running total upward. It also never subtracted the `.meta` bytes, a small

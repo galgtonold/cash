@@ -195,7 +195,45 @@ class PendingWrites:
                 raise RuntimeError("PendingWrites: executor has been shut down")
             future = self._executor.submit(self._run_task, key, fn, args, kwargs)
             self._pending[key] = future
+        # Registered OUTSIDE the lock. ``add_done_callback`` runs the callback
+        # inline when the future has already finished, and ``_lock`` is a plain
+        # Lock, so registering it above would deadlock against the callback's
+        # own acquisition.
+        future.add_done_callback(lambda f, k=key: self._forget_if_succeeded(k, f))
         return future
+
+    def _forget_if_succeeded(self, key: str, future: concurrent.futures.Future) -> None:
+        """Drop a finished, SUCCESSFUL write from ``_pending``.
+
+        Nothing did this, so ``_pending`` kept one future per distinct key for
+        the life of the backend: after 20,000 writes it held 20,000 futures
+        with zero in flight. Two costs followed. ``wait_all`` walks that dict,
+        so it was O(every key ever written) rather than O(in flight) --
+        profiling 20 writes against a 20k-entry cache showed 400,210 calls to
+        ``Future.result``, about 20,010 per write. And every future, with its
+        key, stayed reachable forever.
+
+        ``wait`` already dropped FAILED futures for the same reason, and its
+        docstring names the principle: "Keeping a completed-and-failed future
+        in a dict named ``_pending`` was the original bug in one line." The
+        successful case simply never got the same treatment.
+
+        Failures are deliberately kept. ``wait(key)`` reports one the next time
+        that key is looked up, and ``failed_writes()`` is the only record that
+        a write was discarded -- dropping those here would restore the older
+        bug where a failed write vanished without a trace.
+        """
+        try:
+            if future.cancelled() or future.exception() is not None:
+                return
+        except BaseException:  # noqa: BLE001 - a callback must never propagate
+            return
+        with self._lock:
+            # Identity check, not just presence: a later submit for the same
+            # key may already have replaced this future, and deleting that one
+            # would drop a live write.
+            if self._pending.get(key) is future:
+                del self._pending[key]
 
     def wait(self, key: str) -> None:
         """Block until the pending write for *key* (if any) finishes.
