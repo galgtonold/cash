@@ -7,60 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
+## [0.7.0] - 2026-08-30
 
-- **Opening a large cache directory no longer reads every entry.**
-  `FileBackend` ran a full scan on the first cache operation of every process,
-  `open()`ing and unpickling every `.meta` to prefill an in-memory metadata
-  cache. That is linear in the entry count and dominated startup — measured at
-  98 ms for 1k entries, 490 ms for 5k, 2.1 s for 20k, so roughly 10 s at 100k
-  and 100 s at 1M, paid by every process however few keys it touched. It also
-  held ~1.7 KB per entry in RAM: 172 MB at 100k, 1.7 GB at 1M.
+A storage-layer release. Cache entries changed shape on disk, which makes this
+a one-time rebuild for every existing cache — see **Changed** below. Nothing to
+run by hand: cash notices the old format on first use, clears it, and the work
+recomputes once.
 
-  It was pure prefetch — `get` already reads an entry's metadata from disk when
-  it isn't cached. The size cap only ever needed the sizes, which
-  `scandir`/`stat` supplies 31× faster. Startup is now **20–30× faster**
-  (98→4.9 ms, 490→17.8 ms, 2110→68.1 ms) and flat in memory. Eviction still
-  needs to rank every entry, so it loads the metadata on demand: the cost moves
-  to the processes that actually evict.
+### Upgrading
 
-  Lookups were never affected and remain flat — `get` ~75 µs and `set` ~6 µs
-  regardless of entry count.
+Every cached result recomputes once on the first run after upgrading. Four
+things contribute, and all of them are automatic:
 
-- **A finished cache write is no longer remembered forever.** The async write
-  registry kept one future per distinct key for the life of the backend — after
-  20,000 writes it held 20,000 futures with nothing in flight. `wait_all` walks
-  that registry, so it was O(every key ever written) rather than O(in flight):
-  profiling 20 writes against a 20k-entry cache showed 400,210 calls to
-  `Future.result`, about 20,010 per write. One write with 20k entries present
-  went from **7.05 ms to 2.51 ms**, against a measured raw-filesystem floor of
-  ~2.1 ms for the same two-file write. Failed writes are still retained — they
-  are the only record that a write was discarded.
+- the on-disk entry format is now one file per entry;
+- `SQLiteBackend`'s table declares its columns in a different order;
+- a function defined in a script run directly is keyed by the script rather
+  than by `__main__`, so it now matches the same function imported;
+- numeric literals key by value rather than by spelling.
 
-- **`delete` now measures what it removed.** It took the size from the metadata
-  cache, so an entry this process had never read subtracted 0 and drifted the
-  running total upward. It also never subtracted the `.meta` bytes, a small
-  leak on every delete.
-
-
-- **A polars `LazyFrame` argument no longer collides with a different one.**
-  It was identified by `explain()` — the human-readable *query plan* — and two
-  frames over different in-memory data print identically
-  (`DF ["x"]; PROJECT */1 COLUMNS`), so the second call was served the first's
-  cached result. A wrong answer, reachable in three lines. `LazyFrame` is now
-  identified by `serialize()`, which carries the plan *and* the data it closes
-  over, and is byte-identical across processes so persisted entries still hit.
-
-  Found while asking whether SHA-256 collisions were worth worrying about.
-  They are not — the risk was never the hash, it was the two places identity
-  was not derived from content at all. dask was the other suspect and is fine:
-  `__dask_keys__()` carries a data-derived token.
-
-  **Still open, and documented rather than hidden:** a plan that reads from a
-  source (`scan_csv`, `scan_parquet`, …) serializes the *path*, not the file's
-  contents, so editing that file in place does not move the key. Closing it
-  would mean collecting the frame to build a cache key. Collect before
-  passing, or name the file with `file_depends_on=`.
+`register_hasher` for a type cash already hashes now raises unless you pass
+`override=True`. It previously accepted the call and silently ignored it, so
+code that looked like it had installed a custom hasher had not.
 
 ### Added
 
@@ -92,48 +59,128 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   TOML key. The env var is the one that needs no edit to the script you are
   already running.
 
+### Changed
+
+- **One file per cache entry, not two — and every cache rebuilds once.** An
+  entry used to be a `.meta` and a `.data`; it is now a single `.entry` file
+  carrying a small header, the metadata, and the value. The on-disk format
+  version is bumped, so an existing cache directory is cleared automatically on
+  first use and the work recomputes once. Nothing to run by hand.
+
+  A write was four filesystem operations per file, done twice — create a temp
+  file (121 µs), write it (133 µs), rename it into place (156 µs), stat it
+  (21 µs) — of which about two thirds is namespace churn rather than data.
+  Halving that, and skipping the temp-and-rename entirely for an entry that
+  does not exist yet, takes a 512-byte write at 100k entries from **1.70 ms to
+  0.59 ms** and halves the number of files on disk.
+
+  The split existed for a good reason and the new layout keeps it: reading an
+  entry's metadata must not cost deserializing its value. A length-prefixed
+  header means a metadata read stops after the metadata — measured flat at
+  ~0.05 ms from a 512-byte entry to a **one-gigabyte** one, against 10.4 ms to
+  read that entry's value. Recording an access rewrites only the header, so a
+  session that reads a 100 MB frame no longer rewrites 100 MB on the flush
+  timer. Entries cost ~76 bytes more each for the header and the slack that
+  makes in-place updates possible.
+
+- **`SQLiteBackend` stores the payload column last.** SQLite lays a row out in
+  declaration order and spills the overflow onto a page chain, so reading any
+  column walks past everything declared before it — and the payload was
+  declared first. Reading a 16 MB entry's metadata went from **35.9 ms to
+  0.091 ms**, and is now flat in entry size. A table in the old order is
+  rebuilt on open, which discards that cache's entries; they recompute on
+  demand.
+
+- **`S3Backend` stores one object per entry.** It was two, so every read, write
+  and delete cost two requests, and the write had to order them and clean up
+  after a partial failure. One object is one request, and it either lands or it
+  does not. Reading an entry's metadata is now a ranged GET of the first 8 KB
+  rather than a full download: against a 4 MB entry that is **8 KB transferred
+  where it was 4,194,457**, and both the request and the bytes are billed.
+
+  Objects written by an earlier version use the old names and are ignored
+  rather than migrated — nothing runs against your bucket. They keep occupying
+  storage until `clear()` or a lifecycle rule removes them.
+
+### Performance
+
+- **Opening a cache no longer scales with its size.** The byte total for the
+  eviction cap was computed by walking the whole directory on the first cache
+  operation of every process — 308 ms at 100k entries, ~3.1 µs each. Only
+  eviction ever reads that total, so a run that just reads — a kernel restart
+  replaying from cache — was paying for a number it never looked at. It now
+  happens on the first *write*, on the background write thread: **308 ms →
+  1.1 ms**, flat.
+
+- **Eviction ranks from a directory walk instead of reading every entry.** It
+  opened and unpickled each one to sort by last access — 44 µs each, ~0.9 s at
+  20k entries and ~4.4 s at 100k, on the write thread with every queued write
+  behind it — and then held all that metadata in memory, roughly 1.7 KB an
+  entry. A file's modification time already tracks its last access, so the same
+  ranking now costs **1.6 µs an entry** (32 ms at 20k, 180 ms at 100k) and
+  holds none of it.
+
+- **Reading an entry's metadata no longer reads its value.** Every remote
+  backend inherited an implementation that performed a full `get()` and threw
+  the value away, so asking when an entry was last accessed downloaded the
+  whole object: 4,194,457 bytes on S3 and 4,194,460 on Redis for a 4 MB entry,
+  to return about 150 bytes of answer.
+
+- **A finished cache write is no longer remembered forever.** The async write
+  registry kept one future per distinct key for the life of the backend, and
+  `wait_all` walks that registry — so it was O(every key ever written) rather
+  than O(in flight). Failed writes are still retained; they are the only record
+  that a write was discarded.
+
 ### Fixed
 
-- **Running a script and importing it now share one cache.** A function
-  defined in the script you ran belongs to module `__main__`, so
-  `python model.py` keyed it `__main__.work` while `import model` keyed the
-  same function, same source, same arguments as `model.work` — two entries for
-  one computation, on the ordinary path of developing behind an
-  `if __name__ == "__main__"` block and later importing it. Cash resolves
-  `__main__` through the defining file's name so the two agree. This also
-  *reduces* cross-script collisions: every script alike used to be `__main__`;
-  now only two scripts with the same filename meet. A REPL, `python -c`, a
-  frozen app and a Jupyter kernel have no defining file and stay `__main__`.
-  Entries written under the old prefix recompute once.
+- **Eviction could hang the write thread permanently.** Eviction runs on the
+  single background write worker, and evicting a key waits for that key's
+  pending write — so a write queued behind the one currently running waited for
+  a task that could not start until it returned. The write thread stopped, and
+  the flush that makes results durable stopped with it. Reachable without
+  contriving anything: an entry's recorded access time is still its previous
+  write's, so re-computing a long-idle entry while the cache sits near its cap
+  makes it the obvious eviction candidate. Eviction now skips any entry with a
+  write in flight, which is also right on the merits — it is the newest thing
+  in the cache, not the oldest.
 
-- **`show_stats()` in a script prints something useful.** Its documented "prints
-  a text summary instead" fallback sat behind `except (ImportError,
-  RuntimeError)` while the dashboard printed its own failure and returned
-  normally — the fallback was unreachable, so the documented behaviour had
-  never once happened. It prints the same per-function table now.
+- **A failed write no longer deletes the entry it failed to replace.** Writing
+  through a temp file and renaming exists to guarantee that a write which dies
+  halfway leaves whatever was cached before exactly where it was. The
+  error path then deleted the destination to clear a "partial write" — correct
+  when an entry was two files, actively harmful when it is one written through
+  a temp: the destination was either the previous entry, untouched, or absent.
+  So a full disk or a denied replace destroyed a value that was still good.
 
-- **Re-spelling a number no longer throws away the cache.** `0.5` and `0.50`
-  are the same IEEE double — identical bits, identical entry in `co_consts` —
-  but the source digest hashed the literal's *text*, so swapping one for the
-  other recomputed everything. Same for `.5`, `5e-1`, and the readability
-  spellings `1_000`, `0x3e8`, `0o1750`, `0b1111101000`.
+- **Eviction discarded more than it needed to.** It worked down a shortfall
+  measured in whole entries while crediting each eviction with only the
+  payload's size, so every eviction looked smaller than it was and the loop
+  kept going. Invisible while the per-entry overhead was small.
 
-  Found by watching a user hit it: he re-typed `0.5` as `0.50`, watched a long
-  computation re-run, and was told it was floating-point imprecision. It was
-  not — the two compare exactly equal.
+- **A polars `LazyFrame` argument no longer collides with a different one.**
+  It was identified by `explain()` — the human-readable *query plan* — and two
+  frames over different in-memory data print identically
+  (`DF ["x"]; PROJECT */1 COLUMNS`), so the second call was served the first's
+  cached result. A wrong answer, reachable in three lines. `LazyFrame` is now
+  identified by `serialize()`, which carries the plan *and* the data it closes
+  over, and is byte-identical across processes so persisted entries still hit.
 
-  Numeric literals are now reduced to one spelling per value, with **type
-  preserved**: `1` and `1.0` are different values and keep different keys, as
-  do `1` and `1j`. Existing entries are keyed on the old digest and recompute
-  once.
+  **Still open, and documented rather than hidden:** a plan that reads from a
+  source (`scan_csv`, `scan_parquet`, …) serializes the *path*, not the file's
+  contents, so editing the file in place does not invalidate the entry.
 
+- **Running a script and importing it now share one cache.** A function defined
+  in a script run directly was keyed under `__main__`, and the same function
+  imported as a module was keyed under its real name — two entries for one
+  function, and a guaranteed miss when the same code was reached both ways.
 
-**Curator: fold this block into the new version section, then delete the block.**
-The release process (`.github/copilot-instructions.md`, "Write the CHANGELOG
-entry FROM the `git log`") tells you to *insert* `## [X.Y.Z] - YYYY-MM-DD` at the
-top and says nothing about removing an Unreleased heading — so inserting above
-this without folding it in leaves the note orphaned mid-file. It is a note for
-you, not a release entry.
+- **Re-spelling a number no longer throws away the cache.** `0.5` and `0.50`,
+  `1e3` and `1000`, `1_000_000` and `1000000` are the same value and now share
+  a cache key. Base prefixes are handled correctly (`0x1e3` is 483, not 1000).
+
+- **`show_stats()` in a script prints something useful** rather than silently
+  doing nothing outside a notebook.
 
 ## [0.6.0] - 2026-08-28
 

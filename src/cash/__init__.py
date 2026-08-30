@@ -144,7 +144,7 @@ def opaque(cls: type) -> type:
 
 mark_opaque = Cash.mark_opaque
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # Lazy-initialized global instance (created on first access)
 _global_cash = None

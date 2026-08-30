@@ -136,7 +136,7 @@ Print the installed cash version.
 
 ```bash
 cash version
-# cash 0.6.0
+# cash 0.7.0
 ```
 
 **Behaviour notes:**
@@ -171,7 +171,7 @@ Print the effective merged configuration.
 
 ```bash
 cash info
-# Cash v0.6.0
+# Cash v0.7.0
 #   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
 #   Debug:      False
