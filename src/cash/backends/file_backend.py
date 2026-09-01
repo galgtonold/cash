@@ -978,12 +978,14 @@ class FileBackend(CacheBackend):
 
         ordered = sorted(ranks.items(), key=lambda kv: kv[1][0])
         # Deques: both are drained from the front across many passes, and
-        # list.pop(0) would make that quadratic in a large cache.
+        # list.pop(0) would make that quadratic in a large cache. Each item
+        # carries the mtime it was RANKED at, so `_touched_since` can tell
+        # whether the entry has been read in the meantime.
         self._evict_queue = deque(
-            (p, s) for p, (_m, s) in ordered if s >= crumb)
+            (p, s, m) for p, (m, s) in ordered if s >= crumb)
         self._evict_crumbs = deque(
-            (p, s) for p, (_m, s) in ordered if s < crumb)
-        self._evict_crumb_bytes = sum(s for _p, s in self._evict_crumbs)
+            (p, s, m) for p, (m, s) in ordered if s < crumb)
+        self._evict_crumb_bytes = sum(s for _p, s, _m in self._evict_crumbs)
 
     def _evict_order(self, need: int):
         """The two queues, in the order this pass should consume them.
@@ -998,6 +1000,38 @@ class FileBackend(CacheBackend):
         if self._evict_crumb_bytes >= need:
             return (self._evict_crumbs, self._evict_queue)
         return (self._evict_queue, self._evict_crumbs)
+
+    def _touched_since(self, path: str, key: str | None, ranked_at: float) -> bool:
+        """Has this entry been read or rewritten since it was ranked?
+
+        The ranking is a snapshot, drained across many eviction passes, so an
+        entry can be read AFTER it was queued and before it is reached. Without
+        this check that read does not protect it: measured, an entry read
+        moments earlier -- with a strictly newer mtime than its neighbour --
+        was still evicted first, because the queue had it at the head from
+        before the read.
+
+        That is a regression against the design this queue replaced, which
+        re-sorted from live in-memory ``last_access`` on every pass. The queue
+        buys a 25x cheaper ranking; this restores the freshness it cost, for
+        one ``stat`` on an entry that is about to be deleted anyway.
+
+        Both signals, because they cover different readers. A read in THIS
+        process updates ``last_access`` in memory at once but only reaches
+        mtime when the flusher writes it back; a read in another process over
+        the same directory shows up only as mtime. Checking one would miss the
+        other.
+        """
+        meta = self._metadata_cache.get(key) if key else None
+        last_access = meta.get('last_access') if meta else None
+        if last_access is not None and last_access > ranked_at:
+            return True
+        try:
+            return os.path.getmtime(path) > ranked_at
+        except OSError:
+            # Gone, or unreadable. Not "touched" -- let the eviction proceed
+            # and no-op, which also cleans the entry out of the bookkeeping.
+            return False
 
     def _forget_path(self, path: str) -> int:
         """Remove one entry BY PATH, returning the bytes freed.
@@ -1068,10 +1102,17 @@ class FileBackend(CacheBackend):
                 continue
 
             queue = queues[0] if queues[0] else queues[1]
-            path, size = queue.popleft()
+            path, size, ranked_at = queue.popleft()
             if queue is self._evict_crumbs:
                 self._evict_crumb_bytes -= size
             key = self._paths.get(path)
+
+            # Read since it was ranked? Then it is no longer the coldest thing
+            # in the cache, whatever the snapshot said. Dropped from the queue
+            # rather than re-queued: the next rebuild ranks it properly, and
+            # re-queueing risks a loop over an entry that keeps being read.
+            if self._touched_since(path, key, ranked_at):
+                continue
 
             # Never evict a key that has a write in flight.
             #

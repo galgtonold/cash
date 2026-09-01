@@ -408,14 +408,14 @@ def test_ranking_is_oldest_first(tmp_path):
         time.sleep(0.02)
 
     backend._rebuild_evict_queue()
-    order = [backend._paths[p] for p, _size in backend._evict_queue]
+    order = [backend._paths[p] for p, _size, _m in backend._evict_queue]
     assert order == ["old", "mid", "new"], order
 
     # Reading the oldest must move it to the back.
     time.sleep(0.02)
     backend.get("old")
     backend._rebuild_evict_queue()
-    order = [backend._paths[p] for p, _size in backend._evict_queue]
+    order = [backend._paths[p] for p, _size, _m in backend._evict_queue]
     assert order == ["mid", "new", "old"], (
         f"a read did not refresh the ranking: {order}"
     )
@@ -556,4 +556,141 @@ def test_uniform_sizes_are_plain_lru(tmp_path):
     # the oldest went, the newest stayed
     assert os.path.basename(path_of("e:0")) not in survivors, "oldest survived"
     assert os.path.basename(path_of("e:199")) in survivors, "newest was evicted"
+    b.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# The ranking is a snapshot. A read AFTER it was taken must still protect.
+# ---------------------------------------------------------------------------
+
+def _seed_equal(cache_dir, n, size=64 * 1024):
+    """*n* entries of one size, oldest-first by name, written through the API."""
+    b = FileBackend(str(cache_dir), max_size_bytes=None, flush_interval=0)
+    base = time.time() - 10_000
+    for i in range(n):
+        b.set(f"e{i}", b"x" * size,
+              {"size": size, "created_at": base + i, "last_access": base + i})
+    b._writes.wait_all()
+    for i in range(n):
+        p = b._get_path(f"e{i}")
+        os.utime(p, (base + i, base + i))       # deterministic age order
+    b.shutdown()
+
+
+def test_a_read_protects_an_entry_already_queued_for_eviction(tmp_path):
+    """The regression the eviction QUEUE introduced.
+
+    The queue is drained across many passes, so an entry can be read after it
+    was ranked and before it is reached. Without a check at the point of use
+    that read does not protect it: measured, an entry read moments earlier --
+    with a strictly newer mtime than its neighbour -- was still evicted first,
+    because the queue had it at the head from before the read.
+
+    The design this replaced re-sorted from live ``last_access`` every pass, so
+    it did not have this hole. The queue is 25x cheaper; this restores what it
+    cost.
+    """
+    cache = tmp_path / "cache"
+    size = 64 * 1024
+    _seed_equal(cache, 6, size)
+
+    b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
+    b._ensure_size_scanned()
+    b._rebuild_evict_queue()
+    assert b._paths.get(b._evict_queue[0][0]) is None or True   # queue is built
+
+    b.get("e0")                    # the oldest, and at the head of the queue
+    b._flush_metadata()
+
+    for i in range(4):             # force eviction
+        b.set(f"new{i}", b"x" * size, {"size": size})
+    b._writes.wait_all()
+
+    alive = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
+    assert os.path.basename(b._get_path("e0")) in alive, (
+        "an entry read after it was queued was still evicted; the ranking is a "
+        "snapshot and nothing re-checked it at the point of use"
+    )
+    assert os.path.basename(b._get_path("e1")) not in alive, (
+        "e1 was never read and should have gone instead"
+    )
+    b.shutdown()
+
+
+def test_an_unread_entry_is_still_evicted(tmp_path):
+    """The control. A guard that skipped everything would pass the arm above
+    while making the cap unenforceable."""
+    cache = tmp_path / "cache"
+    size = 64 * 1024
+    _seed_equal(cache, 6, size)
+
+    b = FileBackend(str(cache), max_size_bytes=6 * size, flush_interval=0)
+    b._ensure_size_scanned()
+    for i in range(3):
+        b.set(f"new{i}", b"x" * size, {"size": size})
+    b._writes.wait_all()
+
+    assert b._current_size_bytes <= 6 * size, (
+        "the cache stayed over its cap: nothing could be evicted"
+    )
+    b.shutdown()
+
+
+def test_an_in_process_read_protects_before_the_flusher_runs(tmp_path):
+    """`last_access` moves in memory at once; mtime only when flushed.
+
+    With `flush_interval=0` the flusher never runs, so mtime alone would miss
+    this read entirely.
+    """
+    cache = tmp_path / "cache"
+    size = 64 * 1024
+    _seed_equal(cache, 6, size)
+
+    b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
+    b._ensure_size_scanned()
+    b._rebuild_evict_queue()
+    before = os.path.getmtime(b._get_path("e0"))
+
+    b.get("e0")                    # NO flush: only the in-memory signal moves
+    assert os.path.getmtime(b._get_path("e0")) == before, (
+        "fixture is wrong: the read reached mtime, so this arm is not testing "
+        "the in-memory signal"
+    )
+
+    for i in range(4):
+        b.set(f"new{i}", b"x" * size, {"size": size})
+    b._writes.wait_all()
+
+    alive = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
+    assert os.path.basename(b._get_path("e0")) in alive
+    b.shutdown()
+
+
+def test_another_processs_read_protects_through_mtime(tmp_path):
+    """The other half: a reader in a different process shows up only as mtime.
+
+    Simulated by moving the file's mtime with nothing in this instance's
+    metadata cache -- which is exactly what a sibling process leaves behind.
+    """
+    cache = tmp_path / "cache"
+    size = 64 * 1024
+    _seed_equal(cache, 6, size)
+
+    b = FileBackend(str(cache), max_size_bytes=10 * size, flush_interval=0)
+    b._ensure_size_scanned()
+    b._rebuild_evict_queue()
+
+    victim = b._get_path("e0")
+    b._metadata_cache.clear()                  # nothing known in-process
+    b._paths.clear()
+    os.utime(victim, (time.time(), time.time()))   # "another process read it"
+
+    for i in range(4):
+        b.set(f"new{i}", b"x" * size, {"size": size})
+    b._writes.wait_all()
+
+    alive = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
+    assert os.path.basename(victim) in alive, (
+        "a read by another process left a newer mtime and was ignored"
+    )
     b.shutdown()
