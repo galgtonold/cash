@@ -69,6 +69,17 @@ def _resolve_disk_cap(config: "CashConfig") -> int | None:
     return resolve_disk_cap(config.cache_dir)
 
 
+def _disk_cap_is_adaptive(config: "CashConfig") -> bool:
+    """Did the disk cap come from the policy rather than from the user?
+
+    Only an adaptive cap may be re-derived once the backend knows its own
+    footprint (see ``FileBackend._ensure_size_scanned``). An explicit
+    ``max_cache_size`` is the user's number and must stay exactly where they
+    put it.
+    """
+    return config.max_cache_size is None
+
+
 def _resolve_ram_cap(config: "CashConfig") -> int:
     """Byte cap for the RAM tier — always its own modest, machine-scaled cap.
 
@@ -94,6 +105,7 @@ def _build_single_backend(backend_type: str, config: "CashConfig") -> CacheBacke
             compress=config.compress,
             max_size_bytes=_resolve_disk_cap(config),
             flush_interval=config.flush_interval,
+            adaptive_cap=_disk_cap_is_adaptive(config),
         )
     if backend_type == "sqlite":
         return SQLiteBackend(
@@ -134,6 +146,7 @@ def _build_default_tiered(config: "CashConfig") -> TieredBackend:
         compress=config.compress,
         max_size_bytes=_resolve_disk_cap(config),
         flush_interval=config.flush_interval,
+        adaptive_cap=_disk_cap_is_adaptive(config),
     )
 
     if not config.smart_persistence:

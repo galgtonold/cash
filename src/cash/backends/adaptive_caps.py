@@ -37,6 +37,7 @@ __all__ = [
     "adaptive_disk_cap",
     "adaptive_ram_cap",
     "resolve_disk_cap",
+    "adaptive_disk_cap_for",
     "resolve_ram_cap",
     "human_bytes",
 ]
@@ -163,6 +164,35 @@ def resolve_disk_cap(cache_dir: str) -> int:
     logger.debug("[CAPS] adaptive disk cap for %s: %d bytes (%.1f GiB)",
                  cache_dir, cap, cap / _GIB)
     return cap
+
+
+def adaptive_disk_cap_for(cache_dir: str, own_bytes: int) -> int:
+    """Disk-tier cap sized from the space AVAILABLE TO THE CACHE.
+
+    ``resolve_disk_cap`` measures free space, and free space excludes whatever
+    the cache has already written — so the cap shrinks as the cache fills, and
+    the cache is then over a cap that its own contents caused. Eviction frees
+    space, the next process reads a larger free figure, the cache refills, and
+    the cap drops again. Simulated over sessions on a volume with 48 GiB free
+    when empty, that settles into a two-cycle rather than a fixed point::
+
+        session   free seen   cap set   cache ends at
+        1          48.0 GiB   12.0 GiB       12.0 GiB
+        2          36.0 GiB    9.0 GiB        8.1 GiB
+        3          39.9 GiB   10.0 GiB       10.0 GiB
+        4          38.0 GiB    9.5 GiB        8.6 GiB
+        5          39.4 GiB    9.9 GiB        9.9 GiB   <- 9.9 <-> 8.6 from here
+
+    Every other session discards ~13% of the cache — evicted not because the
+    workload needed the room, but because cash's own footprint moved the number
+    it sizes itself from.
+
+    Adding what the cache already holds back in removes the loop: as the cache
+    grows by N bytes, free drops by N, and the sum is unchanged. The cap
+    becomes a property of the volume rather than of how full the cache happens
+    to be. A cache with nothing in it gets exactly the same answer as before.
+    """
+    return adaptive_disk_cap(_free_bytes_on_volume(cache_dir) + max(0, own_bytes))
 
 
 def resolve_ram_cap() -> int:

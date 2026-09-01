@@ -154,7 +154,7 @@ class FileBackend(CacheBackend):
     """
     source_label: str = "DISK"
 
-    def __init__(self, cache_dir: str, compress: bool = False, max_size_bytes: int | None = None, flush_interval: int = 5, default_ttl: int | None = None) -> None:
+    def __init__(self, cache_dir: str, compress: bool = False, max_size_bytes: int | None = None, flush_interval: int = 5, default_ttl: int | None = None, adaptive_cap: bool = False) -> None:
         """
         Args:
             cache_dir: Directory for cache files.
@@ -167,6 +167,10 @@ class FileBackend(CacheBackend):
         self.cache_dir = os.path.abspath(cache_dir)
         self.compress = compress
         self._max_size_bytes = max_size_bytes
+        # True when max_size_bytes came from the adaptive policy rather than
+        # the user. Only then may it be re-derived once the cache's own size
+        # is known -- an explicit cap is the user's number and stays put.
+        self._adaptive_cap = adaptive_cap
         self._default_ttl = default_ttl
         self._current_size_bytes = 0
         # Evict-after-write detection: a monotonic write counter and
@@ -349,6 +353,25 @@ class FileBackend(CacheBackend):
                 return
             self._current_size_bytes = scanned
             self._size_scanned = True
+
+        # An adaptive cap is re-derived HERE, and only here, because this is
+        # the first moment cash knows its own footprint -- and its own
+        # footprint is exactly what the original figure was missing.
+        #
+        # `resolve_disk_cap` sizes from FREE space, which excludes whatever the
+        # cache has already written, so the cap shrank as the cache filled and
+        # the cache was then over a cap its own contents had caused. See
+        # `adaptive_disk_cap_for` for the two-cycle that produces.
+        #
+        # Free at this point costs one `disk_usage` call (15us) and the walk
+        # that supplies `_current_size_bytes` has just happened anyway, so the
+        # correction is free. It deliberately does NOT run at open time: that
+        # is the walk this release moved off the caller's first cell.
+        if self._adaptive_cap:
+            from .adaptive_caps import adaptive_disk_cap_for
+            self._max_size_bytes = adaptive_disk_cap_for(
+                self.cache_dir, self._current_size_bytes,
+            )
 
     def _flush_periodically(self) -> None:
         while not self._stop_event.is_set():
@@ -1064,6 +1087,13 @@ class FileBackend(CacheBackend):
         re-writing and re-evicting instead of caching anything durably, which
         can make it slower than not caching at all. Deduped to once per
         session (per instance) so a churning workload doesn't spam.
+
+        The message names the free space, and stops short of prescribing a
+        remedy it cannot know is affordable. The old wording ended "Raise
+        max_cache_size so the working set fits" — but a workload that has
+        outgrown the cap may not fit in what is left on the volume either, and
+        cash is the one holding that number: the cap was derived from it.
+        Measuring it costs one `disk_usage` call, once per session.
         """
         if self._warned_evict_after_write:
             return
@@ -1071,13 +1101,22 @@ class FileBackend(CacheBackend):
         import warnings
 
         from cash.exceptions import CashCacheIneffectiveWarning
-        from .adaptive_caps import human_bytes
+        from .adaptive_caps import _free_bytes_on_volume, human_bytes
+
+        cap = human_bytes(self._max_size_bytes)
+        free = _free_bytes_on_volume(self.cache_dir)
+        if free >= (self._max_size_bytes or 0):
+            room = (f"There is {human_bytes(free)} free on that volume, so raising "
+                    f"max_cache_size is an option.")
+        else:
+            room = (f"Only {human_bytes(free)} is free on that volume, so raising "
+                    f"max_cache_size may not help — caching fewer or smaller "
+                    f"results, or pointing cache_dir at a roomier volume, will.")
         warnings.warn(
-            f"Cash: the disk cache evicted an entry within a couple of writes "
-            f"of storing it. The cache cap ({human_bytes(self._max_size_bytes)}) "
-            f"is too small to retain this workload, so cash is re-writing and "
-            f"re-evicting instead of caching durably -- this can be slower than "
-            f"no cache. Raise max_cache_size so the working set fits.",
+            f"the cache is full at its {cap} cap and is evicting entries within "
+            f"a couple of writes of storing them, so it is re-writing and "
+            f"re-evicting rather than caching durably. That can be slower than "
+            f"no cache at all. {room}",
             CashCacheIneffectiveWarning,
             stacklevel=2,
         )
