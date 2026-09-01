@@ -191,8 +191,10 @@ class FileBackend(CacheBackend):
         # walking the directory -- cannot recover the key any other way.
         self._paths: dict[str, str] = {}
         # Eviction candidates, oldest first, consumed across passes and
-        # rebuilt when empty. See _rebuild_evict_queue for why it is a queue.
-        self._evict_queue: deque[str] = deque()
+        # rebuilt when empty. Split by size: see _rebuild_evict_queue.
+        self._evict_queue: deque[tuple[str, int]] = deque()
+        self._evict_crumbs: deque[tuple[str, int]] = deque()
+        self._evict_crumb_bytes = 0
         # Whether _current_size_bytes is an absolute on-disk total (True) or
         # only this process's running delta (False). See _ensure_size_scanned.
         self._size_scanned = False
@@ -902,6 +904,11 @@ class FileBackend(CacheBackend):
     # evicted is healthy LRU, not thrash. Only writes bump the counter.
     _EVICT_WARN_RECENT_OPS = 3
 
+    #: An entry smaller than this fraction of the cap is a "crumb": evicting it
+    #: barely moves the total. Crumbs are still evicted, but only when they can
+    #: actually close the gap, or when nothing bigger is left.
+    _EVICT_CRUMB_FRACTION = 0.001
+
     def _rebuild_evict_queue(self) -> None:
         """Rank every entry for eviction from one ``scandir``, oldest first.
 
@@ -922,19 +929,31 @@ class FileBackend(CacheBackend):
         cost: in steady state a full cache evicts on most writes, so a
         directory walk per pass would be far worse than the walk-once-and-hold
         design it replaces, however cheap the walk.
+
+        **Split by size, oldest-first within each half.** ``scandir`` already
+        returns the size alongside the mtime, so this costs nothing. Without
+        it, a cache holding a few huge entries and many tiny ones chews
+        through the tiny ones freeing almost nothing per delete, and reaches
+        the huge one anyway -- so the tiny ones are destroyed for nothing, and
+        each one is a recompute. Measured on 3000 x 2KB plus one 64MB entry,
+        needing 22.7MB freed: **3001 entries evicted and the whole 69.9MB
+        cache emptied**, against 1 eviction when the big entry happened to be
+        the oldest.
         """
-        ranks: dict[str, float] = {}
+        crumb = max(1, int((self._max_size_bytes or 0) * self._EVICT_CRUMB_FRACTION))
+        ranks: dict[str, tuple[float, int]] = {}
         try:
             with os.scandir(self.cache_dir) as entries:
                 for entry in entries:
                     if not entry.name.endswith(ENTRY_SUFFIX):
                         continue
                     try:
-                        ranks[entry.path] = entry.stat().st_mtime
+                        st = entry.stat()
                     except OSError:
                         # Vanished between the listing and the stat. One
                         # missing candidate is a slightly-late eviction.
                         continue
+                    ranks[entry.path] = (st.st_mtime, st.st_size)
         except OSError:
             logger.debug("Could not scan %s to rank evictions", self.cache_dir,
                          exc_info=True)
@@ -954,14 +973,31 @@ class FileBackend(CacheBackend):
                     continue
                 meta = self._metadata_cache.get(key)
                 last_access = meta.get('last_access') if meta else None
-                if last_access is not None and last_access > ranks[path]:
-                    ranks[path] = last_access
+                if last_access is not None and last_access > ranks[path][0]:
+                    ranks[path] = (last_access, ranks[path][1])
 
-        # A deque: this is drained from the front across many passes, and
+        ordered = sorted(ranks.items(), key=lambda kv: kv[1][0])
+        # Deques: both are drained from the front across many passes, and
         # list.pop(0) would make that quadratic in a large cache.
         self._evict_queue = deque(
-            path for path, _rank in sorted(ranks.items(), key=lambda kv: kv[1])
-        )
+            (p, s) for p, (_m, s) in ordered if s >= crumb)
+        self._evict_crumbs = deque(
+            (p, s) for p, (_m, s) in ordered if s < crumb)
+        self._evict_crumb_bytes = sum(s for _p, s in self._evict_crumbs)
+
+    def _evict_order(self, need: int):
+        """The two queues, in the order this pass should consume them.
+
+        Crumbs first when they can actually close the gap -- that is ordinary
+        LRU and the common case, since a cache of evenly-sized entries puts
+        everything in one queue and the other is empty. Only when the crumbs
+        provably cannot cover *need* do the larger entries go first: at that
+        point the large ones are going to be taken regardless, and taking the
+        crumbs as well destroys them for nothing.
+        """
+        if self._evict_crumb_bytes >= need:
+            return (self._evict_crumbs, self._evict_queue)
+        return (self._evict_queue, self._evict_crumbs)
 
     def _forget_path(self, path: str) -> int:
         """Remove one entry BY PATH, returning the bytes freed.
@@ -1014,7 +1050,9 @@ class FileBackend(CacheBackend):
         rebuilt = False
 
         while self._current_size_bytes > target:
-            if not self._evict_queue:
+            need = self._current_size_bytes - target
+            queues = self._evict_order(need)
+            if not any(queues):
                 if rebuilt:
                     # Every candidate that existed when this pass began has
                     # been considered, and the cache is still over its cap --
@@ -1025,10 +1063,14 @@ class FileBackend(CacheBackend):
                     break
                 self._rebuild_evict_queue()
                 rebuilt = True
-                if not self._evict_queue:
+                if not any((self._evict_queue, self._evict_crumbs)):
                     break
+                continue
 
-            path = self._evict_queue.popleft()
+            queue = queues[0] if queues[0] else queues[1]
+            path, size = queue.popleft()
+            if queue is self._evict_crumbs:
+                self._evict_crumb_bytes -= size
             key = self._paths.get(path)
 
             # Never evict a key that has a write in flight.
@@ -1139,6 +1181,8 @@ class FileBackend(CacheBackend):
             self._write_seq_by_key.clear()
             self._paths.clear()
             self._evict_queue.clear()
+            self._evict_crumbs.clear()
+            self._evict_crumb_bytes = 0
             self._current_size_bytes = 0
 
     def shutdown(self) -> None:

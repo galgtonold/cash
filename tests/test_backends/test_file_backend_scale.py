@@ -391,7 +391,9 @@ def test_ranking_reads_no_entry_files(tmp_path):
     finally:
         ef.read_entry = real
 
-    assert len(backend._evict_queue) == 40, len(backend._evict_queue)
+    assert len(backend._evict_queue) + len(backend._evict_crumbs) == 40, (
+        f"{len(backend._evict_queue)} + {len(backend._evict_crumbs)} ranked"
+    )
     assert opened == [], f"ranking opened {len(opened)} entry files"
     assert backend._metadata_cache == {}, "ranking pulled metadata into memory"
 
@@ -406,14 +408,14 @@ def test_ranking_is_oldest_first(tmp_path):
         time.sleep(0.02)
 
     backend._rebuild_evict_queue()
-    order = [backend._paths[p] for p in backend._evict_queue]
+    order = [backend._paths[p] for p, _size in backend._evict_queue]
     assert order == ["old", "mid", "new"], order
 
     # Reading the oldest must move it to the back.
     time.sleep(0.02)
     backend.get("old")
     backend._rebuild_evict_queue()
-    order = [backend._paths[p] for p in backend._evict_queue]
+    order = [backend._paths[p] for p, _size in backend._evict_queue]
     assert order == ["mid", "new", "old"], (
         f"a read did not refresh the ranking: {order}"
     )
@@ -458,3 +460,100 @@ def test_the_ranking_is_reused_across_eviction_passes(tmp_path):
         f"supposed to be drained across passes, not rebuilt per eviction"
     )
     backend.shutdown()
+
+
+def _seed_sized(cache_dir, sizes, oldest_first):
+    """Write entries of the given sizes, with mtimes in *oldest_first* order.
+
+    Sparse files: the size is real to ``stat`` without needing the bytes, which
+    keeps a 64MB arm cheap.
+    """
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "CACHE_VERSION").write_text(str(CACHE_FORMAT_VERSION), encoding="utf-8")
+    path_of = FileBackend(str(cache_dir))._get_path
+    base = time.time() - 100_000
+    for rank, key in enumerate(oldest_first):
+        p = path_of(key)
+        with open(p, "wb") as fh:
+            fh.write(pack_entry({"key": key, "size": sizes[key]}, b""))
+            fh.truncate(sizes[key])
+        os.utime(p, (base + rank, base + rank))
+    return path_of
+
+
+def test_crumbs_are_not_shredded_to_free_space_they_cannot_free(tmp_path):
+    """Mixed sizes: many tiny entries must not be destroyed for nothing.
+
+    Oldest-first eviction chews through the tiny entries, freeing almost
+    nothing per delete, and reaches the huge one anyway -- so the tiny ones are
+    destroyed AND the huge one goes too. Each one is a recompute. Measured
+    before this rule on 3000 x 2KB plus one 64MB entry, needing 22.7MB freed:
+    3001 entries evicted and the whole 69.9MB cache emptied, against 1
+    eviction when the big entry happened to be the oldest.
+    """
+    cache = tmp_path / "cache"
+    sizes = {f"small:{i}": 2 * 1024 for i in range(400)}
+    sizes["big"] = 32 * 1024 * 1024
+    # every crumb older than the big entry, so plain LRU reaches them first
+    order = [f"small:{i}" for i in range(400)] + ["big"]
+    path_of = _seed_sized(cache, sizes, order)
+
+    total = sum(sizes.values())
+    b = FileBackend(str(cache), max_size_bytes=int(total * 0.75), flush_interval=0)
+    b._ensure_size_scanned()
+    b._check_and_evict()
+
+    survivors = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
+    big_gone = os.path.basename(path_of("big")) not in survivors
+    crumbs_left = len(survivors) - (0 if big_gone else 1)
+
+    assert big_gone, "the big entry had to go -- it is the only way to free the space"
+    assert crumbs_left == 400, (
+        f"{400 - crumbs_left} crumbs were destroyed as well; between them they "
+        f"hold {400 * 2 * 1024} bytes, which could never have closed the gap"
+    )
+    b.shutdown()
+
+
+def test_crumbs_are_evicted_normally_when_they_can_close_the_gap(tmp_path):
+    """The control, and the more common case: ordinary LRU is preserved.
+
+    Without it, "always take the big one first" would pass the arm above while
+    evicting an expensive entry every time a few cheap ones would have done.
+    """
+    cache = tmp_path / "cache"
+    sizes = {f"small:{i}": 64 * 1024 for i in range(400)}
+    sizes["big"] = 4 * 1024 * 1024
+    order = [f"small:{i}" for i in range(400)] + ["big"]
+    path_of = _seed_sized(cache, sizes, order)
+
+    total = sum(sizes.values())
+    b = FileBackend(str(cache), max_size_bytes=int(total * 0.95), flush_interval=0)
+    b._ensure_size_scanned()
+    b._check_and_evict()
+
+    survivors = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
+    assert os.path.basename(path_of("big")) in survivors, (
+        "the big entry was evicted even though the crumbs could cover the gap"
+    )
+    assert len(survivors) < 401, "nothing was evicted at all"
+    b.shutdown()
+
+
+def test_uniform_sizes_are_plain_lru(tmp_path):
+    """No crumbs, no split: the oldest go first, exactly as before."""
+    cache = tmp_path / "cache"
+    sizes = {f"e:{i}": 64 * 1024 for i in range(200)}
+    order = [f"e:{i}" for i in range(200)]
+    path_of = _seed_sized(cache, sizes, order)
+
+    total = sum(sizes.values())
+    b = FileBackend(str(cache), max_size_bytes=int(total * 0.8), flush_interval=0)
+    b._ensure_size_scanned()
+    b._check_and_evict()
+
+    survivors = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
+    # the oldest went, the newest stayed
+    assert os.path.basename(path_of("e:0")) not in survivors, "oldest survived"
+    assert os.path.basename(path_of("e:199")) in survivors, "newest was evicted"
+    b.shutdown()
