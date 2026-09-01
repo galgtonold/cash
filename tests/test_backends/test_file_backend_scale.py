@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import os
 import pickle
+from collections import deque
 import threading
 import time
 
@@ -692,5 +693,108 @@ def test_another_processs_read_protects_through_mtime(tmp_path):
     alive = {f.name for f in os.scandir(cache) if f.name.endswith(ENTRY_SUFFIX)}
     assert os.path.basename(victim) in alive, (
         "a read by another process left a newer mtime and was ignored"
+    )
+    b.shutdown()
+
+
+# ---------------------------------------------------------------------------
+# When the cache holds a handful of large results, say so
+# ---------------------------------------------------------------------------
+
+def _warning_text(backend):
+    """Trigger the ineffective-cache warning and return its message."""
+    import warnings
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        backend._warned_evict_after_write = False
+        backend._warn_evict_after_write(1)
+    msgs = [str(w.message) for w in caught if "evicting entries" in str(w.message)]
+    return msgs[0] if msgs else ""
+
+
+def test_dominant_size_is_byte_weighted_not_the_mean(tmp_path):
+    """The mean misses exactly the shape this advice is for.
+
+    3000 crumbs beside one 64MB entry: the mean is ~24KB and reports thousands
+    fitting the cap, while that single entry is 91% of the cache. Real caches
+    are mixtures -- notebook statement crumbs beside big frames -- so the mean
+    would stay quiet precisely where the advice matters.
+    """
+    b = FileBackend(str(tmp_path / "c"), max_size_bytes=80 * 1024 * 1024)
+    b._evict_queue = deque([(f"/big", 64 * 1024 * 1024, 0.0)])
+    b._evict_crumbs = deque([(f"/c{i}", 2 * 1024, 0.0) for i in range(3000)])
+
+    dominant = b._dominant_entry_size()
+    mean = (64 * 1024 * 1024 + 3000 * 2 * 1024) / 3001
+    assert dominant == 64 * 1024 * 1024, (
+        f"got {dominant}, expected the 64MB entry that IS the cache; the mean "
+        f"would have said {mean:.0f}"
+    )
+
+    # And the difference is visible in the message, not just in the helper: a
+    # mean of ~24KB reports ~3400 entries fitting, which would suppress the
+    # advice outright.
+    text = _warning_text(b)
+    assert "summary of those results" in text, text
+    assert "only one fits at once" in text, text
+    b.shutdown()
+
+
+def test_dominant_size_is_none_with_nothing_ranked(tmp_path):
+    b = FileBackend(str(tmp_path / "c"), max_size_bytes=10 ** 9)
+    assert b._dominant_entry_size() is None
+    b.shutdown()
+
+
+def test_a_handful_of_large_entries_gets_the_advice(tmp_path):
+    b = FileBackend(str(tmp_path / "c"), max_size_bytes=12 * 1024 * 1024)
+    b._evict_queue = deque([(f"/e{i}", 3 * 1024 * 1024, 0.0) for i in range(4)])
+
+    text = _warning_text(b)
+    assert "summary of those results" in text, text
+    assert "only about 4 fit" in text, text
+    b.shutdown()
+
+
+def test_many_entries_fitting_gets_no_shape_advice(tmp_path):
+    """The suppression branch, exercised directly.
+
+    In practice the warning cannot fire when thousands of entries fit -- the
+    evicted entry would be thousands of writes old, so `evicted_recent` is
+    false and nothing is emitted at all. That makes this branch belt-and-braces
+    rather than load-bearing, and it is tested by calling the warning directly
+    rather than by contriving a thrash that cannot happen.
+    """
+    b = FileBackend(str(tmp_path / "c"), max_size_bytes=1024 * 1024 * 1024)
+    b._evict_queue = deque([(f"/e{i}", 64 * 1024, 0.0) for i in range(5000)])
+
+    text = _warning_text(b)
+    assert text, "the warning itself should still fire"
+    assert "summary of those results" not in text, (
+        f"advice was added for a cache that holds ~16000 entries: {text}"
+    )
+    b.shutdown()
+
+
+def test_a_healthy_small_entry_cache_never_warns_at_all(tmp_path):
+    """The noise control, and the reason no separate size warning was added.
+
+    Small entries turning over under LRU are not in trouble: the evicted entry
+    is many writes old, so nothing fires. Size alone is not a problem -- size
+    relative to capacity is -- and this warning already fires exactly then.
+    """
+    import warnings
+
+    cache = tmp_path / "c"
+    b = FileBackend(str(cache), max_size_bytes=60 * 1024, flush_interval=0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for i in range(600):
+            b.set(f"k{i}", b"x" * 4096, {"size": 4096})
+        b._writes.wait_all()
+
+    assert not [w for w in caught if "evicting entries" in str(w.message)], (
+        "a healthy small-entry cache warned; ~15 entries fit and turnover is "
+        "ordinary LRU"
     )
     b.shutdown()

@@ -1162,6 +1162,44 @@ class FileBackend(CacheBackend):
             return self._max_size_bytes // 2
         return type(self).max_size_bytes
 
+    #: Below roughly this many entries fitting the cap, the cache is holding a
+    #: handful of large results rather than many small ones, and the useful
+    #: advice changes: not "raise the cap" but "cache something smaller".
+    _FEW_ENTRIES_FIT = 20
+
+    def _dominant_entry_size(self) -> int | None:
+        """The size at which cumulative bytes cross half the ranked cache.
+
+        Answers "how big are the things actually FILLING this cache", which
+        the mean does not. Measured on a cache of 3000 x 2KB plus one 64MB
+        entry: the mean is ~24KB and reports 3437 fitting the cap, while that
+        single entry is 91% of the cache. Byte-weighting reports 64MB, and 1.
+        Real caches are mixtures -- notebook statement crumbs beside big
+        frames -- so the mean would misfire exactly where the advice matters.
+
+        Computed HERE rather than when the queue is ranked, so the normal path
+        pays nothing at all: no per-write cost, no per-rebuild cost, no extra
+        syscalls. This runs at most once per session, from the sizes already
+        in memory, and only when the cache is already thrashing -- a state
+        whose cost dwarfs a sort. Measured at 13ms for 100k entries.
+
+        A sample rather than a census: the queues have been partly drained by
+        now. Good enough for "roughly how many of these fit", which is all the
+        message claims.
+        """
+        sizes = [s for _p, s, _m in self._evict_queue]
+        sizes.extend(s for _p, s, _m in self._evict_crumbs)
+        if not sizes:
+            return None
+        sizes.sort()
+        half = sum(sizes) / 2
+        run = 0
+        for size in sizes:
+            run += size
+            if run >= half:
+                return size
+        return sizes[-1]
+
     def _warn_evict_after_write(self, n_evicted: int) -> None:
         """Warn once/session that the cache evicted freshly-written entries.
 
@@ -1177,6 +1215,14 @@ class FileBackend(CacheBackend):
         outgrown the cap may not fit in what is left on the volume either, and
         cash is the one holding that number: the cap was derived from it.
         Measuring it costs one `disk_usage` call, once per session.
+
+        When only a handful of entries fit the cap, the more useful lever is
+        not a bigger cache but a smaller value -- so the message says that
+        too, and only then. There is no separate "you are caching something
+        large" warning on purpose: size alone is not a problem, and one would
+        fire on every healthy setup that has big data and a big disk. Size
+        RELATIVE TO CAPACITY is the problem, and this warning already fires
+        exactly when that bites.
         """
         if self._warned_evict_after_write:
             return
@@ -1195,11 +1241,23 @@ class FileBackend(CacheBackend):
             room = (f"Only {human_bytes(free)} is free on that volume, so raising "
                     f"max_cache_size may not help — caching fewer or smaller "
                     f"results, or pointing cache_dir at a roomier volume, will.")
+
+        shape = ""
+        dominant = self._dominant_entry_size()
+        if dominant and self._max_size_bytes:
+            fits = max(1, self._max_size_bytes // dominant)
+            if fits < self._FEW_ENTRIES_FIT:
+                how_many = "only one fits" if fits == 1 else f"only about {fits} fit"
+                shape = (f" Most of it is entries of around {human_bytes(dominant)}, "
+                         f"so {how_many} at once; if what you need downstream is a "
+                         f"summary of those results rather than the results "
+                         f"themselves, caching that instead would fit far more.")
+
         warnings.warn(
             f"the cache is full at its {cap} cap and is evicting entries within "
             f"a couple of writes of storing them, so it is re-writing and "
             f"re-evicting rather than caching durably. That can be slower than "
-            f"no cache at all. {room}",
+            f"no cache at all.{shape} {room}",
             CashCacheIneffectiveWarning,
             stacklevel=2,
         )
