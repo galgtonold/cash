@@ -17,10 +17,10 @@ combined  = source_hash                      # SHA256 of the statement's own tex
           + ":occ" + occurrence_index        # 0-based; disambiguates a repeated statement
           + [":callees:" + callee_globals]   # "name:lineage" per global a callee reaches for
 
-cache_key = "stmt:" + SHA256(combined)
+cache_key = namespace + ":" + SHA256(combined)
 ```
 
-Three details of that formula are load-bearing:
+Five details of that formula are load-bearing:
 
 - **Bracketed components are omitted entirely when empty.** A statement that calls no
   user-defined function produces a key with no `:callees:` segment at all, not an empty
@@ -32,6 +32,16 @@ Three details of that formula are load-bearing:
   `input_lineages` and routed to the module component instead. Hashing a module object
   would fall back to its memory address, which is fresh in every kernel and would make
   every downstream key drift across a restart.
+- **The namespace is a parameter, not a constant.** It is `stmt` for a statement
+  and `call` for a [sub-statement call unit](../annotations.md#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls),
+  which is why the two live in separate key spaces while sharing one builder.
+  Namespacing rather than a second builder is what keeps the single-source-of-truth
+  invariant below true for calls as well as statements.
+- **An `import` statement also folds in the modules it *binds*.** For an ordinary
+  statement only the modules it reads contribute; for an import, the output module's
+  source hash goes in too. Without it, re-running `import mymod` after a reload
+  computed the same key as before and the backend handed back the pre-reload module
+  object.
 
 Note what is *not* in the key: **files**. A file you read does not enter the key directly. It enters the *lineage* of whatever variable the read produced (see below), and it is re-checked on every lookup by a separate freshness pass — see [knowing when to recompute](invalidation.md#what-counts-as-a-change).
 

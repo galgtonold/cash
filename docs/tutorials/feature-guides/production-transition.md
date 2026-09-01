@@ -171,8 +171,9 @@ cold, which is correct but slow. Options, in increasing order of setup:
 <!-- claim: cash/__main__.py:cmd_clear @f0272005 -->
 - Start clean deliberately with `python -m cash clear --all`, when a run must
   not be influenced by earlier state. The `--all` matters: bare
-  `python -m cash clear` takes no default target, prints a usage line and
-  **exits 1**, which in a CI step is a failed build rather than a clean start.
+  `python -m cash clear` takes no default target, prints the subcommand's help
+  and **exits 2** (argparse's bad-invocation code), which in a CI step is a
+  failed build rather than a clean start.
 
 ## Migration checklist
 

@@ -247,21 +247,21 @@ For the annotations that *don't* skip caching:
 
 - Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`StatementProcessor._parse_annotation` assigns `effective_ttl = annotation.ttl` whenever it is not `None`).
 
-- A negative or non-integer TTL: the regex `\d+` only matches non-negative integers, so `ttl=-30`, `ttl=abc` and `ttl=5m` set no TTL. They are **not** silent -- each warns and names the directive it could not read, because `ttl=5m` used to parse as *five seconds*, a 60x error whose only symptom was a cache that kept missing. See [Annotations - common mistakes](../../annotations.md#ttl-with-no-value-or-non-digits).
+- A negative or non-integer TTL: the regex captures the whole value (`\S*`) and the parser then requires ASCII digits, so `ttl=-30`, `ttl=abc` and `ttl=5m` set no TTL. They are **not** silent -- each warns and names the directive it could not read. The wide capture is what makes that possible: a `\d+` value group would match only the `5` of `ttl=5m` and silently mean *five seconds*, a 60x error whose only symptom was a cache that kept missing. See [Annotations - common mistakes](../../annotations.md#ttl-with-no-value-or-non-digits).
 
 ## API reference
 
-| Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?`) | Effect |
+| Annotation | Triggers (regex `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?`) | Effect |
 |---|---|---|
 | `# @cash:no-cache` | directive=`no-cache` (alias `nocache`) | Sets `CacheAnnotation.no_cache=True`. Short-circuits `decide_cacheability` to return `(False, ['@cash:no-cache annotation'])`. |
-| `# @cash:ttl=N` | directive=`ttl`, value=`N` (digits only) | Sets `CacheAnnotation.ttl=N`. Overrides global `_global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
+| `# @cash:ttl=N` | directive=`ttl`, value=`N` (captured wide, then required to be ASCII digits) | Sets `CacheAnnotation.ttl=N`. Overrides global `_global_ttl` for this statement. Checked at lookup time by `_validate_ttl`. |
 | `# @cash:persist` | directive=`persist` | Sets `CacheAnnotation.persist=True`. Forces tiered-backend promotion to the persistent tier regardless of the smart-persistence policy. |
 | `# @cash:allow-random` | directive=`allow-random` (alias `allowrandom`) | Sets `CacheAnnotation.allow_random=True`. `check_and_warn_randomness` suppresses `CashRandomnessWarning` for the statement. |
 | `%cash_on ttl=N` | line-magic flag | Sets `self._global_ttl` on the magic. Applies to every statement unless overridden by `@cash:ttl=...`. |
 | `%%cash ttl=N` | cell-magic flag | Swaps `_global_ttl` in for the duration of the cell, then restores it. |
 | `@c.cache(ttl=N)` | decorator kwarg | Same TTL semantics, applied to function-level caching. |
 
-All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')`.
+All annotation parsing lives in `src/cash/notebook/annotations.py`. The single regex pattern is `ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')` — the value group is deliberately wide so a malformed value is *rejected by name* rather than silently truncated.
 
 ## Related
 

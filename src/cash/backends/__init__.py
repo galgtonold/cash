@@ -7,6 +7,7 @@ from .cascading_backend import CascadingBackend
 from .file_backend import FileBackend
 from .memory_backend import InMemoryBackend
 from .serialization import ParquetSerializer, PickleSerializer, Serializer, get_serializer
+from .sqlite_backend import SQLiteBackend
 from .tiered_backend import TieredBackend
 
 # Optional backends are resolved on FIRST ATTRIBUTE ACCESS (PEP 562), not at
@@ -47,6 +48,7 @@ __all__ = [
     'MetadataDict',
     'InMemoryBackend',
     'FileBackend',
+    'SQLiteBackend',
     'CascadingBackend',
     'TieredBackend',
     'RedisBackend',

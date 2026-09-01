@@ -15,6 +15,8 @@ is the one under test.
 from __future__ import annotations
 
 import os
+import pathlib
+import re
 import threading
 import time
 import warnings
@@ -258,3 +260,96 @@ def test_unhashable_arg_warns_but_returns_correct_value(tmp_path):
     with pytest.warns(CashCacheIneffectiveWarning):
         result = f(threading.Lock())
     assert result == "computed"
+
+
+# ---------------------------------------------------------------------------
+# The text badge an agent is told to parse
+# ---------------------------------------------------------------------------
+
+#: One rendered statement row, as ``renderers.text._row_line`` emits it: two
+#: spaces, ONE label, the code, then a timing — ``(saved Ns)`` on a restore,
+#: ``(Ns)`` otherwise — with an optional ``- reason`` tail on a NOT CACHED row.
+_BADGE_ROW = re.compile(
+    r"^ {2,}(?:\^)?(CACHED|EXECUTED|NOT CACHED|SKIPPED): .+? {2}"
+    r"\((?:saved )?\d+\.\d\ds\)(?: - .+)?$"
+)
+
+_BADGE_HEADER = re.compile(r"^\[Cash\] (?:CACHED|EXECUTED|SKIPPED)\b")
+
+
+def _render_reference_badge() -> list[str]:
+    """A real badge for the shape the agent guide advertises: a restore, a
+    compute, and a row that ran but was not stored."""
+    import io
+    from contextlib import redirect_stdout
+
+    from cash.notebook.badge_renderer._text import print_text_badge
+    from cash.notebook.cache_status import CacheStatus
+
+    metrics = [
+        {"code": "df = pd.read_csv('sales.csv')", "status": str(CacheStatus.RESTORED),
+         "execution_time": 0.004, "total_time": 0.004, "saved_time": 0.42,
+         "storage_tiers": ["RAM", "DISK"], "variables": ["df"]},
+        {"code": "summary = df.groupby('region').sum()", "status": str(CacheStatus.COMPUTED),
+         "execution_time": 0.01, "total_time": 0.01, "variables": ["summary"]},
+        {"code": "n = len(df)", "status": str(CacheStatus.COMPUTED),
+         "execution_time": 0.0001, "total_time": 0.0001,
+         "uncacheable_reasons": ["Too cheap to cache"], "variables": ["n"]},
+    ]
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        print_text_badge(metrics, cell_total_time=0.015)
+    return buf.getvalue().splitlines()
+
+
+def _agent_guide_badge_block() -> list[str]:
+    """The fenced ``[Cash] ...`` transcript from docs/for-coding-agents.md."""
+    page = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "docs" / "for-coding-agents.md"
+    ).read_text(encoding="utf-8")
+    blocks = re.findall(r"^```\n(\[Cash\] .*?)^```", page, re.M | re.S)
+    assert len(blocks) == 1, (
+        f"expected exactly one [Cash] transcript in for-coding-agents.md, found {len(blocks)}"
+    )
+    return [ln for ln in blocks[0].splitlines() if ln.strip()]
+
+
+def test_text_badge_renders_one_labelled_row_per_line():
+    """Ground truth for the test below: this is the shape the renderer emits.
+
+    Written as its own assertion so a renderer change fails *here*, naming the
+    renderer, rather than looking like the docs drifted.
+    """
+    lines = _render_reference_badge()
+    assert _BADGE_HEADER.match(lines[0]), lines[0]
+    rows = lines[1:]
+    assert rows, "expected statement rows under the header"
+    for row in rows:
+        assert _BADGE_ROW.match(row), f"renderer emitted an unexpected row shape: {row!r}"
+    labels = [_BADGE_ROW.match(r).group(1) for r in rows]
+    assert labels == ["CACHED", "EXECUTED", "NOT CACHED"], labels
+
+
+def test_agent_guide_badge_example_matches_what_the_renderer_emits():
+    """docs/for-coding-agents.md tells an agent what to parse, so it must be real.
+
+    It once showed three rows crammed onto ONE line with no timings — a shape
+    ``print_text_badge`` cannot produce. Nothing caught it: the block is an
+    untagged fence, so the docs harness never executes it, and the
+    ``AGENT_GUIDE`` sync test only proves the two copies of the mistake agree
+    with each other. An agent writing a parser from that page wrote the wrong
+    one.
+    """
+    doc_lines = _agent_guide_badge_block()
+
+    assert _BADGE_HEADER.match(doc_lines[0]), (
+        f"the guide's transcript must open with a real header line, got {doc_lines[0]!r}"
+    )
+    for row in doc_lines[1:]:
+        assert _BADGE_ROW.match(row), (
+            f"the guide shows a badge row the renderer cannot emit: {row!r}\n"
+            "Rows are one per line: two spaces, one label, the code, then a "
+            "timing. Re-render with cash.notebook.badge_renderer._text."
+            "print_text_badge and paste what it prints."
+        )

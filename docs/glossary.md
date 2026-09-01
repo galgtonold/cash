@@ -121,8 +121,10 @@ A statement cash decides *not* to cache — because it is too cheap to be worth
 caching (under the ~10 ms floor), too large to store economically (the [cost
 model](#cost-model) declines), or has side effects. The [badge](#badge) reports
 it as **NOT CACHED** and names the reason. That is a different row state from
-**SKIPPED**, which means the statement was not reached at all on this run
-(downstream of a branch not taken). See
+**SKIPPED**, which means the statement had nothing to do — a redundant `import`
+whose names are already bound, or an upstream statement the simulation found
+already satisfied. (A branch that didn't run is neither: only the taken branch
+is rendered at all.) See
 [Knowing when not to cache](how-it-works/safety.md).
 
 ## Statement-level caching

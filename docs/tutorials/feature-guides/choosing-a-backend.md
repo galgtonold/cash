@@ -26,7 +26,7 @@ Walk through these questions top to bottom and stop at the first match:
 
 ## The backend table
 
-<!-- claim: cash/backends/__init__.py:__all__ @47f3d1b2 broad="the count and the table are a claim about the exported backend set" -->
+<!-- claim: cash/backends/__init__.py:__all__ @c2e4bb9a broad="the count and the table are a claim about the exported backend set" -->
 | Backend | Persistence | Speed | Sharing | Best for |
 |---------|-------------|-------|---------|----------|
 | `InMemoryBackend` | Kernel restart clears | Fastest | Single process | Quick experiments |
@@ -357,7 +357,7 @@ export CASH_TIER_2_TYPE=s3
 export CASH_TIER_2_BUCKET=my-team-cache
 ```
 
-<!-- claim: cash/backends/factory.py:build_backend_from_config @838026dc, cash/backends/factory.py:_build_single_backend @a583bb29 -->
+<!-- claim: cash/backends/factory.py:build_backend_from_config @838026dc, cash/backends/factory.py:_build_single_backend @dd74253a -->
 The tier list, when non-empty, takes precedence over the single-backend `CASH_BACKEND` field. The same fields are available under `[tool.cash]` in `pyproject.toml` and `[cash]` in `~/.config/cash/config.toml`. See the [Configuration reference](../../getting-started/configuration.md) for the full resolution order.
 
 ## Notebook vs decorator — same backend
@@ -381,15 +381,20 @@ Env vars resolve to the same `CashConfig` regardless of entry point. There is no
 
 ## API reference (compact)
 
+<!-- claim: cash/backends/__init__.py:__all__ @c2e4bb9a broad="the import-path column is a claim about what the package exports" -->
+**Every** backend below imports from `cash.backends`. The four that are always
+available — no extra to install, nothing to assemble — are re-exported from the
+top-level `cash` as well, and that is the shorter spelling to reach for:
+
 | Backend | Import path | Required parameter | Key knobs |
 |---|---|---|---|
 | `InMemoryBackend` | `from cash import InMemoryBackend` | — | `max_entries`, `max_memory_percent` |
 | `FileBackend` | `from cash import FileBackend` | `cache_dir` | `compress`, `max_size_bytes`, `flush_interval`, `default_ttl` |
 | `SQLiteBackend` | `from cash import SQLiteBackend` | `db_path` | `default_ttl`, `max_size_bytes`, `wal_mode` |
+| `CascadingBackend` | `from cash import CascadingBackend` | `backends` (list) | — writes to every member, read-repairs on hit |
 | `TieredBackend` | `from cash.backends import TieredBackend` | `backends` (list) | `promotion_policy` |
 | `RedisBackend` | `from cash.backends import RedisBackend` | — (`host` defaults to `localhost`) | `port`, `db`, `password`, `prefix`, retry/keepalive kwargs |
 | `S3Backend` | `from cash.backends import S3Backend` | `bucket` (the only genuinely required one) | `prefix`, `max_pool_connections`, `retries`, boto3 kwargs |
-| `CascadingBackend` | `from cash.backends import CascadingBackend` | `backends` (list) | — writes to every member, read-repairs on hit |
 | `CashConfig.backend` | `CASH_BACKEND` env / TOML | one of `memory`/`file`/`sqlite`/`redis`/`s3`/`tiered` | resolved by `build_backend_from_config` |
 | `CashConfig.tiers` | `CASH_TIER_<N>_*` env / TOML | list of `TierConfig` | takes precedence over `backend` |
 

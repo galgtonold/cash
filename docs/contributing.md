@@ -36,14 +36,22 @@ src/cash/
 ├── core.py             # The Cash class + @cash.cache decorator
 ├── config.py           # CashConfig; TOML / env / programmatic resolution
 ├── data_source.py      # FileDataSource and the DataSource protocol
+├── remote_source.py    # RemoteFileDataSource: s3/gs/az/http, keyed on the
+│                       #   store's own validator (ETag, version id, generation)
 ├── dependency_state.py # Folds source/dep/helper state into the cache key
 ├── purity_analyzer.py  # Static purity/impurity analysis for the decorator
+├── source_norm.py      # Normalizes source before hashing (drops comments,
+│                       #   blank lines, indentation width) so a reformat keeps
+│                       #   your cache
 ├── analytics.py        # Cache-usage analytics
+├── effectiveness.py    # Measures whether caching actually paid off
 ├── graph.py            # Dependency-graph utilities
 ├── nbconvert.py        # nbconvert preprocessor (strips badges / magics)
 ├── logging.py          # Structured logging
 ├── exceptions.py       # Public exception types
 ├── utils.py            # Shared internal helpers
+├── _agent_guide.py     # The text cash.help() returns — a byte-for-byte copy
+│                       #   of docs/for-coding-agents.md, kept in step by a test
 ├── __main__.py         # CLI entry point (python -m cash)
 │
 ├── backends/           # Pluggable storage: _base.py (abstract CacheBackend),
@@ -59,11 +67,21 @@ src/cash/
 │                       #   cost_model, consumables, randomness, purity,
 │                       #   provenance, audit, …
 ├── ui/                 # Interactive display components (explorer, debugger, …)
-└── experimental/       # Lazy-imported experimental APIs
+├── experimental/       # Lazy-imported experimental APIs
+└── labextension/       # PREBUILT JupyterLab extension (cash-live-cells), shipped
+                        #   in the wheel. Source is TypeScript under
+                        #   labextension/ at the repo root; this is its build
+                        #   output and is committed, so a plain `pip install`
+                        #   drops it in without Node
 ```
 
 The default backend is `TieredBackend([InMemoryBackend, FileBackend])` — RAM in
 front of disk. Redis and S3 are optional-dependency backends.
+
+The labextension is the part most easily missed: it pushes your unsaved cell
+sources to the kernel so an upstream check can see edits you haven't saved.
+What it covers and what it doesn't is documented under
+[editing without saving](known-limitations.md#editing-without-saving).
 
 ## Testing
 

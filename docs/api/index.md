@@ -10,7 +10,7 @@ source — if you spot an issue, file it against the corresponding
 | Page | Covers |
 |---|---|
 | [Cash class](cash.md) | `Cash`, the lazily-created module-level singleton, `configure`, `reset_session`, and `CacheExplanation` (returned by `f.explain()`). |
-| [Backends](backends.md) | Concrete backends users instantiate: `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, `CascadingBackend`, plus the experimental `RedisBackend` and `S3Backend`. |
+| [Backends](backends.md) | Concrete backends users instantiate: `InMemoryBackend`, `FileBackend`, `SQLiteBackend`, `CascadingBackend`, and `TieredBackend` (the default `Cash()` builds one), plus the experimental `RedisBackend` and `S3Backend`. |
 | [Backend internals](backend_internals.md) | The `CacheBackend` ABC, the `CacheMetadata` dataclass (and the plain-dict wire format backends actually see), `Serializer` hierarchy, `PendingWrites` helper. Read this if you want to write your own backend or contribute fixes. |
 | [Purity & annotations](purity.md) | `@pure`, `@stateful`, `mark_pure`, `mark_stateful`, `is_pure`, `is_stateful`, `analyze_function_purity`. |
 | [Configuration](config.md) | `CashConfig` dataclass, `get_config`, `create_default_config`. |

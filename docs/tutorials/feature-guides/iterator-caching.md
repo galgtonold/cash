@@ -99,10 +99,14 @@ What is **not** supported:
 ## Replay semantics
 
 <!-- claim: cash/core.py:Cash._wrap_iterator_hit @82a2a1ae, cash/core.py:_ListCachedIterator @3d68dd44 broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @d808794a broad="the claim is about the whole replay wrapper" -->
-On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** iterator instance:
+On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `_ChunkedCachedIterator(cash, cache_key, n_chunks)` — a lazy iterator that fetches one chunk at a time. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
-- Single-chunk hits return `_ListCachedIterator(items)` — a thin wrapper over `iter(list)` that streams the cached list.
-- Multi-chunk hits return `_ChunkedCachedIterator(cash, cache_key, n_chunks)` — a lazy iterator that fetches one chunk at a time.
+`_ListCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. On a miss that never crossed a threshold, `_write_chunks` still holds the buffered list in memory, so the wrapper hands that back directly instead of reading it straight back out of the backend:
+
+| | first call (miss) | any later call (hit) |
+|---|---|---|
+| stayed within one chunk | `_ListCachedIterator` | `_ChunkedCachedIterator` |
+| crossed a threshold | `_ChunkedCachedIterator` | `_ChunkedCachedIterator` |
 
 Two consequences:
 
@@ -199,8 +203,8 @@ Tuning notes:
 |---|---|---|
 | `chunk_max_items=N` | `@cash.cache` kwarg | Close current chunk after `N` items. Default `1_000_000`. |
 | `chunk_max_bytes=N` | `@cash.cache` kwarg | Close current chunk after `N` bytes (estimated). Default `1_000_000_000`. |
-| `_ListCachedIterator` | Internal | Single-chunk replay wrapper. Streams a materialized list; iter-self; supports `close()`. |
-| `_ChunkedCachedIterator` | Internal | Multi-chunk lazy replay. Fetches one chunk at a time; iter-self; terminates cleanly on missing chunks; supports `close()`. |
+| `_ListCachedIterator` | Internal | **First-call** wrapper for a result that fit in one chunk. Streams the list `_write_chunks` just materialized, with no backend read; iter-self; supports `close()`. |
+| `_ChunkedCachedIterator` | Internal | Lazy replay, and the wrapper for **every** cache hit. Fetches one chunk at a time; iter-self; terminates cleanly on missing chunks; supports `close()`. |
 | `metadata['iterator_storage'] = 'chunked'` | Backend metadata | Flag the hit path reads to choose `_ChunkedCachedIterator` over a single-blob return. |
 | `f"{cache_key}:chunk_{i}"` | Backend key format | Chunk keys are derived from the manifest key by suffix. `cleanup()` reclaims them alongside the manifest. |
 | `CashCacheIneffectiveWarning` | Warning | Fires once on the first multi-chunk transition when `cache_if=` is set; also fires once if an async-generator function is decorated. |

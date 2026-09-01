@@ -19,9 +19,16 @@ that papermill / nbconvert / headless kernels **strip** — without this you are
 blind. The text badge prints under each cell:
 
 ```
-[Cash] EXECUTED (0.01s, saved 0.42s)
-  CACHED: df = load()      EXECUTED: x = f(df)      NOT CACHED: cheap = 1 + 1
+[Cash] EXECUTED (0.01s, saved 0.42s) - 1 not cached
+  CACHED: df = pd.read_csv('sales.csv')  (saved 0.42s)
+  EXECUTED: summary = df.groupby('region').sum()  (0.01s)
+  NOT CACHED: n = len(df)  (0.00s) - Too cheap to cache
 ```
+
+**One line per statement**, two spaces of indent, the label first, then the
+code, then a timing — `(saved Ns)` on a restore, `(Ns)` on a run. A NOT CACHED
+row appends ` - <reason>`. The header line carries the cell total and, when any
+row was not cached, a ` - N not cached` suffix.
 
 `CACHED` = served from cache · `EXECUTED` = ran · `NOT CACHED` = ran but not
 stored (too cheap, a side effect, or `# @cash:no-cache`). Check the running total

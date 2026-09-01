@@ -30,7 +30,7 @@ One word per state, and the **same** word whether you are reading a single row o
 | **CACHED** | green | The value came from the cache. On the cell header this means *every* statement was served — nothing ran. |
 | **EXECUTED** | ochre | It ran. On the cell header this means at least one statement ran. |
 | **NOT CACHED** | ochre | It ran and Cash did *not* store the result, so it will run again every time. The row names the reason; the cell header counts these in a `not cached` chip. |
-| **SKIPPED** | green | Unreachable on this run (downstream of a branch not taken) or the value isn't needed. |
+| **SKIPPED** | green | There was nothing to do: a redundant `import` whose names are already bound, or an upstream statement the simulation found already satisfied. Not a branch that didn't run — an untaken branch gets no row at all. |
 | **MIXED** | (loop aggregates only) | Some iterations came from cache, some ran. |
 | **FUNC CHANGED** | red | A helper function this row calls had its source change since the last run. |
 | **MODULE RELOADED** | red | A tracked local import was edited; everything downstream re-runs. |

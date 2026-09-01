@@ -33,10 +33,15 @@ Annotations are matched by a single regex at [`src/cash/notebook/annotations.py`
 
 <!-- test:skip reason="source-code excerpt: references re module without import" -->
 ```python
-ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?')
+ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
 ```
 
 It's applied with `re.search` (not `re.match`), so the directive can appear **anywhere on the line** — including trailing on a normal code line.
+
+The value group is `\S*`, not `\d+`, and that is load-bearing rather than lax: it
+captures whatever you actually wrote so `parse_annotation_line` can *reject* it by
+name. A `\d+` group would simply not match the bad part — `ttl=5m` would capture
+`5` and silently mean five seconds. Validation happens after the match, not in it.
 
 A few details that bite people:
 
@@ -102,7 +107,7 @@ quotes = fetch_quotes("AAPL")    # cache for 5 minutes
 
 Notes:
 
-- `N` is a **non-negative integer**. Negative numbers and decimals are not parsed (`\d+` only). `ttl=0` is accepted as a valid value but means "immediately expired" — every run will be a miss.
+- `N` is a **non-negative integer**. The regex captures the whole value (`\S*`) and the parser then requires it to be ASCII digits, so negatives, decimals and unit suffixes are rejected *with a warning* rather than silently truncated. `ttl=0` is accepted as a valid value but means "immediately expired" — every run will be a miss.
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
@@ -609,7 +614,7 @@ called out below.
 # @cash:ttl = 60          # OK — spacing around '=' is allowed too
 ```
 
-The pattern is `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\d+))?` — the `\s*` after the colon absorbs the space, so both spellings take effect. (Earlier versions of this page listed the spaced form as a common mistake; that was wrong, and the regex quoted alongside it was stale.)
+The pattern is `#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?` — the `\s*` after the colon absorbs the space, so both spellings take effect. (Earlier versions of this page listed the spaced form as a common mistake; that was wrong, and the regex quoted alongside it was stale — twice now, the second time still showing the old `\d+` value group after it had widened to `\S*`.)
 
 ### Wrong case for `@cash:`
 

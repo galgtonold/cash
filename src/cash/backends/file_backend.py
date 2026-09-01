@@ -162,6 +162,11 @@ class FileBackend(CacheBackend):
             max_size_bytes: Maximum total cache size in bytes (triggers LRU eviction).
             flush_interval: Seconds between metadata flush cycles.
             default_ttl: Default time-to-live in seconds for cache entries. None = no expiration.
+            adaptive_cap: Whether ``max_size_bytes`` came from the machine-scaling
+                policy rather than from the caller. Set by the backend factory when
+                ``max_cache_size`` is unset; leave it False when constructing a
+                backend directly, so an explicit cap (or an explicit ``None``,
+                meaning unlimited) is never second-guessed.
         """
         # Resolve to absolute path at init time so os.chdir() won't break file paths
         self.cache_dir = os.path.abspath(cache_dir)
