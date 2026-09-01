@@ -177,8 +177,8 @@ statement, opt one out entirely, set a TTL, or acknowledge unseeded randomness:
 now = datetime.utcnow()      # always fresh, never stored
 ```
 
-The five directives and their scoping rules (including how a directive on a loop
-header cascades to the whole body) are documented in [Annotations](annotations.md).
+Every directive and its scoping rules (including how one on a loop header
+cascades to the whole body) are documented in [Annotations](annotations.md).
 
 ---
 

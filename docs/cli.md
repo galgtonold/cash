@@ -17,8 +17,8 @@ subcommand prints help and exits 0.
 |---|---|---|
 | [`cash version`](#cash-version) | Print the installed cash version. | No |
 | [`cash info`](#cash-info) | Show the effective merged configuration. | No |
-| [`cash inspect [path]`](#cash-inspect-path) | Summarise a cache directory or notebook. | No |
-| [`cash clear [path] [--all]`](#cash-clear-path-all) | Delete a cache directory. | **Yes** — no confirmation prompt |
+| [`cash inspect [path] [--function NAME]`](#cash-inspect-path) | Summarise a cache directory or notebook; drill into one function. | No |
+| [`cash clear [path] [--all] [--function NAME] [--entry ID]`](#cash-clear-path-all) | Delete a cache directory, one function's entries, or a single entry. | **Yes** — no confirmation prompt |
 | [`cash autoload on`](#cash-autoload-on) | Install the IPython startup hook. | No (refuses to clobber by default) |
 | [`cash autoload off`](#cash-autoload-off) | Remove the startup hook. | Yes (deletes one file) |
 
@@ -136,7 +136,7 @@ Print the installed cash version.
 
 ```bash
 cash version
-# cash 0.7.0
+# cash <!-- docnum:version -->0.7.0<!-- /docnum -->
 ```
 
 **Behaviour notes:**
@@ -171,7 +171,7 @@ Print the effective merged configuration.
 
 ```bash
 cash info
-# Cash v0.7.0
+# Cash v<!-- docnum:version -->0.7.0<!-- /docnum -->
 #   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
 #   Debug:      False
@@ -192,7 +192,7 @@ cash info
   [Configuration](getting-started/configuration.md#file-locations)).
 
 <!-- claim: cash/__main__.py:cmd_inspect @f70de23e, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
-### `cash inspect [path] [--function NAME]`
+### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
 directory.
@@ -273,17 +273,19 @@ and have no function to name, so they group under `(notebook statements)`.
   `cash inspect` at a `.ipynb`, cash prints
   `nbformat not installed. Install with: pip install nbformat` and continues
   cleanly (exit 0).
-- Cache metadata is read via `pickle`. Corrupted or unreadable `.meta` files
-  are skipped (logged at debug level) rather than aborting the report — one
-  bad file must not cost you the totals for everything else. When nothing is
-  readable the table is replaced by `(no readable entries)`.
+- Each entry is a single `.entry` file whose metadata sits in a
+  length-prefixed header, so the report reads the header and never touches the
+  payload. A corrupted or unreadable entry is skipped (logged at debug level)
+  rather than aborting the report — one bad file must not cost you the totals
+  for everything else. When nothing is readable the table is replaced by
+  `(no readable entries)`.
 
 ---
 
 ## Clearing caches
 
 <!-- claim: cash/__main__.py:cmd_clear @f0272005 -->
-### `cash clear [path] [--all] [--function NAME]`
+### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
 
@@ -343,5 +345,6 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 | Code | When |
 |---|---|
 | `0` | The command succeeded, including no-op outcomes ("nothing to clear", "autoload not installed at ..."). |
-| `1` | User-error refusals: `cash clear` with no `path` and no `--all`; `cash inspect` with no `./.cash` and no path; `cash clear <missing-path>`; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
+| `1` | User-error refusals: `cash inspect` with no `./.cash` and no path; `cash clear <missing-path>`; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
+| `2` | `cash clear` with none of `path`, `--all` or `--function` — argparse's own "bad invocation" code. The subcommand's help is printed and nothing is touched. |
 | traceback | Uncaught exceptions bubble up as Python tracebacks — `main()` does not wrap dispatch in `try/except`. If you see one, treat it as a bug and please file an issue. |

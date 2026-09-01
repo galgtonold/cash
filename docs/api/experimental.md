@@ -18,8 +18,11 @@ from cash.experimental import (
 )
 ```
 
-`RedisBackend`, `S3Backend`, and `TieredBackend` also live here —
-see [Backends](backends.md) for those.
+`RedisBackend` and `S3Backend` are also reachable here — see
+[Backends](backends.md) for those. `TieredBackend` is re-exported from this
+module too, but it is **not** experimental: it is the default backend every
+`Cash()` builds. Import it from `cash.backends.tiered_backend` to skip the
+`FutureWarning` this module raises.
 
 ---
 

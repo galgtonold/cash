@@ -9,21 +9,25 @@ So the question worth asking before you adopt this is not "does it work?" but
 "how would they know if it didn't?" This page answers that, including the parts
 where the answer is *we wouldn't, and here is what we do about it*.
 
-Figures below are as of 0.7.0. The mechanisms matter more than the counts, and
-they are the part that does not go stale.
+Figures below are derived from the repository by
+[`scripts/doc_numbers.py`](https://github.com/galgtonold/cash/blob/main/scripts/doc_numbers.py)
+and re-checked in CI, so they cannot quietly go stale — they are current as of
+<!-- docnum:version -->0.7.0<!-- /docnum -->. The mechanisms matter more than the counts, and they
+are the part that does not change.
 
 ## The shape of the suite
 
-Roughly **8,750 tests** across three suites, spread over about 1,270 files:
+**<!-- docnum:tests_total -->~8,750<!-- /docnum --> tests** across three suites,
+spread over <!-- docnum:test_files -->~1,210<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | ~4,200 | The engine: cache keys, lineage, hashing, backends, invalidation |
-| Notebook integration | ~4,180 | Real kernels executing real notebooks, cell by cell |
-| Docs | ~360 | The documentation itself — see [below](#the-docs-are-tested-too) |
+| Unit | <!-- docnum:tests_unit -->~4,250<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Notebook integration | <!-- docnum:tests_integration -->~4,180<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
+| Docs | <!-- docnum:tests_docs -->~340<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
-Every one runs on **15 platform combinations** — Python 3.10 through 3.14, on
-Linux, Windows and macOS — on every push. The matrix is deliberately kept in
+Every one runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
+3.10 through 3.14, on Linux, Windows and macOS — on every push. The matrix is deliberately kept in
 lockstep with the versions advertised on PyPI, because a version we claim to
 support but never run is a support claim backed by nothing.
 
@@ -76,7 +80,7 @@ Documentation drifts from code silently, and a caching library's docs are load
 bearing — if the page says a change invalidates and it doesn't, the reader is
 about to trust a stale value.
 
-Two mechanisms, both blocking:
+Three mechanisms, all blocking:
 
 **Python fences are executed.** The docs suite auto-discovers every `.md` file
 under `docs/`, `examples/` and the repository root, and runs its Python fences
@@ -84,9 +88,9 @@ through a real harness. There is no whitelist to maintain, so a new page is
 covered the day it lands. Sample output in the docs is checked against what the
 code actually prints.
 
-**Prose is pinned to source.** Around **164 claims** across the documentation carry an
-anchor naming the function that decides them, plus a fingerprint of that
-function's normalized source:
+**Prose is pinned to source.** Around **<!-- docnum:claims -->~250<!-- /docnum --> claims** across
+the documentation carry an anchor naming the function that decides them, plus a
+fingerprint of that function's normalized source:
 
 ```markdown
 <!-- claim: cash/core.py:Cash.cache @b3cd263b -->
@@ -99,6 +103,18 @@ cannot go out resting on prose nobody re-read.
 
 The tooling refuses to make this easy to fake: re-pinning without reading is
 called out in its own help text as manufacturing the appearance of verification.
+**Numbers are derived, not remembered.** Every figure the docs quote about the
+repository — the version, the test counts, the claim count, the size of the CI
+matrix — is computed from the source by
+[`scripts/doc_numbers.py`](https://github.com/galgtonold/cash/blob/main/scripts/doc_numbers.py)
+and written between invisible markers, with CI failing when a committed value
+no longer matches. This exists because they had all gone wrong at once and
+nothing could notice: the README said ~8,500 tests where this page said ~8,750
+and, further down, ~8,800; the claim count read 164 against an actual 247. A
+wrong number renders exactly as well as a right one, and none of the mechanisms
+above look at arithmetic. Counts are rounded so the gate fires when a figure
+becomes misleading rather than every time somebody adds a test.
+
 In practice most drift is a moved fingerprint on unchanged behaviour — but not
 all of it. Preparing 0.4.1 surfaced three drifted claims about `%cash_stats`, and
 **two of them had genuinely become wrong**: both enumerated what the command
@@ -144,9 +160,9 @@ handle has it open; cash expects concurrent readers by design and writes on a
 background thread, so the collision was routine. Each occurrence threw the entry
 away and recomputed the work.
 
-It survived every one of the ~8,800 tests, on every one of the 15 platform
-combinations, through multiple adversarial rounds. Nothing raised. Nothing went
-red. It was found by reading the full logs of jobs that had *passed*.
+It survived the entire suite, on every platform combination, through multiple
+adversarial rounds. Nothing raised. Nothing went red. It was found by reading
+the full logs of jobs that had *passed*.
 
 Two things came out of that, both shipped in 0.4.1:
 

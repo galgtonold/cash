@@ -247,7 +247,7 @@ For the annotations that *don't* skip caching:
 
 - Per-statement `@cash:ttl=N` overrides the global `%cash_on ttl=N` / `%%cash ttl=N` whenever it's set, even when its value is *longer* than the global (`StatementProcessor._parse_annotation` assigns `effective_ttl = annotation.ttl` whenever it is not `None`).
 
-- A negative or non-integer TTL: the regex `\d+` only matches non-negative integers, and bad values return `None` from `parse_annotation_line` and are silently dropped.
+- A negative or non-integer TTL: the regex `\d+` only matches non-negative integers, so `ttl=-30`, `ttl=abc` and `ttl=5m` set no TTL. They are **not** silent -- each warns and names the directive it could not read, because `ttl=5m` used to parse as *five seconds*, a 60x error whose only symptom was a cache that kept missing. See [Annotations - common mistakes](../../annotations.md#ttl-with-no-value-or-non-digits).
 
 ## API reference
 

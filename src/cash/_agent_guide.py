@@ -75,11 +75,18 @@ you cached something too cheap).
 Put the comment **directly above** the statement, no blank line, lowercase `@cash:`:
 
 ```
-# @cash:no-cache      never cache (timestamps, side effects, values that must be fresh)
-# @cash:persist       force-cache a cheap value that must survive a kernel restart
-# @cash:ttl=300       expire after N seconds (integer only)
-# @cash:allow-random  acknowledge a frozen unseeded draw (silences the warning only)
+# @cash:no-cache        never cache (timestamps, side effects, values that must be fresh)
+# @cash:persist         force-cache a cheap value that must survive a kernel restart
+# @cash:ttl=300         expire after N seconds (integer only)
+# @cash:allow-random    acknowledge a frozen unseeded draw (silences the warning only)
+# @cash:no-cache-calls  stop caching the expensive CALL inside a statement (on by default)
+# @cash:cache-fit       opt a bare estimator.fit(X, y) in to caching (off by default)
 ```
+
+`no-cache-calls` is the one to know about: cash caches the expensive call
+*inside* a statement by default, so a callee with side effects the analyzer
+cannot see will have them skipped on a hit **without you asking for it**. Reach
+for the opt-out the moment a callee's purity is something you are unsure of.
 
 Default: **annotate nothing** — the cost model decides what's worth caching.
 

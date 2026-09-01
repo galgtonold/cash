@@ -147,6 +147,17 @@ jobs:
       - name: Run docs feature-parity tests
         run: pytest tests/docs/ -n auto -v -rs --tb=short
 
+      # Blocking. tests/docs/test_doc_numbers.py already ran the cheap half of
+      # this (version, claim count, platform count) on every suite run; the
+      # test COUNTS need three `pytest --collect-only` passes, which cannot run
+      # recursively from inside pytest, so they are checked here. This job's
+      # env is a superset of the unit job's, so every suite collects.
+      #
+      # A failure here means a number a reader sees is no longer true. The fix
+      # is `python scripts/doc_numbers.py --update`, not editing the prose.
+      - name: Check derived doc numbers
+        run: python scripts/doc_numbers.py --check
+
       # Advisory, never blocking. Surfaces the re-verification queue while the
       # author still remembers why the code moved -- which is the only moment
       # re-verifying is cheap. The release gate (CASH_CLAIMS_STRICT=1) is the

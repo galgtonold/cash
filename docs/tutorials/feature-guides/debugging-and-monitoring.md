@@ -164,7 +164,7 @@ cash clear --all                      # nuke ./.cash (no confirmation)
 cash clear ./notebooks/analysis.ipynb # nuke the sibling .cash
 ```
 
-`cash inspect` reports total size, entry count, file-extension breakdown, and the five most recent entries with timestamps and cache-key prefixes. See the [CLI reference](../../cli.md) for the full output and flag list.
+`cash inspect` reports total size, entry count, and a per-function table sorted by size. `--function NAME` drills into one function's individual entries, showing what each one *saves* alongside its size. See the [CLI reference](../../cli.md) for the full output and flag list.
 
 **When to reach for the CLI vs notebook magics** — the CLI when you can't (or don't want to) start a kernel: post-incident inspection on a CI machine, clearing a runaway cache directory on a teammate's box, or scripted size monitoring. Inside an active notebook, `%cash_stats` and `f.cache_info()` are faster.
 
@@ -202,7 +202,9 @@ The output gives the entry count, the total size, and a **per-function table sor
 !!! note "The `~/.cash/analytics.db` telemetry file"
     Separate from the project-local `./.cash/` cache, Cash keeps a small global
     SQLite file at `~/.cash/analytics.db` recording per-session hit/miss/timing
-    events (this is what `%cash_stats` reads). It is **best-effort observability,
+    events. It backs `cash.show_stats()`; `%cash_stats` does **not** read it --
+    that command reports in-memory session counters and deliberately never
+    walks the backend. The file is **best-effort observability,
     never correctness** — deleting it is always safe and loses only telemetry, no
     cached results. Cash recreates it automatically if it is missing, corrupt, or
     oversized, so you should never see an error about it; if you want to reset the

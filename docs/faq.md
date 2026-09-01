@@ -78,7 +78,8 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
 ## Troubleshooting
 
 ??? question "A cell isn't caching — how do I find out why?"
-    Read the [badge](glossary.md#badge): it says *skipped* and why. The usual
+    Read the [badge](glossary.md#badge): the row reads `NOT CACHED` and names
+    the reason. The usual
     reasons are (1) the statement is under the ~10 ms floor (too cheap to be
     worth caching), (2) the result is too large for the [cost
     model](glossary.md#cost-model) to persist economically, or (3) a side effect
@@ -98,19 +99,29 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
     caching works. See [Seeing what Cash did](how-it-works/inspecting.md).
 
 ??? question "How do I force a fresh run or clear the cache?"
-    Three escape hatches for a single run: `@cash:no-cache` on one statement,
-    `%cash_off` for a whole cell, or the `cash clear` CLI command. To wipe
+    Three escape hatches: `@cash:no-cache` on one statement, `%cash_off` to
+    disable auto-caching for the rest of the session (not just one cell -- run
+    `%cash_on` to re-enable), or the `cash clear` CLI command. To wipe
     everything, delete `.cash/` or run `%cash_repair --full`. See
     [Annotations](annotations.md) and [CLI reference](cli.md).
 
 ## Production readiness
 
 ??? question "Is a 0.x release safe for real work?"
-    Yes for notebook use; cash is backed by
-    thousands of integration tests (many derived from real-world bug reports).
-    Treat it like any library you'd pin — this is a `0.x` release, so the API
-    and cache format may change between minor versions (run `%cash_repair --full`
-    after upgrading). The
+    It depends which path you mean, and the two are not equally solid. The
+    **`@cash.cache` decorator** is the smaller problem -- it keys on a
+    function's arguments and its own source, with no cross-cell reasoning --
+    and is the conservative choice for something that matters. The
+    **notebook's statement-level tracking** is the hard end of the problem: it
+    reasons about what your code reads, writes and mutates across cells, from
+    the source alone, and that is where surprises live. Keep an eye on the
+    badge.
+
+    Both are backed by thousands of integration tests, many derived from real
+    bug reports, and where cash knows it can be wrong it says so on
+    [Known limitations](known-limitations.md). Treat it like any library you'd
+    pin — this is a `0.x` release, so the API and cache format may change
+    between minor versions (run `%cash_repair --full` after upgrading). The
     [CHANGELOG](https://github.com/galgtonold/cash/blob/main/CHANGELOG.md)
     documents breaking changes.
 

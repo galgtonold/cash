@@ -247,7 +247,8 @@ If you *do* already use a caching tool, here's where cash sits in the landscape.
 
 ??? question "How do I force a fresh run?"
     Three escape hatches. (1) `@cash:no-cache` annotation on a single
-    statement. (2) `%cash_off` to disable for a whole cell. (3) The
+    statement. (2) `%cash_off` to turn auto-caching off for the rest of the
+    session -- it is not per-cell; run `%cash_on` to turn it back on. (3) The
     `cash clear` CLI command. See [annotations](annotations.md) and
     [CLI reference](cli.md).
 

@@ -67,9 +67,13 @@ next month) returns the stored value.
     so a fresh process — a kernel restart or a new `python script.py` run —
     recomputes it. "Returns the stored value next month" therefore holds for the
     genuinely expensive calls that are worth caching, but a sub-0.1 s function
-    shows no cross-process speedup. Force disk persistence with
-    `# @cash:persist` (or a single-tier `FileBackend`) when a fast result must
-    survive a restart. See [cost model and smart persistence](cost-model.md).
+    shows no cross-process speedup. `# @cash:persist` will **not** help here --
+    it is a notebook-statement directive and the decorator never reads it, so
+    writing one in a decorated body is silently inert. To make a fast result
+    survive a restart, give this `Cash` a single-tier persistent backend
+    (`Cash(backend=FileBackend(...))` writes every entry regardless of compute
+    time), or lower `min_cache_savings_pct` toward `0`. See
+    [cost model and smart persistence](cost-model.md).
 
 If you want a custom configuration (different backend, custom
 directory, debug logging), instantiate `Cash(...)` explicitly:
