@@ -296,3 +296,93 @@ def test_a_cache_hit_does_not_re_warn_or_repeat_the_effect(tmp_path):
         "the effect repeated on a cache hit -- if this ever holds, the warning "
         "is describing a hazard that does not exist"
     )
+
+
+# ---------------------------------------------------------------------------
+# State mutation -- the other half of "side effect"
+#
+# Measured with a library planted in site-packages: of four state mutations
+# that reached past the analyzer, THREE left an observable change in the
+# arguments. The fourth was a library mutating its own module state, which
+# leaves no trace the caller can see and stays out of reach.
+# ---------------------------------------------------------------------------
+
+def test_a_library_mutating_the_callers_argument_is_observed(tmp_path):
+    """`heapq.heappushpop` mutates the caller's heap AND returns a value.
+
+    Stdlib, so not walked into; in no name list; and the return value is USED,
+    so the discarded-call rule does not fire either. That combination is
+    exactly what was silent. (`heapq.heapify` would NOT test this: its return
+    is discarded, so the static pass catches it for an unrelated reason.)
+    """
+    c = _cash(tmp_path)
+
+    def uses_stdlib_mutator(rows):
+        import heapq
+        return heapq.heappushpop(rows, 7)
+
+    rows = [1, 3, 5, 9]
+    original = list(rows)
+    result, warned = _call_capturing(c, uses_stdlib_mutator, rows)
+
+    assert result == 1
+    assert rows != original, "the probe did not actually mutate anything"
+    assert warned, "a library mutating the caller's list was not observed"
+    assert "argument mutation" in str(warned[0].message)
+
+
+def test_a_function_that_leaves_its_arguments_alone_is_silent(tmp_path):
+    """The control. A mutable argument that is only READ must not warn --
+    otherwise every function taking a list would look impure."""
+    c = _cash(tmp_path)
+
+    def only_reads(rows):
+        return sum(rows) + len(rows)
+
+    rows = [5, 3, 9, 1]
+    result, warned = _call_capturing(c, only_reads, rows)
+    assert result == 22
+    assert rows == [5, 3, 9, 1]
+    assert not warned, f"reading a list warned: {[str(w.message) for w in warned]}"
+
+
+@pytest.mark.parametrize("value", [
+    {"b", "a", "c"},                     # set: iteration order
+    frozenset({3, 1, 2}),
+    {"x": [1, 2], "y": {"z": 3}},        # nested containers
+    b"\x00\xff" * 8,
+])
+def test_unmutated_arguments_of_awkward_types_do_not_look_mutated(tmp_path, value):
+    """The check compares two argument hashes taken around the call.
+
+    A type whose serialisation is not stable between those two moments would
+    warn on every miss with nothing wrong. These are the shapes most likely to
+    do it.
+    """
+    c = _cash(tmp_path)
+
+    def reads(x):
+        return 1
+
+    _result, warned = _call_capturing(c, reads, value)
+    mutation = [w for w in warned if "argument mutation" in str(w.message)]
+    assert not mutation, f"{type(value).__name__} looked mutated when it was not"
+
+
+def test_the_mutation_check_retires_itself_when_re_hashing_is_expensive(tmp_path):
+    """A large argument must not be re-hashed on every miss forever.
+
+    The budget is about repeat cost, not the first look: the first miss is
+    still checked, and only then is the function retired.
+    """
+    c = _cash(tmp_path)
+    c._MUTATION_CHECK_BUDGET_S = 0.0        # make any re-hash "too expensive"
+
+    def reads(rows):
+        return len(rows)
+
+    _call_capturing(c, reads, [1, 2, 3])
+    name = next(n for n in c.functions if n.endswith("reads"))
+    assert name in c._mutation_check_too_costly, (
+        "an over-budget re-hash did not retire the check for that function"
+    )

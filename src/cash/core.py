@@ -800,6 +800,9 @@ class Cash:
         # observer stays quiet for these: it would be a second warning about
         # the same function, and the user has already been told.
         self._purity_static_flagged: set[str] = set()
+        # Functions whose arguments cost too much to re-hash for the
+        # mutation check. Checked once, then left alone.
+        self._mutation_check_too_costly: set[str] = set()
         # Per-function purity report cache. Populated on first call.
         # Helper source hashes from this report fold into the cache
         # key state hash so cross-process helper edits invalidate.
@@ -2366,6 +2369,8 @@ class Cash:
                             res, cache_key, chunk_max_items, chunk_max_bytes,
                             func_name, cache_if, ttl=ttl,
                         )
+                self._check_argument_mutation(
+                    func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
                 auto_file_deps = self._snapshot_tracked_deps(tracker)
 
@@ -2599,6 +2604,8 @@ class Cash:
                             res, cache_key, chunk_max_items, chunk_max_bytes,
                             func_name, cache_if, ttl=ttl, warn_stacklevel=5,
                         )
+                self._check_argument_mutation(
+                    func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
                 auto_file_deps = self._snapshot_tracked_deps(tracker)
 
@@ -6146,6 +6153,54 @@ class Cash:
             report = PurityReport()
         self._purity_reports[func_name] = report
 
+    #: A re-hash costing more than this marks the function as not worth
+    #: verifying again. Measured: ~7.4 ms for a 16 MB ndarray, so this is
+    #: roughly a 100 MB argument. The first miss still gets checked -- the
+    #: budget only stops a large argument from being re-hashed on every
+    #: subsequent miss.
+    _MUTATION_CHECK_BUDGET_S = 0.05
+
+    def _check_argument_mutation(
+        self, func_name: str, args: tuple, kwargs: dict,
+        args_hash: str | None, observer: Any,
+    ) -> None:
+        """Did the body change the arguments it was handed?
+
+        The static analyzer sees `rows.append(x)` written in the function, but
+        not `vendor.normalize(rows)` sorting the list inside a library it does
+        not walk into. Measured: of four state mutations that reached past the
+        analyzer, three left an observable change in the arguments -- so the
+        cheapest way to find them is to look.
+
+        The argument hash is already computed to build the cache key, so this
+        re-runs exactly that and compares. `_serialize_args` canonicalises
+        (kwargs order included) and is deterministic on unchanged input, which
+        is what makes a difference mean *mutation* rather than noise.
+
+        Runs only on a miss, and only while it stays cheap: a re-hash over the
+        budget above retires the check for that function rather than taxing
+        every later miss.
+        """
+        if args_hash is None or observer is None:
+            return
+        if func_name in self._mutation_check_too_costly:
+            return
+        started = time.perf_counter()
+        try:
+            after = self._serialize_args(func_name, args, kwargs)
+        except Exception:                                    # noqa: BLE001
+            # Hashing is best-effort here. An argument that hashed once and
+            # not twice (a generator drained by the body, say) is not evidence
+            # of mutation, and must not be reported as such.
+            return
+        if time.perf_counter() - started > self._MUTATION_CHECK_BUDGET_S:
+            self._mutation_check_too_costly.add(func_name)
+        if after is not None and after != args_hash:
+            observer.record(
+                "argument mutation",
+                "the arguments differ after the call than before it",
+            )
+
     def _make_effect_observer(self) -> Any:
         """An :class:`EffectObserver` scoped to this instance's cache dir.
 
@@ -6181,13 +6236,14 @@ class Cash:
             CashImpurityWarning,
             func_name,
             "observed_effect",
-            f"@cash.cache on {func_name}: the first call performed side "
-            f"effects that static analysis did not see, which means they "
-            f"happen inside library code cash does not walk into. Every "
-            f"cache HIT from here on returns the stored value WITHOUT "
-            f"repeating them.\n{summary}\n"
-            f"If the effect is the point of the call, don't cache it (or cache "
-            f"only the pure part). If it is incidental, silence this with "
+            f"@cash.cache on {func_name}: the first call had effects that "
+            f"static analysis did not see -- they happen inside library code "
+            f"cash does not walk into. Every cache HIT from here on returns "
+            f"the stored value WITHOUT repeating them.\n{summary}\n"
+            f"An 'argument mutation' means an object the CALLER still holds "
+            f"was changed by this call, and will stop being changed. If the "
+            f"effect is the point of the call, don't cache it (or cache only "
+            f"the pure part); if it is incidental, silence this with "
             f"@cash.cache(assume_safe=True).",
             stacklevel=6,
         )

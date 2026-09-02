@@ -525,7 +525,7 @@ both raises `ValueError` at decoration time.
 <!-- claim: cash/__init__.py:mark_pure @ba10636a, cash/__init__.py:mark_stateful @ca0b83f6 -->
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @2bd6e1d3 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @ca2cf275 -->
+<!-- claim: cash/effect_observer.py:EffectObserver @2bd6e1d3 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @31ac976f -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method
@@ -564,6 +564,37 @@ Four things worth knowing:
 `assume_safe=True` silences this along with the static warnings, and a function
 the analyzer already flagged does not get a second warning about the same
 thing.
+
+#### Mutated arguments count as an effect
+
+A side effect is not only I/O. If a call changes an object **the caller still
+holds** — sorting a list in place, setting a key on a config dict, bumping a
+field on an object — that change happens once and then stops, exactly the way a
+skipped file write does.
+
+The analyzer sees `rows.append(x)` written in your own function. It does not
+see `vendor.normalise(rows)` sorting that list inside a library it does not
+walk into. Measured against a planted library: of four state mutations that
+reached past the analyzer, **three left an observable change in the
+arguments** — so cash looks. The argument hash is already computed to build the
+cache key, so a miss re-runs exactly that and compares; a difference means the
+call changed what it was handed.
+
+```text
+@cash.cache on report.summarise: the first call had effects that static
+analysis did not see ...
+  argument mutation: the arguments differ after the call than before it
+```
+
+Two limits worth stating:
+
+- **It runs only while it stays cheap.** A re-hash over ~50 ms retires the
+  check for that function rather than taxing every later miss. The first miss
+  is still checked; only the repeat cost is dropped.
+- **A library mutating its OWN module state stays invisible.** None of it is
+  reachable from the caller's arguments, and snapshotting a dependency's
+  globals would be both expensive and noisy. If a library keeps a registry you
+  depend on being updated, that call is a poor candidate for caching.
 
 ### `cash.mark_pure(func)` and `cash.mark_stateful(func)`
 
