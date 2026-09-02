@@ -41,8 +41,9 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
 
 ??? question "Why did `@cash.cache` raise `CashImpureFunctionError`?"
     The function resolves a dependency from a runtime value cash can't track —
-    `eval`/`exec`, dynamic dispatch via `getattr(obj, name)()`, or
-    `importlib.import_module` — so a cached result could go silently stale, and
+    `eval`/`exec`, dynamic dispatch via `getattr(obj, name)()`,
+    `getattr(mod, "exec")(...)`, or `importlib.import_module` — so a cached
+    result could go silently stale, and
     cash refuses to cache it by default. Pass `@cash.cache(assume_safe=True)` to
     cache anyway, or refactor to a statically-named call. See
     [the decorator guide](decorator.md).

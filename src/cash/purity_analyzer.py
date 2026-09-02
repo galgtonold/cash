@@ -95,6 +95,30 @@ ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
 ISSUE_MUTABLE_GLOBAL = "mutable_global"
 
+#: Builtins whose whole job is to run code chosen at runtime. Reaching one of
+#: these through `getattr(x, "<name>")` is the same hazard as calling it
+#: directly, and the constant-name form otherwise slips past the dynamic
+#: dispatch rule (which only fires on a NON-constant name).
+_DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
+
+#: Higher-order callables whose FIRST POSITIONAL argument is the function they
+#: will call. Handing a parameter to one of these runs unknown code exactly as
+#: `cb()` does.
+_CALLABLE_FIRST_ARG = frozenset({
+    "map", "filter", "reduce", "partial", "starmap", "takewhile", "dropwhile",
+})
+
+#: Higher-order callables that take the function as a KEYWORD instead. These
+#: are split out because their first positional argument is the ITERABLE:
+#: `sorted(rows)` passes data, not code, and flagging it warned on one of the
+#: most ordinary lines in Python. Measured as a false positive before the split.
+_CALLABLE_VIA_KEYWORD = frozenset({
+    "sorted", "min", "max", "groupby", "nlargest", "nsmallest",
+})
+
+#: The keyword arguments that receive the callable on those.
+_CALLABLE_KEYWORDS = frozenset({"key", "default_factory", "cmp_to_key"})
+
 
 @dataclass(frozen=True)
 class PurityIssue:
@@ -309,6 +333,44 @@ class _PurityVisitor(ast.NodeVisitor):
             self.read_names.add(node.id)
         self.generic_visit(node)
 
+    def _param_passed_as_callable(self, node: ast.Call) -> bool:
+        """Flag `map(cb, xs)` / `sorted(xs, key=cb)` when `cb` is a parameter.
+
+        Returns True when an issue was recorded, so the caller can stop.
+        """
+        name = _get_call_name(node.func)
+        passed: list[str] = []
+
+        # Only the position that actually receives the callable is inspected.
+        if name in _CALLABLE_FIRST_ARG and node.args:
+            first = node.args[0]
+            if isinstance(first, ast.Name) and first.id in self._param_names:
+                passed.append(first.id)
+            elif isinstance(first, ast.Subscript):
+                passed.append(_describe_subscript(first))
+
+        if name in _CALLABLE_FIRST_ARG or name in _CALLABLE_VIA_KEYWORD:
+            for kw in node.keywords:
+                if kw.arg not in _CALLABLE_KEYWORDS:
+                    continue
+                if isinstance(kw.value, ast.Name) and kw.value.id in self._param_names:
+                    passed.append(kw.value.id)
+                elif isinstance(kw.value, ast.Subscript):
+                    passed.append(_describe_subscript(kw.value))
+
+        if not passed:
+            return False
+        self.issues.append(PurityIssue(
+            kind=ISSUE_DYNAMIC_PATTERN,
+            description=(
+                f"passes parameter {passed[0]!r} to {name}(), which calls it - "
+                f"the code that runs is chosen by the caller"
+            ),
+            where=self._qualname,
+            line=getattr(node, "lineno", 0),
+        ))
+        return True
+
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         if isinstance(node.func, ast.Name):
             self._name_call_nodes.append(node)
@@ -347,6 +409,10 @@ class _PurityVisitor(ast.NodeVisitor):
         does not (it was rebound to a tracked value).
         """
         tainted = {n for n, kinds in self._assign_kinds.items() if kinds == {"dynamic"}}
+        # A local bound only from a subscript is the temporary-variable
+        # spelling of `TABLE[k]()`, and carries that rule's severity rather
+        # than eval's: advisory, with `depends_on=` named as the remedy.
+        looked_up = {n for n, kinds in self._assign_kinds.items() if kinds == {"lookup"}}
         for node in self._name_call_nodes:
             name = node.func.id  # type: ignore[attr-defined]
             if name in tainted:
@@ -355,6 +421,17 @@ class _PurityVisitor(ast.NodeVisitor):
                     description=(
                         f"calls {name!r}, which was bound from a runtime value "
                         "(dynamic dispatch through a local)"
+                    ),
+                    where=self._qualname,
+                    line=getattr(node, "lineno", 0),
+                ))
+            elif name in looked_up:
+                self.issues.append(PurityIssue(
+                    kind=ISSUE_DYNAMIC_PATTERN,
+                    description=(
+                        f"calls {name!r}, which was looked up at runtime - "
+                        f"editing the callable it names will not invalidate; "
+                        f"name it with depends_on=[...]"
                     ),
                     where=self._qualname,
                     line=getattr(node, "lineno", 0),
@@ -417,6 +494,62 @@ class _PurityVisitor(ast.NodeVisitor):
                 where=self._qualname,
                 line=line,
             ))
+            return
+
+        # getattr(x, "exec")(...) -- a CONSTANT name, so the dynamic-dispatch
+        # rule above does not fire, yet what it reaches is the very thing that
+        # rule exists to stop. Measured: `getattr(builtins, "exec")("z = 5")`
+        # executed arbitrary source in silence while a bare `exec(...)` raised.
+        if (
+            isinstance(func_node, ast.Call)
+            and isinstance(func_node.func, ast.Name)
+            and func_node.func.id == "getattr"
+            and len(func_node.args) >= 2
+            and isinstance(func_node.args[1], ast.Constant)
+            and func_node.args[1].value in _DYNAMIC_BUILTIN_NAMES
+        ):
+            self.issues.append(PurityIssue(
+                kind=ISSUE_UNTRACKABLE_DEP,
+                description=(
+                    f"getattr(..., {func_node.args[1].value!r})(...) - reaches "
+                    f"{func_node.args[1].value} indirectly"
+                ),
+                where=self._qualname,
+                line=line,
+            ))
+            return
+
+        # Calling whatever a subscript yields: HANDLERS[name](), FUNCS[i](),
+        # globals()[name](), vars(mod)[name]().
+        #
+        # One AST shape covers every "look the code up at runtime" spelling,
+        # and cash cannot fold code it cannot name: editing the function in
+        # that table will not invalidate, which is a stale ANSWER rather than
+        # a skipped effect. Warned, not raised -- dispatch tables are ordinary
+        # Python and currently cache fine, so raising would break working code
+        # to report a risk the user may well have accepted. `depends_on=` is
+        # the documented remedy and the message says so.
+        if isinstance(func_node, ast.Subscript):
+            self.issues.append(PurityIssue(
+                kind=ISSUE_DYNAMIC_PATTERN,
+                description=(
+                    f"calls {_describe_subscript(func_node)} - the callable is "
+                    f"chosen at runtime, so editing it will not invalidate; "
+                    f"name it with depends_on=[...]"
+                ),
+                where=self._qualname,
+                line=line,
+            ))
+            return
+
+        # Handing a PARAMETER to a higher-order callable: map(cb, xs),
+        # sorted(key=cb), functools.reduce(cb, xs).
+        #
+        # `cb()` was already flagged above, but `map(cb, xs)` -- the same
+        # unknown code, called the same number of times -- was silent. The
+        # hazard does not change because the caller is `map` rather than the
+        # source line.
+        if self._param_passed_as_callable(node):
             return
 
         # Known-impure module-qualified calls (requests.post, os.system, ...).
@@ -544,7 +677,15 @@ class _PurityVisitor(ast.NodeVisitor):
         # Record the RHS kind for a simple ``name = ...`` so a dynamically-bound
         # local that is later called can be flagged (see finalize_taint).
         if len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            kind = "dynamic" if self._is_dynamic_source(node.value) else "other"
+            if self._is_dynamic_source(node.value):
+                kind = "dynamic"
+            elif isinstance(node.value, ast.Subscript):
+                # `cls = REGISTRY[k]; cls()` is the same runtime lookup as
+                # `REGISTRY[k]()` one line apart, and must not be punished
+                # harder for using a temporary: it warns, it does not raise.
+                kind = "lookup"
+            else:
+                kind = "other"
             self._assign_kinds.setdefault(node.targets[0].id, set()).add(kind)
         self.generic_visit(node)
 
@@ -1134,6 +1275,18 @@ import builtins as _builtins  # noqa: E402
 
 _PY_BUILTIN_NAMES = frozenset(dir(_builtins))
 _MODULE_MOD_GLOBALS_CACHE: dict[str, frozenset[str]] = {}
+
+
+def _describe_subscript(node: ast.Subscript) -> str:
+    """A short, readable name for `HANDLERS[k]` / `globals()[n]` in a message."""
+    base = node.value
+    if isinstance(base, ast.Name):
+        return f"{base.id}[...]"
+    if isinstance(base, ast.Call) and isinstance(base.func, ast.Name):
+        return f"{base.func.id}()[...]"
+    if isinstance(base, ast.Attribute):
+        return f"{base.attr}[...]"
+    return "a subscript"
 
 
 def _target_root_name(node: ast.AST) -> str | None:

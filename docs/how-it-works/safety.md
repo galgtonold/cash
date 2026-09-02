@@ -320,8 +320,9 @@ markers** for functions — see [The decorator path](decorator-path.md).
 <!-- claim: cash/core.py:Cash._surface_purity @8f789834, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
 The decorator takes one verdict further than the notebook path: a `@cash.cache`
 function whose body resolves a dependency from a **runtime value** cash can't
-track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`, or
-`importlib.import_module` — **raises `CashImpureFunctionError` by default**
+track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`,
+`getattr(mod, "exec")(...)`, or `importlib.import_module` — **raises
+`CashImpureFunctionError` by default**
 (caching correctness can't be guaranteed), rather than merely warning. Pass
 `@cash.cache(assume_safe=True)` to accept the risk. See
 [the decorator's purity gates](../decorator.md).

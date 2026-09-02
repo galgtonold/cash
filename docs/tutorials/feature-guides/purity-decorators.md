@@ -475,7 +475,8 @@ fetch_user.cache_info()["warnings"]
     Warn-and-cache is for ordinary side effects (I/O, mutations, discarded
     returns). A different class — a dependency resolved from a **runtime value**
     that cash can't track: `eval`/`exec`/`compile`, dynamic dispatch via
-    `getattr(obj, name)()`, or `importlib.import_module` — **raises
+    `getattr(obj, name)()`, `getattr(mod, "exec")(...)`, or
+    `importlib.import_module` — **raises
     `CashImpureFunctionError` on the first call even in default mode**, because a
     cached result could go silently stale. Pass `assume_safe=True` to cache it
     anyway, or refactor to a statically-named call.
@@ -619,6 +620,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @807e8d54 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @60d9406b, cash/purity_analyzer.py:_CALLABLE_FIRST_ARG @1788fba2, cash/purity_analyzer.py:_CALLABLE_VIA_KEYWORD @3fa3e045 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -627,9 +629,23 @@ it flags:
 
 - **Impure calls** — `requests.post`, `os.system`, file writes,
   `logging.*`, pandas `inplace=True`, …
-- **Dynamic patterns** — `eval`/`exec`/`compile`,
-  `getattr(obj, name)()` with non-constant name, calling a parameter
-  as a function
+- **Dynamic patterns** — code chosen at runtime, which cash cannot fold
+  into the key. Two severities, because two different things are at stake:
+    - **Raises** (see the warning box above): `eval`/`exec`/`compile`,
+      `getattr(obj, name)()` with a non-constant name, `importlib`, and
+      `getattr(mod, "exec")(...)` — the constant-name spelling that reaches
+      the same builtin.
+    - **Warns**: calling something looked up at runtime —
+      `HANDLERS[key]()`, `FUNCS[i]()`, `globals()[name]()`, and the
+      temporary-variable form `fn = HANDLERS[key]; fn()`; and handing a
+      parameter to a higher-order callable that will call it —
+      `map(cb, xs)`, `functools.reduce(cb, xs)`, `min(rows, key=cb)`.
+      Dispatch tables are ordinary Python and cache correctly *today*; the
+      risk is that editing the dispatched-to function does not invalidate.
+      `depends_on=[...]` names it, and the message says so.
+
+    Passing **data** to a higher-order builtin is not flagged: `sorted(rows)`,
+    `max(rows)`, `filter(None, rows)` pass an iterable, not code.
 - **Discarded calls** — `f(x)` as a statement (return thrown away)
   when `f` isn't known-pure
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript

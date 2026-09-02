@@ -114,22 +114,27 @@ print(report.format())
 
 ### Issue kinds
 
-The four `kind` values you'll see in `PurityIssue.kind` are
-exported as module-level constants:
+The six `kind` values you'll see in `PurityIssue.kind` are
+exported as module-level constants. Five of them **warn**;
+`ISSUE_UNTRACKABLE_DEP` is the one that **raises** in default mode:
 
 | Constant | Value | Meaning |
 |---|---|---|
 | `ISSUE_IMPURE_CALL` | `"impure_call"` | Known I/O / side-effecting call (`requests.post`, `os.system`, `to_csv`, pandas `inplace=True`, `print`, `logging.*`, etc.) |
-| `ISSUE_DYNAMIC_PATTERN` | `"dynamic_pattern"` | Explicit dynamism — `eval`/`exec`/`compile`, `getattr(obj, name)()` with non-constant name, calling a parameter as a function |
+| `ISSUE_DYNAMIC_PATTERN` | `"dynamic_pattern"` | Code chosen at runtime that cash can still cache, but cannot invalidate on: calling a parameter (`cb()`), calling a runtime lookup (`HANDLERS[key]()`, `globals()[name]()`), or handing a parameter to a higher-order callable that will call it (`map(cb, xs)`, `min(rows, key=cb)`) |
+| `ISSUE_UNTRACKABLE_DEP` | `"untrackable_dep"` | Explicit dynamism cash refuses to cache silently — `eval`/`exec`/`compile`, `getattr(obj, name)()` with a non-constant name, `getattr(mod, "exec")(...)`, `importlib.import_module`. **Raises `CashImpureFunctionError` on the first call even in default mode**; `assume_safe=True` suppresses it |
 | `ISSUE_DISCARDED_CALL` | `"discarded_call"` | Bare-statement call whose return value is thrown away, with a callee not in `KNOWN_PURE_BUILTINS` |
 | `ISSUE_SCOPE_MUTATION` | `"scope_mutation"` | `global`/`nonlocal` declaration, attribute assignment, subscript assignment, augmented-assign to same |
+| `ISSUE_MUTABLE_GLOBAL` | `"mutable_global"` | Reads a module-level global that is reassigned or mutated somewhere in its module, so the cached result won't reflect changes to it |
 
 ```python
 from cash.purity_analyzer import (
     ISSUE_IMPURE_CALL,
     ISSUE_DYNAMIC_PATTERN,
+    ISSUE_UNTRACKABLE_DEP,
     ISSUE_DISCARDED_CALL,
     ISSUE_SCOPE_MUTATION,
+    ISSUE_MUTABLE_GLOBAL,
 )
 
 if any(i.kind == ISSUE_IMPURE_CALL for i in report.issues):

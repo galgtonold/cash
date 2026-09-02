@@ -614,10 +614,15 @@ By default, `@cash.cache` runs a static analyzer on the function body
   function is **still cached**.
 - **Untrackable dependencies** — a call resolved from a *runtime value*, so cash
   can't tell when it changes: `eval`/`exec`/`compile`, dynamic dispatch via
-  `getattr(obj, name)()`, or `importlib.import_module` — **raise
-  `CashImpureFunctionError` by default**, because a cached result could go
-  silently stale. Pass `assume_safe=True` to cache anyway, or refactor to a
-  statically-named call.
+  `getattr(obj, name)()`, `getattr(mod, "exec")(...)`, or
+  `importlib.import_module` — **raise `CashImpureFunctionError` by default**,
+  because a cached result could go silently stale. Pass `assume_safe=True` to
+  cache anyway, or refactor to a statically-named call.
+- **Runtime lookups** — `HANDLERS[key]()`, `globals()[name]()`, or handing a
+  parameter to something that calls it (`map(cb, xs)`, `min(rows, key=cb)`) →
+  a warning, and the function is **still cached**. A dispatch table caches
+  correctly; what it cannot do is notice that you edited the function it
+  dispatches to. Name that function with `depends_on=[...]` and it will.
 
 The analyzer stops at library boundaries, so an effect *inside* a dependency is
 reachable only by the method's name (`session.post`, `cur.execute`). Because a
