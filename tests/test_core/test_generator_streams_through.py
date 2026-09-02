@@ -29,6 +29,7 @@ What must hold at the same time, and is why this is not a two-line change:
 """
 from __future__ import annotations
 
+import itertools
 import time
 import warnings
 
@@ -56,7 +57,39 @@ def _drain(make_iter):
     return arrivals, items
 
 
+def test_the_producer_never_runs_ahead_of_the_consumer(c):
+    """The streaming assertion, without a clock.
+
+    A wall-clock threshold is the one flake class this suite keeps
+    rediscovering, and it is not needed: buffering and streaming differ in
+    OBSERVABLE ORDER, not just in timing. If the generator were drained first,
+    `produced` would already hold every item when the consumer sees the first.
+    """
+    produced: list[int] = []
+
+    @c.cache
+    def stream():
+        for i in range(5):
+            produced.append(i)
+            yield i
+
+    seen: list[int] = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for item in stream():
+            seen.append(item)
+            assert len(produced) == len(seen), (
+                f"producer is {len(produced) - len(seen)} items ahead -- "
+                f"it was drained, not streamed"
+            )
+
+    assert seen == [0, 1, 2, 3, 4]
+
+
 def test_the_first_item_arrives_before_the_last_is_produced(c):
+    """The same property in wall-clock terms, kept because it is what a user
+    actually feels. Generous threshold: it only has to separate 'streamed'
+    from 'the whole 0.4s of work happened first'."""
     @c.cache
     def slow_stream():
         for i in range(4):
@@ -68,10 +101,9 @@ def test_the_first_item_arrives_before_the_last_is_produced(c):
         arrivals, items = _drain(slow_stream)
 
     assert items == [0, 1, 2, 3]
-    assert arrivals[0] < 0.25, (
-        f"first item at {arrivals[0]:.2f}s -- the generator was buffered"
+    assert arrivals[0] < arrivals[-1] / 2, (
+        f"first item at {arrivals[0]:.2f}s of {arrivals[-1]:.2f}s -- buffered"
     )
-    assert arrivals[-1] >= 0.35, "the last item cannot arrive before it is produced"
 
 
 def test_the_replay_still_hits_and_is_complete(c):
@@ -192,3 +224,147 @@ def test_a_slow_consumer_does_not_inflate_the_recorded_time(c):
     assert quick_stream.cache_info()["total_time_saved"] - saved < 0.3, (
         "the caller's sleep was charged to the function"
     )
+
+
+# --------------------------------------------------------------------------
+# The rest of the hazard list. Each of these was named as a risk when the
+# change was designed; a named risk with no test is just a comment.
+# --------------------------------------------------------------------------
+def test_the_caller_keeps_items_received_before_an_exception(c):
+    """Streaming changes error semantics, and this pins the new ones.
+
+    Buffering meant the caller saw nothing when the producer raised. It now
+    sees everything produced up to the failure -- which is what the uncached
+    generator does, and the whole point of not changing behaviour.
+    """
+    @c.cache
+    def stream():
+        yield 0
+        yield 1
+        raise RuntimeError("provider died")
+
+    seen = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(RuntimeError):
+            for item in stream():
+                seen.append(item)
+    assert seen == [0, 1], "items produced before the failure must reach the caller"
+
+
+def test_abandoning_a_multi_chunk_stream_leaves_no_chunks_behind(c):
+    """Chunks written before the caller gave up are unreferenced -- no manifest
+    names them -- so they are dropped. Otherwise every abandoned run leaks."""
+    @c.cache(chunk_max_items=2)
+    def stream():
+        yield from range(20)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        it = stream()
+        for _ in range(7):          # forces at least three chunk writes
+            next(it)
+        it.close()
+
+    leftover = [e for e in c.backend.list_entries()
+                if "chunk_" in str(e.get("key", ""))]
+    assert not leftover, f"orphan chunks left behind: {leftover}"
+
+
+def test_an_infinite_generator_streams_and_simply_never_caches(c):
+    """This used to be a documented footgun: 'the first call never returns',
+    because caching drained it. It streams now; it just never commits."""
+    calls = []
+
+    @c.cache
+    def forever():
+        calls.append(1)
+        i = 0
+        while True:
+            yield i
+            i += 1
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        first = list(itertools.islice(forever(), 5))
+        second = list(itertools.islice(forever(), 5))
+
+    assert first == second == [0, 1, 2, 3, 4]
+    assert len(calls) == 2, "nothing can be cached -- it never finishes"
+
+
+def test_a_cached_generator_consuming_another_one_streams(c):
+    """Nested cached generators. The tracker keeps a token stack, so the inner
+    suspend/resume nests inside the outer one -- asserted rather than assumed.
+    """
+    inner_produced: list[int] = []
+
+    @c.cache
+    def inner():
+        for i in range(4):
+            inner_produced.append(i)
+            yield i
+
+    @c.cache
+    def outer():
+        for value in inner():
+            yield value * 10
+
+    seen = []
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        for item in outer():
+            seen.append(item)
+            assert len(inner_produced) == len(seen), "the inner one was drained"
+
+    assert seen == [0, 10, 20, 30]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert list(outer()) == [0, 10, 20, 30], "and it still caches"
+
+
+def test_argument_mutation_is_still_reported_for_a_generator(c):
+    """`_check_argument_mutation` used to run right after the call. It now runs
+    at exhaustion, so it needs to be shown still running at all."""
+    @c.cache
+    def stream(rows):
+        rows.append("mutated")
+        yield len(rows)
+
+    rows = ["a"]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        list(stream(rows))
+        messages = [str(w.message) for w in caught]
+
+    assert any("mutat" in m.lower() for m in messages), messages
+
+
+def test_a_write_inside_a_LIBRARY_is_still_observed(c, tmp_path):
+    """Same move for the runtime effect observer: it reports at exhaustion now.
+
+    Two things are load-bearing in the shape below. `shutil.copyfile` rather
+    than `path.write_text`, because the analyzer catches the latter by name
+    and then suppresses the observer as a duplicate. And its return value is
+    USED, because a bare call is caught by the discarded-return heuristic and
+    suppressed the same way. Both earlier versions of this test passed while
+    proving only that the STATIC pass runs.
+    """
+    import shutil
+
+    source = tmp_path / "src.txt"
+    source.write_text("payload", encoding="utf-8")
+    target = tmp_path / "copied.txt"
+
+    @c.cache
+    def stream():
+        yield 1
+        yield str(shutil.copyfile(source, target))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert len(list(stream())) == 2
+        messages = [str(w.message) for w in caught]
+
+    assert target.exists()
+    assert any("static analysis did not see" in m for m in messages), messages
