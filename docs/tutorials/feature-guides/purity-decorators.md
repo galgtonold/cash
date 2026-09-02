@@ -456,8 +456,9 @@ def fetch_user(uid):
 fetch_user(42)
 # CashImpurityWarning: @cash.cache on __main__.fetch_user: the analyzer
 # found likely side effects or scope mutations. Cached results may not
-# reflect side-effect intent. Suppress with @cash.cache(assume_safe=True)
-# after auditing, or refactor.
+# reflect side-effect intent. Put `# @cash:assume-safe` on each line you
+# have audited, or refactor. @cash.cache(assume_safe=True) waives the
+# whole function instead, including anything added to it later.
 #   in __main__.fetch_user:
 #     line 2: [impure_call] requests.get() — known I/O / side-effecting
 ```

@@ -6351,9 +6351,11 @@ class Cash:
                 f"@cash.cache on {func_name}: a dependency is resolved from a "
                 f"runtime value, so cash cannot tell when it changes and a cached "
                 f"result could be silently stale. Caching correctness cannot be "
-                f"guaranteed for this function.\nPass @cash.cache(assume_safe=True) "
-                f"to cache it anyway (you accept the staleness risk), or refactor "
-                f"to a statically-named call.\n{untrackable_summary}"
+                f"guaranteed for this function.\nPut `# @cash:assume-safe` on "
+                f"the line named below to accept the risk for that statement "
+                f"alone, pass @cash.cache(assume_safe=True) to waive the whole "
+                f"function, or refactor to a statically-named "
+                f"call.\n{untrackable_summary}"
             )
 
         self._purity_static_flagged.add(func_name)
@@ -6361,8 +6363,9 @@ class Cash:
         if mode == "strict":
             raise CashImpureFunctionError(
                 f"@cash.cache(strict=True) on {func_name}: purity issues "
-                f"detected. Either fix the function, mark callees with "
-                f"@pure / @stateful, or relax to assume_safe=True.\n{summary}"
+                f"detected. Fix the function, mark callees with "
+                f"@pure / @stateful, put `# @cash:assume-safe` on the lines you "
+                f"have audited, or relax to assume_safe=True.\n{summary}"
             )
         # mode == "warn"
         self._warn_once(
@@ -6371,8 +6374,10 @@ class Cash:
             "purity",
             f"@cash.cache on {func_name}: the analyzer found likely "
             f"side effects or scope mutations. Cached results may not "
-            f"reflect side-effect intent. Suppress with "
-            f"@cash.cache(assume_safe=True) after auditing, or refactor.\n{summary}",
+            f"reflect side-effect intent. Put `# @cash:assume-safe` on each "
+            f"line you have audited, or refactor. "
+            f"@cash.cache(assume_safe=True) waives the whole function instead, "
+            f"including anything added to it later.\n{summary}",
             stacklevel=6,
         )
 
