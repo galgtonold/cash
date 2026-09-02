@@ -395,6 +395,47 @@ class _ListCachedIterator:
         )
 
 
+class _StreamingCachedIterator:
+    """Passes the producer's items through as they arrive, caching at the end.
+
+    Returned on a MISS. `@cash.cache` should not change how a function
+    behaves, and for a generator it used to: cash drained the whole thing
+    before returning anything, so a streamed response arrived all at once
+    after the full latency. Measured on a token stream -- 494ms to first item
+    uncached, 2444ms cached, the entire completion in one go.
+
+    Same surface as the two replay iterators, deliberately: no `send`/`throw`,
+    because a cached generator cannot support them on the hit either.
+    """
+
+    __slots__ = ("_gen",)
+
+    def __init__(self, gen):
+        self._gen = gen
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return next(self._gen)
+
+    def close(self):
+        """Abandon the stream. Nothing is cached -- see `_stream_and_store`."""
+        self._gen.close()
+
+    def send(self, value):
+        raise AttributeError(
+            "cached generator: .send() is not supported. If you "
+            "need send() semantics, the function cannot be cached."
+        )
+
+    def throw(self, *args, **kwargs):
+        raise AttributeError(
+            "cached generator: .throw() is not supported. If you "
+            "need throw() semantics, the function cannot be cached."
+        )
+
+
 class _ChunkedCachedIterator:
     """Lazy iterator that reads cached chunks from the backend on demand.
 
@@ -2379,81 +2420,41 @@ class Cash:
                     body_seconds = time.perf_counter() - body_t0
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
-                    if is_iter:
-                        # A generator is lazy: its file reads happen while it is
-                        # consumed, so materialize the chunks INSIDE the tracker.
-                        # Otherwise the body's reads (e.g. open()/read_csv inside
-                        # the generator) land outside the tracked scope, the
-                        # manifest records no file deps, and the cached iterator
-                        # never invalidates when the file changes.
-                        manifest, single_chunk_buffer = self._write_chunks(
-                            res, cache_key, chunk_max_items, chunk_max_bytes,
-                            func_name, cache_if, ttl=ttl,
-                        )
+
+                # A generator is handed straight back, wrapped, and cached only
+                # once the caller has drained it. Draining it here instead --
+                # which is what this did -- meant a streamed response arrived
+                # in one lump after the full latency, so `@cash.cache` changed
+                # how the function behaved. `_stream_and_store` carries the
+                # tracker into each production step so the lazy file reads that
+                # motivated the old placement are still recorded.
+                if is_iter:
+                    # Logged HERE, not at exhaustion. `stats_wrapper` drains
+                    # this log the moment the wrapper returns, so an entry
+                    # written when the caller finishes iterating is never
+                    # counted -- and the next call re-counts the stale one.
+                    # The miss is a fact about the LOOKUP, which has already
+                    # happened. The produce time still reaches the entry, via
+                    # the manifest, which is what a later hit reports as saved.
+                    self._log_decorator_call(
+                        func_name, cache_hit=False,
+                        execution_time=time.perf_counter() - call_start,
+                        args_hash=args_hash, cache_key=cache_key,
+                    )
+                    return _StreamingCachedIterator(self._stream_and_store(
+                        res, cache_key=cache_key, func_name=func_name,
+                        metadata=metadata, tracker=tracker, observer=observer,
+                        rng_new=rng_new, args=args, kwargs=kwargs,
+                        args_hash=args_hash,
+                        current_state_hash=current_state_hash, ttl=ttl,
+                        cache_if=cache_if, chunk_max_items=chunk_max_items,
+                        chunk_max_bytes=chunk_max_bytes,
+                    ))
+
                 self._check_argument_mutation(
                     func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
                 auto_file_deps = self._snapshot_tracked_deps(tracker)
-
-                # Route one-shot iterators through the chunked-storage path.
-                if is_iter:
-                    execution_time = time.perf_counter() - call_start
-
-                    if single_chunk_buffer is not None:
-                        # Single-chunk path. Apply cache_if before writing.
-                        # Skip the write exactly once when THIS call revealed that the function draws:
-                        # its key was built before we knew, so an entry stored now carries no seed
-                        # epoch and would be rebuilt and matched forever -- serving a result computed
-                        # under a seed the user has since changed. Next call keys it correctly.
-                        should_cache = not rng_new
-                        if cache_if is not None:
-                            try:
-                                should_cache = bool(cache_if(single_chunk_buffer))
-                            except Exception as e:
-                                self._warn_cache_if_raised(func_name, e)
-                                should_cache = False
-                        if should_cache and self._refuses_identity_coupled(
-                            func_name, single_chunk_buffer
-                        ):
-                            should_cache = False
-
-                        if should_cache and single_chunk_buffer:
-                            # Write the one chunk now that the predicate approved.
-                            self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
-                            self._store_chunked_manifest(
-                                cache_key, func_name, manifest, metadata,
-                                ttl, current_state_hash, args_hash,
-                                execution_time, auto_file_deps,
-                            )
-                        elif should_cache and not single_chunk_buffer:
-                            # Empty iterator - still write a (zero-chunk) manifest
-                            # so a hit returns an empty iterator instead of recomputing.
-                            self._store_chunked_manifest(
-                                cache_key, func_name, manifest, metadata,
-                                ttl, current_state_hash, args_hash,
-                                execution_time, auto_file_deps,
-                            )
-                        # else: cache_if rejected - return result un-cached.
-
-                        self._log_decorator_call(
-                            func_name, cache_hit=False,
-                            execution_time=execution_time,
-                            args_hash=args_hash, cache_key=cache_key,
-                        )
-                        return _ListCachedIterator(single_chunk_buffer)
-
-                    # Multi-chunk path: chunks already written. Write manifest.
-                    self._store_chunked_manifest(
-                        cache_key, func_name, manifest, metadata,
-                        ttl, current_state_hash, args_hash,
-                        execution_time, auto_file_deps,
-                    )
-                    self._log_decorator_call(
-                        func_name, cache_hit=False,
-                        execution_time=execution_time,
-                        args_hash=args_hash, cache_key=cache_key,
-                    )
-                    return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
                 # Non-iterator return: existing single-blob path.
                 execution_time = time.perf_counter() - call_start
@@ -2616,74 +2617,39 @@ class Cash:
                     body_seconds = time.perf_counter() - body_t0
                     rng_new = self._note_rng_draw(func_name, rng_pre)
                     is_iter = _is_one_shot_iterator(res)
-                    if is_iter:
-                        # A returned sync generator is lazy - materialize its chunks
-                        # inside the tracker so file reads in the generator body are
-                        # recorded as deps (see the sync path for the full rationale).
-                        # warn_stacklevel=5 for async: one fewer frame than sync.
-                        manifest, single_chunk_buffer = self._write_chunks(
-                            res, cache_key, chunk_max_items, chunk_max_bytes,
-                            func_name, cache_if, ttl=ttl, warn_stacklevel=5,
-                        )
+
+                # An async function returning a SYNC generator streams through
+                # the same way -- see `_stream_and_store`. Leaving this branch
+                # on the drain-first path would have made the behaviour differ
+                # between `def` and `async def` for the same generator, which
+                # is exactly the kind of split nobody finds until it bites.
+                if is_iter:
+                    # Logged HERE, not at exhaustion. `stats_wrapper` drains
+                    # this log the moment the wrapper returns, so an entry
+                    # written when the caller finishes iterating is never
+                    # counted -- and the next call re-counts the stale one.
+                    # The miss is a fact about the LOOKUP, which has already
+                    # happened. The produce time still reaches the entry, via
+                    # the manifest, which is what a later hit reports as saved.
+                    self._log_decorator_call(
+                        func_name, cache_hit=False,
+                        execution_time=time.perf_counter() - call_start,
+                        args_hash=args_hash, cache_key=cache_key,
+                    )
+                    return _StreamingCachedIterator(self._stream_and_store(
+                        res, cache_key=cache_key, func_name=func_name,
+                        metadata=metadata, tracker=tracker, observer=observer,
+                        rng_new=rng_new, args=args, kwargs=kwargs,
+                        args_hash=args_hash,
+                        current_state_hash=current_state_hash, ttl=ttl,
+                        cache_if=cache_if, chunk_max_items=chunk_max_items,
+                        chunk_max_bytes=chunk_max_bytes,
+                    ))
+
                 self._check_argument_mutation(
                     func_name, args, kwargs, args_hash, observer)
                 self._report_observed_effects(func_name, observer)
                 auto_file_deps = self._snapshot_tracked_deps(tracker)
-
-                # Iterator returns: chunked storage path.
-                if is_iter:
-                    execution_time = time.perf_counter() - call_start
-
-                    if single_chunk_buffer is not None:
-                        # Skip the write exactly once when THIS call revealed that the function draws:
-                        # its key was built before we knew, so an entry stored now carries no seed
-                        # epoch and would be rebuilt and matched forever -- serving a result computed
-                        # under a seed the user has since changed. Next call keys it correctly.
-                        should_cache = not rng_new
-                        if cache_if is not None:
-                            try:
-                                should_cache = bool(cache_if(single_chunk_buffer))
-                            except Exception as e:
-                                self._warn_cache_if_raised(func_name, e, stacklevel=6)
-                                should_cache = False
-                        if should_cache and self._refuses_identity_coupled(
-                            func_name, single_chunk_buffer
-                        ):
-                            should_cache = False
-
-                        if should_cache and single_chunk_buffer:
-                            self._write_one_chunk(cache_key, 0, single_chunk_buffer, ttl=ttl)
-                            self._store_chunked_manifest(
-                                cache_key, func_name, manifest, metadata,
-                                ttl, current_state_hash, args_hash,
-                                execution_time, auto_file_deps,
-                            )
-                        elif should_cache and not single_chunk_buffer:
-                            self._store_chunked_manifest(
-                                cache_key, func_name, manifest, metadata,
-                                ttl, current_state_hash, args_hash,
-                                execution_time, auto_file_deps,
-                            )
-
-                        self._log_decorator_call(
-                            func_name, cache_hit=False,
-                            execution_time=execution_time,
-                            args_hash=args_hash, cache_key=cache_key,
-                        )
-                        return _ListCachedIterator(single_chunk_buffer)
-
-                    # Multi-chunk path.
-                    self._store_chunked_manifest(
-                        cache_key, func_name, manifest, metadata,
-                        ttl, current_state_hash, args_hash,
-                        execution_time, auto_file_deps,
-                    )
-                    self._log_decorator_call(
-                        func_name, cache_hit=False,
-                        execution_time=execution_time,
-                        args_hash=args_hash, cache_key=cache_key,
-                    )
-                    return _ChunkedCachedIterator(self, cache_key, manifest["n_chunks"])
 
                 # Non-iterator return: single-blob path (unchanged).
                 execution_time = time.perf_counter() - call_start
@@ -5870,44 +5836,55 @@ class Cash:
                 stacklevel=6,
             )
 
-    def _write_chunks(
-        self,
-        iterator: Any,
-        cache_key: str,
-        chunk_max_items: int,
-        chunk_max_bytes: int,
-        func_name: str,
-        cache_if: Callable[[Any], bool] | None,
-        *,
-        ttl: int | None = None,
-        warn_stacklevel: int = 6,
-    ) -> tuple[dict[str, Any], list[Any] | None]:
-        """Stream *iterator* into chunks, writing each chunk to the backend.
+    def _warn_cache_if_bypassed(self, func_name: str, chunk_max_items: int,
+                                chunk_max_bytes: int, stacklevel: int = 6) -> None:
+        """One-shot: the result outgrew a single chunk, so cache_if cannot run.
 
-        Returns ``(manifest, single_chunk_buffer)``. The manifest is a
-        dict describing the layout (``n_chunks``, ``total_items``). The
-        ``single_chunk_buffer`` is non-None only when the iterator
-        exhausted before the first threshold was reached AND no chunks
-        have been written yet - i.e. the entire result fits in a single
-        chunk and the caller may want to apply ``cache_if`` to it before
-        committing.
+        Applying it would mean materializing every chunk back into memory,
+        undoing the bound that chunking exists to provide.
+        """
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            func_name,
+            "",
+            f"@cash.cache on {func_name}: cache_if was bypassed "
+            f"because the result exceeded a single chunk "
+            f"(chunk_max_items={chunk_max_items}, "
+            f"chunk_max_bytes={chunk_max_bytes}). The result "
+            f"is cached without consulting the predicate. To "
+            f"keep cache_if gating in effect, lower the chunk "
+            f"thresholds or materialize the iterator manually.",
+            stacklevel=stacklevel,
+        )
 
-        When the buffer crosses a threshold and we close the second
-        chunk while ``cache_if is not None``, emit a one-shot
-        `CashCacheIneffectiveWarning` documenting that the
-        predicate is bypassed for multi-chunk results.
+    def _stream_and_store(
+        self, source, *, cache_key, func_name, metadata, tracker, observer,
+        rng_new, args, kwargs, args_hash, current_state_hash, ttl, cache_if,
+        chunk_max_items, chunk_max_bytes,
+    ):
+        """Yield the producer's items as they come, and cache once it ends.
 
-        ``warn_stacklevel`` controls which frame the bypass warning
-        attributes to. Default ``6`` is correct for the sync caller
-        (``user -> stats_wrapper -> wrapper -> _compute_and_store ->
-        _write_chunks -> _warn_once``). Async callers pass ``5``
-        (one fewer frame - no ``_compute_and_store`` closure).
+        Three things have to hold at once, and they are why this is not simply
+        a `yield` added to `_write_chunks`:
 
-        Chunks are written under keys ``f"{cache_key}:chunk_{i}"``.
-        Chunk metadata is minimal - the manifest at *cache_key* is the
-        authoritative entry; chunks themselves carry only enough
-        metadata for the backend to deserialize them (timestamp, key,
-        execution_time=0).
+        **The tracker is entered per `next()`, not around the whole loop.** A
+        generator's file reads happen while it is consumed, so the old code
+        drained it inside the tracker to catch them. Holding the tracker open
+        across the caller's loop instead would attribute the CALLER's reads to
+        this function. Scoping it to each production step records the
+        producer's lazy reads and nothing else. `FileAccessTracker` keeps a
+        token stack, so repeated entry accumulates rather than nesting wrong.
+
+        **Nothing is stored unless the producer ran to exhaustion.** A caller
+        that breaks out, or a producer that raises, leaves no entry -- a
+        truncated result under the full result's key is a wrong answer, not a
+        slow one. Chunks already flushed are removed on the way out. The cost
+        is real and accepted: draining eagerly used to leave a complete entry
+        behind even when the caller took two items, and it no longer does.
+
+        **Time is the producer's, not the wall clock.** Only the spans inside
+        `next()` are summed, so a slow consumer cannot inflate the number the
+        persistence decision reads.
         """
         from cash.notebook.object_hashing import estimate_object_size
 
@@ -5915,78 +5892,99 @@ class Cash:
         buffer_bytes = 0
         chunk_index = 0
         total_items = 0
+        produced_seconds = 0.0
+        committed = False
 
-        for item in iterator:
-            buffer.append(item)
-            buffer_bytes += estimate_object_size(item)
-            total_items += 1
+        try:
+            # Entered ONCE. Per item we only suspend around the `yield`, which
+            # is a ContextVar swap; `__enter__` reinstalls patches and rechecks
+            # the import hook, and paying that per item cost 5.1us each --
+            # measured 294ms -> 1521ms on a 200k-item iterator before this.
+            with tracker, observer:
+                while True:
+                    started = time.perf_counter()
+                    try:
+                        item = next(source)
+                    except StopIteration:
+                        produced_seconds += time.perf_counter() - started
+                        break
+                    produced_seconds += time.perf_counter() - started
 
-            if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
-                # About to close the current chunk. If this is the
-                # transition to the second chunk AND cache_if is set,
-                # warn the user that the predicate is bypassed.
-                if chunk_index == 1 and cache_if is not None:
-                    self._warn_once(
-                        CashCacheIneffectiveWarning,
-                        func_name,
-                        "",
-                        f"@cash.cache on {func_name}: cache_if was bypassed "
-                        f"because the result exceeded a single chunk "
-                        f"(chunk_max_items={chunk_max_items}, "
-                        f"chunk_max_bytes={chunk_max_bytes}). The result "
-                        f"is cached without consulting the predicate. To "
-                        f"keep cache_if gating in effect, lower the chunk "
-                        f"thresholds or materialize the iterator manually.",
-                        stacklevel=warn_stacklevel,
+                    buffer.append(item)
+                    buffer_bytes += estimate_object_size(item)
+                    total_items += 1
+                    if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
+                        if chunk_index == 1 and cache_if is not None:
+                            self._warn_cache_if_bypassed(
+                                func_name, chunk_max_items, chunk_max_bytes,
+                                stacklevel=4)
+                        self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
+                        buffer = []
+                        buffer_bytes = 0
+                        chunk_index += 1
+
+                    # The caller's own reads and effects are its own.
+                    tracker_token = tracker.suspend()
+                    observer_token = observer.suspend()
+                    try:
+                        yield item
+                    finally:
+                        observer.resume(observer_token)
+                        tracker.resume(tracker_token)
+
+            self._check_argument_mutation(func_name, args, kwargs, args_hash, observer)
+            self._report_observed_effects(func_name, observer)
+            auto_file_deps = self._snapshot_tracked_deps(tracker)
+
+            if chunk_index == 0:
+                # Everything fit in one chunk, so cache_if can still see the
+                # whole result -- it gates STORAGE, never what the caller
+                # already received.
+                should_cache = not rng_new
+                if cache_if is not None:
+                    try:
+                        should_cache = bool(cache_if(buffer))
+                    except Exception as e:  # noqa: BLE001 - user predicate
+                        self._warn_cache_if_raised(func_name, e)
+                        should_cache = False
+                if should_cache and self._refuses_identity_coupled(func_name, buffer):
+                    should_cache = False
+                if should_cache:
+                    if buffer:
+                        self._write_one_chunk(cache_key, 0, buffer, ttl=ttl)
+                    # An empty iterator still gets a zero-chunk manifest, so a
+                    # hit returns empty instead of recomputing.
+                    self._store_chunked_manifest(
+                        cache_key, func_name,
+                        {"n_chunks": 1 if buffer else 0, "total_items": total_items},
+                        metadata, ttl, current_state_hash, args_hash,
+                        produced_seconds, auto_file_deps,
                     )
-                self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
-                buffer = []
-                buffer_bytes = 0
-                chunk_index += 1
-
-        # Generator exhausted. If no chunks have been written yet AND
-        # there's a tail buffer, the full result fits in a single chunk -
-        # return the buffer so the caller can apply cache_if before
-        # committing.
-        if chunk_index == 0:
-            # Single-chunk case - defer the write so cache_if can gate it.
-            manifest = {
-                "n_chunks": 1 if buffer else 0,
-                "total_items": total_items,
-            }
-            return manifest, buffer
-
-        # Multi-chunk path: flush the tail buffer if non-empty.
-        if buffer:
-            # The threshold-hit branch in the for-loop fires the cache_if-
-            # bypass warning when chunk_1 fills via its own threshold. If
-            # chunk_1 is only PARTIALLY filled (we exhausted the iterator
-            # mid-chunk_1), the warning never fired there - but we are
-            # still committing to a multi-chunk result with cache_if
-            # bypassed. _warn_once dedups, so firing here is safe even if
-            # the for-loop already fired.
-            if chunk_index == 1 and cache_if is not None:
-                self._warn_once(
-                    CashCacheIneffectiveWarning,
-                    func_name,
-                    "",
-                    f"@cash.cache on {func_name}: cache_if was bypassed "
-                    f"because the result exceeded a single chunk "
-                    f"(chunk_max_items={chunk_max_items}, "
-                    f"chunk_max_bytes={chunk_max_bytes}). The result "
-                    f"is cached without consulting the predicate. To "
-                    f"keep cache_if gating in effect, lower the chunk "
-                    f"thresholds or materialize the iterator manually.",
-                    stacklevel=warn_stacklevel,
+            else:
+                if buffer:
+                    if chunk_index == 1 and cache_if is not None:
+                        self._warn_cache_if_bypassed(
+                            func_name, chunk_max_items, chunk_max_bytes, stacklevel=4)
+                    self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
+                    chunk_index += 1
+                self._store_chunked_manifest(
+                    cache_key, func_name,
+                    {"n_chunks": chunk_index, "total_items": total_items},
+                    metadata, ttl, current_state_hash, args_hash,
+                    produced_seconds, auto_file_deps,
                 )
-            self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
-            chunk_index += 1
 
-        manifest = {
-            "n_chunks": chunk_index,
-            "total_items": total_items,
-        }
-        return manifest, None  # single_chunk_buffer is None for multi-chunk
+            committed = True
+        finally:
+            if not committed:
+                # Abandoned or failed: the chunks written so far are
+                # unreferenced (no manifest names them). Best effort -- a
+                # killed process can still leave some behind.
+                for index in range(chunk_index):
+                    try:
+                        self.backend.delete(f"{cache_key}:chunk_{index}")
+                    except Exception:  # noqa: BLE001 - cleanup must not raise
+                        logger.debug("[CORE] could not drop orphan chunk %d", index)
 
     def _write_one_chunk(
         self,

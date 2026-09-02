@@ -323,6 +323,7 @@ function whose body resolves a dependency from a **runtime value** cash can't
 track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`,
 `getattr(mod, "exec")(...)`, or `importlib.import_module` — **raises
 `CashImpureFunctionError` by default**
-(caching correctness can't be guaranteed), rather than merely warning. Pass
-`@cash.cache(assume_safe=True)` to accept the risk. See
+(caching correctness can't be guaranteed), rather than merely warning. Put
+`# @cash:assume-safe` on that line to accept the risk for it alone, or pass
+`@cash.cache(assume_safe=True)` to waive the whole function. See
 [the decorator's purity gates](../decorator.md).

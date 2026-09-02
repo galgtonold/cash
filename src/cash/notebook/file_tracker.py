@@ -613,6 +613,22 @@ class FileAccessTracker:
         if self._parent_stack:
             self._parent_stack.pop()
 
+    def suspend(self):
+        """Stop tracking until :meth:`resume`, restoring the enclosing tracker.
+
+        For a streaming cached generator: production is tracked, the caller's
+        loop body is not. `__enter__` cannot be used per item -- it reinstalls
+        patches and re-checks the import hook every time, measured at 5.1us
+        against 0.15us for the ContextVar swap alone, which on a 200k-item
+        iterator is over a second of pure bookkeeping.
+        """
+        parent = self._parent_stack[-1] if self._parent_stack else None
+        return _active_tracker.set(parent)
+
+    def resume(self, token) -> None:
+        """Undo :meth:`suspend`."""
+        _active_tracker.reset(token)
+
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
 

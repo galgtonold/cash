@@ -6,8 +6,8 @@ Cash caches `async def` functions with the same TTL, file-dependency tracking, p
 
 The natural cached unit for `async def` is the *awaited result*, not the coroutine object. A naive `functools.cache` on a coroutine function would return the same exhausted coroutine on every hit — awaitable exactly once. Cash unwraps the await inside the wrapper, stores the awaited value under the same cache-key scheme used for sync functions, and on a hit returns the value directly so the caller's `await` resolves immediately without re-running the coroutine body.
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @07289e14, cash/core.py:Cash._make_wrapper @39ff4f8b -->
-The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` selects `_make_async_wrapper`, everything else falls through to `_make_wrapper`. Both wrappers share the helpers (`_resolve_cache_key`, `_try_get_cached`, `_store_in_cache`, `_wrap_iterator_hit`, `_write_chunks`), so the storage layout and metadata shape are identical.
+<!-- claim: cash/core.py:Cash._make_async_wrapper @b558ffc4, cash/core.py:Cash._make_wrapper @20a41421 -->
+The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` selects `_make_async_wrapper`, everything else falls through to `_make_wrapper`. Both wrappers share the helpers (`_resolve_cache_key`, `_try_get_cached`, `_store_in_cache`, `_wrap_iterator_hit`, `_stream_and_store`), so the storage layout and metadata shape are identical.
 
 ## Quick start
 
@@ -61,7 +61,7 @@ The pattern matches `test_async_function_caches` and `test_async_cache_info` in 
 
 ## What works on async wrappers
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @07289e14 broad="the parity list is a claim about the whole async wrapper body" -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @b558ffc4 broad="the parity list is a claim about the whole async wrapper body" -->
 The async wrapper mirrors the sync wrapper feature-for-feature with the following confirmed parity:
 
 - **TTL and freshness.** `_validate_ttl` on the hit path is shared between wrappers; `ttl=` works identically.
@@ -69,7 +69,7 @@ The async wrapper mirrors the sync wrapper feature-for-feature with the followin
 - **File dependency auto-tracking.** The `FileAccessTracker` block wraps the `await func(*args, **kwargs)` call, so `pandas.read_*`, `numpy.load`, `joblib.load`, and bare `open()` calls inside the coroutine body are auto-tracked the same way they would be in a sync function. Test reference: `test_async_auto_track_open` in `tests/test_core/test_async_file_tracking.py`.
 - **Purity analysis.** `_analyze_dependencies` runs on the first call regardless of sync/async; the AST-level analyzer doesn't distinguish coroutine functions from regular ones, so impurity warnings, `@cash.pure`, `assume_safe`, and `strict` apply unchanged.
 - **`cache_if=` predicate.** Applied identically on the non-iterator path and on the single-chunk path.
-- **Iterator chunking for `async def` returning a sync iterator.** When a coroutine body executes `return (i for i in range(n))` or similar, the await produces a regular generator object. `_is_one_shot_iterator(res)` catches it and dispatches through the same `_write_chunks` / `_store_chunked_manifest` path the sync wrapper uses. The single-chunk fast path applies; the multi-chunk path returns `_ChunkedCachedIterator`. Test reference: `test_async_function_returning_iterator` in `tests/test_core/test_iterator_caching.py`:
+- **Iterator chunking for `async def` returning a sync iterator.** When a coroutine body executes `return (i for i in range(n))` or similar, the await produces a regular generator object. `_is_one_shot_iterator(res)` catches it and dispatches through the same `_stream_and_store` / `_store_chunked_manifest` path the sync wrapper uses, so it streams through on the miss exactly as the sync one does. Test reference: `test_async_function_returning_iterator` in `tests/test_core/test_iterator_caching.py`:
 
     ```python
     @cash.cache

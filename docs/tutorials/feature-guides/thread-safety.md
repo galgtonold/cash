@@ -83,7 +83,7 @@ There are exactly **two** `lock()` definitions in the codebase:
 
 ## Async
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @07289e14 -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @b558ffc4 -->
 `use_locking=True` **is supported on the async path**, via in-process single-flight rather than `_compute_with_lock`. Concurrent awaits of the same cache key coalesce: the first awaiter (the *leader*) registers an `asyncio.Event` in `self._async_inflight`, computes, and stores; other awaiters of the same key (the *followers*) `await` the event and then read the stored result. If the leader stored nothing — `cache_if` rejected the value, or the compute raised — followers fall through and compute themselves, so correctness is never traded for the optimization.
 
 The coalescing is keyed on the running event loop, so it dedupes an `asyncio.gather` within one process, not across processes. For cross-process async, you still want Redis. Test reference: `tests/test_core/test_async_single_flight.py`.

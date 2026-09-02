@@ -2,6 +2,19 @@
 
 Cash can cache functions that return generators, `map()` / `filter()` objects, or any single-pass iterator. It materializes the iterator into chunks on disk, then hands out cached chunks on subsequent calls — bounded memory, full replay semantics.
 
+**On a miss the items stream through as they are produced.** Caching a
+generator does not change when the caller sees things: cash tees each item to
+you and into the chunk buffer at the same time, and commits once the producer
+is exhausted. Measured on a token stream, first item at 515 ms cached against
+500 ms uncached; before this it was 2444 ms — the whole completion arriving at
+once after the full latency.
+
+The cost is at the other end: **a generator you abandon caches nothing.** Cash
+only produces what you consume, so stopping after three of twenty-five items
+leaves no complete result to store, and the next call recomputes. Storing the
+three under the full result's key would be a wrong answer rather than a slow
+one.
+
 ## Why generators are tricky
 
 A generator is one-shot. The object you'd cache after the first call is already exhausted — handing the same object back on call two would yield nothing. You have two paths out of this:
@@ -35,13 +48,18 @@ No decorator option to enable — iterator detection is automatic. Pre-existing 
 
 ## How chunking works
 
-<!-- claim: cash/core.py:Cash._write_chunks @83d5ddff, cash/notebook/object_hashing.py:estimate_object_size @9aeb760a -->
-The write path lives in `Cash._write_chunks`. The loop is:
+<!-- claim: cash/core.py:Cash._stream_and_store @bdeb1bf7 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/notebook/object_hashing.py:estimate_object_size @9aeb760a -->
+The write path lives in `Cash._stream_and_store`. The loop is:
 
-1. Pull items from the user's iterator into an in-memory buffer.
+1. Pull one item from the user's iterator, with the `FileAccessTracker` entered **only for that step** — so a file the generator reads lazily is recorded as a dependency, while the caller's own reads in its loop body are not.
 2. Track running byte size via `estimate_object_size` from `cash.notebook.object_hashing`.
 3. When `len(buffer) >= chunk_max_items` **or** `buffer_bytes >= chunk_max_bytes`, flush the buffer to the backend under key `f"{cache_key}:chunk_{i}"`, increment `i`, and reset the buffer.
-4. When the source iterator stops, flush any tail buffer the same way.
+4. **Yield the item to the caller**, then go back to 1.
+5. When the source iterator stops, flush any tail buffer, then commit the manifest.
+
+Time is accumulated only across step 1, never wall-clock, so a slow consumer cannot inflate the number the persistence decision reads.
+
+If the caller abandons the iterator, or the producer raises, step 5 never runs: the chunks written so far are unreferenced and are dropped on the way out, and nothing is stored.
 
 On exhaust, Cash writes a **manifest entry** at the canonical `cache_key` carrying `iterator_storage="chunked"`, `n_chunks`, and `total_items`. The manifest is what the hit path reads first.
 
@@ -92,8 +110,8 @@ An empty iterator — a generator that returns before its first yield — is han
 
 What is **not** supported:
 
-- **Async generators** (`async def gen(): yield ...`). The decorator detects them and returns the function unwrapped with a `CashCacheIneffectiveWarning`. See [Async Caching](async-caching.md) for the patterns that work with async code. An ordinary `async def` function that **returns** (rather than `yield`s) a sync iterator does chunk-store normally — the async wrapper dispatches through the same `_write_chunks` path.
-- **Infinite iterators** (`itertools.count()`, `while True: yield ...`). Caching exhausts the iterator on the first call before returning anything. The first call never returns. If you have a streaming computation that's morally infinite but bounded by the caller (`itertools.islice` at the call site), apply the bound *inside* the cached function so the cached iterator is finite.
+- **Async generators** (`async def gen(): yield ...`). The decorator detects them and returns the function unwrapped with a `CashCacheIneffectiveWarning`. See [Async Caching](async-caching.md) for the patterns that work with async code. An ordinary `async def` function that **returns** (rather than `yield`s) a sync iterator does chunk-store normally — the async wrapper streams it through the same `_stream_and_store` path.
+- **Infinite iterators** (`itertools.count()`, `while True: yield ...`). These now *iterate* fine — items stream through as they are produced — but they never finish, so nothing is ever stored and every call recomputes. If you have a streaming computation that's morally infinite but bounded by the caller (`itertools.islice` at the call site), apply the bound *inside* the cached function so the cached iterator is finite and can actually be cached.
 - **Iterators whose items don't pickle.** A chunk write that hits `pickle.PicklingError` raises a `CashCacheStoreFailedWarning` and the partially-written chunks are left orphaned (the manifest is never committed, so the next call sees a miss; orphans are reclaimed by `cleanup()`). Items that pickle slowly (large numpy arrays, custom classes without `__reduce__`) work but inflate write time linearly with chunk size.
 
 ## Replay semantics
@@ -122,8 +140,10 @@ import cash
 def stream():
     yield from range(100)         # 10 chunks of 10 items each
 
-it_a = stream()
-it_b = stream()                   # independent — does not share state with it_a
+list(stream())                    # first call: computed, and now cached
+
+it_a = stream()                   # cached — a replay iterator
+it_b = stream()                   # cached, and independent of it_a
 next(it_a)                        # 0 — reads chunk_0 from backend
 next(it_a)                        # 1 — chunk_0 still in memory
 next(it_b)                        # 0 — re-reads chunk_0 (independent iterator)
@@ -133,6 +153,10 @@ next(it_a)                        # 10 — boundary: reads chunk_1
 
 # Stop here. chunk_2..chunk_9 were never fetched from disk.
 ```
+
+The first line matters: replay iterators only exist once there is something to
+replay. Drop it and all three calls are misses, each producing its own stream
+and caching nothing, because none of them is ever exhausted.
 
 The returned object satisfies the iterator protocol — `iter(x) is x`, `__next__`, `close()`. Generator-specific methods (`.send`, `.throw`) raise `AttributeError` with a message pointing at caching as the cause: the cached iterator replays a list, it is not a coroutine.
 
@@ -189,7 +213,7 @@ Tuning notes:
 
 ## Caveats
 
-- **Materialization on the first call.** The cache-miss path drains the user's iterator to completion before returning the replay wrapper. If the caller plans to consume only the first ten items, the first call still does the full work. Subsequent calls benefit from the cache; the first one does not. Partial consumption is fully supported on cache hits — only chunks the caller reaches are loaded. Test reference: `test_chunked_iterator_partial_consumption_then_hit` in `tests/test_core/test_iterator_caching.py`.
+- **Partial consumption on a miss caches nothing.** The miss path produces only what the caller consumes, so stopping after ten of a thousand items leaves no complete result to store and the next call recomputes. Storing the ten under the full result's key would be a wrong answer rather than a slow one. On a *hit* partial consumption is free — only the chunks the caller reaches are loaded. Test reference: `test_chunked_iterator_partial_consumption_caches_nothing` in `tests/test_core/test_iterator_caching.py`.
 - **`cache_if` is bypassed on multi-chunk results.** As described above, the predicate cannot run without re-materializing chunks. The bypass warning is keyed per-function and fires once per process. To keep `cache_if` gating in effect on large iterators, lower the chunk thresholds enough that the single-chunk path stays in play.
 <!-- claim: cash/core.py:Cash._attach_lineage @8145e913 -->
 - **No `_cash_lineage_hash` on iterator returns.** Cash's lineage-tracking optimization attaches a `_cash_lineage_hash` attribute to non-iterator return values so downstream `@cash.cache` calls can short-circuit the args hash (via `Cash._attach_lineage`). Iterator wrappers don't get this attribute — passing a cached iterator to another `@cash.cache` function will re-hash its contents the normal way. Materialize to a list if you want the lineage short-circuit.

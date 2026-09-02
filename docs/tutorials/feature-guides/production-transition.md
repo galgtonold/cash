@@ -157,7 +157,9 @@ JupyterLab or VS Code, where it means a stale runtime.
 **Fail the build on accidental impurity.** `@cash.cache(strict=True)` turns the
 purity analyzer's warnings into `CashImpureFunctionError` at first call, so a
 teammate caching a side-effecting function breaks CI instead of shipping a
-silently wrong cache. Reserve it for functions you've deliberately audited —
+silently wrong cache. It is usable as a standing CI gate because a line you
+have audited can carry `# @cash:assume-safe`, which `strict` honours — so the
+build stays red for genuinely new impurity rather than for everything —
 see [`strict=`](../../decorator.md#strict-and-assume_safe-purity-gates).
 
 **Decide whether the cache persists between runs.** A fresh container starts

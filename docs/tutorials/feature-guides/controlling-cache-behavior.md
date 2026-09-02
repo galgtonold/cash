@@ -199,6 +199,8 @@ def critical_function(x):
 
 `ttl` here works identically to the statement annotation — `_validate_ttl` is the same code path. `assume_safe` and `strict` are about purity, not freshness; see [Purity Decorators](purity-decorators.md) for the full breakdown. They're mutually exclusive at decoration time.
 
+To waive one statement rather than the function, annotate it — `# @cash:assume-safe` on the audited line. It is honoured under `strict=True` too, and unlike the flag it does not cover code added afterwards.
+
 ## Randomness detection — what gets flagged
 
 `RandomnessDetector` keeps a session-wide set of `seeded_modules`. When it sees a seed call (`np.random.seed(42)`, `torch.manual_seed(0)`, `random.seed(...)`), it marks the module as seeded and stops warning about subsequent calls to its RNG functions. When it sees an unseeded call, it emits a `CashRandomnessWarning`.

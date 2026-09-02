@@ -164,6 +164,13 @@ class EffectObserver:
             _active_observer.reset(self._tokens.pop())
         return False
 
+    def suspend(self):
+        """Stop observing until :meth:`resume`. Mirrors `FileAccessTracker`."""
+        return _active_observer.set(None)
+
+    def resume(self, token) -> None:
+        _active_observer.reset(token)
+
     # -- recording ---------------------------------------------------------
     def record(self, kind: str, detail: str) -> None:
         if len(self.effects) >= 8:      # a summary, not a log

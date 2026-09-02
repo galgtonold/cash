@@ -59,7 +59,9 @@ you cached something too cheap).
    ```
 5. **Side effects run on the FIRST call only**, then the return value replays. A
    purity warning on discarded calls (prints, logging, `.fit()`) is advisory — the
-   result is still correct; `assume_safe=True` silences it once you've audited.
+   result is still correct. Put `# @cash:assume-safe` on the audited LINE;
+   `assume_safe=True` waives the whole function for good, including anything
+   added to it later.
 6. **Verify with `f.explain(*args)`** (→ `[HIT]` / `[MISS]` + reason) or
    `%cash_stats` — both read through to the real cache. Prefer these over
    `f.cache_info()` in a notebook: its hit/miss counters live on the wrapper

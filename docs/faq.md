@@ -44,8 +44,9 @@ workflow?" case, see [Why Cash?](why-cash.md); for the vocabulary, see the
     `eval`/`exec`, dynamic dispatch via `getattr(obj, name)()`,
     `getattr(mod, "exec")(...)`, or `importlib.import_module` — so a cached
     result could go silently stale, and
-    cash refuses to cache it by default. Pass `@cash.cache(assume_safe=True)` to
-    cache anyway, or refactor to a statically-named call. See
+    cash refuses to cache it by default. Put `# @cash:assume-safe` on that line
+    to accept the risk for it alone, pass `@cash.cache(assume_safe=True)` to
+    waive the whole function, or refactor to a statically-named call. See
     [the decorator guide](decorator.md).
 
 ## Coverage

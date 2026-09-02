@@ -735,10 +735,20 @@ def test_item_larger_than_chunk_max_bytes(tmp_path):
     assert n_calls["x"] == 1
 
 
-def test_chunked_iterator_partial_consumption_then_hit(tmp_path):
-    """If the user only iterates the first 3 items, the next call still
-    hits the full cache (because the first call always exhausts the
-    generator)."""
+def test_chunked_iterator_partial_consumption_caches_nothing(tmp_path):
+    """Abandon a generator part-way and nothing is stored.
+
+    This is the price of streaming, and it is deliberate. Cash used to drain
+    the generator internally no matter what the caller took, so stopping after
+    three items still left a complete 25-item entry behind. It now produces
+    only what is consumed -- so there is no complete result to store, and
+    storing the three items under the full result's key would be a wrong
+    answer rather than a slow one.
+
+    The control arm below is what keeps this honest: a fully consumed
+    generator must still cache, or "nothing was stored" would pass for the
+    wrong reason.
+    """
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
     n_calls = {"x": 0}
 
@@ -747,21 +757,16 @@ def test_chunked_iterator_partial_consumption_then_hit(tmp_path):
         n_calls["x"] += 1
         yield from range(25)
 
-    # Partial consumption.
     it = gen()
-    assert next(it) == 0
-    assert next(it) == 1
-    assert next(it) == 2
-    # Stop here. Drop the iterator.
+    assert [next(it), next(it), next(it)] == [0, 1, 2]
     del it
 
-    # n_calls is still 1 (generator was fully exhausted internally for
-    # caching, regardless of user's partial iteration).
-    assert n_calls["x"] == 1
-
-    # Next call gets the full cached result.
     assert list(gen()) == list(range(25))
-    assert n_calls["x"] == 1  # still a hit
+    assert n_calls["x"] == 2, "the abandoned run must not have been stored"
+
+    # Control: that run WAS complete, so this one is a hit.
+    assert list(gen()) == list(range(25))
+    assert n_calls["x"] == 2
 
 
 def test_chunked_persists_across_instances(tmp_path):
