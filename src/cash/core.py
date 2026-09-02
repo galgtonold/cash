@@ -796,6 +796,10 @@ class Cash:
         # ``"warn"`` (default) | ``"silent"`` (assume_safe=True) |
         # ``"strict"`` (raises). Read on first call.
         self._purity_modes: dict[str, str] = {}
+        # Functions the STATIC pass already reported on. The runtime effect
+        # observer stays quiet for these: it would be a second warning about
+        # the same function, and the user has already been told.
+        self._purity_static_flagged: set[str] = set()
         # Per-function purity report cache. Populated on first call.
         # Helper source hashes from this report fold into the cache
         # key state hash so cross-process helper edits invalidate.
@@ -2333,11 +2337,16 @@ class Cash:
                 # content change forces a recompute.
                 from cash.notebook.file_tracker import FileAccessTracker
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                # Watch for side effects the STATIC analyzer cannot see, which
+                # is anything happening inside an installed library. Only on
+                # this (missing) path: a hit runs no body, so there is nothing
+                # to observe and nothing to pay for.
+                observer = self._make_effect_observer()
                 # Watch the global RNG across the call: a draw inside the body is
                 # an input the key cannot see statically.
                 rng_pre = self._capture_rng_pre_state()
                 body_seconds: float | None = None
-                with tracker:
+                with tracker, observer:
                     body_t0 = time.perf_counter()
                     res = func(*args, **kwargs)
                     # The user's own work, isolated. Everything cash does sits
@@ -2357,6 +2366,7 @@ class Cash:
                             res, cache_key, chunk_max_items, chunk_max_bytes,
                             func_name, cache_if, ttl=ttl,
                         )
+                self._report_observed_effects(func_name, observer)
                 auto_file_deps = self._snapshot_tracked_deps(tracker)
 
                 # Route one-shot iterators through the chunked-storage path.
@@ -2571,9 +2581,10 @@ class Cash:
             async def _compute_and_store() -> Any:
                 from cash.notebook.file_tracker import FileAccessTracker
                 tracker = FileAccessTracker(getattr(func, '__globals__', None), propagate_to_parent=True)
+                observer = self._make_effect_observer()
                 rng_pre = self._capture_rng_pre_state()
                 body_seconds: float | None = None
-                with tracker:
+                with tracker, observer:
                     body_t0 = time.perf_counter()
                     res = await func(*args, **kwargs)
                     body_seconds = time.perf_counter() - body_t0
@@ -2588,6 +2599,7 @@ class Cash:
                             res, cache_key, chunk_max_items, chunk_max_bytes,
                             func_name, cache_if, ttl=ttl, warn_stacklevel=5,
                         )
+                self._report_observed_effects(func_name, observer)
                 auto_file_deps = self._snapshot_tracked_deps(tracker)
 
                 # Iterator returns: chunked storage path.
@@ -6134,6 +6146,52 @@ class Cash:
             report = PurityReport()
         self._purity_reports[func_name] = report
 
+    def _make_effect_observer(self) -> Any:
+        """An :class:`EffectObserver` scoped to this instance's cache dir.
+
+        Excluding the cache directory is load-bearing: cash writes the entry
+        it is computing, and without the exclusion every cached function would
+        be observed writing a file and every one of them would warn.
+        """
+        from .effect_observer import EffectObserver
+        cache_dir = getattr(self.config, "cache_dir", None)
+        return EffectObserver(exclude_under=cache_dir)
+
+    def _report_observed_effects(self, func_name: str, observer: Any) -> None:
+        """Warn once when the first call did something a hit will not do.
+
+        Silent in three cases, each for its own reason:
+
+        * ``assume_safe=True`` -- the user audited this function and said so.
+        * the static analyzer already flagged it -- they have been told; a
+          second warning about one function is noise, not information.
+        * nothing was observed -- which is *not* proof of purity. Only the
+          path this call took was watched, so an effect behind a branch that
+          did not run is unobserved. That is why this supplements the static
+          pass rather than replacing it.
+        """
+        summary = observer.summary() if observer is not None else None
+        if summary is None:
+            return
+        if self._purity_modes.get(func_name, "warn") == "silent":
+            return
+        if func_name in self._purity_static_flagged:
+            return
+        self._warn_once(
+            CashImpurityWarning,
+            func_name,
+            "observed_effect",
+            f"@cash.cache on {func_name}: the first call performed side "
+            f"effects that static analysis did not see, which means they "
+            f"happen inside library code cash does not walk into. Every "
+            f"cache HIT from here on returns the stored value WITHOUT "
+            f"repeating them.\n{summary}\n"
+            f"If the effect is the point of the call, don't cache it (or cache "
+            f"only the pure part). If it is incidental, silence this with "
+            f"@cash.cache(assume_safe=True).",
+            stacklevel=6,
+        )
+
     def _surface_purity(
         self, func_name: str, report: PurityReport, mode: str,
     ) -> None:
@@ -6184,6 +6242,8 @@ class Cash:
                 f"to cache it anyway (you accept the staleness risk), or refactor "
                 f"to a statically-named call.\n{untrackable_summary}"
             )
+
+        self._purity_static_flagged.add(func_name)
 
         if mode == "strict":
             raise CashImpureFunctionError(

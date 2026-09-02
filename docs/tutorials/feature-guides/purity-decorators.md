@@ -212,7 +212,7 @@ Now any cell that calls `log_to_dashboard(...)` or `send_alert(...)` runs fresh 
 
 ## Auto-detection (`analyze_function_purity`)
 
-<!-- claim: cash/notebook/purity.py:analyze_function_purity @7323a225, cash/notebook/purity.py:_ImpurityVisitor @04e3cd91 broad="the flag list is a claim about every branch of the visitor", cash/notebook/purity.py:_IMPURE_FUNCTION_CALLS @bb3b34e8, cash/notebook/purity.py:_IMPURE_MODULE_CALLS @2f4b3aee, cash/notebook/purity.py:_WRITE_METHODS @83c86ec8 -->
+<!-- claim: cash/notebook/purity.py:analyze_function_purity @7323a225, cash/notebook/purity.py:_ImpurityVisitor @04e3cd91 broad="the flag list is a claim about every branch of the visitor", cash/notebook/purity.py:_IMPURE_FUNCTION_CALLS @bb3b34e8, cash/notebook/purity.py:_IMPURE_MODULE_CALLS @21b515f5, cash/notebook/purity.py:_WRITE_METHODS @9cc480ba -->
 You won't decorate everything. For undecorated functions, Cash falls back to an AST-based heuristic — `analyze_function_purity`. It:
 
 1. Grabs the function's source via `inspect.getsource`.
@@ -225,7 +225,14 @@ The visitor flags the function as impure if it sees any of:
 - A `yield` or `yield from` (generators are not safe to memoize as plain values).
 - A call to a known-impure builtin: `print`, `input`, `open`, `exec`, `eval`, `compile`, `exit`, `quit`, `breakpoint`.
 - A dotted call to a known-impure module function: `os.system`, `os.remove`, `subprocess.run`, `shutil.move`, `requests.get`, `requests.post`, `json.dump`, `pickle.dump`, `logging.info`, and friends.
-- A method call to a name in the "write-ish" set: `write`, `writelines`, `append`, `extend`, `insert`, `pop`, `remove`, `sort`, `reverse`, `clear`, `update`, `add`, `discard`, `to_csv`, `to_excel`, `to_parquet`, `to_json`, `to_pickle`, `savefig`, `save`, `send`, `sendall`, `sendto`, plus pathlib's `write_text` / `write_bytes`.
+- A method call to a name in the "write-ish" set: `write`, `writelines`, `append`, `extend`, `insert`, `pop`, `remove`, `sort`, `reverse`, `clear`, `update`, `add`, `discard`, `to_csv`, `to_excel`, `to_parquet`, `to_json`, `to_pickle`, `savefig`, `save`, `send`, `sendall`, `sendto`, pathlib's `write_text` / `write_bytes`, and the verbs that mean a client object just changed something remote — `post`, `put`, `patch`, `execute`, `executemany`, `executescript`, `commit`, `rollback`, `upload`, `upload_file`, `upload_fileobj`, `put_object`, `publish`.
+
+    That last group is matched on **any** receiver, and it is the only static
+    handle on a side effect inside an installed library, because the analyzer
+    does not walk into one. `get` is deliberately absent: `dict.get` would
+    match it, so a *read* through a client object cannot be reached by name at
+    all — that case is covered at runtime instead (see
+    [Observed effects](#observed-effects-what-the-first-call-actually-did)).
 - Any assignment whose target is an attribute (`self.x = ...`) or subscript (`d[k] = ...`).
 - Any `+=`/`del` on an attribute or subscript.
 
@@ -435,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @8dc9b22e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @8f789834, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -516,6 +523,48 @@ also count as issues — the paranoid setting.
 both raises `ValueError` at decoration time.
 
 <!-- claim: cash/__init__.py:mark_pure @ba10636a, cash/__init__.py:mark_stateful @ca0b83f6 -->
+### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
+
+<!-- claim: cash/effect_observer.py:EffectObserver @2bd6e1d3 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @ca2cf275 -->
+Static analysis stops at library boundaries, so an effect *inside* a library is
+reachable only by the method's name — and a name cannot reach everything.
+`session.get(url)` is a network call, but `get` cannot go in the write-method
+list without matching `dict.get`.
+
+So cash also *watches* the first call. While the body of a cache **miss** runs,
+it records effects it can see wherever the code lives: a file opened for
+writing, an outbound socket connection, a spawned subprocess. If any happen and
+the analyzer said nothing, you get one warning naming what it saw:
+
+```text
+@cash.cache on api.fetch_user: the first call performed side effects that
+static analysis did not see, which means they happen inside library code cash
+does not walk into. Every cache HIT from here on returns the stored value
+WITHOUT repeating them.
+  network: socket connect to 10.0.0.4:443
+```
+
+Four things worth knowing:
+
+- **It costs nothing on a hit.** A hit runs no body, so there is nothing to
+  observe. The watching happens only on the path that was already doing the
+  work.
+- **Silence is not proof of purity.** Only the path this call took was watched.
+  An effect behind a branch that did not run is unobserved, which is exactly
+  why this supplements the static pass rather than replacing it.
+- **It never blocks or refuses.** By the time an effect is observed, the
+  function has run and its result is worth keeping; refusing the entry would
+  cost you the compute and prevent nothing. Even `strict=True` warns here
+  rather than raising — raising after the effect has landed would throw away a
+  correct result to report something it could not have prevented.
+- **Other threads are not attributed to you.** Dispatch is per-thread and
+  per-task, so an effect on a worker thread is not reported as this function's.
+  (The ordinary `Thread(target=...)` shape is already caught statically.)
+
+`assume_safe=True` silences this along with the static warnings, and a function
+the analyzer already flagged does not get a second warning about the same
+thing.
+
 ### `cash.mark_pure(func)` and `cash.mark_stateful(func)`
 
 The `@pure` and `@stateful` decorators wrap the function — convenient

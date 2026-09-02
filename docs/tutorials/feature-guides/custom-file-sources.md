@@ -51,8 +51,10 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 
 The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @2c6b1e1b -->
-For `open()`, the wrapper records the path only when the mode contains `'r'` or `'+'` (read or read/write), not pure writes — see `_create_open_handler`. So an `open(path, 'w')` for output does *not* get tracked, which is what you want: writes are accounted for by hashing the function's return value, not its outputs.
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @1da1f7d2 -->
+For `open()`, the wrapper records the path as a *dependency* only when the mode contains `'r'` or `'+'` (read or read/write) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output.
+
+A write is not ignored, though — it is an *effect*, and it is reported as one. The same wrapper hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
 
 ### Directory enumeration tracks the directory
 

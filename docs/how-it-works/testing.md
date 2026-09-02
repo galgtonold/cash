@@ -17,12 +17,12 @@ are the part that does not change.
 
 ## The shape of the suite
 
-**<!-- docnum:tests_total -->~8,750<!-- /docnum --> tests** across three suites,
+**<!-- docnum:tests_total -->~8,800<!-- /docnum --> tests** across three suites,
 spread over <!-- docnum:test_files -->~1,210<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~4,250<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Unit | <!-- docnum:tests_unit -->~4,260<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
 | Notebook integration | <!-- docnum:tests_integration -->~4,180<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
 | Docs | <!-- docnum:tests_docs -->~340<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 

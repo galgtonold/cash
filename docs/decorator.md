@@ -191,7 +191,7 @@ within the module; name cross-module dependencies with
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @8bb47d39 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @e1ad9a28 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -605,7 +605,7 @@ is bypassed (warning fires) — see the iterator section below.
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @8dc9b22e, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @8f789834, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -618,6 +618,14 @@ By default, `@cash.cache` runs a static analyzer on the function body
   `CashImpureFunctionError` by default**, because a cached result could go
   silently stale. Pass `assume_safe=True` to cache anyway, or refactor to a
   statically-named call.
+
+The analyzer stops at library boundaries, so an effect *inside* a dependency is
+reachable only by the method's name (`session.post`, `cur.execute`). Because a
+name cannot reach everything — `session.get` collides with `dict.get` — cash
+also **watches the first call** and warns if it wrote a file, opened a
+connection, or spawned a process that the analyzer never saw. A hit repeats
+none of those. See
+[observed effects](tutorials/feature-guides/purity-decorators.md#observed-effects-what-the-first-call-actually-did).
 
 ```python
 @cash.cache

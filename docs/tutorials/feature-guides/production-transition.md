@@ -153,7 +153,7 @@ which a top-to-bottom automated run doesn't need. The warning is expected under
 papermill, nbconvert, and CI — it's only worth investigating if you see it *in*
 JupyterLab or VS Code, where it means a stale runtime.
 
-<!-- claim: cash/core.py:Cash._surface_purity @8dc9b22e -->
+<!-- claim: cash/core.py:Cash._surface_purity @8f789834 -->
 **Fail the build on accidental impurity.** `@cash.cache(strict=True)` turns the
 purity analyzer's warnings into `CashImpureFunctionError` at first call, so a
 teammate caching a side-effecting function breaks CI instead of shipping a

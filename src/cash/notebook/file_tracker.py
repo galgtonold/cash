@@ -38,6 +38,13 @@ FileDependencies = dict[str, float]
 
 logger = logging.getLogger(__name__)
 
+# The effect observer for the current task/thread. Imported at module scope
+# rather than inside the wrapper: `tracked_open` sits on the process-global
+# `open`, so an import executed there would run during arbitrary user code --
+# including at interpreter shutdown, while sys.modules is being torn down.
+# `cash.effect_observer` imports nothing from cash, so this cannot cycle.
+from cash.effect_observer import _active_observer as _active_effect_observer
+
 # Active tracker for the current asyncio task / thread.
 # Read by the patched I/O dispatchers to decide whether to record the
 # access. Isolated per task/thread by contextvars semantics.
@@ -393,6 +400,17 @@ class FileDependencyRegistry:
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
                     _tracker._track_path(file)
+            elif any(ch in mode for ch in ('w', 'a', 'x')):
+                # Not a dependency -- a WRITE is an effect, not an input, and
+                # folding it into the key would invalidate a function on its
+                # own output. It is recorded for the effect observer instead:
+                # a cache hit skips this write, and if the analyzer said
+                # nothing (the write happened inside a library it does not walk
+                # into) that is a silent behaviour change the user should hear
+                # about. See cash.effect_observer.
+                _observer = _active_effect_observer.get()
+                if _observer is not None and not _is_cash_internal(file):
+                    _observer.record_write(file)
             return original_func(file, *args, **kwargs)
         return tracked_open
 

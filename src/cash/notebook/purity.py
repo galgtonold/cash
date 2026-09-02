@@ -168,9 +168,31 @@ _IMPURE_MODULE_CALLS = frozenset({
     'logging.info', 'logging.debug', 'logging.warning', 'logging.error',
     'logging.critical',
     'requests.get', 'requests.post', 'requests.put', 'requests.delete',
+    # `patch` was missing beside its four siblings; `request` is the generic
+    # form they all delegate to, so naming only the verbs left a hole.
+    'requests.patch', 'requests.request',
     'json.dump', 'pickle.dump',
 })
 
+#: Method names meaning "this call changed something outside the function".
+#:
+#: Matched on ANY receiver, because a receiver's type is not knowable from
+#: source. That is deliberate, and it is the only thing that can reach a side
+#: effect inside an INSTALLED library: the analyzer stops at library
+#: boundaries, so `session.post(...)` is invisible to it except through this
+#: name.
+#:
+#: Without the verbs below, a library effect was caught only when its return
+#: value was DISCARDED (by the separate discarded-call rule) -- so
+#: `requests.post(url)` warned while `r = session.post(url); return r.json()`
+#: did not, though they are the same operation and the second is how
+#: production code is written.
+#:
+#: The bar for adding a name: effect-shaped on essentially every type that
+#: defines it. `get` fails that bar (`dict.get`), which is why a *read* over a
+#: client object still cannot be reached by name at all. A false positive here
+#: costs an advisory warning; a false negative costs a write that silently
+#: stops happening on every cache hit.
 _WRITE_METHODS = frozenset({
     'write', 'writelines', 'send', 'sendall', 'sendto',
     'append', 'extend', 'insert', 'pop', 'remove', 'sort', 'reverse', 'clear',
@@ -178,6 +200,14 @@ _WRITE_METHODS = frozenset({
     'to_csv', 'to_excel', 'to_parquet', 'to_json', 'to_pickle',
     'savefig', 'save',
     'write_text', 'write_bytes',  # pathlib.Path
+    # HTTP verbs that change server state, reached through a client object
+    # (a requests Session, httpx, an SDK wrapper) rather than the
+    # module-qualified form already listed above.
+    'post', 'put', 'patch',
+    # Database writes, reached through a cursor / connection / collection.
+    'execute', 'executemany', 'executescript', 'commit', 'rollback',
+    # Object stores and message buses.
+    'upload', 'upload_file', 'upload_fileobj', 'put_object', 'publish',
 })
 
 def analyze_function_purity(func: Any, user_ns: dict[str, Any] | None = None) -> bool:
