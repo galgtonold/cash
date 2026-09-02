@@ -62,6 +62,21 @@ REPO = Path(__file__).resolve().parent.parent
 SCANNED = ["README.md", *sorted(str(p.relative_to(REPO).as_posix())
                                 for p in (REPO / "docs").rglob("*.md"))]
 
+
+def _scanned(root: Path) -> list[str]:
+    """The marked files, relative to ``root``.
+
+    Recomputed rather than reusing ``SCANNED`` so a caller can point this at a
+    COPY of the docs tree. The drift test needs to corrupt a marked file to
+    prove the checker fails on drift, and corrupting the real one races every
+    other test that reads it -- under xdist those run in separate processes,
+    so a `finally` that restores the file is not protection.
+    """
+    if root == REPO:
+        return SCANNED
+    return ["README.md", *sorted(str(q.relative_to(root).as_posix())
+                                 for q in (root / "docs").rglob("*.md"))]
+
 MARKER = re.compile(
     r"<!--\s*docnum:(?P<name>[a-z0-9_]+)\s*-->(?P<value>.*?)<!--\s*/docnum\s*-->",
     re.DOTALL,
@@ -213,10 +228,10 @@ def _resolve(facts, fast: bool) -> dict[str, str]:
     return resolved
 
 
-def _walk(resolved: dict[str, str]):
+def _walk(resolved: dict[str, str], root: Path = REPO):
     """Yield ``(path, name, current, wanted)`` for every marker in the docs."""
-    for rel in SCANNED:
-        path = REPO / rel
+    for rel in _scanned(root):
+        path = root / rel
         text = path.read_text(encoding="utf-8")
         for match in MARKER.finditer(text):
             name = match.group("name")
@@ -225,10 +240,10 @@ def _walk(resolved: dict[str, str]):
             yield rel, name, match.group("value"), resolved[name]
 
 
-def _rewrite(resolved: dict[str, str]) -> list[str]:
+def _rewrite(resolved: dict[str, str], root: Path = REPO) -> list[str]:
     changed = []
-    for rel in SCANNED:
-        path = REPO / rel
+    for rel in _scanned(root):
+        path = root / rel
         text = path.read_text(encoding="utf-8")
 
         def sub(match):
@@ -245,7 +260,7 @@ def _rewrite(resolved: dict[str, str]) -> list[str]:
     return changed
 
 
-def _unknown_markers(resolved_names) -> list[tuple[str, str]]:
+def _unknown_markers(resolved_names, root: Path = REPO) -> list[tuple[str, str]]:
     """Markers naming a fact this script does not know how to derive.
 
     A typo in a marker name would otherwise be invisible: the marker simply
@@ -253,8 +268,8 @@ def _unknown_markers(resolved_names) -> list[tuple[str, str]]:
     """
     known = set(resolved_names)
     bad = []
-    for rel in SCANNED:
-        text = (REPO / rel).read_text(encoding="utf-8")
+    for rel in _scanned(root):
+        text = (root / rel).read_text(encoding="utf-8")
         for match in MARKER.finditer(text):
             if match.group("name") not in known:
                 bad.append((rel, match.group("name")))
@@ -272,7 +287,12 @@ def main() -> int:
                       help="print every derived fact")
     parser.add_argument("--fast", action="store_true",
                         help="skip facts needing a pytest collection pass")
+    parser.add_argument("--docs-root", type=Path, default=REPO, metavar="DIR",
+                        help="read and write markers under DIR instead of the "
+                             "repository (facts are still derived from the "
+                             "repository; used by the drift test)")
     args = parser.parse_args()
+    root = args.docs_root.resolve()
 
     facts = _build_facts()
     resolved = _resolve(facts, args.fast)
@@ -288,7 +308,7 @@ def main() -> int:
     # A misspelled marker name never updates and never fails -- catch it in
     # both modes, against the full fact list rather than the resolved subset,
     # so --fast does not report every expensive marker as a typo.
-    unknown = _unknown_markers(facts)
+    unknown = _unknown_markers(facts, root)
     if unknown:
         print("Unknown docnum markers (no such fact):")
         for rel, name in unknown:
@@ -296,7 +316,7 @@ def main() -> int:
         return 1
 
     if args.update:
-        changed = _rewrite(resolved)
+        changed = _rewrite(resolved, root)
         if changed:
             print("Updated:")
             for rel in changed:
@@ -306,7 +326,7 @@ def main() -> int:
         return 0
 
     stale = [(rel, name, cur, want)
-             for rel, name, cur, want in _walk(resolved) if cur != want]
+             for rel, name, cur, want in _walk(resolved, root) if cur != want]
     if stale:
         print("Stale numbers in the docs "
               "(run `python scripts/doc_numbers.py --update`):\n")
@@ -315,7 +335,7 @@ def main() -> int:
             print(f"    docnum:{name}: {cur!r} -> {want!r}")
         return 1
 
-    counted = len(list(_walk(resolved)))
+    counted = len(list(_walk(resolved, root)))
     scope = " (fast: skipped test counts)" if args.fast else ""
     print(f"All {counted} derived numbers are current{scope}.")
     return 0

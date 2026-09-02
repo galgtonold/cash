@@ -21,6 +21,7 @@ this suite.
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -63,36 +64,39 @@ def test_every_marker_names_a_fact_that_exists():
 def test_the_checker_actually_fails_on_drift(tmp_path):
     """A gate that cannot fail is a green checkmark with nothing behind it.
 
-    Rather than mutate the real docs, this drives the script's own comparison
-    against a corrupted copy of one marked file.
+    Runs the checker against a COPY of the docs tree with one number
+    corrupted. Corrupting the real file is what this test used to do, and it
+    raced: ``--check`` reads every marked file, so the sibling test above saw
+    the corruption whenever xdist put the two on different workers. A
+    ``finally`` that restores the file is no protection when the reader is a
+    separate process.
     """
-    target = REPO / "docs" / "how-it-works" / "testing.md"
-    original = target.read_text(encoding="utf-8")
+    rel = Path("docs") / "how-it-works" / "testing.md"
+    original = (REPO / rel).read_text(encoding="utf-8")
     assert "<!-- docnum:platforms -->" in original, (
         "testing.md lost its platform-count marker; the derivation is no "
         "longer covering the number it was added for"
     )
 
-    backup = tmp_path / "testing.md.bak"
-    backup.write_text(original, encoding="utf-8")
+    root = tmp_path / "repo"
+    shutil.copytree(REPO / "docs", root / "docs")
+    shutil.copy2(REPO / "README.md", root / "README.md")
+
     corrupted = original.replace(
         "<!-- docnum:platforms -->", "<!-- docnum:platforms -->999", 1
     )
     assert corrupted != original
+    (root / rel).write_text(corrupted, encoding="utf-8")
 
-    try:
-        target.write_text(corrupted, encoding="utf-8")
-        result = _run("--check", "--fast")
-        assert result.returncode == 1, (
-            "the checker passed against a deliberately wrong number:\n"
-            + result.stdout
-        )
-        assert "docnum:platforms" in result.stdout, result.stdout
-    finally:
-        target.write_text(backup.read_text(encoding="utf-8"), encoding="utf-8")
+    result = _run("--check", "--fast", "--docs-root", str(root))
+    assert result.returncode == 1, (
+        "the checker passed against a deliberately wrong number:\n"
+        + result.stdout
+    )
+    assert "docnum:platforms" in result.stdout, result.stdout
 
-    # And the restore worked, so the suite does not leave the repo dirty.
-    assert target.read_text(encoding="utf-8") == original
+    # The repository itself was never touched.
+    assert (REPO / rel).read_text(encoding="utf-8") == original
 
 
 @pytest.mark.parametrize(
