@@ -14,6 +14,14 @@ Annotations are `#`-comment directives that tweak Cash's per-statement caching d
 | `# @cash:no-cache-calls` | `nocachecalls` | no | Turn off caching the expensive **call inside** a statement. **On by default** — see [below](#call-level-caching-default-and-cashno-cache-calls-alias-nocachecalls). |
 | `# @cash:cache-calls` | `cachecalls` | no | Legacy. Parses without error but does nothing — call-level caching no longer needs opting in. |
 
+!!! note "`# @cash:assume-safe` belongs to the other path"
+    Every directive above is read by the **notebook statement** processor.
+    `# @cash:assume-safe` is not one of them: it waives a decorator-path purity
+    finding for one statement inside a `@cash.cache` function, and is read by
+    the analyzer out of that function's source. In a notebook statement it
+    parses and does nothing. See
+    [Purity & the decorator](tutorials/feature-guides/purity-decorators.md#cashassume-safe-waive-one-statement).
+
 A minimal example:
 
 ```python

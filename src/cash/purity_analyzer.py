@@ -38,6 +38,7 @@ import dataclasses
 import hashlib
 import inspect
 import logging
+import re
 import sys
 import textwrap
 import threading
@@ -1090,6 +1091,7 @@ class PurityAnalyzer:
                 param_names = param_names | {func_def.args.kwarg.arg}
 
             local_owned = _compute_local_owned(func_def, param_names)
+            own_issues_from = len(all_issues)
             visitor = _PurityVisitor(
                 qualname=qualname, param_names=param_names, local_owned=local_owned,
             )
@@ -1104,6 +1106,11 @@ class PurityAnalyzer:
             self._flag_mutable_global_reads(
                 func, func_def, qualname, visitor.read_names, all_issues,
             )
+
+            # Drop what THIS function's source says it has already audited.
+            # Filtered per function, against that function's own source, so a
+            # waiver written in a helper covers the helper and nothing else.
+            _drop_audited(all_issues, own_issues_from, src)
 
             if depth >= self._MAX_DEPTH:
                 continue
@@ -1239,6 +1246,64 @@ _PY_BUILTIN_NAMES = frozenset(dir(_builtins))
 _MODULE_MOD_GLOBALS_CACHE: dict[str, frozenset[str]] = {}
 
 
+#: ``# @cash:assume-safe`` -- a waiver scoped to ONE statement.
+#
+# ``assume_safe=True`` on the decorator silences the whole function, for good.
+# Audit a call today, add an unrelated ``session.post(...)`` next month, and
+# nothing says a word: the waiver outlived the audit it was granted for.
+# Measured -- a POST added after the fact was detected by the analyzer and
+# suppressed by the flag.
+#
+# A waiver written NEXT TO the statement cannot do that. New code arrives
+# unannotated, so it is reported. The scope of the exemption is visible in the
+# diff that grants it, which is the property blanket suppression cannot have.
+_ASSUME_SAFE_RE = re.compile(r"#\s*@cash:\s*assume-safe\b")
+
+
+def _audited_lines(src: str) -> tuple[frozenset[int], bool]:
+    """Line numbers waived by ``# @cash:assume-safe``, and the function flag.
+
+    1-based against *src*, the same frame ``PurityIssue.line`` uses -- both
+    come from the dedented function source.
+
+    An annotation on its own line waives the statement BELOW it as well as
+    itself, because that is how people write ``# noqa`` once the line is long.
+    On the ``def`` line it waives the function-scoped findings instead: a read
+    of a mutated global is a property of the whole body and carries no line, so
+    there is no statement to attach it to.
+    """
+    lines = src.splitlines()
+    marked: set[int] = set()
+    for index, line in enumerate(lines, start=1):
+        if not _ASSUME_SAFE_RE.search(line):
+            continue
+        marked.add(index)
+        if line.strip().startswith("#"):
+            marked.add(index + 1)
+    function_scope = any(
+        lines[i - 1].lstrip().startswith(("def ", "async def "))
+        for i in marked if 1 <= i <= len(lines)
+    )
+    return frozenset(marked), function_scope
+
+
+def _drop_audited(issues: list[PurityIssue], start: int, src: str) -> None:
+    """Remove issues in ``issues[start:]`` that *src* waives, in place."""
+    # Substring test before the line scan: almost no function carries one of
+    # these, and this runs for every function the analyzer walks.
+    if "@cash:" not in src:
+        return
+    audited, function_scope = _audited_lines(src)
+    if not audited and not function_scope:
+        return
+    kept = [
+        issue for issue in issues[start:]
+        if not (issue.line in audited if issue.line else function_scope)
+    ]
+    del issues[start:]
+    issues.extend(kept)
+
+
 def _describe_subscript(node: ast.Subscript) -> str:
     """A short, readable name for `HANDLERS[k]` / `globals()[n]` in a message."""
     base = node.value
@@ -1312,6 +1377,19 @@ def _function_locals(func_node: ast.AST) -> frozenset[str]:
     return frozenset(locs - decl)
 
 
+def _imported_module_names(tree: ast.AST) -> frozenset[str]:
+    """Names bound by a plain ``import x`` / ``import x as y`` in *tree*.
+
+    ``import os.path`` binds ``os``, so the top-level segment is what counts.
+    """
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.add(alias.asname or alias.name.split(".")[0])
+    return frozenset(names)
+
+
 class _GlobalMutationScanner(ast.NodeVisitor):
     """Collects module-global names that are reassigned or mutated *inside a
     function body* (i.e. reachable at runtime), scope-aware so a function's
@@ -1327,9 +1405,22 @@ class _GlobalMutationScanner(ast.NodeVisitor):
     statically that the function never runs at call time. A false flag is a
     harmless warning; a missed one would be a silent stale cache.)"""
 
-    def __init__(self) -> None:
+    def __init__(self, module_names: frozenset[str] = frozenset()) -> None:
         self.modified: set[str] = set()
         self._locals_stack: list[frozenset[str]] = []  # enclosing function locals
+        # Names bound by a plain ``import x`` / ``import x as y``. A
+        # write-METHOD call on one of these does not mutate it: `net.post(...)`
+        # calls a function that lives on the module, it does not change the
+        # module. Without this, one `requests.post(...)` anywhere in a file made
+        # every function in that file that merely READS `requests` report
+        # "reads module global 'requests' that is reassigned or mutated
+        # elsewhere" -- measured, and on a finding that carries no line number,
+        # so it could not even be waived per statement.
+        #
+        # Only plain module imports are excluded. `from config import SETTINGS`
+        # binds an object that `SETTINGS.update(...)` really does mutate, so
+        # those still flag.
+        self._module_names = module_names
 
     @property
     def _in_function(self) -> bool:
@@ -1384,7 +1475,8 @@ class _GlobalMutationScanner(ast.NodeVisitor):
         f = node.func
         if (self._in_function and isinstance(f, ast.Attribute)
                 and f.attr in _WRITE_METHODS
-                and isinstance(f.value, ast.Name) and self._is_global(f.value.id)):
+                and isinstance(f.value, ast.Name) and self._is_global(f.value.id)
+                and f.value.id not in self._module_names):
             self.modified.add(f.value.id)
         self.generic_visit(node)
 
@@ -1406,7 +1498,7 @@ def _module_modified_globals(module: Any) -> frozenset[str]:
         _MODULE_MOD_GLOBALS_CACHE[name] = frozenset()
         return frozenset()
     try:
-        scanner = _GlobalMutationScanner()
+        scanner = _GlobalMutationScanner(_imported_module_names(tree))
         scanner.visit(tree)
         result = frozenset(scanner.modified)
     except Exception:  # noqa: BLE001 - analysis must never break caching

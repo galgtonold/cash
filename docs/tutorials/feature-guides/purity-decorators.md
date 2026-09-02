@@ -481,11 +481,64 @@ fetch_user.cache_info()["warnings"]
     cached result could go silently stale. Pass `assume_safe=True` to cache it
     anyway, or refactor to a statically-named call.
 
-### `assume_safe=True` — silence after auditing
+### `# @cash:assume-safe` — waive one statement
 
-Use when caching the function is fine (e.g. the side effect is
-idempotent — same URL returns the same JSON; logging is acceptable
-to lose on a hit):
+<!-- claim: cash/purity_analyzer.py:_audited_lines @51755b02, cash/purity_analyzer.py:_drop_audited @221158cc -->
+Put the waiver next to the thing you audited:
+
+```python
+@cash.cache
+def fetch_user(uid):
+    return requests.get(f"https://api/{uid}").json()   # @cash:assume-safe
+```
+
+The annotation may sit on the statement's own line or on its own line directly
+above it. For a call spread over several lines it goes on the **opening** line,
+which is where the finding is anchored:
+
+<!-- test:skip reason="illustrative fragment - session/url/payload are undefined by design" -->
+```python
+    session.post(                          # @cash:assume-safe
+        url,
+        json=payload,
+    )
+```
+
+Everything else in the function stays checked — which is the point:
+
+```python
+@cash.cache
+def fetch_user(uid):
+    audit.post("/read", {"uid": uid})                  # ← warns, added later
+    return requests.get(f"https://api/{uid}").json()   # @cash:assume-safe
+```
+
+On the `def` line it waives the **function-scoped** findings instead — a
+[read of a mutated global](#what-the-analyzer-looks-at) is a property of the
+whole body and carries no line number, so there is no statement to attach it
+to. It does not swallow the line-anchored ones.
+
+It is honoured under `strict=True` as well: a line you audited is audited. It
+also waives the untrackable-dependency class that otherwise
+[raises](#default-warn-at-first-call), which makes it the
+statement-scoped equivalent of `assume_safe=True` for those.
+
+!!! note "A helper's waiver applies to every caller"
+    The annotation is read from the source of the function that *has* the
+    finding. When the impure call lives in a helper, the waiver goes in the
+    helper — and then it holds wherever that helper is called from. You cannot
+    accept a helper's side effect for one caller and not another; if you need
+    that, `assume_safe=True` on the one caller is the tool.
+
+!!! note "Decorator path only"
+    The analyzer reads this out of the function's source. In a notebook
+    *statement* (`%cash_on`) the directive is parsed but has no meaning, and is
+    ignored silently — see [Annotations](../../annotations.md) for the ones
+    that do work there.
+
+### `assume_safe=True` — silence the whole function
+
+The blunt version. Use it when the audit really is function-wide:
 
 ```python
 @cash.cache(assume_safe=True)
@@ -495,6 +548,17 @@ def fetch_user(uid):
 
 The analyzer still runs (its helper-source-hashes are needed for cache
 invalidation), but no warning fires.
+
+!!! warning "The waiver outlives the audit"
+    `assume_safe=True` silences the function **permanently**, including code
+    added long after the audit. Measured: a `session.post(...)` added to an
+    already-flagged function is detected by the analyzer and suppressed by the
+    flag, with nothing to tell you. Nothing re-arms it — not editing the
+    function, not the new call being of a different kind.
+
+    Prefer `# @cash:assume-safe` on the statements you actually checked. New
+    code arrives unannotated, so it gets reported, and the scope of the
+    exemption is visible in the diff that grants it.
 
 ### `strict=True` — fail loud
 
@@ -655,7 +719,8 @@ it flags:
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript
   assignment, augmented-assign, and write-methods (`.append`, `.update`,
   …) on a name that could reach caller-visible state
-- **Reads of a *mutated* module global** — if the function reads a
+- **Reads of a *mutated* module global** — <!-- claim: cash/purity_analyzer.py:_imported_module_names @2e73a3e0 -->
+  if the function reads a
   module-level variable that is reassigned or mutated somewhere in its
   module, the cached result won't reflect changes to it. Only globals that
   are actually written are flagged — a constant (a lookup/dispatch table you

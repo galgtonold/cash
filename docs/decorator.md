@@ -224,7 +224,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @e00247ab -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @38aa4773 -->
 Only globals that are **read** participate — and that includes globals read
 by a **helper** rather than by the cached function itself, so a helper
 returning a module-level `CONFIG` invalidates its caller when that config
@@ -649,6 +649,20 @@ Three modes:
   untrackable-dependency raise, caching regardless. Use after you've audited and
   know caching is correct (e.g., a memoized API call whose side effect is
   idempotent / harmless on hit).
+
+To waive **one statement** rather than the whole function, annotate it:
+
+```python
+@cash.cache
+def fetch_user(uid):
+    return requests.get(f"https://api/{uid}").json()   # @cash:assume-safe
+```
+
+Prefer this over `assume_safe=True`. The flag silences the function
+permanently, including calls added long after the audit; an annotation only
+covers the statement it sits on, so new code is reported. It works under
+`strict=True` too, and on the `def` line it waives the function-scoped
+findings (a read of a mutated global, which has no line to attach to).
 
 See [Purity tutorial](tutorials/feature-guides/purity-decorators.md) for the full story including
 `@pure`, `@stateful`, and `mark_pure`/`mark_stateful` for third-party
