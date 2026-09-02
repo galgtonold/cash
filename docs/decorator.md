@@ -946,7 +946,7 @@ side effect, and only cache the pure part.
 
 ### A function returning a matplotlib `Figure` is never cached
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @409a9199 -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @5ae11390 -->
 `@cash.cache` refuses to store a result that is — or contains — a matplotlib
 `Figure` or `Axes`, and warns once saying so.
 

@@ -48,10 +48,10 @@ No decorator option to enable — iterator detection is automatic. Pre-existing 
 
 ## How chunking works
 
-<!-- claim: cash/core.py:Cash._stream_and_store @bdeb1bf7 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/notebook/object_hashing.py:estimate_object_size @9aeb760a -->
+<!-- claim: cash/core.py:Cash._stream_and_store @08822547 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/notebook/object_hashing.py:estimate_object_size @9aeb760a -->
 The write path lives in `Cash._stream_and_store`. The loop is:
 
-1. Pull one item from the user's iterator, with the `FileAccessTracker` entered **only for that step** — so a file the generator reads lazily is recorded as a dependency, while the caller's own reads in its loop body are not.
+1. Pull one item from the user's iterator, with the `FileAccessTracker` live — so a file the generator reads lazily is recorded as a dependency. It is entered once and suspended around each yield, so the caller's own reads in its loop body are not attributed to the generator.
 2. Track running byte size via `estimate_object_size` from `cash.notebook.object_hashing`.
 3. When `len(buffer) >= chunk_max_items` **or** `buffer_bytes >= chunk_max_bytes`, flush the buffer to the backend under key `f"{cache_key}:chunk_{i}"`, increment `i`, and reset the buffer.
 4. **Yield the item to the caller**, then go back to 1.
@@ -84,7 +84,7 @@ The manifest is always written *last*, so a process killed mid-write cannot prod
 
 ### Single-chunk fast path
 
-`_write_chunks` recognises the common case where the iterator exhausts before any threshold is crossed. It returns the buffered list back to the caller (the `single_chunk_buffer` second element of its tuple) without writing anything yet — that lets the caller apply `cache_if` to the materialized result before committing the single chunk. The wrapper then either writes one chunk plus the manifest, or skips storage entirely if the predicate rejected the result.
+`_stream_and_store` recognises the common case where the iterator exhausts before any threshold is crossed. Nothing is written while the buffer is still filling, so at exhaustion the whole result is in hand and `cache_if` can be applied to it before anything is committed. It then either writes one chunk plus the manifest, or skips storage entirely if the predicate rejected the result. The caller has already received every item either way — the predicate gates *storage*, never what was yielded.
 
 ### Multi-chunk path
 
@@ -116,15 +116,15 @@ What is **not** supported:
 
 ## Replay semantics
 
-<!-- claim: cash/core.py:Cash._wrap_iterator_hit @82a2a1ae, cash/core.py:_ListCachedIterator @3d68dd44 broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @d808794a broad="the claim is about the whole replay wrapper" -->
+<!-- claim: cash/core.py:Cash._wrap_iterator_hit @82a2a1ae, cash/core.py:_StreamingCachedIterator @435e32b0 broad="the claim is about the whole replay wrapper", cash/core.py:_ChunkedCachedIterator @d808794a broad="the claim is about the whole replay wrapper" -->
 On a cache hit, the dispatch at `Cash._wrap_iterator_hit` reads `metadata['iterator_storage']` and returns a **fresh** `_ChunkedCachedIterator(cash, cache_key, n_chunks)` — a lazy iterator that fetches one chunk at a time. That is *every* iterator hit, single-chunk included: a one-chunk result is still stored as a manifest plus one chunk entry, so it replays through the same path.
 
-`_ListCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. On a miss that never crossed a threshold, `_write_chunks` still holds the buffered list in memory, so the wrapper hands that back directly instead of reading it straight back out of the backend:
+`_StreamingCachedIterator` is the other half, and it belongs to the **first** call rather than to a hit. It wraps `_stream_and_store`, so a miss hands you the producer's own items at the producer's own pace while the chunks fill behind you — there is nothing to read back out of the backend, because the result does not exist yet:
 
 | | first call (miss) | any later call (hit) |
 |---|---|---|
-| stayed within one chunk | `_ListCachedIterator` | `_ChunkedCachedIterator` |
-| crossed a threshold | `_ChunkedCachedIterator` | `_ChunkedCachedIterator` |
+| stayed within one chunk | `_StreamingCachedIterator` | `_ChunkedCachedIterator` |
+| crossed a threshold | `_StreamingCachedIterator` | `_ChunkedCachedIterator` |
 
 Two consequences:
 
@@ -167,7 +167,7 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 
 The next call to the decorated function will see a miss on the manifest key (manifests live in the same backend tier as chunks, so they're evicted together in typical configurations) and recompute. Test reference: `test_chunked_iterator_missing_chunk_terminates_safely` in `tests/test_core/test_iterator_caching.py`.
 
-<!-- claim: cash/core.py:Cash._write_one_chunk @2a55c680 -->
+<!-- claim: cash/core.py:Cash._write_one_chunk @cfda4c9a -->
 TTL is honored uniformly: each chunk inherits the manifest's TTL (`Cash._write_one_chunk` propagates it), so `Cash.cleanup()` reclaims expired chunks alongside the expired manifest. Test reference: `test_chunked_chunks_inherit_manifest_ttl` in `tests/test_core/test_iterator_caching.py`.
 
 ## Persistence and backend tiers
@@ -227,7 +227,7 @@ Tuning notes:
 |---|---|---|
 | `chunk_max_items=N` | `@cash.cache` kwarg | Close current chunk after `N` items. Default `1_000_000`. |
 | `chunk_max_bytes=N` | `@cash.cache` kwarg | Close current chunk after `N` bytes (estimated). Default `1_000_000_000`. |
-| `_ListCachedIterator` | Internal | **First-call** wrapper for a result that fit in one chunk. Streams the list `_write_chunks` just materialized, with no backend read; iter-self; supports `close()`. |
+| `_StreamingCachedIterator` | Internal | **First-call** wrapper. Passes the producer's items through as they arrive and fills the chunk buffers behind them; commits only on exhaustion; iter-self; supports `close()`, which abandons the entry. |
 | `_ChunkedCachedIterator` | Internal | Lazy replay, and the wrapper for **every** cache hit. Fetches one chunk at a time; iter-self; terminates cleanly on missing chunks; supports `close()`. |
 | `metadata['iterator_storage'] = 'chunked'` | Backend metadata | Flag the hit path reads to choose `_ChunkedCachedIterator` over a single-blob return. |
 | `f"{cache_key}:chunk_{i}"` | Backend key format | Chunk keys are derived from the manifest key by suffix. `cleanup()` reclaims them alongside the manifest. |

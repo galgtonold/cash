@@ -816,7 +816,7 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
     tier is consistent). The locked path's return value must still be
     a _ChunkedCachedIterator, not a dict.
     """
-    from cash.core import _ChunkedCachedIterator, _ListCachedIterator
+    from cash.core import _ChunkedCachedIterator
 
     c = Cash(cache_dir=str(tmp_path), register_magic=False, use_locking=True)
     n = {"calls": 0}
@@ -837,7 +837,7 @@ def test_chunked_storage_works_under_use_locking(tmp_path):
     assert not isinstance(result, dict), (
         f"got raw manifest dict instead of iterator wrapper: {type(result).__name__}"
     )
-    assert isinstance(result, (_ChunkedCachedIterator, _ListCachedIterator)), (
+    assert isinstance(result, _ChunkedCachedIterator), (
         f"expected iterator wrapper, got {type(result).__name__}"
     )
     assert list(result) == list(range(25))

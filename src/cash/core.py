@@ -353,48 +353,6 @@ class CacheExplanation:
         return self.__str__()
 
 
-class _ListCachedIterator:
-    """Lazy iterator wrapper over a fully-materialized cached list.
-
-    Returned on cache hit when the function's output fit in a single
-    chunk: the yielded values are stored as one Python list and this
-    iterator streams them on each call. See `_ChunkedCachedIterator`
-    for the multi-chunk variant used for large iterators.
-    """
-
-    __slots__ = ("_iter",)
-
-    def __init__(self, items):
-        self._iter = iter(items)
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        return next(self._iter)
-
-    def close(self):
-        """Stop iteration. Subsequent ``next()`` raises ``StopIteration``."""
-        # No generator to throw GeneratorExit into - the iterator is
-        # just a replay over a materialized list. Emptying the iterator
-        # is the right semantic equivalent.
-        self._iter = iter(())
-
-    def send(self, value):
-        raise AttributeError(
-            "cached generator: .send() is not supported. The cached "
-            "iterator replays a previously materialized list. If you "
-            "need send() semantics, the function cannot be cached."
-        )
-
-    def throw(self, *args, **kwargs):
-        raise AttributeError(
-            "cached generator: .throw() is not supported. The cached "
-            "iterator replays a previously materialized list. If you "
-            "need throw() semantics, the function cannot be cached."
-        )
-
-
 class _StreamingCachedIterator:
     """Passes the producer's items through as they arrive, caching at the end.
 
@@ -404,7 +362,7 @@ class _StreamingCachedIterator:
     after the full latency. Measured on a token stream -- 494ms to first item
     uncached, 2444ms cached, the entire completion in one go.
 
-    Same surface as the two replay iterators, deliberately: no `send`/`throw`,
+    Same surface as the replay iterator, deliberately: no `send`/`throw`,
     because a cached generator cannot support them on the hit either.
     """
 
@@ -5750,7 +5708,7 @@ class Cash:
         KNOWN BOUNDARY: called at all four store sites (sync/async x
         non-iterator/single-chunk), which is every site where the value is in
         hand before anything is written.  A *multi*-chunk iterator is not
-        covered -- ``_write_chunks`` has already written earlier chunks by the
+        covered -- ``_stream_and_store`` has already written earlier chunks by the
         time any item could be inspected, so gating there would mean aborting
         mid-write and reclaiming them.  Reaching it needs a generator yielding
         enough Figures to cross ``chunk_max_bytes`` (or a million of them),
@@ -5896,15 +5854,14 @@ class Cash:
         """Yield the producer's items as they come, and cache once it ends.
 
         Three things have to hold at once, and they are why this is not simply
-        a `yield` added to `_write_chunks`:
+        a `yield` added to a drain-then-store loop:
 
-        **The tracker is entered per `next()`, not around the whole loop.** A
-        generator's file reads happen while it is consumed, so the old code
-        drained it inside the tracker to catch them. Holding the tracker open
-        across the caller's loop instead would attribute the CALLER's reads to
-        this function. Scoping it to each production step records the
-        producer's lazy reads and nothing else. `FileAccessTracker` keeps a
-        token stack, so repeated entry accumulates rather than nesting wrong.
+        **The tracker watches production, never consumption.** A generator's
+        file reads happen while it is consumed, so the tracker has to be live
+        across `next()`; leaving it live across the caller's `yield` would
+        attribute the CALLER's reads to this function. It is entered once and
+        suspended around each yield, which records the producer's lazy reads
+        and nothing else.
 
         **Nothing is stored unless the producer ran to exhaustion.** A caller
         that breaks out, or a producer that raises, leaves no entry -- a
