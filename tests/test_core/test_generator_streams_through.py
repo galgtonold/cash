@@ -368,3 +368,70 @@ def test_a_write_inside_a_LIBRARY_is_still_observed(c, tmp_path):
 
     assert target.exists()
     assert any("static analysis did not see" in m for m in messages), messages
+
+
+# --------------------------------------------------------------------------
+# Cross-process survival. Caching a generator exists for the SECOND process;
+# this is the property that makes the feature worth having at all.
+# --------------------------------------------------------------------------
+def test_a_cached_generator_survives_a_fresh_cash_instance(tmp_path):
+    """The bug a user found by re-running a demo and noticing it stayed slow.
+
+    Chunks were written with `execution_time=0`, which put them under the
+    smart-persistence compute floor, so they stayed RAM-only while the
+    manifest -- carrying the real time -- went to disk. A fresh process found
+    a manifest with nothing behind it and, because a missing chunk terminates
+    iteration, returned an EMPTY iterator. Not slow: wrong, and silent.
+    """
+    runs = []
+
+    def build(cash_dir):
+        c = Cash(cache_dir=str(cash_dir), register_magic=False)
+
+        @c.cache
+        def stream():
+            runs.append(1)
+            for i in range(5):
+                time.sleep(0.03)
+                yield i
+        return stream
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert list(build(tmp_path / "c")()) == [0, 1, 2, 3, 4]
+        # A brand-new instance over the same directory: no shared RAM tier,
+        # which is what makes this stand in for a second process.
+        assert list(build(tmp_path / "c")()) == [0, 1, 2, 3, 4]
+
+    assert len(runs) == 1, "the second instance recomputed instead of restoring"
+
+
+def test_a_manifest_whose_chunks_vanished_is_a_miss_not_a_short_answer(tmp_path):
+    """Eviction can still reach a chunk without reaching its manifest.
+
+    The reader stops at the first missing chunk, so the entry would serve
+    fewer items than it stored. Recomputing is the only honest answer.
+    """
+    runs = []
+    c = Cash(cache_dir=str(tmp_path / "c"), register_magic=False)
+
+    @c.cache(chunk_max_items=2)
+    def stream():
+        runs.append(1)
+        for i in range(6):
+            time.sleep(0.02)
+            yield i
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        assert list(stream()) == [0, 1, 2, 3, 4, 5]
+        assert list(stream()) == [0, 1, 2, 3, 4, 5]
+        assert len(runs) == 1
+
+        # Lose one chunk, as eviction would.
+        key = next(e["key"] for e in c.backend.list_entries()
+                   if str(e["key"]).endswith(":chunk_1"))
+        c.backend.delete(key)
+
+        assert list(stream()) == [0, 1, 2, 3, 4, 5], "a short answer was served"
+    assert len(runs) == 2, "the damaged entry must recompute"

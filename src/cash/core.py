@@ -2190,6 +2190,8 @@ class Cash:
                 self._validate_ttl(metadata, ttl)
                 if not self._auto_file_deps_fresh(metadata):
                     return _CACHE_MISS
+                if not self._chunks_are_intact(cache_key, metadata):
+                    return _CACHE_MISS
                 # If this hit happens *inside* another cached function's
                 # computation, replay the files this entry depends on into the
                 # enclosing tracker, so the outer function records them too.
@@ -2321,6 +2323,35 @@ class Cash:
                 validation.seconds,
                 saved,
             )
+
+    def _chunks_are_intact(self, cache_key: str, metadata: CacheMetadata) -> bool:
+        """True unless this is a chunked manifest missing some of its chunks.
+
+        A manifest can outlive its chunks -- eviction reaches them separately,
+        and until chunks carried the producer's execution_time the persistence
+        gate dropped them while keeping the manifest. The reader terminates
+        iteration on a missing chunk, so the result of that split was an
+        entry that returned FEWER items than it stored, or none at all,
+        without a word. A truncated answer is worse than a slow one, so the
+        entry is treated as absent and recomputed.
+
+        Metadata-only reads: the point is to check presence, not to load the
+        payload and undo the laziness chunking exists for.
+        """
+        if getattr(metadata, "iterator_storage", None) != "chunked":
+            return True
+        try:
+            for index in range(metadata.n_chunks or 0):
+                if self.backend.get_metadata(f"{cache_key}:chunk_{index}") is None:
+                    logger.debug(
+                        "[CORE] chunk %d of %s is missing; treating the entry "
+                        "as a miss rather than serving a short result",
+                        index, cache_key,
+                    )
+                    return False
+        except Exception:  # noqa: BLE001 - an integrity check must not break a call
+            return True
+        return True
 
     def _wrap_iterator_hit(
         self,
@@ -5918,7 +5949,8 @@ class Cash:
                             self._warn_cache_if_bypassed(
                                 func_name, chunk_max_items, chunk_max_bytes,
                                 stacklevel=4)
-                        self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
+                        self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl,
+                                          execution_time=produced_seconds)
                         buffer = []
                         buffer_bytes = 0
                         chunk_index += 1
@@ -5951,7 +5983,8 @@ class Cash:
                     should_cache = False
                 if should_cache:
                     if buffer:
-                        self._write_one_chunk(cache_key, 0, buffer, ttl=ttl)
+                        self._write_one_chunk(cache_key, 0, buffer, ttl=ttl,
+                                              execution_time=produced_seconds)
                     # An empty iterator still gets a zero-chunk manifest, so a
                     # hit returns empty instead of recomputing.
                     self._store_chunked_manifest(
@@ -5965,7 +5998,8 @@ class Cash:
                     if chunk_index == 1 and cache_if is not None:
                         self._warn_cache_if_bypassed(
                             func_name, chunk_max_items, chunk_max_bytes, stacklevel=4)
-                    self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl)
+                    self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl,
+                                          execution_time=produced_seconds)
                     chunk_index += 1
                 self._store_chunked_manifest(
                     cache_key, func_name,
@@ -5992,6 +6026,7 @@ class Cash:
         chunk_index: int,
         chunk_buffer: list[Any],
         ttl: int | None = None,
+        execution_time: float = 0.0,
     ) -> None:
         """Write a single chunk to the backend.
 
@@ -6008,7 +6043,16 @@ class Cash:
             key=chunk_key,
             timestamp=time.time(),
             serializer_cls=type(serializer),
-            execution_time=0.0,
+            # The PRODUCER's time, not 0. A chunk is not an independent result
+            # whose worth gets decided on its own -- it is the payload of an
+            # entry whose durability was already decided. Writing 0 here sent
+            # every chunk under the smart-persistence compute floor, so chunks
+            # stayed RAM-only while the manifest (carrying the real time) went
+            # to disk. A fresh process then found a manifest with no chunks
+            # behind it and, because a missing chunk terminates iteration,
+            # returned an EMPTY iterator. Silent data loss, and the cross-
+            # process hit is the entire point of caching a generator.
+            execution_time=execution_time,
             ttl=ttl,
         ).to_dict()
         try:
