@@ -157,6 +157,7 @@ change:
 | A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
 | A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper** rather than by the function itself |
 | A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
+| A **class passed as an argument** | Keyed by its declaration, not its name — so an output specification handed to a call (`extract(doc, InvoiceFields)`) invalidates when a field or a field description changes. Works for plain classes, `@dataclass`, and pydantic `BaseModel` |
 
 None of that needs an annotation. That is the point: the usual reasons a cached
 result goes stale are tracked for you, and the [parameters](#parameters) exist
@@ -605,7 +606,7 @@ is bypassed (warning fires) — see the iterator section below.
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @8f789834, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @9524c3ea, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 

@@ -575,6 +575,17 @@ def _builtin_hash_family(type_name: str, module: str) -> str | None:
     return None
 
 
+#: Pydantic v2 compiles these onto every model class. They are derived from the
+#: field declarations and their digest differs in every process, so folding them
+#: made a pydantic spec un-cacheable across runs. `Cash._pydantic_field_parts`
+#: folds the declarations they were standing in for.
+_PYDANTIC_COMPILED = frozenset({
+    "__pydantic_core_schema__",
+    "__pydantic_serializer__",
+    "__pydantic_validator__",
+})
+
+
 class Cash:
     """Smart caching framework for Python functions and Jupyter notebooks.
 
@@ -3954,6 +3965,47 @@ class Cash:
                           (str(getattr(f, "type", "")), meta)))
         return parts
 
+    def _pydantic_field_parts(self, cls: type) -> list[tuple]:
+        """Fold a pydantic model's field declarations.
+
+        The counterpart to :meth:`_dataclass_field_parts`. Pydantic keeps them
+        in ``model_fields`` -- a property on the class, so ``vars(cls)`` never
+        sees it -- and the only other place they appear is the compiled trio
+        skipped above, whose digest is different in every process.
+
+        So before this, a pydantic spec passed as an argument was tracked
+        (through the compiled schema) but never cached across processes:
+        measured 2 executions for 2 runs of an unedited model, against 1 for
+        the equivalent dataclass. Safe and useless.
+
+        `description` is the load-bearing one -- it is the instruction sent to
+        the model in every structured-output library there is.
+        """
+        # Guarded: this runs for EVERY class the surface walk sees, and
+        # `model_fields` on a non-pydantic class could be a property that
+        # computes something, or raises. Hashing must never be the thing that
+        # breaks a call.
+        try:
+            fields = getattr(cls, "model_fields", None)
+        except Exception:  # noqa: BLE001 - a descriptor of someone else's
+            return []
+        if not isinstance(fields, dict):
+            return []
+        parts: list[tuple] = []
+        for fname, info in sorted(fields.items()):
+            try:
+                default = self._hash_arg_payload((getattr(info, "default", None),), {})
+            except (TypeError, pickle.PicklingError, AttributeError,
+                    OverflowError, ValueError):
+                default = None
+            parts.append((cls.__qualname__, f"__pydantic_field__:{fname}", (
+                str(getattr(info, "annotation", "")),
+                getattr(info, "description", None),
+                getattr(info, "alias", None),
+                default,
+            )))
+        return parts
+
     def _class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
         """Every user-code member of *cls* and its user base classes.
 
@@ -3961,7 +4013,7 @@ class Cash:
         replaces, and sorted within each class so dict ordering cannot change
         the digest.
         """
-        parts: list[tuple] = []
+        parts: list[tuple] = self._pydantic_field_parts(cls)
         for base in reversed(cls.__mro__):
             # An OPAQUE base contributes nothing, so `mark_opaque(VendorBase)`
             # also stops a `Derived(VendorBase)` digest moving when the vendor
@@ -3981,6 +4033,15 @@ class Cash:
                 # code change at all. Skipping it is what keeps "comments do
                 # not invalidate" (see _code_identity) true on 3.13+ too.
                 if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
+                    continue
+                # Pydantic v2 compiles three Rust objects onto every model.
+                # They are DERIVED from the field declarations, and their
+                # digest differs in every process -- measured: the same
+                # unedited model produced a different class digest on each
+                # run, so a pydantic spec passed as an argument never hit
+                # across processes. `model_fields` below carries the same
+                # declarations and is stable, so this loses nothing.
+                if name in _PYDANTIC_COMPILED:
                     continue
                 if name == "__dataclass_fields__" and isinstance(member, dict):
                     parts.extend(self._dataclass_field_parts(base, member))

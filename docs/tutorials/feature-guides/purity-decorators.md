@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @8f789834, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @9524c3ea, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -484,7 +484,7 @@ fetch_user.cache_info()["warnings"]
 
 ### `# @cash:assume-safe` — waive one statement
 
-<!-- claim: cash/purity_analyzer.py:_audited_lines @51755b02, cash/purity_analyzer.py:_drop_audited @221158cc -->
+<!-- claim: cash/purity_analyzer.py:_audited_lines @51755b02, cash/purity_analyzer.py:_drop_audited @75a58657 -->
 Put the waiver next to the thing you audited:
 
 ```python
