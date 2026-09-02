@@ -223,7 +223,7 @@ cash inspect /tmp/some-cache-dir
 
 - `--function NAME` — *Optional.* List one function's individual entries
   instead of the per-function overview. An unambiguous trailing segment is
-  enough: `--function work` finds `__main__.work`. `notebook` (or
+  enough: `--function work` finds `model.work`. `notebook` (or
   `statements`) selects the `(notebook statements)` group without its
   brackets. An ambiguous name prints the candidates and exits 1; an unknown
   one prints the functions that *are* cached.
@@ -251,14 +251,19 @@ Cache directory: .cash
   Total size: 13.7 MB    Entries: 3    Functions: 2
 
   FUNCTION                      ENTRIES        SIZE   LAST USED
-  __main__.heavy_field                2     13.7 MB   2 min ago
-  __main__.small_helper               1       620 B   2 min ago
+  model.heavy_field                   2     13.7 MB   2 min ago
+  model.small_helper                  1       620 B   2 min ago
 ```
 
 The grouping needs no extra bookkeeping: a decorator cache key is
 `{module.qualname}:{state}:{dynamic}:{args}`, so the owning function is the
 first segment of every key on disk. Notebook statements are keyed `stmt:<sha>`
 and have no function to name, so they group under `(notebook statements)`.
+
+The module part is the **defining file's name**, not `__main__`: a function in
+`model.py` groups under `model.` whether you ran the script or imported it, so
+the two agree. `__main__.` is what you see for code with no defining file — a
+REPL, `python -c`, or a notebook kernel.
 
 **Output for a notebook:**
 

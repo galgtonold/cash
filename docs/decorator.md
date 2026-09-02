@@ -108,8 +108,8 @@ CASH_SUMMARY=1 python model.py
 
 ```
 cash: 4 of 5 calls restored, 41.2s saved
-  __main__.ray_component   3 hits,   1 miss     41.2s saved
-  __main__.build_grid      1 hit,    0 misses    0.3s saved
+  model.ray_component   3 hits,   1 miss     41.2s saved
+  model.build_grid      1 hit,    0 misses    0.3s saved
 ```
 
 `cash.configure(summary=True)`, `Cash(summary=True)` and a `summary = true`
@@ -127,8 +127,8 @@ Cache directory: .cash
   Total size: 1.68 GB    Entries: 412    Functions: 6
 
   FUNCTION                      ENTRIES        SIZE   LAST USED
-  __main__.ray_component            180     1.21 GB   2 min ago
-  __main__.build_grid                97      310 MB   2 min ago
+  model.ray_component               180     1.21 GB   2 min ago
+  model.build_grid                   97      310 MB   2 min ago
 ```
 
 **Drop one function's entries** when you're out of disk but still want the

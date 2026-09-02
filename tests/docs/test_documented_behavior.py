@@ -353,3 +353,53 @@ def test_agent_guide_badge_example_matches_what_the_renderer_emits():
             "timing. Re-render with cash.notebook.badge_renderer._text."
             "print_text_badge and paste what it prints."
         )
+
+
+# ---------------------------------------------------------------------------
+# How a script's cached functions are NAMED
+# ---------------------------------------------------------------------------
+
+def test_a_scripts_cached_function_is_keyed_by_filename_not_dunder_main(tmp_path):
+    """`docs/decorator.md` and `docs/cli.md` show `cash inspect` / CASH_SUMMARY
+    output right after telling the reader to run `python model.py`, so the
+    module prefix in those transcripts is a claim about this behaviour.
+
+    Both pages showed `__main__.` until 2026-09-02 -- pre-resolution output.
+    A script's functions group under the defining FILE's name, which is what
+    makes `python model.py` and `import model` share one entry
+    (see how-it-works/decorator-path.md). `__main__.` survives only where
+    there is no defining file: a REPL, `python -c`, a notebook kernel.
+
+    A subprocess is required: run in-process, this file is not `__main__`.
+    """
+    import subprocess
+    import sys
+
+    script = tmp_path / "model.py"
+    script.write_text(
+        "import warnings, time\n"
+        "warnings.simplefilter('ignore')\n"
+        "import cash\n"
+        f"c = cash.Cash(cache_dir={str(tmp_path / '.cash')!r}, register_magic=False)\n"
+        "@c.cache\n"
+        "def ray_component(i):\n"
+        "    time.sleep(0.15)\n"
+        "    return i\n"
+        "ray_component(1)\n"
+        "print('KEY:', next(iter(c.functions)))\n",
+        encoding="utf-8",
+    )
+    cp = subprocess.run([sys.executable, str(script)], capture_output=True,
+                        text=True, cwd=str(tmp_path), timeout=180)
+    names = [ln.split("KEY:", 1)[1].strip()
+             for ln in cp.stdout.splitlines() if ln.startswith("KEY:")]
+    assert names, (
+        "the probe observed no registered function, so it proves nothing:\n"
+        f"stdout={cp.stdout!r}\nstderr={cp.stderr[-500:]!r}"
+    )
+    name = names[0]
+    assert name == "model.ray_component", (
+        f"a script's cached function is named {name!r}. The docs' `cash inspect` "
+        "and CASH_SUMMARY transcripts show a `model.` prefix on the strength of "
+        "this; if the __main__ resolution changed, those pages need updating too."
+    )
