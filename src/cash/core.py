@@ -699,12 +699,22 @@ class Cash:
         self._mutating_globals: dict = {}
         # code object -> closure free vars folded only provisionally (CAS-270).
         self._provisional_capture_cache: dict = {}
-        # Per-call scratch: {name: (pre-call hash, scope)} for every provisional
-        # capture folded into the key being built. Cleared once per
-        # `_resolve_cache_key`, because BOTH `_fold_closure` and
+        # Per-call scratch: {name: (pre-call hash, scope, owner_globals)} for
+        # every provisional capture folded into the key being built. Cleared
+        # once per `_resolve_cache_key`, because BOTH `_fold_closure` and
         # `_fold_read_globals` contribute and either clearing it would wipe the
         # other's entries.
-        self._pending_capture_watch: dict[str, tuple[str, str]] = {}
+        #
+        # `owner_globals` is the mapping the pre-call hash was taken FROM, and
+        # it is not always the decorated function's own. `_fold_read_globals`
+        # also runs on behalf of module-bounded HELPERS, so a global read by a
+        # helper in another module lands here under a bare name that does not
+        # exist in `func.__globals__` at all. Re-reading it there found None,
+        # hashed that, and reported every such global as mutated by the call --
+        # a provider registry read by a client helper warned on every first
+        # call. Carrying the owning mapping is what makes the after-hash look
+        # at the same variable the before-hash did.
+        self._pending_capture_watch: dict[str, tuple[str, str, Any]] = {}
         # func_name -> RNG modules that function was OBSERVED drawing from.
         # Learned on a miss; only these functions get a seed-epoch in their key.
         self._rng_drawing_funcs: dict[str, set[str]] = {}
@@ -3188,7 +3198,7 @@ class Cash:
                     continue
                 captures.append((name, h))
                 if provisional is None or name in provisional:
-                    self._pending_capture_watch[name] = (h, "closure")
+                    self._pending_capture_watch[name] = (h, "closure", None)
         if not captures:
             return state_hash
         clo = self._serialize_args(func_name, tuple(captures), {})
@@ -3905,6 +3915,45 @@ class Cash:
             depth += 1
         return digests
 
+    def _dataclass_field_parts(self, base: type, field_map: dict) -> list[tuple]:
+        """Fold a dataclass's field metadata, which nothing else reaches.
+
+        ``@dataclass`` moves the per-field declaration off the class attribute
+        and into ``__dataclass_fields__``. The attribute that remains is just
+        the default value, so a field's TYPE and its ``metadata=`` never
+        reached the digest -- and ``__dataclass_fields__`` itself cannot be
+        pickled, because ``Field.metadata`` is a ``mappingproxy``. The generic
+        fold below caught that ``TypeError``, set ``content = None``, and
+        dropped the member in silence.
+
+        Measured: a schema class with ``field(metadata={"desc": ...})``, passed
+        as an argument, served an answer built from the OLD description after
+        that description was rewritten. Which is the whole hazard, because a
+        field description is prompt text in every structured-output library
+        there is -- it is not decoration, it is the instruction.
+
+        Only the parts nothing else covers are folded. The default value is
+        already the class attribute and is hashed there; folding it again would
+        change nothing and cost a hash.
+        """
+        parts: list[tuple] = []
+        for fname, f in sorted(field_map.items()):
+            try:
+                meta = self._hash_arg_payload((dict(getattr(f, "metadata", {}) or {}),), {})
+            except (TypeError, pickle.PicklingError, AttributeError,
+                    OverflowError, ValueError):
+                # An unpicklable metadata VALUE. Skip the metadata rather than
+                # repr() it: a repr here would leak an object address and make
+                # the digest differ between processes, which is worse than not
+                # tracking it.
+                meta = None
+            # `str(f.type)` and not the object: an annotation may be a string
+            # (`from __future__ import annotations`) or a class, and both spell
+            # the same thing deterministically this way.
+            parts.append((base.__qualname__, f"__dataclass_field__:{fname}",
+                          (str(getattr(f, "type", "")), meta)))
+        return parts
+
     def _class_surface_parts(self, cls: type, _depth: int = 0) -> list[tuple]:
         """Every user-code member of *cls* and its user base classes.
 
@@ -3932,6 +3981,9 @@ class Cash:
                 # code change at all. Skipping it is what keeps "comments do
                 # not invalidate" (see _code_identity) true on 3.13+ too.
                 if name in ("__dict__", "__weakref__", "__module__", "__firstlineno__"):
+                    continue
+                if name == "__dataclass_fields__" and isinstance(member, dict):
+                    parts.extend(self._dataclass_field_parts(base, member))
                     continue
                 target = member
                 if isinstance(member, (classmethod, staticmethod)):
@@ -4240,7 +4292,9 @@ class Cash:
                 # Free: this is the hash the key already needed. Keeping it is
                 # what makes the post-call check cost one hash instead of two.
                 if provisional is None or name in provisional:
-                    watch[name] = (h, "global")
+                    # `g`, not the decorated function's globals: this may be a
+                    # helper's module (see `_fold_helper_read_globals`).
+                    watch[name] = (h, "global", g)
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError, ValueError):
                 self._warn_once(
                     CashImpurityWarning,
@@ -5579,10 +5633,10 @@ class Cash:
         code = getattr(func, "__code__", None)
         if code is None:
             return
-        g = getattr(func, "__globals__", None)
+        own_globals = getattr(func, "__globals__", None)
         cells = dict(zip(getattr(code, "co_freevars", ()) or (),
                          getattr(func, "__closure__", ()) or ()))
-        for name, (before, scope) in watched.items():
+        for name, (before, scope, owner) in watched.items():
             try:
                 if scope == "closure":
                     cell = cells.get(name)
@@ -5590,11 +5644,14 @@ class Cash:
                         continue
                     after = self._hash_arg_payload((cell.cell_contents,), {})
                 else:
-                    if not isinstance(g, dict):
+                    # The mapping the BEFORE hash came from -- a helper's
+                    # module, when this entry was folded on a helper's behalf.
+                    g = owner if isinstance(owner, dict) else own_globals
+                    if not isinstance(g, dict) or name not in g:
                         continue
                     after = self._hash_arg_payload(
                         (self._stabilize_for_global_hash(
-                            g.get(name), self._hash_callable_source),), {})
+                            g[name], self._hash_callable_source),), {})
             except Exception:  # noqa: BLE001 - unhashable NOW; treat as unchanged
                 continue
             if after == before:

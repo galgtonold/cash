@@ -1,23 +1,27 @@
-"""Code chosen at RUNTIME, which cash cannot fold into a cache key.
+"""Code chosen at RUNTIME -- warn exactly where the answer can go stale.
 
-A different hazard from a side effect. When cash cannot see which function a
-call will run, editing that function does not invalidate -- so the answer goes
-stale while the cache keeps serving it. `depends_on=[...]` is the remedy, but
-only if the user is told.
+A different hazard from a side effect. When cash cannot fold the dispatched-to
+code into the key, editing that code does not invalidate: the cache keeps
+serving the old answer and nothing says so.
 
-Measured across 20 indirect-invocation shapes: 8 were noticed, 12 silent.
-Silent included `HANDLERS[key]()`, `globals()[name]()`, a dict holding `eval`,
-and `getattr(builtins, "exec")(...)` -- the last two defeating the eval/exec
-detection that otherwise RAISES.
+The rule here is calibrated against MEASURED staleness, not against what looks
+dynamic. Ground truth, taken by editing the dispatched-to function between two
+processes and checking which spelling still returned the old value:
 
-SEVERITY, deliberately split:
-  * eval / exec / compile / dynamic getattr / importlib  -> RAISE. Documented
-    contract, unchanged.
-  * a runtime LOOKUP (`TABLE[k]()`, a parameter passed to `map`)  -> WARN.
-    Dispatch tables are ordinary Python that caches fine today; raising would
-    break working code to report a risk the user may have accepted. The same
-    hazard must also carry the same severity whether written directly or
-    through a temporary -- otherwise the rule reads as arbitrary.
+    TABLE[k]()          module global          -> fresh
+    LIST[i]()           module global          -> fresh
+    mod.TABLE[k]()      global in a module     -> fresh
+    fn()                parameter called       -> fresh
+    map(fn, xs)         parameter to map       -> fresh
+    t = {...}; t[k]()   built in the body      -> STALE
+    vars(mod)[k]()      runtime namespace      -> STALE
+    r.table[k]()        attribute of a param   -> STALE
+
+A module-level table is READ AS A GLOBAL, and hashing that global hashes the
+functions inside it -- so cash already tracks it. A callable passed as an
+ARGUMENT is hashed by its source, transitively. Both were warned about in an
+earlier revision of this rule; both warnings were wrong, and told the user to
+declare something cash already handles.
 """
 from __future__ import annotations
 
@@ -58,9 +62,8 @@ HANDLERS = {"a": alpha, "b": beta}
 HANDLER_LIST = [alpha, beta]
 
 
-# --------------------------------------------------------------- CONTROLS
+# ------------------------------------------------------------------ CONTROLS
 def test_a_directly_named_call_is_silent(tmp_path):
-    """Ordinary code must not trip any of this."""
     def calls_by_name():
         return alpha()
 
@@ -73,24 +76,126 @@ def test_a_directly_named_call_is_silent(tmp_path):
     (lambda rows: list(filter(None, rows)), ([1, 0, 2],)),
 ])
 def test_passing_DATA_to_a_higher_order_builtin_is_silent(tmp_path, fn, args):
-    """`sorted(rows)` passes an iterable, not code.
+    """`sorted(rows)` passes an iterable, not code."""
+    assert _run(_cash(tmp_path), fn, *args)[0] == ""
 
-    The first version of the higher-order rule flagged any parameter in the
-    argument list, which warned on one of the most ordinary lines in Python.
-    The tables are split by WHERE the callable actually sits because of it.
+
+# ------------------- tables cash ALREADY tracks: silence is the requirement
+def test_a_module_level_dispatch_table_is_NOT_flagged(tmp_path):
+    """`HANDLERS[key]()` is the most common dispatch idiom there is.
+
+    Measured fresh: the table is read as a global, and hashing the global
+    hashes `alpha`/`beta` inside it. An earlier revision warned here and told
+    the user to add `depends_on=[...]` for something already tracked.
+    """
+    def dispatch(key):
+        return HANDLERS[key]()
+
+    assert _run(_cash(tmp_path), dispatch, "a")[0] == ""
+
+
+def test_a_module_level_list_of_callables_is_NOT_flagged(tmp_path):
+    def dispatch(i):
+        return HANDLER_LIST[i]()
+
+    assert _run(_cash(tmp_path), dispatch, 0)[0] == ""
+
+
+@pytest.mark.parametrize("fn, args", [
+    (lambda cb: cb(), (alpha,)),
+    (lambda rows, cb: list(map(cb, rows)), ([1, 2], abs)),
+    (lambda rows, cb: min(rows, key=cb), ([3, 1, 2], abs)),
+    (lambda cb: functools.reduce(cb, [1, 2, 3]), (lambda a, b: a + b,)),
+])
+def test_a_callable_ARGUMENT_is_NOT_flagged(tmp_path, fn, args):
+    """A function reaching a cached call as an argument is hashed by source.
+
+    Measured fresh for a named function, a lambda, a bound method, and a helper
+    called by the passed function two levels down. Where cash genuinely cannot
+    hash one (`functools.partial`) it warns precisely at that argument instead.
     """
     assert _run(_cash(tmp_path), fn, *args)[0] == ""
 
 
+# --------------------------- tables that cannot reach the key: MUST be flagged
+def test_a_table_built_INSIDE_the_body_warns(tmp_path):
+    """Measured STALE: the dict is a local, so its contents never reach the key."""
+    def dispatch(key):
+        table = {"a": alpha, "b": beta}
+        return table[key]()
+
+    verdict, message = _run(_cash(tmp_path), dispatch, "a")
+    assert verdict == "warned"
+    assert "depends_on" in message, "the warning must name the remedy"
+
+
+def test_a_vars_namespace_lookup_warns(tmp_path):
+    """Measured STALE: resolved fresh out of a module namespace at call time.
+
+    Uses a tiny module on purpose -- `vars()` of a big one hands cash a
+    namespace it will walk while hashing, which is slow enough to look like a
+    hang and tells you nothing about the rule.
+    """
+    from tests import dummy_lib
+
+    def dispatch(name, value):
+        return vars(dummy_lib)[name](value)
+
+    assert _run(_cash(tmp_path), dispatch, "lib_func", 1)[0] == "warned"
+
+
+def test_a_table_on_a_PARAMETER_warns(tmp_path):
+    """Measured STALE: `r.table[k]()` -- the receiver is an argument, and its
+    attribute dict is not hashed as code."""
+    class Router:
+        def __init__(self):
+            self.table = {"a": alpha}
+
+    def dispatch(r, key):
+        return r.table[key]()
+
+    assert _run(_cash(tmp_path), dispatch, Router(), "a")[0] == "warned"
+
+
+def test_eval_hidden_in_a_body_local_dict_is_not_missed(tmp_path):
+    """A local table holding `eval` runs arbitrary source through a subscript."""
+    def sneaky():
+        table = {"run": eval}
+        return table["run"]("4 + 4")
+
+    assert _run(_cash(tmp_path), sneaky)[0] in ("warned", "raised")
+
+
+def test_a_lookup_through_a_TEMPORARY_warns_like_the_direct_form(tmp_path):
+    """`fn = table[k]; fn()` is `table[k]()` one line apart, so it must carry
+    the same severity -- an earlier revision RAISED on this while the direct
+    form only warned."""
+    def via_temporary(key):
+        table = {"a": alpha}
+        fn = table[key]
+        return fn()
+
+    def direct(key):
+        table = {"a": alpha}
+        return table[key]()
+
+    c = _cash(tmp_path)
+    assert _run(c, via_temporary, "a")[0] == _run(c, direct, "a")[0] == "warned"
+
+
+def test_rebinding_to_a_known_function_clears_the_taint(tmp_path):
+    """The taint rule fires only when EVERY binding is dynamic."""
+    def rebound(key):
+        table = {"a": alpha}
+        fn = table[key]
+        fn = alpha
+        return fn()
+
+    assert _run(_cash(tmp_path), rebound, "a")[0] == ""
+
+
 # ------------------------------------------- the documented raise-vectors
-@pytest.mark.parametrize("src", [
-    "eval('1 + 1')",
-    "exec('x = 1')",
-])
-def test_eval_and_exec_still_raise(tmp_path, src):
-    ns: dict = {}
-    exec(f"def f():\n    return {src}\n", {"__builtins__": __builtins__}, ns)
-    # exec'd source is unreadable, so build a real function instead.
+def test_eval_and_exec_still_raise(tmp_path):
     def f_eval():
         return eval("1 + 1")
 
@@ -98,8 +203,9 @@ def test_eval_and_exec_still_raise(tmp_path, src):
         exec("x = 1")
         return 1
 
-    fn = f_eval if "eval" in src else f_exec
-    assert _run(_cash(tmp_path), fn)[0] == "raised"
+    c = _cash(tmp_path)
+    assert _run(c, f_eval)[0] == "raised"
+    assert _run(c, f_exec)[0] == "raised"
 
 
 def test_exec_reached_through_a_constant_getattr_also_raises(tmp_path):
@@ -114,87 +220,3 @@ def test_exec_reached_through_a_constant_getattr_also_raises(tmp_path):
     verdict, message = _run(_cash(tmp_path), sneaky)
     assert verdict == "raised"
     assert "exec" in message
-
-
-# ----------------------------------------------- runtime lookups: WARN
-def test_calling_a_function_out_of_a_dict_warns(tmp_path):
-    def dispatch(key):
-        return HANDLERS[key]()
-
-    verdict, message = _run(_cash(tmp_path), dispatch, "a")
-    assert verdict == "warned"
-    assert "depends_on" in message, "the warning must name the remedy"
-
-
-def test_calling_a_function_out_of_a_list_warns(tmp_path):
-    def dispatch(i):
-        return HANDLER_LIST[i]()
-
-    assert _run(_cash(tmp_path), dispatch, 0)[0] == "warned"
-
-
-def test_eval_hidden_in_a_dict_is_not_missed(tmp_path):
-    """A table holding `eval` executes arbitrary code through a subscript.
-
-    Caught by the lookup rule rather than the eval rule -- the point is that
-    it is caught at all, since it was silent before.
-    """
-    def sneaky():
-        table = {"run": eval}
-        return table["run"]("4 + 4")
-
-    assert _run(_cash(tmp_path), sneaky)[0] in ("warned", "raised")
-
-
-def test_a_lookup_through_a_TEMPORARY_warns_like_the_direct_form(tmp_path):
-    """`cls = REGISTRY[k]; cls()` is `REGISTRY[k]()` one line apart.
-
-    It must carry the SAME severity: an earlier version routed it through the
-    eval-class taint path and RAISED, which both broke an ordinary factory
-    pattern and made the direct form look arbitrarily lenient.
-    """
-    def via_temporary(key):
-        fn = HANDLERS[key]
-        return fn()
-
-    def direct(key):
-        return HANDLERS[key]()
-
-    c = _cash(tmp_path)
-    assert _run(c, via_temporary, "a")[0] == _run(c, direct, "a")[0] == "warned"
-
-
-def test_rebinding_to_a_known_function_clears_the_taint(tmp_path):
-    """The existing taint rule only fires when EVERY binding is dynamic.
-    That guard must survive the new lookup kind."""
-    def rebound(key):
-        fn = HANDLERS[key]
-        fn = alpha
-        return fn()
-
-    assert _run(_cash(tmp_path), rebound, "a")[0] == ""
-
-
-# -------------------------------------- parameters handed to higher-order fns
-def test_a_parameter_passed_to_map_warns_like_calling_it(tmp_path):
-    """`cb()` was already flagged; `map(cb, xs)` runs the same unknown code."""
-    def uses_map(rows, fn):
-        return list(map(fn, rows))
-
-    verdict, message = _run(_cash(tmp_path), uses_map, [1, 2], abs)
-    assert verdict == "warned"
-    assert "map" in message
-
-
-def test_a_parameter_passed_as_a_key_function_warns(tmp_path):
-    def uses_key(rows, k):
-        return min(rows, key=k)
-
-    assert _run(_cash(tmp_path), uses_key, [3, 1, 2], abs)[0] == "warned"
-
-
-def test_a_subscript_handed_to_partial_warns(tmp_path):
-    def uses_partial(key):
-        return functools.partial(HANDLERS[key])()
-
-    assert _run(_cash(tmp_path), uses_partial, "a")[0] == "warned"

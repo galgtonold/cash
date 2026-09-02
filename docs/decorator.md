@@ -618,11 +618,12 @@ By default, `@cash.cache` runs a static analyzer on the function body
   `importlib.import_module` — **raise `CashImpureFunctionError` by default**,
   because a cached result could go silently stale. Pass `assume_safe=True` to
   cache anyway, or refactor to a statically-named call.
-- **Runtime lookups** — `HANDLERS[key]()`, `globals()[name]()`, or handing a
-  parameter to something that calls it (`map(cb, xs)`, `min(rows, key=cb)`) →
-  a warning, and the function is **still cached**. A dispatch table caches
-  correctly; what it cannot do is notice that you edited the function it
-  dispatches to. Name that function with `depends_on=[...]` and it will.
+- **Runtime lookups out of a table cash can't see** — one built inside the
+  body (`t = {...}; t[key]()`), one on a parameter (`router.table[key]()`), or
+  `globals()[name]()` → a warning, and the function is **still cached**.
+  Editing the callable such a table holds does not invalidate; name it with
+  `depends_on=[...]` and it will. A **module-level** table (`HANDLERS[key]()`)
+  needs none of this — cash hashes it as a global already.
 
 The analyzer stops at library boundaries, so an effect *inside* a dependency is
 reachable only by the method's name (`session.post`, `cur.execute`). Because a

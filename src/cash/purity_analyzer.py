@@ -101,25 +101,6 @@ ISSUE_MUTABLE_GLOBAL = "mutable_global"
 #: dispatch rule (which only fires on a NON-constant name).
 _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
 
-#: Higher-order callables whose FIRST POSITIONAL argument is the function they
-#: will call. Handing a parameter to one of these runs unknown code exactly as
-#: `cb()` does.
-_CALLABLE_FIRST_ARG = frozenset({
-    "map", "filter", "reduce", "partial", "starmap", "takewhile", "dropwhile",
-})
-
-#: Higher-order callables that take the function as a KEYWORD instead. These
-#: are split out because their first positional argument is the ITERABLE:
-#: `sorted(rows)` passes data, not code, and flagging it warned on one of the
-#: most ordinary lines in Python. Measured as a false positive before the split.
-_CALLABLE_VIA_KEYWORD = frozenset({
-    "sorted", "min", "max", "groupby", "nlargest", "nsmallest",
-})
-
-#: The keyword arguments that receive the callable on those.
-_CALLABLE_KEYWORDS = frozenset({"key", "default_factory", "cmp_to_key"})
-
-
 @dataclass(frozen=True)
 class PurityIssue:
     """A single issue surfaced by :class:`PurityAnalyzer`.
@@ -296,7 +277,7 @@ class _PurityVisitor(ast.NodeVisitor):
     __slots__ = (
         "issues", "called_callable_nodes", "_param_names",
         "_qualname", "_line_offset", "_local_owned", "read_names",
-        "_assign_kinds", "_name_call_nodes",
+        "_assign_kinds", "_name_call_nodes", "_subscript_call_nodes",
     )
 
     def __init__(self, qualname: str, param_names: frozenset[str],
@@ -316,6 +297,9 @@ class _PurityVisitor(ast.NodeVisitor):
         # Calls whose function is a bare Name, checked against the taint set in
         # :meth:`finalize_taint` after the whole body is walked.
         self._name_call_nodes: list[ast.Call] = []
+        # Calls whose function is a Subscript, judged in `finalize_taint`
+        # once every local assignment in the body is known.
+        self._subscript_call_nodes: list[ast.Call] = []
         self._param_names = param_names
         self._qualname = qualname
         # When source comes from inspect.getsource on a method, line
@@ -332,44 +316,6 @@ class _PurityVisitor(ast.NodeVisitor):
         if isinstance(node.ctx, ast.Load):
             self.read_names.add(node.id)
         self.generic_visit(node)
-
-    def _param_passed_as_callable(self, node: ast.Call) -> bool:
-        """Flag `map(cb, xs)` / `sorted(xs, key=cb)` when `cb` is a parameter.
-
-        Returns True when an issue was recorded, so the caller can stop.
-        """
-        name = _get_call_name(node.func)
-        passed: list[str] = []
-
-        # Only the position that actually receives the callable is inspected.
-        if name in _CALLABLE_FIRST_ARG and node.args:
-            first = node.args[0]
-            if isinstance(first, ast.Name) and first.id in self._param_names:
-                passed.append(first.id)
-            elif isinstance(first, ast.Subscript):
-                passed.append(_describe_subscript(first))
-
-        if name in _CALLABLE_FIRST_ARG or name in _CALLABLE_VIA_KEYWORD:
-            for kw in node.keywords:
-                if kw.arg not in _CALLABLE_KEYWORDS:
-                    continue
-                if isinstance(kw.value, ast.Name) and kw.value.id in self._param_names:
-                    passed.append(kw.value.id)
-                elif isinstance(kw.value, ast.Subscript):
-                    passed.append(_describe_subscript(kw.value))
-
-        if not passed:
-            return False
-        self.issues.append(PurityIssue(
-            kind=ISSUE_DYNAMIC_PATTERN,
-            description=(
-                f"passes parameter {passed[0]!r} to {name}(), which calls it - "
-                f"the code that runs is chosen by the caller"
-            ),
-            where=self._qualname,
-            line=getattr(node, "lineno", 0),
-        ))
-        return True
 
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         if isinstance(node.func, ast.Name):
@@ -437,6 +383,45 @@ class _PurityVisitor(ast.NodeVisitor):
                     line=getattr(node, "lineno", 0),
                 ))
 
+        for node in self._subscript_call_nodes:
+            base = node.func.value          # type: ignore[attr-defined]
+            if self._table_is_reachable_from_the_key(base):
+                continue
+            self.issues.append(PurityIssue(
+                kind=ISSUE_DYNAMIC_PATTERN,
+                description=(
+                    f"calls {_describe_subscript(node.func)} - that table does "  # type: ignore[arg-type]
+                    f"not reach the cache key, so editing the callable it holds "
+                    f"will not invalidate; name it with depends_on=[...]"
+                ),
+                where=self._qualname,
+                line=getattr(node, "lineno", 0),
+            ))
+
+    def _table_is_reachable_from_the_key(self, base: ast.AST) -> bool:
+        """True when cash already folds this dispatch table into the key.
+
+        A module-level table -- ``MODELS[k]()``, ``mod.MODELS[k]()`` -- is read
+        as a global, and hashing that global hashes the functions inside it.
+        Measured: editing any function IN the table invalidates (even one never
+        dispatched to), while editing one outside it does not. Warning there
+        would tell the user to declare something cash already tracks, on the
+        single most common dispatch idiom there is.
+
+        A table that is a body-local, a parameter, an attribute of one, or a
+        runtime namespace (``globals()[k]``, ``vars(mod)[k]``) never reaches the
+        key. Those measurably serve STALE results, and are what this rule is
+        for.
+        """
+        root = base
+        while isinstance(root, ast.Attribute):
+            root = root.value
+        if isinstance(root, ast.Call):
+            return False              # globals()[k], vars(mod)[k]
+        if not isinstance(root, ast.Name):
+            return False
+        return not (root.id in self._param_names or root.id in self._assign_kinds)
+
     def _record_call(self, node: ast.Call) -> None:
         func_node = node.func
         line = getattr(node, "lineno", 0)
@@ -486,15 +471,17 @@ class _PurityVisitor(ast.NodeVisitor):
             ))
             return
 
-        # Calling a parameter: def f(cb): cb(x).
-        if isinstance(func_node, ast.Name) and func_node.id in self._param_names:
-            self.issues.append(PurityIssue(
-                kind=ISSUE_DYNAMIC_PATTERN,
-                description=f"calls parameter {func_node.id!r} as a function",
-                where=self._qualname,
-                line=line,
-            ))
-            return
+        # Calling a parameter -- `def f(cb): cb(x)` -- is NOT flagged.
+        #
+        # It used to be, and that warning outlived the mechanism that made it
+        # true. A callable reaching a cached call as an argument is now hashed
+        # by its SOURCE, so editing it invalidates: measured across a named
+        # function, a lambda, a bound method, and even a helper called by the
+        # passed function two levels down. Where cash genuinely cannot hash one
+        # (`functools.partial`) it already says so precisely, at the argument
+        # that failed, naming depends_on= / mark_opaque(). Warning here as well
+        # would fire on every callback-taking function in the codebase to
+        # report a hazard that no longer exists.
 
         # getattr(x, "exec")(...) -- a CONSTANT name, so the dynamic-dispatch
         # rule above does not fire, yet what it reaches is the very thing that
@@ -519,37 +506,12 @@ class _PurityVisitor(ast.NodeVisitor):
             ))
             return
 
-        # Calling whatever a subscript yields: HANDLERS[name](), FUNCS[i](),
-        # globals()[name](), vars(mod)[name]().
-        #
-        # One AST shape covers every "look the code up at runtime" spelling,
-        # and cash cannot fold code it cannot name: editing the function in
-        # that table will not invalidate, which is a stale ANSWER rather than
-        # a skipped effect. Warned, not raised -- dispatch tables are ordinary
-        # Python and currently cache fine, so raising would break working code
-        # to report a risk the user may well have accepted. `depends_on=` is
-        # the documented remedy and the message says so.
+        # Calling whatever a subscript yields -- but ONLY when the table
+        # itself cannot reach the cache key. Deferred to `finalize_taint`,
+        # because whether the base is a body-local depends on assignments
+        # that may appear after this call in source order.
         if isinstance(func_node, ast.Subscript):
-            self.issues.append(PurityIssue(
-                kind=ISSUE_DYNAMIC_PATTERN,
-                description=(
-                    f"calls {_describe_subscript(func_node)} - the callable is "
-                    f"chosen at runtime, so editing it will not invalidate; "
-                    f"name it with depends_on=[...]"
-                ),
-                where=self._qualname,
-                line=line,
-            ))
-            return
-
-        # Handing a PARAMETER to a higher-order callable: map(cb, xs),
-        # sorted(key=cb), functools.reduce(cb, xs).
-        #
-        # `cb()` was already flagged above, but `map(cb, xs)` -- the same
-        # unknown code, called the same number of times -- was silent. The
-        # hazard does not change because the caller is `map` rather than the
-        # source line.
-        if self._param_passed_as_callable(node):
+            self._subscript_call_nodes.append(node)
             return
 
         # Known-impure module-qualified calls (requests.post, os.system, ...).

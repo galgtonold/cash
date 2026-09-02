@@ -620,7 +620,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @807e8d54 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @60d9406b, cash/purity_analyzer.py:_CALLABLE_FIRST_ARG @1788fba2, cash/purity_analyzer.py:_CALLABLE_VIA_KEYWORD @3fa3e045 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @9db2d435 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -635,17 +635,21 @@ it flags:
       `getattr(obj, name)()` with a non-constant name, `importlib`, and
       `getattr(mod, "exec")(...)` — the constant-name spelling that reaches
       the same builtin.
-    - **Warns**: calling something looked up at runtime —
-      `HANDLERS[key]()`, `FUNCS[i]()`, `globals()[name]()`, and the
-      temporary-variable form `fn = HANDLERS[key]; fn()`; and handing a
-      parameter to a higher-order callable that will call it —
-      `map(cb, xs)`, `functools.reduce(cb, xs)`, `min(rows, key=cb)`.
-      Dispatch tables are ordinary Python and cache correctly *today*; the
-      risk is that editing the dispatched-to function does not invalidate.
-      `depends_on=[...]` names it, and the message says so.
+    - **Warns**: calling something out of a table that cannot reach the
+      cache key — one built inside the body (`t = {...}; t[key]()`), one
+      hanging off a parameter (`router.table[key]()`), or a runtime namespace
+      (`globals()[name]()`, `vars(mod)[name]()`). Editing the callable such a
+      table holds does not invalidate; `depends_on=[...]` names it, and the
+      message says so.
 
-    Passing **data** to a higher-order builtin is not flagged: `sorted(rows)`,
-    `max(rows)`, `filter(None, rows)` pass an iterable, not code.
+    A **module-level** dispatch table is *not* flagged — `HANDLERS[key]()`,
+    `FUNCS[i]()`, `mod.HANDLERS[key]()`. Cash reads it as a global, and hashing
+    that global hashes the functions inside it, so editing one of them already
+    invalidates. Neither is a callable passed as an **argument** (`cb()`,
+    `map(cb, xs)`, `min(rows, key=cb)`): those are hashed by source,
+    transitively through the helpers they call. Where cash genuinely cannot
+    hash one — `functools.partial` — it warns at that argument instead, naming
+    `depends_on=` or `cash.mark_opaque()`.
 - **Discarded calls** — `f(x)` as a statement (return thrown away)
   when `f` isn't known-pure
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript

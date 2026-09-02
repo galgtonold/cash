@@ -121,7 +121,7 @@ exported as module-level constants. Five of them **warn**;
 | Constant | Value | Meaning |
 |---|---|---|
 | `ISSUE_IMPURE_CALL` | `"impure_call"` | Known I/O / side-effecting call (`requests.post`, `os.system`, `to_csv`, pandas `inplace=True`, `print`, `logging.*`, etc.) |
-| `ISSUE_DYNAMIC_PATTERN` | `"dynamic_pattern"` | Code chosen at runtime that cash can still cache, but cannot invalidate on: calling a parameter (`cb()`), calling a runtime lookup (`HANDLERS[key]()`, `globals()[name]()`), or handing a parameter to a higher-order callable that will call it (`map(cb, xs)`, `min(rows, key=cb)`) |
+| `ISSUE_DYNAMIC_PATTERN` | `"dynamic_pattern"` | Code chosen at runtime out of a table that cannot reach the cache key: one built inside the body (`t = {...}; t[key]()`), one on a parameter (`router.table[key]()`), or a runtime namespace (`globals()[name]()`, `vars(mod)[name]()`). A **module-level** table (`HANDLERS[key]()`) is not flagged — cash hashes it as a global — and neither is a callable passed as an argument |
 | `ISSUE_UNTRACKABLE_DEP` | `"untrackable_dep"` | Explicit dynamism cash refuses to cache silently — `eval`/`exec`/`compile`, `getattr(obj, name)()` with a non-constant name, `getattr(mod, "exec")(...)`, `importlib.import_module`. **Raises `CashImpureFunctionError` on the first call even in default mode**; `assume_safe=True` suppresses it |
 | `ISSUE_DISCARDED_CALL` | `"discarded_call"` | Bare-statement call whose return value is thrown away, with a callee not in `KNOWN_PURE_BUILTINS` |
 | `ISSUE_SCOPE_MUTATION` | `"scope_mutation"` | `global`/`nonlocal` declaration, attribute assignment, subscript assignment, augmented-assign to same |

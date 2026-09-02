@@ -125,15 +125,30 @@ def test_getattr_with_constant_name_not_flagged(analyzer):
     assert not any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues)
 
 
-def test_calling_parameter_flagged(analyzer):
+def test_calling_a_parameter_is_not_flagged(analyzer):
+    """Callables passed as arguments are hashed by source, so calling one is
+    not a dynamic-dispatch hazard. See the control arm in
+    tests/test_core/test_purity_decorator.py for the case cash cannot hash."""
     def f(cb, x):
         return cb(x)
 
     r = analyzer.analyze(f)
-    assert any(
-        i.kind == ISSUE_DYNAMIC_PATTERN and "parameter 'cb'" in i.description
-        for i in r.issues
-    )
+    assert not any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [
+        i.description for i in r.issues
+    ]
+
+
+def test_a_table_built_in_the_body_IS_flagged(analyzer):
+    """The shape that measurably goes stale, kept as the positive arm so the
+    test above cannot pass merely because the rule stopped existing."""
+    def f(key):
+        table = {"a": len}
+        return table[key]("xy")
+
+    r = analyzer.analyze(f)
+    assert any(i.kind == ISSUE_DYNAMIC_PATTERN for i in r.issues), [
+        i.description for i in r.issues
+    ]
 
 
 def test_discarded_call_to_unknown_flagged(analyzer):

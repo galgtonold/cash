@@ -228,7 +228,19 @@ def test_untrackable_pattern_caches_with_assume_safe(tmp_path):
     assert f("1 + 1") == 2  # no raise; the user opted in
 
 
-def test_calling_parameter_warns(tmp_path):
+def test_calling_a_parameter_is_no_longer_flagged(tmp_path):
+    """This warning outlived the hazard it reported.
+
+    It fired on every callback-taking function, on the grounds that cash could
+    not tell when `cb` changed. Code-as-argument hashing changed that: a
+    callable reaching a cached call as an argument is hashed by its SOURCE, so
+    editing it invalidates -- measured for a named function, a bound method,
+    and a helper the passed function calls two levels down.
+
+    The control arm below is what makes deleting the warning safe rather than
+    merely quieter: where cash genuinely CANNOT hash the callable, it still
+    says so, at the argument that failed.
+    """
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
@@ -237,16 +249,38 @@ def test_calling_parameter_warns(tmp_path):
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        f(lambda v: v * 2, 5)
+        f(_double, 5)
 
     impurity = [w for w in captured if issubclass(w.category, CashImpurityWarning)]
-    # Should warn because we call the parameter `cb`.
-    # Note: lambda is unpicklable, so this also emits a separate
-    # CashCacheIneffectiveWarning. The purity warning still fires
-    # at first-call analysis time.
-    assert any("parameter 'cb'" in str(w.message) for w in impurity), [
-        str(w.message) for w in captured
-    ]
+    assert not impurity, [str(w.message) for w in impurity]
+
+
+def _double(v):
+    return v * 2
+
+
+def test_an_unhashable_callable_argument_still_reports_itself(tmp_path):
+    """Control arm for the test above: the boundary is still announced.
+
+    `functools.partial` caches but cannot be source-hashed, so editing the
+    function it wraps will NOT invalidate. Cash reports exactly that, naming
+    the remedy -- which is why the blanket per-call warning is redundant
+    rather than merely inconvenient.
+    """
+    import functools
+
+    c = Cash(cache_dir=str(tmp_path), register_magic=False)
+
+    @c.cache
+    def f(cb, x):
+        return cb(x)
+
+    with warnings.catch_warnings(record=True) as captured:
+        warnings.simplefilter("always")
+        f(functools.partial(_double), 5)
+
+    messages = [str(w.message) for w in captured]
+    assert any("could not be hashed" in m and "partial" in m for m in messages), messages
 
 
 def test_warning_message_includes_line_numbers(tmp_path):
