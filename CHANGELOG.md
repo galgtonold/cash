@@ -7,6 +7,177 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-02
+
+A correctness release, focused on the two things a cache can get quietly wrong:
+a side effect that runs once and is then skipped forever, and a result stored
+under a key that does not describe it.
+
+### Upgrading
+
+Two behaviour changes are worth knowing before you upgrade; neither needs an
+edit unless it applies to you.
+
+- **A generator you abandon now caches nothing.** Cash used to drain a cached
+  generator eagerly, so taking two items still left a complete entry behind. It
+  now streams, which means only what you consumed was ever produced — there is
+  no complete result to store, and the next call recomputes. If you relied on a
+  partial read populating the cache, consume the generator fully (`list(...)`).
+- **New purity warnings fire on code that was silent before**, and
+  `getattr(mod, "exec")(...)` now raises at decoration time, like the bare
+  builtin it reaches. If a warning names something you have already audited, put
+  `# @cash:assume-safe` on that line rather than reaching for `assume_safe=True`.
+
+Functions that take a dataclass or a pydantic model as an argument recompute
+once, because their keys now include the field definitions.
+
+### Added
+
+- **Side effects inside libraries are caught.** A missed effect is a hidden
+  correctness bug: it runs on the first call and is silently skipped on every
+  hit. Measured against 24 planted effects, the analyzer caught 21 — and every
+  miss was inside an installed library, all sharing one rule: a library effect
+  was noticed only when its return value was *discarded*. So `requests.get(...)`
+  warned but `SESSION.get(...)` did not, and a `DB.execute("INSERT ...")` whose
+  cursor was used did not. That heuristic inverts exactly where the stakes are
+  highest, because an HTTP POST or a DB write is normally called *for* its
+  response. Two answers now: the write-method list gains the verbs that mean a
+  client changed something remote (`post`/`put`/`patch`, `execute`/`commit`/
+  `rollback`, `upload`/`put_object`/`publish`), and cash *watches* the body of a
+  miss for effects it can see wherever the code lives — a file opened for
+  writing, an outbound connection, a spawned process. The observer never blocks
+  and never raises, even under `strict=True`: by the time an effect is observed
+  the function has already run, so raising would discard a correct result to
+  report something it could not have prevented.
+
+- **A call that mutates the caller's own state is reported.** Side effects are
+  not only I/O. Sorting a list in place, setting a key on a config dict, bumping
+  a field — each happens once and then stops, and the caller's state quietly
+  goes out of date. Cash already hashes arguments to build the key, so a miss
+  re-runs that hash afterwards and compares; a difference means the call changed
+  what it was handed. Caught 12 of 13 planted mutations. A re-hash over 50 ms
+  retires the check for that function, so the repeat cost is dropped rather than
+  taxing every later miss.
+
+- **Code chosen at runtime is noticed.** A dispatch table caches correctly, but
+  it cannot notice that you edited the function it dispatches to. Across 20
+  indirect-invocation shapes cash saw 8; it now sees 18. `TABLE[k]()`,
+  `globals()[n]()` and a parameter handed to `map()` warn and name
+  `depends_on=[...]`; `getattr(mod, "exec")(...)` raises. Two vectors stay
+  silent on purpose — `obj.fn()`, which is statically indistinguishable from a
+  method call, and `operator.methodcaller(name)(obj)`.
+
+- **`# @cash:assume-safe` waives one statement instead of the whole function.**
+  `assume_safe=True` is a permanent, unscoped waiver: audit the call you meant
+  to audit, add an unrelated `session.post(...)` three months later, and nothing
+  says a word. A waiver written next to the statement re-arms itself for free —
+  new code arrives unannotated, so it is reported, and the scope of the
+  exemption is visible in the diff that grants it. Put it on the line or
+  directly above it; on a `def` line it waives the function-scoped findings.
+  Honoured under `strict=True`, which makes strict mode usable. `assume_safe=True`
+  is unchanged and remains the right tool when the audit really is
+  function-wide.
+
+- **A thrashing cache is told when large results are the reason.** The
+  ineffective-cache warning said the cache was churning but not why, so the only
+  remedy it offered was raising the cap — the expensive answer when five 3 GB
+  frames are what fills it. The message now names the size that is filling the
+  cache, how many of those fit, and points at caching the summary instead. Sized
+  by the byte-weighted median rather than the mean, because real caches are
+  mixtures: on 3000 × 2 KB plus one 64 MB entry the mean reports 3437 entries
+  fitting, where that single entry is 91% of the cache.
+
+### Fixed
+
+- **A cached generator returned nothing on a cross-process hit.** Chunks were
+  written with an execution time of zero, which put them under the
+  smart-persistence floor, so they stayed in RAM while the manifest went to
+  disk. A fresh process found the manifest, looked for the first chunk, did not
+  find it — and a missing chunk terminates iteration. The call reported a hit
+  and returned an empty iterator. Caching a generator had never worked across
+  processes, which is the only reason to cache one. Chunks now carry the
+  producer's time, and a manifest whose chunks are missing is a miss.
+
+- **A dataclass used as an output spec served a stale answer.** Field
+  descriptions written with `field(metadata=...)` are prompt text, not
+  documentation, and `Field.metadata` is a `mappingproxy` that cannot be
+  pickled — so the fold caught the error, folded nothing, and dropped it in
+  silence. Rewording a description left the key unchanged. Adding a field and
+  editing the docstring both invalidated already, which is why it survived: the
+  two edits anyone tries first both behaved.
+
+- **A pydantic spec was tracked but never cached.** Pydantic v2 compiles
+  `__pydantic_core_schema__`, `__pydantic_serializer__` and
+  `__pydantic_validator__` onto every model, and their digest differs in every
+  process — so the key moved on every run. Correct answers, no reuse, and
+  invisible to every correctness test there is, because recomputing is always
+  right. The compiled trio is skipped and `model_fields` folded in its place, so
+  a reworded description recomputes and a comment does not.
+
+- **A global read by a helper was reported as mutated — and dropped from the
+  key.** The pre-call hash came from the helper's module while the after-check
+  re-read it from the decorated function's globals, found nothing, and saw a
+  difference. On a three-document pipeline the warm run made 3 provider calls
+  where it should have made 0.
+
+- **Three dynamic-dispatch warnings named hazards that do not exist.** A
+  module-level `TABLE[k]()` and a callable passed as an argument are both hashed
+  and both invalidate correctly. A warning that fires on the most common
+  spelling of a correct pattern is how a project teaches people to filter its
+  warnings out.
+
+- **An adaptive cache cap no longer shrinks because the cache filled.** The cap
+  was sized from free space, which excludes what the cache has already written,
+  so it fell as the cache grew and the cache was then over a cap its own
+  contents had caused. Simulated on a 48 GiB volume it settles into a two-cycle
+  that discards ~13% of the cache every other session. The cache's own size is
+  added back in, so growing by N bytes no longer moves the number.
+
+- **Eviction stops shredding small entries to free space they cannot free.**
+  Oldest-first is size-blind: with a few huge entries and many tiny ones it
+  chews through the tiny ones freeing almost nothing per delete and reaches the
+  huge one anyway. On 3000 × 2 KB plus one 64 MB entry needing 22.7 MB freed, it
+  deleted 3001 entries to free 69.9 MB — the entire cache — where deleting one
+  frees 64 MB. Entries below 0.1% of the cap are now ranked separately, so
+  crumbs still go first when they can close the gap and go last only when they
+  provably cannot.
+
+- **A read protects an entry that is already queued for eviction.** The ranking
+  is a snapshot drained over many passes, so an entry could be read after it was
+  queued and still be evicted. On the shape that prompted it — a baseline whose
+  cached upstream is reused by later variants — the baseline's survival goes
+  from 1-in-3 to 3-in-3.
+
+- **`from cash.backends import SQLiteBackend` raised `ImportError`** while every
+  sibling backend resolved.
+
+### Changed
+
+- **Caching a generator no longer changes when the caller sees items.** The miss
+  path used to drain the whole thing before returning anything, so a streamed
+  response arrived in one lump after the full latency — measured on a token
+  stream, 494 ms to the first item uncached against 2444 ms cached. Items now
+  pass through as they are produced and the entry is committed at exhaustion:
+  515 ms to the first item, and the hit still replays instantly. See
+  **Upgrading** for what this costs.
+
+- **Purity warnings recommend the annotation, not just the flag.** The
+  line-anchored messages name `# @cash:assume-safe` first and `assume_safe=True`
+  as the whole-function fallback, with the trade stated. The observed-effect
+  warning is left alone: it reports what the first call did from inside library
+  code, so it carries no line number, and pointing it at a per-line annotation
+  would be advice the reader cannot follow.
+
+- **Docs.** Three full passes over all 58 published pages, reading each against
+  the code that decides it. Twenty-one places where a reader following the docs
+  would have been wrong — among them `# @cash:persist` recommended to script
+  users, where it is a notebook-only directive that leaves zero entries on disk;
+  a text-badge transcript that `cash.help()` returns verbatim, showing a shape
+  the renderer cannot emit; and `cash clear`'s exit code. Every figure the docs
+  quote about the repository is now derived from source by
+  `scripts/doc_numbers.py` and gated, after all of them drifted at once.
+
+
 ## [0.7.0] - 2026-08-30
 
 A storage-layer release. Cache entries changed shape on disk, which makes this
