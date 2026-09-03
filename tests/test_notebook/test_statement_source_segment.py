@@ -57,10 +57,22 @@ def test_a_single_line_statement_is_unchanged():
 
 
 def test_an_unrecoverable_segment_returns_none():
-    """A node with no position info cannot be located in the source.
+    """A node checked against a mismatched source can't be located in it.
+
+    ``get_source_segment`` indexes into the source's lines by the node's
+    ``lineno``. A node parsed from a three-line source, then looked up
+    against a shorter, mismatched ``raw_cell``, pushes that index past the
+    end of the line list -- ``get_source_segment`` raises ``IndexError``,
+    which is what exercises our own ``except`` clause.
+
+    (A node with its ``lineno`` deleted entirely takes a different path:
+    ``get_source_segment`` catches ``AttributeError`` internally and returns
+    ``None`` without ever raising, so a test built on that would still pass
+    with our ``except`` deleted -- it would not prove this function's guard
+    does anything.)
 
     The caller falls back to the unparsed form, so this must not raise.
     """
-    node = ast.parse("x = 1").body[0]
-    del node.lineno
+    cell = "x = 1\ny = 2\nz = 3\n"
+    node = ast.parse(cell).body[2]
     assert _statement_source("x = 1\n", node) is None
