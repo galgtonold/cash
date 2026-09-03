@@ -301,14 +301,21 @@ _CSS = f"""
 .c3-row {{
   display: grid;
   grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px;
-  /* start, not center: a multi-line .c3-code cell (StatementRow.display_code)
-     makes the row taller than its dots/bar/chip siblings -- start keeps
-     those on the first line instead of floating to the row's vertical
-     midpoint. */
-  align-items: start;
+  align-items: center;
   border-bottom: 1px solid {theme.RULE_SOFT};
   min-height: 26px;
   position: relative;          /* tooltip anchor */
+}}
+/* A multi-line .c3-code cell (a captured StatementRow.display_code, or a
+   `match` statement's full body -- see _statement_source) makes the row
+   taller than its dots/bar/chip siblings; start-align those instead of
+   letting them float to the row's vertical midpoint. Scoped to
+   [data-multiline="true"] -- stamped by _statement_row_html only when the
+   rendered code actually contains a newline -- so every other row (which
+   is most rows, and EVERY display_code=None row) keeps the original
+   center alignment untouched, byte-for-byte. */
+.c3-row[data-multiline="true"] {{
+  align-items: start;
 }}
 .c3-row:last-child {{ border-bottom: 0; }}
 .c3-row[data-clickable="true"] {{ cursor: pointer; }}
@@ -432,12 +439,16 @@ label.c3-row {{ cursor: pointer; }}
   color: {theme.INK} !important;
   white-space: pre !important;
   overflow: hidden !important;
+  text-overflow: ellipsis !important;
   line-height: 1.4 !important;
 }}
 .c3-code-body  {{ color: {theme.INK_2}; }}
-/* Faded suffix listing produced/restored variable names. Lives inline
-   so the parent .c3-code's overflow:hidden + ellipsis hides it first
-   when there's not enough room — never pushes the code itself off. */
+/* Faded suffix listing produced/restored variable names. Lives inline,
+   appended after the code on its LAST line (the only line, for a
+   single-line row) — .c3-code's overflow:hidden + text-overflow:ellipsis
+   apply per LINE BOX, so that line's own ellipsis hides the suffix first
+   when there's not enough room on it — never pushes the code itself off,
+   and never touches any earlier line of a multi-line statement. */
 .c3-row-vars {{
   margin-left: 10px;
   color: {theme.INK_5};
@@ -841,9 +852,22 @@ def _fmt_time(t: float) -> str:
 def _snippet(code: str) -> str:
     """First-line snippet (raw, not yet escaped or highlighted).
 
-    No character cap: the row's ``.c3-code`` cell uses
-    ``overflow: hidden; text-overflow: ellipsis``, so the browser cuts
-    at the column edge rather than hard-truncating mid-word.
+    No character cap: ``.c3-code`` declares ``white-space: pre``,
+    ``overflow: hidden`` and ``text-overflow: ellipsis`` together, so a
+    too-wide line is cut at the column edge with a visible "…" rather than
+    hard-truncated mid-word -- CSS does the truncation, ``_snippet`` only
+    needs to pick which line(s) reach the browser at all.
+
+    ``text-overflow`` applies per LINE BOX, not once for the whole (possibly
+    multi-line) ``<pre>`` -- verified by rendering the same badge with and
+    without the property and comparing multi-line output line-for-line. That
+    is what makes it safe to combine with a genuinely multi-line ``<pre>``
+    (``_row_code_html`` calling ``highlight_python`` directly on
+    ``display_code``, bypassing this function): each line gets its own
+    ellipsis if it overflows, and a short line is untouched, regardless of
+    how many lines came before or after it. ``_snippet`` itself only ever
+    hands the browser ONE line (``splitlines()[0]``), so for callers that go
+    through it, this reduces to the single-line case it was written for.
     """
     if not code:
         return ""
@@ -1246,8 +1270,11 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     else:
         # Produced/restored variables get a faded ``← name1, name2`` suffix
         # so a user can see what the row hydrated or computed without
-        # opening the click tooltip. Suffix overflows with the code if
-        # there isn't room (CSS ellipsis on the parent <pre> takes over).
+        # opening the click tooltip. Lands on the code's LAST line (its
+        # only line, for a single-line row); that line's own CSS ellipsis
+        # takes over if there isn't room -- text-overflow applies per LINE
+        # BOX, not once for the whole (possibly multi-line) <pre>, so a
+        # multi-line statement's earlier lines are never affected by this.
         names = row.restored_vars or row.output_vars
         suffix = (
             f'<span class="c3-row-vars">← {", ".join(_esc(n) for n in names)}</span>'
@@ -1256,6 +1283,15 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         code_html = f'<pre class="c3-code">{_row_code_html(row)}{suffix}</pre>'
         bar = _tbar(row.time_s, max_time, kind)
         chip = _time_chip(row.time_s, row.saved_time_s, kind)
+
+    # True only when the CODE ITSELF spans multiple lines (a captured
+    # display_code, or a `match` statement's full unparsed body) -- never
+    # for the descriptor branches above, which are always first-line-only
+    # by construction. Stamped onto the row so the CSS can start-align the
+    # dots/bar/chip WITHOUT moving every other row's alignment (see
+    # .c3-row[data-multiline] in _CSS) -- the row carries what the renderer
+    # needs, the CSS never has to guess from content it can't see.
+    is_multiline = "\n" in code_html
 
     dots = _dots(
         status=status,
@@ -1272,10 +1308,11 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
     code_cell = f'<div class="c3-codepill">{code_html}{rng_pill}</div>' if rng_pill else code_html
 
     rid = _uid("rx")
+    multiline_attr = ' data-multiline="true"' if is_multiline else ""
     return (
         f'<div class="c3-rowx">'
         f'<input type="checkbox" class="c3-rxtog" id="{rid}">'
-        f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}">'
+        f'<label class="c3-row" for="{rid}" data-kind="{kind}" data-status="{status.value}"{multiline_attr}>'
         f'<span class="c3-rail" style="background:{rail};"></span>'
         f"{code_cell}"
         f"{dots}"

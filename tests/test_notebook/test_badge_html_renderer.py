@@ -481,23 +481,36 @@ def test_a_multiline_statement_renders_across_lines() -> None:
 
 
 def test_a_row_without_display_code_is_unchanged() -> None:
-    """The control: nothing moves for a single-line statement with no
-    ``display_code`` -- the row's code cell must be byte-identical to
-    ``_code_html(row.code)``, the exact call every row used before this
-    feature existed. This is the single most important property of the
-    whole feature: a ``None`` row must be provably untouched, not just
-    visually similar.
+    """The control: nothing moves for a statement with no ``display_code``
+    -- the row's code cell must be byte-identical to ``_code_html(row.code)``,
+    the exact call every row used before this feature existed. This is the
+    single most important property of the whole feature: a ``None`` row
+    must be provably untouched, not just visually similar.
+
+    Two arms, deliberately: a single-line statement alone cannot catch a
+    naive-fallback regression. For single-line ``c``, ``_code_html(c)`` and
+    ``highlight_python(c)`` are IDENTICAL by construction --
+    ``_snippet(c) == c.splitlines()[0] == c``, and the "... +N lines" hint
+    never fires when there is only one line -- so a bug that fell back to
+    calling ``highlight_python(row.code)`` directly (skipping
+    ``_code_html``/``_snippet`` entirely, the same shape of mistake
+    ``_row_code_html`` exists to avoid) would pass the single-line arm
+    either way and prove nothing. The multi-line arm is where the two
+    diverge, so it is the arm that actually controls for something.
     """
-    metrics = [{
-        "code": "x = a + 1",
-        "status": str(CacheStatus.COMPUTED),
-        "total_time": 0.5,
-    }]
-    html = render_html(build_interactive_badge(metrics))
-    start = html.index('<pre class="c3-code">')
-    end = html.index("</pre>", start) + len("</pre>")
-    block = html[start:end]
-    assert block == f'<pre class="c3-code">{_code_html("x = a + 1")}</pre>'
+    for code in ("x = a + 1", "total = (\n    a\n    + b\n)"):
+        metrics = [{
+            "code": code,
+            "status": str(CacheStatus.COMPUTED),
+            "total_time": 0.5,
+        }]
+        html = render_html(build_interactive_badge(metrics))
+        start = html.index('<pre class="c3-code">')
+        end = html.index("</pre>", start) + len("</pre>")
+        block = html[start:end]
+        assert block == f'<pre class="c3-code">{_code_html(code)}</pre>', (
+            f"regressed for code={code!r}"
+        )
 
 
 def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
@@ -541,25 +554,157 @@ def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
     assert "+2 lines" in text, "expected the existing '... +N lines' hint to still show"
 
 
-def test_the_row_code_cell_does_not_ellipsize() -> None:
-    """`text-overflow: ellipsis` only ever applied to one line and would now
-    hide everything after the first.
+def test_a_top_level_match_statement_renders_across_lines() -> None:
+    """The mirror image of the def/class test above: a ``match`` statement
+    is just as multi-line as a def/class, but it must EXPAND, not clip.
+
+    The def/class exclusion is about binding vs. executing, not about "is
+    it multi-line" -- a ``match`` genuinely executes its matched branch,
+    and since it is not a control structure (``is_control_structure`` only
+    covers For/While/If/With/Try) it has no per-branch rows of its own; the
+    runtime caches and runs it as ONE unit, so showing its full source is
+    showing "the code that ran", same as any other captured statement. Also
+    drives ``display_code`` through the real ``_statement_source`` (not a
+    hand-picked value), so this fails if a future "fix" adds ``ast.Match``
+    to the def/class exclusion tuple.
+    """
+    import ast
+
+    from cash.notebook.ipython.cell_executor import _statement_source
+
+    cell = (
+        'match command:\n'
+        '    case "go":\n'
+        '        result = 1\n'
+        '    case _:\n'
+        '        result = 0\n'
+    )
+    node = ast.parse(cell).body[0]
+    code = ast.unparse(node)
+    display_code = _statement_source(cell, node)
+    assert display_code is not None, (
+        "premise: capture must NOT withhold display_code for a top-level "
+        "match -- if this fires, someone added ast.Match to the exclusion"
+    )
+
+    metrics = [{
+        "code": code,
+        "display_code": display_code,
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.03,
+    }]
+    html = render_html(build_interactive_badge(metrics))
+    text = _code_cell_text(html)
+    assert text == display_code, (
+        f"a match row must render its full source, not a summary; got {text!r}"
+    )
+
+
+def test_multiline_row_is_stamped_data_multiline_single_line_is_not() -> None:
+    """Finding 4's mechanism: the row itself carries whether it needs
+    start-alignment, via a ``data-multiline`` attribute stamped only when
+    the rendered code contains a newline -- so the CSS never has to guess,
+    and a single-line (including every ``display_code=None``) row never
+    carries it at all.
+    """
+    multiline_metrics = [{
+        "code": "x = a + 1",
+        "display_code": 'x = (\n    a\n    + 1\n)',
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    html = render_html(build_interactive_badge(multiline_metrics))
+    # Ignore the <style> block for both checks below: the CSS rule/comment
+    # for [data-multiline] legitimately contains this exact string whether
+    # or not any ROW carries it -- only the row MARKUP is under test here.
+    body = html.split("</style>", 1)[1]
+    assert 'data-multiline="true"' in body
+
+    single_line_metrics = [{
+        "code": "x = a + 1",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    html2 = render_html(build_interactive_badge(single_line_metrics))
+    body2 = html2.split("</style>", 1)[1]
+    assert "data-multiline" not in body2
+
+
+def test_c3_row_default_alignment_is_center_start_is_scoped_separately() -> None:
+    """Finding 4: an earlier version of this fix set ``align-items: start``
+    directly on the bare ``.c3-row`` rule, which moves EVERY row's
+    dots/bar/chip -- including every ``display_code=None`` row -- breaking
+    "a None row renders exactly as today". The fix must leave the bare rule
+    at ``center`` and put ``start`` only on the ``[data-multiline="true"]``
+    variant.
+    """
+    html = render_html(build_interactive_badge([]))
+    marker = "grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px"
+    marker_idx = html.index(marker)
+    block_start = html.rindex(".c3-row {", 0, marker_idx)
+    block = html[block_start:html.index("}", marker_idx)]
+    assert "align-items: center" in block
+    assert "align-items: start" not in block
+
+    scoped_start = html.index('.c3-row[data-multiline="true"] {')
+    scoped_block = html[scoped_start:html.index("}", scoped_start)]
+    assert "align-items: start" in scoped_block
+
+
+def test_the_row_code_cell_still_ellipsizes_long_lines() -> None:
+    """A long line still gets a visible truncation indicator, AND a
+    multi-line statement still renders across its own lines -- both at
+    once. These looked like a contradiction (an earlier version of this
+    task removed ``text-overflow`` on the theory that it would "hide
+    everything after the first" line of a multi-line statement) but are
+    not: ``text-overflow`` applies per LINE BOX, not once for the whole
+    (possibly multi-line) ``<pre>`` -- confirmed by rendering the same
+    badge with and without the property and diffing the multi-line output
+    line-for-line. See ``_snippet``'s docstring for the full explanation;
+    this test pins the two properties it justifies.
+
+    A pytest string check cannot measure pixel-level truncation, so this
+    asserts the CSS declares the right combination (the visual truncation
+    itself was confirmed in the task report via a real browser render) and
+    that a multi-line statement's full text still reaches the markup with
+    that same CSS in force -- the exact case the old (wrong) version of
+    this test would have broken.
 
     ``.c3-code {`` is not unique in the stylesheet: a bare neutralization
     rule (background/border/box-shadow only) comes first, and two compound
     selectors (``.c3-codepill > .c3-code {``, ``.c3-loop-head .c3-code {``)
     also contain the substring. Anchor on the styling rule's own
     "!important throughout" comment instead of the first ``.c3-code {``
-    match, which resolves to the wrong (neutralization) rule and would make
-    this test fail unconditionally, independent of the CSS content.
+    match, which resolves to the wrong (neutralization) rule.
     """
     html = render_html(build_interactive_badge([]))
     marker = "/* !important throughout"
     marker_idx = html.index(marker)
     css_start = html.rindex(".c3-code {", 0, marker_idx)
     block = html[css_start:html.index("}", marker_idx)]
-    assert "text-overflow" not in block
+    assert "text-overflow: ellipsis" in block, (
+        "the truncation indicator must be declared -- without it a long "
+        "line is hard-cut mid-glyph with no marker"
+    )
     assert "overflow: hidden" in block, (
         "overflow:hidden must stay -- it defeats Jupyter's overflow:auto, which "
         "would otherwise put a horizontal scrollbar on every row"
+    )
+    assert "white-space: pre" in block, (
+        "pre (not nowrap) is what lets a genuinely multi-line statement "
+        "render as multiple lines at all -- text-overflow then truncates "
+        "PER line, it does not collapse the block to one"
+    )
+
+    display = 'x = (\n    a\n    + 1\n)'
+    metrics = [{
+        "code": "x = a + 1",
+        "display_code": display,
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    multiline_html = render_html(build_interactive_badge(metrics))
+    assert _code_cell_text(multiline_html) == display, (
+        "restoring text-overflow must not re-collapse a multi-line "
+        "statement onto one line"
     )

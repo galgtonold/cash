@@ -241,6 +241,17 @@
   min-height: 26px;
   position: relative;          /* tooltip anchor */
 }
+/* A multi-line .c3-code cell (a captured StatementRow.display_code, or a
+   `match` statement's full body -- see _statement_source) makes the row
+   taller than its dots/bar/chip siblings; start-align those instead of
+   letting them float to the row's vertical midpoint. Scoped to
+   [data-multiline="true"] -- stamped by _statement_row_html only when the
+   rendered code actually contains a newline -- so every other row (which
+   is most rows, and EVERY display_code=None row) keeps the original
+   center alignment untouched, byte-for-byte. */
+.c3-row[data-multiline="true"] {
+  align-items: start;
+}
 .c3-row:last-child { border-bottom: 0; }
 .c3-row[data-clickable="true"] { cursor: pointer; }
 .c3-row[data-clickable="true"]:hover { background: #faf9f5; }
@@ -367,9 +378,12 @@ label.c3-row { cursor: pointer; }
   line-height: 1.4 !important;
 }
 .c3-code-body  { color: #444; }
-/* Faded suffix listing produced/restored variable names. Lives inline
-   so the parent .c3-code's overflow:hidden + ellipsis hides it first
-   when there's not enough room — never pushes the code itself off. */
+/* Faded suffix listing produced/restored variable names. Lives inline,
+   appended after the code on its LAST line (the only line, for a
+   single-line row) — .c3-code's overflow:hidden + text-overflow:ellipsis
+   apply per LINE BOX, so that line's own ellipsis hides the suffix first
+   when there's not enough room on it — never pushes the code itself off,
+   and never touches any earlier line of a multi-line statement. */
 .c3-row-vars {
   margin-left: 10px;
   color: #999;

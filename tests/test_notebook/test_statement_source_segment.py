@@ -102,3 +102,23 @@ def test_a_top_level_class_definition_returns_none():
     cell = "class Foo:\n    x = 1\n"
     node = ast.parse(cell).body[0]
     assert _statement_source(cell, node) is None
+
+
+def test_a_top_level_match_statement_is_captured_verbatim():
+    """The def/class exclusion is about BINDING vs. EXECUTING, not about
+    "is it multi-line". A ``match`` is just as multi-line as a def/class,
+    but it genuinely executes its matched branch, and (unlike an
+    if/for/while/with/try) it is not a control structure the runtime
+    splits into per-branch rows -- it is cached and executed as ONE unit,
+    so its full source IS "the code that ran". It must NOT be excluded the
+    way def/class are.
+    """
+    cell = (
+        'match command:\n'
+        '    case "go":\n'
+        '        result = 1\n'
+        '    case _:\n'
+        '        result = 0\n'
+    )
+    node = ast.parse(cell).body[0]
+    assert _statement_source(cell, node) == cell.rstrip("\n")

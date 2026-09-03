@@ -286,6 +286,18 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     existing fallback (the unparsed form, clipped to one line with a
     "... +N lines" hint) is the right treatment for these, not a compromise.
 
+    ``ast.Match`` is deliberately NOT in the exclusion below, even though a
+    ``match`` statement is just as multi-line as a ``def``/``class``. The
+    line is drawn on BINDING vs. EXECUTING, not on "is it multi-line": a
+    ``match`` genuinely executes its matched branch (unlike a def/class body,
+    which only runs when called), and since ``match`` is not one of
+    ``is_control_structure()``'s node types (For/While/If/With/Try), it has
+    no per-branch rows of its own -- the runtime caches and executes it as
+    ONE unit, so its full source IS "the code that ran", same as any other
+    captured statement. Do not "fix" the def/class-vs-match inconsistency by
+    adding ``Match`` here -- that would re-collapse a match statement's body
+    to a first-line summary for something that actually ran in full.
+
     Returns ``None`` when the segment cannot be recovered, or is withheld as
     above; the caller falls back to the unparsed form. Never raises: a badge
     must not be able to break a cell.
