@@ -28,6 +28,7 @@ What is pinned here is the behaviour that makes it safe.
 """
 from __future__ import annotations
 
+import glob
 import os
 import pickle
 from collections import deque
@@ -796,5 +797,51 @@ def test_a_healthy_small_entry_cache_never_warns_at_all(tmp_path):
     assert not [w for w in caught if "evicting entries" in str(w.message)], (
         "a healthy small-entry cache warned; ~15 entries fit and turnover is "
         "ordinary LRU"
+    )
+    b.shutdown()
+
+
+def test_eviction_breaks_mtime_ties_by_write_order(tmp_path):
+    """A burst that lands inside one filesystem timestamp tick is still LRU.
+
+    ``_rebuild_evict_queue`` ranks on mtime, and a sort on equal keys falls
+    back to ``scandir`` order -- a hash, not a time. So a burst of small
+    writes that shares one tick is ranked arbitrarily and the entry written
+    moments ago is evicted as if it were the coldest.
+
+    Not hypothetical, and not rare: on ext4 twelve 4KB writes landed on TWO
+    distinct mtimes (the burst spans 0.7ms; the timestamp step is 0.57ms),
+    which is why `test_a_healthy_small_entry_cache_never_warns_at_all` failed
+    on every Linux runner while passing on macOS and Windows, where the same
+    burst spread over five values.
+
+    The tie is forced here rather than raced for, so this fails on any
+    filesystem: what is under test is the ordering rule, not the clock.
+    """
+    cache = tmp_path / "c"
+    b = FileBackend(str(cache), max_size_bytes=200 * 1024, flush_interval=0)
+    for i in range(10):
+        b.set(f"k{i}", b"x" * 4096, {"size": 4096})
+    b._writes.wait_all()
+
+    # Every entry now looks written at the same instant, which is what a fast
+    # burst produces on a coarse-granularity filesystem.
+    #
+    # The stamp is in the FUTURE on purpose. Ranking prefers an in-memory
+    # `last_access` when it is NEWER than mtime, and back-dating the files
+    # would hand the sort that per-entry value and quietly rescue it -- which
+    # is how the first version of this test passed against the unfixed code.
+    # In the real failure mtime is recorded after `last_access`, so the
+    # override never fires and the coarse mtime is all the sort gets.
+    stamp = time.time() + 60
+    for path in glob.glob(os.path.join(str(cache), "*.entry")):
+        os.utime(path, (stamp, stamp))
+
+    b._rebuild_evict_queue()
+    order = [b._paths.get(p) for p, _s, _m in b._evict_queue]
+
+    assert order == [f"k{i}" for i in range(10)], (
+        "eviction ranked a tied-mtime burst by directory order, not by when "
+        f"the entries were written; got {order}"
     )
     b.shutdown()

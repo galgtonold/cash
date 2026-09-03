@@ -972,6 +972,23 @@ class FileBackend(CacheBackend):
         #
         # The two are directly comparable: `st_mtime` and `time.time()` are
         # both seconds since the epoch.
+        # Ties are broken by the write sequence, which is exact where mtime is
+        # quantized. A filesystem records timestamps in steps -- ~0.57ms on
+        # ext4 -- and a burst of small writes is faster than that, so an entire
+        # cache-full of entries can share ONE mtime: measured at 15 entries
+        # across 2 distinct values. `sorted` is stable, so a tie group then
+        # keeps `scandir` order, which is a hash, and LRU degenerates into
+        # evicting whatever the directory happens to list first -- including
+        # the entry written moments ago, whose eviction then trips the
+        # treadmill warning on a perfectly healthy cache.
+        #
+        # `last_access` above does not cover this: it is recorded BEFORE the
+        # file is written, so mtime is the newer of the two and the override
+        # never fires on a fresh write. The write sequence is a counter this
+        # process already maintains for the warning itself, so it costs a dict
+        # lookup. Entries this process never wrote sort first within their tie
+        # group (0), which is right: it has no evidence they are hot.
+        seqs: dict[str, int] = {}
         with self._lock:
             for path, key in self._paths.items():
                 if path not in ranks:
@@ -980,8 +997,9 @@ class FileBackend(CacheBackend):
                 last_access = meta.get('last_access') if meta else None
                 if last_access is not None and last_access > ranks[path][0]:
                     ranks[path] = (last_access, ranks[path][1])
+                seqs[path] = self._write_seq_by_key.get(key, 0)
 
-        ordered = sorted(ranks.items(), key=lambda kv: kv[1][0])
+        ordered = sorted(ranks.items(), key=lambda kv: (kv[1][0], seqs.get(kv[0], 0)))
         # Deques: both are drained from the front across many passes, and
         # list.pop(0) would make that quadratic in a large cache. Each item
         # carries the mtime it was RANKED at, so `_touched_since` can tell
