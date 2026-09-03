@@ -55,6 +55,26 @@ def test_statement_row_constructs_with_only_required_props() -> None:
     assert row.uncacheable_reasons == ()
 
 
+def test_statement_row_display_code_defaults_to_none() -> None:
+    """Backwards compat: a row built without ``display_code`` -- every row
+    built before this feature existed -- must behave exactly as before.
+    """
+    row = StatementRow(status=BadgeStatus.RESTORED, code="x = 1", time_s=0.02)
+    assert row.display_code is None
+
+
+def test_statement_row_carries_display_code_when_present() -> None:
+    """The IR keeps the display string separate from the keyed one."""
+    row = StatementRow(
+        status=BadgeStatus.COMPUTED,
+        code="x = a + 1",
+        time_s=0.5,
+        display_code="x = (\n    a + 1\n)",
+    )
+    assert row.code == "x = a + 1"
+    assert row.display_code == "x = (\n    a + 1\n)"
+
+
 def test_frozen_nodes_reject_mutation() -> None:
     row = StatementRow(status=BadgeStatus.COMPUTED, code="y = 2", time_s=0.5)
     with pytest.raises(dataclasses.FrozenInstanceError):
