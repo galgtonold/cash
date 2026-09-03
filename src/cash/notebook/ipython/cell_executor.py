@@ -278,9 +278,20 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     own ``col_offset``. For a top-level statement that offset is 0 and this is a
     no-op.
 
-    Returns ``None`` when the segment cannot be recovered; the caller falls back
-    to the unparsed form. Never raises: a badge must not be able to break a cell.
+    A top-level ``def``/``class`` is deliberately excluded, returning ``None``
+    same as an unrecoverable segment. Executing one only BINDS the name -- the
+    body never runs -- so the body is not "the code that ran" the way it is
+    for every other captured statement, and showing it in full would make the
+    badge very tall in any notebook that defines functions. The caller's
+    existing fallback (the unparsed form, clipped to one line with a
+    "... +N lines" hint) is the right treatment for these, not a compromise.
+
+    Returns ``None`` when the segment cannot be recovered, or is withheld as
+    above; the caller falls back to the unparsed form. Never raises: a badge
+    must not be able to break a cell.
     """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None
     try:
         segment = ast.get_source_segment(raw_cell, node)
     except Exception:  # noqa: BLE001 - display only, never break the cell

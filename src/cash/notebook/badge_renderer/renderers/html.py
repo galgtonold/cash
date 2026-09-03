@@ -301,7 +301,11 @@ _CSS = f"""
 .c3-row {{
   display: grid;
   grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px;
-  align-items: center;
+  /* start, not center: a multi-line .c3-code cell (StatementRow.display_code)
+     makes the row taller than its dots/bar/chip siblings -- start keeps
+     those on the first line instead of floating to the row's vertical
+     midpoint. */
+  align-items: start;
   border-bottom: 1px solid {theme.RULE_SOFT};
   min-height: 26px;
   position: relative;          /* tooltip anchor */
@@ -428,7 +432,6 @@ label.c3-row {{ cursor: pointer; }}
   color: {theme.INK} !important;
   white-space: pre !important;
   overflow: hidden !important;
-  text-overflow: ellipsis !important;
   line-height: 1.4 !important;
 }}
 .c3-code-body  {{ color: {theme.INK_2}; }}
@@ -1187,6 +1190,31 @@ def _rowtip_html(row: StatementRow) -> str:
     )
 
 
+def _row_code_html(row: StatementRow) -> str:
+    """Highlighted code for a STATEMENT row's ``.c3-code`` cell (the ERROR
+    and default/computed branches of :func:`_statement_row_html` -- the two
+    branches that render the statement itself rather than a descriptor).
+
+    Prefers ``display_code`` -- the user's own multi-line layout -- rendered
+    via ``highlight_python`` with NO truncation, the same call the expanded
+    row drawer already uses for ``.c3-rt-code`` (see ``_rowtip_html``):
+    multi-line is the point, not something to summarize away.
+
+    Falls back to ``_code_html(row.code)`` -- byte-for-byte what this cell
+    rendered before ``display_code`` existed -- whenever there isn't one.
+    That covers the common single-line statement (where the two strings are
+    identical anyway) and every row the view-builder withholds one for by
+    design: control bodies, loop-split iterations, statements cash rewrote,
+    and top-level ``def``/``class`` (see ``_statement_source``) -- for those,
+    ``_code_html``'s first-line + "... +N lines" summary IS the intended
+    treatment, not a compromise to route around.
+    """
+    return (
+        highlight_python(row.display_code) if row.display_code
+        else _code_html(row.code)
+    )
+
+
 def _statement_row_html(row: StatementRow, max_time: float) -> str:
     status = row.status
     kind = theme.kind_of(status.value)
@@ -1212,7 +1240,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
         bar = '<span class="c3-tbar-cell"></span>'
         chip = _notif_chip("warn")
     elif status is BadgeStatus.ERROR:
-        code_html = f'<pre class="c3-code">{_code_html(row.code)}</pre>'
+        code_html = f'<pre class="c3-code">{_row_code_html(row)}</pre>'
         bar = '<span class="c3-tbar-cell"></span>'
         chip = _notif_chip("error")
     else:
@@ -1225,7 +1253,7 @@ def _statement_row_html(row: StatementRow, max_time: float) -> str:
             f'<span class="c3-row-vars">← {", ".join(_esc(n) for n in names)}</span>'
             if names else ""
         )
-        code_html = f'<pre class="c3-code">{_code_html(row.code)}{suffix}</pre>'
+        code_html = f'<pre class="c3-code">{_row_code_html(row)}{suffix}</pre>'
         bar = _tbar(row.time_s, max_time, kind)
         chip = _time_chip(row.time_s, row.saved_time_s, kind)
 

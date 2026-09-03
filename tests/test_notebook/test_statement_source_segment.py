@@ -76,3 +76,29 @@ def test_an_unrecoverable_segment_returns_none():
     cell = "x = 1\ny = 2\nz = 3\n"
     node = ast.parse(cell).body[2]
     assert _statement_source("x = 1\n", node) is None
+
+
+def test_a_top_level_function_definition_returns_none():
+    """A ``def`` only BINDS the name -- the body never runs, so the body is
+    not "the code that ran" the way it is for every other captured statement.
+    Showing it in full would also make the badge very tall in any notebook
+    that defines functions, so capture is withheld and the caller falls back
+    to the unparsed form (today's clipped ``def foo(x):`` + "... +N lines").
+    """
+    cell = "def foo(x):\n    y = x + 1\n    return y\n"
+    node = ast.parse(cell).body[0]
+    assert _statement_source(cell, node) is None
+
+
+def test_a_top_level_async_function_definition_returns_none():
+    """``AsyncFunctionDef`` is a distinct node type from ``FunctionDef`` --
+    checked separately so an ``async def`` doesn't slip through the guard."""
+    cell = "async def foo(x):\n    y = x + 1\n    return y\n"
+    node = ast.parse(cell).body[0]
+    assert _statement_source(cell, node) is None
+
+
+def test_a_top_level_class_definition_returns_none():
+    cell = "class Foo:\n    x = 1\n"
+    node = ast.parse(cell).body[0]
+    assert _statement_source(cell, node) is None

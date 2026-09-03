@@ -8,7 +8,7 @@ The visual surface is documented in
 
 from __future__ import annotations
 
-from cash.notebook.badge_renderer.renderers.html import render_html
+from cash.notebook.badge_renderer.renderers.html import _code_html, render_html
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.cache_status import CacheStatus
 
@@ -435,3 +435,131 @@ def test_row_without_rng_pill_has_no_codepill_wrapper():
     }]))
     body = html.split("</style>", 1)[1]  # ignore the .c3-codepill CSS rule
     assert '<div class="c3-codepill">' not in body
+
+
+def _visible_text(fragment: str) -> str:
+    """Strip HTML tags and unescape entities -- the text a reader actually
+    sees, independent of which ``<span>`` ``highlight_python`` wrapped each
+    token in. Asserting on this (rather than a raw substring of the markup)
+    survives syntax highlighting: a literal check like ``"x = a + 1" in
+    html`` breaks the moment the statement contains a keyword, string, or
+    number, because ``highlight_python`` wraps those in their own span and
+    fragments the substring -- that says nothing about whether the row
+    actually rendered the statement in full.
+    """
+    import re
+    from html import unescape
+    return unescape(re.sub(r"<[^>]+>", "", fragment))
+
+
+def _code_cell_text(html: str) -> str:
+    """The visible text of the FIRST ``<pre class="c3-code">...</pre>`` block."""
+    start = html.index('<pre class="c3-code">') + len('<pre class="c3-code">')
+    end = html.index("</pre>", start)
+    return _visible_text(html[start:end])
+
+
+def test_a_multiline_statement_renders_across_lines() -> None:
+    """The row mirrors the cell, so a row can be matched to the code above it.
+
+    The visible text of the code cell must equal the display source
+    EXACTLY, embedded newlines included -- not a first-line-only summary.
+    """
+    display = 'x = (\n    a\n    + 1\n)'
+    metrics = [{
+        "code": "x = a + 1",
+        "display_code": display,
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    html = render_html(build_interactive_badge(metrics))
+    text = _code_cell_text(html)
+    assert text == display, (
+        "the row must show the statement's own multi-line layout in full, "
+        f"not a truncated or collapsed summary; got {text!r}"
+    )
+
+
+def test_a_row_without_display_code_is_unchanged() -> None:
+    """The control: nothing moves for a single-line statement with no
+    ``display_code`` -- the row's code cell must be byte-identical to
+    ``_code_html(row.code)``, the exact call every row used before this
+    feature existed. This is the single most important property of the
+    whole feature: a ``None`` row must be provably untouched, not just
+    visually similar.
+    """
+    metrics = [{
+        "code": "x = a + 1",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    html = render_html(build_interactive_badge(metrics))
+    start = html.index('<pre class="c3-code">')
+    end = html.index("</pre>", start) + len("</pre>")
+    block = html[start:end]
+    assert block == f'<pre class="c3-code">{_code_html("x = a + 1")}</pre>'
+
+
+def test_a_top_level_def_still_renders_clipped_to_one_line() -> None:
+    """A ``def``/``class`` must NOT expand just because it is a multi-line
+    top-level statement.
+
+    Drives ``display_code`` through the SAME function the real cell-executor
+    split loop calls (``_statement_source``) instead of hand-picking it, so
+    this fails if that capture decision ever stops excluding def/class --
+    not only if this test's fixture happens to omit the key. ``ast.unparse``
+    of a top-level ``FunctionDef`` is already multi-line, so ``row.code``
+    alone contains embedded newlines -- the CSS clip used to be the only
+    thing hiding the body, and a naive "prefer display_code" renderer fix
+    (passing display_code through unconditionally whenever present) would
+    have carried a captured one straight through and expanded it. See
+    task-5-report.md finding 2.
+    """
+    import ast
+
+    from cash.notebook.ipython.cell_executor import _statement_source
+
+    cell = "def foo(x):\n    y = x + 1\n    return y\n"
+    node = ast.parse(cell).body[0]
+    code = ast.unparse(node)
+    display_code = _statement_source(cell, node)
+    assert display_code is None, (
+        "premise: capture must withhold display_code for a top-level def -- "
+        "if this fires, the regression is in _statement_source, not here"
+    )
+
+    metrics = [{
+        "code": code,
+        "display_code": display_code,
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.02,
+    }]
+    html = render_html(build_interactive_badge(metrics))
+    text = _code_cell_text(html)
+    assert "\n" not in text, f"a def row must stay collapsed to one line; got {text!r}"
+    assert text.startswith("def foo(x):"), f"expected the signature line; got {text!r}"
+    assert "+2 lines" in text, "expected the existing '... +N lines' hint to still show"
+
+
+def test_the_row_code_cell_does_not_ellipsize() -> None:
+    """`text-overflow: ellipsis` only ever applied to one line and would now
+    hide everything after the first.
+
+    ``.c3-code {`` is not unique in the stylesheet: a bare neutralization
+    rule (background/border/box-shadow only) comes first, and two compound
+    selectors (``.c3-codepill > .c3-code {``, ``.c3-loop-head .c3-code {``)
+    also contain the substring. Anchor on the styling rule's own
+    "!important throughout" comment instead of the first ``.c3-code {``
+    match, which resolves to the wrong (neutralization) rule and would make
+    this test fail unconditionally, independent of the CSS content.
+    """
+    html = render_html(build_interactive_badge([]))
+    marker = "/* !important throughout"
+    marker_idx = html.index(marker)
+    css_start = html.rindex(".c3-code {", 0, marker_idx)
+    block = html[css_start:html.index("}", marker_idx)]
+    assert "text-overflow" not in block
+    assert "overflow: hidden" in block, (
+        "overflow:hidden must stay -- it defeats Jupyter's overflow:auto, which "
+        "would otherwise put a horizontal scrollbar on every row"
+    )
