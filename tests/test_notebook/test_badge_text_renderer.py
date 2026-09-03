@@ -109,3 +109,23 @@ def test_text_badge_is_ascii_across_every_status():
             f"cp1252 reader. The text renderer must stay ASCII -- put the glyph "
             f"in the HTML renderer instead."
         ) from None
+
+
+def test_a_multiline_statement_stays_one_line_in_the_text_badge() -> None:
+    """The text badge documents one line per statement.
+
+    It renders ``row.code.splitlines()[0]``, so handing it the display source
+    would silently print ``x = (`` and drop the rest. It keeps the unparsed
+    form on purpose; `_agent_guide.py` reproduces this shape verbatim and
+    `test_agent_guide_sync` pins it.
+    """
+    metrics = [{
+        "code": "x = a + 1",
+        "display_code": "x = (\n    a\n    + 1\n)",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    text = render_text(build_interactive_badge(metrics))
+    body = [ln for ln in text.splitlines() if "x = " in ln]
+    assert len(body) == 1, f"expected one statement line, got {body}"
+    assert "x = a + 1" in body[0], "the text badge lost the statement's tail"
