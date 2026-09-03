@@ -263,6 +263,42 @@ def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     }, total
 
 
+def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
+    """The statement's ORIGINAL text, for display only.
+
+    ``ast.unparse`` is what the cache key and ``compile()`` use, and it
+    normalizes a statement onto one logical line -- so there is no multi-line
+    form of the executed text. The badge wants the user's own layout back so a
+    row can be matched against the cell above it.
+
+    ``get_source_segment`` returns a nested statement with its first line flush
+    and every continuation line at its ABSOLUTE file indentation, which reads as
+    ragged in a row. ``textwrap.dedent`` cannot fix that -- the first line
+    shares no common prefix -- so continuation lines are dedented by the node's
+    own ``col_offset``. For a top-level statement that offset is 0 and this is a
+    no-op.
+
+    Returns ``None`` when the segment cannot be recovered; the caller falls back
+    to the unparsed form. Never raises: a badge must not be able to break a cell.
+    """
+    try:
+        segment = ast.get_source_segment(raw_cell, node)
+    except Exception:  # noqa: BLE001 - display only, never break the cell
+        return None
+    if not segment:
+        return None
+
+    indent = getattr(node, "col_offset", 0) or 0
+    if indent <= 0:
+        return segment
+
+    head, *rest = segment.split("\n")
+    return "\n".join(
+        [head] + [line[indent:] if line[:indent].isspace() else line
+                  for line in rest]
+    )
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
