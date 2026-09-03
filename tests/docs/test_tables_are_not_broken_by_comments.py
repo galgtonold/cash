@@ -15,12 +15,21 @@ symbols still exist, `mkdocs --strict` only checks links and nav, and
 
 Anchors immediately *above* a header row are fine and are the convention; this
 only rejects the position that destroys content.
+
+Parametrized over ``published_pages()`` rather than a bare ``rglob``, because
+the page set has to be the same on every machine. ``docs/superpowers/`` is
+gitignored planning material: a contributor who has it collected 32 extra
+tests, which is exactly the gap that made the derived ``tests_docs`` figure
+unreproducible and failed the release's doc-number gate. A test over files
+that are not in the repository also cannot fail for anyone else.
 """
 from __future__ import annotations
 
 import pathlib
 
 import pytest
+
+from tests.docs._claims import published_pages
 
 DOCS = pathlib.Path(__file__).resolve().parents[2] / "docs"
 
@@ -45,7 +54,7 @@ def _table_interior_comments(text: str) -> list[tuple[int, str]]:
 
 @pytest.mark.parametrize(
     "page",
-    sorted(DOCS.rglob("*.md")),
+    published_pages(),
     ids=lambda p: str(p.relative_to(DOCS)),
 )
 def test_no_html_comment_inside_a_markdown_table(page: pathlib.Path):

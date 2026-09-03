@@ -205,6 +205,20 @@ dev = [
     # scipy is used by tests/test_notebook/test_size_estimator.py to
     # exercise the csr/csc/coo branches of _estimate_object_size.
     "scipy",
+    # matplotlib and pydantic are OPTIONAL for users and were absent here, so
+    # the tests that guard on them were skipped AT COLLECTION on every CI run
+    # and only ever ran on a contributor machine that happened to have them.
+    # That is invisible: a skipped module reports nothing.
+    #
+    # matplotlib covers the figure identity guard -- `@cash.cache` REFUSING to
+    # store a figure, which decorator.md states as a claim -- across 8 files
+    # and ~30 tests. pydantic covers `model_fields` folding into the cache key,
+    # the 0.8.0 fix for a spec that was tracked but never cached; that
+    # regression test shipped with no CI protecting it.
+    #
+    # Every matplotlib test sets the Agg backend, so neither needs a display.
+    "matplotlib>=3.5,<4",
+    "pydantic>=2,<3",
     # scikit-learn is needed by the integration tests that drive a REAL kernel
     # (test_real_world_libraries.py, test_rng_badge_indicator.py,
     # test_user_testing_findings.py). The `docs-test` note above explains that
