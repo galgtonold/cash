@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.8.0] - 2026-09-02
+## [0.8.0] - 2026-09-03
 
 A correctness release, focused on the two things a cache can get quietly wrong:
 a side effect that runs once and is then skipped forever, and a result stored
@@ -147,6 +147,17 @@ once, because their keys now include the field definitions.
   queued and still be evicted. On the shape that prompted it — a baseline whose
   cached upstream is reused by later variants — the baseline's survival goes
   from 1-in-3 to 3-in-3.
+
+- **A burst of small writes is ranked by write order, not by directory order.**
+  Eviction ranks on modification time, and a filesystem records those in steps:
+  on ext4 the step is about 0.57 ms while a burst of small writes is faster, so
+  a whole cache-full of entries can share one timestamp — measured at 12 entries
+  across 2 distinct values, against 5 on NTFS. Sorting is stable, so everything
+  in that tie kept directory order, which is a hash of the filename. The cache
+  evicted entries it had just written while older ones sat untouched, and then
+  reported itself as thrashing because it had. Ties now break on the write
+  counter, so eviction is exact rather than approximate everywhere: on Linux the
+  evicted entry went from as recent as 1 write old to never newer than 12.
 
 - **`from cash.backends import SQLiteBackend` raised `ImportError`** while every
   sibling backend resolved.
