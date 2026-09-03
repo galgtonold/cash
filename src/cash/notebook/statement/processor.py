@@ -931,7 +931,12 @@ class StatementProcessor:
         self.executed_input_lineages = state.executed_input_lineages
         self.mutation_verdicts = state.mutation_verdicts
 
-    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False, force_outputs: set[str] | None = None, is_last: bool = True) -> ProcessResult:
+    def process_statement(self, code: str, ttl: int | None = None, silent: bool = False,
+                          annotation: CacheAnnotation | None = None,
+                          display_code: str | None = None,
+                          occurrence_index: int = 0, stream_output: bool = False,
+                          force_outputs: set[str] | None = None,
+                          is_last: bool = True) -> ProcessResult:
         """
         Process a single statement: Analyze -> Check Cache -> Execute/Restore.
 
@@ -982,6 +987,9 @@ class StatementProcessor:
             'error': None,
             'restored_vars': [],
             'code': code.strip(),
+            # Display only -- the badge shows the user's own layout. NEVER part
+            # of the key: `code` above is what is hashed and compiled.
+            'display_code': display_code,
             'uncacheable_reasons': []
         }
         self._stamp_random_effect(metrics, code, unseeded_calls)
@@ -1236,7 +1244,11 @@ class StatementProcessor:
 
         return metrics
 
-    async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False, annotation: CacheAnnotation | None = None, occurrence_index: int = 0, stream_output: bool = False, is_last: bool = True) -> ProcessResult:
+    async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False,
+                                      annotation: CacheAnnotation | None = None,
+                                      display_code: str | None = None,
+                                      occurrence_index: int = 0, stream_output: bool = False,
+                                      is_last: bool = True) -> ProcessResult:
         """Async twin of :meth:`process_statement` for top-level-await cells.
 
         Line-for-line the same pipeline — analysis, cache lookup, cache-hit
@@ -1269,6 +1281,9 @@ class StatementProcessor:
             'error': None,
             'restored_vars': [],
             'code': code.strip(),
+            # Display only -- the badge shows the user's own layout. NEVER part
+            # of the key: `code` above is what is hashed and compiled.
+            'display_code': display_code,
             'uncacheable_reasons': []
         }
         self._stamp_random_effect(metrics, code, unseeded_calls)
