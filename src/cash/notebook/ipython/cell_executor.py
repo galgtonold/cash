@@ -1100,11 +1100,13 @@ class CellExecutor:
         is_last_statement: bool,
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
+        display_code: str | None = None,
     ) -> list:
         """Process one non-control statement with caching; return updated buffer."""
         metrics = self._statement_processor.process_statement(
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
+            display_code=display_code,
             occurrence_index=occurrence_index,
             # IPython echoes only the CELL's last expression; cash executes each
             # statement as its own unit, so it must be told which one that is
@@ -1123,6 +1125,7 @@ class CellExecutor:
         is_last_statement: bool,
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
+        display_code: str | None = None,
     ) -> list:
         """Async twin of :meth:`_process_regular_stmt`.
 
@@ -1135,6 +1138,7 @@ class CellExecutor:
         metrics = await self._statement_processor.process_statement_async(
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
+            display_code=display_code,
             occurrence_index=occurrence_index,
             is_last=is_last_statement,  # as in the sync path
         )
@@ -1220,6 +1224,10 @@ class CellExecutor:
             except (ValueError, TypeError):
                 continue
 
+            # The badge shows the user's own layout; `stmt_code` above stays the
+            # keyed and executed text. See `_statement_source`.
+            stmt_display = _statement_source(raw_cell, node)
+
             # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
             # suppression (``df.head();`` shows no repr). Re-attach it so the
             # suppression rides through the cache key AND the execution path
@@ -1270,7 +1278,8 @@ class CellExecutor:
                         raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                 else:
                     buffered_result_outputs = self._process_regular_stmt(
-                        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
+                        stmt_code, annotation, occ, is_last, all_metrics,
+                        buffered_result_outputs, display_code=stmt_display,
                     )
 
                 t_badge = time.time()
@@ -1325,6 +1334,10 @@ class CellExecutor:
                 stmt_code = ast.unparse(node)
             except (ValueError, TypeError):
                 continue
+
+            # The badge shows the user's own layout; `stmt_code` above stays the
+            # keyed and executed text. See `_statement_source`.
+            stmt_display = _statement_source(raw_cell, node)
 
             if self._expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
@@ -1385,7 +1398,8 @@ class CellExecutor:
                         raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                 else:
                     buffered_result_outputs = await self._process_regular_stmt_async(
-                        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
+                        stmt_code, annotation, occ, is_last, all_metrics,
+                        buffered_result_outputs, display_code=stmt_display,
                     )
 
                 t_badge = time.time()

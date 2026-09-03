@@ -93,3 +93,15 @@ def test_display_code_does_not_change_the_cache_key(processor_fixture):
     assert second["status"] in (CacheStatus.SKIPPED, CacheStatus.RESTORED), (
         f"display text changed the key: second call was {second['status']}"
     )
+
+
+def test_a_control_body_statement_has_no_display_code(processor_fixture):
+    """Capture is top-level only, by design.
+
+    A control body, a loop-split iteration and a statement cash rewrote all
+    keep showing what actually RAN. Their source is not what executed, so
+    showing it would mislead rather than help.
+    """
+    processor, shell, backend, magics = processor_fixture
+    metrics = processor.process_statement("y = 2")
+    assert metrics.get("display_code") is None
