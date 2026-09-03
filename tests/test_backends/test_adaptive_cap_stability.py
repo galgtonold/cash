@@ -16,8 +16,6 @@ bytes, free drops by N, and the sum is unchanged.
 """
 from __future__ import annotations
 
-import os
-
 import pytest
 
 import cash.backends.adaptive_caps as caps
@@ -32,32 +30,47 @@ def volume(tmp_path, monkeypatch):
     """A fake volume whose free space shrinks as the cache directory grows.
 
     That coupling is the whole subject: a probe returning a constant would
-    make both the old and the new behaviour look identical.
+    make both the old and the new behaviour look identical. So the SAME number
+    drives both sides -- what the volume reports as free, and what the backend
+    reports as its own footprint.
+
+    The footprint is declared rather than written. It used to be a real
+    ``truncate(12 GiB)``, described as sparse and "no real disk needed", which
+    is true on ext4 and APFS and false on NTFS: measured on Windows it took
+    25.7s and consumed 12.18 GiB of actual disk. A GitHub Windows runner has
+    less free space than that, so the worker died -- every Windows job, every
+    Python version, a hard crash rather than a failed assertion. The scale
+    cannot simply be reduced either: below a 32 GiB volume the cap is pinned to
+    ``DISK_FLOOR`` and every arm of this file would pass without measuring
+    anything.
+
+    Yields ``(cache, free_when_empty, occupy)``; call ``occupy(nbytes)`` to say
+    the cache now holds that much.
     """
     cache = tmp_path / "cache"
     cache.mkdir()
     total_free_when_empty = 48 * GIB
+    used = {"bytes": 0}
 
     def fake_free(path):
-        used = sum(f.stat().st_size for f in os.scandir(cache) if f.is_file())
-        return total_free_when_empty - used
+        return total_free_when_empty - used["bytes"]
 
     monkeypatch.setattr(caps, "_free_bytes_on_volume", fake_free)
-    return cache, total_free_when_empty
+    # The directory walk is what turns bytes on disk into `_current_size_bytes`;
+    # it is exercised in its own tests. Here it is only the courier for the
+    # footprint, and paying 12 GiB of I/O to move one integer is what broke CI.
+    monkeypatch.setattr(FileBackend, "_scan_size_bytes",
+                        lambda self: used["bytes"])
 
+    def occupy(nbytes):
+        used["bytes"] = nbytes
 
-def _fill_to(cache, nbytes):
-    """Occupy *nbytes* in the cache dir, sparsely (no real disk needed)."""
-    for f in os.scandir(cache):
-        if f.is_file():
-            os.remove(f.path)
-    with open(cache / "bulk.entry", "wb") as fh:
-        fh.truncate(nbytes)
+    return cache, total_free_when_empty, occupy
 
 
 def test_the_cap_does_not_shrink_as_the_cache_fills(volume):
     """The defect, stated as the invariant it violates."""
-    cache, free_when_empty = volume
+    cache, free_when_empty, occupy = volume
 
     empty = FileBackend(str(cache), max_size_bytes=adaptive_disk_cap(free_when_empty),
                         adaptive_cap=True, flush_interval=0)
@@ -65,7 +78,7 @@ def test_the_cap_does_not_shrink_as_the_cache_fills(volume):
     cap_when_empty = empty._max_size_bytes
     empty.shutdown()
 
-    _fill_to(cache, cap_when_empty)          # the cache fills to that cap
+    occupy(cap_when_empty)                   # the cache fills to that cap
 
     full = FileBackend(str(cache), max_size_bytes=adaptive_disk_cap(caps._free_bytes_on_volume(str(cache))),
                        adaptive_cap=True, flush_interval=0)
@@ -85,7 +98,7 @@ def test_an_explicit_cap_is_never_re_derived(volume):
     Without this, 'always re-derive' would pass the arm above while quietly
     overriding `max_cache_size`.
     """
-    cache, _ = volume
+    cache, _, _ = volume
     chosen = 3 * GIB
 
     b = FileBackend(str(cache), max_size_bytes=chosen, adaptive_cap=False,
@@ -97,7 +110,7 @@ def test_an_explicit_cap_is_never_re_derived(volume):
 
 def test_an_empty_cache_gets_the_same_cap_as_before(volume):
     """The correction must be invisible until there is something to correct for."""
-    cache, free_when_empty = volume
+    cache, free_when_empty, _ = volume
 
     b = FileBackend(str(cache), max_size_bytes=None, adaptive_cap=True,
                     flush_interval=0)
@@ -111,7 +124,7 @@ def test_the_cap_still_follows_the_volume(volume):
 
     The fix removes the cache's own footprint from the signal, not the signal.
     """
-    cache, free_when_empty = volume
+    cache, free_when_empty, _ = volume
     roomy = adaptive_disk_cap_for(str(cache), 0)
 
     # Something else on the volume eats 40 GiB.
