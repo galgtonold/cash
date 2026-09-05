@@ -277,7 +277,7 @@ label.c3-row { cursor: pointer; }
    own checkbox toggle but keeps the existing summary/drill-down
    markup inside the label. */
 .c3-rxtog:checked ~ .c3-iter-table { display: flex; }
-.c3-iter-table { display: none; }
+
 .c3-rt-h {
   display: flex; align-items: center; gap: 8px;
   margin-bottom: 10px;
@@ -500,137 +500,6 @@ label.c3-row { cursor: pointer; }
 .c3-codepill > .c3-code { min-width: 0; flex: 0 1 auto; }
 .c3-codepill > .c3-rng-pill { flex: 0 0 auto; }
 
-/* Loop heading line */
-.c3-loop-head .c3-code { font-weight: 500; }
-.c3-loop-meta {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: #666;
-  padding: 0 6px;
-  text-align: left;
-}
-
-/* Inline iteration mini-histogram on loop body line */
-.c3-iter-cell { padding: 0 4px; display: flex; align-items: center; }
-.c3-iter-strip {
-  display: inline-flex;
-  align-items: flex-end;
-  gap: 1px;
-  height: 16px;
-  max-width: 100%;
-  overflow: hidden;
-}
-.c3-iter-bar {
-  width: 4px;
-  min-height: 3px;
-  border-radius: 0.5px;
-  flex-shrink: 0;
-}
-
-/* Per-iteration drill-down — collapsed by default, revealed when the
-   parent loop-body row's checkbox is checked. The display rule lives
-   with the click-to-expand rules above; here we only set layout. */
-.c3-iter-table {
-  background: #fafbfc;
-  padding: 6px 12px 8px 30px;
-  border-bottom: 1px solid #f4f3ef;
-  flex-direction: column;
-  gap: 2px;
-}
-.c3-iter-row {
-  display: grid;
-  grid-template-columns: 12px 160px 1fr 70px;
-  align-items: center;
-  gap: 8px;
-  font-size: 10px;
-}
-.c3-iter-bullet {
-  width: 7px; height: 7px; border-radius: 50%; display: inline-block;
-}
-.c3-iter-key {
-  color: #666;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-}
-.c3-iter-more .c3-iter-key { color: #999; font-style: italic; }
-.c3-iter-key b { color: #222; }
-.c3-iter-bar-track {
-  height: 4px;
-  background: #ececec;
-  border-radius: 2px;
-  overflow: hidden;
-}
-.c3-iter-bar-track > span { display: block; height: 100%; border-radius: 2px; }
-.c3-iter-time {
-  color: #444;
-  text-align: right;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Decorator inline detail */
-.c3-detail {
-  background: #fafbfc;
-  padding: 10px 14px 10px 30px;
-  border-bottom: 1px solid #f0f0ef;
-  font-size: 11px;
-  color: #444;
-}
-.c3-detail-h {
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: #666;
-  margin-bottom: 6px;
-}
-.c3-cache-tag {
-  display: inline-block;
-  padding: 1px 5px;
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 9px;
-  color: #1a73e8;
-  background: #e8f0fe;
-  border-radius: 3px;
-  margin-right: 4px;
-}
-.c3-deco-detail {
-  display: none;
-  background: #fafbfc;
-  border-top: 1px solid #f4f3ef;
-  padding: 8px 16px 10px 22px;
-  font-size: 11px;
-}
-.c3-rxtog:checked ~ .c3-deco-detail { display: block; }
-.c3-deco-fn      { margin-top: 6px; }
-.c3-deco-fn-name {
-  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
-  color: #444;
-  margin-bottom: 4px;
-}
-.c3-deco-strip {
-  display: flex; align-items: flex-end; gap: 2px; height: 20px;
-}
-.c3-deco-bar { width: 6px; border-radius: 1px; }
-
-/* Control structure (if / elif / else / try / except).
-   Head row is shown verbatim; body rows render inline beneath it (no
-   click-to-expand) so the if's body is always visible — same way it
-   reads in the source. */
-.c3-ctrl { display: block; }
-.c3-ctrl-head { /* uses .c3-row grid via the markup */ }
-.c3-ctrl-body {
-  border-left: 2px solid #e8e1ce;
-  /* Visual indent of one "tab" so nested loops/controls read at a
-     similar shift as Python's 4-space source indent — the previous
-     5px just aligned rails and looked unindented in deep nesting. */
-  margin-left: 24px;
-  background: #fbfaf3;
-}
-
 /* Overhead row — collapsed single-row variant. Section label sits inline
    with the breakdown so we never spend 3 rows showing 0.00s sub-categories. */
 .c3-ovh { background: #fbfbfa; }
@@ -728,7 +597,7 @@ a.c3-bug:hover {
   color: #999;
   display: inline-block;
 }
-</style><div class="c3-wrap"><details class="c3-card" data-kind="exec"><summary class="c3-summary"><span class="c3-summary-label">EXECUTED</span><span class="c3-summary-sep">·</span><span class="c3-summary-sub">0.21s · saved 3.21s</span><span class="c3-summary-spark"><span class="c3-spark"><span class="c3-spark-bar" style="height:2px;background:#86bfa3;"></span><span class="c3-spark-bar" style="height:16px;background:#d3a76b;"></span></span></span><span class="c3-summary-chips"><span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>exec<span class="c3-fchip-count">1</span></span><span class="c3-fchip c3-fchip-cached"><span class="c3-fchip-dot"></span>cached<span class="c3-fchip-count">1</span></span></span><span class="c3-summary-caret"></span></summary><div class="c3-panel"><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000001"><label class="c3-row" for="rx-0000000001" data-kind="cached" data-status="restored"><span class="c3-rail" style="background:#2a8a5e;"></span><pre class="c3-code">tx_features = transactions.groupby(<span class="c3-str">'customer_id'</span>).agg(...)<span class="c3-row-vars">← tx_features</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring" title="RAM — restored from here"></span><span class="c3-dot c3-dot-empty" title="DISK — not stored"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-cached" style="width:41.2%;"></span></span></span><span class="c3-time-chip c3-time-chip-cached"><span>0.03s</span><span class="c3-time-sub">↑3.21s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#1f6646;background:#ecf6f0;">CACHED</span><span class="c3-rt-time">0.031s <span class="c3-rt-saved">· saved 3.21s</span></span></div><pre class="c3-rt-code">tx_features = transactions.groupby(<span class="c3-str">'customer_id'</span>).agg(...)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring" title="RAM — restored from here"></span><span class="c3-dot c3-dot-empty" title="DISK — not stored"></span></span></span> ← RAM</dd><dt>Restored</dt><dd>tx_features</dd><dt>Key</dt><dd><code>1a2b3c4d</code></dd></dl></div></div><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000002"><label class="c3-row" for="rx-0000000002" data-kind="exec" data-status="computed"><span class="c3-rail" style="background:#a87530;"></span><pre class="c3-code">df = customers.merge(tx_features, on=<span class="c3-str">'customer_id'</span>, how=<span class="c3-str">'inner'</span>)<span class="c3-row-vars">← df</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid" title="RAM — stored"></span><span class="c3-dot c3-dot-solid" title="DISK — stored"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:100.0%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>0.18s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#7a5310;background:#fbf3e5;">EXECUTED</span><span class="c3-rt-time">0.183s</span></div><pre class="c3-rt-code">df = customers.merge(tx_features, on=<span class="c3-str">'customer_id'</span>, how=<span class="c3-str">'inner'</span>)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid" title="RAM — stored"></span><span class="c3-dot c3-dot-solid" title="DISK — stored"></span></span></span> RAM · DISK</dd><dt>Produced</dt><dd>df</dd><dt>Key</dt><dd><code>8f9e0d1c</code></dd><dt>Miss</dt><dd>code changed</dd></dl></div></div><div class="c3-footer"><span class="c3-hint">click a row for detail</span><a class="c3-bug" href="https://github.com/galgtonold/cash/issues/new?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body=%2A%2ADescribe%20the%20incorrect%20behavior%3A%2A%2A%0A%3C%21--%20What%20did%20cash%20do%20wrong%3F%20What%20did%20you%20expect%20instead%3F%20--%3E%0A%0A%2A%2ACash%20badge%20output%3A%2A%2A%0A%60%60%60%0A%20%20%20%20CACHED%20%7C%20%200.031s%20%7C%20saved%20%203.214s%20%7C%20tx_features%20%3D%20transactions.groupby%28%27customer_id%27%29.agg%28...%29%0A%20%20EXECUTED%20%7C%20%200.183s%20%7C%20saved%20%200.000s%20%7C%20df%20%3D%20customers.merge%28tx_features%2C%20on%3D%27customer_id%27%2C%20how%3D%27inner%27%29%0A%60%60%60%0A%0A%2A%2AExpected%20behavior%3A%2A%2A%0A%3C%21--%20e.g.%20%27Should%20have%20re-executed%20but%20the%20badge%20read%20CACHED%27%20--%3E%0A%0A%2A%2AEnvironment%3A%2A%2A%0A-%20Cash%20version%3A%20unknown%0A-%20Python%3A%20%28unknown%29%0A-%20Backend%3A%20%28unknown%29%0A%0A%2A%2AAdditional%20context%3A%2A%2A%0A%3C%21--%20Paste%20any%20relevant%20%60%25cash_debug%20on%60%20output%20here%20--%3E" target="_blank" rel="noopener noreferrer" title="Open a pre-filled GitHub issue to report incorrect caching behaviour">Report incorrect caching<span class="c3-bug-arrow"> →</span></a></div></div></details></div>
+.c3-loop-head .c3-code { font-weight: 500; }.c3-rxtog:checked ~ .c3-deco-detail { display: block; }</style><div class="c3-wrap"><details class="c3-card" data-kind="exec"><summary class="c3-summary"><span class="c3-summary-label">EXECUTED</span><span class="c3-summary-sep">·</span><span class="c3-summary-sub">0.21s · saved 3.21s</span><span class="c3-summary-spark"><span class="c3-spark"><span class="c3-spark-bar" style="height:2px;background:#86bfa3;"></span><span class="c3-spark-bar" style="height:16px;background:#d3a76b;"></span></span></span><span class="c3-summary-chips"><span class="c3-fchip c3-fchip-exec"><span class="c3-fchip-dot"></span>exec<span class="c3-fchip-count">1</span></span><span class="c3-fchip c3-fchip-cached"><span class="c3-fchip-dot"></span>cached<span class="c3-fchip-count">1</span></span></span><span class="c3-summary-caret"></span></summary><div class="c3-panel"><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000001"><label class="c3-row" for="rx-0000000001" data-kind="cached" data-status="restored"><span class="c3-rail" style="background:#2a8a5e;"></span><pre class="c3-code">tx_features = transactions.groupby(<span class="c3-str">'customer_id'</span>).agg(...)<span class="c3-row-vars">← tx_features</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring" title="RAM — restored from here"></span><span class="c3-dot c3-dot-empty" title="DISK — not stored"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-cached" style="width:41.2%;"></span></span></span><span class="c3-time-chip c3-time-chip-cached"><span>0.03s</span><span class="c3-time-sub">↑3.21s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#1f6646;background:#ecf6f0;">CACHED</span><span class="c3-rt-time">0.031s <span class="c3-rt-saved">· saved 3.21s</span></span></div><pre class="c3-rt-code">tx_features = transactions.groupby(<span class="c3-str">'customer_id'</span>).agg(...)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-cached" title="Restored from RAM"><span class="c3-dot c3-dot-ring" title="RAM — restored from here"></span><span class="c3-dot c3-dot-empty" title="DISK — not stored"></span></span></span> ← RAM</dd><dt>Restored</dt><dd>tx_features</dd><dt>Key</dt><dd><code>1a2b3c4d</code></dd></dl></div></div><div class="c3-rowx"><input type="checkbox" class="c3-rxtog" id="rx-0000000002"><label class="c3-row" for="rx-0000000002" data-kind="exec" data-status="computed"><span class="c3-rail" style="background:#a87530;"></span><pre class="c3-code">df = customers.merge(tx_features, on=<span class="c3-str">'customer_id'</span>, how=<span class="c3-str">'inner'</span>)<span class="c3-row-vars">← df</span></pre><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid" title="RAM — stored"></span><span class="c3-dot c3-dot-solid" title="DISK — stored"></span></span></span><span class="c3-tbar-cell"><span class="c3-tbar"><span class="c3-tbar-fill c3-tbar-fill-exec" style="width:100.0%;"></span></span></span><span class="c3-time-chip c3-time-chip-exec"><span>0.18s</span></span></label><div class="c3-rowtip"><div class="c3-rt-h"><span class="c3-rt-status" style="color:#7a5310;background:#fbf3e5;">EXECUTED</span><span class="c3-rt-time">0.183s</span></div><pre class="c3-rt-code">df = customers.merge(tx_features, on=<span class="c3-str">'customer_id'</span>, how=<span class="c3-str">'inner'</span>)</pre><dl class="c3-rt-dl"><dt>Storage</dt><dd><span class="c3-dots-cell"><span class="c3-dots c3-dots-exec" title="Cached to: RAM+DISK"><span class="c3-dot c3-dot-solid" title="RAM — stored"></span><span class="c3-dot c3-dot-solid" title="DISK — stored"></span></span></span> RAM · DISK</dd><dt>Produced</dt><dd>df</dd><dt>Key</dt><dd><code>8f9e0d1c</code></dd><dt>Miss</dt><dd>code changed</dd></dl></div></div><div class="c3-footer"><span class="c3-hint">click a row for detail</span><a class="c3-bug" href="https://github.com/galgtonold/cash/issues/new?title=Incorrect+caching+behavior&labels=bug%2Ccaching-behavior&body=%2A%2ADescribe%20the%20incorrect%20behavior%3A%2A%2A%0A%3C%21--%20What%20did%20cash%20do%20wrong%3F%20What%20did%20you%20expect%20instead%3F%20--%3E%0A%0A%2A%2ACash%20badge%20output%3A%2A%2A%0A%60%60%60%0A%20%20%20%20CACHED%20%7C%20%200.031s%20%7C%20saved%20%203.214s%20%7C%20tx_features%20%3D%20transactions.groupby%28%27customer_id%27%29.agg%28...%29%0A%20%20EXECUTED%20%7C%20%200.183s%20%7C%20saved%20%200.000s%20%7C%20df%20%3D%20customers.merge%28tx_features%2C%20on%3D%27customer_id%27%2C%20how%3D%27inner%27%29%0A%60%60%60%0A%0A%2A%2AExpected%20behavior%3A%2A%2A%0A%3C%21--%20e.g.%20%27Should%20have%20re-executed%20but%20the%20badge%20read%20CACHED%27%20--%3E%0A%0A%2A%2AEnvironment%3A%2A%2A%0A-%20Cash%20version%3A%20unknown%0A-%20Python%3A%20%28unknown%29%0A-%20Backend%3A%20%28unknown%29%0A%0A%2A%2AAdditional%20context%3A%2A%2A%0A%3C%21--%20Paste%20any%20relevant%20%60%25cash_debug%20on%60%20output%20here%20--%3E" target="_blank" rel="noopener noreferrer" title="Open a pre-filled GitHub issue to report incorrect caching behaviour">Report incorrect caching<span class="c3-bug-arrow"> →</span></a></div></div></details></div>
 <script>
 (function () {
   if (window.parent === window) return;
