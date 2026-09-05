@@ -265,6 +265,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._badge_cell_start_time = 0.0
         self._last_badge_render_time = 0.0
         self._BADGE_MIN_RENDER_INTERVAL = 0.3
+        self._progress_timer = None
 
         # Cell ID tracking (available since IPython 8.3)
         self._current_cell_id = None
@@ -981,6 +982,47 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 current_code=code,
             )
 
+    def _arm_progress_badge(self, metrics: list[ProcessResult], display_id: str,
+                            step: int, total: int, code: str | None) -> None:
+        """Publish a RUNNING badge only if this statement is still running.
+
+        Rendering BEFORE the statement published once per statement no matter
+        how fast it was -- 68 progress badges in a ten-cell run. Throttling the
+        leading edge instead would be worse than the traffic: it drops the
+        render that says "now running the slow one", so a long statement shows
+        the PREVIOUS one for its whole duration.
+
+        Deferring inverts that. A statement faster than the interval publishes
+        nothing; a slower one publishes once, naming itself.
+        """
+        import threading
+
+        self._cancel_progress_badge()
+        if self._badge_mode != 'html':
+            return
+
+        def fire() -> None:
+            # `_render_interactive_badge` already swallows everything: a badge
+            # must never break a cell, and this runs on a timer thread where a
+            # raise would be lost anyway.
+            self._render_interactive_badge(
+                metrics, display_id=display_id, status="RUNNING",
+                current_step=step, total_steps=total, current_code=code,
+                _from_thread=True,
+            )
+
+        timer = threading.Timer(self._BADGE_MIN_RENDER_INTERVAL, fire)
+        timer.daemon = True
+        self._progress_timer = timer
+        timer.start()
+
+    def _cancel_progress_badge(self) -> None:
+        """Stop a pending progress badge. Safe to call when none is armed."""
+        timer = getattr(self, '_progress_timer', None)
+        if timer is not None:
+            timer.cancel()
+            self._progress_timer = None
+
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell`` to implement caching when
         ``%cash_on`` is active.  Delegates to :meth:`CellExecutor.execute_cell`."""
@@ -1311,7 +1353,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if row is not None:
             all_metrics = list(all_metrics) + [row]
 
-        # Update Interactive Badge with final metrics
+        # Update Interactive Badge with final metrics. This is the cell's
+        # actual final DONE badge on the success path (shared by the sync
+        # hook, the async hook, and %%cash) -- cancel any still-pending
+        # progress timer first so a late fire can never overwrite it with a
+        # stale RUNNING badge.
+        self._cancel_progress_badge()
         if self._badge_mode == 'html':
             self._render_interactive_badge(all_metrics, display_id=badge_display_id, cell_total_time=hook_total, timing_breakdown=timing_breakdown)
         elif self._badge_mode == 'print':

@@ -341,6 +341,7 @@ class CellExecutor:
         try:
             tree = CodeAnalyzer._parse_cell(raw_cell)
         except SyntaxError:
+            self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _PipelineSyntaxError()
 
@@ -473,6 +474,7 @@ class CellExecutor:
         try:
             tree = CodeAnalyzer._parse_cell(raw_cell)
         except SyntaxError:
+            self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _PipelineSyntaxError()
 
@@ -849,10 +851,12 @@ class CellExecutor:
             # SyntaxError path).  Any other exception propagates so the
             # magic's caller sees the real error.
             if isinstance(caught, SyntaxError):
+                self._magics._cancel_progress_badge()
                 self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
                 return _EarlyReturn(None)
             raise caught
         if isinstance(caught, SyntaxError):
+            self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
         if isinstance(caught, (RuntimeError, AmbiguousCellError, UpstreamStateError)):
@@ -867,9 +871,11 @@ class CellExecutor:
                 f"from {cls.__module__} import {cls.__name__}; "
                 f"raise {cls.__name__}('''{str(caught)}''') from None"
             )
+            self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _EarlyReturn(original_run_cell(error_code, *args, **kwargs))
         logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", caught)
+        self._magics._cancel_progress_badge()
         self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
         return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
 
@@ -1142,6 +1148,10 @@ class CellExecutor:
 
         Does **not** re-raise — that is the pipeline caller's job.
         """
+        # A statement that just raised may have an armed progress timer
+        # (it hadn't finished, so nothing cancelled it yet) -- stop it before
+        # rendering the DONE badge below so a late fire can't overwrite it.
+        self._magics._cancel_progress_badge()
         self._magics._show_clean_error(e, raw_cell, node)
         hook_total = time.time() - hook_start
         if self._magics._badge_mode == 'html':
@@ -1199,12 +1209,10 @@ class CellExecutor:
             unified_step = upstream_step_count + i + 1
 
             t_badge_pre = time.time()
-            if self._magics._badge_mode == 'html':
-                self._magics._render_interactive_badge(
-                    all_metrics, display_id=badge_display_id,
-                    status="RUNNING", current_step=unified_step,
-                    total_steps=total_steps_unified, current_code=stmt_code,
-                )
+            self._magics._arm_progress_badge(
+                all_metrics, display_id=badge_display_id, step=unified_step,
+                total=total_steps_unified, code=stmt_code,
+            )
             badge_render_time += time.time() - t_badge_pre
 
             try:
@@ -1237,6 +1245,7 @@ class CellExecutor:
                         stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
                     )
 
+                self._magics._cancel_progress_badge()
                 t_badge = time.time()
                 self._magics._maybe_progress_badge(
                     all_metrics, display_id=badge_display_id,
@@ -1300,12 +1309,10 @@ class CellExecutor:
             unified_step = upstream_step_count + i + 1
 
             t_badge_pre = time.time()
-            if self._magics._badge_mode == 'html':
-                self._magics._render_interactive_badge(
-                    all_metrics, display_id=badge_display_id,
-                    status="RUNNING", current_step=unified_step,
-                    total_steps=total_steps_unified, current_code=stmt_code,
-                )
+            self._magics._arm_progress_badge(
+                all_metrics, display_id=badge_display_id, step=unified_step,
+                total=total_steps_unified, code=stmt_code,
+            )
             badge_render_time += time.time() - t_badge_pre
 
             try:
@@ -1352,6 +1359,7 @@ class CellExecutor:
                         stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
                     )
 
+                self._magics._cancel_progress_badge()
                 t_badge = time.time()
                 self._magics._maybe_progress_badge(
                     all_metrics, display_id=badge_display_id,
