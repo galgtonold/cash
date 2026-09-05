@@ -141,7 +141,7 @@ def test_floor_skipped_upstream_downstream_hits_after_reset(nb_runner):
         # Cell 3: expensive downstream that consumes `scale`. Engineered
         # to comfortably exceed the floor (~30ms) and produce a multi-MB
         # output so it definitely gets cached under the default policy.
-        "big = pd.DataFrame({'x': np.arange(1_000_000, dtype=np.int64) * scale})",
+        "big = pd.DataFrame({'x': np.arange(8_000_000, dtype=np.int64) * scale})",
         # Cell 4: stable sentinel so we have something to read back.
         "print(f'sum={int(big[\"x\"].sum())}')",
     ])
@@ -201,7 +201,7 @@ def test_two_floor_skipped_layers_downstream_still_hits(nb_runner):
         "a = 7",
         "b = a + 5",
         # Expensive downstream — same shape as the prior test.
-        "big = pd.DataFrame({'x': np.arange(1_000_000, dtype=np.int64) * b})",
+        "big = pd.DataFrame({'x': np.arange(8_000_000, dtype=np.int64) * b})",
         "print(f'sum={int(big[\"x\"].sum())}')",
     ])
     nb_runner.start_kernel()
