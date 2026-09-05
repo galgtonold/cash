@@ -276,6 +276,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         # always the one published last).
         self._progress_lock = threading.Lock()
         self._progress_generation = 0
+        # The shell's REAL display publisher, remembered while no capture is
+        # installed -- see `_uncaptured_display_pub`.
+        self._badge_display_pub = None
 
         # Cell ID tracking (available since IPython 8.3)
         self._current_cell_id = None
@@ -1009,6 +1012,13 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         if self._badge_mode != 'html':
             return
 
+        # Resolve the display publisher HERE, on the main thread, while no
+        # statement -- and therefore no output capture -- is running. By the
+        # time `fire()` runs, `shell.display_pub` has been swapped out for a
+        # capturing stand-in and asking for it then loses the badge. See
+        # `_uncaptured_display_pub`.
+        publisher = self._uncaptured_display_pub()
+
         with self._progress_lock:
             generation = self._progress_generation
 
@@ -1047,7 +1057,8 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 # `_publish_badge_html` already swallows everything: a
                 # badge must never break a cell, and this runs on a timer
                 # thread where a raise would be lost anyway.
-                self._publish_badge_html(html, display_id=display_id, _from_thread=True)
+                self._publish_badge_html(html, display_id=display_id,
+                                         _from_thread=True, publisher=publisher)
 
         try:
             timer = threading.Timer(self._BADGE_MIN_RENDER_INTERVAL, fire)
@@ -1080,6 +1091,51 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             if timer is not None:
                 timer.cancel()
                 self._progress_timer = None
+
+    @staticmethod
+    def _is_capturing_display_pub(pub: Any) -> bool:
+        """True if ``pub`` is IPython's capture-time stand-in publisher."""
+        try:
+            from IPython.core.displaypub import CapturingDisplayPublisher
+        except Exception:  # noqa: BLE001 - a badge must never break a cell
+            return False
+        return isinstance(pub, CapturingDisplayPublisher)
+
+    def _uncaptured_display_pub(self) -> Any:
+        """The shell's REAL display publisher, not whatever a capture installed.
+
+        Every statement executes inside
+        ``IPython.utils.capture.capture_output(display=True)`` (see
+        ``StatementProcessor._make_capture_ctx``), which swaps
+        ``shell.display_pub`` for a ``CapturingDisplayPublisher``. That swap is
+        PROCESS-wide, not thread-local -- so a progress badge published from
+        the timer thread while a slow statement is running never reaches the
+        frontend at all. It is swallowed into that STATEMENT's captured
+        outputs, which cash then replays with
+        ``publish_display_data(data, metadata)`` -- dropping both ``transient``
+        and ``update``. The badge lands as a brand-new ``display_data`` with no
+        display id, so no later update can ever reach it: a frozen RUNNING
+        badge stored for good beside the cell's real DONE badge, and (because
+        captured outputs become ``metrics['rich_outputs']``, part of the
+        statement's cache payload) replayed again on every future cache hit.
+
+        Resolving the publisher on the MAIN thread at arm time -- before the
+        statement, and so before its capture, starts -- hands ``fire()`` the
+        real one to publish through. The last non-capturing publisher is
+        remembered so that an arm which somehow does land inside a capture
+        still has one. Returns ``None`` when there is no shell to ask, in
+        which case the publish falls back to IPython's module-level
+        ``publish_display_data``.
+        """
+        try:
+            shell = getattr(self, 'shell', None)
+            pub = getattr(shell, 'display_pub', None) if shell is not None else None
+            if pub is not None and not self._is_capturing_display_pub(pub):
+                self._badge_display_pub = pub
+        except Exception as e:  # noqa: BLE001 - a badge must never break a cell
+            if self._debug:
+                print(f"[BADGE PUBLISHER ERROR] {e}")
+        return getattr(self, '_badge_display_pub', None)
 
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell`` to implement caching when
@@ -1766,7 +1822,7 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 traceback.print_exc()
             return None
 
-    def _publish_badge_html(self, html: str, display_id: str | None = None, update_existing: bool = True, _from_thread: bool = False) -> None:
+    def _publish_badge_html(self, html: str, display_id: str | None = None, update_existing: bool = True, _from_thread: bool = False, publisher: Any = None) -> None:
         """Publish already-built badge HTML. The cheap half of a render.
 
         Just an IPython display / publish_display_data call (a ZMQ send) --
@@ -1775,18 +1831,34 @@ class CashMagics(CashAdminMagicsMixin, Magics):
 
         Never raises: see :meth:`_render_interactive_badge` for why a badge
         must never break a cell.
+
+        ``publisher``, when given, is the shell's real display publisher as
+        resolved by :meth:`_uncaptured_display_pub` on the main thread. A
+        background-thread publish MUST go through it rather than through
+        IPython's module-level ``publish_display_data``: that helper resolves
+        ``shell.display_pub`` at call time, and while a statement is running
+        that is a ``CapturingDisplayPublisher`` which swallows the badge into
+        the statement's own output.
         """
         try:
             if _from_thread and display_id:
-                # From a background thread, use publish_display_data directly
-                # with update=True to send an ``update_display_data`` message.
-                # This avoids display()'s bookkeeping which can create duplicate
-                # output areas when called from non-main threads.
-                publish_display_data(
-                    {'text/html': html},
-                    transient={'display_id': display_id},
-                    update=True,
-                )
+                # From a background thread, publish an ``update_display_data``
+                # message directly. This avoids display()'s bookkeeping which
+                # can create duplicate output areas when called from non-main
+                # threads.
+                if publisher is not None:
+                    publisher.publish(
+                        {'text/html': html},
+                        metadata={},
+                        transient={'display_id': display_id},
+                        update=True,
+                    )
+                else:
+                    publish_display_data(
+                        {'text/html': html},
+                        transient={'display_id': display_id},
+                        update=True,
+                    )
             elif display_id:
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:

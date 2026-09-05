@@ -53,7 +53,8 @@ def progress_probe(monkeypatch):
             "current_code": current_code,
         }
 
-    def fake_publish(html, display_id=None, update_existing=True, _from_thread=False):
+    def fake_publish(html, display_id=None, update_existing=True, _from_thread=False,
+                     publisher=None):
         published.append({**html, "display_id": display_id})
 
     magics._build_badge_html = fake_build  # type: ignore[assignment]

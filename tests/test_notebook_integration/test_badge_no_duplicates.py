@@ -112,6 +112,49 @@ class TestBadgeNoDuplicates:
             f"Timer thread may be creating duplicate badge outputs."
         )
 
+    def test_slow_interior_statement_no_duplicate_badges(self, nb_runner):
+        """The slow statement is not the cell's FIRST one.
+
+        Every other test in this file walks one of two shapes: a lone slow
+        statement, or a run of fast ones.  Neither reaches this defect, and
+        the real tour notebook -- where a cold ``import matplotlib.pyplot``
+        and a sleeping ``@cash.cache`` call both sit mid-cell -- stored two
+        badges per cell while every test here stayed green.
+
+        The mechanism needs both halves of the shape.  A statement executes
+        inside ``IPython.utils.capture.capture_output(display=True)``, which
+        swaps ``shell.display_pub`` for a ``CapturingDisplayPublisher``
+        PROCESS-wide (not per-thread).  The progress timer fires on a
+        background thread while that swap is in place, so its RUNNING badge
+        is swallowed into the STATEMENT's captured outputs instead of going
+        to the frontend -- and cash then replays those with
+        ``publish_display_data(data, metadata)``, which drops ``transient``
+        and ``update``.  The badge lands as a second, display_id-less output
+        that no later update can ever reach: a frozen RUNNING badge stored
+        for good beside the cell's real DONE badge.
+        """
+        nb_runner.create_notebook([
+            (
+                "import time\n"
+                "ready = 1\n"
+                "time.sleep(1.5)\n"
+                "print(f'ready={ready}')"
+            ),
+        ])
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        assert 'ready=1' in nb_runner.get_output(1)
+
+        cell = nb_runner.get_cell(1)
+        html_count = _count_html_display_outputs(cell)
+        assert html_count <= 1, (
+            f"A cell whose slow statement is not its first has {html_count} HTML "
+            f"display_data outputs, expected <= 1. A progress badge published "
+            f"from the timer thread was captured as the statement's own output "
+            f"and replayed without its display_id."
+        )
+
     def test_second_run_cached_one_badge(self, nb_runner):
         """On second run (cached), cells should still have exactly 1 badge."""
         nb_runner.create_notebook([
