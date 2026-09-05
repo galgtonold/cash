@@ -6,9 +6,13 @@ timer thread to call ``publish_display_data`` from a non-main thread, which
 JupyterLab treated as **new** output areas instead of updates — resulting in
 dozens of duplicate progress badges during long-running statements.
 
-The fix disables the background badge timer entirely.  These tests verify
-that each cell execution produces exactly **one** HTML ``display_data``
-output (the badge), regardless of how many statements the cell contains.
+The fix defers the background badge timer rather than disabling it: it is
+armed before each statement, cancelled if the statement finishes first, and
+published -- naming whichever statement is actually running -- only if it is
+still in flight when the timer fires.  These tests verify that each cell
+execution still produces exactly **one** HTML ``display_data`` output (the
+badge), regardless of how many statements the cell contains or whether one
+of them is slow enough for the deferred timer to fire.
 
 In nbclient the ``update_display_data`` kernel message correctly updates
 existing outputs in-place (it doesn't append), so we can assert the output
@@ -86,8 +90,10 @@ class TestBadgeNoDuplicates:
 
         This is the core regression test: the old bug was that a background
         timer thread would fire publish_display_data every ~2 seconds, creating
-        new output areas.  With the timer disabled, only main-thread badge
-        renders should appear.
+        new output areas.  The ``time.sleep(3)`` below is slow enough that the
+        deferred timer still fires once while the statement is running, but it
+        updates the SAME ``display_id`` the main-thread renders use instead of
+        opening a new output area, so the count stays at 1.
         """
         nb_runner.create_notebook([
             "import time",

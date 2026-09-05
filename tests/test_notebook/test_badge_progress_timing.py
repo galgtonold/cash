@@ -35,6 +35,7 @@ def progress_probe(monkeypatch):
     magics._progress_generation = 0
 
     published: list[dict] = []
+    lock_violations: list[str] = []
 
     # `_arm_progress_badge`'s `fire()` calls `_build_badge_html` (outside the
     # lock) and then `_publish_badge_html` (inside it) separately -- not
@@ -46,6 +47,17 @@ def progress_probe(monkeypatch):
     # fixture recorded.
     def fake_build(metrics_list, status="DONE", current_step=0, total_steps=0,
                     current_code=None, cell_total_time=None, timing_breakdown=None):
+        # This runs INSIDE `fire()`, on the timer thread, standing in for the
+        # expensive half of a render -- the whole reason it must run outside
+        # `_progress_lock` (see the comment in `fire()`). Record a violation
+        # rather than asserting here: an exception raised off the main thread
+        # only produces a PytestUnhandledThreadExceptionWarning, not a failed
+        # test, so the check has to surface on the main thread (in the test
+        # functions below) to actually gate anything.
+        if magics._progress_lock.acquire(blocking=False):
+            magics._progress_lock.release()
+        else:
+            lock_violations.append("the build ran while _progress_lock was held")
         return {
             "status": status,
             "current_step": current_step,
@@ -59,19 +71,20 @@ def progress_probe(monkeypatch):
 
     magics._build_badge_html = fake_build  # type: ignore[assignment]
     magics._publish_badge_html = fake_publish  # type: ignore[assignment]
-    return magics, published
+    return magics, published, lock_violations
 
 
 def test_a_fast_statement_publishes_no_progress_badge(progress_probe):
-    magics, published = progress_probe
+    magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
     magics._cancel_progress_badge()
     time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
     assert published == [], f"a fast statement published {published}"
+    assert lock_violations == [], lock_violations
 
 
 def test_a_slow_statement_publishes_one_badge_naming_itself(progress_probe):
-    magics, published = progress_probe
+    magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="slow = f()")
     time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
     # Assert BEFORE cancelling: the statement is still (notionally) running at
@@ -85,24 +98,31 @@ def test_a_slow_statement_publishes_one_badge_naming_itself(progress_probe):
     assert published[0]["current_code"] == "slow = f()", (
         "the badge named a different statement than the one that was running"
     )
+    # This is the lock-scope regression guard: `fire()` must build the HTML
+    # OUTSIDE `_progress_lock` (see the comment in `fire()`). Tidying `fire()`
+    # into one `with self._progress_lock:` block leaves every assertion above
+    # still passing -- only this one catches it.
+    assert lock_violations == [], lock_violations
     magics._cancel_progress_badge()
 
 
 def test_cancel_after_the_timer_fired_is_harmless(progress_probe):
     """Cancel always runs, whether or not the timer already fired."""
-    magics, published = progress_probe
+    magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
     time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
     magics._cancel_progress_badge()
     magics._cancel_progress_badge()
     assert len(published) == 1
+    assert lock_violations == [], lock_violations
 
 
 def test_nothing_publishes_after_the_final_badge(progress_probe):
     """The sharp edge: a late timer would overwrite DONE with a stale RUNNING."""
-    magics, published = progress_probe
+    magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
     magics._cancel_progress_badge()
     published.clear()
     time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 3)
     assert published == [], "a cancelled timer still fired"
+    assert lock_violations == [], lock_violations

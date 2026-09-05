@@ -58,5 +58,5 @@ def test_stylesheet_is_a_minority_of_the_saved_notebook(executed):
     assert share < 0.60, (
         f"the badge stylesheet is {share:.0%} of the notebook "
         f"({css/1024:.0f} KB of {len(text)/1024:.0f} KB); it was 67% before "
-        f"minification and should now be about 56%"
+        f"minification and should now be about 49.7%"
     )

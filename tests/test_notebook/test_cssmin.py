@@ -20,7 +20,7 @@ def _rules(css: str):
     css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
     out = []
     for sel, body in re.findall(r"([^{}]+)\{([^{}]*)\}", css):
-        decls = frozenset(d.strip().replace(" ", "") for d in body.split(";") if d.strip())
+        decls = tuple(d.strip().replace(" ", "") for d in body.split(";") if d.strip())
         out.append((re.sub(r"\s+", "", sel), decls))
     return out
 

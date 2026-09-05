@@ -1031,6 +1031,14 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # `_cancel_progress_badge` block the main thread for as long as
             # the render took (measured: ~400ms for a 400ms render). Only the
             # generation re-check + the actual publish need the lock.
+            #
+            # `metrics` is also the live `all_metrics` list the main thread
+            # keeps mutating via `.append()` (cell_executor.py's
+            # `_handle_regular_stmt_metrics` / `_collect_ctrl_outputs`), and
+            # reading it here holds no lock either -- a deliberately accepted
+            # race, since the window is narrow, a stress run of hundreds of
+            # concurrent appends raised nothing, and `_build_badge_html`'s own
+            # blanket `except Exception` swallows whatever would.
             html = self._build_badge_html(
                 metrics, status="RUNNING", current_step=step,
                 total_steps=total, current_code=code,
@@ -1123,9 +1131,12 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         statement, and so before its capture, starts -- hands ``fire()`` the
         real one to publish through. The last non-capturing publisher is
         remembered so that an arm which somehow does land inside a capture
-        still has one. Returns ``None`` when there is no shell to ask, in
-        which case the publish falls back to IPython's module-level
-        ``publish_display_data``.
+        still has one. Returns ``None`` when there is no shell to ask, or on
+        the session's very first arm if it lands inside a capture before any
+        real publisher has ever been remembered -- in which case
+        :meth:`_publish_badge_html` skips the publish rather than falling
+        back to IPython's module-level ``publish_display_data``, which would
+        land inside the same capture and swallow the badge right back in.
         """
         try:
             shell = getattr(self, 'shell', None)
@@ -1838,7 +1849,9 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         IPython's module-level ``publish_display_data``: that helper resolves
         ``shell.display_pub`` at call time, and while a statement is running
         that is a ``CapturingDisplayPublisher`` which swallows the badge into
-        the statement's own output.
+        the statement's own output. When no publisher was resolved, this
+        publishes nothing at all rather than risk that fallback -- see the
+        comment at the call site.
         """
         try:
             if _from_thread and display_id:
@@ -1853,12 +1866,17 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                         transient={'display_id': display_id},
                         update=True,
                     )
-                else:
-                    publish_display_data(
-                        {'text/html': html},
-                        transient={'display_id': display_id},
-                        update=True,
-                    )
+                # else: publish NOTHING. `_uncaptured_display_pub` returns
+                # None only on the session's very first arm, if it lands
+                # inside a capture before any real publisher has ever been
+                # remembered. Falling back to module-level
+                # ``publish_display_data`` here would resolve
+                # ``shell.display_pub`` at call time -- mid-statement, that is
+                # the ``CapturingDisplayPublisher`` this whole publisher
+                # resolution dance exists to avoid -- and re-swallow the badge
+                # into the statement's captured outputs and its cache entry,
+                # the exact defect this branch fixed. A missing progress
+                # badge beats a RUNNING one frozen into the cache forever.
             elif display_id:
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:
