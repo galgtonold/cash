@@ -803,131 +803,6 @@ _STYLE_BLOCK = f"<style>{_CSS}</style>"
 
 
 # ---------------------------------------------------------------------------
-# CSS split by feature -- a badge with no loop, no decorator call, and no
-# control structure has no use for the CSS that styles them, and measurement
-# showed 67% of a saved notebook's bytes were copies of this one stylesheet.
-# ``_CSS`` above stays untouched and is still the readable union (the tests
-# compare gated output against it). The pieces below are sliced OUT of that
-# same string by marker text rather than retyped, so a rule can only go
-# missing here if a marker itself stops matching a rule that got edited or
-# moved -- which the assertion at the end of ``_split_css`` catches
-# immediately, at import time, rather than downstream in a rendering test.
-import re  # noqa: E402
-
-
-def _split_css() -> tuple[str, dict[str, str]]:
-    """Partition ``_CSS`` into (core, {feature-name: block}).
-
-    Every character of ``_CSS`` ends up in exactly one returned piece, so
-    the split can never drop or duplicate a rule relative to the union --
-    it's the same string, just cut apart.
-    """
-    def pull(source: str, text: str) -> tuple[str, str]:
-        """Remove the one occurrence of ``text``; return (rest, text)."""
-        n = source.count(text)
-        assert n == 1, f"expected exactly one occurrence of {text!r}, found {n}"
-        return source.replace(text, "", 1), text
-
-    def span(source: str, start: str, end: str) -> tuple[str, str]:
-        """Remove ``[start .. end)``; return (rest, removed)."""
-        i = source.index(start)
-        j = source.index(end, i)
-        return source[:i] + source[j:], source[i:j]
-
-    core = _CSS
-
-    # "Loop body expansion" is almost entirely core: only the base
-    # hidden-state rule for the per-iteration drill-down panel is
-    # loop-exclusive. The rest of that section -- rt-h, rt-status, rt-time,
-    # rt-saved, rt-code, rt-dl and descendants -- styles the generic
-    # per-row tooltip that EVERY StatementRow renders unconditionally via
-    # _rowtip_html, so it stays in core; sweeping it into loop would leave
-    # a plain row's tooltip unstyled on any non-loop badge.
-    core, loop_hidden = pull(core, ".c3-iter-table { display: none; }")
-
-    # "Loop heading line" through "Per-iteration drill-down" is loop
-    # material, with one exception: `.c3-loop-head .c3-code` also names
-    # `.c3-code`, the class every row's code cell carries. Left in the loop
-    # block, that shared name would force this whole block onto every
-    # badge -- the equivalence test (below, and in
-    # test_badge_css_gating.py) treats "names a class the badge uses" as
-    # "might apply to this badge" for ANY of a selector's classes, so a
-    # rule naming a class every badge uses must be reproduced everywhere,
-    # regardless of which feature "owns" the rest of its selector.
-    core, loop_body = span(core, "/* Loop heading line */", "/* Decorator inline detail */")
-    loop_body, loop_head_rule = pull(loop_body, ".c3-loop-head .c3-code { font-weight: 500; }")
-    core += loop_head_rule
-    loop = loop_hidden + loop_body
-
-    # "Decorator inline detail" is decorator material, with the same kind
-    # of exception: the rule that reveals it names `.c3-rxtog`, the
-    # checkbox-hack class every row's tooltip toggle carries (same reason
-    # as above), so it stays in core alongside the other `.c3-rxtog`
-    # toggle rules already there.
-    core, decorator = span(
-        core, "/* Decorator inline detail */",
-        "/* Control structure (if / elif / else / try / except).",
-    )
-    decorator, deco_reveal_rule = pull(
-        decorator, ".c3-rxtog:checked ~ .c3-deco-detail { display: block; }",
-    )
-    core += deco_reveal_rule
-
-    # "Control structure" has no such exception -- every selector in it
-    # names only control-exclusive classes.
-    core, control = span(
-        core, "/* Control structure (if / elif / else / try / except).",
-        "/* Overhead row",
-    )
-
-    return core, {"loop": loop, "decorator": decorator, "control": control}
-
-
-_CSS_CORE: str
-_CSS_FEATURES: dict[str, str]
-_CSS_CORE, _CSS_FEATURES = _split_css()
-
-
-def _selector_classes(css: str) -> frozenset[str]:
-    """Every class named in ``css``'s selectors (not its declarations)."""
-    return frozenset(re.findall(r"\.([a-zA-Z0-9_-]+)", "".join(
-        sel for sel, _body in re.findall(r"([^{}]+)\{([^{}]*)\}", css)
-    )))
-
-
-#: Which classes trigger each block, derived from the block's OWN selectors
-#: minus any class core ALSO has a rule for. That subtraction is what keeps
-#: a handful of shared names (``.c3-code``, ``.c3-rxtog`` -- see the pulls
-#: above) from forcing every block onto every badge: a class core already
-#: styles unconditionally tells gating nothing about whether THIS badge
-#: needs a feature's extra rules on top. Never hand-maintain this mapping:
-#: a rule added to a block extends its own trigger set automatically.
-_CORE_CLASSES = _selector_classes(_CSS_CORE)
-_FEATURE_CLASSES: dict[str, frozenset[str]] = {
-    name: _selector_classes(block) - _CORE_CLASSES
-    for name, block in _CSS_FEATURES.items()
-}
-
-# The split must not lose or duplicate a single character of _CSS -- if a
-# marker above ever stops matching (the rule it names gets edited, moved,
-# or renamed) this fires immediately at import time, instead of shipping a
-# badge that silently renders unstyled.
-assert len(_CSS_CORE) + sum(len(b) for b in _CSS_FEATURES.values()) == len(_CSS), (
-    "the core/feature split lost or duplicated CSS"
-)
-
-
-def _style_block_for(markup: str) -> str:
-    """The stylesheet this badge needs: core plus any feature it renders."""
-    used = {c for group in re.findall(r'class="([^"]+)"', markup) for c in group.split()}
-    css = _CSS_CORE
-    for name, block in _CSS_FEATURES.items():
-        if _FEATURE_CLASSES[name] & used:
-            css += block
-    return f"<style>{css}</style>"
-
-
-# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -2360,8 +2235,9 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
     sparkline = _sparkline_html(badge)
     chips = _filter_chips_html(badge.header)
 
-    markup = (
-        '<div class="c3-wrap">'
+    return (
+        _STYLE_BLOCK
+        + '<div class="c3-wrap">'
         + f'<details class="c3-card" data-kind="{kind}">'
         + '<summary class="c3-summary">'
         + f'<span class="c3-summary-label">{_esc(label)}</span>'
@@ -2378,4 +2254,3 @@ def _render_html_impl(badge: InteractiveBadge) -> str:
         + "</details>"
         + "</div>"
     )
-    return _style_block_for(markup) + markup
