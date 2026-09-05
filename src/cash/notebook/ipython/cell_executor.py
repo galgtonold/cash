@@ -1216,51 +1216,62 @@ class CellExecutor:
             badge_render_time += time.time() - t_badge_pre
 
             try:
-                if is_control_structure(node):
-                    if self._debug:
-                        print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
-                    # ``raw_cell`` (not the annotation) is what goes down: the
-                    # structure's statements each resolve their OWN directive
-                    # against the original source, and ``ast.unparse`` has already
-                    # dropped the comments by the time they are dispatched. The
-                    # ``annotation`` computed above is the node's WHOLE-range
-                    # merge, which cannot tell a directive on the loop from one on
-                    # a single body statement — passing it would disable caching
-                    # for every sibling in the body.
-                    ctrl_result = self._control_structure_processor.process(
-                        node, ttl=self._magics._global_ttl, silent=True,
-                        raw_cell=raw_cell,
-                        prev_node=tree.body[i - 1] if i > 0 else None,
-                    )
-                    buffered_result_outputs = self._collect_ctrl_outputs(
-                        ctrl_result, is_last, all_metrics, buffered_result_outputs,
-                    )
-                    if self._debug:
-                        print(f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
-                              f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed")
-                    if not ctrl_result.success:
-                        raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
-                else:
-                    buffered_result_outputs = self._process_regular_stmt(
-                        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
-                    )
+                try:
+                    if is_control_structure(node):
+                        if self._debug:
+                            print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                        # ``raw_cell`` (not the annotation) is what goes down: the
+                        # structure's statements each resolve their OWN directive
+                        # against the original source, and ``ast.unparse`` has already
+                        # dropped the comments by the time they are dispatched. The
+                        # ``annotation`` computed above is the node's WHOLE-range
+                        # merge, which cannot tell a directive on the loop from one on
+                        # a single body statement — passing it would disable caching
+                        # for every sibling in the body.
+                        ctrl_result = self._control_structure_processor.process(
+                            node, ttl=self._magics._global_ttl, silent=True,
+                            raw_cell=raw_cell,
+                            prev_node=tree.body[i - 1] if i > 0 else None,
+                        )
+                        buffered_result_outputs = self._collect_ctrl_outputs(
+                            ctrl_result, is_last, all_metrics, buffered_result_outputs,
+                        )
+                        if self._debug:
+                            print(f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
+                                  f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed")
+                        if not ctrl_result.success:
+                            raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
+                    else:
+                        buffered_result_outputs = self._process_regular_stmt(
+                            stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
+                        )
 
-                self._magics._cancel_progress_badge()
-                t_badge = time.time()
-                self._magics._maybe_progress_badge(
-                    all_metrics, display_id=badge_display_id,
-                    step=unified_step + 1, total=total_steps_unified, code=None,
-                )
-                badge_render_time += time.time() - t_badge
+                    self._magics._cancel_progress_badge()
+                    t_badge = time.time()
+                    self._magics._maybe_progress_badge(
+                        all_metrics, display_id=badge_display_id,
+                        step=unified_step + 1, total=total_steps_unified, code=None,
+                    )
+                    badge_render_time += time.time() - t_badge
 
-            except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
-                if isinstance(e, KeyboardInterrupt):
+                except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
+                    self._finalize_error_badge(
+                        e, raw_cell, node, all_metrics, badge_display_id,
+                        hook_start, timing_breakdown,
+                    )
                     raise
-                self._finalize_error_badge(
-                    e, raw_cell, node, all_metrics, badge_display_id,
-                    hook_start, timing_breakdown,
-                )
-                raise
+            finally:
+                # Cancel on EVERY exit from this statement, not just the two
+                # paths above (the explicit cancel on success, and the one
+                # inside _finalize_error_badge for a caught Exception). A
+                # BaseException that isn't an Exception -- KeyboardInterrupt,
+                # or asyncio.CancelledError from an interrupted await -- skips
+                # the `except` above entirely, and neither
+                # _execute_cell_inner nor its async twin cancels either. Left
+                # armed, that timer fires up to _BADGE_MIN_RENDER_INTERVAL
+                # after the interrupt, on whatever cell is running by then.
+                # Safe to call unconditionally: a no-op once already cancelled.
+                self._magics._cancel_progress_badge()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)
 
@@ -1316,64 +1327,71 @@ class CellExecutor:
             badge_render_time += time.time() - t_badge_pre
 
             try:
-                if is_control_structure(node):
-                    if contains_top_level_await(node):
-                        # A control body that awaits (``for x in xs: r = await
-                        # fetch(x)``) cannot be compiled by the sync
-                        # ControlStructureProcessor — its unflagged compile()
-                        # raises ``SyntaxError: 'await' outside function``
-                        #. Run the whole structure as one awaited unit
-                        # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
-                        if self._debug:
-                            print("[CONTROL] Await inside control body, running as awaited single unit")
-                        ctrl_result = await self._control_structure_processor.process_await_unit(
-                            node, ttl=self._magics._global_ttl, silent=True,
-                            raw_cell=raw_cell,
+                try:
+                    if is_control_structure(node):
+                        if contains_top_level_await(node):
+                            # A control body that awaits (``for x in xs: r = await
+                            # fetch(x)``) cannot be compiled by the sync
+                            # ControlStructureProcessor — its unflagged compile()
+                            # raises ``SyntaxError: 'await' outside function``
+                            #. Run the whole structure as one awaited unit
+                            # through the PyCF_ALLOW_TOP_LEVEL_AWAIT-capable path.
+                            if self._debug:
+                                print("[CONTROL] Await inside control body, running as awaited single unit")
+                            ctrl_result = await self._control_structure_processor.process_await_unit(
+                                node, ttl=self._magics._global_ttl, silent=True,
+                                raw_cell=raw_cell,
+                            )
+                        else:
+                            if self._debug:
+                                print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
+                            # ``raw_cell`` (not the annotation) is what goes down: the
+                            # structure's statements each resolve their OWN directive
+                            # against the original source, and ``ast.unparse`` has already
+                            # dropped the comments by the time they are dispatched. The
+                            # ``annotation`` computed above is the node's WHOLE-range
+                            # merge, which cannot tell a directive on the loop from one on
+                            # a single body statement — passing it would disable caching
+                            # for every sibling in the body.
+                            ctrl_result = self._control_structure_processor.process(
+                                node, ttl=self._magics._global_ttl, silent=True,
+                                raw_cell=raw_cell,
+                                prev_node=tree.body[i - 1] if i > 0 else None,
+                            )
+                        buffered_result_outputs = self._collect_ctrl_outputs(
+                            ctrl_result, is_last, all_metrics, buffered_result_outputs,
                         )
+                        if self._debug:
+                            print(f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
+                                  f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed")
+                        if not ctrl_result.success:
+                            raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
-                        if self._debug:
-                            print("[CONTROL] Detected control structure, delegating to ControlStructureProcessor")
-                        # ``raw_cell`` (not the annotation) is what goes down: the
-                        # structure's statements each resolve their OWN directive
-                        # against the original source, and ``ast.unparse`` has already
-                        # dropped the comments by the time they are dispatched. The
-                        # ``annotation`` computed above is the node's WHOLE-range
-                        # merge, which cannot tell a directive on the loop from one on
-                        # a single body statement — passing it would disable caching
-                        # for every sibling in the body.
-                        ctrl_result = self._control_structure_processor.process(
-                            node, ttl=self._magics._global_ttl, silent=True,
-                            raw_cell=raw_cell,
-                            prev_node=tree.body[i - 1] if i > 0 else None,
+                        buffered_result_outputs = await self._process_regular_stmt_async(
+                            stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
                         )
-                    buffered_result_outputs = self._collect_ctrl_outputs(
-                        ctrl_result, is_last, all_metrics, buffered_result_outputs,
-                    )
-                    if self._debug:
-                        print(f"[CONTROL] Completed: {ctrl_result.total_iterations} iterations, "
-                              f"{ctrl_result.cached_iterations} cached, {ctrl_result.computed_iterations} computed")
-                    if not ctrl_result.success:
-                        raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
-                else:
-                    buffered_result_outputs = await self._process_regular_stmt_async(
-                        stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
-                    )
 
-                self._magics._cancel_progress_badge()
-                t_badge = time.time()
-                self._magics._maybe_progress_badge(
-                    all_metrics, display_id=badge_display_id,
-                    step=unified_step + 1, total=total_steps_unified, code=None,
-                )
-                badge_render_time += time.time() - t_badge
+                    self._magics._cancel_progress_badge()
+                    t_badge = time.time()
+                    self._magics._maybe_progress_badge(
+                        all_metrics, display_id=badge_display_id,
+                        step=unified_step + 1, total=total_steps_unified, code=None,
+                    )
+                    badge_render_time += time.time() - t_badge
 
-            except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
-                if isinstance(e, KeyboardInterrupt):
+                except Exception as e:  # noqa: BLE001 - intentionally broad: catches user code exceptions
+                    self._finalize_error_badge(
+                        e, raw_cell, node, all_metrics, badge_display_id,
+                        hook_start, timing_breakdown,
+                    )
                     raise
-                self._finalize_error_badge(
-                    e, raw_cell, node, all_metrics, badge_display_id,
-                    hook_start, timing_breakdown,
-                )
-                raise
+            finally:
+                # See the identical guard in _execute_cell_statements: a
+                # BaseException that bypasses `except Exception` (
+                # KeyboardInterrupt, or asyncio.CancelledError from an
+                # interrupted await -- the more exposed case on THIS path)
+                # must still cancel a pending timer, or it fires later on
+                # whatever cell happens to be running by then.
+                self._magics._cancel_progress_badge()
 
         return (all_metrics, buffered_result_outputs, badge_render_time)

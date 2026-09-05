@@ -12,6 +12,7 @@ running -- naming the statement that is actually running.
 """
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -30,6 +31,8 @@ def progress_probe(monkeypatch):
     magics._last_badge_render_time = 0.0
     magics._BADGE_MIN_RENDER_INTERVAL = 0.05   # keep the tests quick
     magics._progress_timer = None
+    magics._progress_lock = threading.Lock()
+    magics._progress_generation = 0
 
     published: list[dict] = []
 
@@ -52,11 +55,18 @@ def test_a_slow_statement_publishes_one_badge_naming_itself(progress_probe):
     magics, published = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="slow = f()")
     time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
-    magics._cancel_progress_badge()
+    # Assert BEFORE cancelling: the statement is still (notionally) running at
+    # this point, and this is the claim the design makes -- that the badge is
+    # on screen DURING the run, not merely that cancelling produces a correct
+    # publish log afterwards. A design that only publishes when cancelled
+    # (nothing ever shown while the statement is in flight) would pass this
+    # test if the assertion ran after `_cancel_progress_badge()`; asserting
+    # first is what rules that out.
     assert len(published) == 1, f"expected exactly one progress badge, got {published}"
     assert published[0]["current_code"] == "slow = f()", (
         "the badge named a different statement than the one that was running"
     )
+    magics._cancel_progress_badge()
 
 
 def test_cancel_after_the_timer_fired_is_harmless(progress_probe):

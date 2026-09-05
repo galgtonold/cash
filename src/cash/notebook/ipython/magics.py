@@ -7,6 +7,7 @@ import contextlib
 import functools
 import logging
 import sys
+import threading
 import time
 
 # Any is used at IPython API boundaries where types come from the shell's dynamic
@@ -266,6 +267,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         self._last_badge_render_time = 0.0
         self._BADGE_MIN_RENDER_INTERVAL = 0.3
         self._progress_timer = None
+        # Guards the race between `_cancel_progress_badge` (main thread) and
+        # a timer's `fire()` (background thread): `_progress_generation` is
+        # bumped on every cancel, and `fire()` re-checks it after acquiring
+        # `_progress_lock`, so a cancel either lands before `fire()` starts
+        # (generation mismatch -> no-op) or blocks until an in-flight
+        # `fire()` finishes (so the caller's own render, e.g. DONE, is
+        # always the one published last).
+        self._progress_lock = threading.Lock()
+        self._progress_generation = 0
 
         # Cell ID tracking (available since IPython 8.3)
         self._current_cell_id = None
@@ -995,33 +1005,66 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Deferring inverts that. A statement faster than the interval publishes
         nothing; a slower one publishes once, naming itself.
         """
-        import threading
-
         self._cancel_progress_badge()
         if self._badge_mode != 'html':
             return
 
-        def fire() -> None:
-            # `_render_interactive_badge` already swallows everything: a badge
-            # must never break a cell, and this runs on a timer thread where a
-            # raise would be lost anyway.
-            self._render_interactive_badge(
-                metrics, display_id=display_id, status="RUNNING",
-                current_step=step, total_steps=total, current_code=code,
-                _from_thread=True,
-            )
+        with self._progress_lock:
+            generation = self._progress_generation
 
-        timer = threading.Timer(self._BADGE_MIN_RENDER_INTERVAL, fire)
-        timer.daemon = True
+        def fire() -> None:
+            # Re-check under the SAME lock `_cancel_progress_badge` takes.
+            # `Timer.cancel()` alone cannot stop a timer whose `run()` has
+            # already passed its internal `is_set()` check -- at that point
+            # the callback WILL execute no matter what the main thread does.
+            # The generation check makes that execution a no-op if a cancel
+            # happened anytime before we got the lock; if a cancel is
+            # concurrently in flight (already past ITS own is_set check on
+            # the timer, now waiting on this lock), it blocks until we
+            # release it, so the cancel's caller (about to publish its own,
+            # e.g. DONE, badge) never runs ahead of us -- this render is
+            # always fully finished before that one starts.
+            with self._progress_lock:
+                if generation != self._progress_generation:
+                    return
+                # `_render_interactive_badge` already swallows everything: a
+                # badge must never break a cell, and this runs on a timer
+                # thread where a raise would be lost anyway.
+                self._render_interactive_badge(
+                    metrics, display_id=display_id, status="RUNNING",
+                    current_step=step, total_steps=total, current_code=code,
+                    _from_thread=True,
+                )
+
+        try:
+            timer = threading.Timer(self._BADGE_MIN_RENDER_INTERVAL, fire)
+            timer.daemon = True
+            timer.start()
+        except Exception as e:  # noqa: BLE001 - a badge must never break a cell; degrade to none
+            if self._debug:
+                import traceback
+                print(f"[BADGE ARM ERROR] {e}")
+                traceback.print_exc()
+            return
         self._progress_timer = timer
-        timer.start()
 
     def _cancel_progress_badge(self) -> None:
-        """Stop a pending progress badge. Safe to call when none is armed."""
-        timer = getattr(self, '_progress_timer', None)
-        if timer is not None:
-            timer.cancel()
-            self._progress_timer = None
+        """Stop a pending progress badge. Safe to call when none is armed.
+
+        Bumps the generation counter FIRST (under the lock a concurrent
+        `fire()` also holds), so either `fire()` hasn't reached its own
+        lock yet -- and will see the mismatch and no-op -- or it is already
+        inside the lock rendering, and this call blocks until that render
+        finishes. Either way, nothing this function's caller does next
+        (typically publishing a DONE badge) can be overtaken by a stale
+        RUNNING render.
+        """
+        with self._progress_lock:
+            self._progress_generation += 1
+            timer = getattr(self, '_progress_timer', None)
+            if timer is not None:
+                timer.cancel()
+                self._progress_timer = None
 
     def _execute_cell(self, raw_cell: str, *args: Any, **kwargs: Any) -> Any:
         """Proxy for ``interactiveshell.run_cell`` to implement caching when
