@@ -31,7 +31,18 @@ def test_rules_and_declarations_survive_minification():
     .a > .b   {  color : red ;  padding: 0 2px; }
     .c:hover  {  margin: 0 !important; }
     """
-    assert _rules(minify_css(css)) == _rules(css)
+    minified = minify_css(css)
+
+    # Semantics preserved: rules and declarations are identical before and after.
+    assert _rules(minified) == _rules(css)
+
+    # Minification actually happened. Without these assertions, the `_rules` check
+    # is tautological: `_rules` normalizes both sides independently (strips comments,
+    # collapses whitespace), so `_rules(minify_css(css)) == _rules(css)` holds even
+    # for a minifier that returns its input untouched.
+    assert minified != css, "minifier returned input unchanged"
+    assert "  " not in minified, "whitespace was not collapsed"
+    assert "/*" not in minified, "comments were not removed"
 
 
 def test_quoted_text_is_never_touched():
