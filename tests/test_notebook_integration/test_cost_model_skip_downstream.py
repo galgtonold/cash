@@ -31,31 +31,58 @@ import pytest
 pytestmark = [pytest.mark.core, pytest.mark.upstream]
 
 
+def _strip_style(html: str) -> str:
+    """Drop the inlined ``<style>`` block.
+
+    So a match can only land on the badge's actual markup -- never on a CSS
+    rule or a comment inside one. Before the stylesheet was minified,
+    'Computed'/'Restored'/'Skipped' (title case) appeared only inside CSS
+    *comments*, nowhere in the rendered markup, so every check below that
+    searched the raw HTML blob was matching stylesheet prose. Minification
+    dropped the comments and turned that into an outright failure. Stripping
+    style first means a future stylesheet change can never again make -- or
+    break -- an assertion here.
+    """
+    return re.sub(r'<style>.*?</style>', '', html, flags=re.DOTALL)
+
+
 def _get_badge_html(cell) -> str:
     """Return the badge HTML rendered by cash for a cell, or ''."""
     for output in cell.get('outputs', []):
         if output.output_type in ('execute_result', 'display_data'):
             html = output.get('data', {}).get('text/html', '')
-            if html and ('Restored' in html or 'Skipped' in html
-                         or 'Computed' in html or 'cash' in html.lower()):
+            if html and 'c3-wrap' in _strip_style(html):
                 return html
     return ''
 
 
 def _cell_status_words(cell) -> set[str]:
-    """Distill cash's badge into a set of status words ({"Computed",
-    "Restored", "Skipped"}) for a single cell.
+    """Distill cash's badge into the set of per-statement status values
+    ({"computed", "restored", "skipped"}) found in a single cell's badge.
 
-    The badge HTML renders sections per status; the words appear inside
-    `<th>` headers and `class="status_*"` attributes. We match conservatively
-    on the readable text so the test isn't tied to badge styling.
+    The current (v3) badge renderer never spells these out as title-case
+    prose in the body -- the visible summary pill uses a DIFFERENT,
+    deliberately-relabelled vocabulary (CACHED/EXECUTED/SKIPPED, chosen so
+    the cell header and the row underneath never disagree on wording; see
+    ``badge_renderer/theme.py``'s ``_LABELS`` and its CAS-272 comment) --
+    but each individual statement row carries the real, structural signal
+    directly: ``data-status="restored"`` / ``"computed"`` / ``"skipped"``,
+    the literal ``BadgeStatus`` enum value. That's what we read here,
+    instead of scanning for 'Computed'/'Restored'/'Skipped' as prose (which
+    never appears in the body at all -- only inside CSS comments in the
+    unminified stylesheet, which is exactly what made the old version of
+    this helper vacuous).
+
+    Scoped to the whole (style-stripped) badge body rather than to a
+    specific section: every call site here runs ``run_all()`` sequentially
+    (never a downstream-only jump), so the cell being inspected is executed
+    right after its own immediate predecessor in the very same run -- its
+    badge never grows an upstream section of its own to pollute this set
+    with an ancestor's status.
     """
     html = _get_badge_html(cell)
-    words = set()
-    for w in ('Computed', 'Restored', 'Skipped'):
-        if re.search(rf'\b{w}\b', html):
-            words.add(w)
-    return words
+    body = _strip_style(html)
+    return set(re.findall(r'data-status="([a-z_]+)"', body))
 
 
 def _full_restart_code(vars_to_clear):
@@ -143,21 +170,21 @@ def test_floor_skipped_upstream_downstream_hits_after_reset(nb_runner):
         f"value than recomputation.\n  cold: {out_cold!r}\n  warm: {out_warm!r}"
     )
 
-    # Cell 3's badge should report the statement as Restored or Skipped
+    # Cell 3's badge should report the statement as restored or skipped
     # (cash has multiple equivalent fast paths — both indicate "did not
-    # recompute"). What we MUST NOT see is "Computed" — that would mean
+    # recompute"). What we MUST NOT see is "computed" — that would mean
     # cash failed to find the cache entry and re-derived big from scratch.
     cell3 = nb_runner.nb.cells[2]  # 0-indexed
     statuses = _cell_status_words(cell3)
-    assert 'Computed' not in statuses, (
+    assert 'computed' not in statuses, (
         "Cell 3 recomputed on warm run instead of restoring from cache. "
         "This means the lineage chain didn't survive the floor-skipped "
         f"upstream scale=17 — downstream cache key was unstable.\n"
         f"  badge statuses found: {statuses}\n"
         f"  badge html:\n{_get_badge_html(cell3)[:500]}"
     )
-    assert statuses & {'Restored', 'Skipped'}, (
-        f"Cell 3's badge has no Restored/Skipped indicator — could not "
+    assert statuses & {'restored', 'skipped'}, (
+        f"Cell 3's badge has no restored/skipped indicator — could not "
         f"verify cache reuse. Statuses found: {statuses}"
     )
 
@@ -197,14 +224,14 @@ def test_two_floor_skipped_layers_downstream_still_hits(nb_runner):
     )
     cell4 = nb_runner.nb.cells[3]  # 0-indexed; the `big = ...` cell
     statuses = _cell_status_words(cell4)
-    assert 'Computed' not in statuses, (
+    assert 'computed' not in statuses, (
         "Cell 4 (big) recomputed on warm run instead of restoring from "
         "cache — the lineage chain didn't survive two floor-skipped "
         f"upstream layers (a, b).\n  badge statuses: {statuses}\n"
         f"  badge html:\n{_get_badge_html(cell4)[:500]}"
     )
-    assert statuses & {'Restored', 'Skipped'}, (
-        f"Cell 4's badge has no Restored/Skipped indicator. "
+    assert statuses & {'restored', 'skipped'}, (
+        f"Cell 4's badge has no restored/skipped indicator. "
         f"Statuses: {statuses}"
     )
 
