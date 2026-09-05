@@ -36,10 +36,28 @@ def progress_probe(monkeypatch):
 
     published: list[dict] = []
 
-    def fake_render(metrics_list, display_id=None, status="DONE", **kw):
-        published.append({"status": status, "display_id": display_id, **kw})
+    # `_arm_progress_badge`'s `fire()` calls `_build_badge_html` (outside the
+    # lock) and then `_publish_badge_html` (inside it) separately -- not
+    # `_render_interactive_badge` as a single call -- so both halves need
+    # faking here, or `fire()` would fall through to the real (slow, real-
+    # backend-touching) implementations instead of being observed by these
+    # tests. The build fake hands the publish fake everything it captured, so
+    # `published` ends up with the same shape the old single-fake-render
+    # fixture recorded.
+    def fake_build(metrics_list, status="DONE", current_step=0, total_steps=0,
+                    current_code=None, cell_total_time=None, timing_breakdown=None):
+        return {
+            "status": status,
+            "current_step": current_step,
+            "total_steps": total_steps,
+            "current_code": current_code,
+        }
 
-    magics._render_interactive_badge = fake_render  # type: ignore[assignment]
+    def fake_publish(html, display_id=None, update_existing=True, _from_thread=False):
+        published.append({**html, "display_id": display_id})
+
+    magics._build_badge_html = fake_build  # type: ignore[assignment]
+    magics._publish_badge_html = fake_publish  # type: ignore[assignment]
     return magics, published
 
 

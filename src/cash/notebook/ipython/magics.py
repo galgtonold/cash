@@ -1013,6 +1013,21 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             generation = self._progress_generation
 
         def fire() -> None:
+            # Build OUTSIDE the lock. This is the expensive half of a render:
+            # `_build_badge_html` calls `_get_bug_report_context`, which can
+            # hit disk, poll for an in-flight notebook save, or (on a cache
+            # miss) make a bounded network call to the Jupyter server.
+            # Holding `_progress_lock` across that is what used to make
+            # `_cancel_progress_badge` block the main thread for as long as
+            # the render took (measured: ~400ms for a 400ms render). Only the
+            # generation re-check + the actual publish need the lock.
+            html = self._build_badge_html(
+                metrics, status="RUNNING", current_step=step,
+                total_steps=total, current_code=code,
+            )
+            if not html:
+                return
+
             # Re-check under the SAME lock `_cancel_progress_badge` takes.
             # `Timer.cancel()` alone cannot stop a timer whose `run()` has
             # already passed its internal `is_set()` check -- at that point
@@ -1022,19 +1037,17 @@ class CashMagics(CashAdminMagicsMixin, Magics):
             # concurrently in flight (already past ITS own is_set check on
             # the timer, now waiting on this lock), it blocks until we
             # release it, so the cancel's caller (about to publish its own,
-            # e.g. DONE, badge) never runs ahead of us -- this render is
-            # always fully finished before that one starts.
+            # e.g. DONE, badge) never runs ahead of us -- this PUBLISH is
+            # always fully finished before that one starts. The lock no
+            # longer guards the build, so that blocking window is now
+            # bounded by a publish call (a ZMQ send), not by a render.
             with self._progress_lock:
                 if generation != self._progress_generation:
                     return
-                # `_render_interactive_badge` already swallows everything: a
+                # `_publish_badge_html` already swallows everything: a
                 # badge must never break a cell, and this runs on a timer
                 # thread where a raise would be lost anyway.
-                self._render_interactive_badge(
-                    metrics, display_id=display_id, status="RUNNING",
-                    current_step=step, total_steps=total, current_code=code,
-                    _from_thread=True,
-                )
+                self._publish_badge_html(html, display_id=display_id, _from_thread=True)
 
         try:
             timer = threading.Timer(self._BADGE_MIN_RENDER_INTERVAL, fire)
@@ -1054,9 +1067,11 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         Bumps the generation counter FIRST (under the lock a concurrent
         `fire()` also holds), so either `fire()` hasn't reached its own
         lock yet -- and will see the mismatch and no-op -- or it is already
-        inside the lock rendering, and this call blocks until that render
-        finishes. Either way, nothing this function's caller does next
-        (typically publishing a DONE badge) can be overtaken by a stale
+        inside the lock publishing, and this call blocks until that publish
+        finishes. `fire()` builds the HTML for that publish BEFORE taking the
+        lock, so this can only ever block for a publish (a ZMQ send), never
+        for a full render. Either way, nothing this function's caller does
+        next (typically publishing a DONE badge) can be overtaken by a stale
         RUNNING render.
         """
         with self._progress_lock:
@@ -1716,19 +1731,20 @@ class CashMagics(CashAdminMagicsMixin, Magics):
         except Exception:  # noqa: BLE001 — best-effort: never break the badge over a backend quirk
             return ()
 
-    def _render_interactive_badge(self, metrics_list: list[ProcessResult], display_id: str | None = None, status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, update_existing: bool = True, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None, _from_thread: bool = False) -> None:
-        """Render a clickable interactive badge with detailed execution history.
+    def _build_badge_html(self, metrics_list: list[ProcessResult], status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None) -> str | None:
+        """Build badge HTML without publishing it. The expensive half of a render.
 
-        Delegates HTML generation to :func:`badge_renderer.render_interactive_badge`
-        and handles the IPython display / publish lifecycle.
+        Delegates to :func:`badge_renderer.render_interactive_badge`, which
+        calls :meth:`_get_bug_report_context` -- that can hit disk, poll for
+        an in-flight notebook save, or (on a cache miss) make a bounded
+        network call to the Jupyter server. Callers that must not block a
+        lock for that long -- see ``_arm_progress_badge``'s ``fire()`` -- call
+        this OUTSIDE the lock and only take one around :meth:`_publish_badge_html`.
+
+        Returns ``None`` (never raises) on failure or empty markup: see
+        :meth:`_render_interactive_badge` for why a badge must never break a
+        cell.
         """
-        # The badge is a diagnostic overlay drawn AROUND the user's cell — it is
-        # rendered before each statement runs (see CellExecutor) and again at the
-        # end. So a failure to BUILD or DISPLAY it must never propagate: if it
-        # did, it would abort the statement loop before the user's code ran and
-        # swallow the cell's output entirely. Degrade to "no badge" instead.
-        # (A broken renderer once shipped that raised at import on Python 3.11,
-        # which is exactly how this manifested: every cell went blank.)
         try:
             html = _badge.render_interactive_badge(
                 metrics_list=metrics_list,
@@ -1742,9 +1758,25 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 bug_report_context=self._get_bug_report_context(),
                 configured_tiers=self._configured_tier_labels(),
             )
-            if not html:
-                return
+            return html or None
+        except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
+            if self._debug:
+                import traceback
+                print(f"[BADGE RENDER ERROR] {e}")
+                traceback.print_exc()
+            return None
 
+    def _publish_badge_html(self, html: str, display_id: str | None = None, update_existing: bool = True, _from_thread: bool = False) -> None:
+        """Publish already-built badge HTML. The cheap half of a render.
+
+        Just an IPython display / publish_display_data call (a ZMQ send) --
+        nothing here touches disk or the notebook server, so it is safe to
+        call while holding ``_progress_lock``.
+
+        Never raises: see :meth:`_render_interactive_badge` for why a badge
+        must never break a cell.
+        """
+        try:
             if _from_thread and display_id:
                 # From a background thread, use publish_display_data directly
                 # with update=True to send an ``update_display_data`` message.
@@ -1759,11 +1791,46 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 display(HTML(html), display_id=display_id, update=update_existing)
             else:
                 display(HTML(html))
-        except Exception as e:  # noqa: BLE001 — intentionally broad; see comment above
+        except Exception as e:  # noqa: BLE001 — intentionally broad; see _render_interactive_badge
             if self._debug:
                 import traceback
                 print(f"[BADGE RENDER ERROR] {e}")
                 traceback.print_exc()
+
+    def _render_interactive_badge(self, metrics_list: list[ProcessResult], display_id: str | None = None, status: str = "DONE", current_step: int = 0, total_steps: int = 0, current_code: str | None = None, update_existing: bool = True, cell_total_time: float | None = None, timing_breakdown: dict[str, float] | None = None, _from_thread: bool = False) -> None:
+        """Render a clickable interactive badge with detailed execution history.
+
+        Delegates HTML generation to :func:`badge_renderer.render_interactive_badge`
+        and handles the IPython display / publish lifecycle.
+
+        The badge is a diagnostic overlay drawn AROUND the user's cell — it is
+        rendered before each statement runs (see CellExecutor) and again at the
+        end. So a failure to BUILD or DISPLAY it must never propagate: if it
+        did, it would abort the statement loop before the user's code ran and
+        swallow the cell's output entirely. Degrade to "no badge" instead.
+        (A broken renderer once shipped that raised at import on Python 3.11,
+        which is exactly how this manifested: every cell went blank.)
+
+        Split into :meth:`_build_badge_html` (expensive) and
+        :meth:`_publish_badge_html` (cheap) so a caller that must not hold a
+        lock across the build -- ``_arm_progress_badge``'s ``fire()`` -- can
+        call them separately, taking a lock around only the publish half.
+        Every other caller (all of them, other than ``fire()``) goes through
+        this method and sees identical behaviour to before the split: both
+        halves always run in sequence, and both still swallow every
+        exception.
+        """
+        html = self._build_badge_html(
+            metrics_list, status=status, current_step=current_step,
+            total_steps=total_steps, current_code=current_code,
+            cell_total_time=cell_total_time, timing_breakdown=timing_breakdown,
+        )
+        if not html:
+            return
+        self._publish_badge_html(
+            html, display_id=display_id, update_existing=update_existing,
+            _from_thread=_from_thread,
+        )
 
     @staticmethod
     def _cash_parse_ttl(line: str) -> int | None:
