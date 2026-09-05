@@ -14,13 +14,39 @@ import re
 import pytest
 
 
+def _strip_style(html: str) -> str:
+    """Drop the inlined ``<style>`` block.
+
+    So a match below can only land on the badge's actual markup -- never on
+    a CSS rule or a comment inside one. This is load-bearing: before the
+    stylesheet was minified, ``'Skipped'``/``'Restored'`` (title case)
+    appeared only inside CSS *comments*, nowhere in the rendered markup, so
+    every check in this file that searched the whole HTML blob was silently
+    matching stylesheet prose rather than the badge. Minification dropped
+    the comments and turned that into an outright failure. Stripping style
+    first means a future stylesheet change (minified or not) can never again
+    make -- or break -- an assertion here.
+    """
+    return re.sub(r'<style>.*?</style>', '', html, flags=re.DOTALL)
+
+
 def _get_badge_html(cell) -> str:
-    """Extract badge HTML from cell outputs."""
+    """Return the raw HTML of cash's own badge output for *cell*, or ''.
+
+    Selects by structure -- the badge's own outer wrapper class, present on
+    every cash badge regardless of status -- rather than by scanning for
+    status prose. The old ``'Skipped' in html or 'Restored' in html``
+    predicate never matches the current (v3) renderer's body: it uses
+    UPPERCASE summary labels (``CACHED``/``EXECUTED``/``SKIPPED``) and a
+    lowercase ``data-status="..."`` attribute per row, not title-case
+    prose. So the old predicate always returned '' here -- there was no
+    badge output to fail on, only a selector that could never find one.
+    """
     for output in cell.get('outputs', []):
         if output.output_type in ('execute_result', 'display_data'):
             data = output.get('data', {})
             html = data.get('text/html', '')
-            if html and ('Skipped' in html or 'Restored' in html):
+            if html and 'c3-wrap' in _strip_style(html):
                 return html
     return ''
 
@@ -104,59 +130,78 @@ class TestSkippedTimingAfterRestart:
         
         # Run ONLY last cell — triggers upstream simulation
         nb_runner.run_cell(6)
-        
+
         # Get the badge HTML
         badge_html = _get_badge_html(nb_runner.nb.cells[5])  # 0-indexed
-        
+        assert badge_html, "Cell 6 produced no cash badge output"
+        body = _strip_style(badge_html)
+
         # Result should still be correct
         raw6 = nb_runner.get_raw_output(6)
         assert str(n) in raw6, f"Expected {n} in output, got: {raw6[:500]}"
-        
-        # Check that the badge has a Skipped section
-        assert 'Skipped' in badge_html, \
-            "Expected 'Skipped' section in badge"
-        
-        # Find all skipped item timing values in the badge HTML.
-        # Skipped rows have class skip_*_d and a timing td at the end.
-        # The timing column for skipped items uses s_time_str which is either
-        # "{s_saved:.2f}s" or "-".
-        # We want to ensure that non-trivial items (sort_values, to_datetime)
-        # show actual timing, not "-".
-        
-        # Extract skipped item rows - they have the ⏩ emoji and display:none
+
+        # Check that the badge has a Skipped section. The current (v3)
+        # renderer marks a not-re-run row with a real, structural
+        # ``data-status="skipped"`` attribute -- not the word 'Skipped' as
+        # visible prose (the visible pill is uppercase, 'SKIPPED', and only
+        # inside a per-row hover tooltip).
+        assert 'data-status="skipped"' in body, \
+            "Expected a Skipped section (data-status=\"skipped\") in badge"
+
+        # Find all skipped item rows and pair each one's own code with its
+        # own displayed timing. The v3 renderer has no <tr>, no `skip_*`
+        # class, and no per-row '-' placeholder any more: every row (skipped
+        # or not) is a `<label class="c3-row" ... data-status="...">` whose
+        # own `<pre class="c3-code">` and `<span class="c3-time-chip">` are
+        # the very next occurrences of each after the attribute -- and
+        # `_fmt_time` (badge_renderer/renderers/html.py) always formats a
+        # real float, never a dash. So a match here is scoped per-row by
+        # simply starting the (non-greedy) search at each
+        # `data-status="skipped"` in turn.
         skipped_rows = re.findall(
-            r'<tr class="skip_.*?</tr>',
-            badge_html,
-            re.DOTALL
+            r'data-status="skipped"[^>]*>.*?'
+            r'<pre class="c3-code">(.*?)</pre>.*?'
+            r'<span class="c3-time-chip[^"]*"><span>([^<]*)</span>',
+            body,
+            re.DOTALL,
         )
-        
+
         print(f"\nSkipped rows found: {len(skipped_rows)}")
-        
+
         items_with_dash = []
-        items_with_timing = []
-        for row in skipped_rows:
-            # Get code snippet from the row
-            code_match = re.search(r'font-size: 10px;">(.*?)</span>', row)
-            code = code_match.group(1) if code_match else 'unknown'
-            
-            # Get the last td content (timing)
-            tds = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
-            timing_td = tds[-1].strip() if tds else ''
-            
+        for code, timing_td in skipped_rows:
             # Print each item (ASCII safe)
             code_ascii = code.encode('ascii', 'replace').decode()
             timing_ascii = timing_td.encode('ascii', 'replace').decode()
             print(f"  Row: code='{code_ascii}' timing='{timing_ascii}'")
-            
+
             if timing_td == '-':
                 items_with_dash.append(code)
-            else:
-                items_with_timing.append((code, timing_td))
-        
-        # sort_values and to_datetime should have timing, not '-'
+
+        # sort_values and to_datetime are the two non-trivial upstream
+        # statements in this notebook (the trivial import/read_csv rows may
+        # legitimately have no separate timing signal -- see
+        # test_skipped_items_metadata_hits's own note on that). Both MUST
+        # show up as Skipped rows with a real, well-formed timing value --
+        # this is the actual regression this file guards: TieredBackend used
+        # to have no metadata for them after a restart, so they'd show a
+        # bare '-' rather than a number.
+        found_targets = {code for code, _ in skipped_rows
+                         if 'sort_values' in code or 'to_datetime' in code}
+        assert len(found_targets) == 2, (
+            "Expected both 'sort_values' and 'to_datetime' as Skipped rows "
+            f"with timing; found {len(found_targets)} of them. "
+            f"All skipped rows parsed: {skipped_rows}"
+        )
         for code in items_with_dash:
             assert 'sort_values' not in code and 'to_datetime' not in code, \
                 f"Item '{code}' shows '-' but should show timing"
+        for code, timing_td in skipped_rows:
+            if 'sort_values' in code or 'to_datetime' in code:
+                assert re.fullmatch(r'\d+\.\d{2}s', timing_td), (
+                    f"Skipped row's timing isn't a well-formed number: "
+                    f"{timing_td!r} (code={code!r})"
+                )
 
     def test_skipped_items_metadata_hits(self, nb_runner, tmp_path):
         """
