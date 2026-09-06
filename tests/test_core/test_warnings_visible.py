@@ -39,6 +39,12 @@ def test_cache_if_raise_appears_in_cache_info(tmp_path):
     assert rec["category"] == "CashCacheIneffectiveWarning"
     assert "cache_if" in rec["message"]
     assert "timestamp" in rec
+    # The code is recorded as its own field, not only inside the text: this log
+    # is where people look once the stderr line has scrolled away, and a reader
+    # of it should be able to branch on the code the way a warning handler
+    # branches on ``w.message.code``.
+    assert rec["code"] == "CACHE-IF-RAISED"
+    assert rec["message"].startswith("[CACHE-IF-RAISED] ")
 
 
 def test_cache_if_raise_async_appears_in_cache_info(tmp_path):

@@ -21,8 +21,8 @@ Handlers can branch on the code rather than the wording, which is free to change
 
 If a warning scrolled past, most of what the decorator raises about a function
 is also kept in a rolling log on the function itself — `f.cache_info()`
-returns a dict whose `"warnings"` entry holds the last twenty, with the message
-and a timestamp. See
+returns a dict whose `"warnings"` entry holds the last twenty, each with the
+code, the message and a timestamp. See
 [Debugging and monitoring](tutorials/feature-guides/debugging-and-monitoring.md).
 
 For the class hierarchy, see [Exceptions & warnings](api/exceptions.md).

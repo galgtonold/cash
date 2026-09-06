@@ -1653,17 +1653,18 @@ class StatementProcessor:
             if digest in self._warned_entropy_reseed:
                 return
             self._warned_entropy_reseed.add(digest)
-            import warnings
-
+            from cash.diagnostics import warn_diagnostic
             from cash.notebook.randomness import CashRandomnessWarning
-            warnings.warn(
-                "Cash: seed(None) asks for a different random stream each run, but "
-                "cash caches downstream results -- a cached value below it is "
-                "frozen from the run that computed it, not redrawn, so what you see "
-                "may describe a stream that no longer exists. Put `# @cash:no-cache` "
-                "on values that must reflect the fresh stream, or seed with a fixed "
-                "integer if you want them reproducible.",
+            warn_diagnostic(
                 CashRandomnessWarning,
+                "RANDOM-SEED-NONE",
+                "seed(None) asks for a different random stream each run, but a "
+                "cached value below it is frozen from the run that computed it, "
+                "not redrawn -- so what you see may describe a stream that no "
+                "longer exists.",
+                "put `# @cash:no-cache` on the values that must reflect the "
+                "fresh stream, or seed with a fixed integer if you want them "
+                "reproducible instead.",
                 stacklevel=2,
             )
         except (SyntaxError, ValueError, AttributeError, RecursionError):
@@ -3666,22 +3667,22 @@ class StatementProcessor:
         which is to persist the finished object once instead of every
         intermediate state of it.
         """
-        import warnings
-
         from cash.backends.adaptive_caps import human_bytes
+        from cash.diagnostics import warn_diagnostic
 
         first_line = (stmt_id.splitlines() or [''])[0].strip()
         if len(first_line) > 60:
             first_line = first_line[:57] + '...'
-        warnings.warn(
-            f"Cash: `{first_line}` runs in a loop and has already cached "
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "CACHE-LOOP-GROWTH",
+            f"`{first_line}` runs in a loop and has already cached "
             f"{human_bytes(cumulative)} of intermediate snapshots for a value "
             f"that is currently only {human_bytes(size)} -- caching a growing "
             f"object every iteration costs the SUM of every intermediate size, "
-            f"not the final one. Further iterations are not being stored. Move "
-            f"`# @cash:persist` off the loop and onto a statement that produces "
-            f"the finished object, so it is cached once.",
-            CashCacheIneffectiveWarning,
+            f"not the final one. Further iterations are not being stored.",
+            "move `# @cash:persist` off the loop and onto a statement that "
+            "produces the finished object, so it is stored once.",
             stacklevel=2,
         )
 

@@ -1250,20 +1250,20 @@ class FileBackend(CacheBackend):
         if self._warned_evict_after_write:
             return
         self._warned_evict_after_write = True
-        import warnings
 
+        from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
         from .adaptive_caps import _free_bytes_on_volume, human_bytes
 
         cap = human_bytes(self._max_size_bytes)
         free = _free_bytes_on_volume(self.cache_dir)
         if free >= (self._max_size_bytes or 0):
-            room = (f"There is {human_bytes(free)} free on that volume, so raising "
-                    f"max_cache_size is an option.")
+            room = (f"raise max_cache_size -- there is {human_bytes(free)} free "
+                    f"on that volume, so there is room for it.")
         else:
-            room = (f"Only {human_bytes(free)} is free on that volume, so raising "
-                    f"max_cache_size may not help — caching fewer or smaller "
-                    f"results, or pointing cache_dir at a roomier volume, will.")
+            room = (f"cache fewer or smaller results, or point cache_dir at a "
+                    f"roomier volume: only {human_bytes(free)} is free on this "
+                    f"one, so raising max_cache_size may not help.")
 
         shape = ""
         dominant = self._dominant_entry_size()
@@ -1276,12 +1276,14 @@ class FileBackend(CacheBackend):
                          f"summary of those results rather than the results "
                          f"themselves, caching that instead would fit far more.")
 
-        warnings.warn(
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "CACHE-THRASH",
             f"the cache is full at its {cap} cap and is evicting entries within "
             f"a couple of writes of storing them, so it is re-writing and "
-            f"re-evicting rather than caching durably. That can be slower than "
-            f"no cache at all.{shape} {room}",
-            CashCacheIneffectiveWarning,
+            f"re-evicting rather than caching durably -- which is slower than "
+            f"no cache at all.{shape}",
+            room,
             stacklevel=2,
         )
 

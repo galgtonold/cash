@@ -32,7 +32,7 @@ model = train_xgb(X, y)         # 12 min to fit — force to disk
 noise = np.random.rand(1000)    # we know it's unseeded; don't warn us
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @9b96b731, cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @519e5ecd, cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce -->
 That's the everyday language — six directives in total, counting the two specialised ones above. Stack annotations on consecutive lines above a statement (Cash walks backwards through comment lines until it hits a blank or a non-comment).
 
 ## The four annotations
@@ -96,7 +96,7 @@ The annotation sets `force_persist = True`, which the post-execute path threads 
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @cb85eaf1, cash/notebook/randomness.py:MODULE_ALIASES @1d79cda4, cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0 -->
+<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @76a812fd, cash/notebook/randomness.py:MODULE_ALIASES @1d79cda4, cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0 -->
 Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:

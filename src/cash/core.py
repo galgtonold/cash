@@ -20,7 +20,6 @@ import textwrap
 import threading
 import time
 import types
-import warnings
 import weakref
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
@@ -35,6 +34,11 @@ from .backends.serialization import get_serializer
 from .config import CashConfig, get_config
 from .data_source import DataSource
 from .dependency_state import DependencyStateHasher, SysModulesHelperResolver
+from .diagnostics import (
+    format_diagnostic,
+    warn_diagnostic,
+    warn_diagnostic_message,
+)
 from .exceptions import (
     SOURCE_RETRIEVAL_ERRORS,
     CacheExpiredError,
@@ -63,6 +67,23 @@ from .utils import resolve_main_module
 
 # Configure Logging
 logger = logging.getLogger(__name__)
+
+# Two fix lines are shared by more than one emit site, because more than one
+# site tells the same story: a global whose value cannot be hashed is one
+# problem reached through two channels (a function's own globals and a
+# helper's), and a refused write is one problem whether the value went whole or
+# as a chunked manifest. Sharing the text is what keeps the two halves of each
+# pair from drifting into two different pieces of advice for one doc section.
+_UNHASHABLE_GLOBAL_FIX = (
+    "register a hasher for its type with cash.register_hasher, or read the "
+    "part the result actually depends on -- a URL, a connection string -- "
+    "instead of the live object."
+)
+_STORE_FAILED_FIX = (
+    "read the exception: a full disk, a cache_dir you cannot write to, or a "
+    "value that cannot be pickled -- return the data, not the handle that "
+    "produced it."
+)
 
 def get_ipython():
     """Return the live IPython shell, or ``None``.
@@ -1119,15 +1140,22 @@ class Cash:
         if name in Cash._WARNED_UNHASHABLE:
             return
         Cash._WARNED_UNHASHABLE.add(name)
-        msg = (
-            f"cash: {name} reached a cached call as an argument or a parameter "
+        what = (
+            f"{name} reached a cached call as an argument or a parameter "
             f"default, but its code could not be hashed, so editing it will NOT "
-            f"invalidate the cache. Declare it with "
-            f"@cash.cache(depends_on=[...]) if the result depends on its "
-            f"implementation, or cash.mark_opaque({name}) to silence this."
+            f"invalidate the cache."
         )
-        logger.warning(msg)
-        warnings.warn(msg, category=CashImpurityWarning, stacklevel=2)
+        fix = (
+            f"name it with @cash.cache(depends_on=[...]) if the result depends "
+            f"on its implementation, or record that it does not with "
+            f"cash.mark_opaque({name})."
+        )
+        # The log carries the same rendered text as the warning, code and all,
+        # so a log-only reader is not the one person without a handle to search.
+        logger.warning(format_diagnostic("KEY-OPAQUE-CALLABLE", what, fix))
+        warn_diagnostic(
+            CashImpurityWarning, "KEY-OPAQUE-CALLABLE", what, fix, stacklevel=2,
+        )
 
     def _iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
         """Yield objects in *value* that carry user code.
@@ -1515,8 +1543,12 @@ class Cash:
                 CashCacheIneffectiveWarning,
                 func_name,
                 "",
-                f"@cash.cache on {func_name}: async generators are not "
-                f"cached in this release. The function is returned unwrapped.",
+                f"@cash.cache on {func_name}: async generators are not cached "
+                f"in this release, so the function was returned unwrapped.",
+                code="CACHE-ASYNC-GENERATOR",
+                fix="move the work into a plain async def that returns a list "
+                    "and cache that, or leave the generator undecorated and "
+                    "cache the expensive step inside it.",
                 stacklevel=3,
             )
             return func
@@ -1779,23 +1811,30 @@ class Cash:
             if args_hash is None:
                 arg_type_name = self._first_unhashable_arg_type(args, kwargs)
                 if arg_type_name == "<unknown>":
+                    which = (
+                        "an argument could not be hashed, and cash cannot say "
+                        "which -- the value is nested inside a container"
+                    )
                     suggestion = (
-                        "Cash could not identify which argument is unhashable "
-                        "(likely a nested value inside a container). Try passing "
-                        "a simpler argument, or register a hasher for the offending "
-                        "type via cash.register_hasher(SomeType, ...)."
+                        "find the nested value, then register a hasher for its "
+                        "type with cash.register_hasher(SomeType, ...) or pass "
+                        "something hashable in its place."
                     )
                 else:
+                    which = f"an argument of type {arg_type_name} could not be hashed"
                     suggestion = (
-                        f"Register a hasher via cash.register_hasher({arg_type_name}, ...) "
-                        f"or pass the argument by a hashable value."
+                        f"register a hasher with "
+                        f"cash.register_hasher({arg_type_name}, ...), or pass the "
+                        f"argument by a hashable value."
                     )
                 self._warn_once(
                     CashCacheIneffectiveWarning,
                     func_name,
                     arg_type_name,
-                    f"@cash.cache on {func_name}: failed to build cache key from "
-                    f"argument of type {arg_type_name}. Call will not cache. {suggestion}",
+                    f"@cash.cache on {func_name}: {which}, so this call and every "
+                    f"call like it does not cache.",
+                    code="KEY-UNHASHABLE-ARG",
+                    fix=suggestion,
                 )
                 result = func(*args, **kwargs)
                 self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='unhashable', cache_key='')
@@ -1806,20 +1845,25 @@ class Cash:
             arg_type_name = self._first_unhashable_arg_type(args, kwargs)
             if arg_type_name == "<unknown>":
                 hint = (
-                    " Cash could not identify the offending argument type; "
-                    "check your function's arguments."
+                    "check the function's arguments -- cash could not identify "
+                    "the offending type; if the exception does not belong to "
+                    "your code, report it as a bug with the traceback."
                 )
             else:
                 hint = (
-                    f" Consider cash.register_hasher({arg_type_name}, ...) "
-                    f"if {arg_type_name} is the unhashable argument."
+                    f"register a hasher with "
+                    f"cash.register_hasher({arg_type_name}, ...) if "
+                    f"{arg_type_name} is the unhashable argument."
                 )
             self._warn_once(
                 CashCacheIneffectiveWarning,
                 func_name,
                 arg_type_name,
                 f"@cash.cache on {func_name}: cache-key generation raised "
-                f"{type(e).__name__} ({e}). Call will not cache.{hint}",
+                f"{type(e).__name__} ({e}) somewhere it did not anticipate, so "
+                f"this call does not cache.",
+                code="KEY-BUILD-FAILED",
+                fix=hint,
             )
             result = func(*args, **kwargs)
             self._log_decorator_call(func_name, cache_hit=False, execution_time=time.perf_counter() - call_start, args_hash='error', cache_key='')
@@ -2911,8 +2955,13 @@ class Cash:
                 func_name,
                 "",
                 f"@cash.cache on {func_name}: depends_on={getattr(dep, '__qualname__', dep)!r} "
-                f"is a callable whose source cannot be read (builtin / C-extension); "
-                f"changes to it will NOT invalidate the cache.",
+                f"is a callable whose source cannot be read (builtin / C-extension), "
+                f"so the declaration is inert and changes to it will NOT "
+                f"invalidate the cache.",
+                code="KEY-DEPENDS-ON-OPAQUE",
+                fix="depend on something cash can read: pass the extension's "
+                    "version in as an argument, or declare a DataSource whose "
+                    "token is that version or build id.",
                 stacklevel=6,
             )
             return
@@ -2977,8 +3026,13 @@ class Cash:
                     func_name,
                     "",
                     f"@cash.cache on {func_name}: dynamic_depends_on resolver raised "
-                    f"{type(e).__name__} ({e}). Call will not include this dependency "
-                    f"in the cache key - results may be stale if the underlying data changes.",
+                    f"{type(e).__name__} ({e}), so that dependency is missing from "
+                    f"the cache key and results may be stale when the underlying "
+                    f"data changes.",
+                    code="KEY-DYNAMIC-DEP-FAILED",
+                    fix="fix the resolver -- it is called with exactly the same "
+                        "arguments as the function -- and clear this function's "
+                        "entries after changing the source data.",
                     stacklevel=6,
                 )
 
@@ -3298,11 +3352,13 @@ class Cash:
                 func_name,
                 bad_type,
                 f"@cash.cache on {func_name}: a parameter default of type "
-                f"{bad_type} could not be hashed ({type(e).__name__}). "
-                f"Cash cannot tell whether that default changed, so the call "
-                f"will not cache rather than risk returning a stale result. "
-                f"Consider cash.register_hasher({bad_type}, ...) or passing "
-                f"the value at the call site.",
+                f"{bad_type} could not be hashed ({type(e).__name__}), so the "
+                f"function does not cache for any caller rather than risk "
+                f"serving a result computed under a default that changed.",
+                code="KEY-UNHASHABLE-DEFAULT",
+                fix=f"get the value out of the signature -- build it in the body "
+                    f"or require it at the call site -- or register a hasher "
+                    f"with cash.register_hasher({bad_type}, ...).",
                 stacklevel=6,
             )
         else:
@@ -3372,10 +3428,14 @@ class Cash:
                     func_name,
                     owner_type,
                     f"@cash.cache on bound method {func_name}: the instance's state "
-                    f"could not be hashed ({type(e).__name__}). Falling back to the "
-                    f"instance's identity - entries won't be shared across equal "
-                    f"instances or survive the process. Consider "
-                    f"cash.register_hasher({owner_type}, ...).",
+                    f"could not be hashed ({type(e).__name__}), so cash fell back "
+                    f"to the instance's identity - entries are not shared across "
+                    f"equal instances and do not survive the process.",
+                    code="KEY-INSTANCE-STATE",
+                    fix=f"register a hasher with "
+                        f"cash.register_hasher({owner_type}, ...), returning "
+                        f"something derived from the state that affects the "
+                        f"result.",
                 )
             else:
                 logger.debug("bound-self hash failed for %s: %s", func_name, e)
@@ -4317,8 +4377,10 @@ class Cash:
                     func_name,
                     name,
                     f"@cash.cache on {func_name}: reads module global '{name}' whose "
-                    f"value could not be hashed; changes to it will NOT invalidate the "
-                    f"cache.",
+                    f"value could not be hashed, so changes to it will NOT "
+                    f"invalidate the cache.",
+                    code="KEY-UNHASHABLE-GLOBAL",
+                    fix=_UNHASHABLE_GLOBAL_FIX,
                     stacklevel=6,
                 )
                 continue
@@ -4621,7 +4683,9 @@ class Cash:
                 func_name,
                 label,
                 f"@cash.cache on {func_name}: reads '{label}' whose value could not "
-                f"be hashed; changes to it will NOT invalidate the cache.",
+                f"be hashed, so changes to it will NOT invalidate the cache.",
+                code="KEY-UNHASHABLE-GLOBAL",
+                fix=_UNHASHABLE_GLOBAL_FIX,
                 stacklevel=6,
             )
             return None
@@ -5246,9 +5310,11 @@ class Cash:
             func_name,
             "cache_if",
             f"@cash.cache on {func_name}: cache_if predicate raised "
-            f"{type(error).__name__} ({error}). The result is returned "
-            f"un-cached and will be recomputed on the next call. Fix "
-            f"the predicate or remove cache_if= to restore caching.",
+            f"{type(error).__name__} ({error}), so the result is returned "
+            f"un-cached and every later call recomputes.",
+            code="CACHE-IF-RAISED",
+            fix="make the predicate total -- it must handle every shape the "
+                "result can take -- or drop cache_if= to restore caching.",
             stacklevel=stacklevel,
         )
 
@@ -5267,10 +5333,11 @@ class Cash:
             func_name,
             "metadata_invalid",
             f"@cash.cache on {func_name}: a stored cache entry's metadata "
-            f"could not be validated ({type(error).__name__}: {error}). "
-            f"Treating as a miss and recomputing. This usually means the "
-            f"entry was written by an older cash version or partially "
-            f"corrupted; clearing the cache for this function may help.",
+            f"could not be validated ({type(error).__name__}: {error}), so "
+            f"cash treated the entry as absent and recomputed.",
+            code="STORE-METADATA-INVALID",
+            fix="nothing, for a one-off; if it keeps appearing, run "
+                "f.cache_clear() so the unreadable records are replaced.",
             stacklevel=stacklevel,
         )
 
@@ -5289,9 +5356,13 @@ class Cash:
             func_name,
             "lock_failed",
             f"@cash.cache on {func_name}: backend lock acquisition failed "
-            f"({type(error).__name__}: {error}). Proceeding without lock - "
-            f"concurrent calls with the same args may compute redundantly. "
-            f"Investigate the backend (disk full, permissions, broken lockfile?).",
+            f"({type(error).__name__}: {error}), so cash proceeded without the "
+            f"lock and concurrent calls with the same args may compute "
+            f"redundantly.",
+            code="STORE-LOCK-FAILED",
+            fix="investigate the backend the exception names -- a full disk, a "
+                "stale lock file, or a cache_dir on a filesystem where locking "
+                "does not work.",
             stacklevel=stacklevel,
         )
 
@@ -5378,15 +5449,19 @@ class Cash:
             f"{describe_random_call(call)} at line {abs_lineno}{extra}. "
             f"The first call's result is cached and replayed on every later "
             f"call - the RNG is never consulted again, so the value is frozen "
-            f"and not reproducible across a cleared cache. Seed the RNG, or "
-            f"pass @cash.cache(allow_random=True) to suppress this warning."
+            f"and not reproducible across a cleared cache."
         )
         # ``_warn_once`` keys on (category, func_name, "") -> one warning per
         # decorated function for the life of this Cash instance, and it also
         # files the message into ``f.cache_info()['warnings']`` so it stays
         # discoverable if the user missed the stderr emission.
         self._warn_once(
-            CashRandomnessWarning, func_name, "", message, stacklevel=3,
+            CashRandomnessWarning, func_name, "", message,
+            code="RANDOM-UNSEEDED",
+            fix="seed the RNG to make the value reproducible, leave the "
+                "function undecorated for a genuinely fresh draw, or pass "
+                "@cash.cache(allow_random=True) to keep it frozen on purpose.",
+            stacklevel=3,
         )
 
     def _warn_once(
@@ -5396,10 +5471,21 @@ class Cash:
         arg_type_name: str,
         message: str,
         *,
+        code: str,
+        fix: str,
         stacklevel: int = 5,
     ) -> None:
-        """Emit ``warnings.warn(message, category)`` at most once per
+        """Emit a coded diagnostic at most once per
         ``(category, func_name, arg_type_name)`` for this Cash instance.
+
+        ``message`` is one sentence of *what happened*; ``fix`` is one
+        imperative sentence; ``code`` is the diagnostic code from
+        ``cash.diagnostics`` that names the section of ``docs/warnings.md``
+        expanding both. The three are rendered together by
+        :func:`~cash.diagnostics.format_diagnostic`, and the rendered text is
+        what reaches BOTH stderr and ``cache_info()['warnings']`` -- the log
+        and the terminal must not drift apart, since the log is where people
+        look once the stderr line has scrolled away.
 
         ``arg_type_name`` is the empty string for warnings that do not
         attach to a specific arg type (e.g. store-failed). The seen-set
@@ -5416,6 +5502,7 @@ class Cash:
         * ``_resolve_dynamic_dependencies`` (called from ``_resolve_cache_key``) -> ``stacklevel=6``
         * ``cache(func)`` decoration-time checks -> ``stacklevel=3``
         """
+        rendered = format_diagnostic(code, message, fix)   # raises on a bad code
         key = (category, func_name, arg_type_name)
         with self._decorator_call_log_lock:
             if key in self._warning_keys_seen:
@@ -5423,17 +5510,21 @@ class Cash:
             self._warning_keys_seen.add(key)
             # Also record in per-function rolling log so the warning is
             # discoverable after the fact via ``f.cache_info()['warnings']``
-            # - even if the user missed the stderr emission.
+            # - even if the user missed the stderr emission. The code goes in
+            # as its own field as well as inside the text, so a reader of the
+            # log can branch on it the way a warning handler branches on
+            # ``w.message.code``.
             entry = {
                 'category': category.__name__,
-                'message': message,
+                'code': code,
+                'message': rendered,
                 'timestamp': time.time(),
             }
             log = self._func_warnings.setdefault(func_name, [])
             log.append(entry)
             if len(log) > self._func_warnings_max:
                 del log[: len(log) - self._func_warnings_max]
-        warnings.warn(message, category=category, stacklevel=stacklevel)
+        warn_diagnostic_message(category, code, rendered, stacklevel=stacklevel)
 
     def drain_decorator_calls(self) -> list[dict[str, Any]]:
         """Return and clear all recorded decorator call events.
@@ -5681,9 +5772,10 @@ class Cash:
                 name,
                 f"@cash.cache on {func_name}: calling it modifies the {where} "
                 f"'{name}', so '{name}' can no longer be tracked for "
-                f"invalidation and a cache hit will not repeat that change. "
-                f"Pass it as an argument, or return the new value instead of "
-                f"mutating it.",
+                f"invalidation and a cache hit will not repeat that change.",
+                code="IMPURE-SCOPE-MUTATION",
+                fix="pass the value in as an argument and return the new one, "
+                    "instead of reaching out and rewriting it.",
                 stacklevel=6,
             )
 
@@ -5731,6 +5823,9 @@ class Cash:
             func_name,
             "",
             f"@cash.cache on {func_name}: result not cached. {reason}",
+            code="CACHE-IDENTITY-COUPLED",
+            fix="split the function: cache the part that computes the numbers, "
+                "and draw the figure from them in an uncached function.",
             stacklevel=6,
         )
         return True
@@ -5755,7 +5850,7 @@ class Cash:
         to catch is one that pays a large key cost on every single call.
         """
         try:
-            message = self._effectiveness.record(
+            verdict = self._effectiveness.record(
                 func_name,
                 overhead_seconds=overhead_seconds,
                 body_seconds=body_seconds,
@@ -5770,8 +5865,12 @@ class Cash:
         # over a failure the user had not asked to hear about. Here the user
         # configured warnings-as-errors and is entitled to have that honoured.
         # Swallowing it would silently override their filter, which is worse.
-        if message:
-            warnings.warn(message, CashCacheIneffectiveWarning, stacklevel=3)
+        if verdict:
+            what, fix = verdict
+            warn_diagnostic(
+                CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix,
+                stacklevel=3,
+            )
 
     def _store_in_cache(
         self,
@@ -5821,7 +5920,10 @@ class Cash:
                 func_name,
                 "",
                 f"@cash.cache on {func_name}: backend {backend_name} failed to store "
-                f"result ({type(e).__name__}: {e}). Compute succeeded; next call will recompute.",
+                f"result ({type(e).__name__}: {e}). Compute succeeded, nothing was "
+                f"stored, and the next call recomputes.",
+                code="STORE-FAILED",
+                fix=_STORE_FAILED_FIX,
                 stacklevel=6,
             )
 
@@ -5831,18 +5933,27 @@ class Cash:
 
         Applying it would mean materializing every chunk back into memory,
         undoing the bound that chunking exists to provide.
+
+        The fix line says **raise** the thresholds, and that direction is
+        load-bearing. ``cache_if`` is consulted only in the ``chunk_index == 0``
+        branch of ``_stream_and_store`` -- the whole result fit one chunk -- and
+        this fires at ``chunk_index == 1``, once it did not. The message used to
+        advise *lowering* the thresholds, which produces more chunks and so
+        guarantees the very bypass it is warning about.
         """
         self._warn_once(
             CashCacheIneffectiveWarning,
             func_name,
             "",
-            f"@cash.cache on {func_name}: cache_if was bypassed "
-            f"because the result exceeded a single chunk "
+            f"@cash.cache on {func_name}: the result exceeded a single chunk "
             f"(chunk_max_items={chunk_max_items}, "
-            f"chunk_max_bytes={chunk_max_bytes}). The result "
-            f"is cached without consulting the predicate. To "
-            f"keep cache_if gating in effect, lower the chunk "
-            f"thresholds or materialize the iterator manually.",
+            f"chunk_max_bytes={chunk_max_bytes}), so it was cached without "
+            f"cache_if ever being consulted.",
+            code="CACHE-IF-BYPASSED",
+            fix="raise chunk_max_items / chunk_max_bytes above the size this "
+                "result reaches, or return a list instead of an iterator, so "
+                "the whole result arrives in one piece for the predicate to "
+                "see.",
             stacklevel=stacklevel,
         )
 
@@ -6021,8 +6132,12 @@ class Cash:
                 f"{cache_key}:chunk_{chunk_index}",
                 "",
                 f"@cash.cache: backend {backend_name} failed to store "
-                f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}). "
-                f"The cache entry will be incomplete on retrieval.",
+                f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}), "
+                f"so a later read of this entry stops at the missing chunk and "
+                f"returns a truncated iterator.",
+                code="STORE-CHUNK-FAILED",
+                fix="clear the entry with f.cache_clear() before anything reads "
+                    "it, then fix the write the exception names.",
                 stacklevel=4,
             )
 
@@ -6068,7 +6183,10 @@ class Cash:
                 "",
                 f"@cash.cache on {func_name}: backend {backend_name} failed "
                 f"to store chunked manifest ({type(e).__name__}: {e}). "
-                f"Compute succeeded; next call will recompute.",
+                f"Compute succeeded, nothing was stored, and the next call "
+                f"recomputes.",
+                code="STORE-FAILED",
+                fix=_STORE_FAILED_FIX,
                 stacklevel=6,
             )
 
@@ -6356,12 +6474,12 @@ class Cash:
             f"@cash.cache on {func_name}: the first call had effects that "
             f"static analysis did not see -- they happen inside library code "
             f"cash does not walk into. Every cache HIT from here on returns "
-            f"the stored value WITHOUT repeating them.\n{summary}\n"
-            f"An 'argument mutation' means an object the CALLER still holds "
-            f"was changed by this call, and will stop being changed. If the "
-            f"effect is the point of the call, don't cache it (or cache only "
-            f"the pure part); if it is incidental, silence this with "
-            f"@cash.cache(assume_safe=True).",
+            f"the stored value WITHOUT repeating them.\n{summary}",
+            code="IMPURE-OBSERVED-EFFECTS",
+            fix="split the function if an effect is part of the result -- an "
+                "'argument mutation' line means an object the CALLER still "
+                "holds stops being changed -- or record it as incidental with "
+                "@cash.cache(assume_safe=True).",
             stacklevel=6,
         )
 
@@ -6432,12 +6550,14 @@ class Cash:
             CashImpurityWarning,
             func_name,
             "purity",
-            f"@cash.cache on {func_name}: the analyzer found likely "
-            f"side effects or scope mutations. Cached results may not "
-            f"reflect side-effect intent. Put `# @cash:assume-safe` on each "
-            f"line you have audited, or refactor. "
-            f"@cash.cache(assume_safe=True) waives the whole function instead, "
-            f"including anything added to it later.\n{summary}",
+            f"@cash.cache on {func_name}: reading the source found likely "
+            f"side effects or scope mutations, so cached results may not "
+            f"reflect what the body does.\n{summary}",
+            code="IMPURE-SIDE-EFFECTS",
+            fix="go down the list and put `# @cash:assume-safe` on each line "
+                "you have audited, or refactor; @cash.cache(assume_safe=True) "
+                "waives the whole function instead, including anything added "
+                "to it later.",
             stacklevel=6,
         )
 

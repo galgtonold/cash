@@ -558,7 +558,7 @@ def test_cache_if_bypass_warning_fires_on_partial_last_chunk(tmp_path):
     ineffective = [
         w for w in captured
         if issubclass(w.category, CashCacheIneffectiveWarning)
-        and "cache_if was bypassed" in str(w.message)
+        and getattr(w.message, "code", None) == "CACHE-IF-BYPASSED"
     ]
     assert len(ineffective) == 1, (
         f"expected one cache_if-bypassed warning for partial chunk_1, got "
@@ -640,7 +640,7 @@ def test_cache_if_warning_fires_on_multi_chunk_transition(tmp_path):
     ineffective = [
         w for w in captured
         if issubclass(w.category, CashCacheIneffectiveWarning)
-        and "cache_if was bypassed" in str(w.message)
+        and getattr(w.message, "code", None) == "CACHE-IF-BYPASSED"
     ]
     assert len(ineffective) == 1, (
         f"expected one cache_if-bypassed warning, got "

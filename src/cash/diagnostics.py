@@ -184,3 +184,20 @@ def warn_diagnostic_explicit(
         lineno=lineno,
         registry=registry,
     )
+
+
+def warn_diagnostic_message(
+    category: type[Warning], code: str, message: str, *, stacklevel: int = 2
+) -> None:
+    """Emit an already-rendered *message* carrying *code*.
+
+    ``Cash._warn_once`` renders with :func:`format_diagnostic` itself, because
+    it files the same text into ``cache_info()['warnings']`` before emitting and
+    the log and the terminal must not drift apart. This keeps the ``.code``
+    attribute and the registry check for that path.
+    """
+    if code not in DIAGNOSTIC_CODES:
+        raise KeyError(f"unknown diagnostic code: {code!r}")
+    instance = category(message)
+    instance.code = code
+    warnings.warn(instance, stacklevel=stacklevel + 1)

@@ -319,8 +319,9 @@ def test_the_effectiveness_warning_names_the_override(tmp_path):
         ) or message
 
     assert message is not None, "this workload should have been flagged"
-    assert "register_hasher" in message
-    assert "override=True" in message, (
+    _what, fix = message
+    assert "register_hasher" in fix
+    assert "override=True" in fix, (
         "the remedy is unreachable for numpy/pandas arguments without it, "
         "which is the case this warning fires on most"
     )

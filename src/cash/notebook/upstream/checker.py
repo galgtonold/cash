@@ -5,10 +5,10 @@ import hashlib
 import logging
 import re
 import types
-import warnings
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
+from ...diagnostics import format_diagnostic, warn_diagnostic_explicit
 from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, UpstreamStateError
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
@@ -1258,21 +1258,27 @@ class UpstreamChecker:
             snippet = next((ln.strip() for ln in raw.splitlines() if ln.strip()), '')
             if len(snippet) > 60:
                 snippet = snippet[:57] + '...'
-            message = (
-                f"Cash: cell {idx + 1} has a syntax error and could not be "
-                f"parsed ({snippet!r}). Caching continues for cells that do "
-                f"not depend on it, but cell {idx + 1} will not run and any "
-                f"cell that depends on it can no longer be dependency-tracked "
-                f"until you fix it."
+            what = (
+                f"cell {idx + 1} has a syntax error and could not be parsed "
+                f"({snippet!r}), so it is skipped and any cell depending on it "
+                f"can no longer be dependency-tracked."
             )
-            logger.warning(message)
+            fix = (
+                "fix the syntax error, then re-run that cell and the cells "
+                "below that use its output; if it is not really code, delete it "
+                "or make it a markdown cell."
+            )
+            logger.warning(format_diagnostic("NOTEBOOK-CELL-SYNTAX", what, fix))
             # warn_explicit with registry=None bypasses the "once per location"
             # __warningregistry__ dedupe (every break is raised from this one
             # line); our own per-(idx, hash) ledger supplies the dedupe we
             # actually want, and this still consults the user's filters. Mirrors
             # randomness.py's established pattern.
-            warnings.warn_explicit(
-                message, CashUpstreamSyntaxWarning,
+            warn_diagnostic_explicit(
+                CashUpstreamSyntaxWarning,
+                code="NOTEBOOK-CELL-SYNTAX",
+                what=what,
+                fix=fix,
                 filename='<cash>', lineno=idx + 1, registry=None,
             )
 

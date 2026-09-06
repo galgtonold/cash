@@ -7,7 +7,6 @@ import contextlib
 import logging
 import threading
 import time
-import warnings
 import weakref
 from abc import ABC, abstractmethod
 from collections.abc import Callable
@@ -292,12 +291,19 @@ class PendingWrites:
                     del self._pending[key]
             # Deferred import: cash.exceptions is a leaf, but importing it at
             # module scope from a backend base has bitten this package before.
+            # ``cash.diagnostics`` is a leaf too (it imports only ``warnings``),
+            # and is deferred alongside it for the same reason.
+            from cash.diagnostics import warn_diagnostic
             from cash.exceptions import CashCacheStoreFailedWarning
-            warnings.warn(
-                f"cash could not store the result for {key!r} "
-                f"({type(exc).__name__}: {exc}). Compute succeeded; the entry "
-                f"is absent and the work will recompute.",
+            warn_diagnostic(
                 CashCacheStoreFailedWarning,
+                "STORE-FAILED",
+                f"cash could not store the result for {key!r} "
+                f"({type(exc).__name__}: {exc}); compute succeeded, but the "
+                f"entry is absent and the work will recompute.",
+                "read the exception: a full disk, a cache_dir you cannot write "
+                "to, or a value that cannot be pickled -- return the data, not "
+                "the handle that produced it.",
                 stacklevel=3,
             )
 

@@ -8,11 +8,11 @@ import hashlib
 import inspect
 import logging
 import types
-import warnings
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import NamedTuple
 
+from ..diagnostics import warn_diagnostic_explicit
 from ..exceptions import CashWarning
 
 __all__ = ["CashRandomnessWarning", "RandomnessCallInfo", "RANDOM_FUNCTIONS", "SEED_FUNCTIONS", "MODULE_ALIASES", "RNG_CARRIER_CONSTRUCTORS", "RandomnessVisitor", "RandomnessDetector", "check_and_warn_randomness", "describe_random_call", "format_stale_randomness_message", "warn_stale_randomness", "format_unseeded_estimator_fit_message", "format_stale_estimator_fit_message", "warn_unseeded_estimator_fit", "warn_stale_estimator_fit", "capture_rng_state", "restore_rng_state", "capture_object_rng_states", "restore_object_rng_states", "get_used_rng_modules", "get_drawing_rng_modules", "get_seeding_rng_modules", "seed_cells_not_yet_run", "rng_modules_changed", "rng_lineage_fingerprint", "rng_virtual_var", "hidden_lineage_reads", "hidden_lineage_writes", "hidden_write_lineage"]
@@ -1022,22 +1022,55 @@ class RandomnessDetector:
         # Source order, so a statement with several draws reads top-to-bottom.
         unseeded_calls.sort(key=lambda c: (c.lineno, c.col_offset))
 
+        # These are the WHAT half of a ``RANDOM-UNSEEDED`` diagnostic: one
+        # sentence of what happened, with the remedy authored at the emit site
+        # in ``check_and_warn_randomness`` and the rest in docs/warnings.md.
         for call in unseeded_calls:
             if call.carrier is not None:
                 warnings_list.append(
                     f"Unseeded randomness detected: {describe_random_call(call)} "
                     f"at line {call.lineno}. '{call.carrier}' came from an unseeded "
-                    f"{call.module} generator, so cached results are frozen, not random. "
-                    f"Pass a seed to the generator, or use @cash:allow-random to suppress."
+                    f"{call.module} generator, so the cached result is frozen at "
+                    f"one arbitrary draw rather than redrawn."
                 )
             else:
                 warnings_list.append(
                     f"Unseeded randomness detected: {describe_random_call(call)} "
-                    f"at line {call.lineno}. Cached results may not be reproducible. "
-                    f"Consider calling seed() first or use @cash:allow-random to suppress."
+                    f"at line {call.lineno}. The first result is cached and "
+                    f"replayed from then on, so the value is frozen rather than "
+                    f"reproducible."
                 )
 
         return unseeded_calls, warnings_list, has_seed_calls
+
+
+# The remedy half of each randomness diagnostic. Four of them rather than one,
+# because the three outcomes a user can want are spelled differently for a draw
+# and for an estimator fit (a seed argument vs. ``random_state=``), and the
+# restore-time twins address a value already on screen rather than the source.
+# ASCII only, like the messages they accompany: this lands in a kernel's stderr,
+# where a Windows console codepage mangles an em-dash.
+_UNSEEDED_FIX = (
+    "seed the source (random.seed(0), np.random.default_rng(0)) to make it "
+    "reproducible, put `# @cash:no-cache` on the statement for a genuinely "
+    "fresh draw each run, or `# @cash:allow-random` to keep it frozen on "
+    "purpose."
+)
+_REPLAY_FIX = (
+    "put `# @cash:no-cache` on the statement if you need a fresh draw each "
+    "run, seed the source if you need it reproducible, or "
+    "`# @cash:allow-random` if holding it steady is the point."
+)
+_UNSEEDED_FIT_FIX = (
+    "pass random_state=<int> to the estimator for reproducibility, put "
+    "`# @cash:no-cache` on the statement to re-fit every run, or "
+    "`# @cash:allow-random` to keep the fit frozen on purpose."
+)
+_REPLAY_FIT_FIX = (
+    "put `# @cash:no-cache` on the statement to re-fit every run, pass "
+    "random_state=<int> for a reproducible fit, or `# @cash:allow-random` if "
+    "holding this fit steady is the point."
+)
 
 
 def describe_random_call(call: RandomnessCallInfo) -> str:
@@ -1066,9 +1099,7 @@ def format_stale_randomness_message(call: RandomnessCallInfo) -> str:
     return (
         f"Unseeded randomness restored from cache: {describe_random_call(call)} "
         f"at line {call.lineno}. The value you are seeing is a replay of an "
-        f"earlier run, not a fresh draw - re-running will not change it. Use "
-        f"@cash:no-cache to re-run it every time, seed the RNG for real "
-        f"reproducibility, or @cash:allow-random to suppress."
+        f"earlier run, not a fresh draw - re-running will not change it."
     )
 
 
@@ -1101,8 +1132,14 @@ def warn_stale_randomness(
         message = format_stale_randomness_message(call)
         if not detector.mark_warned(code, message):
             continue
-        warnings.warn_explicit(
-            message, CashRandomnessWarning,
+        # ``code=`` by name, not position: ``code`` in this scope is the user's
+        # source text, and a positional diagnostic code would silently become
+        # a statement's worth of Python in the terminal.
+        warn_diagnostic_explicit(
+            CashRandomnessWarning,
+            code="RANDOM-REPLAYED",
+            what=message,
+            fix=_REPLAY_FIX,
             filename='<cash>', lineno=call.lineno, registry=None,
         )
 
@@ -1151,8 +1188,12 @@ def check_and_warn_randomness(
         for call, warning_msg in zip(unseeded_calls, warnings_list):
             if not detector.mark_warned(code, warning_msg):
                 continue
-            warnings.warn_explicit(
-                warning_msg, CashRandomnessWarning,
+            # ``code=`` by name: see ``warn_stale_randomness``.
+            warn_diagnostic_explicit(
+                CashRandomnessWarning,
+                code="RANDOM-UNSEEDED",
+                what=warning_msg,
+                fix=_UNSEEDED_FIX,
                 filename='<cash>', lineno=call.lineno, registry=None,
             )
 
@@ -1189,9 +1230,7 @@ def format_unseeded_estimator_fit_message(receiver: str) -> str:
     return (
         f"Unseeded randomness detected: {receiver}.fit() on an estimator with "
         f"random_state=None. cash caches the fit, but the cached fitted model is a "
-        f"frozen replay, not a fresh fit - two genuine fits would differ. Pass "
-        f"random_state=<int> to the estimator for reproducibility, or use "
-        f"@cash:allow-random to suppress."
+        f"frozen replay, not a fresh fit - two genuine fits would differ."
     )
 
 
@@ -1208,9 +1247,7 @@ def format_stale_estimator_fit_message(receiver: str) -> str:
     return (
         f"Unseeded estimator fit restored from cache: {receiver}.fit() with "
         f"random_state=None. The fitted model you are seeing is a replay of an "
-        f"earlier fit, not a fresh draw - re-running will not change it. Use "
-        f"@cash:no-cache to re-fit every time, pass random_state=<int> for real "
-        f"reproducibility, or @cash:allow-random to suppress."
+        f"earlier fit, not a fresh draw - re-running will not change it."
     )
 
 
@@ -1242,8 +1279,12 @@ def warn_unseeded_estimator_fit(
         message = format_unseeded_estimator_fit_message(receiver)
         if not detector.mark_warned(code, message):
             continue
-        warnings.warn_explicit(
-            message, CashRandomnessWarning,
+        # ``code=`` by name: see ``warn_stale_randomness``.
+        warn_diagnostic_explicit(
+            CashRandomnessWarning,
+            code="RANDOM-UNSEEDED",
+            what=message,
+            fix=_UNSEEDED_FIT_FIX,
             filename='<cash>', lineno=0, registry=None,
         )
 
@@ -1267,8 +1308,12 @@ def warn_stale_estimator_fit(
         message = format_stale_estimator_fit_message(receiver)
         if not detector.mark_warned(code, message):
             continue
-        warnings.warn_explicit(
-            message, CashRandomnessWarning,
+        # ``code=`` by name: see ``warn_stale_randomness``.
+        warn_diagnostic_explicit(
+            CashRandomnessWarning,
+            code="RANDOM-REPLAYED",
+            what=message,
+            fix=_REPLAY_FIT_FIX,
             filename='<cash>', lineno=0, registry=None,
         )
 

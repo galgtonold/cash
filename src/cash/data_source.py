@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import warnings
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -56,13 +55,17 @@ class DataSource(ABC):
             name = type(self).__qualname__
             if name not in _warned_bool_token_sources:
                 _warned_bool_token_sources.add(name)
+                from .diagnostics import warn_diagnostic
                 from .exceptions import CashCacheIneffectiveWarning
-                warnings.warn(
-                    f"{name}.has_changed() returned a bool, which cannot track "
-                    f"changes - the cache will NOT invalidate when the source "
-                    f"changes. Return a value that changes (a version, digest, or "
-                    f"mtime) from has_changed(), or override state_token().",
+                warn_diagnostic(
                     CashCacheIneffectiveWarning,
+                    "KEY-BOOL-STATE-TOKEN",
+                    f"{name}.has_changed() returned a bool, which cannot track "
+                    f"changes, so the cache will NOT invalidate when the source "
+                    f"changes.",
+                    "return something that moves with the data -- a version, a "
+                    "digest, an mtime -- from has_changed(), or override "
+                    "state_token() to return that token.",
                     stacklevel=4,
                 )
         return token

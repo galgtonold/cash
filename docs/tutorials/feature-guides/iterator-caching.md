@@ -63,7 +63,7 @@ If the caller abandons the iterator, or the producer raises, step 5 never runs: 
 
 On exhaust, Cash writes a **manifest entry** at the canonical `cache_key` carrying `iterator_storage="chunked"`, `n_chunks`, and `total_items`. The manifest is what the hit path reads first.
 
-<!-- claim: cash/core.py:Cash.cache @91b24c1a broad="the defaults are keyword arguments of the decorator itself" -->
+<!-- claim: cash/core.py:Cash.cache @8a01c3c8 broad="the defaults are keyword arguments of the decorator itself" -->
 Defaults:
 
 - `chunk_max_items = 1_000_000`
@@ -92,7 +92,8 @@ When a threshold trips, chunks are written as they fill. A subsequent `cache_if=
 
 The warning text reads:
 
-> `@cash.cache on {func_name}: cache_if was bypassed because the result exceeded a single chunk (chunk_max_items=…, chunk_max_bytes=…). The result is cached without consulting the predicate. To keep cache_if gating in effect, lower the chunk thresholds or materialize the iterator manually.`
+> `[CACHE-IF-BYPASSED] @cash.cache on {func_name}: the result exceeded a single chunk (chunk_max_items=…, chunk_max_bytes=…), so it was cached without cache_if ever being consulted.`
+> `  Fix: raise chunk_max_items / chunk_max_bytes above the size this result reaches, or return a list instead of an iterator, so the whole result arrives in one piece for the predicate to see.`
 
 The warning is keyed per function via `_warn_once` and fires once per process — repeated multi-chunk calls don't spam the log.
 
@@ -167,7 +168,7 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 
 The next call to the decorated function will see a miss on the manifest key (manifests live in the same backend tier as chunks, so they're evicted together in typical configurations) and recompute. Test reference: `test_chunked_iterator_missing_chunk_terminates_safely` in `tests/test_core/test_iterator_caching.py`.
 
-<!-- claim: cash/core.py:Cash._write_one_chunk @cfda4c9a -->
+<!-- claim: cash/core.py:Cash._write_one_chunk @b1966607 -->
 TTL is honored uniformly: each chunk inherits the manifest's TTL (`Cash._write_one_chunk` propagates it), so `Cash.cleanup()` reclaims expired chunks alongside the expired manifest. Test reference: `test_chunked_chunks_inherit_manifest_ttl` in `tests/test_core/test_iterator_caching.py`.
 
 ## Persistence and backend tiers
@@ -214,7 +215,7 @@ Tuning notes:
 ## Caveats
 
 - **Partial consumption on a miss caches nothing.** The miss path produces only what the caller consumes, so stopping after ten of a thousand items leaves no complete result to store and the next call recomputes. Storing the ten under the full result's key would be a wrong answer rather than a slow one. On a *hit* partial consumption is free — only the chunks the caller reaches are loaded. Test reference: `test_chunked_iterator_partial_consumption_caches_nothing` in `tests/test_core/test_iterator_caching.py`.
-- **`cache_if` is bypassed on multi-chunk results.** As described above, the predicate cannot run without re-materializing chunks. The bypass warning is keyed per-function and fires once per process. To keep `cache_if` gating in effect on large iterators, lower the chunk thresholds enough that the single-chunk path stays in play.
+- **`cache_if` is bypassed on multi-chunk results.** As described above, the predicate cannot run without re-materializing chunks. The bypass warning is keyed per-function and fires once per process. To keep `cache_if` gating in effect, **raise** the thresholds until the whole result fits one chunk, so the single-chunk path stays in play — lowering them produces *more* chunks and so guarantees the bypass.
 <!-- claim: cash/core.py:Cash._attach_lineage @8145e913 -->
 - **No `_cash_lineage_hash` on iterator returns.** Cash's lineage-tracking optimization attaches a `_cash_lineage_hash` attribute to non-iterator return values so downstream `@cash.cache` calls can short-circuit the args hash (via `Cash._attach_lineage`). Iterator wrappers don't get this attribute — passing a cached iterator to another `@cash.cache` function will re-hash its contents the normal way. Materialize to a list if you want the lineage short-circuit.
 - **Purity analysis treats generator bodies like any function.** A generator that calls `time.time()`, mutates module-level state, or reads `os.environ` inside the loop still triggers `CashImpurityWarning`. Apply `@cash.pure` / `assume_safe` / `strict` exactly as you would for a non-generator function. See [Purity Decorators](purity-decorators.md).

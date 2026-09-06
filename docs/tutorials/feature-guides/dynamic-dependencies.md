@@ -40,7 +40,7 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @b5776c0f, cash/data_source.py:DataSource.state_token @0f45bf0d -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @9373ebe6, cash/data_source.py:DataSource.state_token @fe5201da -->
 The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
@@ -96,7 +96,7 @@ method is `has_changed()` (or `state_token()`), which must return a **value that
 changes when the data changes** — a version, a config digest, a tenant id. Cash
 folds that value into the cache key, so the entry invalidates when it moves.
 
-<!-- claim: cash/data_source.py:DataSource.state_token @0f45bf0d -->
+<!-- claim: cash/data_source.py:DataSource.state_token @fe5201da -->
 > **Return a value, not a `bool`.** Despite the name, `has_changed()` is the
 > *state token* that goes into the key — not a yes/no flag. A `bool` only has two
 > states and cannot track changes, so the cache would never invalidate. Cash
@@ -173,7 +173,7 @@ If the resolver raises any of `OSError`, `TypeError`, `ValueError`, `AttributeEr
 
 The warning text reads:
 
-> `@cash.cache on {func_name}: dynamic_depends_on resolver raised {ErrorType} ({message}). Call will not include this dependency in the cache key — results may be stale if the underlying data changes.`
+> `[KEY-DYNAMIC-DEP-FAILED] @cash.cache on {func_name}: dynamic_depends_on resolver raised {ErrorType} ({message}), so that dependency is missing from the cache key and results may be stale when the underlying data changes.`
 
 Catching the exception and continuing means a transiently failing resolver (e.g. a temporary `OSError`) does not break your pipeline — it just degrades to a broader cache hit while you fix it.
 

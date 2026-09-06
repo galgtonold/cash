@@ -25,6 +25,7 @@ import warnings
 from pathlib import Path
 from urllib.parse import unquote
 
+from ..diagnostics import format_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
 
 logger = logging.getLogger(__name__)
@@ -140,15 +141,23 @@ def warn_notebook_not_found_once() -> None:
     if _a_live_reader_can_answer():
         return
     _warned_notebook_not_found = True
-    msg = (
-        "Cash: notebook not found -- upstream dependency tracking is disabled "
-        "for this session. Statement-level caching still works, but changes in "
-        "one cell will not auto-invalidate dependent cells. This is expected "
-        "under papermill / nbconvert / CI (no live Jupyter Server); in "
-        "JupyterLab or VS Code it can mean a stale Jupyter runtime."
+    what = (
+        "notebook not found -- upstream dependency tracking is disabled for "
+        "this session. Statement-level caching still works, but changes in one "
+        "cell will not auto-invalidate dependent cells."
     )
-    logger.warning(msg)
-    warnings.warn(msg, category=CashNotebookDiscoveryWarning, stacklevel=2)
+    fix = (
+        "nothing, under papermill / nbconvert / CI -- there is no live Jupyter "
+        "Server to ask; in JupyterLab or VS Code, restart the kernel, and "
+        "reopen the notebook if it persists."
+    )
+    # The log carries the rendered text, code and all, so a reader who only has
+    # the log is not the one person without a handle to look up.
+    logger.warning(format_diagnostic("NOTEBOOK-NOT-FOUND", what, fix))
+    warn_diagnostic(
+        CashNotebookDiscoveryWarning, "NOTEBOOK-NOT-FOUND", what, fix,
+        stacklevel=2,
+    )
 
 
 def reset_notebook_discovery_warning() -> None:

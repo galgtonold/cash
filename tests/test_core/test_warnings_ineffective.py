@@ -14,6 +14,14 @@ from cash import (
 )
 
 
+# ``_warn_once`` takes a diagnostic code and a fix line as required keyword
+# arguments, and ``format_diagnostic`` rejects a code that is not registered --
+# so these tests pass a REAL one. A placeholder would raise before anything was
+# emitted, and what is under test here is the dedup and stacklevel contract,
+# not the registry.
+CODED = {"code": "CACHE-THRASH", "fix": "raise max_cache_size."}
+
+
 def test_warning_classes_importable():
     """The three warning classes must be importable from the top-level `cash` package."""
     assert issubclass(CashWarning, UserWarning)
@@ -27,11 +35,11 @@ def test_warn_once_dedupes_per_func_and_arg_type(tmp_path):
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")  # bypass Python's built-in dedup
-        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one")
-        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one")  # dup
-        c._warn_once(CashCacheIneffectiveWarning, "g", "MyType", "msg one")  # new func
-        c._warn_once(CashCacheIneffectiveWarning, "f", "OtherType", "msg one")  # new type
-        c._warn_once(CashCacheStoreFailedWarning, "f", "MyType", "msg one")  # new category
+        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)
+        c._warn_once(CashCacheIneffectiveWarning, "f", "MyType", "msg one", **CODED)  # dup
+        c._warn_once(CashCacheIneffectiveWarning, "g", "MyType", "msg one", **CODED)  # new func
+        c._warn_once(CashCacheIneffectiveWarning, "f", "OtherType", "msg one", **CODED)  # new type
+        c._warn_once(CashCacheStoreFailedWarning, "f", "MyType", "msg one", **CODED)  # new category
 
     # Expect 4 unique emissions
     assert len(captured) == 4, [str(w.message) for w in captured]
@@ -42,7 +50,7 @@ def test_warn_once_does_not_emit_when_already_seen(tmp_path):
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         for _ in range(10):
-            c._warn_once(CashCacheIneffectiveWarning, "f", "X", "boom")
+            c._warn_once(CashCacheIneffectiveWarning, "f", "X", "boom", **CODED)
     assert len(captured) == 1
     assert "boom" in str(captured[0].message)
     assert captured[0].category is CashCacheIneffectiveWarning
@@ -64,10 +72,14 @@ def test_warn_once_default_stacklevel_attributes_to_caller(tmp_path):
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
         # Direct call from this test frame: stacklevel=1 → blames the
-        # warnings.warn line in core.py (the line inside _warn_once).
-        c._warn_once(CashCacheIneffectiveWarning, "f", "X", "direct", stacklevel=1)
+        # emit line in core.py (the line inside _warn_once).
+        c._warn_once(
+            CashCacheIneffectiveWarning, "f", "X", "direct", stacklevel=1, **CODED,
+        )
         # stacklevel=2 → blames this test's call line.
-        c._warn_once(CashCacheIneffectiveWarning, "g", "X", "from-test", stacklevel=2)
+        c._warn_once(
+            CashCacheIneffectiveWarning, "g", "X", "from-test", stacklevel=2, **CODED,
+        )
 
     assert len(captured) == 2
     # First emission: stacklevel=1 → inside cash/core.py

@@ -17,7 +17,7 @@ Net result: the computation ran twice instead of once. Both threads return the r
 
 ## The fix: double-checked locking
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @4cc0528e, cash/core.py:Cash._warn_lock_failed @28a3d6e3 -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @4cc0528e, cash/core.py:Cash._warn_lock_failed @109ae4ed -->
 When `use_locking=True`, the miss path routes through `Cash._compute_with_lock` instead of calling the compute closure directly. The helper does three things:
 
 1. **Acquire `self.backend.lock(cache_key)`** as a context manager.

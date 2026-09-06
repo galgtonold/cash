@@ -39,7 +39,6 @@ import itertools
 import logging
 import time
 import urllib.parse
-import warnings
 from typing import Any
 
 # ``urllib.request`` drags in http.client, email and ssl - a real cost on every
@@ -48,6 +47,7 @@ from typing import Any
 # recognise a scheme, so it stays up here.
 
 from .data_source import DataSource
+from .diagnostics import warn_diagnostic
 from .exceptions import CashCacheIneffectiveWarning, DependencyNotFoundError
 
 __all__ = ["RemoteFileDataSource"]
@@ -204,16 +204,17 @@ def warn_validation_cost_once(
         if saved_seconds and saved_seconds > 0
         else ""
     )
-    warnings.warn(
-        f"cash spent {seconds:.2f}s checking {count} remote "
-        f"{'source' if count == 1 else 'sources'} for freshness on {label}{saved}. "
-        f"Mark sources that cannot change with "
-        f"RemoteFileDataSource(..., immutable=True) or pin a version in the URL. "
-        f"For reads cash tracked automatically - where there is no source to "
-        f"annotate - widen the window with "
-        f"cash.configure(remote_revalidate_max_age_seconds=...), accepting that "
-        f"a change goes unnoticed for that long.",
+    warn_diagnostic(
         CashCacheIneffectiveWarning,
+        "REMOTE-FRESHNESS-COST",
+        f"cash spent {seconds:.2f}s checking {count} remote "
+        f"{'source' if count == 1 else 'sources'} for freshness on {label}{saved}, "
+        f"so proving the result fresh costs more than recomputing it would.",
+        "mark sources that cannot change with "
+        "RemoteFileDataSource(..., immutable=True) or pin a version in the URL; "
+        "for reads cash tracked automatically, widen the window with "
+        "cash.configure(remote_revalidate_max_age_seconds=...), accepting that "
+        "a change goes unnoticed for that long.",
         stacklevel=4,
     )
 
@@ -253,12 +254,15 @@ def _warn_weak_token(url: str, detail: str) -> None:
         return
     if len(_warned_weak_tokens) < 1024:  # bound the ledger for long sessions
         _warned_weak_tokens.add(url)
-    warnings.warn(
-        f"cash is tracking {url!r} by size alone ({detail}): the store exposes "
-        f"no ETag, version id or modification time. An edit that does not change "
-        f"the object's size will NOT invalidate the cached result. Consider a "
-        f"version-pinned URL, or a custom DataSource with a stronger token.",
+    warn_diagnostic(
         CashCacheIneffectiveWarning,
+        "REMOTE-SIZE-ONLY",
+        f"cash is tracking {url!r} by size alone ({detail}): the store exposes "
+        f"no ETag, version id or modification time, so an edit that keeps the "
+        f"byte count will NOT invalidate the cached result.",
+        "pin a version in the URL (?versionId=, #generation=), or write a "
+        "DataSource whose token is something you control -- a run id, a digest "
+        "from a manifest.",
         stacklevel=3,
     )
 
@@ -478,12 +482,15 @@ class RemoteFileDataSource(DataSource):
             return
         if len(_warned_failures) < 1024:  # bound the ledger for long sessions
             _warned_failures.add(ledger_key)
-        warnings.warn(
-            f"cash could not read the state of {self.url!r} to check whether the "
-            f"cached result is still fresh: {type(exc).__name__}: {exc}. The call "
-            f"will recompute rather than risk serving a stale result. Fix the "
-            f"access (credentials, network, permissions) to get the cache back.",
+        warn_diagnostic(
             CashCacheIneffectiveWarning,
+            "REMOTE-STATE-UNREADABLE",
+            f"cash could not read the state of {self.url!r} to check whether the "
+            f"cached result is still fresh ({type(exc).__name__}: {exc}), so the "
+            f"call recomputes rather than risk serving a stale result.",
+            "restore the access the exception names -- credentials, network, "
+            "permissions -- and caching resumes on its own; nothing needs "
+            "resetting.",
             stacklevel=5,
         )
 

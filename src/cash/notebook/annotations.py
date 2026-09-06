@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import ast
 import re
-import warnings
 from dataclasses import dataclass
 
+from ..diagnostics import warn_diagnostic
 from ..exceptions import CashCacheIneffectiveWarning
 
 __all__ = ["CacheAnnotation", "ANNOTATION_PATTERN", "leading_cell_annotation", "parse_annotation_line", "parse_annotations_in_range", "get_statement_annotations", "extract_annotations_for_statements"]
@@ -88,12 +88,14 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
         # like the superscript two, which ``int()`` then refuses.
         if value.isascii() and value.isdigit():
             return CacheAnnotation(ttl=int(value))
-        warnings.warn(
-            f"cash: `# @cash:ttl={value}` is not a whole number of seconds, so "
-            f"the annotation was IGNORED and this statement keeps its normal "
-            f"caching. ttl has no unit suffix -- write `ttl=300` for five "
-            f"minutes, not `ttl=5m`.",
+        warn_diagnostic(
             CashCacheIneffectiveWarning,
+            "ANNOT-TTL-INVALID",
+            f"`# @cash:ttl={value}` is not a whole number of seconds, so the "
+            f"annotation was IGNORED and this statement keeps its normal "
+            f"caching with no expiry.",
+            "rewrite the value as a bare count of seconds -- `ttl=300` for five "
+            "minutes -- with no unit suffix and no decimal point.",
             stacklevel=2,
         )
         return None

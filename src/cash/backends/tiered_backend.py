@@ -112,17 +112,18 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         if self._warned_oversize:
             return
         self._warned_oversize = True
-        import warnings
-
+        from cash.diagnostics import warn_diagnostic
         from cash.exceptions import CashCacheIneffectiveWarning
         from .adaptive_caps import human_bytes
-        warnings.warn(
-            f"Cash: cached value {key!r} ({human_bytes(size_bytes)}) exceeds a "
-            f"safe fraction of every persistent cache tier's cap; keeping it in "
-            f"RAM only, so it will not survive a kernel restart. Storing it "
-            f"would force a write-and-evict treadmill -- raise max_cache_size "
-            f"to persist objects this large.",
+        warn_diagnostic(
             CashCacheIneffectiveWarning,
+            "CACHE-VALUE-TOO-BIG",
+            f"cached value {key!r} ({human_bytes(size_bytes)}) exceeds a safe "
+            f"fraction of every persistent cache tier's cap, so cash is keeping "
+            f"it in RAM only and it will not survive a kernel restart.",
+            "raise max_cache_size to a comfortable multiple of that size, or "
+            "cache something smaller -- the aggregate, the sample, or the "
+            "columns you actually use.",
             stacklevel=3,
         )
 

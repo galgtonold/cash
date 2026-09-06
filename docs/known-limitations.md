@@ -791,10 +791,12 @@ the edit will not invalidate — once, the first time a `partial` reaches a cach
 call in this process (a long-lived kernel will not repeat it):
 
 ```text
-cash: partial reached a cached call as an argument or a parameter default, but
-its code could not be hashed, so editing it will NOT invalidate the cache.
-Declare it with @cash.cache(depends_on=[...]) if the result depends on its
-implementation, or cash.mark_opaque(partial) to silence this.
+[KEY-OPAQUE-CALLABLE] partial reached a cached call as an argument or a
+parameter default, but its code could not be hashed, so editing it will NOT
+invalidate the cache.
+  Fix: name it with @cash.cache(depends_on=[...]) if the result depends on its
+  implementation, or record that it does not with cash.mark_opaque(partial).
+  https://cash-lib.readthedocs.io/en/stable/warnings/#key-opaque-callable
 ```
 
 **What to do:** exactly what the warning says — name the wrapped function in
@@ -816,8 +818,8 @@ def make_scaler(k):
         return x * k
     return scale
 
-apply_to(rows, make_scaler(2))   # CashCacheIneffectiveWarning: failed to build
-apply_to(rows, make_scaler(2))   # cache key from argument of type function
+apply_to(rows, make_scaler(2))   # CashCacheIneffectiveWarning: an argument of
+apply_to(rows, make_scaler(2))   # type function could not be hashed
 ```
 
 The code channel does not rescue this, and would not be enough if it did: two

@@ -5,9 +5,9 @@ import logging
 import os
 import re
 import textwrap
-import warnings
 from typing import TYPE_CHECKING
 
+from ...diagnostics import warn_diagnostic
 from ...exceptions import CashWarning
 from ...utils import resolve_file_dep_path
 from ..analysis import CodeAnalyzer
@@ -612,13 +612,16 @@ class ReexecutionPlanner:
 
     def _warn_orphaned_figure_write(self, code: str, producer: int | None, w: int) -> None:
         """Emit the refusal as a CashWarning (and a trace/debug record)."""
-        warnings.warn(
-            "cash refused to re-run a plt.savefig() during upstream reconstruction: "
-            "the statement that drew the current figure is not being re-run, so the "
-            "save would flush a blank/wrong figure over your chart on disk. Re-run "
-            "the plot cell to regenerate it. (plt.savefig() has no variable link to "
-            "its figure; use fig.savefig(path) to let cash track it.)",
+        warn_diagnostic(
             CashWarning,
+            "NOTEBOOK-SAVEFIG-SKIP",
+            "cash refused to re-run a plt.savefig() during upstream "
+            "reconstruction: the statement that drew the current figure is not "
+            "being re-run, so the save would flush a blank figure over your "
+            "chart on disk. The file is untouched.",
+            "re-run the cell that draws the plot if the image should be "
+            "rewritten; to stop this arising at all, save through the figure "
+            "object -- fig.savefig(path) -- rather than through pyplot.",
             stacklevel=2,
         )
         trace_event("refuse_orphaned_figure_write", stmt=code[:80], producer=producer)

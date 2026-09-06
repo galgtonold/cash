@@ -5,6 +5,7 @@ so the page's structure is pinned rather than trusted.
 """
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 
@@ -62,3 +63,53 @@ def test_every_section_is_a_registered_code():
     replacement -- and removing it from the registry, which this catches."""
     orphaned = sorted(set(documented_codes()) - DIAGNOSTIC_CODES)
     assert not orphaned, f"documented but not registered: {orphaned}"
+
+
+SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
+CASH_CATEGORIES = {
+    "CashWarning",
+    "CashCacheIneffectiveWarning",
+    "CashCacheStoreFailedWarning",
+    "CashImpurityWarning",
+    "CashUpstreamSyntaxWarning",
+    "CashRandomnessWarning",
+    "CashNotebookDiscoveryWarning",
+}
+
+
+def _raw_cash_warns() -> list[str]:
+    """`warnings.warn*(...)` calls naming a Cash category, outside diagnostics.py.
+
+    ``warn_explicit`` is matched as well as ``warn``. Five sites use it -- four
+    in ``notebook/randomness.py``, one in ``notebook/upstream/checker.py`` -- and
+    a matcher checking only ``attr == "warn"`` passes while every one of them is
+    still unmigrated. A totality test that is silently not total is worse than
+    no test, because it is *cited* as proof.
+    """
+    found = []
+    for path in sorted(SRC.rglob("*.py")):
+        if path.name == "diagnostics.py":
+            continue
+        tree = ast.parse(path.read_text("utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr in {"warn", "warn_explicit"}
+            ):
+                continue
+            names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+            if names & CASH_CATEGORIES:
+                found.append(f"{path.name}:{node.lineno}")
+    return found
+
+
+def test_no_cash_warning_is_emitted_without_a_code():
+    """Without this, the next warning added silently has no code and the
+    bijection test still passes -- it only checks codes that exist."""
+    assert not _raw_cash_warns(), (
+        "these emit a Cash warning directly; route them through "
+        f"warn_diagnostic instead: {_raw_cash_warns()}"
+    )

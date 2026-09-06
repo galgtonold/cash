@@ -208,7 +208,7 @@ first result is simply frozen:
 | `torch` | `rand()`, `randn()`, `randint()`, `randperm()`, `normal()`, … |
 | `tensorflow.random` | `uniform()`, `normal()`, `truncated_normal()`, `shuffle()`, … |
 
-<!-- claim: cash/notebook/randomness.py:RandomnessDetector @befaee4a broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/notebook/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870 -->
+<!-- claim: cash/notebook/randomness.py:RandomnessDetector @9108c273 broad="the claim is about the detector having exactly two channels, which is a property of the class", cash/notebook/randomness.py:RandomnessDetector.is_seeded @9ff99734, cash/notebook/randomness.py:RNG_CARRIER_CONSTRUCTORS @3248b870 -->
 Two channels feed it, because there are two ways to be random. **Module
 globals** (`np.random.rand()`) are reproducible if the *module* was seeded, so
 the detector tracks `seed()` calls across the session: once a module is seeded,
@@ -317,7 +317,7 @@ Cash also exposes these verdicts at runtime: `@cash:no-cache` forces a
 statement to never cache, and the decorator path has matching **purity
 markers** for functions — see [The decorator path](decorator-path.md).
 
-<!-- claim: cash/core.py:Cash._surface_purity @9524c3ea, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
+<!-- claim: cash/core.py:Cash._surface_purity @d65a6265, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
 The decorator takes one verdict further than the notebook path: a `@cash.cache`
 function whose body resolves a dependency from a **runtime value** cash can't
 track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`,

@@ -143,7 +143,7 @@ The full shape and field meanings:
 
 - `hits`, `misses`, `hit_rate` — counters since the wrapper was created (not since process start).
 - `total_time_saved` — sum of execution times avoided on hits.
-- `warnings` — rolling log of the last 20 `CashWarning` emissions for this function. Each entry has `category`, `message`, `timestamp`. Survives `warnings.simplefilter('ignore')` so you can find silent misbehavior after the fact.
+- `warnings` — rolling log of the last 20 `CashWarning` emissions for this function. Each entry has `category`, `code`, `message`, `timestamp` -- the `code` is the diagnostic code from [Warnings](../../warnings.md), so the log can be filtered on it the same way a warning handler branches on `w.message.code`. Survives `warnings.simplefilter('ignore')` so you can find silent misbehavior after the fact.
 
 ### Reading hit rate
 

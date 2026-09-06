@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @9524c3ea, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @d65a6265, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -454,13 +454,14 @@ def fetch_user(uid):
     return requests.get(f"https://api/{uid}").json()
 
 fetch_user(42)
-# CashImpurityWarning: @cash.cache on __main__.fetch_user: the analyzer
-# found likely side effects or scope mutations. Cached results may not
-# reflect side-effect intent. Put `# @cash:assume-safe` on each line you
-# have audited, or refactor. @cash.cache(assume_safe=True) waives the
-# whole function instead, including anything added to it later.
+# CashImpurityWarning: [IMPURE-SIDE-EFFECTS] @cash.cache on
+# __main__.fetch_user: reading the source found likely side effects or scope
+# mutations, so cached results may not reflect what the body does.
 #   in __main__.fetch_user:
 #     line 2: [impure_call] requests.get() — known I/O / side-effecting
+#   Fix: go down the list and put `# @cash:assume-safe` on each line you have
+#   audited, or refactor; @cash.cache(assume_safe=True) waives the whole
+#   function instead, including anything added to it later.
 ```
 
 The function is still cached. The warning is one-shot per
@@ -469,7 +470,8 @@ emitted warning is also stored on the wrapper:
 
 ```python
 fetch_user.cache_info()["warnings"]
-# [{'category': 'CashImpurityWarning', 'message': '...', 'timestamp': ...}]
+# [{'category': 'CashImpurityWarning', 'code': 'IMPURE-SIDE-EFFECTS',
+#   'message': '[IMPURE-SIDE-EFFECTS] ...', 'timestamp': ...}]
 ```
 
 !!! warning "Untrackable dependencies *raise*, they don't warn"
@@ -613,7 +615,7 @@ both raises `ValueError` at decoration time.
 <!-- claim: cash/__init__.py:mark_pure @ba10636a, cash/__init__.py:mark_stateful @ca0b83f6 -->
 ### Observed effects — what the first call actually did { #observed-effects-what-the-first-call-actually-did }
 
-<!-- claim: cash/effect_observer.py:EffectObserver @aeccafc9 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @31ac976f -->
+<!-- claim: cash/effect_observer.py:EffectObserver @aeccafc9 broad="the observed-effect contract is the class as a whole", cash/core.py:Cash._report_observed_effects @6869da5e -->
 Static analysis stops at library boundaries, so an effect *inside* a library is
 reachable only by the method's name — and a name cannot reach everything.
 `session.get(url)` is a network call, but `get` cannot go in the write-method
@@ -669,8 +671,8 @@ cache key, so a miss re-runs exactly that and compares; a difference means the
 call changed what it was handed.
 
 ```text
-@cash.cache on report.summarise: the first call had effects that static
-analysis did not see ...
+[IMPURE-OBSERVED-EFFECTS] @cash.cache on report.summarise: the first call had
+effects that static analysis did not see ...
   argument mutation: the arguments differ after the call than before it
 ```
 

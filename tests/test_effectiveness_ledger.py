@@ -13,7 +13,11 @@ from cash.effectiveness import MIN_OBSERVATIONS, EffectivenessLedger
 
 
 def _drive(ledger, *, overhead, body, calls, hit=True, name="f"):
-    """Record *calls* identical calls; return the first message emitted."""
+    """Record *calls* identical calls; return the first verdict emitted.
+
+    A verdict is the ``(what, fix)`` pair the caller renders into a
+    ``CACHE-NET-LOSS`` diagnostic, or ``None``.
+    """
     first = None
     for _ in range(calls):
         msg = ledger.record(name, overhead_seconds=overhead,
@@ -26,11 +30,12 @@ def _drive(ledger, *, overhead, body, calls, hit=True, name="f"):
 def test_it_fires_on_the_case_that_motivated_it():
     """390ms of hashing to avoid 11ms of work, over enough calls to matter."""
     ledger = EffectivenessLedger()
-    msg = _drive(ledger, overhead=0.390, body=0.011, calls=10, name="summarise")
+    verdict = _drive(ledger, overhead=0.390, body=0.011, calls=10, name="summarise")
 
-    assert msg is not None, "the pathological case did not warn"
-    assert "summarise" in msg
-    assert "register_hasher" in msg, "the warning must name a remedy that keeps caching"
+    assert verdict is not None, "the pathological case did not warn"
+    what, fix = verdict
+    assert "summarise" in what
+    assert "register_hasher" in fix, "the warning must name a remedy that keeps caching"
 
 
 def test_it_stays_quiet_below_the_cumulative_threshold():

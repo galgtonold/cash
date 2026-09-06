@@ -53,7 +53,7 @@ name. A `\d+` group would simply not match the bad part — `ttl=5m` would captu
 
 A few details that bite people:
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce, cash/notebook/annotations.py:parse_annotation_line @9b96b731 -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce, cash/notebook/annotations.py:parse_annotation_line @519e5ecd -->
 - **`@cash:` is case-sensitive.** `# @Cash:persist` is silently ignored. Only the directive *name* after the colon is lower-cased ([`annotations.py` — `ANNOTATION_PATTERN`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), so `# @cash:PERSIST` works.
 - **A space after the colon is fine.** `# @cash: persist` and `# @cash:persist` both match (the pattern allows `\s*` after the colon), as does spacing around `=` — `# @cash:ttl = 60` works.
 - **Whitespace before `@cash:` is fine.** `#@cash:persist`, `# @cash:persist`, and `#   @cash:persist` all match.
@@ -75,7 +75,7 @@ Forces a statement to be cached on disk even when the cost model would normally 
 cheap_constant = compute_constants()    # would normally be skipped; now forced
 ```
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @9b96b731, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @519e5ecd, cash/notebook/statement/processor.py:StatementProcessor._parse_annotation @70e15ddd -->
 Behind the scenes: the parser sets `CacheAnnotation(persist=True)` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), and `_parse_annotation` in the statement processor turns that into `force_persist=True` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)), which bypasses the cost-model skip logic downstream.
 
 If both `persist` and `no-cache` apply to the same statement, **`no-cache` wins** (see [Merging](#merging-multiple-annotations)).
@@ -119,7 +119,7 @@ Notes:
 - If multiple `ttl=` annotations apply to the same statement, **the last one wins** (see [Merging](#merging-multiple-annotations)).
 - TTL only governs *cache freshness*. A statement with `no-cache` won't be cached at all, so its `ttl=` is irrelevant.
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @9b96b731 -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @519e5ecd -->
 Behind the scenes: the annotation sets `CacheAnnotation.ttl` ([`annotations.py` — `parse_annotation_line`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/annotations.py)), which `_parse_annotation` reads and uses as `effective_ttl` ([`statement/processor.py` — `StatementProcessor._parse_annotation`](https://github.com/galgtonold/cash/blob/main/src/cash/notebook/statement/processor.py)).
 
 ### `# @cash:allow-random` (alias: `allowrandom`)
@@ -128,9 +128,13 @@ When a statement draws from an RNG that hasn't been seeded, Cash raises a
 `CashRandomnessWarning` telling you the cached value may not be reproducible:
 
 ```
-CashRandomnessWarning: Unseeded randomness detected: numpy.random.rand() at line 1.
-Cached results may not be reproducible. Consider calling seed() first or use
-@cash:allow-random to suppress.
+CashRandomnessWarning: [RANDOM-UNSEEDED] Unseeded randomness detected:
+numpy.random.rand() at line 1. The first result is cached and replayed from
+then on, so the value is frozen rather than reproducible.
+  Fix: seed the source (random.seed(0), np.random.default_rng(0)) to make it
+  reproducible, put `# @cash:no-cache` on the statement for a genuinely fresh
+  draw each run, or `# @cash:allow-random` to keep it frozen on purpose.
+  https://cash-lib.readthedocs.io/en/stable/warnings/#random-unseeded
 ```
 
 `# @cash:allow-random` silences that warning for the statement it applies to:
@@ -376,10 +380,13 @@ Cash raises a *different* warning when it serves you a cached value that came
 from an unseeded draw:
 
 ```
-CashRandomnessWarning: Unseeded randomness restored from cache: numpy.random.rand()
-at line 1. The value you are seeing is a replay of an earlier run, not a fresh
-draw - re-running will not change it. Use @cash:no-cache to re-run it every time,
-seed the RNG for real reproducibility, or @cash:allow-random to suppress.
+CashRandomnessWarning: [RANDOM-REPLAYED] Unseeded randomness restored from
+cache: numpy.random.rand() at line 1. The value you are seeing is a replay of
+an earlier run, not a fresh draw - re-running will not change it.
+  Fix: put `# @cash:no-cache` on the statement if you need a fresh draw each
+  run, seed the source if you need it reproducible, or `# @cash:allow-random`
+  if holding it steady is the point.
+  https://cash-lib.readthedocs.io/en/stable/warnings/#random-replayed
 ```
 
 The distinction matters, because they are different claims:
@@ -644,9 +651,11 @@ model = train()
 
 Each of these warns rather than passing silently:
 
-> cash: `# @cash:ttl=5m` is not a whole number of seconds, so the annotation was
-> IGNORED and this statement keeps its normal caching. ttl has no unit suffix —
-> write `ttl=300` for five minutes, not `ttl=5m`.
+> [ANNOT-TTL-INVALID] `# @cash:ttl=5m` is not a whole number of seconds, so the
+> annotation was IGNORED and this statement keeps its normal caching with no
+> expiry.
+>   Fix: rewrite the value as a bare count of seconds -- `ttl=300` for five
+>   minutes -- with no unit suffix and no decimal point.
 
 **TTL is always in seconds, digits only** — write `# @cash:ttl=300`.
 

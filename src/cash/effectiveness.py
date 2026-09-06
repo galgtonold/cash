@@ -77,9 +77,12 @@ class _FunctionLedger:
 class EffectivenessLedger:
     """Per-function running account of what caching cost versus what it saved.
 
-    ``record`` returns a message when the function has crossed into
-    "measurably counterproductive", and ``None`` every other time -- which is
-    almost always.
+    ``record`` returns a ``(what, fix)`` pair when the function has crossed
+    into "measurably counterproductive", and ``None`` every other time --
+    which is almost always. The two halves are separate because the caller
+    renders them into a coded diagnostic (``CACHE-NET-LOSS``): the measurement
+    is one sentence and the remedy is another, and the doc section carries the
+    rest.
     """
 
     def __init__(self, waste_threshold_seconds: float = CUMULATIVE_WASTE_SECONDS) -> None:
@@ -93,8 +96,8 @@ class EffectivenessLedger:
         overhead_seconds: float,
         body_seconds: float | None,
         was_hit: bool,
-    ) -> str | None:
-        """Account for one call. Returns a warning message, or ``None``.
+    ) -> tuple[str, str] | None:
+        """Account for one call. Returns a ``(what, fix)`` pair, or ``None``.
 
         ``body_seconds`` is the function's OWN time, excluding everything cash
         did around it. ``None`` means unknown -- an entry written before this
@@ -147,7 +150,7 @@ def _message(
     waste: float,
     per_call_overhead: float,
     best_case_saving: float,
-) -> str:
+) -> tuple[str, str]:
     """Say what it cost, and what to do about it.
 
     Naming a remedy that KEEPS the caching matters more than the number: a
@@ -161,15 +164,18 @@ def _message(
     cause correctly, they registered a hasher, nothing changed, and nothing
     said why.
     """
-    return (
+    what = (
         f"@cash.cache on {func_name!r} is costing more than it saves. "
         f"Across {led.calls} calls cash spent {led.overhead_seconds:.2f}s on "
         f"cache keys and lookups to avoid at most {best_case_saving * 1000:.0f}ms "
         f"of work per call -- a net loss of about {waste:.1f}s so far "
-        f"({per_call_overhead * 1000:.0f}ms of overhead per call). "
-        f"This usually means a large argument is being hashed in full on every "
-        f"call. Register a cheaper hasher for that type "
-        f"(cash.register_hasher) to keep caching -- for a type cash "
-        f"fingerprints itself, such as a numpy array or a dataframe, that "
-        f"registration needs override=True -- or drop the decorator here."
+        f"({per_call_overhead * 1000:.0f}ms of overhead per call). This usually "
+        f"means a large argument is being hashed in full on every call."
     )
+    fix = (
+        "register a cheaper hasher for that argument's type "
+        "(cash.register_hasher) to keep caching -- for a type cash "
+        "fingerprints itself, such as a numpy array or a dataframe, that "
+        "registration needs override=True -- or drop the decorator here."
+    )
+    return what, fix
