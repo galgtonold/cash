@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from cash.diagnostics import DIAGNOSTIC_CODES
+from cash.exceptions import CashWarning
 
 PAGE = Path(__file__).resolve().parents[2] / "docs" / "warnings.md"
 SECTION = re.compile(r"^## ([A-Z][A-Z-]+) \{#([a-z][a-z-]+)\}$", re.M)
@@ -66,15 +67,80 @@ def test_every_section_is_a_registered_code():
 
 
 SRC = Path(__file__).resolve().parents[2] / "src" / "cash"
-CASH_CATEGORIES = {
+
+#: The three names the derivation below MUST find, spanning all three ways a
+#: Cash warning class can reach it: the root, a class defined in
+#: ``exceptions.py`` beside it, and one defined in a notebook submodule far
+#: from it. Asserted separately so a derivation that quietly returns nothing
+#: fails loudly instead of making ``_raw_cash_warns`` vacuously empty.
+_DERIVATION_MUST_FIND = frozenset({
     "CashWarning",
     "CashCacheIneffectiveWarning",
-    "CashCacheStoreFailedWarning",
-    "CashImpurityWarning",
-    "CashUpstreamSyntaxWarning",
-    "CashRandomnessWarning",
     "CashNotebookDiscoveryWarning",
-}
+})
+
+
+def _class_defs() -> list[tuple[str, set[str]]]:
+    """``(class name, base names)`` for every class defined under ``src/cash``."""
+    defs: list[tuple[str, set[str]]] = []
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text("utf-8"))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ClassDef):
+                continue
+            bases = {b.id for b in node.bases if isinstance(b, ast.Name)}
+            bases |= {b.attr for b in node.bases if isinstance(b, ast.Attribute)}
+            defs.append((node.name, bases))
+    return defs
+
+
+def cash_warning_categories() -> set[str]:
+    """Every ``CashWarning`` subclass name, DERIVED rather than hand-listed.
+
+    The previous version of this was a literal seven-name set with nothing
+    asserting it stayed complete: add a ``CashXWarning`` next month, emit it
+    with a raw ``warnings.warn``, and the totality test below passes without
+    ever looking at it. A test that is silently not total is worse than no
+    test, because it gets cited as proof.
+
+    Two passes, because neither is sufficient alone:
+
+    * the **runtime** closure over ``CashWarning.__subclasses__()`` catches
+      anything ``import cash`` pulls in, including a class defined dynamically;
+    * the **static** closure over every ``class`` statement under ``src/cash``
+      catches one defined in a module that ``import cash`` does not reach --
+      an optional-dependency backend, say -- which the runtime walk cannot see.
+      Iterated to a fixed point, so a subclass whose file happens to be read
+      before its base's is still found.
+    """
+    names = set()
+    stack = [CashWarning]
+    while stack:
+        cls = stack.pop()
+        if cls.__name__ in names:
+            continue
+        names.add(cls.__name__)
+        stack.extend(cls.__subclasses__())
+
+    defs = _class_defs()
+    grew = True
+    while grew:
+        grew = False
+        for name, bases in defs:
+            if name not in names and bases & names:
+                names.add(name)
+                grew = True
+    return names
+
+
+def test_the_category_set_is_derived_and_not_empty():
+    """The guard on the guard. ``_raw_cash_warns`` finds nothing when the
+    category set is empty, so an unnoticed break in the derivation would read
+    as 'every site is migrated' rather than as a broken test."""
+    categories = cash_warning_categories()
+    missing = sorted(_DERIVATION_MUST_FIND - categories)
+    assert not missing, f"the CashWarning derivation missed: {missing}"
+    assert len(categories) >= len(_DERIVATION_MUST_FIND) + 3
 
 
 def _raw_cash_warns() -> list[str]:
@@ -83,9 +149,14 @@ def _raw_cash_warns() -> list[str]:
     ``warn_explicit`` is matched as well as ``warn``. Five sites use it -- four
     in ``notebook/randomness.py``, one in ``notebook/upstream/checker.py`` -- and
     a matcher checking only ``attr == "warn"`` passes while every one of them is
-    still unmigrated. A totality test that is silently not total is worse than
-    no test, because it is *cited* as proof.
+    still unmigrated.
+
+    Both call shapes are matched: ``warnings.warn(...)`` (an ``ast.Attribute``)
+    and a bare ``warn(...)`` from ``from warnings import warn`` (an
+    ``ast.Name``). Nothing in ``src/`` imports it that way today -- which is
+    exactly why the hole was invisible, and exactly how cheap it is to close.
     """
+    categories = cash_warning_categories()
     found = []
     for path in sorted(SRC.rglob("*.py")):
         if path.name == "diagnostics.py":
@@ -95,13 +166,16 @@ def _raw_cash_warns() -> list[str]:
             if not isinstance(node, ast.Call):
                 continue
             func = node.func
-            if not (
-                isinstance(func, ast.Attribute)
-                and func.attr in {"warn", "warn_explicit"}
-            ):
+            if isinstance(func, ast.Attribute):
+                called = func.attr
+            elif isinstance(func, ast.Name):
+                called = func.id
+            else:
+                continue
+            if called not in {"warn", "warn_explicit"}:
                 continue
             names = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-            if names & CASH_CATEGORIES:
+            if names & categories:
                 found.append(f"{path.name}:{node.lineno}")
     return found
 

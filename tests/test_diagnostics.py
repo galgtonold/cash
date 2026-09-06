@@ -92,3 +92,9 @@ def test_the_explicit_variant_keeps_the_caller_s_location():
     assert caught[0].filename == "<cash>"
     assert caught[0].lineno == 42
     assert str(caught[0].message).startswith("[CACHE-THRASH] ")
+    # The asymmetry itself, which docs/warnings.md now warns readers about:
+    # ``warn_explicit`` takes a message STRING, so there is no object for
+    # ``.code`` to ride on. ``diagnostics.py`` says this is "pinned by test";
+    # until this line it was not -- the assertions above pin the location and
+    # the rendered prefix, both of which would survive an attribute appearing.
+    assert getattr(caught[0].message, "code", None) is None
