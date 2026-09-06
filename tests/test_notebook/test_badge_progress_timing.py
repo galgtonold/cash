@@ -74,11 +74,40 @@ def progress_probe(monkeypatch):
     return magics, published, lock_violations
 
 
+#: How long a positive assertion will wait for the timer thread. Generous on
+#: purpose: it is an upper bound on scheduling latency, not a delay anyone pays
+#: -- the polls below return as soon as the badge lands, so the fast case is
+#: still milliseconds.
+_PUBLISH_TIMEOUT_S = 5.0
+
+#: How long a negative assertion waits before concluding nothing fired. Fixed
+#: rather than a multiple of the (deliberately tiny) test interval, so widening
+#: the confidence does not depend on that interval staying small.
+_QUIET_PERIOD_S = 0.5
+
+
+def _wait_for_publish(published, timeout: float = _PUBLISH_TIMEOUT_S) -> None:
+    """Block until a badge is published, or *timeout* elapses.
+
+    Sleeping a fixed multiple of ``_BADGE_MIN_RENDER_INTERVAL`` and then
+    asserting looks equivalent and is not: it gives the timer thread a fixed
+    slack (50 ms at the test interval) to be scheduled AND to finish. That held
+    locally and failed on a contended macOS runner, twice, where the badge had
+    simply not fired yet -- a green assertion about a race rather than about the
+    behaviour. Waiting for the condition removes the race without weakening
+    anything: the assertions after this call are unchanged, and a badge that
+    never fires still fails, just five seconds later.
+    """
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not published:
+        time.sleep(0.005)
+
+
 def test_a_fast_statement_publishes_no_progress_badge(progress_probe):
     magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
     magics._cancel_progress_badge()
-    time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
+    time.sleep(_QUIET_PERIOD_S)
     assert published == [], f"a fast statement published {published}"
     assert lock_violations == [], lock_violations
 
@@ -86,7 +115,7 @@ def test_a_fast_statement_publishes_no_progress_badge(progress_probe):
 def test_a_slow_statement_publishes_one_badge_naming_itself(progress_probe):
     magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="slow = f()")
-    time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
+    _wait_for_publish(published)
     # Assert BEFORE cancelling: the statement is still (notionally) running at
     # this point, and this is the claim the design makes -- that the badge is
     # on screen DURING the run, not merely that cancelling produces a correct
@@ -110,7 +139,7 @@ def test_cancel_after_the_timer_fired_is_harmless(progress_probe):
     """Cancel always runs, whether or not the timer already fired."""
     magics, published, lock_violations = progress_probe
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
-    time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 2)
+    _wait_for_publish(published)
     magics._cancel_progress_badge()
     magics._cancel_progress_badge()
     assert len(published) == 1
@@ -123,6 +152,6 @@ def test_nothing_publishes_after_the_final_badge(progress_probe):
     magics._arm_progress_badge([], display_id="d", step=1, total=2, code="x = 1")
     magics._cancel_progress_badge()
     published.clear()
-    time.sleep(magics._BADGE_MIN_RENDER_INTERVAL * 3)
+    time.sleep(_QUIET_PERIOD_S)
     assert published == [], "a cancelled timer still fired"
     assert lock_violations == [], lock_violations
