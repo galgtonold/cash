@@ -164,6 +164,49 @@ def test_statement_row_miss_reason_is_none_when_metric_lacks_it() -> None:
     assert row.miss_reason is None
 
 
+def test_statement_row_carries_display_code_through_to_view() -> None:
+    """The IR keeps the display string separate from the keyed one.
+
+    ``code`` is what was hashed and compiled (``ast.unparse`` output);
+    ``display_code`` is display-only, for the badge to show what the user
+    actually wrote. The two must never collapse into each other.
+    """
+    metrics = [{
+        "code": "x = a + 1",
+        "display_code": "x = (\n    a + 1\n)",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 0.5,
+    }]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.code == "x = a + 1"
+    assert row.display_code == "x = (\n    a + 1\n)"
+
+
+def test_statement_row_display_code_is_none_when_metric_lacks_it() -> None:
+    """Backwards compat: most metrics dicts have no ``display_code`` key at
+    all (every caller that predates this feature), and a ``ProcessResult``
+    that does have the key still sets it to ``None`` for a control body, a
+    loop-split iteration, or a statement cash rewrote. Both must produce a
+    row that behaves exactly as it did before this field existed.
+    """
+    metrics = [{"code": "y = 1", "status": str(CacheStatus.COMPUTED), "total_time": 0.001}]
+    badge = build_interactive_badge(metrics)
+    row = badge.sections[0].items[0]
+    assert isinstance(row, StatementRow)
+    assert row.display_code is None
+
+    metrics_explicit_none = [{
+        "code": "y = 1", "display_code": None,
+        "status": str(CacheStatus.COMPUTED), "total_time": 0.001,
+    }]
+    badge2 = build_interactive_badge(metrics_explicit_none)
+    row2 = badge2.sections[0].items[0]
+    assert isinstance(row2, StatementRow)
+    assert row2.display_code is None
+
+
 def test_bare_expression_does_not_leak_richoutput_repr_into_output_vars() -> None:
     """Regression test: a bare-expression cell like ``panel.shape`` has no AST
     output vars, but ``metrics['outputs']`` holds the IPython

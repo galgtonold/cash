@@ -104,7 +104,7 @@ top-level `await` is cached like any other cell.
 rows = await db.fetch("SELECT * FROM events")   # cached like any other cell
 ```
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @99f914f7, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @db78635d -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor.execute_cell_async @99f914f7, cash/notebook/statement/processor.py:StatementProcessor.process_statement_async @cff2c6b3 -->
 ipykernel dispatches such a cell through `shell.run_cell_async` rather than the
 `pre_run_cell` hook that `%cash_on` patches, so cash intercepts that entry point
 too and routes the cell into `CellExecutor.execute_cell_async` →

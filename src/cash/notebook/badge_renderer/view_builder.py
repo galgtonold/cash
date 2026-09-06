@@ -696,6 +696,10 @@ def _statement_row_from_metric(m: dict[str, Any]) -> StatementRow:
         status=status,
         code=_strip_context_comments(str(m.get("code", ""))),
         time_s=time_s,
+        display_code=(
+            _strip_context_comments(str(m["display_code"]))
+            if m.get("display_code") else None
+        ),
         saved_time_s=saved_time_s,
         storage_tiers=_tup_str(m.get("storage")),
         source=m.get("source") or None,

@@ -263,6 +263,65 @@ def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     }, total
 
 
+def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
+    """The statement's ORIGINAL text, for display only.
+
+    ``ast.unparse`` is what the cache key and ``compile()`` use, and it
+    normalizes a statement onto one logical line -- so there is no multi-line
+    form of the executed text. The badge wants the user's own layout back so a
+    row can be matched against the cell above it.
+
+    ``get_source_segment`` returns a nested statement with its first line flush
+    and every continuation line at its ABSOLUTE file indentation, which reads as
+    ragged in a row. ``textwrap.dedent`` cannot fix that -- the first line
+    shares no common prefix -- so continuation lines are dedented by the node's
+    own ``col_offset``. For a top-level statement that offset is 0 and this is a
+    no-op.
+
+    A top-level ``def``/``class`` is deliberately excluded, returning ``None``
+    same as an unrecoverable segment. Executing one only BINDS the name -- the
+    body never runs -- so the body is not "the code that ran" the way it is
+    for every other captured statement, and showing it in full would make the
+    badge very tall in any notebook that defines functions. The caller's
+    existing fallback (the unparsed form, clipped to one line with a
+    "... +N lines" hint) is the right treatment for these, not a compromise.
+
+    ``ast.Match`` is deliberately NOT in the exclusion below, even though a
+    ``match`` statement is just as multi-line as a ``def``/``class``. The
+    line is drawn on BINDING vs. EXECUTING, not on "is it multi-line": a
+    ``match`` genuinely executes its matched branch (unlike a def/class body,
+    which only runs when called), and since ``match`` is not one of
+    ``is_control_structure()``'s node types (For/While/If/With/Try), it has
+    no per-branch rows of its own -- the runtime caches and executes it as
+    ONE unit, so its full source IS "the code that ran", same as any other
+    captured statement. Do not "fix" the def/class-vs-match inconsistency by
+    adding ``Match`` here -- that would re-collapse a match statement's body
+    to a first-line summary for something that actually ran in full.
+
+    Returns ``None`` when the segment cannot be recovered, or is withheld as
+    above; the caller falls back to the unparsed form. Never raises: a badge
+    must not be able to break a cell.
+    """
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None
+    try:
+        segment = ast.get_source_segment(raw_cell, node)
+    except Exception:  # noqa: BLE001 - display only, never break the cell
+        return None
+    if not segment:
+        return None
+
+    indent = getattr(node, "col_offset", 0) or 0
+    if indent <= 0:
+        return segment
+
+    head, *rest = segment.split("\n")
+    return "\n".join(
+        [head] + [line[indent:] if line[:indent].isspace() else line
+                  for line in rest]
+    )
+
+
 class CellExecutor:
     """Run a single notebook cell through the cached-execution pipeline.
 
@@ -1070,11 +1129,13 @@ class CellExecutor:
         is_last_statement: bool,
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
+        display_code: str | None = None,
     ) -> list:
         """Process one non-control statement with caching; return updated buffer."""
         metrics = self._statement_processor.process_statement(
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
+            display_code=display_code,
             occurrence_index=occurrence_index,
             # IPython echoes only the CELL's last expression; cash executes each
             # statement as its own unit, so it must be told which one that is
@@ -1093,6 +1154,7 @@ class CellExecutor:
         is_last_statement: bool,
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
+        display_code: str | None = None,
     ) -> list:
         """Async twin of :meth:`_process_regular_stmt`.
 
@@ -1105,6 +1167,7 @@ class CellExecutor:
         metrics = await self._statement_processor.process_statement_async(
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
+            display_code=display_code,
             occurrence_index=occurrence_index,
             is_last=is_last_statement,  # as in the sync path
         )
@@ -1194,6 +1257,10 @@ class CellExecutor:
             except (ValueError, TypeError):
                 continue
 
+            # The badge shows the user's own layout; `stmt_code` above stays the
+            # keyed and executed text. See `_statement_source`.
+            stmt_display = _statement_source(raw_cell, node)
+
             # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
             # suppression (``df.head();`` shows no repr). Re-attach it so the
             # suppression rides through the cache key AND the execution path
@@ -1243,7 +1310,8 @@ class CellExecutor:
                             raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
                         buffered_result_outputs = self._process_regular_stmt(
-                            stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
+                            stmt_code, annotation, occ, is_last, all_metrics,
+                            buffered_result_outputs, display_code=stmt_display,
                         )
 
                     self._magics._cancel_progress_badge()
@@ -1310,6 +1378,10 @@ class CellExecutor:
             except (ValueError, TypeError):
                 continue
 
+            # The badge shows the user's own layout; `stmt_code` above stays the
+            # keyed and executed text. See `_statement_source`.
+            stmt_display = _statement_source(raw_cell, node)
+
             if self._expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
 
@@ -1368,7 +1440,8 @@ class CellExecutor:
                             raise ctrl_result.error or RuntimeError("Unknown error in control structure execution")
                     else:
                         buffered_result_outputs = await self._process_regular_stmt_async(
-                            stmt_code, annotation, occ, is_last, all_metrics, buffered_result_outputs,
+                            stmt_code, annotation, occ, is_last, all_metrics,
+                            buffered_result_outputs, display_code=stmt_display,
                         )
 
                     self._magics._cancel_progress_badge()

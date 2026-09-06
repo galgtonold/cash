@@ -79,6 +79,10 @@ class StatementRow:
     status: BadgeStatus
     code: str
     time_s: float
+    #: The statement as the user WROTE it, for display only. ``None`` when the
+    #: original source could not be recovered (a control body, a loop-split
+    #: iteration, a statement cash rewrote) -- renderers fall back to ``code``.
+    display_code: str | None = None
     saved_time_s: float = 0.0
     storage_tiers: tuple[str, ...] = ()          # e.g. ('RAM',), ('RAM', 'DISK')
     source: str | None = None                    # restore source, e.g. 'RAM', 'DISK'
