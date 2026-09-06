@@ -8,7 +8,7 @@ it run.
 
 ## The execution badge
 
-<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row_from_metric @ffd5e737, cash/notebook/badge_renderer/renderers/html.py:_rowtip_html @4a2577a0 -->
+<!-- claim: cash/notebook/badge_renderer/view_builder.py:_statement_row_from_metric @ffd5e737, cash/notebook/badge_renderer/renderers/html.py:_rowtip_html @68b4c538 -->
 Every cell you run under `%cash_on` paints an **execution badge**: a compact
 summary of what just happened — which statements ran, which came from the
 cache, which ran without being stored, the time each took, and any decorator
@@ -16,6 +16,18 @@ hit/miss metrics folded in from the [decorator path](decorator-path.md). It's
 the first thing you see, and
 usually all you need. The full field-by-field guide lives in
 [Reading the Cash Badge](../badges.md).
+
+<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @21cc6a12, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
+The code shown for each row is **your own source**, laid out across its
+original lines — not the single-line, normalized form Cash actually hashes
+and compiles. `def`/`class` statements are the one exception: a row for one
+of those still clips to its first line (`def foo(x):` … `+N lines`), because
+defining a function only *binds* the name — the body doesn't run until
+something calls it, so unlike every other row, it isn't "the code that ran."
+And because the row shows your source while the cache key is built from the
+normalized form with comments already stripped, editing a comment on an
+otherwise-unchanged statement changes what the row displays without changing
+its key — the next run still hits.
 
 ## Where a value came from
 

@@ -1,7 +1,7 @@
 """The metrics dict carries a display-only copy of the statement's source."""
 from __future__ import annotations
 
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 from traitlets.config import Configurable
@@ -101,7 +101,55 @@ def test_a_control_body_statement_has_no_display_code(processor_fixture):
     A control body, a loop-split iteration and a statement cash rewrote all
     keep showing what actually RAN. Their source is not what executed, so
     showing it would mislead rather than help.
+
+    This drives a REAL ``for`` loop through the full ``%%cash`` pipeline
+    (``CashMagics.cash`` -> ``CellExecutor`` -> ``ControlStructureProcessor``)
+    rather than calling ``process_statement`` directly, because the thing
+    being pinned is a fact about WIRING, not about ``process_statement``
+    itself: ``process_statement`` happily accepts a ``display_code`` kwarg
+    from any caller. What actually keeps a loop body's row ``None`` is that
+    ``for_handler.py``'s ``_execute_loop_body`` calls
+    ``self.statement_processor.process_statement(modified_code, ttl, silent,
+    annotation=annotation)`` with no ``display_code`` kwarg at all -- for
+    every loop-body statement, every iteration. Only the top-level dispatch
+    loop in ``cell_executor.py`` computes ``_statement_source`` and threads
+    it through. A test that calls ``process_statement("y = 2")`` directly
+    (as this one used to) never touches that wiring at all: it would keep
+    passing even if someone threaded ``display_code`` all the way into
+    ``for_handler.py`` / ``if_handler.py`` / ``try_handler.py`` tomorrow.
+
+    Scope note: this only drives a ``for`` loop (the control structure
+    ``for_handler.py`` implements), not ``if``/``try``. The three handlers
+    share the same ``process_statement(...)`` call shape with no
+    ``display_code`` kwarg (verified by reading each), so the same argument
+    applies to all three, but this test does not itself exercise ``if``/
+    ``try`` bodies.
     """
     processor, shell, backend, magics = processor_fixture
-    metrics = processor.process_statement("y = 2")
-    assert metrics.get("display_code") is None
+    magics._badge_mode = 'html'
+    shell.user_ns['xs'] = [1, 2, 3]
+    cell = (
+        "for i in xs:\n"
+        "    y = i + 1\n"
+        "z = 99\n"
+    )
+
+    with patch.object(magics, '_render_interactive_badge') as mock_badge:
+        magics.cash("", cell)
+
+    # Premises: both the loop body and the sibling statement actually ran,
+    # so a false pass can't hide behind a cell that silently did nothing.
+    # `y` is overwritten each iteration, so it holds the LAST one (i=3).
+    assert shell.user_ns.get('y') == 4
+    assert shell.user_ns.get('z') == 99
+
+    all_metrics = mock_badge.call_args_list[-1][0][0]
+    loop_rows = [m for m in all_metrics if 'loop_vars' in m]
+    sibling_rows = [m for m in all_metrics if m.get('code') == 'z = 99']
+
+    assert loop_rows, "premise: the loop produced its own per-iteration rows"
+    assert len(loop_rows) == 3, "premise: one row per iteration (3 elements in xs)"
+    assert all(row.get('display_code') is None for row in loop_rows)
+
+    assert sibling_rows, "premise: the sibling top-level statement has its own row"
+    assert all(row.get('display_code') is not None for row in sibling_rows)

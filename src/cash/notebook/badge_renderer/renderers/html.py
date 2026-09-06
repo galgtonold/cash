@@ -374,6 +374,18 @@ label.c3-row {{ cursor: pointer; }}
   font-variant-numeric: tabular-nums;
 }}
 .c3-rt-saved {{ color: {theme.RAIL_CACHED}; }}
+/* Quiet eyebrow over the drawer's code block -- same treatment as the
+   `dt` labels in .c3-rt-dl below (9px, uppercase, INK_4) -- naming what
+   .c3-rt-code shows (the keyed, comment-free text) so it reads as
+   intentional rather than as a mismatch with the row above it. */
+.c3-rt-code-label {{
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: {theme.INK_4};
+  margin-bottom: 3px;
+}}
 .c3-rt-code {{
   margin: 0 0 12px;
   padding: 7px 10px;
@@ -1097,7 +1109,17 @@ def _rng_pill(row: StatementRow) -> str:
 # ---------------------------------------------------------------------------
 
 def _rowtip_html(row: StatementRow) -> str:
-    """Pure-CSS click-to-expand tooltip body for a :class:`StatementRow`."""
+    """Pure-CSS click-to-expand tooltip body for a :class:`StatementRow`.
+
+    ``code_block`` below always shows ``row.code`` -- the normalized,
+    comment-free text that was actually hashed and compiled -- never
+    ``row.display_code``. For a multi-line statement that is a DIFFERENT
+    string than the row above it (different quotes, no comments; see
+    ``_row_code_html``, which prefers ``display_code``), and with nothing
+    saying so it reads as the two disagreeing by mistake. The small
+    ``c3-rt-code-label`` caption exists only to name what this block is, so
+    the difference is legible rather than alarming.
+    """
     kind = theme.kind_of(row.status.value)
     # Same word the text renderer uses for this row, and the same word the cell
     # header uses for the whole-cell case (CAS-272) -- this pill used to render
@@ -1121,6 +1143,7 @@ def _rowtip_html(row: StatementRow) -> str:
         time_html += f' <span class="c3-rt-saved">· saved {row.saved_time_s:.2f}s</span>'
 
     code_block = (
+        '<div class="c3-rt-code-label">as keyed</div>'
         f'<pre class="c3-rt-code">{highlight_python(row.code)}</pre>'
         if row.code else ""
     )
