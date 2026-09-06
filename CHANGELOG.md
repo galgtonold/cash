@@ -7,6 +7,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-09-07
+
+A release about Cash explaining itself. Every warning now carries an
+identifier, one line of what to do, and a link to a page that says whether you
+should care — prompted by a reader who hit these warnings in a script, read
+them, and still could not tell what they meant.
+
+### Upgrading
+
+- **Every warning's message text changed shape.** If you match on warning text
+  — `pytest.warns(match=...)`, a log filter, a regex — that match will break.
+  Branch on the code instead, which is stable where prose is not:
+
+  ```python
+  if getattr(w.message, "code", None) == "CACHE-THRASH":
+      ...
+  ```
+
+  Three notebook-side warnings are raised in a way that cannot carry the
+  attribute; the rendered text always starts `[CODE] `, and
+  [the warnings page](https://cash-lib.readthedocs.io/en/stable/warnings/)
+  gives a helper that reads either.
+- **Annotating a cell-defined function now invalidates it.** A
+  `# @cash:assume-safe` inside a function defined in a `%cash_on` cell used to
+  do nothing at all; now it is honoured, which also makes it part of that
+  function's identity. Adding one is a one-time miss, and that is correct — the
+  function is treated differently than it was before.
+
+### Breaking
+
+- Warning message text is rewritten across the board (see **Upgrading**). No
+  warning was removed and none fires under new conditions; only the wording and
+  the blamed source line changed.
+
+### Added
+
+- **Every warning carries a diagnostic code, a fix, and a link.** 34 codes
+  across the `CashWarning` hierarchy, each with a section in the new
+  [warnings reference](https://cash-lib.readthedocs.io/en/stable/warnings/)
+  covering what happened, why it matters, what to do — and, deliberately,
+  **when it is safe to ignore**, because several of these are informational and
+  nothing used to say so. A warning now looks like:
+
+  ```
+  foo.py:12: CashCacheIneffectiveWarning: [CACHE-THRASH] the cache is full at
+  its 500 MB cap and is evicting entries within a couple of writes of storing
+  them.
+    Fix: raise max_cache_size, or cache fewer values.
+    https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash
+  ```
+
+- **Warnings carry `.code` for handlers**, so you can branch on the diagnostic
+  rather than on wording that is free to change.
+- **The badge shows a multi-line statement the way you wrote it**, across its
+  own lines, instead of collapsing it to a first-line summary.
+
+### Fixed
+
+- **`# @cash:assume-safe` now works inside a notebook cell.** A per-line purity
+  waiver on a function defined in a `%cash_on` cell was silently ignored: cells
+  are compiled from `ast.unparse` output, which strips comments, so the analyzer
+  read the function back and found no waiver. Annotated functions are now
+  compiled from your own source. This was visible in the demo tour, which
+  displayed the annotation next to the warning it was supposed to silence.
+- **`use_locking=True` could serve a truncated iterator.** A chunked entry whose
+  manifest outlived one of its chunks was served short — three of ten items, or
+  none at all when the missing chunk was the first — with no recompute, no error
+  and no warning. The integrity check that turns a broken manifest into a miss
+  now runs on the locked read path too, not only the default one.
+- **A trailing `;` stopped suppressing output when the line held a non-ASCII
+  character.** `df[df.city == "Zürich"];` echoed its repr: the column offset is
+  a UTF-8 byte offset and was being read as a character index.
+- **Warnings point at your line, not Cash's.** Several pointed inside
+  `core.py`, which is the one question a code and a link cannot answer for you.
+  The blamed frame is now resolved when the warning fires rather than from
+  hand-tuned constants, so it is right at any call depth.
+- **`cache_if` guidance was backwards.** The warning told you to *lower* the
+  chunk thresholds; `cache_if` only runs when the whole result fits in one
+  chunk, so lowering them guarantees the bypass it warns about.
+
+### Changed
+
+- **Executed notebooks are substantially smaller and the badge is quieter on
+  the wire.** The stylesheet is minified once at import, and progress badges
+  render on the trailing edge — armed when a statement starts and published only
+  if it is still running — so fast statements publish nothing. On the demo tour
+  that cut the saved notebook by close to 40% and roughly halved the number of
+  badge updates sent to the frontend. A slow statement still shows *itself*
+  rather than the previous one.
+- **The Binder tour is sized for Binder's CPU**, and its expensive step is now a
+  real computation rather than a large pile of data. Its two slowest steps each
+  came down by roughly an order of magnitude.
+
 ## [0.8.0] - 2026-09-03
 
 A correctness release, focused on the two things a cache can get quietly wrong:

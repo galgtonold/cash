@@ -12,7 +12,7 @@ where the answer is *we wouldn't, and here is what we do about it*.
 Figures below are derived from the repository by
 [`scripts/doc_numbers.py`](https://github.com/galgtonold/cash/blob/main/scripts/doc_numbers.py)
 and re-checked in CI, so they cannot quietly go stale — they are current as of
-<!-- docnum:version -->0.8.0<!-- /docnum -->. The mechanisms matter more than the counts, and they
+<!-- docnum:version -->0.9.0<!-- /docnum -->. The mechanisms matter more than the counts, and they
 are the part that does not change.
 
 ## The shape of the suite
