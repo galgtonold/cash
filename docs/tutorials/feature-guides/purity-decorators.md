@@ -537,6 +537,28 @@ statement-scoped equivalent of `assume_safe=True` for those.
     ignored silently — see [Annotations](../../annotations.md) for the ones
     that do work there.
 
+!!! note "Defined inside a `%cash_on` cell"
+    The waiver is honoured the same way when the decorated function is
+    defined directly inside a `%cash_on` cell rather than in a `.py` file —
+    a `# @cash:assume-safe` on one of the function's own lines silences the
+    finding it sits on exactly as it would in a module. That used to
+    silently not work: the cell compiled a comment-stripped form of the
+    function, so the annotation was invisible to the analyzer and the
+    warning fired regardless of it. If you tried this before and gave up,
+    it is fixed now.
+
+    It needs the `def` to be its own top-level statement in the cell. One
+    defined inside an `if`/`for`/`while`/`try` block instead still compiles
+    from that comment-stripped form, so a waiver inside it is silently lost
+    there the same way it always was — move the definition to the cell's
+    top level, or into a module, if you need it honoured.
+
+    Adding the annotation is a real edit to the function, on purpose: it
+    changes what the analyzer honours, so it changes the function's cache
+    identity too. A previously-cached call to that function misses once
+    right after you add or edit a waiver — the same as any other edit to
+    the function's body, not something to "fix".
+
 ### `assume_safe=True` — silence the whole function
 
 The blunt version. Use it when the audit really is function-wide:

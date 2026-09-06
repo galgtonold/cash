@@ -17,7 +17,7 @@ the first thing you see, and
 usually all you need. The full field-by-field guide lives in
 [Reading the Cash Badge](../badges.md).
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @3bc4fa1f, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @3aa20254, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
 The code shown for each row is **your own source**, laid out across its
 original lines — not the single-line, normalized form Cash always hashes for
 the cache key. That original text is also what actually gets compiled and
@@ -28,25 +28,30 @@ its first line (`def foo(x):` … `+N lines`), because defining a function only
 every other row, it isn't "the code that ran".
 
 Whether a `def`/`class` is also an exception to what actually **runs**
-depends on its body. The common case — no `# @cash:` directive anywhere in
-it — still compiles from the normalized, comment-free form, same as its
-clipped row summary. Only a function or class that *does* carry a directive
-is compiled from its original text, comments included, so a per-line
-`# @cash:assume-safe` in its body is honoured instead of silently lost. That
-split isn't cosmetic: recovering a function's original text unconditionally
-would let its compiled-source identity hash depend on *which* internal path
-(re)compiled it — the per-cell path, which can offer the original text,
-versus a same-session replay that re-executes an earlier definition and
-never could — silently moving the cache key for calls to that function even
-though nothing about it changed. Gating recovery on the directive keeps the
-overwhelming majority of functions on the single, stable path they always
-had.
+depends on its body. The common case — nothing the purity analyzer
+recognises as an `# @cash:assume-safe` waiver anywhere in it — still compiles
+from the normalized, comment-free form, same as its clipped row summary.
+Only a function or class whose body the analyzer *does* recognise as
+carrying that waiver is compiled from its original text, comments included,
+so a per-line `# @cash:assume-safe` in its body is honoured instead of
+silently lost. The gate checks the same thing the analyzer itself checks,
+not merely whether the text `@cash:` appears somewhere — a docstring, a
+string literal, or an ordinary comment that happens to *mention* `@cash:`
+without being a real waiver does not qualify, and doesn't affect what gets
+compiled. That split isn't cosmetic: recovering a function's original text
+too eagerly — unconditionally, or on any looser a check — would let its
+compiled-source identity hash depend on *which* internal path (re)compiled
+it — the per-cell path, which can offer the original text, versus a
+same-session replay that re-executes an earlier definition and never could —
+silently moving the cache key for calls to that function even though nothing
+about it changed. Gating recovery on a real waiver keeps the overwhelming
+majority of functions on the single, stable path they always had.
 
 Because the cache key is always built from the normalized form with
 comments already stripped, editing a comment on an otherwise-unchanged
-statement changes what the row displays (and, for a directive-bearing
-`def`/`class`, what actually runs) without changing its key — the next run
-still hits.
+statement changes what the row displays (and, for a `def`/`class` whose body
+carries a recognised waiver, what actually runs) without changing its key —
+the next run still hits.
 
 ## Where a value came from
 

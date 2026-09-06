@@ -1,9 +1,10 @@
 """``_exec_source_for_node`` -- what a statement is EXECUTED from, which
 diverges from ``_statement_source`` (what the badge DISPLAYS) only for a
-top-level ``def``/``class`` that carries a ``# @cash:`` directive.
+top-level ``def``/``class`` whose body the purity analyzer recognises as
+carrying an ``# @cash:assume-safe`` waiver.
 
-Two defects were found and fixed on the way to this file, and both are
-pinned here so neither regresses silently:
+Three defects were found and fixed on the way to this file, and all three
+are pinned here so none regresses silently:
 
 * **Dropped decorator.** ``ast.get_source_segment`` anchors to
   ``node.lineno``, which (Python 3.8+) is the ``def``/``class`` KEYWORD
@@ -31,6 +32,21 @@ pinned here so neither regresses silently:
   as if it did not exist. See ``tests/test_notebook_integration/
   test_callee_global_capture.py::test_a_same_session_rerun_neither_freezes_nor_accumulates``
   for the end-to-end regression this was caught by.
+* **The substring gate itself was a false-positive surface (final
+  whole-branch review, finding 1).** ``"@cash:" in body`` fires on any text
+  containing that substring, directive or not -- a docstring merely
+  mentioning ``@cash:`` in prose, a string literal containing it, or an
+  ordinary comment documenting cash's own annotation syntax all matched,
+  putting an UNDIRECTED function on the recovery path and re-opening the
+  exact cross-path hash instability above for a user who wrote no
+  annotation at all. Fixed by gating on
+  ``purity_analyzer._audited_lines(body)`` instead -- the same function the
+  analyzer itself calls to decide whether a line is waived, so the gate and
+  the analyzer agree about what counts as "directed" BY CONSTRUCTION rather
+  than by a second, independently-fallible guess. See
+  ``test_a_docstring_mentioning_cash_syntax_is_not_a_directive`` and its
+  neighbours below for the false-positive shapes this closes, and
+  ``_exec_source_for_node``'s own docstring for the full reasoning.
 """
 from __future__ import annotations
 
@@ -187,3 +203,82 @@ def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
     )
     node = _node(cell)
     assert _exec_source_for_node(cell, node, None) is None
+
+
+# --- FINDING 1 (final whole-branch review) -- the substring gate's own
+# false-positive surface. `"@cash:" in body` cannot distinguish a real
+# directive from the substring merely appearing in prose, a string literal,
+# or a comment that documents cash's own syntax rather than invoking it.
+# Each case below must return None -- exactly as if the def/class recovery
+# did not exist -- and the control that follows proves a REAL directive in
+# the same shape is still recovered, so these fail because they are not
+# directives, not because nothing is ever recovered any more.
+
+def test_a_docstring_mentioning_cash_syntax_is_not_a_directive():
+    """A docstring that merely MENTIONS ``@cash:`` in prose is not a waiver.
+    Before the fix, the bare substring check fired here anyway, putting this
+    UNDIRECTED function on the recovery path."""
+    cell = (
+        'def f(n):\n'
+        '    """See the @cash: docs."""\n'
+        '    return n\n'
+    )
+    node = _node(cell)
+    assert _exec_source_for_node(cell, node, None) is None
+
+
+def test_a_string_literal_containing_the_substring_is_not_a_directive():
+    """A run-time string value, not a comment -- ``inspect.getsource`` and the
+    purity analyzer both see it, but it waives nothing."""
+    cell = (
+        'def f(n):\n'
+        '    msg = "@cash: not a directive"\n'
+        '    return n\n'
+    )
+    node = _node(cell)
+    assert _exec_source_for_node(cell, node, None) is None
+
+
+def test_a_prose_comment_mentioning_cash_syntax_is_not_a_directive():
+    """An ordinary comment that happens to document cash's own annotation
+    syntax, rather than invoke it. The exact shape a maintainer of THIS
+    codebase would be most likely to write by accident."""
+    cell = (
+        'def f(n):\n'
+        '    # the @cash: system does this\n'
+        '    return n\n'
+    )
+    node = _node(cell)
+    assert _exec_source_for_node(cell, node, None) is None
+
+
+def test_a_non_waiver_directive_between_the_decorator_and_def_is_not_recovered():
+    """A fifth confirmed shape from the review: text landing in the MANUALLY
+    RECONSTRUCTED PREFIX (between the decorator and the ``def`` keyword),
+    not in ``ast.get_source_segment``'s own span -- a different code path
+    than the three cases above, which all sit inside the segment itself.
+    ``_audited_lines`` recognises ``assume-safe`` only, so a comment
+    documenting a DIFFERENT ``@cash:`` directive here (meaningless in this
+    position regardless) must not fire the gate either."""
+    cell = (
+        "@c.cache\n"
+        "# @cash:no-cache - not real here, just documenting the syntax\n"
+        "def f(n):\n"
+        "    return n\n"
+    )
+    node = _node(cell)
+    assert _exec_source_for_node(cell, node, None) is None
+
+
+def test_a_real_directive_alongside_the_false_positives_is_still_recovered():
+    """The control arm for the four false positives above: same shape, but
+    the ``@cash:`` text is now a REAL waiver. Recovery must still fire --
+    the fix narrows the gate's TRIGGER, not its ability to recover a
+    genuinely directed function."""
+    cell = (
+        'def f(n):\n'
+        '    time.sleep(0.01)  # @cash:assume-safe\n'
+        '    return n\n'
+    )
+    node = _node(cell)
+    assert _exec_source_for_node(cell, node, None) == cell.rstrip("\n")

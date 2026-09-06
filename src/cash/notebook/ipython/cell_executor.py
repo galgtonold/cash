@@ -53,6 +53,7 @@ from typing import TYPE_CHECKING, Any
 from IPython.display import display, publish_display_data
 
 from ...exceptions import AmbiguousCellError, UpstreamStateError
+from ...purity_analyzer import _audited_lines
 from ...remote_source import measured_validation as _measured_validation
 from .._protocols import ShellProtocol
 from ..analysis import CodeAnalyzer
@@ -325,10 +326,11 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     analyzer) if compiled from text with no comments in it. See
     ``_execute_statement`` for the cache-key/exec-source boundary in full,
     and ``_exec_source_for_node`` below for how a top-level ``def``/``class``
-    -- excluded here -- is handled instead: ONLY when its body carries a
-    ``@cash:`` directive does it get its own original text to execute; one
-    with no directive executes from the same unparsed form it always did,
-    completely unaffected by any of this.
+    -- excluded here -- is handled instead: ONLY when the purity analyzer
+    recognises its body as carrying an ``# @cash:assume-safe`` waiver does it
+    get its own original text to execute; one with no waiver executes from
+    the same unparsed form it always did, completely unaffected by any of
+    this.
 
     ``get_source_segment`` returns a nested statement with its first line flush
     and every continuation line at its ABSOLUTE file indentation, which reads as
@@ -347,6 +349,19 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     This exclusion is a DISPLAY decision only -- ``_exec_source_for_node``
     recovers a def/class's source separately, for execution, without
     widening what this function hands the badge.
+
+    **Warning for whoever next touches this exclusion:** lifting it here --
+    e.g. to show a def/class's full body in the badge instead of clipping it
+    -- would ALSO silently widen what gets EXECUTED, not just what gets
+    displayed. ``_exec_source_for_node`` opens with
+    ``if stmt_display is not None: return stmt_display``, so the moment this
+    function stops returning ``None`` for a def/class, EVERY def/class in
+    EVERY notebook cell would execute from its original text unconditionally
+    -- directed or not -- which is exactly the cross-path CAS-243 regression
+    ``_exec_source_for_node``'s own gate exists to prevent (see that
+    function's docstring in full). Widening what this function returns for a
+    def/class means also revisiting whether ``_exec_source_for_node`` can
+    still gate independently, not just updating this docstring.
 
     ``ast.Match`` is deliberately NOT in the exclusion below, even though a
     ``match`` statement is just as multi-line as a ``def``/``class``. The
@@ -437,8 +452,11 @@ def _exec_source_for_node(
     raw_cell: str, node: ast.stmt, stmt_display: str | None,
 ) -> str | None:
     """The text to EXECUTE for *node*, diverging from ``stmt_display`` (the
-    text to DISPLAY) only for a top-level ``def``/``class`` that carries a
-    ``# @cash:`` directive somewhere in its body.
+    text to DISPLAY) only for a top-level ``def``/``class`` whose body the
+    purity analyzer recognises as carrying an ``# @cash:assume-safe`` waiver
+    (``purity_analyzer._audited_lines`` reports a waived line -- see "Why the
+    gate is ``_audited_lines``" below for why that, and not a hand-rolled
+    text check, is what this gates on).
 
     ``_statement_source`` withholds a ``def``/``class`` body on purpose --
     showing one in full would make the badge very tall (see its docstring),
@@ -461,11 +479,13 @@ def _exec_source_for_node(
     dedent step relies on.
 
     **A cheap early-out skips even that second extraction for the ordinary
-    def/class.** The check before returning is ``"@cash:" in body``, and
-    ``body`` is always a substring of ``raw_cell`` -- so
-    ``"@cash:" not in raw_cell`` is exactly equivalent and lets a cell with
-    no directive anywhere skip the ``ast.get_source_segment`` call and the
-    whole-cell ``_splitlines_like_the_parser`` entirely, not just the
+    def/class.** The eventual gate (below) is ``_audited_lines(body)``
+    finding a waived line, and a waiver can only be found where the literal
+    text ``"@cash:"`` itself appears -- so ``"@cash:" not in raw_cell`` is a
+    valid, if coarser, pre-filter, since ``body`` is always a substring of
+    ``raw_cell``. It lets a cell with no ``@cash:`` text anywhere skip the
+    ``ast.get_source_segment`` call and the whole-cell
+    ``_splitlines_like_the_parser`` entirely, not just the
     decorator/trailing-comment bookkeeping around them. Measured: this made
     the function O(1) instead of O(cell size) per undirected def/class --
     31.8ms saved on a 200-def cell with no directive in it.
@@ -487,10 +507,10 @@ def _exec_source_for_node(
     ``str.splitlines()``) for the same reason every other line-indexed read
     in this module does -- see that function's docstring.
 
-    **Gated on ``"@cash:" in body`` -- not unconditional, and this is
-    load-bearing, not an optimisation.** A ``def``/``class`` this recovers
-    can be RE-COMPILED a second time later, by an entirely different path:
-    the upstream checker/restorer re-executes an earlier statement (e.g. to
+    **Gated on a real waiver -- not unconditional, and this is load-bearing,
+    not an optimisation.** A ``def``/``class`` this recovers can be
+    RE-COMPILED a second time later, by an entirely different path: the
+    upstream checker/restorer re-executes an earlier statement (e.g. to
     replay a self-modifying global back to its pre-cell state -- see
     ``test_a_same_session_rerun_neither_freezes_nor_accumulates``), and that
     path has never threaded ``display_code``/``exec_source`` (same as a
@@ -511,18 +531,84 @@ def _exec_source_for_node(
     the two representations hashed differently, the call-cache key for a
     call to that function moved, and its body executed an extra time on the
     very next same-session re-run (measured: ``compute_f``'s tick file
-    incremented once where 0 was expected). Gating on the ``@cash:`` marker
-    -- the same substring check ``_drop_audited`` itself uses as a fast path
-    -- means a function with no directive in it (the overwhelming majority)
-    is completely unaffected by this function, on EITHER path, exactly as
-    before it existed: no behaviour change, no risk of the above. A function
-    that DOES carry a directive can still hit the same cross-path
-    inconsistency if it is later redefined via the upstream/restorer path in
-    the same session -- that residual case is not fixed here (fixing it
-    would mean threading original-source recovery into upstream
-    restoration too, well beyond what this function is scoped to do) --
-    but it no longer taxes every def/class in every notebook to leave it
-    open for the rare annotated one.
+    incremented once where 0 was expected).
+
+    **Why the gate is ``purity_analyzer._audited_lines(body)``, not a
+    hand-rolled text check (final whole-branch review, finding 1).** An
+    earlier version of this gate was ``"@cash:" in body`` -- the same
+    substring test ``_drop_audited`` uses as ITS fast path, reused here as
+    the actual decision instead of a pre-filter for one. That fires on any
+    text containing the substring, directive or not: a docstring merely
+    mentioning ``@cash:`` in prose, a string literal containing it, a
+    ``@cash:`` inside a decorator's own argument, and a plain comment
+    documenting cash's own annotation syntax all matched it. Every one of
+    those puts an UNDIRECTED function on this recovery path, where
+    ``source_identity_digest``/``normalize_source_for_hash`` treat the
+    original text and its ``ast.unparse`` form as different token streams (a
+    raw string literal against its escaped equivalent, redundant
+    parentheses, and so on) and the identity digest silently moves -- the
+    same cross-path instability measured above, now reachable by a user who
+    wrote no annotation whatsoever, which is precisely what this module's
+    binding constraint rules out: an undirected ``def``/``class`` must be
+    byte-for-byte unaffected on every path. Gating on
+    ``purity_analyzer._audited_lines(body)`` instead -- the EXACT function
+    the analyzer itself calls (from ``_drop_audited``) to decide whether a
+    line is waived -- means this function and the analyzer agree about what
+    counts as "directed" BY CONSTRUCTION. That is a stronger property than
+    "more accurate": any imprecision left in the gate is now SHARED with the
+    analyzer rather than being a second, independent guess that could
+    silently diverge from it. ``"@cash:" not in raw_cell`` stays as the
+    cheap early-out a few lines below -- a pure performance pre-filter, not
+    the decision itself -- since ``body`` is always a substring of
+    ``raw_cell``, so ``_audited_lines`` can only find a waiver in ``body``
+    when the substring is present somewhere in the cell too.
+
+    Narrower than that old substring gate in one respect, and deliberately
+    so: ``_audited_lines`` recognises ``# @cash:assume-safe`` only, never
+    the OTHER ``@cash:`` directives (``no-cache``, ``ttl``, ``persist``,
+    ...), whereas the substring gate it replaces matched every one of them.
+    That is correct, not an under-fix -- a statement-level directive like
+    ``# @cash:no-cache`` is read straight off the RAW CELL by
+    ``get_statement_annotations``, before unparsing ever happens, so it
+    never depended on source recovery to be honoured and never needed this
+    function's gate to fire for it. ``assume-safe`` is the only directive
+    read back OUT of a function's own compiled source -- via
+    ``inspect.getsource``, by the purity analyzer, long after this function
+    has returned -- which is exactly why it is the only one this gate needs
+    to serve.
+
+    Gating on a real waiver (rather than being unconditional) means a
+    function with no waiver in it (the overwhelming majority) is completely
+    unaffected by this function, on EITHER path, exactly as before it
+    existed: no behaviour change, no risk of the above. A function that DOES
+    carry a waiver can still hit the cross-path inconsistency itself if it
+    is later redefined via the upstream/restorer path in the same session --
+    that residual is not fixed here (fixing it would mean threading
+    original-source recovery into upstream restoration too, well beyond
+    what this function is scoped to do). Unlike the false-positive case just
+    closed, this residual is not "wrong" for a user who wrote no annotation
+    -- it only reaches a function that DOES carry one -- but it is
+    DETERMINISTIC whenever that path is reached, not merely possible in
+    principle: ``source_identity_digest`` keeps ``@cash:`` directives as
+    identity-relevant text (correctly -- see ``_statement_source``), so the
+    two paths' digests always differ once a function carries one, and
+    reaching that path only takes an ORDINARY same-session re-run of a cell
+    that calls the annotated function -- not a rare combination. Reproduced
+    end-to-end on a stock five-cell notebook (the final whole-branch
+    review's own repro, ``test_callee_global_capture``'s fixture with the
+    waiver added to ``compute_f``, counting ``_tick`` bytes across a cold
+    run and four same-session re-runs)::
+
+        [waived]  cold: [1,1,1]   re-run 1: ran=[0,1,0]   re-run 2..4: ran=[0,0,0]
+        [control] cold: [1,1,1]   re-run 1: ran=[0,0,0]   re-run 2..4: ran=[0,0,0]
+
+    What makes it acceptable to ship anyway is the BOUNDED shape of the
+    symptom: the first same-session re-run that replays the defining
+    statement recomputes the call once and re-runs the annotated function's
+    body once extra; every re-run after that settles, and the VALUES are
+    correct throughout. It costs one lost cache hit per session -- never a
+    wrong answer, never a permanently stale one. Not covered by a test; a
+    known, documented edge rather than a surprise.
 
     **A trailing comment on the node's own LAST line is recovered too.**
     ``ast.get_source_segment`` trims its last line at ``end_col_offset``, so
@@ -573,18 +659,23 @@ def _exec_source_for_node(
     executor, unchanged from before this function existed -- for every other
     reason ``stmt_display`` came back empty (a control body, a loop-split
     iteration, a rewritten statement, or a genuinely unrecoverable segment),
-    for a def/class with no ``@cash:`` directive in it, and for one whose
-    recovered text fails the ``compile()`` check above. Never raises: this
-    must never be able to break a cell.
+    for a def/class whose body ``_audited_lines`` finds no waiver in, and for
+    one whose recovered text fails the ``compile()`` check above. Never
+    raises: this must never be able to break a cell.
     """
     if stmt_display is not None:
         return stmt_display
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return None
-    # Equivalent to the `"@cash:" in body` check at the bottom of the `try`
-    # below -- `body` is always a substring of `raw_cell` -- but cheaper: it
-    # skips `ast.get_source_segment` and the whole-cell
-    # `_splitlines_like_the_parser` too, not just the bookkeeping around them.
+    # A NECESSARY precondition for the `_audited_lines(body)` gate below --
+    # `body` is always a substring of `raw_cell`, so if the substring isn't
+    # anywhere in the cell, `_audited_lines` cannot find a waiver in `body`
+    # either -- but cheaper: it skips `ast.get_source_segment` and the
+    # whole-cell `_splitlines_like_the_parser` too, not just the bookkeeping
+    # around them. This is a performance pre-filter only, never the decision
+    # itself (see "Why the gate is `_audited_lines`" above) -- it may return
+    # early in cases the real gate would also reject, but never in a case
+    # the real gate would accept.
     if "@cash:" not in raw_cell:
         return None
     try:
@@ -606,7 +697,16 @@ def _exec_source_for_node(
             trailing = rest.split("\n", 1)[0].rstrip("\r")
             if trailing.strip() == "" or trailing.lstrip().startswith("#"):
                 body = body + trailing
-        if "@cash:" not in body:
+        # THE GATE. Delegates to the analyzer's own definition of "waived"
+        # (`purity_analyzer._audited_lines`, the same helper `_drop_audited`
+        # calls) rather than re-testing the raw substring here -- see "Why
+        # the gate is `_audited_lines`" above. `_audited_lines` returns the
+        # marked line numbers and a function-scope flag; the flag can only
+        # ever be set from a line already in the marked set (it is derived
+        # BY scanning `marked`), so an empty marked set already means no
+        # waiver of either kind -- the flag itself is irrelevant here.
+        audited_lines, _ = _audited_lines(body)
+        if not audited_lines:
             return None
         # Sanity-check against the sharp edge documented above (PEP 614 and
         # any future recovery bug alike): if this does not compile, fall
@@ -1467,10 +1567,11 @@ class CellExecutor:
         but diverge for a top-level ``def``/``class``: the badge withholds
         the body there (``display_code`` stays ``None``), while
         ``exec_source`` recovers the original text for execution -- but ONLY
-        when the body carries a ``@cash:`` directive (see
-        ``_exec_source_for_node``); a def/class with no directive gets
-        ``exec_source=None`` too and executes from the same unparsed form it
-        always did. See the caller in ``_execute_cell_statements``.
+        when the purity analyzer recognises the body as carrying an
+        ``# @cash:assume-safe`` waiver (see ``_exec_source_for_node``); a
+        def/class with no waiver gets ``exec_source=None`` too and executes
+        from the same unparsed form it always did. See the caller in
+        ``_execute_cell_statements``.
         """
         metrics = self._statement_processor.process_statement(
             stmt_code, self._magics._global_ttl, silent=True,
