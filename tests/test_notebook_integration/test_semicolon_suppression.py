@@ -55,3 +55,26 @@ def test_semicolon_with_trailing_comment_suppresses(nb_runner):
     assert nb_runner.get_output(2).strip() == "", nb_runner.get_output(2)
     nb_runner.run_all()
     assert nb_runner.get_output(2).strip() == "", nb_runner.get_output(2)
+
+
+def test_semicolon_suppresses_after_a_non_ascii_character(nb_runner):
+    """``end_col_offset`` is a UTF-8 byte offset. Reading it as a character
+    index slid the slice past the ``;`` whenever anything non-ASCII sat
+    earlier on the same line — so a perfectly ordinary filter on a city name
+    echoed a repr the user had suppressed. The unsuppressed arm is what proves
+    the suppressed arm isn't passing because output is broken generally."""
+    nb_runner.create_notebook([
+        "import pandas as pd\n"
+        "df = pd.DataFrame({'city': ['Zürich', 'Genève'], 'n': [1, 2]})",
+        "df[df.city == 'Zürich']",     # no semicolon -> displays
+        "df[df.city == 'Zürich'];",    # semicolon -> suppressed
+    ])
+    nb_runner.start_kernel()
+    nb_runner.enable_persist()
+    nb_runner.run_all()
+    assert "Zürich" in nb_runner.get_output(2), nb_runner.get_output(2)
+    assert nb_runner.get_output(3).strip() == "", nb_runner.get_output(3)
+
+    nb_runner.run_all()
+    assert "Zürich" in nb_runner.get_output(2), nb_runner.get_output(2)
+    assert nb_runner.get_output(3).strip() == "", nb_runner.get_output(3)

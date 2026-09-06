@@ -1174,19 +1174,34 @@ class CellExecutor:
     def _expr_has_trailing_semicolon(raw_cell: str, node: ast.stmt) -> bool:
         """True if expression statement *node* is followed by a ``;`` in the raw
         source (IPython display suppression). ``ast.unparse`` discards it, so we
-        recover it from the original cell text."""
+        recover it from the original cell text.
+
+        Both coordinates must be read the way the PARSER wrote them, or this
+        silently answers ``False`` and echoes a repr the user suppressed:
+
+        * the line index needs the parser's line-break rules, not
+          ``str.splitlines()``'s wider set -- see
+          ``_splitlines_like_the_parser``. One vertical tab or form feed
+          anywhere earlier in the cell shifts every later index.
+        * ``end_col_offset`` is a UTF-8 *byte* offset, not a character index,
+          so the line is sliced as bytes. Reading it as characters slid the
+          slice past the ``;`` whenever anything non-ASCII sat earlier on the
+          same line (``df[df.city == "Zürich"];``).
+
+        Lines here keep their endings, so the remainder of the cell appends
+        verbatim rather than being rebuilt with ``"\\n".join``.
+        """
         if not isinstance(node, ast.Expr):
             return False
         end_line = getattr(node, "end_lineno", None)
         end_col = getattr(node, "end_col_offset", None)
         if end_line is None or end_col is None:
             return False
-        lines = raw_cell.splitlines()
+        lines = _splitlines_like_the_parser(raw_cell)
         if end_line > len(lines):
             return False
-        rest = lines[end_line - 1][end_col:]
-        if end_line < len(lines):
-            rest = rest + "\n" + "\n".join(lines[end_line:])
+        rest = lines[end_line - 1].encode()[end_col:].decode()
+        rest += "".join(lines[end_line:])
         return rest.lstrip().startswith(";")
 
     def _handle_regular_stmt_metrics(
