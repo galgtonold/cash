@@ -491,7 +491,23 @@ class RemoteFileDataSource(DataSource):
             "restore the access the exception names -- credentials, network, "
             "permissions -- and caching resumes on its own; nothing needs "
             "resetting.",
-            stacklevel=5,
+            # Measured, not guessed. Through the decorator -- the way users
+            # reach this -- the chain is ``_warn_failure -> _resolve ->
+            # state_token -> compute -> compute -> _resolve_cache_key ->
+            # wrapper -> stats_wrapper -> user``, so 9 names the caller's own
+            # line where 5 named ``dependency_state.py``. The two ``compute``
+            # frames are fixed nesting rather than per-dependency recursion:
+            # verified unchanged with two dependencies.
+            #
+            # Calling ``state_token()`` directly is only three frames deep, and
+            # there an over-deep stacklevel reports ``<sys>:0``. That is not a
+            # regression from this value -- 5 reports ``<sys>:0`` on that path
+            # too, measured both ways -- so 9 improves the deep path and leaves
+            # the shallow one exactly as it was. Fixing the shallow path needs
+            # the depth resolved at emit time (walk out to the first frame
+            # outside ``cash/``), which belongs in ``warn_diagnostic`` so every
+            # site benefits, not in another constant here.
+            stacklevel=9,
         )
 
     def __repr__(self) -> str:

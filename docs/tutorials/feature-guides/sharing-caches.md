@@ -81,7 +81,7 @@ This is the part that decides whether a shared backend actually pays off, and
 it differs between the two caching paths:
 
 <!-- claim: cash/notebook/statement/file_deps.py:compute_file_hash_component @3dc65a7c, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @5f35e472 -->
-<!-- claim: cash/remote_source.py:RemoteFileDataSource @16c56807 broad="the portability claim is a property of the whole source type" -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource @930dfe49 broad="the portability claim is a property of the whole source type" -->
 
 | What you cached | Hits on another machine? |
 |---|---|

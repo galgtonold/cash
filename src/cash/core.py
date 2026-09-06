@@ -3445,6 +3445,10 @@ class Cash:
                         f"cash.register_hasher({owner_type}, ...), returning "
                         f"something derived from the state that affects the "
                         f"result.",
+                    # Explicit: ``_warn_once``'s default of 5 stops one frame
+                    # short and blames the key-resolution code inside core.py.
+                    # Measured against a known call line.
+                    stacklevel=6,
                 )
             else:
                 logger.debug("bound-self hash failed for %s: %s", func_name, e)
@@ -5485,7 +5489,14 @@ class Cash:
             fix="seed the RNG to make the value reproducible, leave the "
                 "function undecorated for a genuinely fresh draw, or pass "
                 "@cash.cache(allow_random=True) to keep it frozen on purpose.",
-            stacklevel=3,
+            # 4, not 3: the chain from ``warnings.warn`` is
+            # ``warn_diagnostic_message -> _warn_once ->
+            # _warn_unseeded_randomness -> cache -> user``, so 3 blamed
+            # ``cache`` itself and printed a line inside core.py. Measured
+            # against a decoration on a known line; a reader whose warning
+            # points into Cash cannot act on it, which is the whole point of
+            # this diagnostic. Single caller, so the depth is fixed.
+            stacklevel=4,
         )
 
     def _warn_once(
@@ -6040,7 +6051,7 @@ class Cash:
                         if chunk_index == 1 and cache_if is not None:
                             self._warn_cache_if_bypassed(
                                 func_name, chunk_max_items, chunk_max_bytes,
-                                stacklevel=4)
+                                stacklevel=5)
                         self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl,
                                           execution_time=produced_seconds)
                         buffer = []
@@ -6089,7 +6100,7 @@ class Cash:
                 if buffer:
                     if chunk_index == 1 and cache_if is not None:
                         self._warn_cache_if_bypassed(
-                            func_name, chunk_max_items, chunk_max_bytes, stacklevel=4)
+                            func_name, chunk_max_items, chunk_max_bytes, stacklevel=5)
                     self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl,
                                           execution_time=produced_seconds)
                     chunk_index += 1

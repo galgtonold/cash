@@ -671,7 +671,7 @@ callables.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @e9a9b460 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @64592a13 -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 

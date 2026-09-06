@@ -48,7 +48,7 @@ No decorator option to enable — iterator detection is automatic. Pre-existing 
 
 ## How chunking works
 
-<!-- claim: cash/core.py:Cash._stream_and_store @08822547 broad="the loop, the tracker scope and the commit rule are one mechanism", cash/notebook/object_hashing.py:estimate_object_size @9aeb760a -->
+<!-- claim: cash/core.py:Cash._stream_and_store @6ed2031d broad="the loop, the tracker scope and the commit rule are one mechanism", cash/notebook/object_hashing.py:estimate_object_size @9aeb760a -->
 The write path lives in `Cash._stream_and_store`. The loop is:
 
 1. Pull one item from the user's iterator, with the `FileAccessTracker` live — so a file the generator reads lazily is recorded as a dependency. It is entered once and suspended around each yield, so the caller's own reads in its loop body are not attributed to the generator.

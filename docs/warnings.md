@@ -576,7 +576,7 @@ silent declaration that does nothing is worse than no declaration.
 
 ## KEY-INSTANCE-STATE {#key-instance-state}
 
-<!-- claim: cash/core.py:Cash._fold_bound_self @22b72518 -->
+<!-- claim: cash/core.py:Cash._fold_bound_self @71e4d747 -->
 **What happened.** You cached an already-bound method — `c.cache(obj.method)`.
 Cash folds the instance into the key so that two objects in different states do
 not share results, but this instance could not be hashed, so it fell back to
@@ -997,7 +997,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @e9a9b460 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @64592a13 -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a
@@ -1095,7 +1095,7 @@ URL and the exception. Rather than serve a result whose freshness it could not
 check, Cash produced a token it has never seen before, which forces a recompute.
 The answer you received is a real one.
 
-<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @dc480d0f -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @84b777c5 -->
 **Why it matters.** This fails closed on purpose: an outage costs you the
 speedup, never the correctness. What it costs while it lasts is the cache
 itself. Every call to that function recomputes, and each failed check leaves
