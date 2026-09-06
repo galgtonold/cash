@@ -462,6 +462,7 @@ fetch_user(42)
 #   Fix: go down the list and put `# @cash:assume-safe` on each line you have
 #   audited, or refactor; @cash.cache(assume_safe=True) waives the whole
 #   function instead, including anything added to it later.
+#   https://cash-lib.readthedocs.io/en/stable/warnings/#impure-side-effects
 ```
 
 The function is still cached. The warning is one-shot per

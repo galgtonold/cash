@@ -2339,6 +2339,14 @@ class Cash:
 
         Metadata-only reads: the point is to check presence, not to load the
         payload and undo the laziness chunking exists for.
+
+        Scope, because the docs depend on it: this guard is applied by
+        ``_try_get_cached`` and therefore covers the DEFAULT read path. The
+        double-checked re-read inside ``_compute_with_lock`` validates the TTL
+        and goes straight to ``_wrap_iterator_hit`` without calling this, so
+        with ``use_locking=True`` a manifest missing a chunk still yields a
+        short iterator. Measured, same probe both ways: locking off -> 10 items
+        and a recompute, locking on -> 3 items and no recompute.
         """
         if getattr(metadata, "iterator_storage", None) != "chunked":
             return True
@@ -6131,10 +6139,17 @@ class Cash:
                 CashCacheStoreFailedWarning,
                 f"{cache_key}:chunk_{chunk_index}",
                 "",
+                # NOT "you will get a truncated iterator". On the ordinary read
+                # path ``_chunks_are_intact`` probes every chunk and turns a
+                # manifest with a hole into a MISS, so the cost is a permanent
+                # recompute, not a short answer. The locked re-read in
+                # ``_compute_with_lock`` is the one path that skips that guard,
+                # so it is named rather than generalised from.
                 f"@cash.cache: backend {backend_name} failed to store "
                 f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}), "
-                f"so a later read of this entry stops at the missing chunk and "
-                f"returns a truncated iterator.",
+                f"so the entry can never be read back and every later call "
+                f"recomputes it -- and under use_locking=True the re-read "
+                f"inside the lock can serve the short result instead.",
                 code="STORE-CHUNK-FAILED",
                 fix="clear the entry with f.cache_clear() before anything reads "
                     "it, then fix the write the exception names.",

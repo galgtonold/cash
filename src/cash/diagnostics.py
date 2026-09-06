@@ -175,7 +175,16 @@ def warn_diagnostic_explicit(
     way to pass a pre-built instance, so ``.code`` cannot ride along on the
     warning object here. Callers that need the code programmatically from these
     sites should read it from the rendered text, which always starts
-    ``[CODE] ``. This asymmetry is why the test below pins it.
+    ``[CODE] ``. ``docs/warnings.md`` tells readers the same thing, and names
+    the three codes it reaches: ``RANDOM-REPLAYED`` and ``NOTEBOOK-CELL-SYNTAX``
+    (every site is explicit) and ``RANDOM-UNSEEDED`` (explicit on the two
+    notebook paths, attached on the decorator one).
+
+    ``tests/test_diagnostics.py::test_the_explicit_variant_keeps_the_caller_s_location``
+    pins the asymmetry -- including, since the final review, an explicit
+    ``.code is None`` assertion. It previously pinned only the blamed location
+    and the ``[CODE] `` prefix, both of which would have survived the attribute
+    quietly appearing, so the claim "pinned by test" was itself unpinned.
     """
     warnings.warn_explicit(
         format_diagnostic(code, what, fix),   # raises on an unknown code

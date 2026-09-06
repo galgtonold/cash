@@ -679,8 +679,12 @@ from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 @cash.cache
 def sample():
     return np.random.randn()      # no seed anywhere
-# CashRandomnessWarning: [RANDOM-UNSEEDED] Unseeded randomness detected:
-#   numpy.random.randn() ...
+# CashRandomnessWarning: [RANDOM-UNSEEDED] @cash.cache on __main__.sample:
+#   Unseeded randomness detected: numpy.random.randn() at line 3. ...
+#   Fix: seed the RNG to make the value reproducible, leave the function
+#   undecorated for a genuinely fresh draw, or pass
+#   @cash.cache(allow_random=True) to keep it frozen on purpose.
+#   https://cash-lib.readthedocs.io/en/stable/warnings/#random-unseeded
 ```
 
 The warning matters because the first call's value is cached and
@@ -875,10 +879,12 @@ def f(lock):
     return id(lock)
 
 f(threading.Lock())
-# CashCacheIneffectiveWarning: [KEY-UNHASHABLE-ARG] an argument of type lock
-#   could not be hashed, so this call and every call like it does not cache.
+# CashCacheIneffectiveWarning: [KEY-UNHASHABLE-ARG] @cash.cache on __main__.f:
+#   an argument of type lock could not be hashed, so this call and every call
+#   like it does not cache.
 #   Fix: register a hasher with cash.register_hasher(lock, ...), or pass the
 #   argument by a hashable value.
+#   https://cash-lib.readthedocs.io/en/stable/warnings/#key-unhashable-arg
 ```
 
 `threading.Lock`, sockets, open file handles, etc. can't be pickled,

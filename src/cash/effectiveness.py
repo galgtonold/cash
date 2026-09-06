@@ -158,11 +158,18 @@ def _message(
     hashed in full) without giving up the decorator.
 
     ``override=True`` is named explicitly because the usual culprit is a
-    numpy array or a dataframe, and for exactly those types a plain
-    ``register_hasher`` is silently never consulted. The first version of
-    this message sent a design partner to that dead end: it diagnosed the
-    cause correctly, they registered a hasher, nothing changed, and nothing
-    said why.
+    numpy array or a dataframe, and for exactly those types cash's own
+    content hasher runs first. The first version of this message sent a
+    design partner to that dead end: it diagnosed the cause correctly, they
+    registered a hasher, nothing changed, and nothing said why.
+
+    That silence is gone -- ``Cash.register_hasher`` now REJECTS a plain
+    registration for one of those types with ``ValueError`` rather than
+    accepting a hasher it would never consult (verified by execution:
+    ``register_hasher(np.ndarray, fn)`` raises; the same call with
+    ``override=True`` is accepted). Naming the flag here and refusing there
+    are two halves of one fix, so do not "simplify" this back to a bare
+    ``register_hasher``.
     """
     what = (
         f"@cash.cache on {func_name!r} is costing more than it saves. "

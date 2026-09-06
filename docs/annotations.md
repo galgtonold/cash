@@ -46,6 +46,23 @@ ANNOTATION_PATTERN = re.compile(r'#\s*@cash:\s*([\w-]+)(?:\s*=\s*(\S*))?')
 
 It's applied with `re.search` (not `re.match`), so the directive can appear **anywhere on the line** — including trailing on a normal code line.
 
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._opts_out_of_rng_rewind @00e6c078 -->
+!!! warning "One consumer reads own-line comments only"
+    That is true of the *parser*. It is not true of everything downstream of it.
+    `UpstreamChecker._opts_out_of_rng_rewind` — the check that decides whether
+    `# @cash:no-cache` also switches off the RNG rewind (see "A value can be
+    frozen without being cached", below) — walks the cell's lines and skips any
+    that does not start with `#` once stripped, so it never sees a trailing
+    directive. Measured: `# @cash:no-cache` on its own line above a draw
+    opts out of the rewind; `x = random.random()  # @cash:no-cache` does not,
+    while still parsing as `no_cache=True` and switching caching off.
+
+    So a trailing `no-cache` on a random draw turns caching off and leaves the
+    draw frozen anyway — the one failure the directive is advertised to prevent.
+    Write it on a line of its own whenever randomness is involved. That check
+    also runs over the **whole cell**: one own-line `no-cache` anywhere in a cell
+    disables the rewind for every draw in it.
+
 The value group is `\S*`, not `\d+`, and that is load-bearing rather than lax: it
 captures whatever you actually wrote so `parse_annotation_line` can *reject* it by
 name. A `\d+` group would simply not match the bad part — `ttl=5m` would capture
@@ -132,8 +149,9 @@ CashRandomnessWarning: [RANDOM-UNSEEDED] Unseeded randomness detected:
 numpy.random.rand() at line 1. The first result is cached and replayed from
 then on, so the value is frozen rather than reproducible.
   Fix: seed the source (random.seed(0), np.random.default_rng(0)) to make it
-  reproducible, put `# @cash:no-cache` on the statement for a genuinely fresh
-  draw each run, or `# @cash:allow-random` to keep it frozen on purpose.
+  reproducible, put `# @cash:no-cache` on a line of its own above the statement
+  for a genuinely fresh draw each run, or `# @cash:allow-random` to keep it
+  frozen on purpose.
   https://cash-lib.readthedocs.io/en/stable/warnings/#random-unseeded
 ```
 
@@ -383,9 +401,9 @@ from an unseeded draw:
 CashRandomnessWarning: [RANDOM-REPLAYED] Unseeded randomness restored from
 cache: numpy.random.rand() at line 1. The value you are seeing is a replay of
 an earlier run, not a fresh draw - re-running will not change it.
-  Fix: put `# @cash:no-cache` on the statement if you need a fresh draw each
-  run, seed the source if you need it reproducible, or `# @cash:allow-random`
-  if holding it steady is the point.
+  Fix: put `# @cash:no-cache` on a line of its own above the statement if you
+  need a fresh draw each run, seed the source if you need it reproducible, or
+  `# @cash:allow-random` if holding it steady is the point.
   https://cash-lib.readthedocs.io/en/stable/warnings/#random-replayed
 ```
 
@@ -411,8 +429,11 @@ how much it varies" measures nothing.
     from cache" one.
 
     So don't read "no restore warning" as "this varies". If you want a draw to
-    genuinely redraw on every run, say so — `# @cash:no-cache` switches off the
-    rewind as well as caching, and is the only thing that does.
+    genuinely redraw on every run, say so — `# @cash:no-cache` **on a line of
+    its own** switches off the rewind as well as caching, and is the only thing
+    that does. Trailing on the code line it switches off caching only, and the
+    draw comes back identical; see "One consumer reads own-line comments only"
+    under [Grammar](#grammar).
 
 Both fire **once per statement per session**, not once per run: re-running an
 unchanged cell a third time stays quiet, and editing the statement makes it warn
@@ -474,8 +495,8 @@ generator instead.
     argument landing in `*args`, or anything after a `*unpacking`. Each of those
     is a missing warning, never a false one.
 
-    Seed explicitly, or use [`# @cash:no-cache`](#cashno-cache-alias-nocache),
-    when a statement must genuinely re-run every time. The warning is advisory —
+    Seed explicitly, or use [`# @cash:no-cache`](#cashno-cache-alias-nocache)
+    on a line of its own, when a statement must genuinely re-run every time. The warning is advisory —
     it never changes what gets cached.
 
 ## Lookback and scoping

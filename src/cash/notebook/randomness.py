@@ -1050,26 +1050,36 @@ class RandomnessDetector:
 # restore-time twins address a value already on screen rather than the source.
 # ASCII only, like the messages they accompany: this lands in a kernel's stderr,
 # where a Windows console codepage mangles an em-dash.
+#
+# "on a line of its own above the statement", NOT "on the statement". The
+# spelling is load-bearing and the difference is silent:
+# ``UpstreamChecker._opts_out_of_rng_rewind`` skips any line that does not
+# ``strip().startswith('#')``, so a TRAILING ``x = random.random()  #
+# @cash:no-cache`` turns caching off and leaves the RNG rewind ON -- the
+# statement re-executes and redraws the identical number, which is the exact
+# outcome these four strings promise to prevent. Measured: own line ->
+# opts_out=True; trailing -> opts_out=False while the annotation itself still
+# parses as no_cache=True. Do not shorten this back.
 _UNSEEDED_FIX = (
     "seed the source (random.seed(0), np.random.default_rng(0)) to make it "
-    "reproducible, put `# @cash:no-cache` on the statement for a genuinely "
-    "fresh draw each run, or `# @cash:allow-random` to keep it frozen on "
-    "purpose."
+    "reproducible, put `# @cash:no-cache` on a line of its own above the "
+    "statement for a genuinely fresh draw each run, or `# @cash:allow-random` "
+    "to keep it frozen on purpose."
 )
 _REPLAY_FIX = (
-    "put `# @cash:no-cache` on the statement if you need a fresh draw each "
-    "run, seed the source if you need it reproducible, or "
-    "`# @cash:allow-random` if holding it steady is the point."
+    "put `# @cash:no-cache` on a line of its own above the statement if you "
+    "need a fresh draw each run, seed the source if you need it reproducible, "
+    "or `# @cash:allow-random` if holding it steady is the point."
 )
 _UNSEEDED_FIT_FIX = (
     "pass random_state=<int> to the estimator for reproducibility, put "
-    "`# @cash:no-cache` on the statement to re-fit every run, or "
-    "`# @cash:allow-random` to keep the fit frozen on purpose."
+    "`# @cash:no-cache` on a line of its own above the statement to re-fit "
+    "every run, or `# @cash:allow-random` to keep the fit frozen on purpose."
 )
 _REPLAY_FIT_FIX = (
-    "put `# @cash:no-cache` on the statement to re-fit every run, pass "
-    "random_state=<int> for a reproducible fit, or `# @cash:allow-random` if "
-    "holding this fit steady is the point."
+    "put `# @cash:no-cache` on a line of its own above the statement to re-fit "
+    "every run, pass random_state=<int> for a reproducible fit, or "
+    "`# @cash:allow-random` if holding this fit steady is the point."
 )
 
 
@@ -1163,7 +1173,11 @@ def check_and_warn_randomness(
 
     Warnings are deduped *once per statement per session* via
     ``detector.mark_warned``, and raised with :func:`warnings.warn_explicit`
-    under the ``<cash>`` pseudo-filename Cash compiles user statements with.
+    under a literal ``<cash>`` filename. That is a LABEL these warnings pass to
+    ``warn_explicit``, not the name a statement is compiled under: since
+    ``notebook/compiled_source.py`` landed, each statement compiles as
+    ``<cash-{digest}>`` so a traceback can resolve its source. Both share the
+    ``CASH_FILENAME_PREFIX`` (``"<cash"``) that frame filters match on.
 
     Two things make that the right call rather than a plain ``warnings.warn``:
 

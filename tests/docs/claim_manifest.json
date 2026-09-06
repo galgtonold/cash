@@ -1,6 +1,6 @@
 {
   "docs/annotations.md": {
-    "anchors": 8,
+    "anchors": 9,
     "audited": "2026-07-27"
   },
   "docs/api/backend_internals.md": {
@@ -185,7 +185,7 @@
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/iterator-caching.md": {
-    "anchors": 10,
+    "anchors": 11,
     "audited": "2026-07-27"
   },
   "docs/tutorials/feature-guides/production-transition.md": {
@@ -229,8 +229,8 @@
     "audited": "2026-07-27"
   },
   "docs/warnings.md": {
-    "anchors": 0,
-    "audited": null
+    "anchors": 48,
+    "audited": "2026-09-06"
   },
   "docs/why-cash.md": {
     "anchors": 0,

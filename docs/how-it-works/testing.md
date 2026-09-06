@@ -88,7 +88,7 @@ through a real harness. There is no whitelist to maintain, so a new page is
 covered the day it lands. Sample output in the docs is checked against what the
 code actually prints.
 
-**Prose is pinned to source.** Around **<!-- docnum:claims -->~250<!-- /docnum --> claims** across
+**Prose is pinned to source.** Around **<!-- docnum:claims -->~300<!-- /docnum --> claims** across
 the documentation carry an anchor naming the function that decides them, plus a
 fingerprint of that function's normalized source:
 

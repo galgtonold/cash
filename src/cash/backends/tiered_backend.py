@@ -106,9 +106,18 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         """Warn once/session that a worth-persisting value fit no disk tier.
 
         The object is larger than a safe fraction (half) of every persistent
-        tier's cap, so persisting it would thrash. Cash keeps it in RAM (where
-        it dies on restart) rather than write-and-evict forever, and tells the
-        user how to actually cache it. Deduped to once per session."""
+        tier's cap, so persisting it would thrash. Cash offers it to the RAM
+        tier rather than write-and-evict forever, and tells the user how to
+        actually cache it. Deduped to once per session.
+
+        "Offers", not "keeps": the RAM tier applies its own byte cap, which is
+        machine-scaled and independent of ``max_cache_size``. That cap is
+        normally SMALLER than the disk threshold that refused this value (4.0
+        GiB against 18.7 GiB on one measured machine), so the usual outcome is
+        eviction inside the same ``set()`` and no caching at all -- not
+        RAM-only caching. Measured on a 4 MiB value that warns in both arms:
+        RAM cap 100 MiB -> 2 calls, 1 execution; RAM cap 1 MiB -> 2 calls, 2
+        executions."""
         if self._warned_oversize:
             return
         self._warned_oversize = True
@@ -118,9 +127,20 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         warn_diagnostic(
             CashCacheIneffectiveWarning,
             "CACHE-VALUE-TOO-BIG",
+            # "offered to the RAM tier", not "kept in RAM": the RAM tier applies
+            # its own byte cap (InMemoryBackend._evict_to_byte_cap), which is
+            # machine-scaled and independent of max_cache_size, and is normally
+            # SMALLER than the disk threshold that refused this value -- so the
+            # usual outcome is eviction inside the same set(), i.e. no caching
+            # at all rather than RAM-only caching. Measured on a 4 MiB value:
+            # RAM cap 100 MiB -> 2 calls, 1 execution; RAM cap 1 MiB -> 2 calls,
+            # 2 executions. Keep this and docs/warnings.md#cache-value-too-big
+            # saying the same thing.
             f"cached value {key!r} ({human_bytes(size_bytes)}) exceeds a safe "
-            f"fraction of every persistent cache tier's cap, so cash is keeping "
-            f"it in RAM only and it will not survive a kernel restart.",
+            f"fraction of every persistent cache tier's cap, so only the RAM "
+            f"tier was offered it -- it will not survive a kernel restart, and "
+            f"if it is over the RAM tier's own cap too it is evicted at once "
+            f"and nothing is cached.",
             "raise max_cache_size to a comfortable multiple of that size, or "
             "cache something smaller -- the aggregate, the sample, or the "
             "columns you actually use.",

@@ -36,7 +36,7 @@ Cash warns the first time this happens:
 
 | Goal | Do this |
 |---|---|
-| A fresh draw every run | `# @cash:no-cache` on the statement |
+| A fresh draw every run | `# @cash:no-cache` on a line of its own above the statement — trailing on the code line switches off caching but not the RNG rewind |
 | Reproducible results | Seed the RNG (`np.random.seed(0)`) — then the replay *is* the correct value |
 | Keep the cache, silence the warning | `# @cash:allow-random` |
 
@@ -818,8 +818,11 @@ def make_scaler(k):
         return x * k
     return scale
 
-apply_to(rows, make_scaler(2))   # CashCacheIneffectiveWarning: an argument of
-apply_to(rows, make_scaler(2))   # type function could not be hashed
+apply_to(rows, make_scaler(2))   # CashCacheIneffectiveWarning:
+apply_to(rows, make_scaler(2))   # [KEY-UNHASHABLE-ARG] @cash.cache on
+                                 # __main__.apply_to: an argument of type
+                                 # function could not be hashed, so this call
+                                 # and every call like it does not cache.
 ```
 
 The code channel does not rescue this, and would not be enough if it did: two

@@ -7,6 +7,10 @@ A few internal warnings live on their own submodule and are not re-exported —
 upstream tracking degrades) is importable from
 `cash.notebook.server_discovery`, not from `cash`.
 
+This page is the class hierarchy. For what an individual warning *means* and
+what to do about it, every warning carries a diagnostic code — look it up in
+[Warnings](../warnings.md).
+
 ## Imports
 
 ```python
@@ -77,13 +81,19 @@ UserWarning
     │   └── CashImpurityWarning        — purity analyzer found issues
     ├── CashCacheStoreFailedWarning    — compute OK but backend rejected store
     ├── CashRandomnessWarning          — unseeded draw; the cached value is frozen
-    └── CashUpstreamSyntaxWarning      — an upstream cell won't parse, so it
-                                         could not be simulated
+    ├── CashUpstreamSyntaxWarning      — an upstream cell won't parse, so it
+    │                                    could not be simulated
+    └── CashNotebookDiscoveryWarning   — no notebook path; upstream tracking is
+                                         off (not re-exported from `cash`)
 ```
 
 `CashImpurityWarning` deliberately subclasses `CashCacheIneffectiveWarning`
 so existing filters that catch the parent also catch impurity warnings.
 Filter more precisely with `CashImpurityWarning` directly.
+`CashNotebookDiscoveryWarning` is the class behind
+[`NOTEBOOK-NOT-FOUND`](../warnings.md#notebook-not-found); it hangs off
+`CashWarning` like the two above it, so only a filter on `CashWarning` itself
+catches all five branches.
 
 ::: cash.CashWarning
 

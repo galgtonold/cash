@@ -96,7 +96,7 @@ The annotation sets `force_persist = True`, which the post-execute path threads 
 
 ### `@cash:allow-random` — accept non-reproducibility
 
-<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @76a812fd, cash/notebook/randomness.py:MODULE_ALIASES @1d79cda4, cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0 -->
+<!-- claim: cash/notebook/randomness.py:check_and_warn_randomness @acebcb9b, cash/notebook/randomness.py:MODULE_ALIASES @1d79cda4, cash/notebook/randomness.py:RANDOM_FUNCTIONS @928168d0 -->
 Cash scans every statement for unseeded calls to known RNG functions (`numpy.random.randn`, `torch.rand`, `random.choice`, dozens more — full list in `RANDOM_FUNCTIONS`) and raises a `CashRandomnessWarning` when it finds one. The reasoning: a cached `np.random.rand(1000)` won't match what a fresh re-execution would produce, so cache hits are silently non-reproducible.
 
 Two fixes. Seed it:
