@@ -122,3 +122,66 @@ def test_a_top_level_match_statement_is_captured_verbatim():
     )
     node = ast.parse(cell).body[0]
     assert _statement_source(cell, node) == cell.rstrip("\n")
+
+
+def test_a_vertical_tab_inside_a_string_literal_is_not_truncated():
+    """The single-line fast path used to slice raw_cell.splitlines(keepends=
+    True) directly. str.splitlines() treats a vertical tab (U+000B) as a
+    line break; the CPython parser does not -- it recognizes only CRLF, CR
+    and LF. So this whole assignment is still ONE line to ast (lineno ==
+    end_lineno == 1). Splitting on the vertical tab desyncs the fast path's
+    line index from that numbering: lines[0] becomes only the fragment up
+    to it, so the slice silently drops everything after (here, the closing
+    B') instead of raising.
+
+    Built with chr() rather than an escape literal so the exact code point
+    is unambiguous on the page.
+    """
+    vertical_tab = chr(0x0B)
+    cell = f"x = 'A{vertical_tab}B'\n"
+    node = ast.parse(cell).body[0]
+    assert _statement_source(cell, node) == ast.get_source_segment(cell, node)
+
+
+def test_a_form_feed_does_not_corrupt_the_following_statement():
+    """A form feed (U+000C) the parser folds into the middle of line 1
+    still reads as a line break to str.splitlines(), so that split produces
+    an extra list entry the parser's own numbering has no room for. Every
+    lines[node.lineno - 1] lookup for a LATER statement is then off by one
+    -- so the corruption lands on the statement AFTER the one containing
+    the form feed, not on that statement itself.
+    """
+    form_feed = chr(0x0C)
+    cell = f"x = 1{form_feed}\ny = 2\n"
+    tree = ast.parse(cell)
+    assert len(tree.body) == 2, "premise: two top-level statements"
+    assert [_statement_source(cell, node) for node in tree.body] == [
+        ast.get_source_segment(cell, node) for node in tree.body
+    ]
+
+
+def test_the_fast_path_agrees_with_get_source_segment_for_every_parser_incompatible_linebreak():
+    """The property that matters is agreement with the slow path on every
+    input, not the exact output for the two reproductions above.
+    str.splitlines() breaks on eight characters the parser does not:
+    vertical tab (U+000B), form feed (U+000C), FILE/GROUP/RECORD SEPARATOR
+    (U+001C-U+001E), NEL (U+0085), LINE SEPARATOR (U+2028) and PARAGRAPH
+    SEPARATOR (U+2029). This cell puts one of each inside its own
+    single-line statement, so a fix that only special-cases the two
+    reproduced characters (rather than fixing the general splitting rule)
+    would still fail here -- and fail on every statement after the first
+    offender, not just the one that contains it.
+
+    Built with chr() rather than escape literals so the exact code points
+    are unambiguous on the page.
+    """
+    offenders = "".join(
+        chr(c) for c in (0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)
+    )
+    cell = "\n".join(
+        f"x{i} = 'A{ch}B'" for i, ch in enumerate(offenders)
+    ) + "\n"
+    tree = ast.parse(cell)
+    assert len(tree.body) == len(offenders), "premise: one statement per offender"
+    for node in tree.body:
+        assert _statement_source(cell, node) == ast.get_source_segment(cell, node)

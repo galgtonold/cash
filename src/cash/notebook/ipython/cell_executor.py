@@ -263,6 +263,53 @@ def discarded_writes_notification(seen_before: int) -> tuple[dict | None, int]:
     }, total
 
 
+# Characters ``str.splitlines()`` treats as line breaks that the CPython
+# parser does not -- the parser (and therefore ``node.lineno`` /
+# ``node.end_lineno``) recognizes only "\r\n", "\r" and "\n". Built with
+# ``chr()`` rather than escape literals so the exact code points stay
+# unambiguous on the page: vertical tab, form feed, FILE/GROUP/RECORD
+# SEPARATOR (U+001C-U+001E), NEL (U+0085), LINE SEPARATOR (U+2028) and
+# PARAGRAPH SEPARATOR (U+2029). See ``_splitlines_like_the_parser`` below.
+_PARSER_INCOMPATIBLE_LINEBREAKS = "".join(
+    chr(c) for c in (0x0B, 0x0C, 0x1C, 0x1D, 0x1E, 0x85, 0x2028, 0x2029)
+)
+_LINEBREAK_MASK = str.maketrans(
+    _PARSER_INCOMPATIBLE_LINEBREAKS, " " * len(_PARSER_INCOMPATIBLE_LINEBREAKS)
+)
+
+
+def _splitlines_like_the_parser(raw_cell: str) -> list[str]:
+    """Split ``raw_cell`` into lines using the parser's line-ending rules,
+    not ``str.splitlines()``'s.
+
+    ``str.splitlines(keepends=True)`` breaks on more characters than the
+    CPython tokenizer does -- see ``_PARSER_INCOMPATIBLE_LINEBREAKS`` above
+    -- so indexing its result by ``node.lineno`` desyncs the moment any of
+    those appear anywhere earlier in the cell (observed: a vertical tab
+    inside one string literal silently truncated that statement's display;
+    a form feed at the end of one line corrupted the display of the NEXT
+    statement). Fixed here by masking those characters to a plain space --
+    one-for-one, so every position keeps its original index -- before
+    calling ``str.splitlines()``, then slicing the boundaries it finds back
+    out of the ORIGINAL (unmasked) ``raw_cell``. The returned lines contain
+    the real original characters verbatim; only the *decision of where a
+    line ends* used the masked copy.
+
+    Both ``str.translate`` and ``str.splitlines`` are single C-level passes
+    over the whole string, so this stays cheap enough for the fast path
+    below to keep its measured win over always calling
+    ``ast.get_source_segment`` (see that docstring for the numbers).
+    """
+    masked = raw_cell.translate(_LINEBREAK_MASK)
+    lines = []
+    pos = 0
+    for masked_line in masked.splitlines(keepends=True):
+        length = len(masked_line)
+        lines.append(raw_cell[pos:pos + length])
+        pos += length
+    return lines
+
+
 def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     """The statement's ORIGINAL text, for display only.
 
@@ -317,14 +364,26 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     difference O(statements x cell length) instead of O(cell length).
 
     The replacement does exactly what ``get_source_segment`` does for a
-    single-line node -- one ``str.splitlines(keepends=True)`` (the C
-    implementation, not the manual loop above) and a slice of that one line
+    single-line node -- split the cell into lines (the C-level
+    ``str.splitlines``, not the manual loop above -- see
+    ``_splitlines_like_the_parser``) and slice the one at ``node.lineno``
     -- INCLUDING its byte-offset semantics: ``col_offset``/``end_col_offset``
     are UTF-8 byte offsets, not character indices, so the line is encoded,
     sliced, and decoded, same as upstream. Any node shape this fast path
     can't handle (missing/`None` location attributes) falls through to the
     original call below, so behaviour for every other case -- multi-line
     segments, the dedent, the ``None`` fallback -- is untouched.
+
+    **The splitter must use the parser's line-ending rules, not
+    ``str.splitlines()``'s own.** ``str.splitlines()`` treats several
+    characters as line breaks that the CPython tokenizer does not (see
+    ``_PARSER_INCOMPATIBLE_LINEBREAKS``), so a naive
+    ``raw_cell.splitlines(keepends=True)`` desyncs its line index from
+    ``node.lineno`` the moment any of those appear anywhere earlier in the
+    cell -- silently, with no exception to trigger the ``None`` fallback.
+    ``_splitlines_like_the_parser`` fixes this while keeping the same
+    single-pass-over-the-whole-cell shape (so the perf win above holds);
+    see its own docstring for how.
     """
     if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
         return None
@@ -335,7 +394,7 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
             and end_lineno == node.lineno
             and node.end_col_offset is not None
         ):
-            lines = raw_cell.splitlines(keepends=True)
+            lines = _splitlines_like_the_parser(raw_cell)
             segment = (
                 lines[node.lineno - 1]
                 .encode()[node.col_offset:node.end_col_offset]
