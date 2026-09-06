@@ -25,7 +25,59 @@ prose, with one piece of advice, serves every site that emits it.
 """
 from __future__ import annotations
 
+import os
+import sys
+
 _DOCS_BASE = "https://cash-lib.readthedocs.io/en/stable/warnings/"
+
+#: The installed package directory. A frame whose file lives under this is Cash
+#: reporting on itself; anything else is the caller's own code.
+#:
+#: Matched as a path prefix, never as the substring "cash". A notebook statement
+#: compiles under the pseudo-filename ``<cash>`` or ``<cash-{digest}>``, and
+#: that IS the user's code -- a substring test would classify exactly the
+#: frames we most want to blame as internal ones.
+_CASH_ROOT = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+
+def _is_cash_frame(frame) -> bool:
+    """True if *frame* is executing Cash's own code."""
+    try:
+        return os.path.abspath(frame.f_code.co_filename).startswith(_CASH_ROOT)
+    except (OSError, ValueError):
+        # A synthetic or unresolvable filename is not Cash's; treating it as
+        # the user's stops the walk rather than running off the top of the
+        # stack, which is the safer failure.
+        return False
+
+
+def _stacklevel_of_first_user_frame() -> int:
+    """The ``stacklevel`` that blames the nearest frame outside Cash.
+
+    Hand-tuned ``stacklevel`` constants are unverifiable by reading and wrong
+    often enough to matter: four separate diagnostics shipped pointing at a
+    line inside ``core.py``, which tells a reader nothing they can act on. A
+    constant also cannot be right for a site with two entry points at different
+    depths -- and an over-deep one does not clamp to the outermost frame, it
+    reports ``<sys>:0``.
+
+    Counting: ``warnings.warn(..., stacklevel=1)`` blames the frame that calls
+    it, so level 1 is the caller of this function (``warn_diagnostic``), which
+    is itself Cash. Walking outward until the first non-Cash frame gives the
+    level that names the user's own line, whatever the depth.
+
+    Falls back to the outermost frame if every frame is Cash's -- a warning
+    raised during ``import cash``, say. That is honest: there is no user frame
+    to point at.
+    """
+    frame = sys._getframe(1)
+    level = 1
+    while frame is not None:
+        if not _is_cash_frame(frame):
+            return level
+        frame = frame.f_back
+        level += 1
+    return level - 1
 
 #: Every diagnostic code Cash can emit. Adding a warning means adding its code
 #: here AND a section in ``docs/warnings.md``. Once both exist, the bijection
@@ -139,7 +191,7 @@ def warn_diagnostic(
     what: str,
     fix: str,
     *,
-    stacklevel: int = 2,
+    stacklevel: int | None = None,
 ) -> None:
     """Emit *category* carrying *code*, its rendered message, and ``.code``.
 
@@ -147,12 +199,21 @@ def warn_diagnostic(
     to the handler: a caller can test ``w.message.code == "CACHE-THRASH"``
     instead of matching prose that is free to be reworded.
 
+    **The blamed frame is resolved at emit time.** Leave *stacklevel* at
+    ``None`` and the warning names the nearest frame outside Cash, whatever the
+    call depth -- see ``_stacklevel_of_first_user_frame``. Pass an integer only
+    to override that, counted from this function's caller as before; no site
+    needs to today.
+
     Raises ``KeyError`` before emitting anything if *code* is unregistered.
     """
     message = format_diagnostic(code, what, fix)   # raises on an unknown code
     instance = category(message)
     instance.code = code
-    warnings.warn(instance, stacklevel=stacklevel + 1)
+    level = (
+        _stacklevel_of_first_user_frame() if stacklevel is None else stacklevel + 1
+    )
+    warnings.warn(instance, stacklevel=level)
 
 
 def warn_diagnostic_explicit(
@@ -196,7 +257,7 @@ def warn_diagnostic_explicit(
 
 
 def warn_diagnostic_message(
-    category: type[Warning], code: str, message: str, *, stacklevel: int = 2
+    category: type[Warning], code: str, message: str, *, stacklevel: int | None = None
 ) -> None:
     """Emit an already-rendered *message* carrying *code*.
 
@@ -204,9 +265,15 @@ def warn_diagnostic_message(
     it files the same text into ``cache_info()['warnings']`` before emitting and
     the log and the terminal must not drift apart. This keeps the ``.code``
     attribute and the registry check for that path.
+
+    Blames the nearest frame outside Cash unless *stacklevel* overrides it, the
+    same as :func:`warn_diagnostic`.
     """
     if code not in DIAGNOSTIC_CODES:
         raise KeyError(f"unknown diagnostic code: {code!r}")
     instance = category(message)
     instance.code = code
-    warnings.warn(instance, stacklevel=stacklevel + 1)
+    level = (
+        _stacklevel_of_first_user_frame() if stacklevel is None else stacklevel + 1
+    )
+    warnings.warn(instance, stacklevel=level)

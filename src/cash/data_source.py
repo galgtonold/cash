@@ -66,7 +66,6 @@ class DataSource(ABC):
                     "return something that moves with the data -- a version, a "
                     "digest, an mtime -- from has_changed(), or override "
                     "state_token() to return that token.",
-                    stacklevel=4,
                 )
         return token
 

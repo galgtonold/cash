@@ -96,7 +96,6 @@ def parse_annotation_line(line: str) -> CacheAnnotation | None:
             f"caching with no expiry.",
             "rewrite the value as a bare count of seconds -- `ttl=300` for five "
             "minutes -- with no unit suffix and no decimal point.",
-            stacklevel=2,
         )
         return None
 

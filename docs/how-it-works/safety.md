@@ -317,7 +317,7 @@ Cash also exposes these verdicts at runtime: `@cash:no-cache` forces a
 statement to never cache, and the decorator path has matching **purity
 markers** for functions — see [The decorator path](decorator-path.md).
 
-<!-- claim: cash/core.py:Cash._surface_purity @d65a6265, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
+<!-- claim: cash/core.py:Cash._surface_purity @2b5e1845, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP @67696b30 -->
 The decorator takes one verdict further than the notebook path: a `@cash.cache`
 function whose body resolves a dependency from a **runtime value** cash can't
 track — `eval`/`exec`/`compile`, dynamic dispatch via `getattr(obj, name)()`,

@@ -304,7 +304,6 @@ class PendingWrites:
                 "read the exception: a full disk, a cache_dir you cannot write "
                 "to, or a value that cannot be pickled -- return the data, not "
                 "the handle that produced it.",
-                stacklevel=3,
             )
 
     def drain(self, key: str) -> None:

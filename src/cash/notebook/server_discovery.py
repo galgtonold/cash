@@ -156,7 +156,6 @@ def warn_notebook_not_found_once() -> None:
     logger.warning(format_diagnostic("NOTEBOOK-NOT-FOUND", what, fix))
     warn_diagnostic(
         CashNotebookDiscoveryWarning, "NOTEBOOK-NOT-FOUND", what, fix,
-        stacklevel=2,
     )
 
 

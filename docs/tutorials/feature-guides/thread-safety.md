@@ -17,7 +17,7 @@ Net result: the computation ran twice instead of once. Both threads return the r
 
 ## The fix: double-checked locking
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @2ddd2abb, cash/core.py:Cash._warn_lock_failed @109ae4ed -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @feddd279, cash/core.py:Cash._warn_lock_failed @7150ae79 -->
 When `use_locking=True`, the miss path routes through `Cash._compute_with_lock` instead of calling the compute closure directly. The helper does three things:
 
 1. **Acquire `self.backend.lock(cache_key)`** as a context manager.
@@ -83,7 +83,7 @@ There are exactly **two** `lock()` definitions in the codebase:
 
 ## Async
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @b558ffc4 -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @dbeeaa97 -->
 `use_locking=True` **is supported on the async path**, via in-process single-flight rather than `_compute_with_lock`. Concurrent awaits of the same cache key coalesce: the first awaiter (the *leader*) registers an `asyncio.Event` in `self._async_inflight`, computes, and stores; other awaiters of the same key (the *followers*) `await` the event and then read the stored result. If the leader stored nothing — `cache_if` rejected the value, or the compute raised — followers fall through and compute themselves, so correctness is never traded for the optimization.
 
 The coalescing is keyed on the running event loop, so it dedupes an `asyncio.gather` within one process, not across processes. For cross-process async, you still want Redis. Test reference: `tests/test_core/test_async_single_flight.py`.

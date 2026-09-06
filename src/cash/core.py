@@ -1154,7 +1154,7 @@ class Cash:
         # so a log-only reader is not the one person without a handle to search.
         logger.warning(format_diagnostic("KEY-OPAQUE-CALLABLE", what, fix))
         warn_diagnostic(
-            CashImpurityWarning, "KEY-OPAQUE-CALLABLE", what, fix, stacklevel=2,
+            CashImpurityWarning, "KEY-OPAQUE-CALLABLE", what, fix,
         )
 
     def _iter_code_carriers(self, value: Any, _depth: int = 0, _seen: set | None = None):
@@ -1549,7 +1549,6 @@ class Cash:
                 fix="move the work into a plain async def that returns a list "
                     "and cache that, or leave the generator undecorated and "
                     "cache the expensive step inside it.",
-                stacklevel=3,
             )
             return func
 
@@ -2705,7 +2704,7 @@ class Cash:
                     try:
                         should_cache = bool(cache_if(res))
                     except Exception as e:
-                        self._warn_cache_if_raised(func_name, e, stacklevel=6)
+                        self._warn_cache_if_raised(func_name, e)
                         should_cache = False
                 # See the sync path.
                 self._learn_mutating_captures(func, func_name, capture_watch)
@@ -2971,7 +2970,6 @@ class Cash:
                 fix="depend on something cash can read: pass the extension's "
                     "version in as an argument, or declare a DataSource whose "
                     "token is that version or build id.",
-                stacklevel=6,
             )
             return
         self._declared_dep_snapshots[dep_key] = snapshot
@@ -3042,7 +3040,6 @@ class Cash:
                     fix="fix the resolver -- it is called with exactly the same "
                         "arguments as the function -- and clear this function's "
                         "entries after changing the source data.",
-                    stacklevel=6,
                 )
 
         if dynamic_state_parts:
@@ -3368,7 +3365,6 @@ class Cash:
                 fix=f"get the value out of the signature -- build it in the body "
                     f"or require it at the call site -- or register a hasher "
                     f"with cash.register_hasher({bad_type}, ...).",
-                stacklevel=6,
             )
         else:
             logger.debug("defaults hash failed for %s: %s", func_name, e)
@@ -3447,8 +3443,7 @@ class Cash:
                         f"result.",
                     # Explicit: ``_warn_once``'s default of 5 stops one frame
                     # short and blames the key-resolution code inside core.py.
-                    # Measured against a known call line.
-                    stacklevel=6,
+                    # Measured against a known call line.,
                 )
             else:
                 logger.debug("bound-self hash failed for %s: %s", func_name, e)
@@ -4394,7 +4389,6 @@ class Cash:
                     f"invalidate the cache.",
                     code="KEY-UNHASHABLE-GLOBAL",
                     fix=_UNHASHABLE_GLOBAL_FIX,
-                    stacklevel=6,
                 )
                 continue
             # A pre-built user-class INSTANCE (or a container of them) is only
@@ -4699,7 +4693,6 @@ class Cash:
                 f"be hashed, so changes to it will NOT invalidate the cache.",
                 code="KEY-UNHASHABLE-GLOBAL",
                 fix=_UNHASHABLE_GLOBAL_FIX,
-                stacklevel=6,
             )
             return None
 
@@ -5124,7 +5117,7 @@ class Cash:
         try:
             lock_cm.__enter__()
         except Exception as e:  # noqa: BLE001 - any acquisition failure -> unlocked
-            self._warn_lock_failed(func_name, e, stacklevel=4)
+            self._warn_lock_failed(func_name, e)
             return compute_and_store()
         try:
             raw_locked_metadata, locked_data = self.backend.get(cache_key)
@@ -5166,7 +5159,7 @@ class Cash:
                 except CacheExpiredError:
                     pass
                 except (TypeError, KeyError) as e:
-                    self._warn_metadata_invalid(func_name, e, stacklevel=6)
+                    self._warn_metadata_invalid(func_name, e)
             return compute_and_store()
         finally:
             try:
@@ -5324,7 +5317,7 @@ class Cash:
             logger.info('cash %s: %s (%.3fs)', status, func_name, execution_time)
 
     def _warn_cache_if_raised(
-        self, func_name: str, error: BaseException, *, stacklevel: int = 7,
+        self, func_name: str, error: BaseException, *, stacklevel: int | None = None,
     ) -> None:
         """Surface a raised ``cache_if`` predicate as a user-visible warning.
 
@@ -5347,7 +5340,7 @@ class Cash:
         )
 
     def _warn_metadata_invalid(
-        self, func_name: str, error: BaseException, *, stacklevel: int = 5,
+        self, func_name: str, error: BaseException, *, stacklevel: int | None = None,
     ) -> None:
         """Surface a malformed cache-metadata read as a user-visible warning.
 
@@ -5370,7 +5363,7 @@ class Cash:
         )
 
     def _warn_lock_failed(
-        self, func_name: str, error: BaseException, *, stacklevel: int = 5,
+        self, func_name: str, error: BaseException, *, stacklevel: int | None = None,
     ) -> None:
         """Surface a backend-locking failure as a user-visible warning.
 
@@ -5495,8 +5488,7 @@ class Cash:
             # ``cache`` itself and printed a line inside core.py. Measured
             # against a decoration on a known line; a reader whose warning
             # points into Cash cannot act on it, which is the whole point of
-            # this diagnostic. Single caller, so the depth is fixed.
-            stacklevel=4,
+            # this diagnostic. Single caller, so the depth is fixed.,
         )
 
     def _warn_once(
@@ -5508,7 +5500,7 @@ class Cash:
         *,
         code: str,
         fix: str,
-        stacklevel: int = 5,
+        stacklevel: int | None = None,
     ) -> None:
         """Emit a coded diagnostic at most once per
         ``(category, func_name, arg_type_name)`` for this Cash instance.
@@ -5526,16 +5518,16 @@ class Cash:
         attach to a specific arg type (e.g. store-failed). The seen-set
         key still distinguishes by func_name.
 
-        ``stacklevel`` controls which frame is blamed in the warning's
-        filename/lineno. The default of ``5`` is correct for warnings
-        emitted from ``_resolve_cache_key`` via the standard call chain
-        ``user -> stats_wrapper -> wrapper -> _resolve_cache_key -> _warn_once``.
-        Callers reached through a deeper or shallower chain pass their
-        own value:
-
-        * ``_store_in_cache`` via ``_compute_and_store`` -> ``stacklevel=6``
-        * ``_resolve_dynamic_dependencies`` (called from ``_resolve_cache_key``) -> ``stacklevel=6``
-        * ``cache(func)`` decoration-time checks -> ``stacklevel=3``
+        **Do not pass ``stacklevel``.** The blamed frame is resolved at emit
+        time by walking out to the nearest frame outside ``cash/`` -- see
+        :func:`~cash.diagnostics._stacklevel_of_first_user_frame`. This used to
+        be a per-caller constant, documented here as 5 by default with 6 and 3
+        for the deeper and shallower chains, and four separate diagnostics
+        shipped pointing at a line inside ``core.py`` anyway. A constant cannot
+        be right for a helper reached at two different depths, and an over-deep
+        one reports ``<sys>:0`` rather than clamping, so the failure was silent
+        in both directions. The parameter survives only as an override for a
+        site that needs one; none does.
         """
         rendered = format_diagnostic(code, message, fix)   # raises on a bad code
         key = (category, func_name, arg_type_name)
@@ -5811,7 +5803,6 @@ class Cash:
                 code="IMPURE-SCOPE-MUTATION",
                 fix="pass the value in as an argument and return the new one, "
                     "instead of reaching out and rewriting it.",
-                stacklevel=6,
             )
 
     def _refuses_identity_coupled(self, func_name: str, result: Any) -> bool:
@@ -5861,7 +5852,6 @@ class Cash:
             code="CACHE-IDENTITY-COUPLED",
             fix="split the function: cache the part that computes the numbers, "
                 "and draw the figure from them in an uncached function.",
-            stacklevel=6,
         )
         return True
 
@@ -5904,7 +5894,6 @@ class Cash:
             what, fix = verdict
             warn_diagnostic(
                 CashCacheIneffectiveWarning, "CACHE-NET-LOSS", what, fix,
-                stacklevel=3,
             )
 
     def _store_in_cache(
@@ -5959,11 +5948,10 @@ class Cash:
                 f"stored, and the next call recomputes.",
                 code="STORE-FAILED",
                 fix=_STORE_FAILED_FIX,
-                stacklevel=6,
             )
 
     def _warn_cache_if_bypassed(self, func_name: str, chunk_max_items: int,
-                                chunk_max_bytes: int, stacklevel: int = 6) -> None:
+                                chunk_max_bytes: int, stacklevel: int | None = None) -> None:
         """One-shot: the result outgrew a single chunk, so cache_if cannot run.
 
         Applying it would mean materializing every chunk back into memory,
@@ -6050,8 +6038,7 @@ class Cash:
                     if len(buffer) >= chunk_max_items or buffer_bytes >= chunk_max_bytes:
                         if chunk_index == 1 and cache_if is not None:
                             self._warn_cache_if_bypassed(
-                                func_name, chunk_max_items, chunk_max_bytes,
-                                stacklevel=5)
+                                func_name, chunk_max_items, chunk_max_bytes)
                         self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl,
                                           execution_time=produced_seconds)
                         buffer = []
@@ -6100,7 +6087,7 @@ class Cash:
                 if buffer:
                     if chunk_index == 1 and cache_if is not None:
                         self._warn_cache_if_bypassed(
-                            func_name, chunk_max_items, chunk_max_bytes, stacklevel=5)
+                            func_name, chunk_max_items, chunk_max_bytes)
                     self._write_one_chunk(cache_key, chunk_index, buffer, ttl=ttl,
                                           execution_time=produced_seconds)
                     chunk_index += 1
@@ -6179,7 +6166,6 @@ class Cash:
                 code="STORE-CHUNK-FAILED",
                 fix="clear the entry with f.cache_clear() before anything reads "
                     "it, then fix the write the exception names.",
-                stacklevel=4,
             )
 
     def _store_chunked_manifest(
@@ -6228,7 +6214,6 @@ class Cash:
                 f"recomputes.",
                 code="STORE-FAILED",
                 fix=_STORE_FAILED_FIX,
-                stacklevel=6,
             )
 
     def cleanup(self, max_age: int | None = None) -> int:
@@ -6521,7 +6506,6 @@ class Cash:
                 "'argument mutation' line means an object the CALLER still "
                 "holds stops being changed -- or record it as incidental with "
                 "@cash.cache(assume_safe=True).",
-            stacklevel=6,
         )
 
     def _surface_purity(
@@ -6599,7 +6583,6 @@ class Cash:
                 "you have audited, or refactor; @cash.cache(assume_safe=True) "
                 "waives the whole function instead, including anything added "
                 "to it later.",
-            stacklevel=6,
         )
 
     def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:

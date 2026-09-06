@@ -40,7 +40,7 @@ The resolver receives **the same positional and keyword arguments as the decorat
 
 ## How it works
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @9373ebe6, cash/data_source.py:DataSource.state_token @fe5201da -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @8ba1651b, cash/data_source.py:DataSource.state_token @fb386b76 -->
 The resolver lives in `Cash._resolve_dynamic_dependencies`. The path is:
 
 1. The resolver is called as `resolver(*args, **kwargs)` — same signature as the decorated function.
@@ -96,7 +96,7 @@ method is `has_changed()` (or `state_token()`), which must return a **value that
 changes when the data changes** — a version, a config digest, a tenant id. Cash
 folds that value into the cache key, so the entry invalidates when it moves.
 
-<!-- claim: cash/data_source.py:DataSource.state_token @fe5201da -->
+<!-- claim: cash/data_source.py:DataSource.state_token @fb386b76 -->
 > **Return a value, not a `bool`.** Despite the name, `has_changed()` is the
 > *state token* that goes into the key — not a yes/no flag. A `bool` only has two
 > states and cannot track changes, so the cache would never invalidate. Cash

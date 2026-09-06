@@ -1665,7 +1665,6 @@ class StatementProcessor:
                 "put `# @cash:no-cache` on the values that must reflect the "
                 "fresh stream, or seed with a fixed integer if you want them "
                 "reproducible instead.",
-                stacklevel=2,
             )
         except (SyntaxError, ValueError, AttributeError, RecursionError):
             logger.debug("%s Entropy-reseed warning failed for statement", _LOG_PROCESSOR)
@@ -3683,7 +3682,6 @@ class StatementProcessor:
             f"not the final one. Further iterations are not being stored.",
             "move `# @cash:persist` off the loop and onto a statement that "
             "produces the finished object, so it is stored once.",
-            stacklevel=2,
         )
 
     def _store_in_cache(

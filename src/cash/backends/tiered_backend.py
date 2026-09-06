@@ -144,7 +144,6 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             "raise max_cache_size to a comfortable multiple of that size, or "
             "cache something smaller -- the aggregate, the sample, or the "
             "columns you actually use.",
-            stacklevel=3,
         )
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:

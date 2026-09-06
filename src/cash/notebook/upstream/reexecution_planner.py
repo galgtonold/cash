@@ -622,7 +622,6 @@ class ReexecutionPlanner:
             "re-run the cell that draws the plot if the image should be "
             "rewritten; to stop this arising at all, save through the figure "
             "object -- fig.savefig(path) -- rather than through pyplot.",
-            stacklevel=2,
         )
         trace_event("refuse_orphaned_figure_write", stmt=code[:80], producer=producer)
         if self.debug:

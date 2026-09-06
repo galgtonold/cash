@@ -23,7 +23,7 @@ Handlers can branch on the code rather than the wording, which is free to change
     if any(getattr(w.message, "code", None) == "CACHE-THRASH" for w in caught):
         ...
 
-<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @8c8ea21a, cash/diagnostics.py:warn_diagnostic @eb034ce7 -->
+<!-- claim: cash/diagnostics.py:warn_diagnostic_explicit @8c8ea21a, cash/diagnostics.py:warn_diagnostic @4b561034 -->
 **That recipe does not reach every warning.** `.code` is an attribute set on a
 warning *object*, and the three notebook-side diagnostics are raised through
 `warnings.warn_explicit`, which takes a message *string* and offers no way to
@@ -75,7 +75,7 @@ For the class hierarchy, see [Exceptions & warnings](api/exceptions.md).
 
 ## ANNOT-TTL-INVALID {#annot-ttl-invalid}
 
-<!-- claim: cash/notebook/annotations.py:parse_annotation_line @519e5ecd -->
+<!-- claim: cash/notebook/annotations.py:parse_annotation_line @f843a7c6 -->
 **What happened.** You put `# @cash:ttl=` on a statement in a notebook and the
 value after the `=` is not a whole number of seconds, so Cash ignored that
 annotation entirely and the statement keeps whatever caching it would have had
@@ -96,7 +96,7 @@ works. Two things can still expire it, and neither is what you wrote: a
 session-wide TTL from `%cash_on ttl=N`, and a `default_ttl` set on a backend
 tier, which stamps every entry that arrives without one of its own.
 
-<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce, cash/notebook/annotations.py:parse_annotation_line @519e5ecd -->
+<!-- claim: cash/notebook/annotations.py:ANNOTATION_PATTERN @95980cce, cash/notebook/annotations.py:parse_annotation_line @f843a7c6 -->
 **What to do.** Rewrite the value as a bare count of seconds: `# @cash:ttl=300`
 for five minutes, `3600` for an hour, `86400` for a day. Annotations on *other*
 lines were parsed normally and still apply — a `# @cash:persist` above the
@@ -115,7 +115,7 @@ switched off.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @8a01c3c8 -->
+<!-- claim: cash/core.py:Cash.cache @b4f1f605 -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -138,7 +138,7 @@ not ignore it if this is the function you were trying to speed up.
 
 ## CACHE-IDENTITY-COUPLED {#cache-identity-coupled}
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @747f9591 -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @27e72e7a -->
 **What happened.** Your cached function returned a live matplotlib `Figure` or
 `Axes` — or a list, tuple, dict or array holding one — and Cash refused to
 store it. "Identity-coupled" is Cash's term for an object that a library keeps
@@ -176,7 +176,7 @@ out of the cache is in the cache — which matters a great deal if the predicate
 was there to stop an incomplete or unwanted result being stored, and not at all
 if it was there to save space.
 
-<!-- claim: cash/core.py:Cash._warn_cache_if_bypassed @44d8659d -->
+<!-- claim: cash/core.py:Cash._warn_cache_if_bypassed @f39e544a -->
 **What to do.** To get the predicate back, the result has to arrive in one
 piece. Either **raise** `chunk_max_items` / `chunk_max_bytes` above the size
 this result actually reaches, or return a list instead of an iterator — a
@@ -198,7 +198,7 @@ exception when Cash called it with the function's return value. The message
 names the exception and its text. Your call itself returned normally — only the
 storing was abandoned.
 
-<!-- claim: cash/core.py:Cash._warn_cache_if_raised @27dd375e -->
+<!-- claim: cash/core.py:Cash._warn_cache_if_raised @ed2eb8f1 -->
 **Why it matters.** Cash treats a predicate that raises as "do not cache", so
 every call whose *result* makes it raise goes uncached and recomputes. This is
 scoped to the result, not to the function: calls returning a shape the predicate
@@ -219,7 +219,7 @@ on one of those results pays full compute, every time.
 
 ## CACHE-LOOP-GROWTH {#cache-loop-growth}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @a4ac20a9 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_persist_amplification @bf8e0721 -->
 **What happened.** A statement marked `# @cash:persist` sits inside a loop, and
 the value it stores grows on each pass — a list being appended to, a frame
 being concatenated. Cash wrote a fresh copy of the whole thing every iteration,
@@ -286,7 +286,7 @@ warning on this page most worth reading, and the last one to filter.
 
 ## CACHE-THRASH {#cache-thrash}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @13414cba -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._warn_evict_after_write @d3225bf8 -->
 **What happened.** The cache reached its size cap and is evicting entries
 within a couple of writes of storing them, so it re-writes and re-evicts
 instead of caching durably. The message names the cap, how much room is left on
@@ -306,7 +306,7 @@ roomier volume.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @4723a8f8 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @2bde4795 -->
 **What happened.** A single value is larger than a safe fraction of every
 persistent tier's cap, so Cash offered it to the RAM tier instead of writing it
 to disk. Writing it would immediately push the cache past its cap and evict it
@@ -365,7 +365,7 @@ progress marker, a temp file the function cleans up itself — record that
 decision with `@cash.cache(assume_safe=True)`, which is what the message
 suggests.
 
-<!-- claim: cash/core.py:Cash._report_observed_effects @6869da5e -->
+<!-- claim: cash/core.py:Cash._report_observed_effects @960249ed -->
 One caveat worth knowing: only the path this particular call took was watched.
 An effect behind a branch that did not run was not seen, so silence here is not
 a proof of purity — this supplements the source scan behind
@@ -390,7 +390,7 @@ moved — which means calling the function is what moves it. The message names t
 variable and says whether it is a module global or a variable captured from an
 enclosing scope.
 
-<!-- claim: cash/core.py:Cash._learn_mutating_captures @b574a676 -->
+<!-- claim: cash/core.py:Cash._learn_mutating_captures @367b8947 -->
 **Why it matters.** Two things follow, and neither is visible at the call site.
 A cache hit runs no body, so the write stops happening: a counter stops
 counting, an accumulator stops accumulating, and code that reads the variable
@@ -421,7 +421,7 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @d65a6265 -->
+<!-- claim: cash/core.py:Cash._surface_purity @2b5e1845 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -482,7 +482,7 @@ stale-result kinds, and nothing else will tell you when they bite.
 
 ## KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
 
-<!-- claim: cash/data_source.py:DataSource.state_token @fe5201da -->
+<!-- claim: cash/data_source.py:DataSource.state_token @fb386b76 -->
 **What happened.** You wrote a `DataSource` subclass, and Cash asked it for the
 value to fold into the cache key. That value comes from `has_changed()` unless
 you override `state_token()` — and yours returned `True` or `False`. Despite
@@ -527,7 +527,7 @@ it every time is fine. Nothing on this path can hand you a wrong result.
 
 ## KEY-DEPENDS-ON-OPAQUE {#key-depends-on-opaque}
 
-<!-- claim: cash/core.py:Cash._register_declared_callable_dep @f28f4f0c -->
+<!-- claim: cash/core.py:Cash._register_declared_callable_dep @ab2edea1 -->
 **What happened.** You named a callable in `depends_on=`, and Cash could not
 read its source to fingerprint it — it is a builtin, or it lives in a compiled
 extension. The declaration was accepted and does nothing.
@@ -552,7 +552,7 @@ seriously only when the opaque target is code you compile yourself.
 
 ## KEY-DYNAMIC-DEP-FAILED {#key-dynamic-dep-failed}
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @9373ebe6 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @8ba1651b -->
 **What happened.** A resolver you passed to `dynamic_depends_on=` raised when
 Cash called it to find out which data sources this particular call depends on.
 Cash carried on and built the key without that dependency. The message names
@@ -576,7 +576,7 @@ silent declaration that does nothing is worse than no declaration.
 
 ## KEY-INSTANCE-STATE {#key-instance-state}
 
-<!-- claim: cash/core.py:Cash._fold_bound_self @71e4d747 -->
+<!-- claim: cash/core.py:Cash._fold_bound_self @22b72518 -->
 **What happened.** You cached an already-bound method — `c.cache(obj.method)`.
 Cash folds the instance into the key so that two objects in different states do
 not share results, but this instance could not be hashed, so it fell back to
@@ -687,7 +687,7 @@ that is fine.
 `def` line, not something a caller passed — could not be fingerprinted, so Cash
 declined to cache the call. The message names the type.
 
-<!-- claim: cash/core.py:Cash._defaults_unhashable @29d88452 -->
+<!-- claim: cash/core.py:Cash._defaults_unhashable @56ac2c5f -->
 **Why it matters.** Cash folds defaults into the key so that `build()` and
 `build(Schema)` are recognised as the same call, and so that changing a default
 invalidates. It cannot tell whether an unhashable default has changed, and it
@@ -708,7 +708,7 @@ whole function's caching, not just the calls that rely on the default.
 
 ## KEY-UNHASHABLE-GLOBAL {#key-unhashable-global}
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @fbb1e26a -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @72ffaaac -->
 **What happened.** The function reads a module-level variable — its own
 module's, or a helper's, in which case the message shows a dotted name — and
 Cash could not fingerprint that variable's value. Cash normally folds the
@@ -788,7 +788,7 @@ goes top to bottom once, that costs nothing, because everything runs in order
 anyway. It matters in the edit-and-re-run-one-cell loop, where a downstream cell
 can be handed a value computed from the previous version of the cell above.
 
-<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @97a13eb0 -->
+<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @486a93e9 -->
 **What to do.** Under papermill, nbconvert or a CI job there is no live Jupyter
 Server to ask, so this is expected and there is nothing to fix. In JupyterLab or
 VS Code it usually means a stale runtime: restart the kernel, and if it persists
@@ -814,7 +814,7 @@ edited cell depends on, and the plan contained a bare `plt.savefig(path)` whose
 figure is *not* being redrawn in the same pass. It dropped that write from the
 plan instead of performing it. The file on disk is untouched.
 
-<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._warn_orphaned_figure_write @960ada64 -->
+<!-- claim: cash/notebook/upstream/reexecution_planner.py:ReexecutionPlanner._warn_orphaned_figure_write @f5ce1b7c -->
 **Why it matters.** The refusal is the protection. `plt.savefig(path)` saves
 pyplot's *current* figure, which it looks up in a process-global registry — it
 has no link to any variable, so there is nothing for Cash to follow back to the
@@ -886,7 +886,7 @@ answers a different question without saying so.
 
 ## RANDOM-SEED-NONE {#random-seed-none}
 
-<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @899c0ae1 -->
+<!-- claim: cash/notebook/statement/processor.py:StatementProcessor._warn_entropy_reseed @a794f6b6 -->
 **What happened.** A statement called `seed(None)` — `np.random.seed(None)`,
 `random.seed()` with no argument, or the same on another supported module. That
 asks for a different, entropy-derived random stream on every run, and Cash
@@ -997,7 +997,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @64592a13 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @90f4a751 -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a
@@ -1060,7 +1060,7 @@ version id, no last-modified time. The only thing left to compare is the
 object's size in bytes, so that is what went into the cache key. The message
 names the URL and which validators were missing.
 
-<!-- claim: cash/remote_source.py:_warn_weak_token @1bf6ef79 -->
+<!-- claim: cash/remote_source.py:_warn_weak_token @bce362c5 -->
 **Why it matters.** A size only catches edits that change the byte count.
 Correct a value in a fixed-width column, rewrite a row to the same length,
 replace the object with a different one that happens to be the same size, and
@@ -1095,7 +1095,7 @@ URL and the exception. Rather than serve a result whose freshness it could not
 check, Cash produced a token it has never seen before, which forces a recompute.
 The answer you received is a real one.
 
-<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @84b777c5 -->
+<!-- claim: cash/remote_source.py:RemoteFileDataSource._warn_failure @ed90c553 -->
 **Why it matters.** This fails closed on purpose: an outage costs you the
 speedup, never the correctness. What it costs while it lasts is the cache
 itself. Every call to that function recomputes, and each failed check leaves
@@ -1139,7 +1139,7 @@ entry. Measured: three calls after the failure ran the body three times and each
 returned all ten items; the call after the write succeeded was the last one to
 run the body.
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @2ddd2abb -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @feddd279 -->
 Both read paths run that probe, including the double-checked re-read taken
 inside the lock when `use_locking=True`. Until 2026-09-06 the locking path
 skipped it and served the broken entry as a *short* iterator — three of ten
@@ -1165,7 +1165,7 @@ failing until you fix its cause.
 result to the cache failed. The message names the backend and the exception.
 Nothing was stored.
 
-<!-- claim: cash/core.py:Cash._store_in_cache @5c806833 -->
+<!-- claim: cash/core.py:Cash._store_in_cache @d798a24e -->
 **Why it matters.** The result you received is correct — the failure is on the
 storage side only, and Cash deliberately reports it rather than raising it into
 your code. If this happens once, it costs one recompute. If it happens on every
@@ -1221,7 +1221,7 @@ bookkeeping stored alongside it — the record holding the timestamp, the TTL an
 which serialiser wrote the value. It treated the entry as absent and
 recomputed. The message names the exception.
 
-<!-- claim: cash/core.py:Cash._warn_metadata_invalid @02a17bd3 -->
+<!-- claim: cash/core.py:Cash._warn_metadata_invalid @f1d92b39 -->
 **Why it matters.** Mostly it does not, and that is worth saying plainly. The
 fallback is the right one: an unreadable entry is ignored rather than
 half-trusted, so you get a fresh, correct result. What it costs is one

@@ -225,7 +225,7 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @fbb1e26a -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @72ffaaac -->
 Only globals that are **read** participate — and that includes globals read
 by a **helper** rather than by the cached function itself, so a helper
 returning a module-level `CONFIG` invalidates its caller when that config
@@ -449,7 +449,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @8a01c3c8 -->
+<!-- claim: cash/core.py:Cash.cache @b4f1f605 -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -560,7 +560,7 @@ def load_user(user_id):
     return json.load(open(f"/data/users/{user_id}.json"))
 ```
 
-<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @9373ebe6 -->
+<!-- claim: cash/core.py:Cash._resolve_dynamic_dependencies @8ba1651b -->
 The resolver runs with the same `args/kwargs` as the function on every call.
 
 !!! warning "A resolver exception is only *sometimes* survivable"
@@ -606,7 +606,7 @@ is bypassed (warning fires) — see the iterator section below.
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @d65a6265, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @2b5e1845, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
@@ -671,7 +671,7 @@ callables.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @64592a13 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @90f4a751 -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -955,7 +955,7 @@ side effect, and only cache the pure part.
 
 ### A function returning a matplotlib `Figure` is never cached
 
-<!-- claim: cash/core.py:Cash._refuses_identity_coupled @747f9591 -->
+<!-- claim: cash/core.py:Cash._refuses_identity_coupled @27e72e7a -->
 `@cash.cache` refuses to store a result that is — or contains — a matplotlib
 `Figure` or `Axes`, and warns once saying so.
 

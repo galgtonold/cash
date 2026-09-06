@@ -1284,7 +1284,6 @@ class FileBackend(CacheBackend):
             f"re-evicting rather than caching durably -- which is slower than "
             f"no cache at all.{shape}",
             room,
-            stacklevel=2,
         )
 
     def clear(self) -> None:

@@ -215,7 +215,6 @@ def warn_validation_cost_once(
         "for reads cash tracked automatically, widen the window with "
         "cash.configure(remote_revalidate_max_age_seconds=...), accepting that "
         "a change goes unnoticed for that long.",
-        stacklevel=4,
     )
 
 
@@ -263,7 +262,6 @@ def _warn_weak_token(url: str, detail: str) -> None:
         "pin a version in the URL (?versionId=, #generation=), or write a "
         "DataSource whose token is something you control -- a run id, a digest "
         "from a manifest.",
-        stacklevel=3,
     )
 
 
@@ -506,8 +504,7 @@ class RemoteFileDataSource(DataSource):
             # the shallow one exactly as it was. Fixing the shallow path needs
             # the depth resolved at emit time (walk out to the first frame
             # outside ``cash/``), which belongs in ``warn_diagnostic`` so every
-            # site benefits, not in another constant here.
-            stacklevel=9,
+            # site benefits, not in another constant here.,
         )
 
     def __repr__(self) -> str:
