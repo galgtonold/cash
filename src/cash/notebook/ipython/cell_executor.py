@@ -613,7 +613,23 @@ def _exec_source_for_node(
         # back to `None` -- the unparsed form -- exactly like any other
         # unrecoverable statement, instead of handing the executor text
         # that will raise there.
-        compile(body, "<cash-recovery-check>", "exec")
+        #
+        # The flag matches what the ASYNC execution path compiles with
+        # (`processor._execute_statement_async`). Without it this check is
+        # STRICTER than the path it is guarding, and a decorator expression
+        # that is itself a bare top-level `await` -- `@await get_deco()`,
+        # legal since PEP 614 because decorators evaluate in the enclosing
+        # scope -- fails the check, falls back, and silently stops honouring
+        # the waiver in an autoawait cell (measured: 0 warnings before this
+        # check existed, 1 with it unflagged, 0 again once flagged).
+        #
+        # Passing it unconditionally cannot over-accept on the SYNC path
+        # either: measured, top-level `await` fails `compile()` identically
+        # for the recovered text and for the unparsed fallback, so the
+        # recovery decision changes nothing there -- such a cell fails the
+        # same way with or without this function.
+        compile(body, "<cash-recovery-check>", "exec",
+                ast.PyCF_ALLOW_TOP_LEVEL_AWAIT)
         return body
     except Exception:  # noqa: BLE001 - execution must never break over this
         return None

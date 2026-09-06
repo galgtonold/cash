@@ -205,3 +205,37 @@ def test_an_unannotated_line_still_warns_in_a_notebook_cell_with_top_level_await
     are off, or because the async path silently skips the purity check
     altogether."""
     assert async_cell_runner(PLAIN_ASYNC) == 1
+
+
+AWAIT_DECORATED_ASYNC = (
+    "import time\n"
+    "async def get_deco():\n"
+    "    return c.cache\n"
+    "@await get_deco()\n"
+    "def audited(n):\n"
+    "    time.sleep(0.01)  # @cash:assume-safe - deliberate, this is the test\n"
+    "    return n * 2\n"
+    "audited(1)\n"
+)
+
+
+def test_a_waiver_survives_a_decorator_that_is_itself_a_top_level_await(async_cell_runner):
+    """The recovery `compile()` sanity check must use the same flags as the
+    path it guards.
+
+    PEP 614 allows any expression as a decorator, and decorators evaluate in
+    the ENCLOSING scope -- so `@await get_deco()` is a bare top-level `await`
+    and needs `PyCF_ALLOW_TOP_LEVEL_AWAIT` to compile at all. The sanity
+    check added for the PEP 614 crash originally omitted that flag, making it
+    stricter than `_execute_statement_async`'s own compile: the recovered
+    text failed the check, fell back to the unparsed form, and the waiver
+    silently stopped being honoured -- the original bug returning by a new
+    route. Measured across the three revisions: 0 warnings before the check
+    existed, 1 with the unflagged check, 0 again once flagged.
+
+    Nothing crashed in any of those states, which is exactly why this needs a
+    test: the failure is invisible.
+    """
+    assert async_cell_runner(AWAIT_DECORATED_ASYNC) == 0, (
+        "the sanity check rejected valid recovered source and dropped the waiver"
+    )
