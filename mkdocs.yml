@@ -177,6 +177,7 @@ nav:
     - Experimental: api/experimental.md
   - Resources:
     - FAQ: faq.md
+    - Warnings: warnings.md
     - Glossary: glossary.md
     - Versioning & compatibility: versioning.md
     - Contributing: contributing.md
