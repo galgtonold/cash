@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from cash.diagnostics import DIAGNOSTIC_CODES
+
 PAGE = Path(__file__).resolve().parents[2] / "docs" / "warnings.md"
 SECTION = re.compile(r"^## ([A-Z][A-Z-]+) \{#([a-z][a-z-]+)\}$", re.M)
 REQUIRED = (
@@ -46,3 +48,17 @@ def test_every_section_answers_all_four_questions():
         if heading not in body
     ]
     assert not missing, f"sections missing required headings: {missing}"
+
+
+def test_every_registered_code_has_a_section():
+    """The load-bearing half: a code with no section is a dead link."""
+    undocumented = sorted(DIAGNOSTIC_CODES - set(documented_codes()))
+    assert not undocumented, f"registered but not documented: {undocumented}"
+
+
+def test_every_section_is_a_registered_code():
+    """The other half: a section for a code nothing emits is dead weight that
+    reads as a feature. Retiring a code means leaving a stub that points at its
+    replacement -- and removing it from the registry, which this catches."""
+    orphaned = sorted(set(documented_codes()) - DIAGNOSTIC_CODES)
+    assert not orphaned, f"documented but not registered: {orphaned}"
