@@ -8,6 +8,8 @@ The visual surface is documented in
 
 from __future__ import annotations
 
+import re
+
 from cash.notebook.badge_renderer.renderers.html import _code_html, render_html
 from cash.notebook.badge_renderer.view_builder import build_interactive_badge
 from cash.notebook.cache_status import CacheStatus
@@ -630,6 +632,31 @@ def test_multiline_row_is_stamped_data_multiline_single_line_is_not() -> None:
     assert "data-multiline" not in body2
 
 
+def _rule_blocks(css: str, selector: str) -> list[str]:
+    """Declaration bodies of every rule whose selector text ends in ``selector``.
+
+    Whitespace-insensitive so it works whether ``css`` is pretty-printed (as
+    written in ``html._CSS``) or minified (as actually emitted -- see
+    ``_CSS_MIN`` / ``_cssmin.minify_css``): the selector text is matched
+    literally, then any amount of whitespace, then the opening brace.
+
+    A leading-boundary check excludes a COMPOUND selector gluing another
+    simple selector directly onto this one with no combinator (e.g.
+    ``label.c3-row`` is not a match for ``.c3-row``), and the immediate
+    ``\\s*\\{`` requirement excludes one extending it the other way (e.g.
+    ``.c3-row[data-clickable="true"]`` is not a match for ``.c3-row``: the
+    class name is followed by ``[``, never whitespace-then-``{``). It does
+    NOT exclude a selector reached through a combinator (``.c3-codepill >
+    .c3-code``, ``.c3-loop-head .c3-code``) -- those really do end in
+    ``.c3-code`` followed by nothing but a brace, just with an ancestor
+    constraint on it -- so callers with more than one same-named rule in
+    play (bare and combinator-qualified alike) should pick theirs out by a
+    distinguishing declaration, not by assuming there is only one match.
+    """
+    pattern = re.compile(r"(?<![\w.])" + re.escape(selector) + r"\s*\{([^{}]*)\}")
+    return [re.sub(r"\s+", "", body) for body in pattern.findall(css)]
+
+
 def test_c3_row_default_alignment_is_center_start_is_scoped_separately() -> None:
     """Finding 4: an earlier version of this fix set ``align-items: start``
     directly on the bare ``.c3-row`` rule, which moves EVERY row's
@@ -639,16 +666,17 @@ def test_c3_row_default_alignment_is_center_start_is_scoped_separately() -> None
     variant.
     """
     html = render_html(build_interactive_badge([]))
-    marker = "grid-template-columns: 5px minmax(0, 1fr) 70px 80px 76px"
-    marker_idx = html.index(marker)
-    block_start = html.rindex(".c3-row {", 0, marker_idx)
-    block = html[block_start:html.index("}", marker_idx)]
-    assert "align-items: center" in block
-    assert "align-items: start" not in block
 
-    scoped_start = html.index('.c3-row[data-multiline="true"] {')
-    scoped_block = html[scoped_start:html.index("}", scoped_start)]
-    assert "align-items: start" in scoped_block
+    blocks = _rule_blocks(html, ".c3-row")
+    block = next((b for b in blocks if "grid-template-columns" in b), None)
+    assert block is not None, f"no .c3-row rule declares grid-template-columns; rules={blocks}"
+    assert "align-items:center" in block
+    assert "align-items:start" not in block
+
+    scoped_blocks = _rule_blocks(html, '.c3-row[data-multiline="true"]')
+    scoped = next((b for b in scoped_blocks if "align-items" in b), None)
+    assert scoped is not None, f"no .c3-row[data-multiline] rule declares align-items; rules={scoped_blocks}"
+    assert "align-items:start" in scoped
 
 
 def test_the_row_code_cell_still_ellipsizes_long_lines() -> None:
@@ -673,24 +701,26 @@ def test_the_row_code_cell_still_ellipsizes_long_lines() -> None:
     ``.c3-code {`` is not unique in the stylesheet: a bare neutralization
     rule (background/border/box-shadow only) comes first, and two compound
     selectors (``.c3-codepill > .c3-code {``, ``.c3-loop-head .c3-code {``)
-    also contain the substring. Anchor on the styling rule's own
-    "!important throughout" comment instead of the first ``.c3-code {``
-    match, which resolves to the wrong (neutralization) rule.
+    also contain the substring. The minified stylesheet also drops the
+    styling rule's "!important throughout" comment (comments never ship --
+    see ``_cssmin.minify_css``), so a comment can no longer disambiguate
+    them either way. Pick the bare ``.c3-code`` rule that actually declares
+    ``text-overflow`` instead -- the neutralization rule never does, and
+    that holds regardless of rule order or whitespace.
     """
     html = render_html(build_interactive_badge([]))
-    marker = "/* !important throughout"
-    marker_idx = html.index(marker)
-    css_start = html.rindex(".c3-code {", 0, marker_idx)
-    block = html[css_start:html.index("}", marker_idx)]
-    assert "text-overflow: ellipsis" in block, (
+    bare_blocks = _rule_blocks(html, ".c3-code")
+    block = next((b for b in bare_blocks if "text-overflow:" in b), None)
+    assert block is not None, f"no bare .c3-code rule declares text-overflow; rules={bare_blocks}"
+    assert "text-overflow:ellipsis" in block, (
         "the truncation indicator must be declared -- without it a long "
         "line is hard-cut mid-glyph with no marker"
     )
-    assert "overflow: hidden" in block, (
+    assert "overflow:hidden" in block, (
         "overflow:hidden must stay -- it defeats Jupyter's overflow:auto, which "
         "would otherwise put a horizontal scrollbar on every row"
     )
-    assert "white-space: pre" in block, (
+    assert "white-space:pre" in block, (
         "pre (not nowrap) is what lets a genuinely multi-line statement "
         "render as multiple lines at all -- text-overflow then truncates "
         "PER line, it does not collapse the block to one"

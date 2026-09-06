@@ -6,9 +6,13 @@ timer thread to call ``publish_display_data`` from a non-main thread, which
 JupyterLab treated as **new** output areas instead of updates — resulting in
 dozens of duplicate progress badges during long-running statements.
 
-The fix disables the background badge timer entirely.  These tests verify
-that each cell execution produces exactly **one** HTML ``display_data``
-output (the badge), regardless of how many statements the cell contains.
+The fix defers the background badge timer rather than disabling it: it is
+armed before each statement, cancelled if the statement finishes first, and
+published -- naming whichever statement is actually running -- only if it is
+still in flight when the timer fires.  These tests verify that each cell
+execution still produces exactly **one** HTML ``display_data`` output (the
+badge), regardless of how many statements the cell contains or whether one
+of them is slow enough for the deferred timer to fire.
 
 In nbclient the ``update_display_data`` kernel message correctly updates
 existing outputs in-place (it doesn't append), so we can assert the output
@@ -86,8 +90,10 @@ class TestBadgeNoDuplicates:
 
         This is the core regression test: the old bug was that a background
         timer thread would fire publish_display_data every ~2 seconds, creating
-        new output areas.  With the timer disabled, only main-thread badge
-        renders should appear.
+        new output areas.  The ``time.sleep(3)`` below is slow enough that the
+        deferred timer still fires once while the statement is running, but it
+        updates the SAME ``display_id`` the main-thread renders use instead of
+        opening a new output area, so the count stays at 1.
         """
         nb_runner.create_notebook([
             "import time",
@@ -110,6 +116,49 @@ class TestBadgeNoDuplicates:
         assert html_count <= 1, (
             f"Slow cell has {html_count} HTML display_data outputs, expected <= 1. "
             f"Timer thread may be creating duplicate badge outputs."
+        )
+
+    def test_slow_interior_statement_no_duplicate_badges(self, nb_runner):
+        """The slow statement is not the cell's FIRST one.
+
+        Every other test in this file walks one of two shapes: a lone slow
+        statement, or a run of fast ones.  Neither reaches this defect, and
+        the real tour notebook -- where a cold ``import matplotlib.pyplot``
+        and a sleeping ``@cash.cache`` call both sit mid-cell -- stored two
+        badges per cell while every test here stayed green.
+
+        The mechanism needs both halves of the shape.  A statement executes
+        inside ``IPython.utils.capture.capture_output(display=True)``, which
+        swaps ``shell.display_pub`` for a ``CapturingDisplayPublisher``
+        PROCESS-wide (not per-thread).  The progress timer fires on a
+        background thread while that swap is in place, so its RUNNING badge
+        is swallowed into the STATEMENT's captured outputs instead of going
+        to the frontend -- and cash then replays those with
+        ``publish_display_data(data, metadata)``, which drops ``transient``
+        and ``update``.  The badge lands as a second, display_id-less output
+        that no later update can ever reach: a frozen RUNNING badge stored
+        for good beside the cell's real DONE badge.
+        """
+        nb_runner.create_notebook([
+            (
+                "import time\n"
+                "ready = 1\n"
+                "time.sleep(1.5)\n"
+                "print(f'ready={ready}')"
+            ),
+        ])
+        nb_runner.start_kernel()
+        nb_runner.run_all()
+
+        assert 'ready=1' in nb_runner.get_output(1)
+
+        cell = nb_runner.get_cell(1)
+        html_count = _count_html_display_outputs(cell)
+        assert html_count <= 1, (
+            f"A cell whose slow statement is not its first has {html_count} HTML "
+            f"display_data outputs, expected <= 1. A progress badge published "
+            f"from the timer thread was captured as the statement's own output "
+            f"and replayed without its display_id."
         )
 
     def test_second_run_cached_one_badge(self, nb_runner):

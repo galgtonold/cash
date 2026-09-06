@@ -809,11 +809,19 @@ a.c3-bug:hover {{
 }}
 """
 
+from ._cssmin import minify_css
+
+# Minified once, here, rather than at build time or as a committed generated
+# file: it costs 0.57ms against a 157ms `import cash`, and it keeps an editable
+# dev install byte-identical to the wheel users receive. `_CSS` above stays the
+# readable source -- the tests compare against it.
+_CSS_MIN = minify_css(_CSS)
+
 
 # Emit the style block at most once per <details id>. Because each
 # notebook output is a fresh DOM fragment we can re-emit it cheaply; the
 # browser deduplicates rule sets.
-_STYLE_BLOCK = f"<style>{_CSS}</style>"
+_STYLE_BLOCK = f"<style>{_CSS_MIN}</style>"
 
 
 # ---------------------------------------------------------------------------
