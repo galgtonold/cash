@@ -29,8 +29,9 @@ Cash warns the first time this happens:
 
 > Unseeded randomness restored from cache … The value you are seeing is a replay of an earlier run, not a fresh draw — re-running will not change it.
 
-<!-- claim: cash/notebook/cost_model.py:_COEFFS @19a78800 broad="the claim is that a cost floor, not the kind of randomness, decides caching" -->
-**Why it looks inconsistent.** Cheap draws behave differently. A statement that runs in well under 10 ms falls below the cost floor and is never cached at all, so `random.random()` *does* give you a new number each time while `np.random.rand(200_000)` does not. The rule is the cost floor, not the kind of randomness.
+**A cheap draw is replayed too.** It is tempting to reason that a statement too cheap to cache must therefore be redrawn. It is not: freezing does not require caching. In a notebook the RNG rewind replays the value whether or not it was ever stored, so a cell containing nothing but `v = random.random()` returns the identical number on a re-run, exactly as `np.random.rand(200_000)` does.
+
+The cost floor decides whether a value is worth *persisting*. It does not decide whether you see the same number twice.
 
 **What to do**
 
