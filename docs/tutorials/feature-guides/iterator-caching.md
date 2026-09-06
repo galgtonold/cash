@@ -168,10 +168,12 @@ The returned object satisfies the iterator protocol — `iter(x) is x`, `__next_
 
 The next call to the decorated function will see a miss on the manifest key (manifests live in the same backend tier as chunks, so they're evicted together in typical configurations) and recompute. Test reference: `test_chunked_iterator_missing_chunk_terminates_safely` in `tests/test_core/test_iterator_caching.py`.
 
-<!-- claim: cash/core.py:Cash._chunks_are_intact @c539039c, cash/core.py:Cash._compute_with_lock @4cc0528e -->
-That miss is `Cash._chunks_are_intact`, which `_try_get_cached` runs on every hit: it `get_metadata`-probes each chunk the manifest claims and treats a manifest with a hole as absent. It covers the default read path only. The double-checked re-read inside `Cash._compute_with_lock` validates the TTL and goes straight to serving the hit without that probe, so with `use_locking=True` an incomplete manifest is served as a *short* iterator instead of recomputing — measured, the same broken entry returns 10 items and recomputes with locking off, 3 items and no recompute with locking on. See [`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed).
+<!-- claim: cash/core.py:Cash._chunks_are_intact @769a0a1e, cash/core.py:Cash._compute_with_lock @2ddd2abb -->
+That miss is `Cash._chunks_are_intact`, which `get_metadata`-probes each chunk the manifest claims and treats a manifest with a hole as absent. **Both read paths run it** — `_try_get_cached` on the default path, and the double-checked re-read inside `Cash._compute_with_lock` when `use_locking=True` — so an incomplete manifest recomputes either way.
 
-<!-- claim: cash/core.py:Cash._write_one_chunk @599e6549 -->
+The locking path skipped that probe until 2026-09-06 and served the broken entry as a *short* iterator instead: measured, the same entry returned 10 items and recomputed with locking off, and 3 items with no recompute with locking on — 0 items when the missing chunk was the first one. See [`STORE-CHUNK-FAILED`](../../warnings.md#store-chunk-failed).
+
+<!-- claim: cash/core.py:Cash._write_one_chunk @538539cc -->
 TTL is honored uniformly: each chunk inherits the manifest's TTL (`Cash._write_one_chunk` propagates it), so `Cash.cleanup()` reclaims expired chunks alongside the expired manifest. Test reference: `test_chunked_chunks_inherit_manifest_ttl` in `tests/test_core/test_iterator_caching.py`.
 
 ## Persistence and backend tiers

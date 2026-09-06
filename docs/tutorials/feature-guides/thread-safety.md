@@ -17,11 +17,11 @@ Net result: the computation ran twice instead of once. Both threads return the r
 
 ## The fix: double-checked locking
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @4cc0528e, cash/core.py:Cash._warn_lock_failed @109ae4ed -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @2ddd2abb, cash/core.py:Cash._warn_lock_failed @109ae4ed -->
 When `use_locking=True`, the miss path routes through `Cash._compute_with_lock` instead of calling the compute closure directly. The helper does three things:
 
 1. **Acquire `self.backend.lock(cache_key)`** as a context manager.
-2. **Re-read the cache inside the lock.** If the entry now exists (because a concurrent caller wrote it while the current thread was waiting on the lock), return the cached value — `_validate_ttl` runs, then `_wrap_iterator_hit` reconstructs iterator chunks if needed.
+2. **Re-read the cache inside the lock.** If the entry now exists (because a concurrent caller wrote it while the current thread was waiting on the lock), return the cached value — `_chunks_are_intact` confirms a chunked manifest can still be fully resolved, `_validate_ttl` runs, then `_wrap_iterator_hit` reconstructs iterator chunks if needed. A manifest missing a chunk falls through to step 3 rather than being served short.
 3. **Otherwise compute and store inside the lock.**
 
 The "double check" is the read on step 2 — the first check was the lock-free read on the wrapper's hot path before `_compute_with_lock` was called. The second read is needed because the first one is racy with concurrent writers.

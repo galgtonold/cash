@@ -982,3 +982,68 @@ def test_chunked_chunks_with_no_ttl_have_none(tmp_path):
         )
 
     backend.shutdown()
+
+
+def _chunked_gen(cache, counter):
+    """Defined in a helper so __qualname__ is stable across Cash instances."""
+    @cache.cache(chunk_max_items=3)
+    def gen():
+        counter["calls"] += 1
+        yield from range(10)
+    return gen
+
+
+def _cache_then_break_a_chunk(tmp_path, monkeypatch, *, use_locking):
+    """Cache a chunked generator, then delete one of its chunks.
+
+    Returns (fresh_reader, counter, calls_after_write). The backend exposes no
+    key enumeration, so the chunk keys are captured as they are written.
+    """
+    from cash.backends.file_backend import FileBackend
+
+    store = str(tmp_path / "store")
+    written: list[str] = []
+    original = Cash._write_one_chunk
+
+    def spy(self, cache_key, chunk_index, *args, **kwargs):
+        written.append(f"{cache_key}:chunk_{chunk_index}")
+        return original(self, cache_key, chunk_index, *args, **kwargs)
+
+    monkeypatch.setattr(Cash, "_write_one_chunk", spy)
+
+    counter = {"calls": 0}
+    writer = Cash(backend=FileBackend(store, flush_interval=0),
+                  register_magic=False, use_locking=use_locking)
+    first = list(_chunked_gen(writer, counter)())
+    assert first == list(range(10))
+    assert len(written) >= 2, f"expected a chunked write, got {written!r}"
+
+    writer.backend.delete(written[-1])          # the manifest outlives its chunk
+
+    reader = Cash(backend=FileBackend(store, flush_interval=0),
+                  register_magic=False, use_locking=use_locking)
+    return _chunked_gen(reader, counter), counter, counter["calls"]
+
+
+def test_a_missing_chunk_recomputes_on_the_default_path(tmp_path, monkeypatch):
+    """The control. `_chunks_are_intact` treats a manifest missing a chunk as a
+    miss, so the caller gets the whole result rather than a short one.
+
+    Without this arm the locking test below could pass because chunking never
+    engaged, rather than because the guard ran."""
+    reader, counter, before = _cache_then_break_a_chunk(
+        tmp_path, monkeypatch, use_locking=False)
+    assert list(reader()) == list(range(10))
+    assert counter["calls"] == before + 1, "expected a recompute, not a served entry"
+
+
+def test_a_missing_chunk_recomputes_with_use_locking_too(tmp_path, monkeypatch):
+    """`_compute_with_lock`'s double-checked re-read went straight to
+    `_wrap_iterator_hit`, skipping the integrity guard — so with
+    `use_locking=True` a manifest missing a chunk yielded a SHORT iterator and
+    no recompute. Truncated data, silently: no error, no warning, and an empty
+    or partial result is easy to mistake for a real one."""
+    reader, counter, before = _cache_then_break_a_chunk(
+        tmp_path, monkeypatch, use_locking=True)
+    assert list(reader()) == list(range(10)), "served a truncated cached result"
+    assert counter["calls"] == before + 1, "expected a recompute, not a served entry"

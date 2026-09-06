@@ -1128,26 +1128,24 @@ store in chunks, and one of those chunks failed to write. The message names the
 chunk, the backend and the exception. The rest of the entry — including the
 manifest that records how many chunks there should be — was written anyway.
 
-<!-- claim: cash/core.py:Cash._chunks_are_intact @c539039c -->
-**Why it matters.** On the ordinary read path it costs you the caching, not the
-correctness. Before serving a chunked entry Cash probes every chunk the manifest
-claims and treats a manifest with a hole as *absent*, so the call misses and
-recomputes — the same way every other `STORE-` failure degrades. The cost is
+<!-- claim: cash/core.py:Cash._chunks_are_intact @769a0a1e -->
+**Why it matters.** It costs you the caching, not the correctness. Before
+serving a chunked entry Cash probes every chunk the manifest claims and treats a
+manifest with a hole as *absent*, so the call misses and recomputes — the same
+way every other `STORE-` failure degrades. The cost is
 that the entry is written and permanently unreachable: every call recomputes,
 and the wasted write repeats, until a write finally succeeds and completes the
 entry. Measured: three calls after the failure ran the body three times and each
 returned all ten items; the call after the write succeeded was the last one to
 run the body.
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @4cc0528e -->
-There is one path where it is worse. With `use_locking=True`, the double-checked
-re-read taken inside the lock validates the TTL and goes straight to serving the
-hit — it does not run that integrity probe. A manifest with a missing chunk is
-then served as a *short* iterator: the same broken entry that returns all ten
-items and recomputes with locking off returns three items and no recompute with
-locking on. Locking is off by default, so this is not what you have unless you
-asked for it — but if you did ask for it, this warning is a correctness signal
-and not just a cost one.
+<!-- claim: cash/core.py:Cash._compute_with_lock @2ddd2abb -->
+Both read paths run that probe, including the double-checked re-read taken
+inside the lock when `use_locking=True`. Until 2026-09-06 the locking path
+skipped it and served the broken entry as a *short* iterator — three of ten
+items, or none at all when the missing chunk was the first, with no recompute
+and no error. If you are on an older version and use locking, this warning is a
+correctness signal there and not only a cost one.
 
 **What to do.** Get rid of the entry. `f.cache_clear()` on the decorated
 function is the blunt version and always works, and it is what stops the
@@ -1156,11 +1154,10 @@ fix the write itself — the message names the exception, and the usual causes a
 a full disk, a permissions problem, or an item in the iterator that cannot be
 serialised.
 
-**When it is safe to ignore.** Never for long, but the urgency depends on your
-settings. On the defaults you are paying full compute on every call to that
-function while the entry sits there unreadable, so it is a performance bug that
-will not fix itself. With `use_locking=True` it is a correctness bug: clear the
-entry before anything reads it.
+**When it is safe to ignore.** Never for long. You are paying full compute on
+every call to that function while the entry sits there unreadable, so it is a
+performance bug that will not fix itself — and the write that failed will keep
+failing until you fix its cause.
 
 ## STORE-FAILED {#store-failed}
 

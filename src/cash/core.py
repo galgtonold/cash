@@ -2340,13 +2340,14 @@ class Cash:
         Metadata-only reads: the point is to check presence, not to load the
         payload and undo the laziness chunking exists for.
 
-        Scope, because the docs depend on it: this guard is applied by
-        ``_try_get_cached`` and therefore covers the DEFAULT read path. The
-        double-checked re-read inside ``_compute_with_lock`` validates the TTL
-        and goes straight to ``_wrap_iterator_hit`` without calling this, so
-        with ``use_locking=True`` a manifest missing a chunk still yields a
-        short iterator. Measured, same probe both ways: locking off -> 10 items
-        and a recompute, locking on -> 3 items and no recompute.
+        Scope, because the docs depend on it: BOTH read paths apply this --
+        ``_try_get_cached`` for the default one, and the double-checked re-read
+        inside ``_compute_with_lock`` for ``use_locking=True``. Keep it that
+        way. The locking path skipped it until 2026-09-06 and served a short
+        iterator with no recompute, no error and no warning: measured 3 of 10
+        items when a later chunk was missing, and 0 items when the first one
+        was. Both paths are pinned by
+        ``tests/test_core/test_iterator_caching.py``.
         """
         if getattr(metadata, "iterator_storage", None) != "chunked":
             return True
@@ -5129,7 +5130,22 @@ class Cash:
             )
             # Use metadata presence (not data presence) as the existence test -
             # see _try_get_cached for rationale.
-            if locked_metadata is not None:
+            #
+            # ``_chunks_are_intact`` is applied here for the same reason it is
+            # applied there, and the omission was a real defect: a chunked
+            # manifest can outlive its chunks (eviction reaches them
+            # separately), and the reader terminates quietly on the first
+            # missing one. Without this check the double-checked re-read went
+            # straight to ``_wrap_iterator_hit`` and handed back a SHORT
+            # iterator -- measured at 3 of 10 items when a later chunk was
+            # gone, and 0 items when the first one was -- with no recompute, no
+            # error and no warning. Truncated data is worse than a slow answer,
+            # so a manifest that cannot be fully resolved is treated as absent
+            # and falls through to ``compute_and_store`` below, exactly as it
+            # does on the default path.
+            if locked_metadata is not None and self._chunks_are_intact(
+                cache_key, locked_metadata
+            ):
                 try:
                     self._validate_ttl(locked_metadata, ttl)
                     self._attach_lineage(
@@ -6139,17 +6155,16 @@ class Cash:
                 CashCacheStoreFailedWarning,
                 f"{cache_key}:chunk_{chunk_index}",
                 "",
-                # NOT "you will get a truncated iterator". On the ordinary read
-                # path ``_chunks_are_intact`` probes every chunk and turns a
-                # manifest with a hole into a MISS, so the cost is a permanent
-                # recompute, not a short answer. The locked re-read in
-                # ``_compute_with_lock`` is the one path that skips that guard,
-                # so it is named rather than generalised from.
+                # NOT "you will get a truncated iterator". ``_chunks_are_intact``
+                # probes every chunk and turns a manifest with a hole into a
+                # MISS, on both read paths, so the cost is a permanent recompute
+                # rather than a short answer. The locked re-read skipped that
+                # guard until 2026-09-06; do not re-introduce the truncation
+                # language here without first checking it is true again.
                 f"@cash.cache: backend {backend_name} failed to store "
                 f"chunk {chunk_index} of {cache_key} ({type(e).__name__}: {e}), "
                 f"so the entry can never be read back and every later call "
-                f"recomputes it -- and under use_locking=True the re-read "
-                f"inside the lock can serve the short result instead.",
+                f"recomputes it.",
                 code="STORE-CHUNK-FAILED",
                 fix="clear the entry with f.cache_clear() before anything reads "
                     "it, then fix the write the exception names.",
