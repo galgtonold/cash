@@ -1,8 +1,12 @@
 """The badge shows a statement the way it was written, not the way it is keyed.
 
 ``ast.unparse`` normalizes a statement onto one logical line -- it is what the
-cache key needs and what gets compiled. For the badge we want the user's own
-text back, which is what ``ast.get_source_segment`` returns.
+cache key always needs. For the badge we want the user's own text back, which
+is what ``ast.get_source_segment`` returns; ``_execute_statement`` also
+compiles THIS (not the unparsed form) whenever it is available, so a
+`# @cash:assume-safe` inside a function defined in a cell keeps its comment
+-- see ``_exec_source_for_node`` in this same module for the def/class case,
+which this file does not cover.
 """
 from __future__ import annotations
 

@@ -934,6 +934,7 @@ class StatementProcessor:
     def process_statement(self, code: str, ttl: int | None = None, silent: bool = False,
                           annotation: CacheAnnotation | None = None,
                           display_code: str | None = None,
+                          exec_source: str | None = None,
                           occurrence_index: int = 0, stream_output: bool = False,
                           force_outputs: set[str] | None = None,
                           is_last: bool = True) -> ProcessResult:
@@ -965,6 +966,17 @@ class StatementProcessor:
                 affect the cache key (outputs only enter it when they are
                 modules), so the key still tracks the loop source + input
                 lineages.
+            exec_source: The statement's ORIGINAL text (comments intact), when
+                the caller could recover one -- see ``_statement_source`` in
+                ``cell_executor.py``. Threaded down to ``_execute_statement``,
+                which parses/compiles/registers THIS instead of ``code`` so a
+                function defined here keeps its comments for
+                ``inspect.getsource`` (and therefore for a per-line
+                ``# @cash:assume-safe`` waiver). Never affects the cache key:
+                ``code`` (the unparsed form) is what is hashed, regardless of
+                whether this is supplied. Discarded (treated as absent)
+                whenever CAS-243 rewrote an eligible call in ``code`` --
+                see ``_code_and_tree_for_execution``.
 
         Returns:
             ProcessResult with keys: 'status', 'execution_time', 'total_time',
@@ -987,8 +999,13 @@ class StatementProcessor:
             'error': None,
             'restored_vars': [],
             'code': code.strip(),
-            # Display only -- the badge shows the user's own layout. NEVER part
-            # of the key: `code` above is what is hashed and compiled.
+            # The badge shows the user's own layout. NEVER part of the cache
+            # key: `code` above is what is hashed, always. This text MAY reach
+            # `ast.parse` / `compile()` / `register_cell_source` now (as
+            # `exec_source`, below) -- revised from the original
+            # "display-only, never compile()" rule so a function defined in a
+            # cell keeps its comments (and thus a per-line
+            # `# @cash:assume-safe` waiver) for `inspect.getsource`.
             'display_code': display_code,
             'uncacheable_reasons': []
         }
@@ -1205,9 +1222,23 @@ class StatementProcessor:
         _exec_code, _exec_tree = self._code_and_tree_for_execution(
             code, _parsed_tree, annotation,
         )
+        # CAS-243: `_code_and_tree_for_execution` may have rewritten an
+        # eligible call into `__cash_call__(fn, i)(...)` -- returning a NEW
+        # string, never `code` itself, when it fires (see that method: every
+        # opt-out / no-eligible-call / failure branch returns the ORIGINAL
+        # `code` object unchanged; only the actual rewrite calls
+        # `ast.unparse` to build a new one). Forwarding the pre-rewrite
+        # original text after that fired would execute a version of the
+        # statement that never went through the indirection, silently
+        # discarding the sub-expression caching this statement's calls just
+        # got routed through. Forward `exec_source` only when the rewrite
+        # made no change; otherwise fall back to None so `_execute_statement`
+        # executes `_exec_code` (the rewritten text) exactly as today.
+        _exec_source = exec_source if _exec_code is code else None
         error_metrics, result, captured, execution_time, accessed_files, accessed_remote = self._execute_and_drain(
             _exec_code, stream_output, skip_cache, _exec_tree,
             metrics, process_start, silent, is_last,
+            exec_source=_exec_source,
         )
         if error_metrics is not None:
             return error_metrics
@@ -1247,6 +1278,7 @@ class StatementProcessor:
     async def process_statement_async(self, code: str, ttl: int | None = None, silent: bool = False,
                                       annotation: CacheAnnotation | None = None,
                                       display_code: str | None = None,
+                                      exec_source: str | None = None,
                                       occurrence_index: int = 0, stream_output: bool = False,
                                       is_last: bool = True) -> ProcessResult:
         """Async twin of :meth:`process_statement` for top-level-await cells.
@@ -1281,8 +1313,13 @@ class StatementProcessor:
             'error': None,
             'restored_vars': [],
             'code': code.strip(),
-            # Display only -- the badge shows the user's own layout. NEVER part
-            # of the key: `code` above is what is hashed and compiled.
+            # The badge shows the user's own layout. NEVER part of the cache
+            # key: `code` above is what is hashed, always. This text MAY reach
+            # `ast.parse` / `compile()` / `register_cell_source` now (as
+            # `exec_source`, below) -- revised from the original
+            # "display-only, never compile()" rule so a function defined in a
+            # cell keeps its comments (and thus a per-line
+            # `# @cash:assume-safe` waiver) for `inspect.getsource`.
             'display_code': display_code,
             'uncacheable_reasons': []
         }
@@ -1448,9 +1485,12 @@ class StatementProcessor:
         _exec_code, _exec_tree = self._code_and_tree_for_execution(
             code, _parsed_tree, annotation,
         )
+        # CAS-243 guard -- see the identical comment in :meth:`process_statement`.
+        _exec_source = exec_source if _exec_code is code else None
         error_metrics, result, captured, execution_time, accessed_files, accessed_remote = await self._execute_and_drain_async(
             _exec_code, stream_output, skip_cache, _exec_tree,
             metrics, process_start, silent, is_last,
+            exec_source=_exec_source,
         )
         if error_metrics is not None:
             return error_metrics
@@ -2197,6 +2237,7 @@ class StatementProcessor:
         process_start: float,
         silent: bool,
         is_last: bool = True,
+        exec_source: str | None = None,
     ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
         """Execute the statement, drain decorator calls, populate stdout/stderr in metrics.
 
@@ -2210,6 +2251,7 @@ class StatementProcessor:
         result, captured, execution_time, accessed_files, accessed_remote = self._execute_statement(
             code, stream_output=stream_output, tree=tree,
             skip_capture=(skip_cache and stream_output), is_last=is_last,
+            exec_source=exec_source,
         )
 
         decorator_calls: list = []
@@ -2254,6 +2296,7 @@ class StatementProcessor:
         process_start: float,
         silent: bool,
         is_last: bool = True,
+        exec_source: str | None = None,
     ) -> tuple[ProcessResult | None, Any, Any, float, set[str]]:
         """Async twin of :meth:`_execute_and_drain`.
 
@@ -2269,6 +2312,7 @@ class StatementProcessor:
         result, captured, execution_time, accessed_files, accessed_remote = await self._execute_statement_async(
             code, stream_output=stream_output, tree=tree,
             skip_capture=(skip_cache and stream_output), is_last=is_last,
+            exec_source=exec_source,
         )
 
         decorator_calls: list = []
@@ -3047,19 +3091,25 @@ class StatementProcessor:
             return _tee_output()
         return capture_output(stdout=True, stderr=True, display=True)
 
-    def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True) -> tuple[Any, Any, float, set[str]]:
+    def _execute_statement(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True, exec_source: str | None = None) -> tuple[Any, Any, float, set[str]]:
         """Execute statement with output capture and file tracking.
 
         Args:
             code: Python code to execute.
             stream_output: When True, use _tee_output() so output goes to the
                 real terminal in real-time while still being recorded.
-            tree: Optional pre-parsed AST to avoid redundant parsing.
+            tree: Optional pre-parsed AST to avoid redundant parsing. Ignored
+                (re-derived from ``source`` below) when ``exec_source`` is
+                supplied -- see the comment at the top of the ``try`` block.
             skip_capture: When True AND stream_output is True, bypass output
                 capture entirely.  Output goes directly to the real streams
                 with zero interception overhead.  Use when the result will not
                 be cached (skip_cache=True) so recorded stdout/stderr are not
                 needed.
+            exec_source: The statement's ORIGINAL text (comments intact), or
+                ``None`` to execute ``code`` (the ``ast.unparse`` form) as
+                before. Never affects the cache key -- callers hash ``code``,
+                not this.
         """
         start_time = time.time()
         accessed_files = set()
@@ -3075,12 +3125,29 @@ class StatementProcessor:
         pre_rng = capture_rng_state()
 
         try:
+            # What we EXECUTE is the user's own text when we have it; what we
+            # KEY on is `code`, the ast.unparse output, and that does not
+            # change here.
+            #
+            # `ast.unparse` strips comments, so a function defined in a cell
+            # used to be compiled from source with no comments in it -- and
+            # `inspect.getsource` then handed the purity analyzer a body
+            # where `# @cash:assume-safe` had never existed. Compiling the
+            # original fixes that, and makes a traceback inside a
+            # cell-defined function show what the user wrote rather than
+            # cash's normalised form.
+            source = exec_source if exec_source is not None else code
+            if exec_source is not None:
+                # A tree parsed from the unparsed text has line numbers that
+                # do not match the source we are about to compile and
+                # register. Re-parse below instead of trusting the caller's.
+                tree = None
             ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
             with ctx_manager as captured:
                 with FileAccessTracker(self.shell.user_ns) as file_tracker:
                     if tree is None:
                         try:
-                            tree = ast.parse(code)
+                            tree = ast.parse(source)
                         except SyntaxError:
                              # Fallback to standard exec if parse fails (though it shouldn't if compiled worked, but good for safety)
                              tree = None
@@ -3088,7 +3155,7 @@ class StatementProcessor:
                     # One linecache-registered filename per statement, so a
                     # traceback inside a function DEFINED here shows its source
                     # instead of "<cash>" with no line.
-                    cash_file = register_cell_source(code)
+                    cash_file = register_cell_source(source)
 
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
                          body_nodes = tree.body[:-1]
@@ -3126,12 +3193,17 @@ class StatementProcessor:
                              from IPython.display import display
                              display(result_val)
                     else:
-                        compiled_code = compile(code, cash_file, 'exec')
+                        compiled_code = compile(source, cash_file, 'exec')
                         exec(compiled_code, self.shell.user_ns, self.shell.user_ns)
                         result_val = None
 
                 accessed_files = file_tracker.get_accessed_files()
                 accessed_remote = file_tracker.get_accessed_remote_urls()
+                # Deliberately `code` (the canonical/keyed form), not `source`:
+                # the RNG observation is about what the STATEMENT does, which
+                # is identical either way -- see `_statement_source` (the
+                # dedent is a no-op for a top-level node) -- and this keeps it
+                # matched to what the simulator's own unparse would see.
                 self._observe_statement_rng(pre_rng, code)
 
                 result = ExecutionResult(success=True)
@@ -3148,7 +3220,7 @@ class StatementProcessor:
         execution_time = time.time() - start_time
         return result, captured, execution_time, accessed_files, accessed_remote
 
-    async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True) -> tuple[Any, Any, float, set[str]]:
+    async def _execute_statement_async(self, code: str, stream_output: bool = False, tree: ast.Module | None = None, skip_capture: bool = False, is_last: bool = True, exec_source: str | None = None) -> tuple[Any, Any, float, set[str]]:
         """Async twin of :meth:`_execute_statement` for top-level-await cells.
 
         Byte-for-byte the same output-capture / file-tracking / last-expr
@@ -3164,6 +3236,11 @@ class StatementProcessor:
         This mirrors IPython's own ``run_code`` pattern (compile under the flag,
         ``await`` when ``CO_COROUTINE``), so a top-level-await statement executes
         exactly once, on the same loop IPython would have used.
+
+        ``exec_source``: same contract as the sync path -- the statement's
+        original text (comments intact), used for parse/compile/linecache in
+        place of ``code`` when supplied. See the comment at the top of the
+        ``try`` block in :meth:`_execute_statement`.
         """
         start_time = time.time()
         accessed_files = set()
@@ -3175,18 +3252,23 @@ class StatementProcessor:
         pre_rng = capture_rng_state()
 
         try:
+            # See the identical comment in `_execute_statement`: `source` is
+            # what we EXECUTE, `code` (unchanged) is what we KEY on.
+            source = exec_source if exec_source is not None else code
+            if exec_source is not None:
+                tree = None
             ctx_manager = self._make_capture_ctx(stream_output, skip_capture)
             with ctx_manager as captured:
                 with FileAccessTracker(self.shell.user_ns) as file_tracker:
                     if tree is None:
                         try:
-                            tree = ast.parse(code)
+                            tree = ast.parse(source)
                         except SyntaxError:
                             tree = None
 
                     # Same per-statement linecache registration as the sync path
                     # so an await-bearing cell's tracebacks resolve too.
-                    cash_file = register_cell_source(code)
+                    cash_file = register_cell_source(source)
 
                     if tree and tree.body and isinstance(tree.body[-1], ast.Expr):
                         body_nodes = tree.body[:-1]
@@ -3213,7 +3295,7 @@ class StatementProcessor:
                             from IPython.display import display
                             display(result_val)
                     else:
-                        compiled_code = compile(code, cash_file, 'exec', flags=_FLAG)
+                        compiled_code = compile(source, cash_file, 'exec', flags=_FLAG)
                         coro = eval(compiled_code, self.shell.user_ns, self.shell.user_ns)
                         if compiled_code.co_flags & inspect.CO_COROUTINE:
                             await coro
@@ -3221,6 +3303,8 @@ class StatementProcessor:
 
                 accessed_files = file_tracker.get_accessed_files()
                 accessed_remote = file_tracker.get_accessed_remote_urls()
+                # `code` (the canonical/keyed form), not `source` -- see the
+                # identical comment in `_execute_statement`.
                 self._observe_statement_rng(pre_rng, code)
 
                 result = ExecutionResult(success=True)

@@ -311,12 +311,21 @@ def _splitlines_like_the_parser(raw_cell: str) -> list[str]:
 
 
 def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
-    """The statement's ORIGINAL text, for display only.
+    """The statement's ORIGINAL text.
 
-    ``ast.unparse`` is what the cache key and ``compile()`` use, and it
-    normalizes a statement onto one logical line -- so there is no multi-line
-    form of the executed text. The badge wants the user's own layout back so a
-    row can be matched against the cell above it.
+    Originally written for display only, and still what the badge shows --
+    but its result is also reused, unchanged, as what a cache-miss statement
+    COMPILES from (``exec_source`` in ``processor.py``'s
+    ``_execute_statement``), instead of the ``ast.unparse`` form, whenever it
+    is not ``None``. ``ast.unparse`` normalizes a statement onto one logical
+    line and strips comments -- both fine for the CACHE KEY, which stays the
+    unparsed form always (never this), but wrong for compiling a function
+    DEFINED in the cell: a per-line ``# @cash:assume-safe`` in its body would
+    be invisible to ``inspect.getsource`` (and so to the purity analyzer) if
+    compiled from text with no comments in it. See ``_execute_statement`` for
+    the cache-key/exec-source boundary in full, and ``_exec_source_for_node``
+    below for why a top-level ``def``/``class`` -- excluded here -- still
+    gets a source to execute despite that.
 
     ``get_source_segment`` returns a nested statement with its first line flush
     and every continuation line at its ABSOLUTE file indentation, which reads as
@@ -332,6 +341,9 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     badge very tall in any notebook that defines functions. The caller's
     existing fallback (the unparsed form, clipped to one line with a
     "... +N lines" hint) is the right treatment for these, not a compromise.
+    This exclusion is a DISPLAY decision only -- ``_exec_source_for_node``
+    recovers a def/class's source separately, for execution, without
+    widening what this function hands the badge.
 
     ``ast.Match`` is deliberately NOT in the exclusion below, even though a
     ``match`` statement is just as multi-line as a ``def``/``class``. The
@@ -416,6 +428,137 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
         [head] + [line[indent:] if line[:indent].isspace() else line
                   for line in rest]
     )
+
+
+def _exec_source_for_node(
+    raw_cell: str, node: ast.stmt, stmt_display: str | None,
+) -> str | None:
+    """The text to EXECUTE for *node*, diverging from ``stmt_display`` (the
+    text to DISPLAY) only for a top-level ``def``/``class`` that carries a
+    ``# @cash:`` directive somewhere in its body.
+
+    ``_statement_source`` withholds a ``def``/``class`` body on purpose --
+    showing one in full would make the badge very tall (see its docstring),
+    so ``stmt_display`` is ``None`` there and the badge falls back to a
+    "+N lines" summary (``_row_code_html``). That withholding is a DISPLAY
+    decision; it must not also decide what gets compiled. ``ast.unparse``
+    strips comments, so a function DEFINED in a cell used to be compiled with
+    no comments in it, and a per-line ``# @cash:assume-safe`` inside its body
+    was invisible to ``inspect.getsource`` (and so to the purity analyzer) --
+    exactly the def/class case ``stmt_display`` withholds. Recovering it here
+    for EXECUTION closes that gap without widening what the badge shows.
+
+    Reuses ``stmt_display`` whenever it is not ``None`` -- one extraction per
+    statement, same as before this function existed. Only a top-level
+    ``def``/``class`` (rare relative to ordinary statements, and always
+    multi-line, so never the single-line case ``_statement_source``'s fast
+    path exists for) pays a second, direct ``ast.get_source_segment`` call.
+    No dedent is needed for it: every node this is called on is top-level
+    (``col_offset == 0``), same precondition ``_statement_source``'s own
+    dedent step relies on.
+
+    **Decorators are prepended manually.** ``ast.get_source_segment`` anchors
+    to ``node.lineno``, which -- since Python 3.8 -- is the ``def``/``class``
+    KEYWORD line, not the decorator, even though ``@c.cache`` is
+    unambiguously part of "the statement that ran". Measured: without this,
+    the segment recovered for ``@c.cache\\ndef audited(n): ...`` was just
+    ``def audited(n): ...`` with NO decorator -- so the executed function was
+    never actually wrapped in ``@cash.cache`` at all, silently disabling
+    caching (and purity checking) for every decorated function defined in a
+    cell. ``node.decorator_list`` gives the exact AST-derived boundary: a
+    decorator is always alone on its own line(s) by Python's grammar, so the
+    lines from the first decorator's own start through the line before
+    ``node.lineno`` are exactly the decorator block, verbatim, regardless of
+    multiple decorators, multi-line decorator arguments, or blank lines
+    between them. Uses ``_splitlines_like_the_parser`` (not
+    ``str.splitlines()``) for the same reason every other line-indexed read
+    in this module does -- see that function's docstring.
+
+    **Gated on ``"@cash:" in body`` -- not unconditional, and this is
+    load-bearing, not an optimisation.** A ``def``/``class`` this recovers
+    can be RE-COMPILED a second time later, by an entirely different path:
+    the upstream checker/restorer re-executes an earlier statement (e.g. to
+    replay a self-modifying global back to its pre-cell state -- see
+    ``test_a_same_session_rerun_neither_freezes_nor_accumulates``), and that
+    path has never threaded ``display_code``/``exec_source`` (same as a
+    control body or a loop-split iteration -- it always compiles the
+    unparsed form). Before this function existed, EVERY path compiled a
+    function from the same canonical ``ast.unparse`` text, so a function's
+    identity hash (``FunctionTracker.get_function_source_hash``, which feeds
+    the CAS-243 call-cache key -- "editing the callee re-keys the call")
+    was stable regardless of which path (re)created it. Recovering the
+    original text unconditionally broke that: the FIRST definition (via the
+    normal split loop) got the original text, but a LATER same-session
+    redefinition via the upstream/restorer path still fell back to the
+    unparsed form -- two textually different, behaviourally identical
+    representations of the same, unedited function. ``source_identity_digest``
+    normalises comments away but NOT other harmless textual variance (a raw
+    string literal vs. its ``ast.unparse``-escaped equivalent, measured with
+    a Windows path baked into the source hashed differently either way), so
+    the two representations hashed differently, the call-cache key for a
+    call to that function moved, and its body executed an extra time on the
+    very next same-session re-run (measured: ``compute_f``'s tick file
+    incremented once where 0 was expected). Gating on the ``@cash:`` marker
+    -- the same substring check ``_drop_audited`` itself uses as a fast path
+    -- means a function with no directive in it (the overwhelming majority)
+    is completely unaffected by this function, on EITHER path, exactly as
+    before it existed: no behaviour change, no risk of the above. A function
+    that DOES carry a directive can still hit the same cross-path
+    inconsistency if it is later redefined via the upstream/restorer path in
+    the same session -- that residual case is not fixed here (fixing it
+    would mean threading original-source recovery into upstream
+    restoration too, well beyond what this function is scoped to do) --
+    but it no longer taxes every def/class in every notebook to leave it
+    open for the rare annotated one.
+
+    **A trailing comment on the node's own LAST line is recovered too.**
+    ``ast.get_source_segment`` trims its last line at ``end_col_offset``, so
+    ``return x  # @cash:assume-safe`` as literally the final line of a
+    function loses the comment -- a directive on any INTERIOR line survives
+    untouched (only the first/last lines of a multi-line segment are
+    column-trimmed), so this only bites the specific case of the waiver
+    sitting on the function's very last physical line. Recovered the same
+    way ``_expr_has_trailing_semicolon`` reads past a node's end elsewhere in
+    this module: byte-offset slice the end line past ``end_col_offset``, and
+    append it ONLY when what remains, stripped, is empty or starts with
+    ``#`` -- never anything else, which would mean a semicolon-separated
+    SIBLING statement on the same physical line (``def f(): return 1; y =
+    2``), whose text belongs to a different node entirely and must not be
+    swallowed here.
+
+    Returns ``None`` -- falling back to the unparsed ``code`` at the
+    executor, unchanged from before this function existed -- for every other
+    reason ``stmt_display`` came back empty (a control body, a loop-split
+    iteration, a rewritten statement, or a genuinely unrecoverable segment),
+    and for a def/class with no ``@cash:`` directive in it. Never raises:
+    this must never be able to break a cell.
+    """
+    if stmt_display is not None:
+        return stmt_display
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None
+    try:
+        body = ast.get_source_segment(raw_cell, node)
+        if not body:
+            return None
+        lines = _splitlines_like_the_parser(raw_cell)
+        decorators = node.decorator_list
+        if decorators:
+            prefix = "".join(lines[decorators[0].lineno - 1: node.lineno - 1])
+            body = prefix + body
+        end_lineno = getattr(node, "end_lineno", None)
+        end_col = getattr(node, "end_col_offset", None)
+        if (
+            end_lineno is not None and end_col is not None
+            and 0 < end_lineno <= len(lines)
+        ):
+            rest = lines[end_lineno - 1].encode()[end_col:].decode()
+            trailing = rest.split("\n", 1)[0].rstrip("\r")
+            if trailing.strip() == "" or trailing.lstrip().startswith("#"):
+                body = body + trailing
+        return body if "@cash:" in body else None
+    except Exception:  # noqa: BLE001 - execution must never break over this
+        return None
 
 
 class CellExecutor:
@@ -1241,12 +1384,22 @@ class CellExecutor:
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
         display_code: str | None = None,
+        exec_source: str | None = None,
     ) -> list:
-        """Process one non-control statement with caching; return updated buffer."""
+        """Process one non-control statement with caching; return updated buffer.
+
+        ``display_code`` and ``exec_source`` are usually the SAME text (the
+        loop passes ``stmt_display`` for both -- see ``_statement_source``),
+        but diverge for a top-level ``def``/``class``: the badge withholds
+        the body there (``display_code`` stays ``None``), while execution
+        still needs it (``exec_source`` recovers it directly) -- see the
+        caller in ``_execute_cell_statements``.
+        """
         metrics = self._statement_processor.process_statement(
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
             display_code=display_code,
+            exec_source=exec_source,
             occurrence_index=occurrence_index,
             # IPython echoes only the CELL's last expression; cash executes each
             # statement as its own unit, so it must be told which one that is
@@ -1266,6 +1419,7 @@ class CellExecutor:
         all_metrics: list[ProcessResult],
         buffered_result_outputs: list,
         display_code: str | None = None,
+        exec_source: str | None = None,
     ) -> list:
         """Async twin of :meth:`_process_regular_stmt`.
 
@@ -1279,6 +1433,7 @@ class CellExecutor:
             stmt_code, self._magics._global_ttl, silent=True,
             annotation=annotation,
             display_code=display_code,
+            exec_source=exec_source,
             occurrence_index=occurrence_index,
             is_last=is_last_statement,  # as in the sync path
         )
@@ -1371,6 +1526,7 @@ class CellExecutor:
             # The badge shows the user's own layout; `stmt_code` above stays the
             # keyed and executed text. See `_statement_source`.
             stmt_display = _statement_source(raw_cell, node)
+            stmt_exec_source = _exec_source_for_node(raw_cell, node, stmt_display)
 
             # ``ast.unparse`` drops a trailing ``;``, losing IPython's display
             # suppression (``df.head();`` shows no repr). Re-attach it so the
@@ -1423,6 +1579,7 @@ class CellExecutor:
                         buffered_result_outputs = self._process_regular_stmt(
                             stmt_code, annotation, occ, is_last, all_metrics,
                             buffered_result_outputs, display_code=stmt_display,
+                            exec_source=stmt_exec_source,
                         )
 
                     self._magics._cancel_progress_badge()
@@ -1492,6 +1649,7 @@ class CellExecutor:
             # The badge shows the user's own layout; `stmt_code` above stays the
             # keyed and executed text. See `_statement_source`.
             stmt_display = _statement_source(raw_cell, node)
+            stmt_exec_source = _exec_source_for_node(raw_cell, node, stmt_display)
 
             if self._expr_has_trailing_semicolon(raw_cell, node):
                 stmt_code = stmt_code + ";"
@@ -1553,6 +1711,7 @@ class CellExecutor:
                         buffered_result_outputs = await self._process_regular_stmt_async(
                             stmt_code, annotation, occ, is_last, all_metrics,
                             buffered_result_outputs, display_code=stmt_display,
+                            exec_source=stmt_exec_source,
                         )
 
                     self._magics._cancel_progress_badge()
