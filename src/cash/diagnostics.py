@@ -1,9 +1,12 @@
 """Stable identifiers for every warning Cash emits.
 
 A warning without a handle is a warning nobody can look up: there is nothing to
-search for, nothing to google, nothing to ask a colleague about. Every Cash
-warning carries a code from this module and a link to its section in
-``docs/warnings.md``.
+search for, nothing to google, nothing to ask a colleague about. Every warning
+in the ``CashWarning`` hierarchy (see ``cash.exceptions``) carries a code from
+this module and a link to its section in ``docs/warnings.md``. The one
+exception is ``cash.experimental``, whose import-time notice warns with a
+plain ``FutureWarning`` outside that hierarchy on purpose -- it flags an
+unstable API, not a diagnosable condition, so it gets no code.
 
 Codes are mnemonic on purpose. ``CACHE-THRASH`` tells the reader something
 before they click; ``CASH-W012`` requires exactly the lookup we are trying to
@@ -25,8 +28,10 @@ from __future__ import annotations
 _DOCS_BASE = "https://cash-lib.readthedocs.io/en/stable/warnings/"
 
 #: Every diagnostic code Cash can emit. Adding a warning means adding its code
-#: here AND a section in ``docs/warnings.md``; the bijection test in
-#: ``tests/docs/test_warning_codes_documented.py`` fails if either is missing.
+#: here AND a section in ``docs/warnings.md``. Once both exist, the bijection
+#: test at ``tests/docs/test_warning_codes_documented.py`` will fail if either
+#: is missing; until that test lands (a later task in this plan), treat this
+#: as a contract to honour by hand.
 #:
 #: The gloss on each line is the one-sentence claim its doc section expands.
 DIAGNOSTIC_CODES: frozenset[str] = frozenset({
@@ -45,6 +50,13 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "CACHE-THRASH",            # at the cap, evicting within writes of storing
     "CACHE-VALUE-TOO-BIG",     # too large for any persistent tier; RAM only
 
+    # -- IMPURE: the function does something a cache hit will not repeat ----
+    "IMPURE-OBSERVED-EFFECTS", # watching the first call caught effects static
+                               # analysis could not see
+    "IMPURE-SCOPE-MUTATION",   # calling it rewrites a global or captured
+                               # variable, which can then no longer be tracked
+    "IMPURE-SIDE-EFFECTS",     # static analysis found likely side effects
+
     # -- KEY: something the result depends on is not in the cache key -------
     "KEY-BOOL-STATE-TOKEN",    # DataSource.has_changed() returned a bool,
                                # which cannot track changes
@@ -60,13 +72,6 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "KEY-UNHASHABLE-DEFAULT",  # a parameter default could not be hashed
     "KEY-UNHASHABLE-GLOBAL",   # a global the function reads could not be
                                # hashed, so changing it invalidates nothing
-
-    # -- IMPURE: the function does something a cache hit will not repeat ----
-    "IMPURE-OBSERVED-EFFECTS", # watching the first call caught effects static
-                               # analysis could not see
-    "IMPURE-SCOPE-MUTATION",   # calling it rewrites a global or captured
-                               # variable, which can then no longer be tracked
-    "IMPURE-SIDE-EFFECTS",     # static analysis found likely side effects
 
     # -- NOTEBOOK: notebook-wide machinery, not one statement ---------------
     "NOTEBOOK-CELL-SYNTAX",    # an upstream cell does not parse, so cells that
@@ -105,3 +110,77 @@ def doc_url(code: str) -> str:
     if code not in DIAGNOSTIC_CODES:
         raise KeyError(f"unknown diagnostic code: {code!r}")
     return f"{_DOCS_BASE}#{code.lower()}"
+
+
+import warnings
+
+
+def format_diagnostic(code: str, what: str, fix: str) -> str:
+    """Render the three-part message body.
+
+    Python's own machinery prints the location and the category name, so this
+    starts at the code::
+
+        foo.py:12: CashCacheIneffectiveWarning: [CACHE-THRASH] the cache is
+        full at its 500 MB cap.
+          Fix: raise max_cache_size, or cache fewer values.
+          https://cash-lib.readthedocs.io/en/stable/warnings/#cache-thrash
+
+    *what* is one sentence of what happened; *fix* is one imperative sentence.
+    Everything else belongs in the doc section, which is the whole point — the
+    message used to carry a paragraph because it had nowhere to point.
+    """
+    return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
+
+
+def warn_diagnostic(
+    category: type[Warning],
+    code: str,
+    what: str,
+    fix: str,
+    *,
+    stacklevel: int = 2,
+) -> None:
+    """Emit *category* carrying *code*, its rendered message, and ``.code``.
+
+    Warns with an *instance* rather than a message string so the code survives
+    to the handler: a caller can test ``w.message.code == "CACHE-THRASH"``
+    instead of matching prose that is free to be reworded.
+
+    Raises ``KeyError`` before emitting anything if *code* is unregistered.
+    """
+    message = format_diagnostic(code, what, fix)   # raises on an unknown code
+    instance = category(message)
+    instance.code = code
+    warnings.warn(instance, stacklevel=stacklevel + 1)
+
+
+def warn_diagnostic_explicit(
+    category: type[Warning],
+    code: str,
+    what: str,
+    fix: str,
+    *,
+    filename: str,
+    lineno: int,
+    registry: dict | None = None,
+) -> None:
+    """Emit a coded diagnostic blamed on an explicit *filename* and *lineno*.
+
+    For sites that must point at the user's own cell rather than the frame that
+    happened to call them -- ``warnings.warn``'s ``stacklevel`` cannot express
+    "that line over there".
+
+    ``warn_explicit`` takes ``(message, category)`` positionally and gives no
+    way to pass a pre-built instance, so ``.code`` cannot ride along on the
+    warning object here. Callers that need the code programmatically from these
+    sites should read it from the rendered text, which always starts
+    ``[CODE] ``. This asymmetry is why the test below pins it.
+    """
+    warnings.warn_explicit(
+        format_diagnostic(code, what, fix),   # raises on an unknown code
+        category,
+        filename=filename,
+        lineno=lineno,
+        registry=registry,
+    )
