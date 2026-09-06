@@ -320,12 +320,15 @@ def _statement_source(raw_cell: str, node: ast.stmt) -> str | None:
     is not ``None``. ``ast.unparse`` normalizes a statement onto one logical
     line and strips comments -- both fine for the CACHE KEY, which stays the
     unparsed form always (never this), but wrong for compiling a function
-    DEFINED in the cell: a per-line ``# @cash:assume-safe`` in its body would
-    be invisible to ``inspect.getsource`` (and so to the purity analyzer) if
-    compiled from text with no comments in it. See ``_execute_statement`` for
-    the cache-key/exec-source boundary in full, and ``_exec_source_for_node``
-    below for why a top-level ``def``/``class`` -- excluded here -- still
-    gets a source to execute despite that.
+    DEFINED in the cell that carries a per-line ``# @cash:assume-safe``: that
+    comment would be invisible to ``inspect.getsource`` (and so to the purity
+    analyzer) if compiled from text with no comments in it. See
+    ``_execute_statement`` for the cache-key/exec-source boundary in full,
+    and ``_exec_source_for_node`` below for how a top-level ``def``/``class``
+    -- excluded here -- is handled instead: ONLY when its body carries a
+    ``@cash:`` directive does it get its own original text to execute; one
+    with no directive executes from the same unparsed form it always did,
+    completely unaffected by any of this.
 
     ``get_source_segment`` returns a nested statement with its first line flush
     and every continuation line at its ABSOLUTE file indentation, which reads as
@@ -457,6 +460,16 @@ def _exec_source_for_node(
     (``col_offset == 0``), same precondition ``_statement_source``'s own
     dedent step relies on.
 
+    **A cheap early-out skips even that second extraction for the ordinary
+    def/class.** The check before returning is ``"@cash:" in body``, and
+    ``body`` is always a substring of ``raw_cell`` -- so
+    ``"@cash:" not in raw_cell`` is exactly equivalent and lets a cell with
+    no directive anywhere skip the ``ast.get_source_segment`` call and the
+    whole-cell ``_splitlines_like_the_parser`` entirely, not just the
+    decorator/trailing-comment bookkeeping around them. Measured: this made
+    the function O(1) instead of O(cell size) per undirected def/class --
+    31.8ms saved on a 200-def cell with no directive in it.
+
     **Decorators are prepended manually.** ``ast.get_source_segment`` anchors
     to ``node.lineno``, which -- since Python 3.8 -- is the ``def``/``class``
     KEYWORD line, not the decorator, even though ``@c.cache`` is
@@ -521,21 +534,58 @@ def _exec_source_for_node(
     way ``_expr_has_trailing_semicolon`` reads past a node's end elsewhere in
     this module: byte-offset slice the end line past ``end_col_offset``, and
     append it ONLY when what remains, stripped, is empty or starts with
-    ``#`` -- never anything else, which would mean a semicolon-separated
-    SIBLING statement on the same physical line (``def f(): return 1; y =
-    2``), whose text belongs to a different node entirely and must not be
-    swallowed here.
+    ``#``. For a top-level ``def``/``class`` -- the only node types this
+    function handles -- that guard is actually unreachable, not merely
+    cautious: the header's suite consumes everything after the colon on its
+    own last line, so nothing else can start on that same physical line the
+    way a semicolon-separated statement can follow an ordinary simple
+    statement (contrast ``_expr_has_trailing_semicolon``, where that
+    same-line-sibling hazard is real -- e.g. ``x = 1; y = 2``). Kept anyway
+    as cheap defence-in-depth rather than removed, in case this function's
+    scope ever widens to a node type where it would matter.
+
+    **The recovered text is sanity-checked with ``compile()`` before it is
+    trusted.** Every step above is a manual, line-number-driven
+    reconstruction, and Python's decorator grammar has a sharp edge:
+    since PEP 614 (Python 3.9), a decorator's EXPRESSION need not start on
+    the ``@`` line --
+
+    .. code-block:: python
+
+        @(
+            c.cache
+        )
+        def audited(n): ...
+
+    -- so ``decorator_list[0].lineno`` (the expression's own line) is not
+    the ``@`` line, and the manual prefix above silently drops the ``@(``
+    line while leaving a stray ``)``. Text like that does not compile, and
+    returning it anyway does not "fail" here -- ``_execute_statement``
+    would raise trying to parse/compile it, which is exactly as capable of
+    killing the cell as this function raising directly would be (measured:
+    an ``IndentationError`` on a cell that ran fine before this function
+    existed). One ``compile()`` call closes this AND any future recovery
+    bug in this function the same way, at the cost of one extra parse per
+    ANNOTATED def/class only (the early-out above already excludes every
+    other def/class, so this never taxes the ordinary-statement path).
 
     Returns ``None`` -- falling back to the unparsed ``code`` at the
     executor, unchanged from before this function existed -- for every other
     reason ``stmt_display`` came back empty (a control body, a loop-split
     iteration, a rewritten statement, or a genuinely unrecoverable segment),
-    and for a def/class with no ``@cash:`` directive in it. Never raises:
-    this must never be able to break a cell.
+    for a def/class with no ``@cash:`` directive in it, and for one whose
+    recovered text fails the ``compile()`` check above. Never raises: this
+    must never be able to break a cell.
     """
     if stmt_display is not None:
         return stmt_display
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return None
+    # Equivalent to the `"@cash:" in body` check at the bottom of the `try`
+    # below -- `body` is always a substring of `raw_cell` -- but cheaper: it
+    # skips `ast.get_source_segment` and the whole-cell
+    # `_splitlines_like_the_parser` too, not just the bookkeeping around them.
+    if "@cash:" not in raw_cell:
         return None
     try:
         body = ast.get_source_segment(raw_cell, node)
@@ -556,7 +606,15 @@ def _exec_source_for_node(
             trailing = rest.split("\n", 1)[0].rstrip("\r")
             if trailing.strip() == "" or trailing.lstrip().startswith("#"):
                 body = body + trailing
-        return body if "@cash:" in body else None
+        if "@cash:" not in body:
+            return None
+        # Sanity-check against the sharp edge documented above (PEP 614 and
+        # any future recovery bug alike): if this does not compile, fall
+        # back to `None` -- the unparsed form -- exactly like any other
+        # unrecoverable statement, instead of handing the executor text
+        # that will raise there.
+        compile(body, "<cash-recovery-check>", "exec")
+        return body
     except Exception:  # noqa: BLE001 - execution must never break over this
         return None
 
@@ -1391,9 +1449,12 @@ class CellExecutor:
         ``display_code`` and ``exec_source`` are usually the SAME text (the
         loop passes ``stmt_display`` for both -- see ``_statement_source``),
         but diverge for a top-level ``def``/``class``: the badge withholds
-        the body there (``display_code`` stays ``None``), while execution
-        still needs it (``exec_source`` recovers it directly) -- see the
-        caller in ``_execute_cell_statements``.
+        the body there (``display_code`` stays ``None``), while
+        ``exec_source`` recovers the original text for execution -- but ONLY
+        when the body carries a ``@cash:`` directive (see
+        ``_exec_source_for_node``); a def/class with no directive gets
+        ``exec_source=None`` too and executes from the same unparsed form it
+        always did. See the caller in ``_execute_cell_statements``.
         """
         metrics = self._statement_processor.process_statement(
             stmt_code, self._magics._global_ttl, silent=True,

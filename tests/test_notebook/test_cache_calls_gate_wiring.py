@@ -224,3 +224,61 @@ def test_a_no_cache_statement_never_reaches_the_gate(magics_fixture, monkeypatch
         "decide_cacheability's downstream no-cache check to save it: "
         f"{captured_calls!r}"
     )
+
+
+def test_identity_contract_holds_on_the_no_eligible_call_and_opt_out_branches(magics_fixture):
+    """FINDING 7 (notebook-annotation-visibility Task 1, review round 1).
+
+    ``process_statement``/``process_statement_async`` forward the cell's
+    original text for compilation (``exec_source``) ONLY when this method
+    made no change: ``_exec_source = exec_source if _exec_code is code else
+    None``. That guard is correct only because every opt-out /
+    no-eligible-call / failure branch below returns the SAME ``code`` object
+    it was given, never an equal-but-freshly-built string -- ``is``, not
+    ``==``. Removing the guard entirely fails 7 integration tests, so the
+    guard's *effect* is covered, but nothing previously named this identity
+    *contract* directly: a future refactor that returned, say,
+    ``code.strip()`` or ``ast.unparse(tree)`` on one of these branches would
+    be value-equal (breaking no existing assertion) while silently
+    disabling ``exec_source`` forwarding for every ordinary statement in
+    that branch, forever falling back to the unparsed form.
+
+    Pinned directly at the two branches ``exec_source`` forwarding actually
+    depends on, with a positive control proving this is not vacuous: the
+    SAME statement, with the opt-out lifted, produces a genuinely NEW string
+    once ``wrap_eligible_calls`` actually rewrites something.
+    """
+    import ast
+    import types
+
+    magics, shell, _, _ = magics_fixture
+    magics.cash("", "out = []")
+    processor = magics._statement_processor
+
+    # Branch 1: no eligible call anywhere in the statement.
+    code = "out.append(1)"
+    tree = ast.parse(code)
+    result_code, result_tree = processor._code_and_tree_for_execution(code, tree, None)
+    assert result_code is code, "the no-eligible-call branch built a NEW string object"
+    assert result_tree is tree, "the no-eligible-call branch built a NEW tree object"
+
+    # Branch 2: the `no_cache_calls` opt-out, short-circuiting BEFORE
+    # `wrap_eligible_calls` runs at all -- even though `compute(x)` below is
+    # structurally eligible (proven by the control that follows).
+    magics.cash("", "def compute(x):\n    return x + 1\nx = 1")
+    code = "out.append(compute(x))"
+    tree = ast.parse(code)
+    opted_out = types.SimpleNamespace(no_cache_calls=True, no_cache=False)
+    result_code, result_tree = processor._code_and_tree_for_execution(code, tree, opted_out)
+    assert result_code is code, "the no_cache_calls opt-out branch built a NEW string object"
+    assert result_tree is tree, "the no_cache_calls opt-out branch built a NEW tree object"
+
+    # Control: the identical statement, opt-out lifted, DOES get a new
+    # string -- proving the two assertions above are discriminating, not
+    # trivially true because nothing here is ever eligible for rewriting.
+    not_opted_out = types.SimpleNamespace(no_cache_calls=False, no_cache=False)
+    control_code, _ = processor._code_and_tree_for_execution(code, tree, not_opted_out)
+    assert control_code is not code, (
+        "the control did not rewrite -- these statements are not actually "
+        "exercising the branches this test claims to pin"
+    )

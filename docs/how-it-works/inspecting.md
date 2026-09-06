@@ -17,22 +17,36 @@ the first thing you see, and
 usually all you need. The full field-by-field guide lives in
 [Reading the Cash Badge](../badges.md).
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @1465b16f, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @3bc4fa1f, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
 The code shown for each row is **your own source**, laid out across its
 original lines — not the single-line, normalized form Cash always hashes for
 the cache key. That original text is also what actually gets compiled and
-run, whenever Cash can recover one — including inside a function *defined*
-in the cell, so a per-line `# @cash:assume-safe` on a line in its body is
-honoured instead of silently lost. `def`/`class` statements are the one
-exception to what the row **shows**, not to what runs: a row for one of
-those still clips to its first line (`def foo(x):` … `+N lines`), because
-defining a function only *binds* the name — the body doesn't run until
-something calls it, so unlike every other row, it isn't "the code that ran"
-— but the function's real source, comments included, is still what gets
-compiled underneath. And because the cache key is always built from the
-normalized form with comments already stripped, editing a comment on an
-otherwise-unchanged statement changes what the row displays (and what
-actually runs) without changing its key — the next run still hits.
+run, whenever Cash can recover one. `def`/`class` statements are the one
+exception to what the row **shows**: a row for one of those still clips to
+its first line (`def foo(x):` … `+N lines`), because defining a function only
+*binds* the name — the body doesn't run until something calls it, so unlike
+every other row, it isn't "the code that ran".
+
+Whether a `def`/`class` is also an exception to what actually **runs**
+depends on its body. The common case — no `# @cash:` directive anywhere in
+it — still compiles from the normalized, comment-free form, same as its
+clipped row summary. Only a function or class that *does* carry a directive
+is compiled from its original text, comments included, so a per-line
+`# @cash:assume-safe` in its body is honoured instead of silently lost. That
+split isn't cosmetic: recovering a function's original text unconditionally
+would let its compiled-source identity hash depend on *which* internal path
+(re)compiled it — the per-cell path, which can offer the original text,
+versus a same-session replay that re-executes an earlier definition and
+never could — silently moving the cache key for calls to that function even
+though nothing about it changed. Gating recovery on the directive keeps the
+overwhelming majority of functions on the single, stable path they always
+had.
+
+Because the cache key is always built from the normalized form with
+comments already stripped, editing a comment on an otherwise-unchanged
+statement changes what the row displays (and, for a directive-bearing
+`def`/`class`, what actually runs) without changing its key — the next run
+still hits.
 
 ## Where a value came from
 

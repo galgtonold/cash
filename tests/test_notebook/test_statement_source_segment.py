@@ -2,11 +2,21 @@
 
 ``ast.unparse`` normalizes a statement onto one logical line -- it is what the
 cache key always needs. For the badge we want the user's own text back, which
-is what ``ast.get_source_segment`` returns; ``_execute_statement`` also
-compiles THIS (not the unparsed form) whenever it is available, so a
-`# @cash:assume-safe` inside a function defined in a cell keeps its comment
--- see ``_exec_source_for_node`` in this same module for the def/class case,
-which this file does not cover.
+is what ``ast.get_source_segment`` returns; for an ORDINARY statement,
+``_execute_statement`` also compiles THIS (not the unparsed form) whenever it
+is available AND the CAS-243 call-interception rewrite did not fire for it
+(a rewritten statement always executes the rewritten text instead -- see the
+guard in ``processor.py``'s ``process_statement``).
+
+A top-level ``def``/``class`` is a different story: this function withholds
+its body (returns ``None``), and its original text -- when there is one to
+recover -- is recovered separately, in ``cell_executor.py``'s
+``_exec_source_for_node``, ONLY when the body carries a ``@cash:``
+directive; a `# @cash:assume-safe` inside a function defined in a cell keeps
+its comment ONLY in that case. An undirected def/class keeps compiling from
+the unparsed form, same as before. See that function's docstring (in
+``cell_executor.py``, not this test module) for the def/class case, which
+this file does not cover.
 """
 from __future__ import annotations
 

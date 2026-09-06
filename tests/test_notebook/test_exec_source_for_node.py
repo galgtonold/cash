@@ -161,3 +161,29 @@ def test_a_cash_directive_on_a_sibling_statement_does_not_leak_in():
     )
     node = _node(cell, index=0)
     assert _exec_source_for_node(cell, node, None) is None
+
+
+def test_a_pep614_parenthesised_decorator_returns_none_not_uncompilable_text():
+    """FINDING 1 (review round 1), the regression this file exists to guard
+    against not recurring. Since PEP 614 (Python 3.9), a decorator's
+    EXPRESSION need not start on the same line as the ``@`` --
+    ``decorator_list[0].lineno`` is the expression's own line. The manual
+    prefix in ``_exec_source_for_node`` (lines from
+    ``decorators[0].lineno - 1`` through ``node.lineno - 1``) then drops the
+    ``@(`` line and leaves a stray ``)`` -- text that does not compile.
+
+    Before the ``compile()`` sanity check this function returned that
+    broken text anyway, and ``_execute_statement`` raised
+    ``IndentationError`` trying to parse/compile it -- killing a cell that
+    ran fine on base ``479e30e``. This must return ``None`` instead, the
+    same as any other unrecoverable segment, so the caller falls back to
+    the unparsed form rather than text that cannot compile."""
+    cell = (
+        "@(\n"
+        "    c.cache\n"
+        ")\n"
+        "def f(n):\n"
+        "    return n  # @cash:assume-safe\n"
+    )
+    node = _node(cell)
+    assert _exec_source_for_node(cell, node, None) is None
