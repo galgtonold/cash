@@ -17,17 +17,22 @@ the first thing you see, and
 usually all you need. The full field-by-field guide lives in
 [Reading the Cash Badge](../badges.md).
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @21cc6a12, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:_statement_source @1465b16f, cash/notebook/badge_renderer/renderers/html.py:_row_code_html @65ca0afa -->
 The code shown for each row is **your own source**, laid out across its
-original lines — not the single-line, normalized form Cash actually hashes
-and compiles. `def`/`class` statements are the one exception: a row for one
-of those still clips to its first line (`def foo(x):` … `+N lines`), because
+original lines — not the single-line, normalized form Cash always hashes for
+the cache key. That original text is also what actually gets compiled and
+run, whenever Cash can recover one — including inside a function *defined*
+in the cell, so a per-line `# @cash:assume-safe` on a line in its body is
+honoured instead of silently lost. `def`/`class` statements are the one
+exception to what the row **shows**, not to what runs: a row for one of
+those still clips to its first line (`def foo(x):` … `+N lines`), because
 defining a function only *binds* the name — the body doesn't run until
-something calls it, so unlike every other row, it isn't "the code that ran."
-And because the row shows your source while the cache key is built from the
+something calls it, so unlike every other row, it isn't "the code that ran"
+— but the function's real source, comments included, is still what gets
+compiled underneath. And because the cache key is always built from the
 normalized form with comments already stripped, editing a comment on an
-otherwise-unchanged statement changes what the row displays without changing
-its key — the next run still hits.
+otherwise-unchanged statement changes what the row displays (and what
+actually runs) without changing its key — the next run still hits.
 
 ## Where a value came from
 

@@ -50,7 +50,7 @@ A few of these steps deserve a closer look:
   [Staying correct: invalidation](invalidation.md). This page and that one
   describe the same engine from two angles: here it's "how a cell runs," there
   it's "how a cell knows it's stale."
-<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130, cash/notebook/statement/processor.py:StatementProcessor.process_statement @97f6ac79 -->
+<!-- claim: cash/notebook/cacheability_decision.py:decide_cacheability @894ac130, cash/notebook/statement/processor.py:StatementProcessor.process_statement @728813ad -->
 - **Step 7 — the per-statement decision.** Each statement passes the detector
   pre-checks from [Safety](safety.md) — merged into one verdict by
   `decide_cacheability` — before the cache is consulted at all. If the verdict

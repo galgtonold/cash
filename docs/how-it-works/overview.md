@@ -63,13 +63,13 @@ Non-determinism is the one case where "recompute" is not the safe answer, and Ca
 
 ## One core, two front-ends
 
-<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_statements @ec9d4e75, cash/core.py:Cash.cache @91b24c1a -->
+<!-- claim: cash/notebook/ipython/cell_executor.py:CellExecutor._execute_cell_statements @5f82719d, cash/core.py:Cash.cache @91b24c1a -->
 Under the surface, Cash is one engine: a shared set of cache-key computation rules, a lineage and dependency-hashing layer, a family of invalidation policies, and a pluggable storage tier. What varies is only how you drive it. The **notebook path** (`%cash_on`) operates statement by statement — Cash intercepts each line of a cell via IPython hooks and decides independently whether to execute or restore. The **decorator path** (`@cash.cache`) wraps a Python function — Cash intercepts each call and caches the return value.
 
 The next pages explain the shared foundation first, then each path's specifics. If you read from top to bottom you will understand both paths by the time you reach the storage and inspection pages.
 
 ??? question "Why statement-level, not whole-cell?"
-    <!-- claim: cash/notebook/statement/processor.py:StatementProcessor.process_statement @97f6ac79 -->
+    <!-- claim: cash/notebook/statement/processor.py:StatementProcessor.process_statement @728813ad -->
     Cash caches each statement in a cell independently rather than the cell as a
     unit. If a 3-statement cell changes only its first line, statements 2 and 3
     still restore from cache; a one-line edit never throws away a cell full of
