@@ -330,6 +330,77 @@ def _fallback_capture_output(stdout: bool = True, stderr: bool = True, display: 
 
 _CAPTURE_OUTPUT = None
 
+#: Methods ipykernel expects on ``shell.display_pub`` that IPython's
+#: ``CapturingDisplayPublisher`` does not implement. ``set_parent`` is the one
+#: that bites: ``zmqshell.set_parent`` calls it for EVERY shell message, from
+#: the very top of ``dispatch_shell`` -- before the busy status is published
+#: and before the message type is even read.
+_KERNEL_PUBLISHER_METHODS = ("set_parent", "register_hook", "unregister_hook")
+
+
+def _attach_kernel_publisher_api(pub: Any, real: Any) -> None:
+    """Give the capturing publisher the methods ipykernel calls on it.
+
+    ``capture_output(display=True)`` swaps ``shell.display_pub`` for a
+    ``CapturingDisplayPublisher``, and that swap is **process-wide** and stays
+    installed for the whole of a statement's execution. ipykernel dispatches
+    shell messages during that window -- its shell channel runs in its own
+    thread, and an ``await`` inside an async statement yields to the event loop
+    besides -- and every dispatch begins with
+    ``zmqshell.set_parent -> self.display_pub.set_parent(parent)``.
+
+    ``CapturingDisplayPublisher`` has no such method, so the message died with
+    ``AttributeError`` before it was handled: no busy status, no reply, and for
+    an ``execute_request`` a cell that silently never ran. Observed on Binder.
+
+    Forwards to the *real* publisher rather than swallowing the call. ipykernel
+    tracks the parent so later output is attributed to the cell that caused it;
+    a no-op would stop the exception and leave the real publisher holding a
+    stale parent the moment capture exits, which trades a loud failure for a
+    quiet mis-attribution.
+
+    Bound per instance rather than patched onto IPython's class: the class is
+    shared with every other ``capture_output`` user in the process, and cash
+    does not get to change their behaviour.
+    """
+    for name in _KERNEL_PUBLISHER_METHODS:
+        if hasattr(pub, name):
+            continue
+        target = getattr(real, name, None)
+        if target is None:
+            # A publisher that never had this method (a plain terminal
+            # ``DisplayPublisher``) is not one ipykernel calls it on either, so
+            # accepting and dropping the call is right here -- it only has to
+            # be survivable, not meaningful.
+            def _noop(*_args: Any, __name: str = name, **_kwargs: Any) -> None:
+                logger.debug("[CAPTURE] %s() ignored: no real publisher", __name)
+            setattr(pub, name, _noop)
+        else:
+            setattr(pub, name, target)
+
+
+def _kernel_safe_capture(cls: Any) -> Any:
+    """``capture_output`` that leaves ``shell.display_pub`` usable by the kernel.
+
+    Subclasses rather than wraps so ``__exit__`` -- which restores the real
+    publisher and the display hook -- is inherited untouched, exception
+    propagation included.
+    """
+    class _KernelSafeCaptureOutput(cls):  # type: ignore[misc, valid-type]
+        def __enter__(self):
+            captured = super().__enter__()
+            # ``self.display`` goes False when there is no shell to swap on, in
+            # which case nothing was installed and there is nothing to repair.
+            if getattr(self, "display", False) and self.shell is not None:
+                pub = getattr(self.shell, "display_pub", None)
+                if pub is not None:
+                    _attach_kernel_publisher_api(pub, self.save_display_pub)
+            return captured
+
+    _KernelSafeCaptureOutput.__name__ = cls.__name__
+    _KernelSafeCaptureOutput.__qualname__ = cls.__qualname__
+    return _KernelSafeCaptureOutput
+
 
 def capture_output(stdout: bool = True, stderr: bool = True, display: bool = True):
     """Resolve IPython's ``capture_output`` on FIRST USE, not at import.
@@ -349,8 +420,11 @@ def capture_output(stdout: bool = True, stderr: bool = True, display: bool = Tru
     if _CAPTURE_OUTPUT is None:
         try:
             from IPython.utils.io import capture_output as _ipy_capture
-            _CAPTURE_OUTPUT = _ipy_capture
+            # See `_kernel_safe_capture`: IPython's publisher is missing methods
+            # ipykernel calls on `shell.display_pub` while the swap is live.
+            _CAPTURE_OUTPUT = _kernel_safe_capture(_ipy_capture)
         except ImportError:
+            # The fallback never touches `display_pub`, so it has nothing to fix.
             _CAPTURE_OUTPUT = _fallback_capture_output
     return _CAPTURE_OUTPUT(stdout=stdout, stderr=stderr, display=display)
 
