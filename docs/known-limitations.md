@@ -355,7 +355,7 @@ puts you on the content-hashed eager path, or name the file:
 
 Unlike the mutation cases above, this one is **not** isolated-re-run only — it can give a wrong answer on a fresh `Run All`, the first time the loop ever executes.
 
-<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @3f828077 -->
+<!-- claim: cash/notebook/control_structures/for_handler.py:ForLoopHandler._process_one_iteration @556e3f16 -->
 Cash decomposes a `for` loop per iteration and uses the loop variable's value — captured at the moment it is *bound*, before any body statement runs — as the per-iteration cache discriminator. That applies both to an ordinary cached statement in the body and to an intercepted (on by default) sub-call whose own arguments give the key nothing else to vary on. If the body **mutates the loop variable before it is used**, the discriminator was already captured before that mutation and cannot see it:
 
 <!-- test:skip reason="illustrative: pull() stands in for a slow call whose only per-iteration signal is the loop variable; call-level caching is on by default and needs no directive to make pull(handle) itself the cached, keyed unit" -->

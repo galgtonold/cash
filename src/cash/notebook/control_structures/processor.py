@@ -151,14 +151,28 @@ def bind_target_values(target: ast.AST, value, user_ns: dict[str, Any]) -> dict[
 def build_iteration_context(
     target_names: list[str],
     user_ns: dict[str, Any],
-    parent_context: dict[str, Any] | None
+    parent_context: dict[str, Any] | None,
+    loop_var_digests: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """
     Build a context dict containing current iteration variable values.
 
     Used to differentiate cache keys across loop iterations.
+
+    *loop_var_digests* carries full-content digests the caller has ALREADY
+    computed for these same bindings. ``for_handler._process_one_iteration``
+    fills it a few lines before calling this, and without it this function
+    recomputed the identical ``compute_hash_full`` on the identical object --
+    measured at 164ms of a 328ms hashing bill on the demo tour's bootstrap
+    cell (five ~200k-row groups), on a re-run where nothing recomputed.
+
+    The digest is only substituted where this function would have computed one
+    itself. A value that is plain ``hash()``-able still goes into the context
+    *by value*: swapping in a digest there would change the context hash and
+    invalidate every existing entry for no gain.
     """
     context = dict(parent_context) if parent_context else {}
+    digests = loop_var_digests or {}
 
     for name in target_names:
         if name in user_ns:
@@ -170,6 +184,16 @@ def build_iteration_context(
                 # repr() TRUNCATES large numpy/pandas objects, so two
                 # iterations differing outside the repr window collided
                 # into one context hash. Hash the full content.
+                #
+                # Reuse the caller's digest when it has one: it is the same
+                # `compute_hash_full` of the same object, so this is shared
+                # rather than approximated. Do NOT weaken the fallback to
+                # `compute_hash` -- a sampled hash here is exactly the
+                # collision this branch exists to prevent.
+                cached = digests.get(name)
+                if cached is not None:
+                    context[name] = cached
+                    continue
                 from cash.notebook.object_hashing import compute_hash_full
                 context[name] = compute_hash_full(value)
 

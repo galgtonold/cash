@@ -465,7 +465,14 @@ class ForLoopHandler:
                 if self.debug:
                     logger.warning("[CONTROL] Failed to hash loop variable %s: %s", name, exc)
 
-        iteration_context = build_iteration_context(target_names, self.shell.user_ns, parent_context)
+        # `loop_var_digests` is fully populated by the loop above, over these
+        # same bindings. Handing it over stops `build_iteration_context`
+        # recomputing an identical `compute_hash_full` on an identical object --
+        # a full duplicate of the most expensive thing an iteration does when
+        # the loop target is large.
+        iteration_context = build_iteration_context(
+            target_names, self.shell.user_ns, parent_context, loop_var_digests
+        )
         if iterable_lineage:
             iteration_context['__iterable_lineage__'] = iterable_lineage
 
