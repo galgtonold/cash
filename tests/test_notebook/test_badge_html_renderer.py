@@ -16,11 +16,65 @@ from cash.notebook.cache_status import CacheStatus
 
 
 def test_empty_badge_produces_valid_v3_skeleton() -> None:
+    """The skeleton is this test's subject; the LABEL is asserted separately.
+
+    This used to assert ``EXECUTED`` for an empty badge, commented "default =
+    nothing cached" -- which pinned a bug rather than a contract. Every caller
+    that renders an empty badge is an abort path (`cell_executor.py` lines 817,
+    950, 1327, 1332, 1347, 1351), and each hands the cell straight to
+    ``original_run_cell`` afterwards. So the badge claimed the cell had
+    EXECUTED in 0.00s *before its work began*. See
+    ``test_empty_badge_never_claims_the_cell_executed``.
+    """
     html = render_html(build_interactive_badge([]))
     assert "<style>" in html
     assert "c3-card" in html and "c3-summary" in html and "c3-panel" in html
-    assert 'data-kind="exec"' in html  # default = nothing cached
+
+
+def test_empty_badge_never_claims_the_cell_executed() -> None:
+    """A badge with no rows must not report success.
+
+    Reported symptom: a badge that is "just empty and says executed which is
+    wrong". It appears when cash bails out -- a SyntaxError, a failed upstream
+    simulation, or ``Cash auto-caching failed ... falling back to normal
+    execution`` -- and then runs the cell normally, so the false EXECUTED is
+    also masking a swallowed internal error.
+    """
+    html = render_html(build_interactive_badge([]))
+    assert "EXECUTED" not in html, "an empty badge still claims the cell executed"
+    assert "BYPASSED" in html
+    assert "cash stepped aside" in html
+    assert 'data-kind="warn"' in html
+
+
+def test_running_badge_without_step_info_is_not_reported_as_finished() -> None:
+    """The other silent fall-through.
+
+    RUNNING used to be inferred from step information rather than carried on
+    the header, so a progress badge published without it rendered as EXECUTED
+    0.00s -- a finished cell, mid-run. It is now ``BadgeStatus.RUNNING`` and
+    survives on its own.
+    """
+    html = render_html(build_interactive_badge([], status="RUNNING"))
+    assert "PROCESSING" in html
+    assert "EXECUTED" not in html
+
+
+def test_normal_summaries_are_unchanged_by_the_empty_state() -> None:
+    """The control arm: a real row must still summarise as before.
+
+    Without this, making the empty case non-EXECUTED could equally have been
+    achieved by breaking the EXECUTED path outright.
+    """
+    metrics = [{
+        "code": "y = expensive()",
+        "status": str(CacheStatus.COMPUTED),
+        "total_time": 1.23,
+        "evaluated_vars": ["y"],
+    }]
+    html = render_html(build_interactive_badge(metrics))
     assert "EXECUTED" in html
+    assert "BYPASSED" not in html
 
 
 def test_restored_row_uses_cached_kind_and_saved_time() -> None:

@@ -2104,10 +2104,46 @@ def _section_label(kind: SectionKind, header: str) -> str:
 # Summary chip (header + sparkline + filter counts)
 # ---------------------------------------------------------------------------
 
+def _header_is_empty(header: BadgeHeader) -> bool:
+    """True when the header describes no work at all.
+
+    Counts only, deliberately: ``total_exec_s`` is the CELL's wall time on the
+    final render and is non-zero even when nothing was cacheable, so folding it
+    in here would make a genuinely empty badge look occupied.
+    """
+    return not (
+        header.restored_count
+        or header.computed_count
+        or header.skipped_count
+        or header.uncacheable_count
+        or header.warn_count
+    )
+
+
 def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
-    """``(kind, label, sub)`` for the collapsed pill."""
-    # RUNNING placeholder
-    if header.current_step or header.total_steps or header.current_code:
+    """``(kind, label, sub)`` for the collapsed pill.
+
+    Two states below are explicit because they used to be inferred, and both
+    inferences produced a badge that lied.
+
+    ``RUNNING`` was inferred from the presence of step information. A progress
+    badge published without it -- and one is, from every abort path -- fell
+    through to the EXECUTED default and told the user the cell had finished in
+    0.00s while it was still running.
+
+    An EMPTY header (no rows at all) fell through to the same default. Every
+    caller that produces one is an abort: a SyntaxError, a failed upstream
+    simulation, or ``Cash auto-caching failed ... falling back to normal
+    execution``. Each then hands the cell to ``original_run_cell``, so the
+    badge announced completion *before the work started*. "cash stepped aside"
+    is what actually happened, and it is worth saying: caching silently did
+    not run.
+    """
+    # RUNNING is now carried on the header itself, so a progress badge stays a
+    # progress badge even when it has no step information to show.
+    if header.status is BadgeStatus.RUNNING or (
+        header.current_step or header.total_steps or header.current_code
+    ):
         if header.total_steps:
             sub = f"({header.current_step}/{header.total_steps})"
         elif header.current_step:
@@ -2115,6 +2151,13 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
         else:
             sub = "…"
         return "exec", "PROCESSING", sub
+
+    # Deliberately NOT "not cached": that is already the per-row chip for a
+    # statement that ran but was not stored (``uncacheable_count``). This is a
+    # different thing -- cash never processed the cell at all -- and reusing
+    # the phrase would conflate the two.
+    if _header_is_empty(header):
+        return "warn", "BYPASSED", "cash stepped aside"
 
     if header.computed_count == 0 and (header.restored_count > 0 or header.skipped_count > 0):
         if header.restored_count > 0:

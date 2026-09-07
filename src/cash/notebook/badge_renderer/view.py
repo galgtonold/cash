@@ -47,6 +47,11 @@ class BadgeStatus(str, Enum):
     COMPUTED = "computed"
     SKIPPED = "skipped"
     MIXED = "mixed"                    # summary header when a cell has both restored + computed
+    # A header-only state: the cell is still running. Previously "RUNNING" was
+    # squeezed into WARNING, which the summary renderer does not read, so a
+    # progress badge published without step information fell through to
+    # EXECUTED and claimed the cell had finished in 0.00s.
+    RUNNING = "running"
     ERROR = "error"
     FUNCTION_CHANGED = "function_changed"
     MODULE_RELOADED = "module_reloaded"

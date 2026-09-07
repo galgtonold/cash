@@ -36,6 +36,7 @@ One word per state, and the **same** word whether you are reading a single row o
 | **MODULE RELOADED** | red | A tracked local import was edited; everything downstream re-runs. |
 | **WARNING** | red | Something to look at (e.g. an opaque call Cash can't see through); the row still ran. |
 | **ERROR** | red | The statement raised. |
+| **BYPASSED** | red | *Cell header only.* Cash stepped aside before processing the cell at all and handed it straight to IPython, so nothing was cached and there are no rows to show. Distinct from `NOT CACHED`, which is about a statement that **did** run under Cash. Usually a syntax error in the cell; if the cell looks fine, check the kernel log for `Cash auto-caching failed` — that names the internal error Cash swallowed on the way out. |
 
 The cell header also carries counter chips — `EXEC`, `NOT CACHED`, `CACHED`, `WARN` — each with a count. They tally rows by family rather than naming this cell's state, so `EXEC 1 · CACHED 1` under an `EXECUTED` header means one statement ran and one came from cache.
 

@@ -1151,7 +1151,7 @@ def build_interactive_badge(
         cell_overhead = max(0.0, cell_total_time - cell_compute)
         header_saved = max(0.0, total_saved - cell_overhead)
     header = BadgeHeader(
-        status=BadgeStatus.WARNING if status == "RUNNING" else _summary_status(restored, computed, skipped_count),
+        status=BadgeStatus.RUNNING if status == "RUNNING" else _summary_status(restored, computed, skipped_count),
         restored_count=restored,
         computed_count=computed,
         skipped_count=skipped_count,
