@@ -35,12 +35,6 @@ them, and still could not tell what they meant.
   function's identity. Adding one is a one-time miss, and that is correct — the
   function is treated differently than it was before.
 
-### Breaking
-
-- Warning message text is rewritten across the board (see **Upgrading**). No
-  warning was removed and none fires under new conditions; only the wording and
-  the blamed source line changed.
-
 ### Added
 
 - **Every warning carries a diagnostic code, a fix, and a link.** 34 codes
@@ -89,6 +83,10 @@ them, and still could not tell what they meant.
 
 ### Changed
 
+- **Warning message text is rewritten across the board** (see **Upgrading**).
+  No warning was removed and none fires under new conditions; the wording and
+  the blamed source line changed. Warning text was never a documented
+  interface — branch on `.code` if you need something stable.
 - **Executed notebooks are substantially smaller and the badge is quieter on
   the wire.** The stylesheet is minified once at import, and progress badges
   render on the trailing edge — armed when a statement starts and published only
