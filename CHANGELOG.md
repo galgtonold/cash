@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-09-07
+
+One crash worth upgrading for, one loop that was doing its work twice, and a
+rebuilt live demo.
+
+### Fixed
+
+- **A cell could die under Jupyter with `AttributeError:
+  'CapturingDisplayPublisher' object has no attribute 'set_parent'`.** To
+  record what a cell displays, Cash swaps IPython's display publisher for a
+  capturing one — and that swap is process-wide. Meanwhile the kernel drives
+  the publisher itself on the shell channel, so any message that arrived while
+  a capture was open reached an object missing the methods the kernel expects.
+  The capturing publisher now forwards the real one's kernel-facing API, so the
+  swap is invisible to the kernel.
+
+  Worth upgrading for even if you have not seen the traceback. The failure
+  lands as an error on a cell whose work then silently did not happen, and the
+  capture is open while Cash runs your statements — so the window is ordinary
+  cell execution, not some rare path.
+
+### Performance
+
+- **A loop target is no longer hashed twice per iteration.** Cash pays a full
+  hash of each value a loop binds, deliberately — a sampled hash once collided
+  two iterations onto one cache entry and returned a wrong result. It was
+  paying that cost twice: once when binding the value, then again when building
+  the iteration's cache context, which did not know the digest had just been
+  computed. Sharing it cut a cached re-run of a loop over five 200k-row frames
+  from 0.50s to 0.294s, and the hashing itself from 328ms to 161ms.
+
+  The hash is shared, never weakened — loops over large values keep the same
+  cache keys and the same collision guarantee.
+
+### Changed
+
+- **The live feature tour is rebuilt around work that caching can actually
+  save.** The old tour held 1.38s of cacheable compute, 82% of it in a single
+  cell, while the rest sat in the 50–130ms band where Cash's own bookkeeping
+  costs about what the work does; its million-row frame took 130ms to build and
+  99ms to hash, so caching it roughly broke even.
+
+  It now runs a model bake-off — a shared k-means feature stage feeding a
+  lasso, gradient-boosted stumps and a small neural net into a leaderboard —
+  around 9s of genuine compute over intermediates that hash in single-digit
+  milliseconds. Because those pieces form a lattice rather than a fan-out, the
+  tour can finally show the thing it is about: change one model's
+  hyperparameter and only that model recomputes, while its siblings and the
+  shared stage stay cached. Edit the helper all three share and all three
+  invalidate, while the stage that does not call it does not.
+
 ## [0.9.0] - 2026-09-07
 
 A release about Cash explaining itself. Every warning now carries an
