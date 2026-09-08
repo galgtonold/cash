@@ -94,7 +94,13 @@ class TestMagicHandling(unittest.TestCase):
             # We need to manually populate tracking dicts to simulate that x=10 was executed and cached
             # effectively ignoring the magic part which CashMagics usually skips caching for anyway (unless handled)
             self.magics._tracking_state.executed_cell_codes['x'] = "x = 10"
-            self.magics._tracking_state.executed_cell_hashes['x'] = "hash_of_x_10"
+            # A SET, which is what every production writer stores here
+            # (statement/lineage.py, statement/restore.py, upstream/_types.py).
+            # A bare string made `.add()` raise AttributeError, cash bailed out
+            # of its own pipeline, and the cell then ran UNCACHED through
+            # IPython -- so `x == 20` below held for a reason that had nothing
+            # to do with the magic being ignored.
+            self.magics._tracking_state.executed_cell_hashes['x'] = {"hash_of_x_10"}
             self.magics._tracking_state.variable_lineage['x'] = "lineage_of_x_10"
             self.shell.user_ns['x'] = 10
             

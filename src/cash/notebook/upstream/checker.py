@@ -118,7 +118,7 @@ class UpstreamChecker:
         shell: IPython shell instance
         debug: Enable debug output
         executed_cell_codes: Maps variable names to the statement code that defined them
-        executed_cell_hashes: Maps variable names to hash of their defining statement code
+        executed_cell_hashes: Maps variable names to the SET of hashes of the statement code that defined them
         variable_lineage: Maps variable names to their lineage hash (includes input dependencies)
     """
 

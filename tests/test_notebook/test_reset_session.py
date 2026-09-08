@@ -15,17 +15,29 @@ import cash
 
 class TestResetSession:
     def test_drops_global_singleton(self):
-        """After ``reset_session()`` the module-level singleton is gone;
-        the next access creates a fresh ``Cash`` instance."""
+        """After ``reset_session()`` the singleton is replaced, not reused.
+
+        Asserting ``_global_cash is None`` here does NOT work, and used to make
+        this test depend on which other tests shared its xdist worker: when an
+        IPython shell exists in the process, ``reset_session`` nulls the
+        singleton and then immediately rebuilds one to rebind the ``%cash_*``
+        magics, so the window in which it is None never reaches the caller.
+        ``InteractiveShell.instance()`` is process-wide and is never unset, so
+        one earlier test creating a shell decided the outcome for this one.
+
+        Replacement is the contract that holds either way, and it is the thing
+        callers actually rely on -- a benchmark harness needs the NEXT ``Cash``
+        to have empty tracking state, not a momentary ``None``.
+        """
         # Touch ``cash.cache`` to force-create the singleton if needed.
         _ = cash.cache
         before = cash._global_cash
         assert before is not None
 
         cash.reset_session()
-        assert cash._global_cash is None
+        assert cash._global_cash is not before
 
-        # Next access creates a NEW singleton.
+        # Next access yields a NEW singleton, never the old one.
         _ = cash.cache
         after = cash._global_cash
         assert after is not None
@@ -44,10 +56,17 @@ class TestResetSession:
 
     def test_reset_when_singleton_never_created(self):
         """Calling reset_session before the singleton was ever created
-        is a no-op (no exceptions)."""
+        is a no-op (no exceptions).
+
+        Only "no exceptions" is asserted, because that is all that is true in
+        both worlds: under a live IPython shell ``reset_session`` rebinds the
+        magics onto a fresh singleton, so ``_global_cash`` is not None
+        afterwards. See ``test_drops_global_singleton`` for why that used to
+        depend on which tests shared the worker.
+        """
         cash._global_cash = None
-        cash.reset_session()  # should not raise
-        assert cash._global_cash is None
+        cash.reset_session()  # the assertion is that this does not raise
+        assert cash.cache is not None
 
     def test_reset_session_is_in_module_all(self):
         """``reset_session`` is part of the public API."""

@@ -185,7 +185,10 @@ def reset_session() -> None:
       with empty tracking state.
     * If an IPython session is active, re-runs the auto-load so the
       ``%cash_on`` / ``%cash_off`` / ``%cash_stats`` magics rebind to
-      the new singleton.
+      the new singleton. Note that this *builds that singleton eagerly*,
+      so under IPython ``_global_cash`` is a NEW ``Cash`` when this
+      returns, not ``None``. What callers can rely on either way is
+      replacement: nothing from before the reset survives.
 
     What this does NOT do:
 

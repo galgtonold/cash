@@ -119,8 +119,15 @@ class TrackingState:
     executed_cell_codes: dict[str, str] = field(default_factory=dict)
 
     # Written by StatementProcessor after each statement execution.
-    # Stores the SHA-256 of the defining statement code for fast change detection.
-    executed_cell_hashes: dict[str, str] = field(default_factory=dict)
+    # sha256 of the defining statement code, for fast change detection. A SET
+    # per variable, not one hash: a variable can be defined by more than one
+    # statement across a session (a re-run cell, a loop body, a restore from
+    # cache), and the checker asks whether the code it simulated is among them.
+    # Every writer builds it that way -- statement/lineage.py,
+    # statement/restore.py, restore.py and upstream/_types.py all do
+    # `[var] = set()` then `.add(...)`. This said `dict[str, str]` until a test
+    # fixture believed it, stored a bare string, and made `.add()` raise.
+    executed_cell_hashes: dict[str, set[str]] = field(default_factory=dict)
 
     # Written by StatementProcessor (and ControlStructureProcessor for mutations).
     # Read by UpstreamChecker to detect stale variables; occasionally reset by
