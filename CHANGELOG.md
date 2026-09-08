@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-09-08
+
+The badge stops telling you a cell has finished while it is still running.
+
+### Fixed
+
+- **Every cell opened by claiming it had already executed.** Cash draws a
+  placeholder badge before a cell's first statement runs. That placeholder had
+  no rows and no step information, and the renderer had no state meaning
+  "running" — so it fell through to the default and drew `EXECUTED · 0.00s`.
+
+  On a fast cell you never saw it: the real badge replaced it within
+  milliseconds. On a slow one it stayed for the whole run, so the cell looked
+  finished — in no time, with nothing in it — while it was still working. The
+  slower and more interesting the cell, the more wrong the badge. It now reads
+  `PROCESSING`.
+
+  Measured at one such render per cell — twelve in a twelve-cell notebook —
+  so this affected every cell of every run, not an edge case.
+
+- **A badge with nothing in it no longer reports success.** The same default
+  was reached from the paths where cash hits an internal problem, steps aside
+  and hands your cell to IPython to run uncached. Those now read `BYPASSED ·
+  cash stepped aside`, which is what actually happened. Deliberately not
+  `NOT CACHED`: that already means a statement that ran under cash and was not
+  stored, which is a different thing.
+
+### Added
+
+- **`NOTEBOOK-BAILOUT`** — when cash steps aside because of an internal error,
+  it now says so, and names the exception, next to the cell that lost its
+  caching. Previously that went to a logger nothing in a notebook surfaces, so
+  the only trace was a cell that appeared to do nothing. Your code still runs
+  and the result is still correct; what you lose is the caching, and now you
+  are told. Documented at
+  [warnings#notebook-bailout](https://cash-lib.readthedocs.io/en/stable/warnings/#notebook-bailout).
+
+### Changed
+
+- `BadgeStatus` gains a `RUNNING` member. Cash used to signal a running cell by
+  passing `"RUNNING"` and having the renderer infer it from the presence of
+  step information, which is exactly the inference that failed above.
+
 ## [0.9.1] - 2026-09-07
 
 One crash worth upgrading for, one loop that was doing its work twice, and a
