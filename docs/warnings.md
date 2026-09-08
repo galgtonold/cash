@@ -735,6 +735,33 @@ worth anything. Do not ignore it when the global is configuration or data that
 your program rewrites while it runs: that is a stale-result bug waiting for the
 first person who changes the value and does not see the output change.
 
+## NOTEBOOK-BAILOUT {#notebook-bailout}
+
+**What happened.** Cash hit an internal error while processing the cell, stepped
+aside, and handed the cell straight to IPython. Your code then ran normally,
+uncached. The warning names the exception that caused it.
+
+**Why it matters.** The result you got is correct — the cell really ran, and it
+ran without Cash in the way. What you did not get is caching: nothing from this
+cell was stored, so it will run in full again next time, and cells downstream of
+it lose the lineage they would have inherited. Nothing is silently wrong, but a
+cell you expect to be instant on the next run will not be.
+
+Before this warning existed the failure was logged to the kernel log and nowhere
+else, so in a notebook the only trace was a cell that appeared to do nothing.
+The badge said `BYPASSED` at best, and before that it wrongly said `EXECUTED`.
+
+**What to do.** Nothing in your code caused this, and re-running is safe. It is
+a bug in Cash, and the exception name in the message is the part worth reporting
+— please open an issue with it. If you need the cell cached in the meantime,
+restarting the kernel clears any accumulated state that may have triggered it.
+
+**When it is safe to ignore.** If it fires once and the cell is cached normally
+on a later run, you lost one cache write and nothing else. It is not safe to
+ignore if it repeats on the same cell: that cell is permanently uncached, so
+every run pays its full cost, and any timing you read from the badge for cells
+below it is measuring a pipeline Cash is no longer helping with.
+
 ## NOTEBOOK-CELL-SYNTAX {#notebook-cell-syntax}
 
 **What happened.** To work out what the cell you just ran depends on, Cash

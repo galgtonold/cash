@@ -52,7 +52,12 @@ from typing import TYPE_CHECKING, Any
 
 from IPython.display import display, publish_display_data
 
-from ...exceptions import AmbiguousCellError, UpstreamStateError
+from ...diagnostics import warn_diagnostic
+from ...exceptions import (
+    AmbiguousCellError,
+    CashCacheIneffectiveWarning,
+    UpstreamStateError,
+)
 from ...purity_analyzer import _audited_lines
 from ...remote_source import measured_validation as _measured_validation
 from .._protocols import ShellProtocol
@@ -1346,7 +1351,29 @@ class CellExecutor:
             self._magics._cancel_progress_badge()
             self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
             return _EarlyReturn(original_run_cell(error_code, *args, **kwargs))
+        # An internal failure, and the cell is about to run UNCACHED. This used
+        # to be logger.error only -- invisible in a notebook, where nobody is
+        # watching the kernel log -- so the sole trace was an empty badge, which
+        # itself then read as "EXECUTED 0.00s". A user hitting this saw a cell
+        # produce nothing and had no way to learn why. Warn where they are.
         logger.error("Cash auto-caching failed: %s. Falling back to normal execution.", caught)
+        try:
+            warn_diagnostic(
+                CashCacheIneffectiveWarning,
+                "NOTEBOOK-BAILOUT",
+                what=(
+                    f"cash hit an internal error and stepped aside: "
+                    f"{type(caught).__name__}: {caught}. This cell ran normally "
+                    f"but was NOT cached, and neither were its results."
+                ),
+                fix=(
+                    "Nothing in your code caused this and re-running is safe -- "
+                    "the cell's result is correct, just uncached. Please report "
+                    "it with the message above."
+                ),
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
+            pass
         self._magics._cancel_progress_badge()
         self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
         return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
