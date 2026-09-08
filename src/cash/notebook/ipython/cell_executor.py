@@ -1789,9 +1789,22 @@ class CellExecutor:
 
                     self._magics._cancel_progress_badge()
                     t_badge = time.time()
+                    # `unified_step`, NOT `unified_step + 1`. This fires when a
+                    # statement has FINISHED; the next one has not started, and
+                    # saying it had is what put a wrong number on the badge.
+                    # Measured on a cell of three trivial assignments followed
+                    # by an eight-second one: the badge read `(2/6)` while
+                    # nothing at all was running, and on the last statement the
+                    # counter ran off the end of the cell entirely -- `(7/6)`.
+                    # Both are invisible at full speed, because the throttle
+                    # drops these renders when they arrive in a burst, and both
+                    # show up as soon as a render is slow enough to escape it.
+                    # The number now means "the furthest statement cash has
+                    # reached", which is what `_arm_progress_badge` publishes
+                    # too, so the two sources agree instead of leapfrogging.
                     self._magics._maybe_progress_badge(
                         all_metrics, display_id=badge_display_id,
-                        step=unified_step + 1, total=total_steps_unified, code=None,
+                        step=unified_step, total=total_steps_unified, code=None,
                     )
                     badge_render_time += time.time() - t_badge
 
@@ -1921,9 +1934,22 @@ class CellExecutor:
 
                     self._magics._cancel_progress_badge()
                     t_badge = time.time()
+                    # `unified_step`, NOT `unified_step + 1`. This fires when a
+                    # statement has FINISHED; the next one has not started, and
+                    # saying it had is what put a wrong number on the badge.
+                    # Measured on a cell of three trivial assignments followed
+                    # by an eight-second one: the badge read `(2/6)` while
+                    # nothing at all was running, and on the last statement the
+                    # counter ran off the end of the cell entirely -- `(7/6)`.
+                    # Both are invisible at full speed, because the throttle
+                    # drops these renders when they arrive in a burst, and both
+                    # show up as soon as a render is slow enough to escape it.
+                    # The number now means "the furthest statement cash has
+                    # reached", which is what `_arm_progress_badge` publishes
+                    # too, so the two sources agree instead of leapfrogging.
                     self._magics._maybe_progress_badge(
                         all_metrics, display_id=badge_display_id,
-                        step=unified_step + 1, total=total_steps_unified, code=None,
+                        step=unified_step, total=total_steps_unified, code=None,
                     )
                     badge_render_time += time.time() - t_badge
 
