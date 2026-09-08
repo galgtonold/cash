@@ -65,7 +65,7 @@ Most caching tools key on the **arguments** you pass. Cash also keys on **the co
 **In a notebook, additionally:**
 
 - **Statement-level, not cell-level.** Change one line in a 20-line cell → that line and its dependents recompute. The other 19 stay cached.
-- **Mutation-aware.** `df.append(...)` and `+=` are detected, so you don't get stale reads.
+- **Mutation-aware.** `df.append(...)` and `+=` are detected, so cells *below* the mutation see it. Re-running a cell *above* one answers as a clean top-to-bottom run would — without it ([why](https://cash-lib.readthedocs.io/en/latest/known-limitations/)).
 - **Zero-config.** `%cash_on` and you're done. No decorators, no config file.
 
 Cash saves time on **re-runs** — restoring an unchanged result instead of recomputing it, not speeding the first execution up. The more a statement costs to compute relative to the size of its result, the more a restore saves; `%cash_stats` reports your actual numbers, and says so plainly when caching cost you time. See the [benchmarks](https://cash-lib.readthedocs.io/en/latest/benchmarks/) for how that plays out on real workloads.

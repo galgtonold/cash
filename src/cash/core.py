@@ -1572,6 +1572,7 @@ class Cash:
         return self._wrap_with_stats(
             func, func_name, wrapper,
             dynamic_depends_on=dynamic_depends_on, ttl=ttl,
+            allow_random=allow_random,
         )
 
     def _register_func(
@@ -2763,6 +2764,7 @@ class Cash:
         *,
         dynamic_depends_on: Callable[..., Any] | list[Callable[..., Any]] | None = None,
         ttl: int | None = None,
+        allow_random: bool = False,
     ) -> Callable:
         """Wrap *wrapper* with hit/miss stat tracking and attach introspection API.
 
@@ -2801,12 +2803,16 @@ class Cash:
             async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
                 result = await wrapper(*args, **kwargs)
                 _drain_stats()
+                self._warn_unseeded_estimator_result(
+                    func_name, result, allow_random)
                 return result
         else:
             @functools.wraps(func)
             def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
                 result = wrapper(*args, **kwargs)
                 _drain_stats()
+                self._warn_unseeded_estimator_result(
+                    func_name, result, allow_random)
                 return result
 
         def cache_info() -> dict[str, Any]:
@@ -3174,7 +3180,8 @@ class Cash:
                         unsafe.add(root.id)
         return frozenset(unsafe)
 
-    def _fold_closure(self, func: Callable, func_name: str, state_hash: str) -> str:
+    def _fold_closure(self, func: Callable, func_name: str, state_hash: str,
+                      _depth: int = 0) -> str:
         """Mix a fingerprint of *func*'s captured free variables into the
         state hash.
 
@@ -3213,6 +3220,51 @@ class Cash:
                 v = cell.cell_contents
             except ValueError:
                 continue
+            # A captured FUNCTION is its code, so fold its source. Reaching
+            # this before the `unsafe` check is the point: a capture the body
+            # PASSES TO A CALL is marked unsafe and skipped (watch it, don't
+            # fold it blind -- CAS-270), and calling is exactly what you do
+            # with a captured function. So the strategy-factory shape
+            #
+            #     def make(weight_fn):
+            #         @cash.cache
+            #         def score(px, n): return f(px, weight_fn(n))
+            #         return score
+            #
+            # folded NOTHING: two scorers built with different weightings share
+            # a source and a qualname (`make.<locals>.score`), collided on one
+            # key, and returned each other's results. Measured: `flat` and
+            # `ramp` both returning 0.025001250062501867, one body execution.
+            #
+            # A call cannot mutate a function, so the reason `unsafe` exists
+            # does not apply. Same predicate as `_fingerprint_default`, and the
+            # same deliberate limit: functions, methods and builtins only. An
+            # arbitrary callable INSTANCE keeps the old path rather than being
+            # keyed on its class and silently sharing entries across instances
+            # holding different state.
+            fingerprint = self._fingerprint_default(v)
+            if fingerprint is not v:
+                # Source text alone collides for two lambdas sharing a line
+                # (`a(lambda: "AAA"), a(lambda: "BBB")` is ONE line, so
+                # `inspect.getsource` returns the same string for both).
+                # Measured: both arms returned "AAA". Their code objects differ.
+                inner_code = getattr(v, "__code__", None)
+                if inner_code is not None:
+                    fingerprint = f"{fingerprint}:{self._code_fingerprint(inner_code)}"
+                # Source alone is not enough: a factory-built helper has the
+                # SAME source for every parameter it was built with, so
+                # `outer(2)` and `outer(3)` fingerprint identically and collide
+                # again one level down (measured: both returned 20). Recurse so
+                # the captured function's own captures fold under the same
+                # rules. Bounded, because a wrong answer is worth a few frames
+                # and a cycle is not.
+                if _depth < 4:
+                    fingerprint = self._fold_closure(
+                        v, f"{func_name}.{name}", str(fingerprint), _depth + 1,
+                    )
+                captures.append((name, fingerprint))
+                continue
+
             if self._is_immutable_capture(v):
                 captures.append((name, v))
             elif name not in unsafe:
@@ -3333,6 +3385,38 @@ class Cash:
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 return self._defaults_unhashable(func_name, pos, kwd, e, warn)
         return self._finish_defaults_fold(func, state_hash, digest, pos, kwd, pinnable)
+
+    @staticmethod
+    def _code_fingerprint(code: types.CodeType, _depth: int = 0) -> str:
+        """A digest of what a code object DOES, independent of where it sits.
+
+        Source text is not enough on its own for a lambda: two different
+        lambdas written on the SAME physical line share their
+        ``inspect.getsource`` result, so ``a(lambda: "AAA"), a(lambda: "BBB")``
+        fingerprint identically and collide. Their code objects differ, which
+        is the signal this reads.
+
+        Deliberately built from ``co_code``/``co_names``/``co_varnames`` and the
+        constants, never from ``repr`` of a nested code object -- that carries a
+        memory address, which would make the key unstable across processes and
+        turn every restart into a miss. Nested code (a lambda inside a lambda)
+        recurses instead, bounded.
+        """
+        parts: list[str] = [
+            code.co_code.hex(),
+            repr(code.co_names),
+            repr(code.co_varnames),
+            repr(code.co_freevars),
+        ]
+        for const in code.co_consts:
+            if isinstance(const, types.CodeType):
+                parts.append(
+                    Cash._code_fingerprint(const, _depth + 1)
+                    if _depth < 4 else "<deep>"
+                )
+            else:
+                parts.append(repr(const))
+        return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
     @staticmethod
     def _fingerprint_default(v: Any) -> Any:
@@ -5489,6 +5573,63 @@ class Cash:
             # against a decoration on a known line; a reader whose warning
             # points into Cash cannot act on it, which is the whole point of
             # this diagnostic. Single caller, so the depth is fixed.,
+        )
+
+    def _warn_unseeded_estimator_result(
+        self, func_name: str, result: Any, allow_random: bool,
+    ) -> None:
+        """Warn when a cached function RETURNS an unseeded fitted estimator.
+
+        ``_warn_unseeded_randomness`` reads the source, and
+        ``decorator.md`` is right that this hazard is invisible to it:
+        randomness inside sklearn's compiled ``.fit()`` is not in any AST. The
+        notebook's statement path solves that by asking the LIVE object
+        (``get_params()['random_state'] is None``) rather than the source; the
+        decorator path had no equivalent, so the recommended way to cache a fit
+        was also the silent one.
+
+        Reported in round 14: three runs returned the identical model (first
+        tree's `random_state` 1200527474), no warning, no badge marker, using
+        the docs' own recipe. The tester's words for the harm are the reason
+        this exists -- "I would have written 'the model is completely stable
+        across random seeds' in a report."
+
+        Same verdict rule as ``_unseeded_estimator_fits``: unseeded iff
+        ``get_params()`` HAS ``random_state`` and it is ``None``. A seed of any
+        kind, or no such parameter at all (``LinearRegression``), is silent.
+        Any failure is silent too -- an advisory must never break a call.
+        """
+        if allow_random:
+            return
+        # This runs on EVERY call, hits included, so it must stay cheap once it
+        # has had its say. `_warn_once` would dedupe the emission but not the
+        # `get_params()` that precedes it, and sklearn's `get_params` walks the
+        # signature -- a per-hit cost on exactly the functions people cache to
+        # avoid paying for a fit. Check the same key first and leave.
+        if (CashRandomnessWarning, func_name, "_estimator_result") in \
+                self._warning_keys_seen:
+            return
+        get_params = getattr(result, "get_params", None)
+        if get_params is None or not callable(get_params):
+            return
+        try:
+            params = get_params()
+            if params.get("random_state", "absent") is not None:
+                return
+        except Exception:  # noqa: BLE001 - advisory only; never break a call
+            return
+
+        self._warn_once(
+            CashRandomnessWarning, func_name, "_estimator_result",
+            f"@cash.cache on {func_name}: returns a fitted estimator with "
+            f"random_state=None. cash caches it, so every later call replays "
+            f"that one fit - the model is frozen, not stable. Two genuine fits "
+            f"would differ, and comparing runs cannot tell you otherwise.",
+            code="RANDOM-UNSEEDED",
+            fix="pass random_state=<int> to the estimator for a reproducible "
+                "fit, leave the function undecorated for a genuinely fresh "
+                "one, or pass @cash.cache(allow_random=True) to keep it frozen "
+                "on purpose.",
         )
 
     def _warn_once(

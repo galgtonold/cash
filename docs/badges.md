@@ -68,7 +68,7 @@ A statement that touches a random-number generator carries a small text pill on 
 | --- | --- |
 | `seed` | The statement sets a global RNG seed (`np.random.seed(0)`, `random.seed(0)`). Neutral — informational. |
 | `random` | A **seeded** draw (`np.random.rand()` after a seed). Neutral — its cached value is reproducible. |
-| `unseeded` | A draw or estimator `.fit()` with **no frozen seed**. Warn-coloured: cash still caches it, but the cached value is a **frozen replay**, not a fresh draw — re-running won't change it. An unseeded row also bumps the header's warning count. Seed the RNG to make it reproducible, or use `# @cash:no-cache` to redraw every run. |
+| `unseeded` | A draw or estimator `.fit()` with **no frozen seed**, in a *notebook statement*. Warn-coloured: cash still caches it, but the cached value is a **frozen replay**, not a fresh draw — re-running won't change it. An unseeded row also bumps the header's warning count. Seed the RNG to make it reproducible, or use `# @cash:no-cache` to redraw every run. A `@cash.cache` function has no badge row; it warns instead ([`RANDOM-UNSEEDED`](warnings.md#random-unseeded)), including when it *returns* an estimator with `random_state=None`. |
 
 A seed that cash re-ran to re-establish the random stream (after you edited an upstream input) shows the row-detail reason **"re-run to restore the random stream"**, so an unchanged seed cell re-executing is explained rather than mysterious.
 

@@ -205,6 +205,21 @@ The trigger is **mutating an upstream object**, not subscript assignment: the sa
 
 **What to do:** rebind (`df = df.assign(...)`) when the frame came from another cell.
 
+### Re-running a cell that sits *above* an in-place mutation
+
+Cash answers as a clean top-to-bottom run would, so a cell above the mutation does not see it — while plain Jupyter, which only has the live object, would. The object itself is not reverted, so this is visible: `s.iloc[0]` still reads `1e9` in the kernel while a cell above it computes with `0.0`.
+
+<!-- test:skip reason="illustrative: needs an isolated re-run of a cell above the mutation" -->
+```python
+s = pd.Series(np.arange(200_000, dtype=float))   # cell 1
+out = summarize(s)                                # cell 2 — re-running this…
+s.iloc[0] = 1e9                                   # cell 3 — …does not see this
+```
+
+Cells *below* the mutation do see it, and editing the mutation correctly re-runs them. This caught an independent tester out, who read it as a stale result.
+
+**What to do:** move the mutation above the cell that must see it, or rebind (`s = s.copy(); s.iloc[0] = 1e9`) so the change is a new value rather than an edit to an earlier one.
+
 ### Mutating and reassigning the same name in one cell
 
 <!-- test:skip reason="illustrative: mutate-then-reassign raises on isolated re-run" -->
