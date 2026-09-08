@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @c63add7b, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @2e6767ef, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
