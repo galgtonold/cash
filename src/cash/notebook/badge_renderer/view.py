@@ -52,6 +52,12 @@ class BadgeStatus(str, Enum):
     # progress badge published without step information fell through to
     # EXECUTED and claimed the cell had finished in 0.00s.
     RUNNING = "running"
+    # Also header-only: cash aborted its own pipeline and handed the cell to
+    # IPython uncached. Explicit rather than inferred from "the header has no
+    # rows", because a cell of imports or magics has no rows either and has
+    # not been bypassed -- inferring it put "cash stepped aside" on the first
+    # cell of the demo tour.
+    BYPASSED = "bypassed"
     ERROR = "error"
     FUNCTION_CHANGED = "function_changed"
     MODULE_RELOADED = "module_reloaded"

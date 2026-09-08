@@ -552,6 +552,22 @@ def map_status(raw: Any) -> BadgeStatus:
     return BadgeStatus.WARNING
 
 
+def _header_status(status: str, restored: int, computed: int,
+                   skipped: int) -> BadgeStatus:
+    """The header's own status, honouring the caller's lifecycle signal.
+
+    ``RUNNING`` and ``BYPASSED`` describe the CELL, not its rows, and neither
+    can be derived from the counts: both arrive with no rows at all. They used
+    to be squeezed into ``WARNING``, which the summary renderer never read, so
+    a running cell rendered as a finished one.
+    """
+    if status == "RUNNING":
+        return BadgeStatus.RUNNING
+    if status == "BYPASSED":
+        return BadgeStatus.BYPASSED
+    return _summary_status(restored, computed, skipped)
+
+
 def _summary_status(restored: int, computed: int, skipped: int) -> BadgeStatus:
     """Decide the top-level :attr:`BadgeHeader.status` from per-row counts."""
     if computed == 0 and (restored > 0 or skipped > 0):
@@ -1151,7 +1167,7 @@ def build_interactive_badge(
         cell_overhead = max(0.0, cell_total_time - cell_compute)
         header_saved = max(0.0, total_saved - cell_overhead)
     header = BadgeHeader(
-        status=BadgeStatus.RUNNING if status == "RUNNING" else _summary_status(restored, computed, skipped_count),
+        status=_header_status(status, restored, computed, skipped_count),
         restored_count=restored,
         computed_count=computed,
         skipped_count=skipped_count,

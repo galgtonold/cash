@@ -2104,21 +2104,6 @@ def _section_label(kind: SectionKind, header: str) -> str:
 # Summary chip (header + sparkline + filter counts)
 # ---------------------------------------------------------------------------
 
-def _header_is_empty(header: BadgeHeader) -> bool:
-    """True when the header describes no work at all.
-
-    Counts only, deliberately: ``total_exec_s`` is the CELL's wall time on the
-    final render and is non-zero even when nothing was cacheable, so folding it
-    in here would make a genuinely empty badge look occupied.
-    """
-    return not (
-        header.restored_count
-        or header.computed_count
-        or header.skipped_count
-        or header.uncacheable_count
-        or header.warn_count
-    )
-
 
 def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
     """``(kind, label, sub)`` for the collapsed pill.
@@ -2156,11 +2141,15 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
             sub = "…"
         return "exec", "PROCESSING", sub
 
+    # Keyed on the STATUS, never on "the header has no rows". A cell of imports
+    # or magics has no rows either and has not been bypassed -- inferring this
+    # from emptiness put "cash stepped aside" on the demo tour's very first
+    # cell, which is how the inference was caught.
+    #
     # Deliberately NOT "not cached": that is already the per-row chip for a
     # statement that ran but was not stored (``uncacheable_count``). This is a
-    # different thing -- cash never processed the cell at all -- and reusing
-    # the phrase would conflate the two.
-    if _header_is_empty(header):
+    # different thing -- cash never processed the cell at all.
+    if header.status is BadgeStatus.BYPASSED:
         return "warn", "BYPASSED", "cash stepped aside"
 
     if header.computed_count == 0 and (header.restored_count > 0 or header.skipped_count > 0):

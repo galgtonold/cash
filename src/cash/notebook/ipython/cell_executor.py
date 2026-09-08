@@ -1375,7 +1375,7 @@ class CellExecutor:
         except Exception:  # noqa: BLE001 - a diagnostic must never break a cell
             pass
         self._magics._cancel_progress_badge()
-        self._magics._render_interactive_badge([], display_id=badge_display_id, status="DONE")
+        self._magics._render_interactive_badge([], display_id=badge_display_id, status="BYPASSED")
         return _EarlyReturn(original_run_cell(raw_cell, *args, **kwargs))
 
     # ------------------------------------------------------------------

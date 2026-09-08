@@ -31,20 +31,32 @@ def test_empty_badge_produces_valid_v3_skeleton() -> None:
     assert "c3-card" in html and "c3-summary" in html and "c3-panel" in html
 
 
-def test_empty_badge_never_claims_the_cell_executed() -> None:
-    """A badge with no rows must not report success.
+def test_a_bypassed_cell_says_so_and_does_not_claim_success() -> None:
+    """When cash aborts its pipeline the badge must say that, not EXECUTED.
 
-    Reported symptom: a badge that is "just empty and says executed which is
-    wrong". It appears when cash bails out -- a SyntaxError, a failed upstream
-    simulation, or ``Cash auto-caching failed ... falling back to normal
-    execution`` -- and then runs the cell normally, so the false EXECUTED is
-    also masking a swallowed internal error.
+    ``BYPASSED`` is carried on the header, NOT inferred from "this badge has no
+    rows". The first version inferred it, which was wrong in the other
+    direction: a cell of imports and magics has no rows either, so the demo
+    tour's opening cell rendered "cash stepped aside". See
+    ``test_a_cell_with_nothing_to_cache_is_not_reported_as_bypassed``.
     """
-    html = render_html(build_interactive_badge([]))
-    assert "EXECUTED" not in html, "an empty badge still claims the cell executed"
+    html = render_html(build_interactive_badge([], status="BYPASSED"))
     assert "BYPASSED" in html
     assert "cash stepped aside" in html
     assert 'data-kind="warn"' in html
+    assert "EXECUTED" not in html, "a bypassed cell still claims it executed"
+
+
+def test_a_cell_with_nothing_to_cache_is_not_reported_as_bypassed() -> None:
+    """The control arm, and the regression this pairs with.
+
+    An import-only or magic-only cell produces no rows. It has not been
+    bypassed -- cash processed it fine, there was simply nothing to cache -- so
+    it must not carry the warn rail or "cash stepped aside".
+    """
+    html = render_html(build_interactive_badge([]))
+    assert "BYPASSED" not in html
+    assert "cash stepped aside" not in html
 
 
 def test_running_badge_without_step_info_is_not_reported_as_finished() -> None:

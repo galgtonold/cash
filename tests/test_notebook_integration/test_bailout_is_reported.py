@@ -15,6 +15,8 @@ a ``try/except SyntaxError``. Raising something that is NOT a SyntaxError --
 and not one of the three exception types with their own branches -- lands in
 ``_handle_pipeline_exception``'s final else, which is the bail-out under test.
 """
+import re
+
 import pytest
 
 pytestmark = pytest.mark.timeout(180)
@@ -58,6 +60,32 @@ def test_a_bailout_tells_the_user_why(nb_runner):
         f"the diagnostic did not name the exception that caused it: {out!r}")
     assert "probe: forced internal failure" in out, (
         f"the diagnostic dropped the underlying message: {out!r}")
+
+    # ...and the badge must agree with the warning rather than claim success.
+    badge = _badge_html(r, 3)
+    labels = re.findall(r'c3-summary-label[^>]*>([^<]+)<', badge)
+    if labels:
+        assert "EXECUTED" not in labels, (
+            f"cash bailed out but the badge reported EXECUTED: {labels}")
+        assert "BYPASSED" in labels, (
+            f"a bailed-out cell should read BYPASSED, got {labels}")
+
+
+def _badge_html(runner, cell_num):
+    """The cell's rendered badge markup, stylesheet stripped.
+
+    Read from the stored ``text/html`` outputs, not ``get_raw_output``, which
+    returns only stream text -- the badge is a display_data payload.
+    """
+    cell = runner.get_cell(cell_num)
+    parts = []
+    for out in cell.get("outputs", []):
+        html = (out.get("data") or {}).get("text/html", "")
+        if isinstance(html, list):
+            html = "".join(html)
+        if html:
+            parts.append(html)
+    return re.sub(r"<style>.*?</style>", "", "".join(parts), flags=re.DOTALL)
 
 
 def test_a_healthy_cell_says_nothing_about_bailing_out(nb_runner):
