@@ -2126,10 +2126,14 @@ def _summary_meta(header: BadgeHeader) -> tuple[str, str, str]:
     Two states below are explicit because they used to be inferred, and both
     inferences produced a badge that lied.
 
-    ``RUNNING`` was inferred from the presence of step information. A progress
-    badge published without it -- and one is, from every abort path -- fell
-    through to the EXECUTED default and told the user the cell had finished in
-    0.00s while it was still running.
+    ``RUNNING`` was inferred from the presence of step information, and the
+    badge that opens EVERY cell has none: ``_init_cell_timing_and_badge``
+    renders ``([], status="RUNNING")`` before a single statement has run. That
+    fell through to the EXECUTED default, so every cell began life claiming it
+    had finished in 0.00s -- invisible on a fast cell, because the real badge
+    replaced it in milliseconds, and glaring on a slow one, where it sat there
+    for the whole run. That is the reported "empty badge that says executed".
+    Measured: 12 such renders in a 12-cell notebook, one per cell.
 
     An EMPTY header (no rows at all) fell through to the same default. Every
     caller that produces one is an abort: a SyntaxError, a failed upstream

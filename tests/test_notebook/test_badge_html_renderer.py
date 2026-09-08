@@ -48,16 +48,25 @@ def test_empty_badge_never_claims_the_cell_executed() -> None:
 
 
 def test_running_badge_without_step_info_is_not_reported_as_finished() -> None:
-    """The other silent fall-through.
+    """The reported bug, at its actual source.
 
-    RUNNING used to be inferred from step information rather than carried on
-    the header, so a progress badge published without it rendered as EXECUTED
-    0.00s -- a finished cell, mid-run. It is now ``BadgeStatus.RUNNING`` and
-    survives on its own.
+    ``CellExecutor._init_cell_timing_and_badge`` opens EVERY cell with
+    ``_render_interactive_badge([], status="RUNNING")`` -- no rows yet, and no
+    step information either. RUNNING used to be inferred from step information
+    rather than carried on the header, so this fell through to the EXECUTED
+    default and every cell began by claiming it had finished in 0.00s.
+
+    On a fast cell the real badge replaces it within milliseconds and nobody
+    sees it. On a slow one it sits there for the whole run, which is what was
+    reported: "just empty and says executed which is wrong". Measured at one
+    render per cell -- 12 in a 12-cell notebook.
     """
     html = render_html(build_interactive_badge([], status="RUNNING"))
     assert "PROCESSING" in html
     assert "EXECUTED" not in html
+    # And it must NOT take the empty-header branch, which would make every
+    # cell open by announcing that cash had bailed out.
+    assert "BYPASSED" not in html
 
 
 def test_normal_summaries_are_unchanged_by_the_empty_state() -> None:
