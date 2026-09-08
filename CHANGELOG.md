@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.3] - 2026-09-08
+
+Follow-up to 0.9.2: one badge said the wrong thing, and the live demo is
+rebuilt.
+
+### Fixed
+
+- **A cell of imports or magics reported `BYPASSED · cash stepped aside`.**
+  0.9.2 decided a cell had been bypassed by looking for a badge with no rows in
+  it — and a cell that only imports things, or only runs a magic, has no rows
+  either. `%cash_on` is not valid Python, so Cash cannot parse that cell, hands
+  it to IPython and moves on. That is the ordinary path for a magic, not a
+  failure, but the badge announced it as one — including on the opening cell of
+  the demo tour.
+
+  `BYPASSED` is now carried explicitly and set at one place: the internal-error
+  path that also emits `NOTEBOOK-BAILOUT`. Nothing else can reach it. The three
+  states a badge with no rows can be in are now distinct — a cell with nothing
+  to cache reads `EXECUTED`, a cell still running reads `PROCESSING`, and only a
+  genuine bail-out reads `BYPASSED`.
+
+### Changed
+
+- **The live feature tour is rebuilt around a Monte Carlo stress test.** One
+  shared simulation of the market, three volatility scenarios stressed against
+  it, one summary — the same dependency lattice as before, in **two functions
+  and ten lines** instead of four hand-written model fits and around two
+  hundred.
+
+  The work is real: two million price paths walked over 252 trading days, half
+  a billion random draws. Deliberately not a `sleep` standing in for slow work,
+  because a demo built on sleeps argues against itself.
+
+  It is also sized from measurements taken **on Binder** rather than on a
+  developer's machine, which the previous version was not — a cold run there
+  took five to ten minutes. It now takes about twenty seconds, and a warm one
+  about two.
+
 ## [0.9.2] - 2026-09-08
 
 The badge stops telling you a cell has finished while it is still running.
