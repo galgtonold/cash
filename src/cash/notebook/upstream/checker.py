@@ -1933,7 +1933,8 @@ class UpstreamChecker:
                 logger.error("[ERROR] Failed to auto-execute statement: %s", e)
                 raise UpstreamStateError(
                     self._format_upstream_failure(
-                        stmt_code, f"{type(e).__name__}: {e}"
+                        stmt_code, f"{type(e).__name__}: {e}",
+                        planning_gap=self._planning_gap_for(e, statements[:stmt_idx]),
                     )
                 ) from e
 
@@ -1947,8 +1948,67 @@ class UpstreamChecker:
 
         return executed_metrics
 
+    def _planning_gap_for(self, exc: Exception, already_scheduled: list[str]) -> str | None:
+        """Name the producer cash failed to schedule, when there is one.
+
+        A ``NameError`` during upstream re-execution has two very different
+        causes, and the user cannot tell them apart from the message:
+
+        * the cell genuinely has not run and nothing defines the name -- their
+          problem, and the advice to run that cell is right;
+        * a statement in the notebook DOES define it, cash scheduled the
+          statement that reads it, and did not schedule the one that writes it
+          -- cash's problem, and no amount of running cells is the fix.
+
+        A round-14 report is the second kind: reconstruction ran
+        ``ax.plot(sub[...])`` without ``sub = mm[...]`` four statements earlier
+        in the same cell. It took ten failed reproduction attempts (five theirs,
+        five mine) to not pin it down, which is exactly why this exists --
+        the next occurrence should carry its own diagnosis rather than needing
+        the conditions guessed at again.
+
+        Returns ``None`` unless the evidence is unambiguous: a name that is
+        missing, that some known statement assigns, and that was not among the
+        statements already re-executed in this plan.
+        """
+        missing = re.search(r"name '([^']+)' is not defined", str(exc))
+        if missing is None:
+            return None
+        name = missing.group(1)
+        try:
+            producers = [
+                code for code, outputs in self._known_producers()
+                if name in outputs and code not in already_scheduled
+            ]
+        except Exception:  # noqa: BLE001 - a diagnostic must never mask the error
+            return None
+        if not producers:
+            return None
+        first = producers[0].split("\n")[0][:60]
+        return (
+            f"NOTE: '{name}' is assigned by {first!r}, which cash did not "
+            f"schedule alongside the statement that reads it. That is a gap in "
+            f"cash's re-execution plan, not something wrong with your cell - "
+            f"please report it"
+        )
+
+    def _known_producers(self) -> list[tuple[str, set[str]]]:
+        """``(statement code, names it assigns)`` for statements cash has seen.
+
+        Read off ``executed_cell_codes``, which maps a variable to the statement
+        that last produced it -- already maintained, so this costs nothing until
+        something has actually failed.
+        """
+        pairs: dict[str, set[str]] = {}
+        for var, code in (self.executed_cell_codes or {}).items():
+            if isinstance(code, str):
+                pairs.setdefault(code, set()).add(var)
+        return list(pairs.items())
+
     @staticmethod
-    def _format_upstream_failure(stmt_code: str, error_text: str) -> str:
+    def _format_upstream_failure(
+        stmt_code: str, error_text: str, planning_gap: str | None = None,
+    ) -> str:
         """One-line, embeddable message for an upstream statement failure.
 
         The executor re-raises this inside the user's cell via a generated
@@ -1979,6 +2039,8 @@ class UpstreamChecker:
             f"re-execution: {error_text}. Cash stopped instead of running "
             f"this cell against stale upstream state - {advice}."
         )
+        if planning_gap:
+            msg = f"{msg} {planning_gap}."
         return msg.replace("'''", '"""').replace('\n', ' ')
 
     def _try_parse_control_structure(self, code: str) -> ast.AST | None:

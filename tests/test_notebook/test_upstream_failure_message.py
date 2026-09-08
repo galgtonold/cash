@@ -54,3 +54,57 @@ def test_the_message_stays_embeddable():
              "NameError: name 'sub' is not defined")
     assert "\n" not in m
     assert "'''" not in m
+
+
+class _Checker(UpstreamChecker):
+    """Just enough of a checker to exercise the planning-gap detection."""
+
+    def __init__(self, executed_cell_codes):  # noqa: D107 - test double
+        self.executed_cell_codes = executed_cell_codes
+
+
+def test_a_missing_name_with_a_known_producer_names_it_as_a_cash_gap():
+    """The distinction the old message could not draw.
+
+    A NameError here has two causes that look identical to the reader: the cell
+    genuinely never ran (their problem, run it), or cash scheduled the statement
+    that READS a name without the one that WRITES it (cash's problem, running
+    cells will not help). When the evidence is unambiguous, say which.
+    """
+    checker = _Checker({"sub": "sub = mm[mm['category'] == 'Electronics']"})
+    gap = checker._planning_gap_for(
+        NameError("name 'sub' is not defined"), already_scheduled=[],
+    )
+    assert gap is not None
+    assert "'sub' is assigned by" in gap
+    assert "gap in cash's re-execution plan" in gap
+
+
+def test_no_gap_is_claimed_when_nothing_produces_the_name():
+    """The ordinary case -- the user really has not run anything defining it."""
+    checker = _Checker({"other": "other = 1"})
+    assert checker._planning_gap_for(
+        NameError("name 'sub' is not defined"), already_scheduled=[]) is None
+
+
+def test_no_gap_is_claimed_when_the_producer_was_already_scheduled():
+    """If cash DID schedule it, the failure is something else; do not misblame."""
+    producer = "sub = mm[mm['category'] == 'Electronics']"
+    checker = _Checker({"sub": producer})
+    assert checker._planning_gap_for(
+        NameError("name 'sub' is not defined"), already_scheduled=[producer]) is None
+
+
+def test_a_non_nameerror_never_claims_a_gap():
+    checker = _Checker({"sub": "sub = 1"})
+    assert checker._planning_gap_for(
+        ValueError("bad column"), already_scheduled=[]) is None
+
+
+def test_the_gap_note_rides_along_in_the_message():
+    m = UpstreamChecker._format_upstream_failure(
+        "ax.plot(sub['month'])", "NameError: name 'sub' is not defined",
+        planning_gap="NOTE: 'sub' is assigned by 'sub = mm[...]'",
+    )
+    assert "NOTE: 'sub' is assigned by" in m
+    assert "\n" not in m and "'''" not in m

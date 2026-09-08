@@ -16,10 +16,21 @@ from cash import Cash
 class TestRegisterMagicAutoDetect:
     def test_no_magic_registered_outside_ipython_by_default(self):
         """Cash() without arguments should NOT call register_magic() when
-        there is no active IPython session."""
-        with patch.object(Cash, 'register_magic') as mock_register:
-            Cash()
-            mock_register.assert_not_called()
+        there is no active IPython session.
+
+        ``get_ipython`` is patched to None rather than assumed, mirroring the
+        sibling test below which patches in a fake shell. Without it this
+        asserts "no shell exists in this PROCESS", which no xdist worker can
+        promise: ``InteractiveShell.instance()`` is a process-wide singleton
+        that is never unset, so one earlier test on the same worker creating a
+        shell made this fail — and which tests share a worker changes whenever
+        anyone adds a test file. Verified: instantiating a shell first fails
+        this assertion, because ``Cash()`` then correctly registers the magic.
+        """
+        with patch('cash.core.get_ipython', return_value=None):
+            with patch.object(Cash, 'register_magic') as mock_register:
+                Cash()
+                mock_register.assert_not_called()
 
     def test_magic_registered_when_ipython_active_by_default(self):
         """Cash() without arguments SHOULD call register_magic() when
