@@ -1958,11 +1958,26 @@ class UpstreamChecker:
         stmt_short = stmt_code.split('\n')[0][:60]
         if len(stmt_code) > 60 or '\n' in stmt_code:
             stmt_short += '...'
+
+        # "fix the upstream cell" is right for a statement that genuinely
+        # raised, and actively misleading for a NameError. That one usually
+        # means the cell simply has not run in THIS kernel -- there is nothing
+        # to fix, and the remedy (run that cell) is the one thing the old text
+        # never suggested. A round-14 tester lost time to exactly that: five
+        # cells blocked at once, the message pointing at a cell they had just
+        # read through and found nothing wrong with.
+        advice = "fix the upstream cell and re-run"
+        missing = re.search(r"NameError: name '([^']+)' is not defined", error_text)
+        if missing:
+            advice = (
+                f"run the cell that defines '{missing.group(1)}' - it has not "
+                f"run in this kernel yet, so there may be nothing to fix"
+            )
+
         msg = (
             f"Upstream statement {stmt_short!r} failed during auto-"
             f"re-execution: {error_text}. Cash stopped instead of running "
-            f"this cell against stale upstream state - fix the upstream "
-            f"cell and re-run."
+            f"this cell against stale upstream state - {advice}."
         )
         return msg.replace("'''", '"""').replace('\n', ' ')
 

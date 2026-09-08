@@ -190,12 +190,50 @@ def update_lineage_after_execution(
 
     if mutated_vars:
         iterable_lineage = None
+        target_names: set[str] = set()
         if isinstance(node, ast.For):
             iterable_lineage = get_iterable_lineage(shell, statement_processor, node.iter)
+            from .processor import extract_target_names
+            target_names = set(extract_target_names(node.target))
 
         update_mutated_variable_lineages(
-            shell, statement_processor, mutated_vars, iterable_lineage, code, debug=debug
+            shell, statement_processor, mutated_vars, iterable_lineage, code,
+            debug=debug,
+            input_lineages=collect_body_input_lineages(
+                statement_processor, body_nodes, mutated_vars | target_names,
+            ),
         )
+
+
+def collect_body_input_lineages(
+    statement_processor, body_nodes: list, exclude: set[str],
+) -> dict[str, str]:
+    """Current lineage of every variable the control-structure body READS.
+
+    The mutated variable's identity has to answer "did this come from the same
+    upstream computation as last time?", and the body's inputs are most of that
+    answer. Without them the only content signal is a sampled hash — see
+    :func:`update_mutated_variable_lineages` for the measurement showing why
+    that is not enough.
+
+    Excludes the mutated variables themselves (a loop body almost always reads
+    what it mutates, and folding that in would just re-add the sampled hash by
+    another route) and the loop targets (they are bindings the loop creates, not
+    upstream inputs). Names with no recorded lineage are skipped rather than
+    guessed at: absence is not a lineage, and inventing one would churn the key
+    on every run.
+    """
+    reads: set[str] = set()
+    for body_node in body_nodes:
+        for sub in ast.walk(body_node):
+            if isinstance(sub, ast.Name) and isinstance(sub.ctx, ast.Load):
+                reads.add(sub.id)
+    lineages: dict[str, str] = {}
+    for name in reads - exclude:
+        lin = statement_processor.variable_lineage.get(name)
+        if lin:
+            lineages[name] = lin
+    return lineages
 
 
 def get_body_nodes(node: ast.AST) -> list[ast.AST]:
@@ -298,6 +336,7 @@ def find_potentially_mutated_variables(body_nodes: list) -> set[str]:
 def update_mutated_variable_lineages(
     shell, statement_processor, mutated_vars: set[str],
     iterable_lineage: str | None, loop_code: str, debug: bool = False,
+    input_lineages: dict[str, str] | None = None,
 ) -> None:
     """
     Update the lineage of variables that were mutated inside a control structure.
@@ -306,9 +345,27 @@ def update_mutated_variable_lineages(
     1. The control structure code itself
     2. The variable's current value hash
     3. The iterable's lineage (for loops)
+    4. The lineage of every OTHER variable the body read (*input_lineages*)
 
     This ensures downstream statements get fresh cache keys when the
     control structure produces different results.
+
+    Component 4 is not an optimisation, it is what makes the result correct.
+    Component 2 is ``compute_hash``, which SAMPLES large objects (a DataFrame
+    hashes shape + dtypes + ``head(5)``), so two frames that differ only past
+    the sampled region hash identically and the lineage cannot move. Measured:
+    a 400k-row frame before and after an upstream edit that changed 5,000 rows
+    — sums 14400396.667 vs 14588218.0, ``compute_hash`` equal on both. The loop
+    itself rebuilt the variable correctly; the NEXT statement to read it then
+    restored a stale entry, because its key saw an unchanged lineage.
+
+    ``known-limitations.md`` calls the sampling blind spot latent, "reachable
+    only after provenance is lost". This path is where provenance *was* lost:
+    it re-derived identity from a sampled value instead of from the inputs.
+    ``for_handler`` already records the same lesson one layer out — "a sampled
+    hash is never sound as a key discriminator" — and states that
+    ``variable_lineage`` wants PROVENANCE. *iterable_lineage* was already
+    provenance; this extends the same treatment to the body's other reads.
     """
     for var_name in mutated_vars:
         if var_name not in shell.user_ns:
@@ -327,6 +384,8 @@ def update_mutated_variable_lineages(
             lineage_components = [loop_code_hash, value_hash]
             if iterable_lineage:
                 lineage_components.append(iterable_lineage)
+            for name, lin in sorted((input_lineages or {}).items()):
+                lineage_components.append(f"{name}={lin}")
 
             new_lineage = hashlib.sha256(':'.join(lineage_components).encode()).hexdigest()
 
