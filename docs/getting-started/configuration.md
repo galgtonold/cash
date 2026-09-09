@@ -64,7 +64,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @8f155618 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @36ee68e1 broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -198,13 +198,13 @@ export CASH_TIER_1_HOST=prod-redis.example.com
 Each backend declares a `max_size_bytes` cap that `TieredBackend` uses as
 a *promotion hint*. A value larger than the cap quietly skips that tier but
 still writes to the unconstrained ones. Most caps are static class-level
-values; the file tier's is *dynamic* — half its (machine-scaled) LRU cap.
+values; the file tier's is *dynamic* — its whole (machine-scaled) LRU cap.
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @2bde4795, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @80a5a388, cash/backends/redis_backend.py:RedisBackend.max_size_bytes == 10485760, cash/backends/sqlite_backend.py:SQLiteBackend.max_size_bytes == 104857600 -->
 | Backend | `max_size_bytes` cap | Rationale |
 |---|---|---|
 | `InMemoryBackend` | unbounded | RAM eviction handles pressure separately. |
-| `FileBackend` | **½ of its LRU cap** | Refuses a single object larger than half the disk cap rather than write-then-evict it (the treadmill); warns once. See `max_cache_size`. |
+| `FileBackend` | **its whole LRU cap** | Refuses only a single object that cannot fit in the disk cap at all; anything that fits is stored and LRU eviction does the rest. It was half the cap, which meant a 500 MB cap cached nothing for a 263 MB working set. Warns once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big)); a real write-and-evict treadmill is caught by [`CACHE-THRASH`](../warnings.md#cache-thrash) instead. See `max_cache_size`. |
 | `RedisBackend` | **10 MiB** | Redis is in-memory server-side; protocol disfavours multi-MB values. |
 | `SQLiteBackend` | **100 MiB** | SQLite blobs degrade past this. |
 | `S3Backend` | unbounded | S3 is fine arbitrarily large. |
@@ -218,8 +218,11 @@ opt-in promotion hint, not a hard wall.
 ### `pyproject.toml` (project, version-controlled)
 
 Most projects should put their config here so the team shares one
-default. Cash walks upward from the current working directory until it
-finds a `pyproject.toml`.
+default. Cash walks upward from the [project anchor](#what-paths-are-relative-to)
+— not from the current working directory — until it finds a
+`pyproject.toml`, so the same script picks up the same config wherever it
+is launched from. A relative `cache_dir` in that file is resolved against
+the file's own directory.
 
 ```toml
 [tool.cash]
@@ -235,7 +238,7 @@ type = "redis"
 host = "redis.internal"
 ```
 
-<!-- claim: cash/config.py:_default_user_config_path @c0252c47, cash/config.py:_default_project_config_path @3e6c11e6 -->
+<!-- claim: cash/config.py:_default_user_config_path @c0252c47, cash/config.py:_default_project_config_path @1c9825c3 -->
 ### `~/.config/cash/config.toml` (user, machine-private)
 
 For personal defaults spanning all projects on a machine — e.g. your

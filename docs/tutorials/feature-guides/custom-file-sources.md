@@ -33,7 +33,7 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @9540ade4, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @53a0d8fb, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
 The default handler set is registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
@@ -48,6 +48,7 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | `json` | `load` |
 | `glob` | `glob`, `iglob` — tracks the *directory* enumerated (see below) |
 | `os` | `listdir`, `scandir` — tracks the *directory* enumerated (see below) |
+| `os.path` | `exists`, `isfile` (and their `genericpath` originals) — records a path that was looked for and was **not** there (see below) |
 
 The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
 
@@ -55,6 +56,22 @@ The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against
 For `open()`, the wrapper records the path as a *dependency* only when the mode contains `'r'` or `'+'` (read or read/write) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output.
 
 A write is not ignored, though — it is an *effect*, and it is reported as one. The same wrapper hands a write-mode open to the [effect observer](purity-decorators.md#observed-effects-what-the-first-call-actually-did), which warns once if the first call wrote a file the static analyzer never saw. That matters because every cache hit from then on skips the write.
+
+### A file that was not there is a dependency too
+
+`os.path.exists` and `os.path.isfile` are tracked, but only when the answer is **False**:
+
+```python
+@cash.cache
+def load_config():
+    if os.path.exists("local_overrides.toml"):
+        return read_overrides()
+    return DEFAULTS
+```
+
+The absence of `local_overrides.toml` is what selected the defaults branch — it is an input, and it was the one input Cash could not see, because a file that is never opened produces no read to track. The entry recorded no dependencies at all, so it looked valid everywhere: a round-16 tester got one directory's answer in another, silently. A negative probe is now recorded as `{'absent': True}`, and the entry stops being valid once the file appears.
+
+A probe that finds the file records nothing here; the read that follows it tracks the file properly. Absent paths are kept **as written** rather than resolved: a relative probe asks "is there a file with this name, *here*", and freezing the directory it happened to run in would reintroduce the same bug in mirror image.
 
 ### Directory enumeration tracks the directory
 
@@ -95,7 +112,7 @@ load_features.explain()
 #   changed_files: {'data/features.csv': 'content changed'}
 ```
 
-The `file_changed` reason and the `changed_files` dict are emitted by `Cash._explain_call`. The dict's values are short human-readable strings: `'content changed'`, `'size changed'`, or `'file missing'`.
+The `file_changed` reason and the `changed_files` dict are emitted by `Cash._explain_call`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`.
 
 `explain()` decides freshness through the same content-authoritative `file_dep_is_fresh` helper a real lookup uses, so it cannot disagree with the call: a **touch** (identical bytes, bumped mtime) explains as `hit`, exactly as it behaves. See [Debugging and Monitoring](debugging-and-monitoring.md) for the full `explain()` story.
 
@@ -280,7 +297,7 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @5f35e472, cash/notebook/file_dep_snapshot.py:file_content_hash @6bdf50df, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @029207de, cash/notebook/file_dep_snapshot.py:file_content_hash @d0e0c875, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 64 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.

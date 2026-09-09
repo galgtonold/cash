@@ -118,7 +118,7 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @2466264a, cash/backends/tiered_backend.py:TieredBackend.get @5413e4ec -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @9b5ed308, cash/backends/tiered_backend.py:TieredBackend.get @5413e4ec -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
 For debugging, enable verbose logging:

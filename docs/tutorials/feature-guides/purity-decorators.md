@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @2b5e1845, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @454b1632, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -710,7 +710,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @9db2d435 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @d0589603 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -740,6 +740,14 @@ it flags:
     transitively through the helpers they call. Where cash genuinely cannot
     hash one — `functools.partial` — it warns at that argument instead, naming
     `depends_on=` or `cash.mark_opaque()`.
+- **Ambient reads** — the clock (`datetime.now`, `time.time`), the
+  environment (`os.getenv`, `os.environ[...]`), the working directory, a
+  fresh `uuid4()`. These are hidden *inputs* rather than side effects, so
+  they get their own warning ([`KEY-AMBIENT-READ`](../../warnings.md#key-ambient-read)):
+  the value is not part of the cache key, so the first call's answer is what
+  every later call gets back. Pass it in as an argument
+  (`f(now=datetime.now())`) so it reaches the key, or accept the freeze with
+  `# @cash:assume-safe` on that line.
 - **Discarded calls** — `f(x)` as a statement (return thrown away)
   when `f` isn't known-pure
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript

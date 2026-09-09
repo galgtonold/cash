@@ -136,7 +136,7 @@ Print the installed cash version.
 
 ```bash
 cash version
-# cash <!-- docnum:version -->0.9.3<!-- /docnum -->
+# cash <!-- docnum:version -->0.10.0<!-- /docnum -->
 ```
 
 **Behaviour notes:**
@@ -157,8 +157,11 @@ Print the effective merged configuration.
 - `Cache dir` — the on-disk cache directory the file backend will use.
 - `Debug` — whether debug logging is enabled.
 - `Compress` — whether cache entries are compressed on disk.
-- `Max size` — the maximum cache size, or `auto (scaled to disk/RAM per tier)`
-  when unset (the default).
+- `Max size` — the caps the two persistent tiers actually resolve to, not the
+  configured value: `auto -- disk 16.4 GiB, RAM 4.0 GiB` when unset (the
+  default), or `<N> GB on disk, RAM <M>` when `max_cache_size` is set. The RAM
+  figure appears nowhere else, and a growing RSS is usually that cap doing its
+  job rather than a leak.
 - `Persist` — what actually decides disk persistence: the cost model
   (`0.1s compute floor, N% savings required`), or a conservative fallback when
   smart persistence is off.
@@ -171,12 +174,12 @@ Print the effective merged configuration.
 
 ```bash
 cash info
-# Cash v<!-- docnum:version -->0.9.3<!-- /docnum -->
+# Cash v<!-- docnum:version -->0.10.0<!-- /docnum -->
 #   Backend:    tiered
 #   Cache dir:  /home/me/project/.cash
 #   Debug:      False
 #   Compress:   True
-#   Max size:   auto (scaled to disk/RAM per tier)
+#   Max size:   auto -- disk 16.4 GiB, RAM 4.0 GiB
 #   Persist:    cost model (0.1s compute floor, 20% savings required)
 #   Source:     project:/home/me/project/pyproject.toml,env
 ```
@@ -344,7 +347,7 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 ---
 
-<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @c6a1b14a -->
+<!-- claim: cash/__main__.py:cmd_autoload @528fa896, cash/__main__.py:cmd_version @700ebd0c, cash/__main__.py:cmd_info @1799ead3 -->
 ## Exit codes
 
 | Code | When |

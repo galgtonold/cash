@@ -23,7 +23,7 @@ A *failed* lookup is memoised too, but for two seconds rather than five minutes 
 
 ## Upstream simulation
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @56e90e45, cash/notebook/upstream/simulator.py:NotebookSimulator @8ffd10e8, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker @32950bad, cash/notebook/upstream/simulator.py:NotebookSimulator @8ffd10e8, cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e broad="the simulation story is the two orchestrating classes, not one method" -->
 The classic problem: you edited cell 1 but then ran cell 3 directly. Cash solves this with a virtual-lineage approach. When cell 3 runs, Cash reads the notebook's current cell state — from a live source when one is available, the saved file otherwise — and *simulates* the upstream cells — cells 1 and 2 — without executing them. It parses each upstream statement's AST to compute what its lineage hash *should* be given the current code, then compares those virtual lineages against the in-memory lineages stored from the last actual run. Only the cells whose simulated lineage differs from what is in memory are re-executed; the rest are restored straight from cache, which is also how a variable you never computed this session appears in the namespace without its cell running.
 
 <!-- claim: cash/notebook/server_discovery.py:_read_notebook_code_cells @f6b1396e, cash/notebook/server_discovery.py:last_cell_source @b653689d -->
@@ -87,7 +87,7 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c3d42a4 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @029207de -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first, and when it matches, the
     content hash decides — so a bare `touch` no longer invalidates, and a same-size

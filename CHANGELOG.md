@@ -7,6 +7,147 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-09-09
+
+Two independent testing rounds, five projects each, on the decorator and script
+path. They found eight ways to get a wrong answer and two ways to lose a job;
+this release is those fixes. It is a minor bump because one of them moves where
+your cache lives.
+
+### Breaking
+
+- **The cache belongs to the project, not to the directory you launched from.**
+  The default cache directory and `[tool.cash]` discovery used to resolve from
+  `os.getcwd()`, so running the same script from a cron entry, a CI step or a
+  colleague's terminal silently discarded the whole cache and built a second one
+  beside you — measured at `6 of 6 restored` dropping to `0 of 6`, a fresh 232 MB
+  `.cash`, no warning, indistinguishable from a cold run. One tester's job wrote
+  a `.cash` at the drive root. The documented escape hatch was discovered by
+  walking up from the cwd too, so it was ignored in exactly the case that needed
+  it.
+
+  Both now resolve from a **project anchor**: the first directory above the
+  *running script* holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git`.
+  Relative paths follow whoever wrote them — the default against that anchor, a
+  config file's against its own directory, an env var or `cache_dir=` argument
+  against your cwd, because you typed those where you are standing. Interactive
+  sessions (a notebook, a REPL, `python -c`) have no running script and keep
+  using the cwd exactly as before.
+
+  **What you will see:** if your cache sat wherever you happened to run from,
+  one cold run and a [`CACHE-DIR-MOVED`](https://cash-lib.readthedocs.io/en/stable/warnings/#cache-dir-moved)
+  notice naming both directories. Silently relocating a 500 MB cache would be
+  the same bad surprise pointing the other way. `cash.configure(cache_dir=...)`
+  or `CASH_CACHE_DIR` pins it wherever you want.
+
+### Fixed
+
+**Wrong answers.** Each of these could serve you a cached result that no longer
+matched your code or your data.
+
+- **A global that only a cached callee reads now reaches the caller's key.** A
+  helper that read `THRESHOLD` and was itself decorated contributed nothing to
+  its caller's key, so editing the constant left every aggregate above it stale.
+- **Reading a global through a method call, or a dunder, counts as reading it.**
+  `CONFIG.get("mode")` and `len(TABLE)` were invisible to the key while
+  `CONFIG["mode"]` was not.
+- **A captured callable decides the result, so it reaches the key.** The
+  strategy-factory shape — `make_scorer(weight_fn)` returning a closure — keyed
+  identically for every `weight_fn`, so the second strategy got the first one's
+  numbers.
+- **An ndarray's memory layout is part of what it is.** A C-ordered and an
+  F-ordered array holding equal values shared one entry, and a layout-sensitive
+  callee was served the other one's result: `np.ravel(x, order="A")` returned
+  `[0, 1, 2, …]` for an input whose true answer is `[0, 4, 8, 1, …]`.
+- **A file that was looked for and was not there is a dependency.**
+  `if os.path.exists("local_overrides.toml")` recorded nothing at all, so an
+  entry computed *without* the optional file looked valid everywhere — one
+  directory's answer served in another, silently.
+- **A same-size edit to a large file with the mtime restored no longer slips
+  through.** `cp -p`, `rsync -a`, `tar -x` and any script that saves and puts
+  back timestamps defeated the sampled-hash backstop. Sampled files now carry
+  the inode change time as well (POSIX), and the full-hash threshold moved to
+  64 MiB so an ordinary CSV or parquet is hashed whole on every platform.
+- **Concurrent first calls agree on one cache key.** Two threads entering a
+  function whose source had never been analyzed could compute different keys for
+  the same call, so one of them wrote an entry nobody would ever read again.
+- **The locked re-read validates what the unlocked one validates.** With
+  `use_locking=True`, the double-checked read inside the lock was a hand-written
+  copy that had fallen behind — it served entries the ordinary path rejects,
+  including a chunked iterator with a missing chunk (10 items unlocked, 3
+  locked). Both paths now share one helper.
+- **A variable mutated inside a `for` loop takes its identity from its inputs.**
+  An upstream edit did not propagate through a cell that assigns columns in a
+  loop; the stale value survived a kernel restart and an in-order run-all, and
+  `%cash_verify` called every entry healthy.
+- **Reconstruction runs the statements it depends on.** A forced fill executed
+  `ax.plot(sub[...])` without the `sub = mm[...]` four statements above it, and
+  the resulting `NameError` surfaced on a completely unrelated cell — five cells
+  blocked at once in the reporter's session.
+- **A figure that was rebuilt but never drawn is never flushed.** Asking for an
+  unrelated downstream cell after a kernel restart could overwrite a saved chart
+  with a blank one — no error, no badge, and a restart cannot undo it.
+- **Pool workers share their parent's cache.** A spawned worker resolved its own
+  anchor from `sys.argv[0]` and cached into the wrong place.
+
+**Jobs that did not finish, or cached nothing.**
+
+- **An unwritable cache directory no longer outlives the job.** Pointed at a
+  directory it could read but not write, a process ran to completion, printed
+  its result, and then never exited — measured at 28.7 s writable against still
+  running at 150 s, 200 s, and eleven minutes. Background writes now run on
+  daemon threads with a bounded shutdown wait (`shutdown_write_timeout`,
+  60 s), and expiry says so via `CACHE-WRITE-ABANDONED`.
+- **A cache directory that cannot be used at all no longer kills the job.** It
+  used to raise straight out of `get()`, so "cash cannot cache" became "your job
+  does not run", exit 1, before the caller's own work had started. The file tier
+  now turns itself off, loudly (`CACHE-DIR-UNWRITABLE`), and the process carries
+  on computing.
+- **A cache cap bounds the cache; it does not switch it off.** A single value
+  larger than *half* the disk cap was refused, so `CASH_MAX_CACHE_SIZE=500MB` on
+  a 263 MB working set cached **nothing at all** — three of four stages
+  recomputed nightly and the directory held 29 KB. The threshold is the whole
+  cap now, measured on serialized bytes, so what fits is stored and LRU eviction
+  does the rest.
+- **The RAM tier is sized from the memory this process may actually use** — it
+  now reads a cgroup limit, so a container no longer scales its cache to the
+  host's RAM. `cash info` prints the two caps it resolved to; a tester spent a
+  round reading a growing RSS as a leak when it was a 4 GiB cap doing its job.
+- **The badge's progress counter no longer names a statement that has not
+  started** — `(2/6)` while nothing was running, and `(7/6)` on the last one.
+
+### Added
+
+- **`KEY-AMBIENT-READ`** — a warning of its own for a cached body that reads the
+  clock, the environment, the working directory or a fresh `uuid4()`. These are
+  hidden *inputs*, not side effects: the first call's value is what every later
+  call gets back, in this process and in every process after it.
+- **`CACHE-FRESHNESS-COST`** — says so when proving a cached result fresh cost a
+  serious share of what it saved, with both numbers. Local file checking had no
+  such guard; only remote sources did.
+- **An upstream `NameError` names whose fault it is** — whether the statement
+  that defines the name has genuinely never run, or cash failed to schedule a
+  producer that the notebook does contain.
+- **`cash.run_summary()` says which cache directory it used**, which is the
+  first question to ask when a warm run comes back cold.
+- **`file_hash_full_max_bytes`** and **`shutdown_write_timeout`** config fields.
+
+### Changed
+
+- **File digests are memoized per process.** Freshness is checked once per
+  cached call and file dependencies propagate, so a pipeline over fifty inputs
+  re-read and re-hashed all fifty on every hit. Now the second and later checks
+  of an untouched file cost a `stat`: 50 × 2 MiB went from 79.6 ms to 2.7 ms per
+  hit, 50 × 8 MiB from 313 ms to 2.8 ms.
+- **`file_hash_full_max_bytes` defaults to 64 MiB**, up from 8 MiB. That is what
+  the memo bought: a full hash is now paid once per file per process rather than
+  on every check, so covering the ordinary data file is affordable. A first
+  check of a 64 MiB input costs about 46 ms; `CACHE-FRESHNESS-COST` names the
+  number if a workload makes that a bad trade, and lowering the setting restores
+  sampling.
+- **`cash info` prints the caps that actually resolved** — `auto -- disk 16.4
+  GiB, RAM 4.0 GiB` — instead of `auto (scaled per tier)`.
+
 ## [0.9.3] - 2026-09-08
 
 Follow-up to 0.9.2: one badge said the wrong thing, and the live demo is

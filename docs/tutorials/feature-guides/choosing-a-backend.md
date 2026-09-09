@@ -46,7 +46,7 @@ c = Cash(backend=InMemoryBackend(max_entries=500))
 c.register_magic()
 ```
 
-<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @42a1a958, cash/backends/memory_backend.py:InMemoryBackend._evict @03ba0434 -->
+<!-- claim: cash/backends/memory_backend.py:InMemoryBackend.__init__ @a6823bed, cash/backends/memory_backend.py:InMemoryBackend._evict @03ba0434 -->
 A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default so a downstream mutation can't poison the cache. Eviction has **three** triggers, and they do not use the same policy:
 
 1. `max_entries` — a hard LRU cap, evicting oldest-accessed first (`_evict_lru`).
@@ -54,6 +54,8 @@ A plain dict guarded by light bookkeeping. Reads and writes deep-copy by default
 3. A `psutil` memory-pressure check, run every `check_interval` writes, that fires when the system crosses `max_memory_percent`. This one is **not** LRU: `_evict` scores each entry as `(execution_time × access_count) / size` and drops the lowest-scoring first, so a big cheap entry goes before a small expensive one.
 
 **Key parameters** — `max_entries` (None = unlimited), `max_size_bytes` (None = unlimited), `max_memory_percent` (default 0.9 = 90% of system RAM), `check_interval` (default 10 writes between pressure checks).
+
+Those `None`s are this constructor's defaults, not what a default Cash gives you: the RAM tier a `TieredBackend` builds is always handed a resolved byte cap (a fifth of the memory this process may use, clamped to 512 MiB–4 GiB), independent of `max_cache_size`, which caps only disk. `cash info` prints the number it resolved to.
 
 **Gotcha** — kernel restart wipes everything. There is no on-disk fallback. Pair it with `TieredBackend` if you also want persistence.
 

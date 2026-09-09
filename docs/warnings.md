@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f34d9bb0, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @db0353c0, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -115,7 +115,7 @@ switched off.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @b4f1f605 -->
+<!-- claim: cash/core.py:Cash.cache @60e3ce9f -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -196,7 +196,7 @@ anchoring exists to end; set `CASH_CACHE_DIR` or delete the strays.
 
 ## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
 
-<!-- claim: cash/backends/file_backend.py:FileBackend._warn_if_unwritable @82b4ab5b -->
+<!-- claim: cash/backends/file_backend.py:FileBackend._warn_if_unwritable @8edc0db6 -->
 **What happened.** On its first cache operation, cash tried to create a file in
 its cache directory and could not: a read-only mount, a directory this account
 has no write permission on, a container volume, a path owned by another user
@@ -207,6 +207,14 @@ every call recomputes. Your results are correct -- they are computed the normal
 way -- but the cache is doing nothing at all, and without this warning that has
 no symptom you could see. The job is simply always slow, and nothing names the
 directory responsible.
+
+The same code fires for the harder case: a directory cash cannot even open --
+a stale mount, a path that no longer exists, permissions changed under a
+running deployment. There the file tier turns itself **off** for the rest of
+the process rather than raising into your code, which is what it used to do:
+"cash cannot cache" became "your job does not run", exit 1, before the caller's
+own work had started. In a tiered stack the RAM tier is untouched, so repeats
+within the process still hit.
 
 **What to do.** Point cash somewhere writable, or grant this account write
 permission on the path it named:
@@ -407,7 +415,7 @@ roomier volume.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @c198bb89, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @80a5a388, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->
 **What happened.** A single value is larger than every persistent tier's whole
 cap, so there is nowhere durable to put it and Cash offered it to the RAM tier
 instead. The message names the value's size and the cap it was measured
@@ -568,7 +576,7 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @2b5e1845 -->
+<!-- claim: cash/core.py:Cash._surface_purity @454b1632 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -705,7 +713,7 @@ somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
 returned its real result; only the caching was skipped.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @5c5b8c6c -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @293fdc2e -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -856,7 +864,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @5c5b8c6c -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @293fdc2e -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.
@@ -1361,7 +1369,7 @@ entry. Measured: three calls after the failure ran the body three times and each
 returned all ten items; the call after the write succeeded was the last one to
 run the body.
 
-<!-- claim: cash/core.py:Cash._compute_with_lock @feddd279 -->
+<!-- claim: cash/core.py:Cash._compute_with_lock @b47c9e4c -->
 Both read paths run that probe, including the double-checked re-read taken
 inside the lock when `use_locking=True`. Until 2026-09-06 the locking path
 skipped it and served the broken entry as a *short* iterator — three of ten

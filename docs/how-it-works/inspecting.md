@@ -196,7 +196,7 @@ keep. `show` displays the last 50. Full flag reference in
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @135def80 -->
+<!-- claim: cash/core.py:Cash._explain_call @dee21f6f -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -226,7 +226,7 @@ print(load.explain(1000))
 own `details` (which files changed, which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @d0900d46, cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b, cash/core.py:Cash._log_decorator_call @55a1f795 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @ff7bcb33, cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b, cash/core.py:Cash._log_decorator_call @55a1f795 -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was
@@ -298,7 +298,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @88959c97, cash/__main__.py:cmd_info @c6a1b14a, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
+<!-- claim: cash/__main__.py:main @88959c97, cash/__main__.py:cmd_info @1799ead3, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from

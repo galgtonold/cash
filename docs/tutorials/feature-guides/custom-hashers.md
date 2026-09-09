@@ -136,8 +136,8 @@ Four properties, in priority order:
 
 - **Deterministic.** Same input, same hash, every time. No `id(obj)`, no `time.time()`, no `random.random()`, no `hash(str)` (PYTHONHASHSEED randomises that across processes). If your hasher returns a different string on two runs of the same Python script for the same input, every cache entry is a guaranteed miss.
 - **Total.** Capture every field that affects the function's output. If `MyModel` has a `temperature` knob and your hasher only reads `weights`, two models with different temperatures share a cache entry — your function returns the wrong answer.
-<!-- claim: cash/core.py:Cash._try_hash_numpy @ca38104d -->
-- **Cheap, but never at the cost of correctness.** The hasher runs on every call, so it should be fast — but a hasher that only samples the data will collide two different inputs into a wrong cache hit. Cash's built-in `_try_hash_numpy` hashes the **full** buffer (plus shape/dtype) for this reason. Only sample if you can *guarantee* the sampled fields uniquely identify the value (e.g. a content version you control), never as a blind speed shortcut over raw bytes.
+<!-- claim: cash/core.py:Cash._try_hash_numpy @937a72f9 -->
+- **Cheap, but never at the cost of correctness.** The hasher runs on every call, so it should be fast — but a hasher that only samples the data will collide two different inputs into a wrong cache hit. Cash's built-in `_try_hash_numpy` hashes the **full** buffer (plus shape, dtype and strides) for this reason. Only sample if you can *guarantee* the sampled fields uniquely identify the value (e.g. a content version you control), never as a blind speed shortcut over raw bytes.
 - **Stable across processes.** Don't depend on the process-local hash seed, `id()`, memory addresses, or anything else that varies between Python invocations. The whole point of disk caching is sharing entries across runs.
 
 A useful sanity check: call your hasher twice on freshly constructed-equal instances. If the two outputs match, you're on the right track. If they don't, you're hashing identity, not value.
@@ -195,7 +195,7 @@ Cash ships with module-level fingerprinting for the dataframe ecosystem. These a
 | Type | Hash strategy | Source |
 |---|---|---|
 | `pandas.DataFrame`, `pandas.Series` | Schema (column / series / index names) **and** `pd.util.hash_pandas_object(value).values.tobytes()`, SHA-256'd together — so a column rename invalidates even with identical row values | `_try_hash_pandas` |
-| `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype, at any size | `_try_hash_numpy` |
+| `numpy.ndarray` | Full-buffer SHA-256 (zero-copy memoryview) + shape/dtype/strides, at any size | `_try_hash_numpy` |
 | `polars.DataFrame`, `Series`, `LazyFrame` | `hash_rows()`, `hash()`, or `explain()` output then SHA-256 | `_try_hash_polars` |
 | `pyarrow.Table`, `RecordBatch` | Schema + row count + every column buffer (full content, any size) | `_try_hash_pyarrow` |
 | `modin.DataFrame`, `Series` | Convert to pandas, then `hash_pandas_object` | `_try_hash_modin` |
