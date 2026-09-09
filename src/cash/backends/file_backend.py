@@ -81,11 +81,16 @@ def _create_temp_file(
     ``os.urandom`` rather than the ``random`` module: cash watches the process
     RNG to decide whether a cached statement drew from it, and drawing from it
     here to name a file would be cash poisoning its own instrument.
+
+    Six bytes, so the name is the same LENGTH as the one ``mkstemp`` produced
+    (48 bits against its ~47.6). Longer names would be free entropy nobody needs
+    and would push a deep cache directory over Windows' 260-character path limit
+    that used to fit.
     """
     flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, 'O_BINARY', 0)
     last: OSError | None = None
     for _ in range(_TEMP_NAME_ATTEMPTS):
-        candidate = os.path.join(directory, f"{prefix}{os.urandom(12).hex()}{suffix}")
+        candidate = os.path.join(directory, f"{prefix}{os.urandom(6).hex()}{suffix}")
         try:
             return os.open(candidate, flags, 0o600), candidate
         except FileExistsError as exc:

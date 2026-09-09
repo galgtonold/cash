@@ -95,6 +95,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "CACHE-IDENTITY-COUPLED",  # result is a live Figure/Axes; storing it would
                                # detach the library's copy from yours
     "CACHE-IF-BYPASSED",       # result outgrew a chunk, so cache_if never ran
+    "CACHE-DIR-MOVED",         # the project-anchored default cache dir differs
+                               # from an existing cache in the current directory
     "CACHE-IF-RAISED",         # the cache_if predicate raised
     "CACHE-LOOP-GROWTH",       # a loop is persisting every state of a growing
                                # object, costing the sum of every snapshot

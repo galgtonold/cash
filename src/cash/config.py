@@ -20,6 +20,8 @@ import functools
 import logging
 import os
 import re
+import site
+import sys
 import typing
 from dataclasses import dataclass, field, fields
 from pathlib import Path
@@ -516,14 +518,109 @@ def _load_env_config() -> dict[str, Any]:
 # Path resolution for the two TOML sources
 # ---------------------------------------------------------------------------
 
-def _default_project_config_path() -> Path | None:
-    """Walk upward from cwd to find a ``pyproject.toml`` and return its path.
+#: Files that mean "the project starts here".
+_PROJECT_MARKERS = ("pyproject.toml", "setup.py", "setup.cfg", ".git")
 
-    The first parent containing one wins. None if we never find one (a
+
+def _interactive_shell_is_running() -> bool:
+    """True inside IPython, a Jupyter kernel, or anything else hosting one.
+
+    ``__main__.__file__`` cannot be trusted there. IPython SETS it, temporarily,
+    while it executes each of the profile's startup scripts -- so a kernel that
+    imports cash from a startup file resolves an anchor inside
+    ``~/.ipython/profile_default/startup`` and writes the session's cache there.
+    Measured exactly that: a notebook whose entries went to the profile
+    directory after a kernel restart, so nothing hit.
+
+    There is no "running script" in an interactive session anyway. The cwd is
+    the right answer, and it is the one a notebook has always had.
+    """
+    try:
+        from IPython import get_ipython  # type: ignore[import-not-found]
+    except ImportError:
+        return False
+    try:
+        return get_ipython() is not None
+    except Exception:  # noqa: BLE001 - a half-initialised IPython is not one
+        return False
+
+
+def _running_script_dir() -> Path | None:
+    """The directory of the script being run, or None if that is meaningless.
+
+    None for an interactive interpreter, a notebook, ``python -c``, and for any
+    ``__main__`` that lives inside the interpreter's own installation -- an
+    installed console entry point, ``python -m pytest``, the Jupyter kernel
+    launcher. Those all report a ``__file__`` somewhere under ``sys.prefix`` or
+    site-packages, and anchoring a user's cache inside their virtualenv because
+    they ran an installed tool would be a worse answer than the cwd.
+    """
+    if _interactive_shell_is_running():
+        return None
+    main = sys.modules.get("__main__")
+    raw = getattr(main, "__file__", None)
+    if not raw:
+        return None
+    try:
+        path = Path(raw).resolve()
+    except OSError:
+        return None
+    installed_roots = [Path(sys.prefix), Path(sys.base_prefix)]
+    installed_roots += [Path(p) for p in site.getsitepackages()] if hasattr(site, "getsitepackages") else []
+    user_site = getattr(site, "getusersitepackages", None)
+    if user_site is not None:
+        try:
+            installed_roots.append(Path(user_site()))
+        except Exception:  # noqa: BLE001 - a site module without a user site
+            pass
+    for root in installed_roots:
+        try:
+            if path.is_relative_to(root):
+                return None
+        except (OSError, ValueError):
+            continue
+    return path.parent
+
+
+def project_anchor() -> Path:
+    """The directory cash treats as "here" -- for the DEFAULT cache location
+    and for finding ``pyproject.toml``.
+
+    Both used to be resolved from ``os.getcwd()``, which made the cache a
+    property of where you were standing rather than of what you were running.
+    Run the same script from a different directory -- a cron job, a CI step, a
+    colleague -- and the entire cache was silently discarded and a second one
+    built: measured at ``6 of 6 restored`` dropping to ``0 of 6``, a fresh 232MB
+    ``.cash``, no warning, indistinguishable from a cold run. Three separate
+    round-15 projects hit it, one of them writing a ``.cash`` at the drive root
+    because the cwd
+    happened to be the drive root. The documented escape hatch --
+    ``[tool.cash] cache_dir`` in ``pyproject.toml`` -- was found the same broken
+    way, so it did not work in exactly the case that needed it.
+
+    The anchor walks up from the RUNNING SCRIPT to its project root, so
+    ``python /srv/etl/run.py`` uses the same cache from anywhere on the machine.
+    Without a script (a notebook, a REPL) or without a project marker above it,
+    the answer is the cwd or the script's own directory respectively -- both
+    stable for the case they describe.
+    """
+    start = _running_script_dir()
+    if start is None:
+        return Path.cwd()
+    for d in [start, *start.parents]:
+        if any((d / marker).exists() for marker in _PROJECT_MARKERS):
+            return d
+    return start
+
+
+def _default_project_config_path() -> Path | None:
+    """Walk upward from the project anchor to find a ``pyproject.toml``.
+
+    The first directory containing one wins. None if we never find one (a
     standalone script with no project structure).
     """
-    cwd = Path.cwd()
-    for d in [cwd, *cwd.parents]:
+    anchor = project_anchor()
+    for d in [anchor, *anchor.parents]:
         candidate = d / "pyproject.toml"
         if candidate.exists():
             return candidate
@@ -548,6 +645,85 @@ def _default_user_config_path() -> Path:
 
 # Sentinel to distinguish "use default path" from "explicitly None".
 _USE_DEFAULT_PATH: Any = object()
+
+#: ``cache_dir`` origin meaning "leave a relative path alone -- it is relative to
+#: the caller's cwd, like every other path they type".
+_CALLER_RELATIVE: Any = object()
+
+
+def _anchor_cache_dir(cache_dir: Any, origin: Path | object) -> Any:
+    """Resolve a relative *cache_dir* against whatever set it.
+
+    Three answers, by who wrote the value:
+
+    * **the default** (nobody wrote it) -- relative to the project anchor, so
+      ``.cash`` means "this project's cache" rather than "a cache wherever this
+      job was launched from". That difference is the whole of CAS-84.
+    * **a config file** -- relative to that file's directory, the ordinary rule
+      for paths in config files. Anchoring it to the cwd instead is what made
+      ``[tool.cash] cache_dir`` useless for the case it was documented to fix.
+    * **an env var or a kwarg** -- left exactly as written. The user typed it in
+      the shell or in the code that is running now, so cwd-relative is what they
+      meant, and it is what every other command-line path does.
+
+    An absolute path is returned untouched in all three cases.
+    """
+    if not isinstance(cache_dir, str) or not cache_dir:
+        return cache_dir
+    if origin is _CALLER_RELATIVE or os.path.isabs(cache_dir):
+        return cache_dir
+    if not isinstance(origin, Path):
+        return cache_dir
+    resolved = os.path.normpath(str(origin / cache_dir))
+    _warn_if_cache_moved(resolved, cache_dir)
+    return resolved
+
+
+#: One notice per process, whatever builds a config how many times.
+_MOVE_NOTICE_GIVEN = False
+
+
+def _warn_if_cache_moved(resolved: str, relative: str) -> None:
+    """Say when the anchored default leaves an existing cwd cache behind.
+
+    Anchoring the default is the fix for a cache that silently split in two;
+    relocating somebody's 500MB cache without a word would be the same class of
+    surprise in the other direction. Fires only when there is really something
+    to leave behind: the new location does not exist yet, the old one does, and
+    it holds entries.
+    """
+    global _MOVE_NOTICE_GIVEN
+    if _MOVE_NOTICE_GIVEN:
+        return
+    try:
+        previous = Path.cwd() / relative
+        if os.path.normcase(str(previous)) == os.path.normcase(resolved):
+            return
+        if os.path.exists(resolved) or not previous.is_dir():
+            return
+        if not any(previous.iterdir()):
+            return
+    except OSError:
+        return
+    _MOVE_NOTICE_GIVEN = True
+    try:
+        from .diagnostics import warn_diagnostic
+        from .exceptions import CashCacheIneffectiveWarning
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "CACHE-DIR-MOVED",
+            f"cash keeps this project's cache at {resolved}, next to the code, "
+            f"rather than at {previous} -- the directory this process happens to "
+            f"be running in. The cache already at {previous} will not be used, "
+            f"so this run is a cold one.",
+            f"nothing to do if you did not know that cache was there. To keep "
+            f"using it, set CASH_CACHE_DIR={previous} or move it to {resolved}; "
+            f"to be rid of it, delete it once this run has repopulated the new "
+            f"location.",
+        )
+    except Exception:  # noqa: BLE001 - a notice must never break a config load
+        logger.debug("Could not emit the cache-relocation notice", exc_info=True)
+
 
 
 def get_config(
@@ -577,6 +753,11 @@ def get_config(
         The merged `CashConfig`.
     """
     sources: list[str] = []
+    # Where a relative ``cache_dir`` should be resolved FROM. Starts as the
+    # project anchor (the default ``.cash`` belongs to the project, not to
+    # wherever the job was launched); each layer that sets ``cache_dir``
+    # replaces it with the directory that layer is written relative to.
+    cache_dir_origin: Path | object = project_anchor()
 
     # Layer 1: defaults from CashConfig dataclass
     merged: dict[str, Any] = {
@@ -595,6 +776,8 @@ def get_config(
         if user_data:
             _merge(merged, user_data)
             sources.append(f"user:{user_path}")
+            if "cache_dir" in user_data:
+                cache_dir_origin = Path(user_path).parent
 
     # Layer 2b: explicit ``Cash(config_path=...)`` override (merged on
     # top of the user-scoped layer)
@@ -603,6 +786,8 @@ def get_config(
         if override_data:
             _merge(merged, override_data)
             sources.append(f"file:{config_path}")
+            if "cache_dir" in override_data:
+                cache_dir_origin = Path(config_path).parent
 
     # Layer 3: project TOML
     if project_config_path is _USE_DEFAULT_PATH:
@@ -614,17 +799,25 @@ def get_config(
         if project_data:
             _merge(merged, project_data)
             sources.append(f"project:{project_path}")
+            if "cache_dir" in project_data:
+                cache_dir_origin = Path(project_path).parent
 
     # Layer 4: env vars
     env_data = _load_env_config()
     if env_data:
         _merge(merged, env_data)
         sources.append("env")
+        if "cache_dir" in env_data:
+            cache_dir_origin = _CALLER_RELATIVE
 
     # Layer 5: explicit overrides (kwargs)
     if overrides:
         _merge(merged, overrides)
         sources.append("kwargs")
+        if "cache_dir" in overrides:
+            cache_dir_origin = _CALLER_RELATIVE
+
+    merged["cache_dir"] = _anchor_cache_dir(merged.get("cache_dir"), cache_dir_origin)
 
     # Materialise the dict into a CashConfig.
     return _build_config(merged, source=",".join(sources) if sources else "defaults")

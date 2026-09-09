@@ -199,7 +199,9 @@ class TestPrecedence:
         user = tmp_path / "user_config.toml"
         user.write_text('[cash]\ncache_dir = "from_user"\n', encoding="utf-8")
         cfg = get_config(user_config_path=user, project_config_path=None)
-        assert cfg.cache_dir == "from_user"
+        # Resolved against the config file that names it -- the ordinary rule
+        # for a relative path in a config file, and the fix for CAS-99.
+        assert cfg.cache_dir == str(tmp_path / "from_user")
 
     def test_project_overrides_user(self, tmp_path, monkeypatch):
         from cash.config import get_config
@@ -211,7 +213,7 @@ class TestPrecedence:
             encoding="utf-8",
         )
         cfg = get_config(user_config_path=user, project_config_path=proj)
-        assert cfg.cache_dir == "from_project"
+        assert cfg.cache_dir == str(tmp_path / "from_project")
         # debug stays as user-config value (project didn't override it)
         assert cfg.debug is False
 
@@ -224,6 +226,8 @@ class TestPrecedence:
         )
         monkeypatch.setenv("CASH_CACHE_DIR", "from_env")
         cfg = get_config(user_config_path=None, project_config_path=proj)
+        # Taken exactly as typed: an env var is written in the shell you are
+        # standing in, so it stays relative to the cwd like any other path.
         assert cfg.cache_dir == "from_env"
 
     def test_kwargs_override_env(self, tmp_path, monkeypatch):
@@ -252,8 +256,8 @@ class TestPrecedence:
             project_config_path=proj,
             overrides={"max_cache_size": 999},
         )
-        # cache_dir: only user set → user
-        assert cfg.cache_dir == "from_user"
+        # cache_dir: only user set → user (relative to the user config file)
+        assert cfg.cache_dir == str(tmp_path / "from_user")
         # debug: user=False, project=True → project
         assert cfg.debug is True
         # compress: user=False, env=True → env

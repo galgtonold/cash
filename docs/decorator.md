@@ -91,6 +91,43 @@ slow_square(1000)      # first call on this instance — computes
 slow_square(1000)      # cache hit, from ./my_app_cache
 ```
 
+### Where the cache lives
+
+<!-- claim: cash/config.py:project_anchor @cfea99ac, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+`.cash` sits next to **your project**, not next to whoever launched the job.
+Cash finds the running script, walks up to the first directory holding a
+`pyproject.toml`, `setup.py`, `setup.cfg` or `.git`, and puts the cache there —
+so `python /srv/etl/run.py` uses the same cache whether it was started by you,
+by cron from `/`, or by a CI step in a checkout directory. A script with no
+project above it caches beside itself; an interactive session or a notebook,
+which has no script at all, caches in the current directory.
+
+That matters most for exactly the case that cannot see it. A scheduled job runs
+from whatever directory the scheduler picked, and a cwd-relative cache meant a
+second cache built from scratch every time, with no symptom beyond "it is
+always slow" and a disk filling with duplicates.
+
+Four ways to say it explicitly, highest priority first:
+
+| How | Relative to | Use it for |
+|---|---|---|
+| `Cash(cache_dir="…")` | your current directory | one app that owns its cache |
+| `CASH_CACHE_DIR=…` | your current directory | a scheduled job, a container, CI |
+| `[tool.cash] cache_dir` in `pyproject.toml` | that file's directory | a shared, committed project setting |
+| *(nothing)* | the project anchor above | everything else |
+
+`CASH_CACHE_DIR` is the one to reach for in a cron entry or a `Dockerfile`: it
+needs no change to the code that is already running, and an absolute value
+removes every question about where the cache ends up.
+
+```bash
+CASH_CACHE_DIR=/var/cache/cash python /srv/etl/run.py
+```
+
+If your cache used to live wherever you happened to run from, the first run
+after upgrading says so ([`CACHE-DIR-MOVED`](warnings.md#cache-dir-moved)) and
+recomputes once.
+
 ---
 
 ## Seeing what it did

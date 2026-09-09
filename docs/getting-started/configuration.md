@@ -7,7 +7,8 @@ Cash settles its configuration from five sources in priority order:
 2. **Environment variables** — `CASH_*` (every `CashConfig` field has a
    binding, plus `CASH_TIER_<N>_<FIELD>` for tier overrides).
 3. **Project config** — `[tool.cash]` in the nearest `pyproject.toml`
-   (walks up from the current working directory).
+   (walks up from the *running script*, not from the current working
+   directory — see below).
 4. **User config** — `~/.config/cash/config.toml` on Linux/macOS, or
    `%APPDATA%\cash\config.toml` on Windows. Honours `$XDG_CONFIG_HOME`.
 5. **Built-in defaults** from the `CashConfig` dataclass.
@@ -16,6 +17,31 @@ Each layer overrides the next. A single field can be set wherever is
 most convenient — explicit code for one-off scripts, `pyproject.toml`
 for team defaults, env vars for deployment overrides, the XDG file for
 personal cross-project defaults.
+
+<!-- claim: cash/config.py:project_anchor @cfea99ac, cash/config.py:_anchor_cache_dir @7f3408d4 -->
+### What paths are relative to
+
+Where a relative `cache_dir` points depends on who wrote it, and the rule is
+the same one you would guess for each:
+
+| Written in | Resolved against |
+|---|---|
+| `Cash(cache_dir="…")` or `CASH_CACHE_DIR` | your current working directory — you typed it here, so it means here |
+| `pyproject.toml` / the XDG user config | that file's own directory, as paths in config files normally are |
+| nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git` |
+
+The project anchor is also where `pyproject.toml` itself is looked for. Both
+used to be resolved from the current working directory, which made the cache a
+property of where a job was *launched* rather than of what it *runs*: the same
+script run from two directories built two caches, silently, and the documented
+fix (`[tool.cash] cache_dir`) was discovered the same way, so it was ignored in
+exactly that case.
+
+With no script to anchor to — an interactive interpreter, a Jupyter kernel,
+`python -c` — the current directory is still the answer, which is why a
+notebook's cache stays exactly where it was. The same goes for an installed
+console entry point, whose `__main__` lives inside the virtualenv rather than
+in your project.
 
 ## Quick reference
 

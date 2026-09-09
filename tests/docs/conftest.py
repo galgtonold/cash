@@ -32,9 +32,13 @@ def reset_cash_state(tmp_path, monkeypatch):
     runs in 0.74 s on its own.
 
     ``reset_session()`` is the real API: it drops the singleton so the next
-    access re-resolves config from TOML/env/defaults. Cache isolation comes for
-    free from ``parquet_stubs``' ``chdir(tmp_path)``, since the default
-    ``cache_dir`` is the relative ``.cash``.
+    access re-resolves config from TOML/env/defaults. Cache isolation comes
+    from ``parquet_stubs``, which sets ``CASH_CACHE_DIR`` alongside its
+    ``chdir(tmp_path)`` -- it used to rely on the ``chdir`` alone, back when the
+    default ``cache_dir`` was resolved from the cwd. It no longer is (the
+    default now follows the project, so a job run from anywhere finds one
+    cache), which would otherwise have pointed every doc page at the repo's own
+    ``.cash`` and let one page's entries answer another's.
     """
     import cash
     cash.reset_session()
@@ -201,6 +205,11 @@ def parquet_stubs(tmp_path, monkeypatch):
         "amount\n10.0\n20.0\n30.0\n", encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
+    # Isolation, stated rather than inherited: the default cache directory
+    # follows the PROJECT now, not the cwd, so a chdir alone no longer gives a
+    # page its own cache. An env var is taken exactly as written, relative to
+    # the cwd -- so this is the old behaviour, said out loud.
+    monkeypatch.setenv("CASH_CACHE_DIR", ".cash")
 
     if "pandas" not in sys.modules:
         import types
