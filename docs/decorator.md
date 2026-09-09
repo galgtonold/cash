@@ -606,13 +606,20 @@ is bypassed (warning fires) — see the iterator section below.
 
 ### `strict=` and `assume_safe=` — purity gates
 
-<!-- claim: cash/core.py:Cash._surface_purity @2b5e1845, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @454b1632, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 By default, `@cash.cache` runs a static analyzer on the function body
 (and module-bounded helpers) on first call. What it does depends on what it finds:
 
 - **Impure calls, scope mutations, discarded-return calls** (`requests.get`,
-  `datetime.now`, `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
+  `model.fit(...)`, …) → a `CashImpurityWarning` fires and the
   function is **still cached**.
+- **Ambient reads** — the clock, the environment, the working directory, a
+  fresh UUID (`datetime.now()`, `date.today()`, `os.environ["..."]`,
+  `os.getenv`, `os.getcwd()`, `uuid.uuid4()`) → a `CashImpurityWarning` coded
+  [`KEY-AMBIENT-READ`](warnings.md#key-ambient-read), and the function is
+  **still cached**. Not a side effect: the value is a hidden *input*, so the
+  first call's reading is frozen into every later result, in this process and
+  in every process after it. Pass it in as an argument and it reaches the key.
 - **Untrackable dependencies** — a call resolved from a *runtime value*, so cash
   can't tell when it changes: `eval`/`exec`/`compile`, dynamic dispatch via
   `getattr(obj, name)()`, `getattr(mod, "exec")(...)`, or

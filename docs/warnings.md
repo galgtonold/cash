@@ -480,6 +480,54 @@ warning filter, because it leaves the rest of the function watched. Do not
 ignore a `mutable_global` or a `dynamic_pattern` line — those two are the
 stale-result kinds, and nothing else will tell you when they bite.
 
+## KEY-AMBIENT-READ {#key-ambient-read}
+
+<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @23eb97e5, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @06a7232f -->
+**What happened.** Reading the source of the function you decorated found a
+call that asks the world what time it is, what the environment says, where the
+process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
+`time.time()`, `os.getenv(...)`, `os.environ["..."]`, `os.getcwd()`,
+`uuid.uuid4()`. The named line ran, and the result was cached as normal.
+
+**Why it matters.** That value is an *input* to your result, and it is not one
+Cash can see: it does not arrive as an argument, so it is not in the cache key.
+The first call's value is therefore baked into the stored result, and every
+later call gets it back — in this process and in every process afterwards,
+because the cache is on disk. A nightly report stamped with `date.today()`
+keeps the date of the night it first ran. A job that reads
+`os.environ["TENANT"]` serves the first tenant's answer to every other tenant.
+Nothing raises; the run exits 0 with the wrong number in it.
+
+This is not the same as [IMPURE-SIDE-EFFECTS](#impure-side-effects), which is
+about work a cache hit *skips*. Here nothing is skipped — a hidden input is
+frozen — so the fix is different too.
+
+**What to do.** Pass the value in, so it reaches the key and a new value means
+a new entry:
+
+```python
+from datetime import date
+
+@cash.cache
+def report(rows, as_of):        # as_of is an argument, so it is in the key
+    return sum(rows), as_of
+
+report([1, 2, 3], as_of=date.today())
+```
+
+Read the clock at the call site, where it is obvious, rather than inside the
+body, where it is invisible. If the value genuinely never changes for the
+program's lifetime (`os.getcwd()` in a job that never chdirs, a build ID read
+once from the environment), hoist it to a module-level constant computed at
+import.
+
+**When it is safe to ignore.** When the frozen value is the point — a timestamp
+recording when the *computation* happened rather than when you asked for it, or
+a UUID used only as a stable identifier for the cached result. Say so on the
+line with `# @cash:assume-safe`, which keeps the rest of the function watched;
+`@cash.cache(assume_safe=True)` waives the whole function, including code added
+to it later.
+
 ## KEY-BOOL-STATE-TOKEN {#key-bool-state-token}
 
 <!-- claim: cash/data_source.py:DataSource.state_token @fb386b76 -->

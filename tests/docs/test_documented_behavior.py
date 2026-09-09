@@ -403,3 +403,46 @@ def test_a_scripts_cached_function_is_keyed_by_filename_not_dunder_main(tmp_path
         "and CASH_SUMMARY transcripts show a `model.` prefix on the strength of "
         "this; if the __main__ resolution changed, those pages need updating too."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Ambient reads  (docs/decorator.md "strict= and assume_safe= - purity gates", #
+#                 docs/warnings.md#key-ambient-read)                          #
+# --------------------------------------------------------------------------- #
+
+def test_decorator_doc_ambient_read_bullet_actually_fires(tmp_path):
+    """The doc says `datetime.now()` gets a `CashImpurityWarning`. Run it.
+
+    This claim was FALSE for as long as it had been written: the bullet listed
+    `datetime.now` among the impure calls that warn, and the analyzer had no
+    rule for it at all. The claim anchor beside that bullet did not catch it --
+    an anchor pins the doc to source that CHANGED, and this source never
+    changed, it was never written. Only executing the sentence finds that.
+    """
+    from cash.exceptions import CashImpurityWarning
+
+    c = _cash(tmp_path)
+    ran = []
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+
+        @c.cache
+        def stamped():
+            import datetime
+            ran.append("call")
+            return datetime.datetime.now().year
+
+        stamped()
+
+    impurity = [w for w in rec if issubclass(w.category, CashImpurityWarning)]
+    assert impurity, "docs/decorator.md promises a CashImpurityWarning here"
+    text = "\n".join(str(w.message) for w in impurity)
+    assert "KEY-AMBIENT-READ" in text, (
+        f"docs/warnings.md documents this code for the ambient reads:\n{text}"
+    )
+    # The other half of the same bullet: warned, and STILL CACHED. Counted, not
+    # compared -- two calls a second apart return the same year either way.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        stamped()
+    assert len(ran) == 1, "the doc says the function is still cached"

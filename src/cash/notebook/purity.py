@@ -174,6 +174,36 @@ _IMPURE_MODULE_CALLS = frozenset({
     'json.dump', 'pickle.dump',
 })
 
+#: Calls that READ ambient state — the clock, the environment, the working
+#: directory, a fresh UUID.
+#:
+#: A different category from everything above, which is why it is a separate
+#: table. Those are side effects: they change the world, and a cache hit means
+#: the change silently stops happening. These change nothing — they make the
+#: function's RESULT depend on hidden state, so a cache hit freezes it. A
+#: nightly job's `date.today()` returns the night it first ran, forever; a
+#: multi-tenant job reading `os.environ['TENANT']` serves the first tenant's
+#: answer to every other tenant, exit 0.
+#:
+#: Not routed through the randomness detector even though the hazard is the
+#: same shape, because that filters through a seed ledger and there is no
+#: `seed()` that makes `datetime.now()` reproducible — these can only ever be
+#: unseeded, so they would fight the machinery they were folded into.
+#:
+#: The bar for adding a name: reading it twice in one program can give two
+#: answers, through no argument the caller passed. `os.path.exists` fails that
+#: bar (it is about a file, which the file-dependency tracker already owns);
+#: `os.getpid` passes it but is not worth the noise.
+_AMBIENT_READ_CALLS = frozenset({
+    'datetime.now', 'datetime.utcnow', 'datetime.today',
+    'datetime.datetime.now', 'datetime.datetime.utcnow',
+    'datetime.datetime.today', 'datetime.date.today', 'date.today',
+    'time.time', 'time.time_ns', 'time.monotonic', 'time.perf_counter',
+    'time.localtime', 'time.gmtime',
+    'os.getcwd', 'os.getenv', 'os.environ.get',
+    'uuid.uuid1', 'uuid.uuid4',
+})
+
 #: Method names meaning "this call changed something outside the function".
 #:
 #: Matched on ANY receiver, because a receiver's type is not knowable from

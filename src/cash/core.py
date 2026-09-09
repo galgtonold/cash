@@ -6718,6 +6718,40 @@ class Cash:
                 f"call.\n{untrackable_summary}"
             )
 
+        # Ambient reads get their own warning, not the side-effects one. The
+        # hazard is the opposite shape -- nothing is skipped, a hidden INPUT is
+        # frozen -- and so is the fix: pass the value in as an argument, where
+        # it reaches the key. Filing them under "likely side effects" told the
+        # user to audit for writes that are not there, and left the actual
+        # failure (a nightly job whose `date.today()` is the night it first
+        # ran) unnamed.
+        from .purity_analyzer import ISSUE_AMBIENT_READ
+        # strict=True keeps them in the one exception it raises: there, every
+        # issue is a hard stop and splitting the report would hide half of it.
+        ambient = [i for i in issues if getattr(i, "kind", None) == ISSUE_AMBIENT_READ]
+        if ambient and mode != "strict":
+            issues = [i for i in issues if getattr(i, "kind", None) != ISSUE_AMBIENT_READ]
+            self._purity_static_flagged.add(func_name)
+            self._warn_once(
+                CashImpurityWarning,
+                func_name,
+                "ambient",
+                f"@cash.cache on {func_name}: the body reads ambient state "
+                f"(the clock, the environment, the working directory, a fresh "
+                f"UUID). That value is not part of the cache key, so the first "
+                f"call's answer is what every later call gets back -- in this "
+                f"process and in every process "
+                f"after it.\n{_format_issues_summary(func_name, ambient)}",
+                code="KEY-AMBIENT-READ",
+                fix="pass the value in as an argument -- `f(now=datetime.now())` "
+                    "-- so it reaches the cache key and a new value means a new "
+                    "entry. If freezing it is what you want, say so with "
+                    "`# @cash:assume-safe` on that line.",
+            )
+        if not issues:
+            return
+        summary = _format_issues_summary(func_name, issues)
+
         self._purity_static_flagged.add(func_name)
 
         if mode == "strict":

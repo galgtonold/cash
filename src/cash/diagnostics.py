@@ -110,6 +110,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "IMPURE-SIDE-EFFECTS",     # static analysis found likely side effects
 
     # -- KEY: something the result depends on is not in the cache key -------
+    "KEY-AMBIENT-READ",        # the body reads the clock / environment / cwd /
+                               # a fresh uuid, so the first call's value freezes
     "KEY-BOOL-STATE-TOKEN",    # DataSource.has_changed() returned a bool,
                                # which cannot track changes
     "KEY-BUILD-FAILED",        # key construction raised

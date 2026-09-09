@@ -56,6 +56,7 @@ from .notebook.cacheability import (
 )
 from .notebook.function_tracker import is_local_module
 from .notebook.purity import (
+    _AMBIENT_READ_CALLS,
     _IMPURE_FUNCTION_CALLS,
     _IMPURE_MODULE_CALLS,
     _WRITE_METHODS,
@@ -82,6 +83,7 @@ __all__ = [
     "ISSUE_DISCARDED_CALL",
     "ISSUE_SCOPE_MUTATION",
     "ISSUE_MUTABLE_GLOBAL",
+    "ISSUE_AMBIENT_READ",
 ]
 
 ISSUE_IMPURE_CALL = "impure_call"
@@ -95,12 +97,24 @@ ISSUE_UNTRACKABLE_DEP = "untrackable_dep"
 ISSUE_DISCARDED_CALL = "discarded_call"
 ISSUE_SCOPE_MUTATION = "scope_mutation"
 ISSUE_MUTABLE_GLOBAL = "mutable_global"
+# Reading ambient state -- the clock, the environment, the working directory, a
+# fresh UUID. Not a side effect: nothing about the world changes. The result
+# depends on something the cache key cannot see, so the FIRST call's answer is
+# what every later call gets, in this process and every process after it.
+# Advisory like ISSUE_IMPURE_CALL (warn, still cache), because freezing is
+# sometimes exactly what the user wants -- but it is never what they want by
+# accident, and it is invisible without this.
+ISSUE_AMBIENT_READ = "ambient_read"
 
 #: Builtins whose whole job is to run code chosen at runtime. Reaching one of
 #: these through `getattr(x, "<name>")` is the same hazard as calling it
 #: directly, and the constant-name form otherwise slips past the dynamic
 #: dispatch rule (which only fires on a NON-constant name).
 _DYNAMIC_BUILTIN_NAMES = frozenset({"eval", "exec", "compile", "__import__"})
+
+#: How the process environment is spelled at a subscript: ``os.environ[...]``,
+#: or bare ``environ[...]`` after ``from os import environ``.
+_ENVIRON_NAMES = frozenset({"os.environ", "environ"})
 
 @dataclass(frozen=True)
 class PurityIssue:
@@ -324,6 +338,29 @@ class _PurityVisitor(ast.NodeVisitor):
         self._record_call(node)
         self.generic_visit(node)
 
+    def visit_Subscript(self, node: ast.Subscript) -> None:  # noqa: N802
+        """``os.environ["KEY"]`` -- the one ambient read that is not a call.
+
+        Needed as its own visitor because the call rule cannot see it: this is
+        a subscript on a mapping, and it is the form most people actually
+        write. ``os.environ.get("KEY")`` goes through the call table instead.
+
+        Load context only. ``os.environ["KEY"] = ...`` is a side effect rather
+        than a frozen input, a different issue with a different fix.
+        """
+        if isinstance(node.ctx, ast.Load) and _get_base_name(node.value) in _ENVIRON_NAMES:
+            self.issues.append(PurityIssue(
+                kind=ISSUE_AMBIENT_READ,
+                description=(
+                    "os.environ[...] - reads ambient state, which is not in the "
+                    "cache key, so the first call's value is frozen into every "
+                    "later result"
+                ),
+                where=self._qualname,
+                line=getattr(node, "lineno", 0),
+            ))
+        self.generic_visit(node)
+
     @staticmethod
     def _is_dynamic_source(value: ast.AST) -> bool:
         """True when *value* resolves a callable from a runtime value.
@@ -520,6 +557,23 @@ class _PurityVisitor(ast.NodeVisitor):
         module_name = _get_call_module(func_node)
         if func_name:
             dotted = f"{module_name}.{func_name}" if module_name else func_name
+
+            # Ambient reads (datetime.now, os.getenv, uuid4, ...). Only ever
+            # matched DOTTED: every entry carries its module, so a method named
+            # `now` on the user's own object is not this.
+            if dotted in _AMBIENT_READ_CALLS:
+                self.issues.append(PurityIssue(
+                    kind=ISSUE_AMBIENT_READ,
+                    description=(
+                        f"{dotted}() - reads ambient state, which is not in the "
+                        f"cache key, so the first call's value is frozen into "
+                        f"every later result"
+                    ),
+                    where=self._qualname,
+                    line=line,
+                ))
+                return
+
             if dotted in _IMPURE_MODULE_CALLS or func_name in _IMPURE_FUNCTION_CALLS:
                 # Special case: open() in read mode is not impure.
                 if func_name == "open" and not module_name and not _is_open_write_mode(node):
