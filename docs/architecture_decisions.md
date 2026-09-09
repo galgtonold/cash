@@ -77,9 +77,12 @@ until this wave.
 (`file_dep_is_fresh`, `src/cash/notebook/file_dep_snapshot.py`). The cheap size
 check runs first, so the "hashing a 2 GB parquet on every lookup" objection is
 answered by never hashing when the size already proves staleness, and by sampling
-files over 8 MiB (head/middle/tail) rather than reading them whole. The residual
-tradeoff is a narrow one: a same-size edit confined to unsampled interior bytes of
-a >8 MiB file is not detected.
+files over `file_hash_full_max_bytes` (head/middle/tail) rather than reading them
+whole. The residual tradeoff is a narrow one: a same-size edit confined to
+unsampled interior bytes of a file above that threshold is not detected. The
+threshold defaults to 64 MiB — above the ordinary CSV or parquet — because the
+digest is memoized per process, so a full hash is paid once rather than on every
+lookup.
 
 **Still timestamp-based, deliberately:** the explicit `file_depends_on=` /
 `FileDataSource` escape hatch folds the file's mtime into the cache key

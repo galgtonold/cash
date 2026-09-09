@@ -349,7 +349,7 @@ class MismatchClassifier:
         # the receiver has no Store target so it is NOT in ``current_cell_outputs``
         # -> without this branch it hits the "read-only input: reject" path below,
         # whose reset-to-L0 is an incidental side effect of a full upstream
-        # re-derivation. That side channel DESYNCS for a pandas / >8 MiB input, so
+        # re-derivation. That side channel DESYNCS for a pandas / sampled-file input, so
         # the fit perpetually MISSES and re-serialises the model every run. Reset
         # the receiver's lineage to the virtual (simulated-constructor) lineage:
         # CHEAP and deterministic, so the key is stable across warm re-runs (HIT),

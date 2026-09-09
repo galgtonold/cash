@@ -1,4 +1,4 @@
-"""What a >8 MiB dependency's freshness check can and cannot see.
+"""What a SAMPLED dependency's freshness check can and cannot see.
 
 Two round-16 testers, independently, reproduced the same wrong answer (5/5 and
 3/3): a CSV above the full-hash threshold, one field rewritten IN PLACE so the
@@ -7,20 +7,21 @@ size is unchanged, and the mtime restored afterwards -- `cp -p`, `rsync -a`,
 served from cache with the old total. The sample covers head/middle/tail, so it
 misses an interior edit; the mtime backstop was then put back by hand.
 
-Two things change here, and neither is a claim that the hole is closed on every
-platform:
+Three things came out of it:
 
 * the snapshot records ``st_ctime`` for sampled files. On POSIX that is the
   inode CHANGE time: it moves on any write and no ordinary tool restores it, so
   the edit is caught. On Windows it is the CREATION time and does not move --
-  measured on this machine, which is why the next item exists.
-* ``file_hash_full_max_bytes`` makes the threshold configurable, so a user can
-  buy immunity with time: a full hash costs about 0.72 ms per MiB on every
-  freshness check, i.e. on every hit that depends on the file (23 ms at 32 MiB,
-  46 ms at 64 MiB, measured).
+  measured on this machine, which is why the next two items exist.
+* ``file_hash_full_max_bytes`` makes the threshold configurable.
+* **the default is 64 MiB**, not the 8 MiB this shipped with, so the ordinary
+  CSV or parquet is hashed in full and the hole does not reach it on any
+  platform. A full hash costs about 0.72 ms per MiB, but the digest is
+  memoized per process, so only the first check of a file pays it.
 
-The default is unchanged. Raising it is a cost decision that belongs to whoever
-runs the pipeline, and the docs now state the price.
+Above 64 MiB the sampled regime is still the sampled regime, and on Windows it
+is still blind to a mtime-restoring in-place edit. That is characterised here
+too, at a lowered threshold rather than with a 130 MiB fixture.
 """
 from __future__ import annotations
 
@@ -31,20 +32,34 @@ import time
 import pytest
 
 from cash import Cash
+from cash.notebook import file_dep_snapshot
 from cash.notebook.file_dep_snapshot import (
     _HASH_FULL_MAX_BYTES_DEFAULT,
     snapshot_file_deps,
 )
 
+# A 9 MiB fixture is BELOW the 64 MiB default (full-hashed) and above this
+# lowered one (sampled). Both regimes are then reachable from one file.
+_SAMPLE_ABOVE = 1024 * 1024
+
+
+@pytest.fixture
+def sampled_regime(monkeypatch):
+    """Put the fixture files into the sampled regime without growing them."""
+    monkeypatch.setattr(
+        file_dep_snapshot, "_full_hash_max_bytes", lambda: _SAMPLE_ABOVE
+    )
+
 
 def _big_csv(path, mib=9):
-    """A file above the sampling threshold, with a known interior field."""
+    """A file with a known interior field, full-hashed under the default."""
     row = b"1,alpha,10.00\n"
     rows_per_mib = (1024 * 1024) // len(row)
     with open(path, "wb") as fh:
         for _ in range(rows_per_mib * mib):
             fh.write(row)
-    assert os.path.getsize(path) > _HASH_FULL_MAX_BYTES_DEFAULT
+    size = os.path.getsize(path)
+    assert _SAMPLE_ABOVE < size <= _HASH_FULL_MAX_BYTES_DEFAULT
     return path
 
 
@@ -70,7 +85,13 @@ def _edit_in_place_preserving_mtime(path):
     return before
 
 
-def test_a_sampled_file_records_its_ctime(tmp_path):
+def test_the_default_hashes_an_ordinary_csv_in_full(tmp_path):
+    """The knob's value is the fix: no ctime backstop means no sampling."""
+    path = _big_csv(str(tmp_path / "big.csv"))
+    assert "ctime" not in snapshot_file_deps({path})[path]
+
+
+def test_a_sampled_file_records_its_ctime(sampled_regime, tmp_path):
     """The extra signal is captured; whether it MOVES is the platform's call."""
     path = _big_csv(str(tmp_path / "big.csv"))
     snap = snapshot_file_deps({path})
@@ -88,7 +109,7 @@ def test_a_small_file_does_not_bother(tmp_path):
 @pytest.mark.skipif(sys.platform == "win32",
                     reason="st_ctime is the creation time on Windows and does "
                            "not move on an in-place edit -- measured")
-def test_the_edit_is_caught_on_posix(tmp_path):
+def test_the_edit_is_caught_on_posix(sampled_regime, tmp_path):
     """POSIX: the inode change time gives it away even with mtime restored."""
     path = _big_csv(str(tmp_path / "big.csv"))
     snap = snapshot_file_deps({path})
@@ -101,58 +122,56 @@ def test_the_edit_is_caught_on_posix(tmp_path):
     assert reason == "ctime-sampled"
 
 
-def test_raising_the_threshold_catches_it_anywhere(tmp_path):
-    """The knob, end to end through a cached function.
+def _reader(cache_dir):
+    c = Cash(cache_dir=cache_dir, register_magic=False)
+    runs: list[int] = []
 
-    Both arms in one test on purpose: the default arm is the characterisation
-    of what is still possible, and the raised arm is what a user can do about
-    it. If the default ever starts catching this, the first assertion fails and
-    somebody re-reads this file -- which is the point.
+    @c.cache(assume_safe=True)
+    def read_total(p):
+        runs.append(1)
+        time.sleep(0.25)              # clear the persistence floor
+        with open(p, "rb") as fh:
+            return sum(float(line.split(b",")[2]) for line in fh if line.strip())
+
+    return read_total, runs
+
+
+def test_the_default_catches_the_stealth_edit(tmp_path):
+    """End to end, on every platform, with nothing configured.
+
+    This is what raising the default bought: the edit both round-16 testers
+    reported now invalidates, because a 9 MiB CSV is hashed in full.
     """
-    import cash
-
     path = _big_csv(str(tmp_path / "big.csv"))
+    read_total, runs = _reader(str(tmp_path / "cache"))
 
-    def total(cache_dir):
-        c = Cash(cache_dir=cache_dir, register_magic=False)
-        runs: list[int] = []
+    before = read_total(path)
+    time.sleep(1.1)
+    _edit_in_place_preserving_mtime(path)
 
-        @c.cache(assume_safe=True)
-        def read_total(p):
-            runs.append(1)
-            time.sleep(0.25)          # clear the persistence floor
-            with open(p, "rb") as fh:
-                return sum(float(line.split(b",")[2]) for line in fh if line.strip())
+    assert read_total(path) != before, "a full hash missed the edit"
+    assert len(runs) == 2
 
-        return read_total, runs
 
-    # --- default threshold: the sampled regime, mtime restored -> not caught
-    read_total, runs = total(str(tmp_path / "cache_default"))
+def test_above_the_threshold_windows_is_still_blind(sampled_regime, tmp_path):
+    """The characterisation of what remains, at a lowered threshold.
+
+    A file larger than ``file_hash_full_max_bytes`` is sampled, and on Windows
+    there is no second timestamp to fall back on. If this ever starts
+    recomputing, the hole is closed and this file should say so.
+    """
+    path = _big_csv(str(tmp_path / "big.csv"))
+    read_total, runs = _reader(str(tmp_path / "cache"))
+
     first = read_total(path)
     time.sleep(1.1)
     _edit_in_place_preserving_mtime(path)
     second = read_total(path)
-    if sys.platform == "win32":
-        assert second == first and len(runs) == 1, (
-            "Windows has no second timestamp to fall back on; if this now "
-            "recomputes, the hole is closed and this file should say so"
-        )
 
-    # --- threshold raised above the file: caught everywhere.
-    # Through `configure`, not the env, because that is the path a user takes
-    # mid-program -- and the one that reads the LIVE config rather than
-    # re-merging TOML from disk.
-    cash.configure(file_hash_full_max_bytes=64 * 1024 * 1024)
-    try:
-        read_total2, runs2 = total(str(tmp_path / "cache_full"))
-        before = read_total2(path)
-        time.sleep(1.1)
-        _edit_in_place_preserving_mtime(path)
-        after = read_total2(path)
-        assert after != before, "a full hash still missed the edit"
-        assert len(runs2) == 2
-    finally:
-        cash.configure(file_hash_full_max_bytes=_HASH_FULL_MAX_BYTES_DEFAULT)
+    if sys.platform == "win32":
+        assert second == first and len(runs) == 1
+    else:
+        assert second != first and len(runs) == 2   # ctime saves it
 
 
 def test_an_unedited_big_file_still_hits(tmp_path):

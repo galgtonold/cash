@@ -94,9 +94,9 @@ it differs between the two caching paths:
 The last row is the one to plan around, and no backend can fix it: the two runs
 compute *different keys*, so they never look at the same entry.
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_content_hash @6bdf50df, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 8388608 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_content_hash @6bdf50df, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864 -->
 !!! note "Large files carry an extra condition"
-    Files over 8 MiB are hash-**sampled** rather than read end to end, so their
+    Files over 64 MiB are hash-**sampled** rather than read end to end, so their
     freshness check also consults the mtime. A fresh clone of a big parquet
     therefore recomputes once even when the paths do line up.
 

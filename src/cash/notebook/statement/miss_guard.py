@@ -5,10 +5,10 @@ new instance of one recurring failure: some input hashes *unstably* across runs,
 so the statement's cache key differs every run, so it never hits — yet cash still
 pays the (large) serialisation on every run. The cache can never pay the user
 back, and the statement is net-negative forever. Known instances: a bare
-fit on a DataFrame (-25 s); >8 MiB content-hash sampling that destabilises
-keys across restarts; a ``make_classification``-derived frame that poisons
-downstream caching (-7.9 s). We have conceded we cannot enumerate the causes, so
-this module bounds the *consequence* regardless of cause.
+fit on a DataFrame (-25 s); sampled content-hashing of a large file, which
+destabilises keys across restarts; a ``make_classification``-derived frame that
+poisons downstream caching (-7.9 s). We have conceded we cannot enumerate the
+causes, so this module bounds the *consequence* regardless of cause.
 
 **What is and is not guarded.** The guard fires on the perpetual-MISS
 *signature* only: identical source, a cache key that keeps changing, zero hits.

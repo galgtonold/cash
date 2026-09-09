@@ -1,4 +1,4 @@
-"""Regression: a same-size edit to a >8 MiB file OUTSIDE the sampled hash
+"""Regression: a same-size edit to a SAMPLED file OUTSIDE the sampled hash
 regions must invalidate the dependency.
 
 ``file_content_hash`` hashes files up to ``file_hash_full_max_bytes`` in full but
@@ -27,8 +27,8 @@ import os
 
 import pytest
 
+from cash.notebook import file_dep_snapshot
 from cash.notebook.file_dep_snapshot import (
-    _HASH_FULL_MAX_BYTES_DEFAULT as _HASH_FULL_MAX_BYTES,
     _HASH_SAMPLE_REGION_BYTES,
     file_dep_is_fresh,
     snapshot_file_deps,
@@ -36,7 +36,19 @@ from cash.notebook.file_dep_snapshot import (
 
 pytestmark = pytest.mark.core
 
-_BIG = _HASH_FULL_MAX_BYTES + 1024 * 1024  # ~9 MiB -> sampled regime
+# The threshold is lowered here rather than the fixtures grown past the real
+# default (64 MiB): what is under test is the SAMPLED regime, which begins
+# wherever the threshold sits, and a 130 MiB fixture per test buys nothing.
+# ``test_sampled_file_freshness_backstops.py`` pins the default itself.
+_FULL_MAX = 1024 * 1024                    # 1 MiB
+_BIG = _FULL_MAX + 1024 * 1024             # 2 MiB -> sampled regime
+
+
+@pytest.fixture(autouse=True)
+def _sample_above_one_mib(monkeypatch):
+    monkeypatch.setattr(
+        file_dep_snapshot, "_full_hash_max_bytes", lambda: _FULL_MAX
+    )
 
 
 def _sampled_offsets(size: int) -> list[tuple[int, int]]:

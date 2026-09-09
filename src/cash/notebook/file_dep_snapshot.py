@@ -71,7 +71,12 @@ _ABSENT_MARKER = "absent"
 # deterministically (head / middle / tail) so hashing a multi-GB parquet on
 # every freshness check stays cheap. The sample is a function of the file size
 # only, so snapshot-time and check-time hashes are computed identically.
-_HASH_FULL_MAX_BYTES_DEFAULT = 8 * 1024 * 1024        # 8 MiB
+#
+# 64 MiB, not the 8 MiB this shipped with: the sampled regime has a hole (see
+# ``file_dep_is_fresh``) that cost two round-16 testers a wrong answer each,
+# and the memo below made the full hash a once-per-process cost rather than a
+# per-check one -- which is what makes covering the ordinary CSV affordable.
+_HASH_FULL_MAX_BYTES_DEFAULT = 64 * 1024 * 1024       # 64 MiB
 
 
 def _full_hash_max_bytes() -> int:

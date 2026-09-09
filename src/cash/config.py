@@ -185,7 +185,7 @@ class CashConfig:
     values reduce data loss on crash but increase disk I/O. Set to
     0 to flush after every write (slowest, safest)."""
 
-    file_hash_full_max_bytes: int = 8 * 1024 * 1024
+    file_hash_full_max_bytes: int = 64 * 1024 * 1024
     """Largest tracked file hashed IN FULL when checking freshness.
 
     Above this, the content hash covers three deterministic head/middle/tail
@@ -195,9 +195,11 @@ class CashConfig:
     restored (`cp -p`, `rsync -a`, `tar -x`) is invisible. On Linux and macOS
     the inode change time closes that; on Windows it does not.
 
-    Raise this to hash more of your inputs in full — the cost is about
-    0.72 ms per MiB, paid on every cache hit that depends on the file, so
-    64 MiB costs roughly 46 ms a check."""
+    The default covers the ordinary CSV or parquet outright. A full hash
+    costs about 0.72 ms per MiB — 46 ms at 64 MiB — but only the FIRST
+    check of a file pays it: the digest is memoized per process, so later
+    checks of an unchanged file cost a ``stat``. Lower it if your inputs are
+    large, on a slow mount, and re-read by many short-lived processes."""
 
     shutdown_write_timeout: float = 60.0
     """Seconds a finishing process waits for its background cache
