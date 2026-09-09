@@ -100,7 +100,13 @@ Cash finds the running script, walks up to the first directory holding a
 so `python /srv/etl/run.py` uses the same cache whether it was started by you,
 by cron from `/`, or by a CI step in a checkout directory. A script with no
 project above it caches beside itself; an interactive session or a notebook,
-which has no script at all, caches in the current directory.
+which has no script at all, caches in the current directory. An installed
+console script — a `[project.scripts]` entry point, whose `__main__` sits in
+the virtualenv rather than in anyone's project — caches per user, per tool, in
+the platform's cache location (`%LOCALAPPDATA%\cash\<tool>`,
+`~/Library/Caches/cash/<tool>`, `$XDG_CACHE_HOME/cash/<tool>`), unless the
+directory you run it from belongs to a project whose `pyproject.toml` has a
+`[tool.cash]` section — then it follows that project.
 
 That matters most for exactly the case that cannot see it. A scheduled job runs
 from whatever directory the scheduler picked, and a cwd-relative cache meant a
@@ -197,7 +203,7 @@ change:
 |---|---|
 | The **arguments** | Hashed by *content* — so DataFrames and arrays work, and two equal-but-distinct objects share one entry |
 | The **function's own source** | Edit the body and old entries stop matching |
-| The source of a **helper it calls** | Followed **transitively** within the module |
+| The source of a **helper it calls** | Followed **transitively**, across your own modules — installed libraries are where it stops |
 | A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
 | A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper**, or by another cached function it calls, rather than by itself |
 | A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
@@ -230,9 +236,16 @@ def pipeline(x):  return features(x)       # ...and pipeline's cache invalidates
 The analyzer captures helper source hashes and folds them into the cache key, so
 both cross-process edits and in-process redefinitions (notebook cell rerun, REPL)
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
-transitive call graph on every call. Helpers are resolved
-within the module; name cross-module dependencies with
-[`depends_on=`](#depends_on-explicit-dependency-graph).
+transitive call graph on every call.
+
+**The boundary is your code, not your module.** A helper imported from another
+file in your project is followed like any other — edit it and the entry
+invalidates, verified end to end. What the analyzer stops at is *installed*
+code: anything under `site-packages` / `dist-packages` or the standard library
+is treated as fixed for a given environment, because folding numpy's internals
+into your key would churn it on every call and editing your venv is not a case
+worth keying on. If you do need a third-party function's identity in the key,
+name it with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
 ### File reads are tracked automatically
 
@@ -525,6 +538,13 @@ expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
 Mutually exclusive: `strict` and `assume_safe` — pass both and the
 decorator raises `ValueError` immediately.
+
+Locking is not a decorator parameter: `use_locking=True` is set on the `Cash`
+instance and applies to every function registered through it. Reach for it when
+concurrent callers can ask for the same uncached result — a web worker pool, a
+task queue, an `asyncio.gather` over one paid API — and see
+[Thread safety](tutorials/feature-guides/thread-safety.md) for what it
+guarantees and what it costs.
 
 **Changing any of these keeps your cache.** The decorator's arguments are
 configuration, not code, so editing one does not change the function's

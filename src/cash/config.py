@@ -643,6 +643,78 @@ def project_anchor() -> Path:
     return start
 
 
+def _running_console_script() -> str | None:
+    """The name of the installed entry point being run, if that is what this is.
+
+    A ``[project.scripts]`` console script lives in the interpreter's own
+    ``bin`` / ``Scripts`` directory, so it has no project to anchor to and
+    ``_running_script_dir`` correctly returns None for it -- leaving it on the
+    cwd, which means a `pip install`ed tool drops a fresh ``.cash`` in every
+    directory you happen to run it from, and never reuses one. A round-16
+    tester reported that as blocking.
+
+    Detected from ``sys.argv[0]`` rather than from the absence of an anchor,
+    because that absence also covers a notebook, a REPL and ``python -c``,
+    where the cwd is the right answer and always was.
+
+    Deliberately NOT ``python -m tool``: its ``argv[0]`` is a module path
+    inside site-packages, so it looks similar, but the invocation is a
+    developer standing in a project far more often than it is an installed
+    tool -- ``python -m pytest`` most of all. That shape keeps today's
+    behaviour.
+    """
+    argv0 = sys.argv[0] if sys.argv else None
+    if not argv0:
+        return None
+    try:
+        path = Path(argv0).resolve()
+    except OSError:
+        return None
+    script_dirs = {Path(sys.prefix) / d for d in ("bin", "Scripts")}
+    script_dirs |= {Path(sys.base_prefix) / d for d in ("bin", "Scripts")}
+    if path.parent not in script_dirs:
+        return None
+    name = re.sub(r"[^A-Za-z0-9._-]", "-", path.stem).strip("-.")
+    return name or None
+
+
+def _per_user_cache_root() -> Path:
+    """The platform's own place for caches, where a cache survives ``cd``."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA")     # not APPDATA: caches do not roam
+        if base:
+            return Path(base) / "cash"
+        return Path.home() / "AppData" / "Local" / "cash"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Caches" / "cash"
+    xdg = os.environ.get("XDG_CACHE_HOME")
+    if xdg:
+        return Path(xdg) / "cash"
+    return Path.home() / ".cache" / "cash"
+
+
+def _installed_entry_point_cache_dir() -> Path | None:
+    """Where an installed console script should cache, or None if not one.
+
+    Per tool, under the platform cache root, so two installed tools do not
+    share one directory and neither inherits the other's eviction pressure.
+
+    Only reached when nothing else claimed ``cache_dir``: an explicit setting
+    of any kind wins, and so does a project ``pyproject.toml`` found by walking
+    up from the cwd -- which is how a tool run inside a project that declares
+    ``[tool.cash] cache_dir`` still caches beside that project's code. The
+    per-user location is the answer for "nothing here claims this run", not a
+    blanket override.
+    """
+    name = _running_console_script()
+    if name is None:
+        return None
+    try:
+        return _per_user_cache_root() / name
+    except (OSError, RuntimeError):           # no home directory to speak of
+        return None
+
+
 def _default_project_config_path() -> Path | None:
     """Walk upward from the project anchor to find a ``pyproject.toml``.
 
@@ -788,6 +860,10 @@ def get_config(
     # wherever the job was launched); each layer that sets ``cache_dir``
     # replaces it with the directory that layer is written relative to.
     cache_dir_origin: Path | object = project_anchor()
+    #: Did any layer below actually set ``cache_dir``? Only when none did is
+    #: the value still the dataclass default, and only then may an installed
+    #: console script be redirected to a per-user location.
+    cache_dir_was_configured = False
 
     # Layer 1: defaults from CashConfig dataclass
     merged: dict[str, Any] = {
@@ -808,6 +884,7 @@ def get_config(
             sources.append(f"user:{user_path}")
             if "cache_dir" in user_data:
                 cache_dir_origin = Path(user_path).parent
+                cache_dir_was_configured = True
 
     # Layer 2b: explicit ``Cash(config_path=...)`` override (merged on
     # top of the user-scoped layer)
@@ -818,6 +895,7 @@ def get_config(
             sources.append(f"file:{config_path}")
             if "cache_dir" in override_data:
                 cache_dir_origin = Path(config_path).parent
+                cache_dir_was_configured = True
 
     # Layer 3: project TOML
     if project_config_path is _USE_DEFAULT_PATH:
@@ -831,6 +909,7 @@ def get_config(
             sources.append(f"project:{project_path}")
             if "cache_dir" in project_data:
                 cache_dir_origin = Path(project_path).parent
+                cache_dir_was_configured = True
 
     # Layer 4: env vars
     env_data = _load_env_config()
@@ -839,6 +918,7 @@ def get_config(
         sources.append("env")
         if "cache_dir" in env_data:
             cache_dir_origin = _CALLER_RELATIVE
+            cache_dir_was_configured = True
 
     # Layer 5: explicit overrides (kwargs)
     if overrides:
@@ -846,7 +926,14 @@ def get_config(
         sources.append("kwargs")
         if "cache_dir" in overrides:
             cache_dir_origin = _CALLER_RELATIVE
+            cache_dir_was_configured = True
 
+    if not cache_dir_was_configured:
+        installed = _installed_entry_point_cache_dir()
+        if installed is not None:
+            merged["cache_dir"] = str(installed)
+            cache_dir_origin = _CALLER_RELATIVE      # already absolute
+            sources.append("entry-point")
     merged["cache_dir"] = _anchor_cache_dir(merged.get("cache_dir"), cache_dir_origin)
 
     # Materialise the dict into a CashConfig.

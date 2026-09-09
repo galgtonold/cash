@@ -190,6 +190,10 @@ If applicable:
 
 - [ ] Add `file_depends_on=` for non-standard file access (URLs, custom loaders) — see [Custom file sources](custom-file-sources.md)
 - [ ] Set `ttl=` for time-sensitive data
+- [ ] Set `use_locking=True` if concurrent callers can ask for the same
+      expensive result at once — a web worker pool, a task queue, an
+      `asyncio.gather` over one paid API. Without it, the first two callers
+      both compute it. See [Thread safety](thread-safety.md)
 
 ## Related
 
@@ -197,3 +201,4 @@ If applicable:
 - [Choosing a backend](choosing-a-backend.md)
 - [Custom file sources](custom-file-sources.md)
 - [Debugging and monitoring](debugging-and-monitoring.md)
+- [Thread safety](thread-safety.md) — `use_locking=True`, and what it costs

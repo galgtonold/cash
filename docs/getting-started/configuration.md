@@ -29,6 +29,7 @@ the same one you would guess for each:
 | `Cash(cache_dir="…")` or `CASH_CACHE_DIR` | your current working directory — you typed it here, so it means here |
 | `pyproject.toml` / the XDG user config | that file's own directory, as paths in config files normally are |
 | nothing (the `.cash` default) | the **project anchor**: the first directory above the running script holding a `pyproject.toml`, `setup.py`, `setup.cfg` or `.git` |
+| nothing, from an **installed console script** | a per-user directory named after the tool — `%LOCALAPPDATA%\cash\<tool>`, `~/Library/Caches/cash/<tool>`, or `$XDG_CACHE_HOME/cash/<tool>` |
 
 The project anchor is also where `pyproject.toml` itself is looked for. Both
 used to be resolved from the current working directory, which made the cache a
@@ -38,10 +39,23 @@ fix (`[tool.cash] cache_dir`) was discovered the same way, so it was ignored in
 exactly that case.
 
 With no script to anchor to — an interactive interpreter, a Jupyter kernel,
-`python -c` — the current directory is still the answer, which is why a
-notebook's cache stays exactly where it was. The same goes for an installed
-console entry point, whose `__main__` lives inside the virtualenv rather than
-in your project.
+`python -c`, `python -m sometool` — the current directory is still the answer,
+which is why a notebook's cache stays exactly where it was.
+
+An **installed console script** (a `[project.scripts]` entry point) is the one
+case that gets neither. Its `__main__` lives in the virtualenv's `bin` /
+`Scripts` directory, so there is no project above it to anchor to — and
+anchoring inside the virtualenv would be worse, since the cache would then be
+shared by every project using that environment and wiped by a reinstall. Left
+on the current directory it dropped a fresh `.cash` wherever you happened to
+run it and never reused one. So it caches per user, per tool, in the platform's
+own cache location.
+
+Two things still override that, in this order: any explicit setting
+(`CASH_CACHE_DIR`, `cache_dir=`, the XDG user config), and a `pyproject.toml`
+with a `[tool.cash]` section found by walking up from your current directory.
+So a tool run inside a project that has an opinion follows the project; the
+per-user location is the answer when nothing about the run claims it.
 
 ## Quick reference
 

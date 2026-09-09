@@ -407,3 +407,4 @@ top-level `cash` as well, and that is the shorter spelling to reach for:
 - [Production Transition](production-transition.md) — backend selection when you move from notebook to script.
 - [Controlling Cache Behavior](controlling-cache-behavior.md) — TTL, `@cash:no-cache`, and other per-entry overrides.
 - [Debugging and Monitoring](debugging-and-monitoring.md) — how to confirm your chosen backend is actually being used.
+- [Thread Safety](thread-safety.md) — `use_locking=True` when several callers can ask for the same uncached result at once; the lock is per cache key, and per process unless the backend is Redis.
