@@ -502,6 +502,24 @@ class ReexecutionPlanner:
                             pending.add(j)
                     if not pending:
                         continue
+                    # A fill we FORCE must be able to run. The loop above
+                    # selects fills by co-produced NAME (`ax`), which says
+                    # nothing about the data they read: `ax.plot(sub[...])`
+                    # reads `sub`, `sub` is not a carrier, and the backward scan
+                    # never treated it as a broken var, so nothing pulls its
+                    # producer in. Scheduling the reader without the writer is
+                    # the round-14 BLOCKING report -- `NameError: name 'sub' is
+                    # not defined`, surfaced as an UpstreamStateError on a
+                    # completely unrelated cell, five cells blocked at once.
+                    #
+                    # It took eleven attempts to reproduce because `fig`, `ax`
+                    # and `sub` come from one cell and are normally all present
+                    # or all absent; both extremes are harmless (no live `fig`
+                    # and this pass never fires, live `sub` and the fill just
+                    # runs). Only a state that separates them reaches it.
+                    pending |= self._producers_of_read_names(
+                        simulation_trace, pending, scheduled,
+                    )
                     if self.debug:
                         logger.debug(
                             "[UPSTREAM] Carrier-history completion for '%s' (%s) consumed "
@@ -528,6 +546,54 @@ class ReexecutionPlanner:
                 if info.get('code') not in added_codes
             ]
         return sorted(scheduled), restored_statements_info
+
+    def _producers_of_read_names(
+        self, simulation_trace: list, pending: set[int], scheduled: set[int],
+    ) -> set[int]:
+        """Producers of the data the *pending* statements read, transitively.
+
+        Only reached for statements the carrier-history pass has already decided
+        to force, so the blast radius is the closure of what those statements
+        need — not the notebook. A statement already scheduled, or already
+        pending, is left alone; a name with no producer in the trace (a module,
+        a builtin, something bound outside this notebook) contributes nothing.
+
+        Transitive on purpose: ``ax.plot(sub[...])`` needs ``sub = mm[...]``,
+        which needs ``mm = monthly_margin(tx)``. Stopping at one level would
+        move the same NameError one statement up.
+
+        **A producer that writes files is never added.**
+        ``_schedule_file_write_statements`` runs BEFORE this pass, so anything
+        added here has already bypassed its scope and repeatability gates —
+        re-firing a ``to_csv(..., mode='a')`` would duplicate a line on disk,
+        which a kernel restart cannot undo. Skipping it can leave the fill
+        unrunnable, and that is the right trade: the failure is loud, names the
+        missing variable and is fixed by running the cell, whereas a duplicated
+        append is silent and permanent.
+        """
+        from ..cacheability import statement_writes_files
+
+        extra: set[int] = set()
+        frontier = list(pending)
+        while frontier:
+            j = frontier.pop()
+            for name in simulation_trace[j][2]:  # inputs
+                producer = self._latest_producer(simulation_trace, name, j)
+                if producer is None:
+                    continue
+                if producer in scheduled or producer in pending or producer in extra:
+                    continue
+                if statement_writes_files(simulation_trace[producer][0]):
+                    if self.debug:
+                        logger.debug(
+                            "[UPSTREAM] Not scheduling file-writing producer [%s] "
+                            "for '%s': re-firing it could duplicate on-disk output",
+                            producer, name,
+                        )
+                    continue
+                extra.add(producer)
+                frontier.append(producer)
+        return extra
 
     def _latest_current_figure_producer(
         self, simulation_trace: list, before: int, user_ns,
