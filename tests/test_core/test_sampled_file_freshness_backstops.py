@@ -101,7 +101,7 @@ def test_the_edit_is_caught_on_posix(tmp_path):
     assert reason == "ctime-sampled"
 
 
-def test_raising_the_threshold_catches_it_anywhere(tmp_path, monkeypatch):
+def test_raising_the_threshold_catches_it_anywhere(tmp_path):
     """The knob, end to end through a cached function.
 
     Both arms in one test on purpose: the default arm is the characterisation
@@ -138,9 +138,10 @@ def test_raising_the_threshold_catches_it_anywhere(tmp_path, monkeypatch):
             "recomputes, the hole is closed and this file should say so"
         )
 
-    # --- threshold raised above the file: caught everywhere
-    monkeypatch.setattr(cash.config.get_config(), "file_hash_full_max_bytes",
-                        64 * 1024 * 1024, raising=False)
+    # --- threshold raised above the file: caught everywhere.
+    # Through `configure`, not the env, because that is the path a user takes
+    # mid-program -- and the one that reads the LIVE config rather than
+    # re-merging TOML from disk.
     cash.configure(file_hash_full_max_bytes=64 * 1024 * 1024)
     try:
         read_total2, runs2 = total(str(tmp_path / "cache_full"))
