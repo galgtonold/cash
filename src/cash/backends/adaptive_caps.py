@@ -12,7 +12,8 @@ machine-scaled cap for each tier:
 
 * **disk** — a generous fraction of the *free* space on the cache volume,
   so it can actually retain what the user persists;
-* **RAM**  — a modest fraction of *total* system memory.
+* **RAM**  — a modest fraction of the memory this process may use: the host's
+  total, or a cgroup limit when one binds it, whichever is smaller.
 
 Both are clamped to sane floors/ceilings. The arithmetic lives in the pure
 ``adaptive_disk_cap`` / ``adaptive_ram_cap`` functions (they take the
@@ -158,6 +159,59 @@ def _total_system_ram() -> int | None:
         return None
 
 
+#: Where a cgroup records the memory limit that binds this process: v2 first,
+#: then v1. Both live under ``/sys/``, which the file tracker already refuses to
+#: record as a dependency -- reading a live kernel file into a cache key is a
+#: mistake this codebase has made once already, with ``/proc/meminfo``.
+_CGROUP_LIMIT_PATHS: tuple[str, ...] = (
+    "/sys/fs/cgroup/memory.max",                     # cgroup v2
+    "/sys/fs/cgroup/memory/memory.limit_in_bytes",   # cgroup v1
+)
+
+#: cgroup v1 spells "no limit" as a huge sentinel rather than a word. Anything
+#: at this scale is not a real limit.
+_CGROUP_UNLIMITED = 1 << 62
+
+
+def _cgroup_memory_limit() -> int | None:
+    """The memory limit binding THIS process, or None if nothing limits it.
+
+    ``psutil.virtual_memory().total`` reports the HOST's memory, in a container
+    as much as anywhere else -- ``/proc/meminfo`` is not namespaced. So a 2 GiB
+    container on a 64 GiB host was handed the full 4 GiB RAM-tier ceiling: a
+    cache budget twice the memory the process is allowed, i.e. an OOM kill
+    rather than an eviction.
+
+    Absent on macOS and Windows (no such files), which is correct -- there is no
+    limit to find, and the caller falls back to the host total.
+    """
+    for path in _CGROUP_LIMIT_PATHS:
+        try:
+            with open(path) as fh:
+                raw = fh.read().strip()
+        except OSError:
+            continue
+        if not raw or raw == "max":          # v2's word for "no limit"
+            continue
+        try:
+            value = int(raw)
+        except ValueError:
+            continue
+        if value <= 0 or value >= _CGROUP_UNLIMITED:
+            continue
+        return value
+    return None
+
+
+def _memory_budget() -> int | None:
+    """The smaller of the host's RAM and any limit imposed on this process.
+
+    ``None`` when neither can be read, which is the fixed-fallback path.
+    """
+    known = [v for v in (_total_system_ram(), _cgroup_memory_limit()) if v]
+    return min(known) if known else None
+
+
 def resolve_disk_cap(cache_dir: str) -> int:
     """Adaptive disk-tier cap for the volume that holds *cache_dir*."""
     cap = adaptive_disk_cap(_free_bytes_on_volume(cache_dir))
@@ -196,7 +250,11 @@ def adaptive_disk_cap_for(cache_dir: str, own_bytes: int) -> int:
 
 
 def resolve_ram_cap() -> int:
-    """Adaptive RAM-tier cap for this machine (psutil-guarded)."""
-    cap = adaptive_ram_cap(_total_system_ram())
+    """Adaptive RAM-tier cap for this process (psutil- and cgroup-aware).
+
+    Sized from the memory this process may actually use -- the host's total, or
+    a cgroup limit when one binds it, whichever is smaller.
+    """
+    cap = adaptive_ram_cap(_memory_budget())
     logger.debug("[CAPS] adaptive RAM cap: %d bytes (%.0f MiB)", cap, cap / _MIB)
     return cap

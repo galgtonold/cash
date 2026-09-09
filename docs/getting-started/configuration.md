@@ -77,9 +77,28 @@ the `CASH_*` binding; the TOML key matches the field name.
 | `cache_dir` | `CASH_CACHE_DIR` | `".cash"` | Where the default `FileBackend` writes. **Add to `.gitignore`** — this is the disk cache, not the config. |
 | `compress` | `CASH_COMPRESS` | `false` | gzip data files on disk. |
 | `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (**auto**) | Disk-tier LRU eviction threshold, in bytes. A single value larger than the whole cap is skipped rather than written and evicted at once ([`CACHE-VALUE-TOO-BIG`](../warnings.md#cache-value-too-big) says so, and names both numbers); everything that fits is stored and evicted least-recently-used. `null` scales the cap to the machine — a fraction of free disk for the disk tier, a fraction of RAM for the memory tier — instead of a flat 1 GiB that capped every tier and thrashed persist-heavy workloads. Set an integer to pin the disk cap. |
-| `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` (unlimited) | Cap on `InMemoryBackend` entries — LRU eviction when exceeded. |
+| `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` (no COUNT limit) | Cap on `InMemoryBackend` **entries** — LRU eviction when exceeded. `null` does not mean the memory tier is unbounded: it is bounded by bytes, adaptively (see below). |
 | `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | Seconds between `FileBackend`'s background metadata-flush cycles. |
 | `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | Seconds a finishing process waits for background cache writes before exiting without them. Finite on purpose: a write that cannot complete (an unwritable directory, a stalled mount) must never keep a finished process alive. Expiry warns [`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned). |
+
+<!-- claim: cash/backends/adaptive_caps.py:resolve_ram_cap @02a19f23, cash/backends/adaptive_caps.py:_cgroup_memory_limit @c42e9359 -->
+#### What "auto" resolves to
+
+Both tiers are bounded by default, and neither number is one you set:
+
+* **Disk** — a quarter of the free space on the cache volume, clamped to
+  [8 GiB, 100 GiB] and never above 80% of what is actually free.
+* **RAM** — a fifth of the memory this process may use, clamped to
+  [512 MiB, 4 GiB]. "May use" means the host's total, or a **cgroup limit**
+  when one binds the process, whichever is smaller — so a 2 GiB container on a
+  large host is sized from the 2 GiB, not from the host. Without that, a
+  long-lived worker in a container was handed a cache budget twice the memory
+  it was allowed.
+
+`cash info` prints both resolved numbers. Worth checking when a long-running
+process looks like it is leaking: the memory tier growing to its cap is the
+cache working as designed, and the entries filling it are the cheap ones the
+cost model declined to write to disk.
 
 ### Cost-aware caching policy
 

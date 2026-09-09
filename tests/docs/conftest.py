@@ -487,23 +487,31 @@ def mock_my_lib(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def mock_pipeline(monkeypatch):
+def mock_pipeline(monkeypatch, tmp_path):
     """Stub the fictional 'pipeline' module imported by production-transition.md.
 
     The doc page has `from pipeline import train` — a stand-in for a user's
     own module. We provide a real `@cash.cache`-wrapped `train` so the fence
     behaves as documented (claim inference can find a cache_info()).
+
+    Its own ``Cash``, pointed at this page's ``tmp_path``, rather than the
+    global one. Decorating with the global binds whichever instance exists when
+    the FIXTURE runs, and this stub's entries were landing in the repo's own
+    ``.cash`` and answering a later run of the same page — a hit where the page
+    documents a miss.
     """
     import sys
     import types
     if "pipeline" in sys.modules:
         yield
         return
-    import cash as _cash
+    from cash import Cash
 
     fake_pipeline = types.ModuleType("pipeline")
+    stub_cash = Cash(cache_dir=str(tmp_path / "pipeline_stub_cache"),
+                     register_magic=False)
 
-    @_cash.cache
+    @stub_cash.cache
     def train(features):
         return {"model": "stub", "features": features}
 

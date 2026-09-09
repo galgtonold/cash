@@ -40,10 +40,22 @@ def cmd_info(args: argparse.Namespace) -> None:
     print(f"  Cache dir:  {config.cache_dir}")
     print(f"  Debug:      {config.debug}")
     print(f"  Compress:   {config.compress}")
+    # Resolved, not just configured. "auto (scaled per tier)" is true and
+    # useless: a user asking what their cache is allowed to hold needs the two
+    # numbers it actually resolves to, and the RAM one in particular appears
+    # nowhere else -- a tester spent a round reading a growing RSS as a leak
+    # when it was a 4 GiB cap doing exactly what it says.
+    from cash.backends.adaptive_caps import (
+        human_bytes,
+        resolve_disk_cap,
+        resolve_ram_cap,
+    )
     if config.max_cache_size is None:
-        print("  Max size:   auto (scaled to disk/RAM per tier)")
+        disk = human_bytes(resolve_disk_cap(config.cache_dir))
+        print(f"  Max size:   auto -- disk {disk}, RAM {human_bytes(resolve_ram_cap())}")
     else:
-        print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB")
+        print(f"  Max size:   {config.max_cache_size / (1024**3):.1f} GB on disk, "
+              f"RAM {human_bytes(resolve_ram_cap())}")
     # Report what actually decides persistence — the serialization-aware cost
     # model — rather than a raw threshold number.
     if config.smart_persistence:

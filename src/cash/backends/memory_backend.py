@@ -42,11 +42,19 @@ class InMemoryBackend(CacheBackend):
                          None means unlimited entries (eviction only via memory pressure).
             max_size_bytes: Soft byte cap for the RAM tier. When the tracked
                          total exceeds it, least-recently-used entries are evicted down to
-                         ~90% of the cap. ``None`` (default) means unbounded — eviction is
-                         driven only by ``max_entries`` and psutil memory pressure, exactly
-                         as before. The factory sets this to a modest fraction of system RAM
-                         (``adaptive_caps.resolve_ram_cap``) so the RAM tier is bounded
-                         independently of the disk tier.
+                         ~90% of the cap. ``None`` (this CONSTRUCTOR's default) means
+                         unbounded — eviction driven only by ``max_entries`` and psutil
+                         memory pressure.
+
+                         **``None`` is not what a user gets.** Every backend the
+                         factory builds passes a resolved cap
+                         (``adaptive_caps.resolve_ram_cap``: a fifth of the memory
+                         this process may use, clamped to [512 MiB, 4 GiB]), so the
+                         RAM tier is bounded by default and independently of the
+                         disk tier. Read alone, the old wording here supported
+                         exactly the wrong conclusion, and a ticket was filed on
+                         it: "the in-memory tier is unbounded by default".
+                         ``cash info`` prints the resolved number.
         """
         self._store: dict[str, tuple[MetadataDict, Any]] = {}  # Stores (metadata, value)
         self.max_memory_percent = max_memory_percent
