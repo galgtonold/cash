@@ -6553,6 +6553,16 @@ class Cash:
             return name if len(name) <= width else "..." + name[-(width - 3):]
 
         lines = [f"cash: {hits} of {calls} calls restored, {saved:.1f}s saved"]
+        where = self._summary_cache_dir()
+        if where:
+            # Which directory this ran against. A script user has no badge and
+            # no other place to see it, and every question that starts "why is
+            # nothing cached" is answered or excluded by this one line: a
+            # scheduled job's cwd-relative cache, a path typed with one
+            # backslash too few, a container volume that is not the one they
+            # meant. A tester spent a round on a cache directory that was not
+            # the one they thought they had set.
+            lines.append(f"  cache: {where}")
         for name, stat in rows:
             # Pad the whole "N hits," token, not the word: padding the word
             # puts the space before the comma ("1 hit ,").
@@ -6563,6 +6573,22 @@ class Cash:
             lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}"
                          f"{miss_col:<12}{saved_col}")
         return "\n".join(lines)
+
+    def _summary_cache_dir(self) -> str | None:
+        """The cache directory this instance is using, for the summary header.
+
+        Reads the ALREADY-BUILT backend when there is one and falls back to the
+        configured path otherwise: the summary must never be the thing that
+        creates a cache directory, and it runs from an ``atexit`` handler where
+        building one is worse than saying nothing.
+        """
+        backend = self._backend
+        for candidate in (backend, *getattr(backend, "backends", ())):
+            path = getattr(candidate, "cache_dir", None)
+            if isinstance(path, str) and path:
+                return path
+        configured = getattr(self.config, "cache_dir", None)
+        return configured if isinstance(configured, str) and configured else None
 
     def _print_run_summary(self) -> None:
         """``atexit`` hook for ``summary=True``. Must never raise.

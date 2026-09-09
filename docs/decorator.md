@@ -145,9 +145,16 @@ CASH_SUMMARY=1 python model.py
 
 ```
 cash: 4 of 5 calls restored, 41.2s saved
+  cache: /srv/etl/.cash
   model.ray_component   3 hits,   1 miss     41.2s saved
   model.build_grid      1 hit,    0 misses    0.3s saved
 ```
+
+The `cache:` line is the directory this run actually used. Check it first when
+a run that should have been warm was not: a job started from a different
+directory, a path with a typo in it, a container volume that is not the one you
+meant — each of those looks exactly like "caching is broken" until you see
+where the entries were going.
 
 `cash.configure(summary=True)`, `Cash(summary=True)` and a `summary = true`
 TOML key do the same thing; `f.cache_info()` gives one function's numbers

@@ -173,3 +173,37 @@ def test_show_stats_says_so_when_there_is_nothing_yet(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "no cached function" in out
     assert "ipywidgets" not in out
+
+
+# ---------------------------------------------------------------------------
+# Which cache it ran against
+# ---------------------------------------------------------------------------
+
+def test_the_summary_names_the_cache_directory(tmp_path):
+    """The one line that answers "why is nothing cached".
+
+    Every version of that question -- a scheduled job whose cwd-relative cache
+    is somewhere else, a path typed with one backslash too few, a container
+    volume that is not the one you meant -- is answered or excluded by seeing
+    the directory. A round-15 tester spent an arm of their round on a cache
+    directory that was not the one they thought they had set, with
+    `CASH_SUMMARY=1` on the whole time and nothing in its output to say so.
+    """
+    c = _cash(tmp_path)
+    _exercise(c)
+    assert str(tmp_path / "cache") in c.run_summary()
+
+
+def test_naming_it_does_not_build_a_backend(tmp_path):
+    """The summary runs from an atexit handler; it must not create anything.
+
+    A cache directory conjured into existence by the summary would be a new
+    defect of exactly the kind the line is there to diagnose.
+    """
+    c = _cash(tmp_path)
+    assert c._backend is None, "the fixture must start with the backend unbuilt"
+
+    c.run_summary()
+
+    assert c._backend is None
+    assert not (tmp_path / "cache").exists()
