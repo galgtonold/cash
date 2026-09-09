@@ -192,7 +192,7 @@ change:
 | The **function's own source** | Edit the body and old entries stop matching |
 | The source of a **helper it calls** | Followed **transitively** within the module |
 | A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
-| A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper** rather than by the function itself |
+| A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper**, or by another cached function it calls, rather than by itself |
 | A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
 | A **class passed as an argument** | Keyed by its declaration, not its name — so an output specification handed to a call (`extract(doc, InvoiceFields)`) invalidates when a field or a field description changes. Works for plain classes, `@dataclass`, and pydantic `BaseModel` |
 
@@ -262,11 +262,14 @@ TAX_RATE = 0.5
 net(100)          # 50.0 — recomputed, not the stale 80.0
 ```
 
-<!-- claim: cash/core.py:Cash._fold_read_globals @72ffaaac -->
+<!-- claim: cash/core.py:Cash._fold_read_globals @72ffaaac, cash/core.py:Cash._fold_dependency_read_globals @959d77fa -->
 Only globals that are **read** participate — and that includes globals read
-by a **helper** rather than by the cached function itself, so a helper
-returning a module-level `CONFIG` invalidates its caller when that config
-changes. Globals that are *written* (`global x; x = ...`) or mutated in
+on someone else's behalf: by a **helper**, so a helper returning a module-level
+`CONFIG` invalidates its caller when that config changes, and by another
+**cached function** further down the call chain, however many modules away.
+That last one is the shape a library has — a `config.py` holding a constant, an
+`io.py` reading it, a `build.py` calling that — and it is followed
+transitively, so a constant four modules down still invalidates the top. Globals that are *written* (`global x; x = ...`) or mutated in
 place are excluded — those are side-effect accumulators, and folding them
 in would invalidate the function on its own output. That exclusion applies
 to a helper's own accumulator too. A read global whose value can't be hashed

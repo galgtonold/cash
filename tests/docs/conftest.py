@@ -33,14 +33,17 @@ def reset_cash_state(tmp_path, monkeypatch):
 
     ``reset_session()`` is the real API: it drops the singleton so the next
     access re-resolves config from TOML/env/defaults. Cache isolation comes
-    from ``parquet_stubs``, which sets ``CASH_CACHE_DIR`` alongside its
-    ``chdir(tmp_path)`` -- it used to rely on the ``chdir`` alone, back when the
-    default ``cache_dir`` was resolved from the cwd. It no longer is (the
-    default now follows the project, so a job run from anywhere finds one
-    cache), which would otherwise have pointed every doc page at the repo's own
-    ``.cash`` and let one page's entries answer another's.
+    from ``CASH_CACHE_DIR``, set HERE and to an ABSOLUTE path, which matters for
+    two reasons that both bit. It used to come for free from ``parquet_stubs``'
+    ``chdir(tmp_path)`` plus a cwd-relative default; the default now follows the
+    project instead, so a chdir isolates nothing. And it has to be set before
+    ``reset_session()`` on the line below -- under IPython that call builds the
+    new instance EAGERLY, so a page whose cache dir was still being decided by
+    another fixture wrote its entries into the repo's own ``.cash`` and read
+    another page's back out of it on the next run.
     """
     import cash
+    monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
     cash.reset_session()
     yield
     cash.reset_session()

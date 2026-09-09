@@ -1816,6 +1816,9 @@ class Cash:
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
+            current_state_hash = self._fold_dependency_read_globals(
+                func, func_name, current_state_hash,
+            )
             current_state_hash = self._fold_rng_epoch(func_name, current_state_hash)
             current_state_hash = self._fold_method_class_deps(func, args, current_state_hash)
             # ONE canonicalisation, fed to both the code channel and the value
@@ -1944,6 +1947,9 @@ class Cash:
             current_state_hash = self._fold_bound_self(func, func_name, current_state_hash, warn=False)
             current_state_hash = self._fold_read_globals(func, func_name, current_state_hash)
             current_state_hash = self._fold_helper_read_globals(func, func_name, current_state_hash)
+            current_state_hash = self._fold_dependency_read_globals(
+                func, func_name, current_state_hash,
+            )
             # Mirrors `_resolve_cache_key`: without this the predicted key
             # would differ from the one a real call builds for exactly the
             # arguments this feature exists for, so `explain()` would report
@@ -4555,6 +4561,25 @@ class Cash:
         if isinstance(own_globals, dict):
             for name in self._read_global_data_names(func):
                 seen.add((id(own_globals), name))
+        return self._fold_paths_read_globals(
+            report, func, func_name, state_hash, owner_code=owner_code, seen=seen,
+        )
+
+    def _fold_paths_read_globals(
+        self,
+        report: PurityReport,
+        func: Callable,
+        func_name: str,
+        state_hash: str,
+        *,
+        owner_code: Any,
+        seen: set,
+    ) -> str:
+        """Fold the read globals of every helper *report* resolved.
+
+        Shared by the two callers that need it: a cached function's own helpers
+        and the helpers of the cached functions it calls.
+        """
         for qual in sorted(report.helper_resolution_paths):
             module_name, attr_chain = report.helper_resolution_paths[qual]
             target: Any = sys.modules.get(module_name)
@@ -4571,6 +4596,73 @@ class Cash:
             state_hash = self._fold_read_globals(
                 target, func_name, state_hash, owner_code=owner_code, seen=seen
             )
+        return state_hash
+
+    def _fold_dependency_read_globals(
+        self, func: Callable, func_name: str, state_hash: str
+    ) -> str:
+        """Fold the globals the CACHED functions this one calls read.
+
+        The third of the three channels a global can reach a key through, and
+        the one that was missing. A cached function's own globals are folded by
+        ``_fold_read_globals``; its plain helpers' by
+        ``_fold_helper_read_globals``; a cached CALLEE's were folded into that
+        callee's key and nowhere else::
+
+            # rules.py
+            THRESHOLD = 20
+            def keep(x): return (x % 100) < THRESHOLD
+
+            # calc.py
+            @cash.cache
+            def inner(n): return sum(i for i in range(n) if keep(i))
+
+            @cash.cache
+            def outer(n): return inner(n)
+
+        Edit THRESHOLD and ``inner`` recomputes -- its key moved -- while
+        ``outer`` returns the answer computed under the old value, with zero
+        executions and no warning. One process disagreeing with itself, which
+        is what a round-15 tester reported after building exactly this shape as
+        a library (config module, io module, build module).
+
+        The SOURCE side of the same edge already worked: editing ``inner``'s
+        body, or ``keep``'s, invalidates ``outer`` through the graph and the
+        transitive helper hashes. Only the DATA those functions read was
+        invisible.
+
+        Transitive, because the chain is: ``outer`` -> ``inner`` -> a helper in
+        a third module reading a global in a fourth. Each dependency's own
+        helpers go through the same fold as if they were this function's.
+        """
+        owner_code = getattr(func, "__code__", None)
+        # Pre-seed with what this function already folded for itself, so a
+        # shared global is hashed once rather than once per reader.
+        seen: set = set()
+        own_globals = getattr(func, "__globals__", None)
+        if isinstance(own_globals, dict):
+            for name in self._read_global_data_names(func):
+                seen.add((id(own_globals), name))
+        visited = {func_name}
+        stack = sorted(self.graph.get_dependencies(func_name))
+        while stack:
+            dep = stack.pop()
+            if dep in visited:
+                continue
+            visited.add(dep)
+            stack.extend(sorted(self.graph.get_dependencies(dep)))
+            dep_func = self.functions.get(dep)
+            if dep_func is None or getattr(dep_func, "__globals__", None) is None:
+                continue
+            state_hash = self._fold_read_globals(
+                dep_func, func_name, state_hash, owner_code=owner_code, seen=seen,
+            )
+            dep_report = self._purity_reports.get(dep)
+            if dep_report is not None and dep_report.helper_resolution_paths:
+                state_hash = self._fold_paths_read_globals(
+                    dep_report, func, func_name, state_hash,
+                    owner_code=owner_code, seen=seen,
+                )
         return state_hash
 
     @staticmethod
