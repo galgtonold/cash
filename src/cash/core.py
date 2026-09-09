@@ -2090,6 +2090,8 @@ class Cash:
                 'content': 'content changed',
                 'mtime': 'mtime changed',
                 'mtime-sampled': 'mtime changed (sampled file)',
+                'ctime-sampled': 'the file was written (sampled file)',
+                'appeared': 'a file the call looked for and did not find now exists',
                 'remote-changed': 'remote object changed',
                 'remote-unresolved': 'remote object could not be checked',
             }
@@ -2294,8 +2296,7 @@ class Cash:
             else:
                 tracker._add_tracked(path)
 
-    @staticmethod
-    def _auto_file_deps_fresh(metadata: CacheMetadata) -> bool:
+    def _auto_file_deps_fresh(self, metadata: CacheMetadata) -> bool:
         """Return True if every file recorded in ``metadata.auto_file_deps``
         still matches on disk.
 
@@ -2317,21 +2318,93 @@ class Cash:
         snap = metadata.auto_file_deps or {}
         if not snap:
             return True  # nothing to check
-        from cash.notebook.file_dep_snapshot import file_dep_is_fresh
+        from cash.notebook.file_dep_snapshot import (
+            _full_hash_max_bytes,
+            file_dep_is_fresh,
+        )
         from cash.remote_source import measured_validation
+
+        # The full-hash threshold, resolved ONCE for the pass. Reading it per
+        # file costs a config merge each time, and a config merge walks the
+        # directory tree looking for the project marker: profiling a 50-file hit
+        # found 7,000 stat calls and 130 ms in there, three times the checking
+        # it was guarding.
+        full_hash_max = _full_hash_max_bytes()
 
         # Remote entries cost a network round trip each to check, so the check
         # itself is worth measuring - see _warn_if_validation_is_expensive.
+        #
+        # Local ones are measured too, on their own clock. Hashing is not free
+        # either, and file deps PROPAGATE: an aggregate that calls ten cached
+        # functions inherits their inputs, so a fifty-file pipeline paid for
+        # fifty checks on every one of those hits. Measured at 168 ms a hit
+        # before the digest memo landed, with nothing anywhere to say so -- the
+        # remote channel had a cost warning and the local one, which every user
+        # has, did not.
+        local_seconds = 0.0
+        local_count = 0
         with measured_validation() as validation:
             fresh = True
             for path, recorded in snap.items():
-                is_fresh, reason = file_dep_is_fresh(path, recorded)
+                is_remote = isinstance(recorded, dict) and recorded.get("remote")
+                started = time.perf_counter()
+                is_fresh, reason = file_dep_is_fresh(path, recorded, full_hash_max)
+                if not is_remote:
+                    local_seconds += time.perf_counter() - started
+                    local_count += 1
                 if not is_fresh:
                     logger.debug("[FILE_DEP] stale (%s): %s", reason, path)
                     fresh = False
                     break
         Cash._warn_if_validation_is_expensive(validation, metadata)
+        self._warn_if_local_validation_is_expensive(local_seconds, local_count, metadata)
         return fresh
+
+    def _warn_if_local_validation_is_expensive(
+        self, seconds: float, count: int, metadata: CacheMetadata,
+    ) -> None:
+        """Say so when hashing this entry's own files costs a real share of the
+        saving.
+
+        The same rule the remote channel uses (``validation_is_expensive``):
+        more than half the compute it avoids past a 0.25 s floor, or more than
+        2 s outright. Shared deliberately -- "proving it fresh cost more than
+        recomputing would" is one judgement, and it should not depend on whether
+        the input was a file or a URL.
+
+        After the first check of a file this is microseconds (the digest is
+        memoized per process), so reaching the threshold means many
+        dependencies, very large ones, or a slow filesystem. Each of those is
+        something the user can act on, and none of them shows up anywhere else.
+        """
+        if not count or not seconds:
+            return
+        from cash.remote_source import validation_is_expensive
+
+        saved = metadata.execution_time
+        if not validation_is_expensive(seconds, saved):
+            return
+        label = metadata.func_name or "a cached call"
+        against = (
+            f", against {saved:.2f}s of compute it avoids"
+            if saved and saved > 0 else ""
+        )
+        self._warn_once(
+            CashCacheIneffectiveWarning,
+            label,
+            "local-freshness-cost",
+            f"cash spent {seconds:.2f}s checking {count} tracked "
+            f"{'file' if count == 1 else 'files'} for freshness on {label}"
+            f"{against}, so proving the result fresh costs a serious share of "
+            f"what it saves.",
+            code="CACHE-FRESHNESS-COST",
+            fix="depend on fewer or smaller files -- cache a summary rather than "
+                "every input -- or split the function so the expensive inputs are "
+                "read by a callee whose deps the aggregates do not inherit. Note "
+                "that files above file_hash_full_max_bytes are sampled rather "
+                "than hashed in full, which is cheaper per file but not per file "
+                "COUNT.",
+        )
 
     @staticmethod
     def _warn_if_validation_is_expensive(

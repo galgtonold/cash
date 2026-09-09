@@ -97,6 +97,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "CACHE-IF-BYPASSED",       # result outgrew a chunk, so cache_if never ran
     "CACHE-DIR-MOVED",         # the project-anchored default cache dir differs
                                # from an existing cache in the current directory
+    "CACHE-FRESHNESS-COST",    # proving the entry fresh cost a serious share
+                               # of the compute it avoids
     "CACHE-IF-RAISED",         # the cache_if predicate raised
     "CACHE-LOOP-GROWTH",       # a loop is persisting every state of a growing
                                # object, costing the sum of every snapshot

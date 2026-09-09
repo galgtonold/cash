@@ -224,6 +224,44 @@ shared, pre-populated cache you only ever read from). Cash still reads it; only
 new entries are lost. If that is the intent, the warning is telling you the
 truth and there is nothing to fix.
 
+## CACHE-FRESHNESS-COST {#cache-freshness-cost}
+
+<!-- claim: cash/core.py:Cash._warn_if_local_validation_is_expensive @b7e7f0ec, cash/remote_source.py:validation_is_expensive @18292cc6 -->
+**What happened.** Before serving a cached result, cash re-checks every file the
+call read, to be sure none of them changed. On this call that check cost a
+serious share of the compute it saved — more than half of it, or more than two
+seconds outright. Your result was correct and came from the cache; the warning
+is about what proving it cost.
+
+**Why it matters.** A cache hit is supposed to be nearly free. Checking is
+normally microseconds per file after the first look, so reaching this threshold
+means one of three things: the call depends on **many** files, on very **large**
+ones, or the filesystem is slow (a network share, a fuse mount, a spinning disk
+under load). File dependencies also *propagate* — an aggregate that calls ten
+cached functions inherits their inputs — so a wide dependency set is paid for on
+every one of those hits, not once.
+
+**What to do.** Reduce what the entry depends on, or make the dependency
+cheaper:
+
+* **Depend on a summary, not on every input.** A function that reads fifty
+  shards and returns an aggregate can be split: one cached loader per shard, and
+  an aggregate that depends on their *results* rather than inheriting all fifty
+  files.
+* **Split so the inputs are read once.** If the expensive reads live in a callee
+  that the aggregates do not inherit from, only that callee pays the check.
+* **Check the storage.** The same fifty files on a local disk and on an SMB
+  share are not the same cost; the message gives you the seconds to compare.
+* `file_hash_full_max_bytes` decides where cash stops hashing a file in full and
+  starts sampling three regions of it. Sampling is cheaper **per file** and no
+  cheaper per file *count*, so it helps with a few huge inputs and not with
+  hundreds of small ones.
+
+**When it is safe to ignore.** When the numbers say the trade is still worth it
+— half a second of checking against a five-minute pipeline is a good deal, and
+the message prints both. Ignore it once, though, not every run: it fires once per
+function per session precisely so it stays worth reading.
+
 ## CACHE-IF-BYPASSED {#cache-if-bypassed}
 
 **What happened.** You passed `cache_if=` to decide whether a result is worth

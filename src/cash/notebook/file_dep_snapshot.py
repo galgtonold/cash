@@ -33,6 +33,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import os
+import time
 from collections.abc import Iterable
 from typing import Any
 
@@ -105,7 +106,53 @@ _HASH_SAMPLE_REGION_BYTES = 256 * 1024        # 256 KiB per sampled region
 _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 
 
-def file_content_hash(path: str, size: int | None = None) -> str | None:
+#: Digests already computed this process, keyed by the file's identity AND its
+#: stat fields: ``(path, size, mtime_ns, ctime_ns)``.
+#:
+#: Freshness is checked once per cached call, and file dependencies PROPAGATE --
+#: an aggregate that calls ten cached functions inherits their inputs -- so a
+#: pipeline over fifty files re-read and re-hashed all fifty on every one of
+#: those calls. Measured before this memo, warm page cache: 50 files x 2 MiB
+#: cost 168 ms per hit, and 50 x 32 MiB cost 156 ms (per-file overhead
+#: dominates once you have that many). Ten such hits in a run paid it ten times.
+#: With the memo the second and later checks are one ``stat`` each.
+#:
+#: What the key buys, and what it does not. Any write moves ``mtime``, so an
+#: ordinary edit re-hashes immediately. On Linux and macOS ``ctime`` moves on
+#: any write whatever the tool does, so the memo cannot be fooled at all. On
+#: Windows a same-size edit that RESTORES the mtime leaves every key field
+#: identical, and the memo would repeat the digest it already has -- the
+#: sampled regime's blind spot (see ``file_dep_is_fresh``), extended to
+#: fully-hashed files.
+#:
+#: Two rules keep that from mattering, and an existing regression test is what
+#: forced them: ``test_same_size_edit_under_identical_mtime_invalidates`` pins
+#: that a fully-hashed file catches exactly this edit, and a memo keyed on stat
+#: fields alone broke it.
+#:
+#: 1. A file is memoized only once it has been UNTOUCHED for a while
+#:    (``_HASH_MEMO_MIN_AGE_SECONDS``). A file written moments ago is the one
+#:    plausibly still being written; an input from this morning is not. This is
+#:    what keeps "write it, then read it twice in one run" honest.
+#: 2. A digest is reused for a few seconds only (``_HASH_MEMO_TTL_SECONDS``),
+#:    which is what the memo is actually for: one burst of related calls -- ten
+#:    aggregates hitting the same fifty inputs, milliseconds apart. A long-lived
+#:    worker re-hashes each file at most once per window, so what the memo
+#:    borrows is bounded to that window rather than the life of the process.
+#:
+#: Five seconds, not one: the timestamp is when the digest was COMPUTED and is
+#: not refreshed on use, so a window shorter than the pass itself expires
+#: entries mid-pass and re-hashes them. Measured with a one-second window, a
+#: 50-file 400 MiB pass fell back to 151 ms from 49 ms.
+_HASH_MEMO: dict[tuple[str, int, int, int], tuple[float, str]] = {}
+_HASH_MEMO_MAX = 4096
+_HASH_MEMO_TTL_SECONDS = 5.0
+_HASH_MEMO_MIN_AGE_SECONDS = 10.0
+
+
+def file_content_hash(
+    path: str, size: int | None = None, full_hash_max: int | None = None,
+) -> str | None:
     """Return a stable content hash for *path*, or ``None`` if unreadable.
 
     Small files (``<= _full_hash_max_bytes()``) are hashed in full. Larger files
@@ -117,14 +164,40 @@ def file_content_hash(path: str, size: int | None = None) -> str | None:
 
     Determinism is the contract: given the same bytes and size, this returns
     the same digest at snapshot time and at every later freshness check.
+
+    Memoized per process on the file's stat fields — see ``_HASH_MEMO`` for what
+    that costs and what it saves.
+
+    *full_hash_max* lets a caller that checks many files resolve the threshold
+    once instead of per file. That is not a micro-optimisation: reading it from
+    the config costs a full config merge, which walks the directory tree looking
+    for a project marker, and profiling a 50-dependency hit found 7,000
+    ``os.path.exists`` calls and 130 ms spent there -- three times the hashing
+    it was guarding.
     """
+    memo_key = None
     try:
+        st = os.stat(path)
         if size is None:
-            size = os.path.getsize(path)
+            size = st.st_size
+        memoizable = (time.time() - st.st_mtime) > _HASH_MEMO_MIN_AGE_SECONDS
+        if memoizable:
+            memo_key = (path, size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+            cached = _HASH_MEMO.get(memo_key)
+            if cached is not None and (
+                time.monotonic() - cached[0]
+            ) < _HASH_MEMO_TTL_SECONDS:
+                return cached[1]
+    except OSError:
+        logger.debug("[FILE_DEP] Could not stat file for freshness: %s", path)
+        return None
+    try:
+        if full_hash_max is None:
+            full_hash_max = _full_hash_max_bytes()
         h = hashlib.sha256()
         h.update(str(size).encode("ascii"))
         with open(path, "rb") as f:
-            if size <= _full_hash_max_bytes():
+            if size <= full_hash_max:
                 for chunk in iter(lambda: f.read(_HASH_READ_CHUNK), b""):
                     h.update(chunk)
             else:
@@ -137,7 +210,10 @@ def file_content_hash(path: str, size: int | None = None) -> str | None:
                 for off in offsets:
                     f.seek(off)
                     h.update(f.read(_HASH_SAMPLE_REGION_BYTES))
-        return h.hexdigest()
+        digest = h.hexdigest()
+        if memo_key is not None and len(_HASH_MEMO) < _HASH_MEMO_MAX:
+            _HASH_MEMO[memo_key] = (time.monotonic(), digest)
+        return digest
     except OSError:
         logger.debug("[FILE_DEP] Could not hash file for freshness: %s", path)
         return None
@@ -151,16 +227,17 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
     only when the file cannot be read at snapshot time.
     """
     snapshot: dict[str, dict[str, Any]] = {}
+    full_hash_max = _full_hash_max_bytes()
     for f in paths:
         try:
             st = os.stat(f)
         except OSError:
             continue
         entry: dict[str, Any] = {"mtime": st.st_mtime, "size": st.st_size}
-        content_hash = file_content_hash(f, st.st_size)
+        content_hash = file_content_hash(f, st.st_size, full_hash_max)
         if content_hash is not None:
             entry["hash"] = content_hash
-        if st.st_size > _full_hash_max_bytes():
+        if st.st_size > full_hash_max:
             # Sampled regime only, where mtime is load-bearing rather than a
             # convenience -- see ``file_dep_is_fresh``. On POSIX ``st_ctime``
             # is the inode CHANGE time: it moves on any write and no ordinary
@@ -295,7 +372,9 @@ def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
     return float(value.get('mtime', 0.0)), value.get('size')
 
 
-def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool, str | None]:
+def file_dep_is_fresh(
+    resolved_path: str, stored: dict[str, Any], full_hash_max: int | None = None,
+) -> tuple[bool, str | None]:
     """Return ``(is_fresh, stale_reason)`` for a resolved file dependency.
 
     *stored* is a snapshot entry (``{'mtime', 'size'[, 'hash']}``). The size is
@@ -347,11 +426,13 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     if stored_size is not None and st.st_size != stored_size:
         return False, "size"
     if stored_hash is not None:
-        cur_hash = file_content_hash(resolved_path, st.st_size)
+        if full_hash_max is None:
+            full_hash_max = _full_hash_max_bytes()
+        cur_hash = file_content_hash(resolved_path, st.st_size, full_hash_max)
         if cur_hash != stored_hash:
             return False, "content"
         # Full-hashed file: content is authoritative, mtime ignored.
-        if st.st_size <= _full_hash_max_bytes():
+        if st.st_size <= full_hash_max:
             return True, None
         # Sampled file: the hash only covers head/middle/tail, so trust it only
         # when the timestamps also match — otherwise a same-size edit outside
