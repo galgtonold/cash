@@ -21,12 +21,12 @@ Three things came out of it:
 
 Above 64 MiB the sampled regime is still the sampled regime, and the timestamp
 comparison is what stands in for the bytes the hash never reads. It compares
-the integer nanoseconds exactly now, which splits the mtime-restoring family
-in two: a tool that puts back whole seconds (``tar``, ``rsync -a``) cannot
-reproduce the original nanoseconds and is caught, while one that puts back the
-exact nanoseconds (``cp -p``, ``shutil.copystat``) still is not -- on Windows,
-where there is no inode change time. Both arms are characterised here, at a
-lowered threshold rather than with a 130 MiB fixture.
+the integer nanoseconds exactly now, and what that catches depends on the
+resolution the restoring tool stores: whole seconds (a plain ``tar`` ustar
+header, rsync's protocol) cannot reproduce them and is caught; the exact
+nanoseconds (``cp -p``, ``shutil.copystat``, GNU tar's pax headers) still are
+not -- on Windows, where there is no inode change time. Both arms are
+characterised here, at a lowered threshold rather than with a 130 MiB fixture.
 """
 from __future__ import annotations
 
@@ -71,20 +71,27 @@ def _big_csv(path, mib=9):
 _EDITS = iter(range(11, 99))
 
 
-def _edit_in_place_preserving_mtime(path, exact_ns=True):
-    """Rewrite one interior row and put the timestamps back.
+def _edit_in_place_preserving_mtime(path, restore="exact"):
+    """Rewrite one interior row and put the timestamp back.
 
-    *exact_ns* is the difference between the two families of restoring tool,
-    and since the timestamp comparison became exact it is also the difference
-    between missed and caught:
+    How precisely the timestamp comes back is what decides whether the exact
+    comparison sees the edit, so the restoring tool's own resolution matters:
 
-    * ``True`` puts back the integer nanoseconds -- ``cp -p`` (``utimensat``
-      with the source's full precision), ``shutil.copystat``,
-      ``robocopy /COPY:T``. Indistinguishable from no edit at all.
-    * ``False`` puts back the float seconds -- plain ``tar`` (ustar headers
-      carry whole seconds), ``rsync -a`` (whole seconds), and any script that
-      round-trips the value through ``st_mtime``. Measured, that lands 200 ns
-      off the original, which the exact comparison sees.
+    * ``"exact"`` -- the integer nanoseconds, which is what ``cp -p`` passes to
+      ``utimensat``, and what ``shutil.copystat`` and ``robocopy /COPY:T`` do.
+      Indistinguishable from no edit at all.
+    * ``"seconds"`` -- whole seconds, the resolution a plain ``tar`` ustar
+      header and rsync's protocol carry. The sub-second part is dropped, so
+      the restored value always differs and the edit is always caught.
+
+    A third case is deliberately NOT asserted anywhere: a float round-trip
+    (``os.utime(p, (st.st_atime, st.st_mtime))``, what a Python script that
+    reads and writes ``st_mtime`` does). Whether the double reproduces the
+    original nanoseconds is a property of the value, not of the code --
+    measured over 300 live NTFS timestamps, it survived 46% of the time and
+    landed 100-200 ns off the rest. An arm built on that is a coin flip, and
+    it flipped: this test passed alone and failed after its neighbour, because
+    the two files' mtimes happened to differ in representability.
 
     A DIFFERENT value every call: two arms editing the same offset with the
     same bytes leave the file unchanged, and the second arm then "misses" an
@@ -98,10 +105,13 @@ def _edit_in_place_preserving_mtime(path, exact_ns=True):
         fh.seek(size // 4)
         fh.seek(-(size // 4) % 14, 1)      # land on a row boundary
         fh.write(row)
-    if exact_ns:
+    if restore == "exact":
         os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    elif restore == "seconds":
+        os.utime(path, ns=(before.st_atime_ns,
+                           (before.st_mtime_ns // 1_000_000_000) * 1_000_000_000))
     else:
-        os.utime(path, (before.st_atime, before.st_mtime))
+        raise AssertionError(f"unknown restore mode {restore!r}")
     return before
 
 
@@ -173,23 +183,26 @@ def test_the_default_catches_the_stealth_edit(tmp_path):
     assert len(runs) == 2
 
 
-def test_a_coarse_timestamp_restore_is_caught_anywhere(sampled_regime, tmp_path):
+def test_a_whole_second_restore_is_caught_anywhere(sampled_regime, tmp_path):
     """The half of the mtime-restoring family that the exact comparison sees.
 
-    A tool that puts the timestamp back from whole seconds -- ``tar``,
-    ``rsync -a``, a script round-tripping ``st_mtime`` -- cannot reproduce the
-    original nanoseconds, so the restored value differs and the edit is caught
-    on every platform, sampled or not. Before the comparison became exact, a
-    10 ms tolerance swallowed the difference (measured: 200 ns).
+    A tool whose format carries only whole seconds -- a plain ``tar`` ustar
+    header, rsync's protocol -- drops the sub-second part, so the restored
+    value always differs from the recorded one and the edit is caught on every
+    platform. Under the old 10 ms tolerance the difference had to exceed 10 ms
+    to count; a restore that lands in the same second never did.
+
+    (GNU tar's pax extended headers do carry nanoseconds, and that shape
+    belongs with ``cp -p`` in the test below rather than here.)
     """
     path = _big_csv(str(tmp_path / "big.csv"))
     read_total, runs = _reader(str(tmp_path / "cache"))
 
     first = read_total(path)
     time.sleep(1.1)
-    _edit_in_place_preserving_mtime(path, exact_ns=False)
+    _edit_in_place_preserving_mtime(path, restore="seconds")
 
-    assert read_total(path) != first, "a coarse timestamp restore hid an edit"
+    assert read_total(path) != first, "a whole-second timestamp restore hid an edit"
     assert len(runs) == 2
 
 
@@ -209,7 +222,7 @@ def test_a_nanosecond_exact_restore_is_still_blind_on_windows(sampled_regime,
 
     first = read_total(path)
     time.sleep(1.1)
-    _edit_in_place_preserving_mtime(path, exact_ns=True)
+    _edit_in_place_preserving_mtime(path, restore="exact")
     second = read_total(path)
 
     if sys.platform == "win32":

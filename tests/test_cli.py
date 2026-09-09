@@ -112,7 +112,9 @@ class TestCLIClear:
         monkeypatch.chdir(tmp_path)
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
+        (cache_dir / "CACHE_VERSION").write_text("1")
         (cache_dir / "file.data").write_bytes(b"data")
+        monkeypatch.setenv("CASH_CACHE_DIR", str(cache_dir))
 
         from types import SimpleNamespace
         cmd_clear(SimpleNamespace(path=None, all=True))
@@ -125,12 +127,19 @@ class TestCLIClear:
             cmd_clear(SimpleNamespace(path=None, all=False))
 
     def test_clear_all_no_cache(self, tmp_path, capsys, monkeypatch):
-        """Clear --all when no .cash dir exists."""
+        """Clear --all when the resolved cache directory does not exist.
+
+        The message names the directory now, because `--all` no longer means
+        "./.cash" -- it means whatever the config resolved to, which the user
+        may not be standing in (CAS-83).
+        """
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
         from types import SimpleNamespace
         cmd_clear(SimpleNamespace(path=None, all=True))
         captured = capsys.readouterr()
-        assert "No .cash directory" in captured.out
+        assert "No cache directory found at" in captured.out
+        assert str(tmp_path) in captured.out
 
     def test_clear_nonexistent_path(self, capsys):
         """Clear nonexistent path should fail."""

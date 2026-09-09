@@ -749,12 +749,14 @@ One shape gets through all of it, and it takes every one of these at once:
 5. you are on **Windows**, where `st_ctime` is the creation time and does not
    move on a write.
 
-Condition 4 is narrower than it sounds. `cp -p`, `shutil.copystat` and
-`robocopy /COPY:T` restore the exact nanoseconds. `tar`, `rsync -a` and any
-script that round-trips the value through `st_mtime` restore whole seconds or a
-rounded float, which cannot reproduce the original and **is** caught. On Linux
-and macOS condition 5 fails too: the inode change time moves on any write and
-no ordinary tool puts it back, so the edit is caught there regardless.
+Condition 4 is narrower than it sounds, because it depends on the resolution
+the restoring tool actually stores. `cp -p`, `shutil.copystat`,
+`robocopy /COPY:T` and GNU tar's pax headers carry the full nanoseconds and
+reproduce them exactly. A format that carries only whole seconds — a plain
+`tar` ustar header, rsync's protocol — drops the sub-second part, so the
+restored timestamp differs and the edit **is** caught. On Linux and macOS
+condition 5 fails too: the inode change time moves on any write and no ordinary
+tool puts it back, so the edit is caught there regardless.
 
 **What to do:** raise the threshold above the file, and content decides again
 on every platform:
