@@ -28,6 +28,22 @@ The "double check" is the read on step 2 — the first check was the lock-free r
 
 Acquisition, compute, and release are deliberately separated. If **acquisition** raises anything at all, the helper emits a `CashCacheIneffectiveWarning` via `_warn_lock_failed` and falls through to an unlocked compute — the user's function still runs and the result is still cached, so the redundancy guarantee is best-effort, not absolute. If **release** fails, it is logged at debug and swallowed so a release error can't re-run the compute. A **compute** exception propagates normally and is never mistaken for a lock failure.
 
+### Single-flight is a property of one key, so the first call has to agree on it
+
+<!-- claim: cash/core.py:Cash._ensure_closure_analyzed @ecd28b28 -->
+A lock coalesces the callers that ask for **the same cache key**. On the very
+first call of a process there is one more thing to get right: the key itself.
+Cash folds the source of the helpers a function calls into its key, and that
+information is populated by a one-time analysis on first use — so concurrent
+first callers must not resolve their keys while it is still running, or they
+end up in two groups that each single-flight correctly and compute twice.
+
+That is exactly what happened before this was serialised, and it looked like a
+lock bug: with eight threads, five shared one key and one thread had another,
+so the body ran twice at 2, 4, 8 and 16 threads alike, with N−2 blocking
+correctly. The one-time analysis now runs under a lock of its own, which is
+what makes the guarantee hold from the first call rather than from the second.
+
 ## Enabling
 
 ```python

@@ -205,11 +205,16 @@ def parquet_stubs(tmp_path, monkeypatch):
         "amount\n10.0\n20.0\n30.0\n", encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
-    # Isolation, stated rather than inherited: the default cache directory
-    # follows the PROJECT now, not the cwd, so a chdir alone no longer gives a
-    # page its own cache. An env var is taken exactly as written, relative to
-    # the cwd -- so this is the old behaviour, said out loud.
-    monkeypatch.setenv("CASH_CACHE_DIR", ".cash")
+    # Isolation, stated rather than inherited, and ABSOLUTE.
+    #
+    # This page's cache used to be its own because the default cache_dir was
+    # relative and every page chdir'd here. The default now follows the project
+    # instead, so that no longer isolates anything -- and a relative value here
+    # would not either: an env var is taken exactly as written and resolved by
+    # whatever the cwd is when the backend is built, which is not necessarily
+    # after this chdir. An absolute path removes the question, and with it a
+    # doc page reading an entry some other test left in the repo's own .cash.
+    monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
 
     if "pandas" not in sys.modules:
         import types

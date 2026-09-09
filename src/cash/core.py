@@ -704,6 +704,28 @@ class Cash:
             # including the ``atexit.register(self.shutdown)`` further down.)
             atexit.register(self._print_run_summary)
         self._analyzed = set() # Track which functions we've *surfaced* purity for
+        # ONE lock for the one-time analysis, whatever function triggers it.
+        #
+        # The check-and-analyze below is not atomic, and the CACHE KEY depends
+        # on what the analysis populates (helper source hashes, graph edges).
+        # Concurrent first calls therefore resolved two different keys for one
+        # call -- the threads that got there before the analysis finished, and
+        # the one that did it -- so `use_locking=True` looked like it admitted
+        # exactly two threads into the compute at every thread count. It was
+        # not the lock: each key was single-flighted correctly, there were just
+        # two of them, and the pre-analysis one is an entry no later run will
+        # ever look up. Measured: warming the analysis in the main thread first
+        # collapsed 6 threads to one key and one execution.
+        #
+        # RLock, not Lock: analysis walks the dependency graph and re-enters
+        # this same guard for the callees it populates on the way.
+        #
+        # One lock rather than one per function, deliberately. Analysis of f
+        # populates f's whole callee closure, so per-function locks could be
+        # taken in two orders by two threads and deadlock. It is a one-time,
+        # source-reading step measured in milliseconds; serialising unrelated
+        # first calls behind it costs nothing worth a lock-ordering rule.
+        self._analysis_lock = threading.RLock()
         # Track which functions have had their graph edges + purity report
         # populated (separate from _analyzed: a dependency can be populated to
         # complete a parent's state hash long before it is called directly and
@@ -2405,8 +2427,12 @@ class Cash:
             call_start = time.perf_counter()
 
             if func_name not in self._analyzed:
-                self._analyze_dependencies(func)
-                self._analyzed.add(func_name)
+                # Double-checked under a per-function lock: the key is built
+                # from what this populates, so two threads must not race it.
+                with self._analysis_lock:
+                    if func_name not in self._analyzed:
+                        self._analyze_dependencies(func)
+                        self._analyzed.add(func_name)
             # Inherit the shortest TTL of any TTL'd dependency (computed after
             # analysis populates the graph). `ttl` shadows the declared one for
             # the rest of the wrapper.
@@ -2571,8 +2597,12 @@ class Cash:
             call_start = time.perf_counter()
 
             if func_name not in self._analyzed:
-                self._analyze_dependencies(func)
-                self._analyzed.add(func_name)
+                # Double-checked under a per-function lock: the key is built
+                # from what this populates, so two threads must not race it.
+                with self._analysis_lock:
+                    if func_name not in self._analyzed:
+                        self._analyze_dependencies(func)
+                        self._analyzed.add(func_name)
             # Inherit the shortest TTL of any TTL'd dependency (see sync wrapper).
             ttl = self._effective_ttl(func_name, ttl_decl)
 
@@ -6536,7 +6566,21 @@ class Cash:
         traverses the dependency edges - even when the root is already
         populated - so a dependency invalidated by a source edit gets
         re-populated. The local ``seen`` set bounds cyclic graphs.
+
+        Under ``self._analysis_lock`` because the CACHE KEY is built from what
+        this populates. Concurrent first calls otherwise resolved two different
+        keys for one call -- the threads that arrived mid-population, and the
+        one doing it -- which is what made ``use_locking=True`` look like it
+        admitted exactly two threads at every thread count. Both paths into
+        this must hold the lock: the wrapper's one-time analysis AND
+        ``explain()``, which populates the closure directly and would otherwise
+        race it back apart.
         """
+        with self._analysis_lock:
+            self._ensure_closure_analyzed_locked(func)
+
+    def _ensure_closure_analyzed_locked(self, func: Callable[..., Any]) -> None:
+        """The body of ``_ensure_closure_analyzed``, with the lock already held."""
         stack = [func]
         seen: set[str] = set()
         while stack:
