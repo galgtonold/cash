@@ -236,7 +236,7 @@ within the module; name cross-module dependencies with
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @e1ad9a28 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @116d1850 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on
@@ -251,6 +251,11 @@ def load():
 
 Auto-tracking fingerprints file **content**; to name a file cash can't see you
 read, use [`file_depends_on=`](#file_depends_on-name-a-file-explicitly).
+
+A file that was **not** there counts as well. `if os.path.exists("cfg.toml")`
+coming back False is an input — it chose the defaults branch — so the entry it
+produced stops being valid once that file appears, including when the same
+relative name resolves into a directory that has one.
 
 ### Module globals a function reads
 
@@ -282,9 +287,16 @@ in would invalidate the function on its own output. That exclusion applies
 to a helper's own accumulator too. A read global whose value can't be hashed
 warns once rather than failing the call.
 
+Dunder-named constants count too: bumping a module's `__version__` invalidates
+whatever read it. The import machinery's own dunders — `__file__`, `__name__`,
+`__doc__` and friends — are the exception, and deliberately: they differ
+between two checkouts of the same project and between `python job.py` and
+`python -m job`, so folding them would make a cache un-shareable.
+
 **Reading includes passing it to something.** `sum(G)`, `len(G)`,
 `helper(G)` and `model.predict(G)` all count, so changing `G` invalidates
-in each case. If cash then observes that *calling your function* is what
+in each case — as does reading it through a non-writing method of its own,
+`G.get(k)` or `G.keys()`. If cash then observes that *calling your function* is what
 changed `G` — a helper that appends to it, say — it stops tracking that one
 name and warns, because a value the call itself moves would key every entry
 on the previous call's output. The rest of the function keeps caching
@@ -342,14 +354,16 @@ and stopping there keeps the key from churning.
 
 Two boundaries worth knowing:
 
-- **This is the *data* path, and the exclusion is the method receiver.** An
-  object you call a method on directly (`obj.transform(x)`) is excluded from
-  value-folding — it might mutate, see the write/mutate rule above — and
-  rebinding it does not invalidate. A directly *called* method's own edit is
-  still caught, by the helper-source channel; only a method reached **solely**
-  through such an excluded object can be missed. Handing the object to something
-  else instead (`helper(OBJ, rows)`) is a *read*, so both its value and its
-  class's source fold, exactly as the rule above says.
+- **This is the *data* path, and the exclusion is a WRITING method call.**
+  Calling a method that writes (`obj.append(...)`, `obj.update(...)`,
+  `obj.sort()` — the mutating verbs) excludes the receiver from value-folding:
+  it is an accumulator, and folding a value the call itself moves would key
+  every entry on the previous call's output. Every other method call is a read:
+  `ALIASES.get(v)`, `TABLE.keys()`, `text.upper()` fold the receiver's value
+  like any other global, and a method cash's table does not know about is folded
+  and then dropped if calling your function is observed to move the value.
+  A directly *called* method's own edit is caught separately, by the
+  helper-source channel.
 - **Source is assumed stable within a process.** cash reads a class's source
   once per interpreter run. Editing a class's source *between two calls in the
   same running process* is out of scope — that only happens with live

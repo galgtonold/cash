@@ -3156,7 +3156,9 @@ class Cash:
             # capture outright. "Passed to a call" is provisional: folded, then
             # confirmed by observation (CAS-270). Before this split, `sum(data)`
             # put `data` beyond the fold and the closure served stale forever.
-            result = Cash._unsafe_uses_of(tree, freevars, bare_args=False)
+            result = Cash._unsafe_uses_of(
+                tree, freevars, bare_args=False, mutating_methods_only=True,
+            )
             provisional = Cash._unsafe_uses_of(tree, freevars) - result
         if len(self._capture_use_cache) < 4096:
             self._capture_use_cache[code] = result
@@ -3167,35 +3169,47 @@ class Cash:
 
     @staticmethod
     def _unsafe_uses_of(tree: ast.AST, names: set[str], *,
-                        bare_args: bool = True) -> frozenset:
+                        bare_args: bool = True,
+                        mutating_methods_only: bool = False) -> frozenset:
         """Return the subset of *names* the AST body *may mutate*.
 
-        Disqualifying uses of a name ``n``: method calls on it (``n.append(...)``
-        — any method, since we can't prove purity), passing it as a bare argument
-        (the callee may mutate), subscript/attribute stores or aug-assigns rooted
-        at it, and ``del``. Iteration, subscript reads, and arithmetic stay safe.
-        Shared by the closure-capture and module-global folds.
+        Disqualifying uses of a name ``n``: method calls on it
+        (``n.append(...)``), passing it as a bare argument (the callee may
+        mutate), subscript/attribute stores or aug-assigns rooted at it, and
+        ``del``. Iteration, subscript reads, and arithmetic stay safe. Shared by
+        the closure-capture and module-global folds.
 
-        ``bare_args=False`` drops the "passed as an argument" rule, leaving only
-        uses that are *provably* a mutation in this function's own source. The
-        difference between the two calls is the PROVISIONAL set: names with no
-        positive evidence against them, which the argument rule was refusing
-        purely because an opaque callee *might* mutate them.
+        Two knobs, and both exist to move a *suspicion* out of the HARD set and
+        into the provisional one, where it is folded and then confirmed at
+        runtime by ``_learn_mutating_captures``.
 
-        That refusal was over-broad, and it chose the worse failure. `sum(G)`,
-        `len(G)`, `helper(G)` and `model.predict(G)` all put `G` beyond the
-        argument rule, so a later `G = ...` never reached the key and the
-        function served a stale value forever, silently (CAS-270). Only
-        iteration and subscript reads survived. Callers now fold the
-        provisional names and confirm at runtime — see
-        ``_learn_mutating_captures``.
+        ``bare_args=False`` drops the "passed as an argument" rule. That refusal
+        was over-broad and chose the worse failure: `sum(G)`, `len(G)`,
+        `helper(G)` and `model.predict(G)` all put `G` beyond it, so a later
+        `G = ...` never reached the key and the function served a stale value
+        for ever, silently (CAS-270).
+
+        ``mutating_methods_only=True`` narrows the method-call rule to methods
+        that actually write -- ``append``, ``update``, ``sort`` and their
+        relatives, the same table the purity analyzer uses. "Any method, since
+        we cannot prove purity" made the same over-broad choice one level down,
+        and a round-16 tester paid for it: a lookup table read as
+        ``ALIASES.get(v, v)`` never reached the key, so editing the table
+        published stale labels with nothing to see. `ALIASES[v]`, `v in
+        ALIASES`, `d = ALIASES; d.get(v)` and a bare read all tracked
+        correctly, which is what made it so hard to believe.
         """
         unsafe: set[str] = set()
+        write_methods: frozenset[str] = frozenset()
+        if mutating_methods_only:
+            from cash.notebook.purity import _WRITE_METHODS
+            write_methods = _WRITE_METHODS
         for node in ast.walk(tree):
             if isinstance(node, ast.Call):
                 f = node.func
                 if (isinstance(f, ast.Attribute) and isinstance(f.value, ast.Name)
-                        and f.value.id in names):
+                        and f.value.id in names
+                        and (not mutating_methods_only or f.attr in write_methods)):
                     unsafe.add(f.value.id)
                 if bare_args:
                     for a in list(node.args) + [kw.value for kw in node.keywords]:
@@ -3595,11 +3609,29 @@ class Cash:
             if isinstance(const, types.CodeType):
                 yield from Cash._iter_code_scopes(const)
 
+    #: Dunder globals that are machine or import machinery, never user data.
+    #:
+    #: Every dunder used to be skipped, which is right for these -- ``__file__``
+    #: and ``__name__`` differ per checkout and per invocation, so folding them
+    #: would make a cache key un-shareable between two machines and between
+    #: ``python job.py`` and ``python -m job``. It is wrong for the ones a
+    #: library actually declares: a round-16 tester bumped ``__version__``,
+    #: watched it invalidate NOTHING, and kept publishing a report stamped with
+    #: the old version through three further edits that each correctly
+    #: invalidated other stages. ``RELEASE`` and ``LEVEL`` in the same file were
+    #: tracked; only the dunder spelling was not.
+    _MACHINERY_DUNDERS = frozenset({
+        "__name__", "__file__", "__doc__", "__package__", "__loader__",
+        "__spec__", "__builtins__", "__path__", "__cached__", "__debug__",
+        "__annotations__", "__dict__", "__module__", "__qualname__",
+    })
+
     def _read_global_data_names(self, func: Callable) -> tuple[str, ...]:
         """Global names *func* references that are candidates for data-folding.
 
-        ``co_names`` intersected with the function's globals, minus dunders
-        and minus any global the function WRITES (``STORE_GLOBAL`` /
+        ``co_names`` intersected with the function's globals, minus the import
+        machinery dunders (``_MACHINERY_DUNDERS``) and minus any global the
+        function WRITES (``STORE_GLOBAL`` /
         ``DELETE_GLOBAL``). A written global is a side-effect accumulator (a
         ``global counter; counter += 1``) whose value drifts every call - folding
         it would make every call miss (the lesson, applied to globals).
@@ -3632,7 +3664,7 @@ class Cash:
         }
         candidates = {
             n for scope in scopes for n in (scope.co_names or ())
-            if n in g and not n.startswith("__") and n not in written
+            if n in g and n not in Cash._MACHINERY_DUNDERS and n not in written
         }
         # Also exclude globals the body mutates IN PLACE (``g['k'] += 1``,
         # ``g.append(...)``) - a STORE_GLOBAL-free accumulator that would
@@ -3648,7 +3680,9 @@ class Cash:
         if candidates:
             try:
                 tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
-                hard = Cash._unsafe_uses_of(tree, candidates, bare_args=False)
+                hard = Cash._unsafe_uses_of(
+                    tree, candidates, bare_args=False, mutating_methods_only=True,
+                )
                 provisional = Cash._unsafe_uses_of(tree, candidates) - hard
                 candidates -= hard
             except SOURCE_RETRIEVAL_ERRORS:
