@@ -267,3 +267,73 @@ def test_a_real_script_is_still_the_anchor_without_a_shell(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
 
     assert cash_config.project_anchor() == project.resolve()
+
+# --------------------------------------------------------------------------- #
+# Spawned workers must anchor where their parent did                           #
+# --------------------------------------------------------------------------- #
+
+_POOL_MAIN = """
+from concurrent.futures import ProcessPoolExecutor
+
+from .work import where
+
+
+def main():
+    print("PARENT", where(), flush=True)
+    with ProcessPoolExecutor(max_workers=1) as pool:
+        print("WORKER", list(pool.map(where, [1]))[0], flush=True)
+
+
+if __name__ == "__main__":
+    main()
+"""
+
+_POOL_WORKER = """
+import cash
+
+
+def where(_=None):
+    return cash.get_config().cache_dir
+"""
+
+
+def test_a_spawned_worker_anchors_where_its_parent_did(tmp_path):
+    """One run, one cache directory -- even across a process pool.
+
+    Run as ``python -m pkg``, a spawned worker has no ``__main__.__file__`` and
+    no ``__spec__``, so the anchor fell back to the cwd while the parent had
+    anchored to its project: one fan-out wrote into two cache directories and
+    neither side could see the other's entries. A round-16 tester measured that
+    3/3 and named the cost -- the whole point of a shared cache across workers,
+    defeated silently.
+
+    The ``-m`` form is load-bearing here. With a plain ``python run.py`` parent
+    the child DOES inherit ``__main__.__file__`` and the two already agreed, so
+    a fixture built that way passes against the unfixed code. What the worker
+    always inherits is ``sys.argv[0]``, which is what the anchor falls back to
+    now.
+    """
+    project = tmp_path / "proj"
+    pkg = project / "pkg"
+    pkg.mkdir(parents=True)
+    (project / "pyproject.toml").write_text(
+        '[project]\nname = "demo"\nversion = "0"\n', encoding="utf-8",
+    )
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "__main__.py").write_text(textwrap.dedent(_POOL_MAIN), encoding="utf-8")
+    (pkg / "work.py").write_text(textwrap.dedent(_POOL_WORKER), encoding="utf-8")
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    env = dict(os.environ, PYTHONPATH=str(project))
+    env.pop("CASH_CACHE_DIR", None)
+
+    proc = subprocess.run([sys.executable, "-m", "pkg"], cwd=str(elsewhere),
+                          env=env, capture_output=True, text=True, timeout=300)
+    assert proc.returncode == 0, proc.stderr[-2000:]
+
+    lines = dict(line.split(" ", 1) for line in proc.stdout.splitlines() if " " in line)
+    assert lines["PARENT"] == lines["WORKER"], (
+        f"one run resolved two cache directories: {lines}"
+    )
+    assert lines["PARENT"] == str(project / ".cash")

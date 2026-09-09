@@ -1,7 +1,7 @@
 """Regression: a same-size edit to a >8 MiB file OUTSIDE the sampled hash
 regions must invalidate the dependency.
 
-``file_content_hash`` hashes files up to ``_HASH_FULL_MAX_BYTES`` in full but
+``file_content_hash`` hashes files up to ``file_hash_full_max_bytes`` in full but
 SAMPLES larger files at three fixed head/middle/tail regions. ``file_dep_is_fresh``
 used to treat that hash as authoritative whenever the size matched (mtime
 ignored, CAS-98) — so a same-size in-place edit outside every sampled region
@@ -14,6 +14,12 @@ touch-tolerant CAS-98 behavior unchanged.
 
 Run through ``scripts/fails_first.py`` to confirm the outside-sample case fails
 without the fix.
+
+The backstop has a hole of its own, found by two round-16 testers
+independently: an edit that RESTORES the mtime afterwards satisfies it. See
+``test_sampled_file_freshness_backstops.py`` for that case, the second
+timestamp that closes it on POSIX, and the threshold knob that closes it
+anywhere.
 """
 from __future__ import annotations
 
@@ -22,7 +28,7 @@ import os
 import pytest
 
 from cash.notebook.file_dep_snapshot import (
-    _HASH_FULL_MAX_BYTES,
+    _HASH_FULL_MAX_BYTES_DEFAULT as _HASH_FULL_MAX_BYTES,
     _HASH_SAMPLE_REGION_BYTES,
     file_dep_is_fresh,
     snapshot_file_deps,

@@ -185,6 +185,20 @@ class CashConfig:
     values reduce data loss on crash but increase disk I/O. Set to
     0 to flush after every write (slowest, safest)."""
 
+    file_hash_full_max_bytes: int = 8 * 1024 * 1024
+    """Largest tracked file hashed IN FULL when checking freshness.
+
+    Above this, the content hash covers three deterministic head/middle/tail
+    regions plus the size, and the file's timestamps are used as a backstop —
+    which keeps a freshness check on a multi-GB parquet cheap, and leaves one
+    hole: a same-size edit *outside* the sampled regions whose mtime is then
+    restored (`cp -p`, `rsync -a`, `tar -x`) is invisible. On Linux and macOS
+    the inode change time closes that; on Windows it does not.
+
+    Raise this to hash more of your inputs in full — the cost is about
+    0.72 ms per MiB, paid on every cache hit that depends on the file, so
+    64 MiB costs roughly 46 ms a check."""
+
     shutdown_write_timeout: float = 60.0
     """Seconds a finishing process waits for its background cache
     writes before exiting without them.
@@ -560,7 +574,21 @@ def _running_script_dir() -> Path | None:
     main = sys.modules.get("__main__")
     raw = getattr(main, "__file__", None)
     if not raw:
-        return None
+        # A spawned multiprocessing worker has no ``__main__.__file__`` and no
+        # ``__spec__`` -- but it does inherit the parent's ``sys.argv[0]``.
+        # Without this the parent anchored to its project and every pool worker
+        # fell back to the cwd, so one run wrote into two cache directories and
+        # neither side could see the other's entries. A round-16 tester
+        # measured exactly that, 3/3, and it defeats the whole point of a
+        # shared cache across a fan-out.
+        #
+        # Only a real file counts, which is what keeps the interpreter's own
+        # invocations out: ``python -c`` leaves ``-c`` here, a REPL leaves the
+        # empty string, and an installed console script is filtered below like
+        # any other path inside the interpreter's installation.
+        raw = sys.argv[0] if sys.argv else None
+        if not raw or not str(raw).endswith(".py") or not os.path.isfile(raw):
+            return None
     try:
         path = Path(raw).resolve()
     except OSError:

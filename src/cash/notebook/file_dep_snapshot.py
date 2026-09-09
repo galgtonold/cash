@@ -70,7 +70,37 @@ _ABSENT_MARKER = "absent"
 # deterministically (head / middle / tail) so hashing a multi-GB parquet on
 # every freshness check stays cheap. The sample is a function of the file size
 # only, so snapshot-time and check-time hashes are computed identically.
-_HASH_FULL_MAX_BYTES = 8 * 1024 * 1024        # 8 MiB
+_HASH_FULL_MAX_BYTES_DEFAULT = 8 * 1024 * 1024        # 8 MiB
+
+
+def _full_hash_max_bytes() -> int:
+    """Largest file hashed IN FULL rather than sampled.
+
+    Configurable (``file_hash_full_max_bytes``) because the sampled regime has
+    a hole that cost two round-16 testers a wrong answer each: a same-size
+    interior edit with the mtime restored is invisible to both the sample and
+    the mtime backstop. Raising this closes it, and the price is real and
+    measurable -- a full hash costs about 0.72 ms per MiB, on every freshness
+    check, i.e. on every cache HIT that depends on the file.
+
+    Resolved per call rather than at import so ``cash.configure(...)`` takes
+    effect; falls back to the default when the config layer is unavailable.
+    """
+    try:
+        # The LIVE config first: ``cash.configure(...)`` updates the singleton's
+        # config in place, while ``get_config()`` re-merges env and TOML from
+        # disk and would not see it. Falls through to the merged one for a
+        # process that has not built a Cash yet.
+        import cash
+
+        config = getattr(getattr(cash, "_global_cash", None), "config", None)
+        if config is None:
+            from cash.config import get_config
+            config = get_config()
+        value = int(config.file_hash_full_max_bytes)
+    except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
+        return _HASH_FULL_MAX_BYTES_DEFAULT
+    return value if value > 0 else _HASH_FULL_MAX_BYTES_DEFAULT
 _HASH_SAMPLE_REGION_BYTES = 256 * 1024        # 256 KiB per sampled region
 _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 
@@ -78,7 +108,7 @@ _HASH_READ_CHUNK = 1024 * 1024                # 1 MiB streaming chunk
 def file_content_hash(path: str, size: int | None = None) -> str | None:
     """Return a stable content hash for *path*, or ``None`` if unreadable.
 
-    Small files (``<= _HASH_FULL_MAX_BYTES``) are hashed in full. Larger files
+    Small files (``<= _full_hash_max_bytes()``) are hashed in full. Larger files
     are sampled at three deterministic, size-derived offsets (head, middle,
     tail) so the cost is bounded while still catching the overwhelming majority
     of edits. The byte length is folded into the digest so a change that leaves
@@ -94,7 +124,7 @@ def file_content_hash(path: str, size: int | None = None) -> str | None:
         h = hashlib.sha256()
         h.update(str(size).encode("ascii"))
         with open(path, "rb") as f:
-            if size <= _HASH_FULL_MAX_BYTES:
+            if size <= _full_hash_max_bytes():
                 for chunk in iter(lambda: f.read(_HASH_READ_CHUNK), b""):
                     h.update(chunk)
             else:
@@ -130,6 +160,15 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
         content_hash = file_content_hash(f, st.st_size)
         if content_hash is not None:
             entry["hash"] = content_hash
+        if st.st_size > _full_hash_max_bytes():
+            # Sampled regime only, where mtime is load-bearing rather than a
+            # convenience -- see ``file_dep_is_fresh``. On POSIX ``st_ctime``
+            # is the inode CHANGE time: it moves on any write and no ordinary
+            # tool restores it, so it catches the edit that `cp -p`, `rsync -a`
+            # or `tar -x` hides by putting mtime back. On Windows it is the
+            # creation time and this buys nothing, which is why it is recorded
+            # as an extra signal rather than relied on.
+            entry["ctime"] = st.st_ctime
         snapshot[f] = entry
     return snapshot
 
@@ -268,7 +307,7 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     before content hashing (no ``hash`` key) fall back to the old mtime
     tolerance so pre-existing cache entries keep working.
 
-    **Sampled-file backstop.** For files larger than ``_HASH_FULL_MAX_BYTES``
+    **Sampled-file backstop.** For files larger than ``_full_hash_max_bytes()``
     the content hash only covers three fixed head/middle/tail regions (see
     :func:`file_content_hash`), so a same-size edit *outside* those regions
     produces an identical hash and would silently pass as FRESH — serving stale
@@ -312,13 +351,28 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
         if cur_hash != stored_hash:
             return False, "content"
         # Full-hashed file: content is authoritative, mtime ignored.
-        if st.st_size <= _HASH_FULL_MAX_BYTES:
+        if st.st_size <= _full_hash_max_bytes():
             return True, None
         # Sampled file: the hash only covers head/middle/tail, so trust it only
-        # when the mtime also matches — otherwise a same-size edit outside the
-        # sampled regions would be served stale. A real edit bumps mtime.
+        # when the timestamps also match — otherwise a same-size edit outside
+        # the sampled regions would be served stale. Measured, twice, by two
+        # round-16 testers independently: a 9 MiB CSV with one amount field
+        # rewritten in place and the mtime restored was served from cache with
+        # the old total, 5/5 and 3/3.
+        #
+        # mtime alone is restorable -- that is exactly what `cp -p`, `rsync -a`
+        # and `tar -x` do. On POSIX ``st_ctime`` is not: it is the inode change
+        # time, it moves on any write, and no ordinary tool puts it back. On
+        # Windows it is the creation time and does not move, so this closes the
+        # hole on Linux and macOS and narrows nothing there. The remaining
+        # Windows case is documented, and ``file_hash_full_max_bytes`` closes it
+        # on any platform at the cost of hashing the whole file on every check
+        # (measured ~0.72 ms/MiB).
         if abs(st.st_mtime - stored_mtime) > 0.01:
             return False, "mtime-sampled"
+        stored_ctime = stored.get("ctime") if isinstance(stored, dict) else None
+        if stored_ctime is not None and abs(st.st_ctime - stored_ctime) > 0.01:
+            return False, "ctime-sampled"
         return True, None
     # Legacy snapshot with no content hash: fall back to the mtime tolerance.
     if abs(st.st_mtime - stored_mtime) > 0.01:
