@@ -82,8 +82,14 @@ def installed_tool(tmp_path_factory):
 
     repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
     dist = _write_distribution(base / "dist")
+    # `tomllib` is 3.11+ and cash has no required dependencies, so on 3.10 a
+    # bare install cannot read a [tool.cash] section at all -- which is what
+    # CONFIG-TOML-UNREADABLE now says out loud. The project-wins arm below is
+    # about config PRECEDENCE, not about whether a parser exists, so give the
+    # environment one.
+    extra = ["tomli"] if sys.version_info < (3, 11) else []
     install = subprocess.run(
-        [str(python), "-m", "pip", "install", "-q", repo_root, str(dist)],
+        [str(python), "-m", "pip", "install", "-q", repo_root, str(dist), *extra],
         capture_output=True, text=True,
     )
     if install.returncode != 0:

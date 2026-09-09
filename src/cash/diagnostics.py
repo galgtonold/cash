@@ -110,6 +110,11 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "CACHE-WRITE-ABANDONED",   # a write was still running at the exit deadline,
                                # so the process exited without storing it
 
+    # -- CONFIG: a setting cash found but could not act on ------------------
+    "CONFIG-TOML-UNREADABLE",  # a config file exists but nothing can parse it
+                               # (Python 3.10 without `tomli`), so every
+                               # setting in it is being ignored
+
     # -- IMPURE: the function does something a cache hit will not repeat ----
     "IMPURE-OBSERVED-EFFECTS", # watching the first call caught effects static
                                # analysis could not see

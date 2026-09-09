@@ -425,6 +425,36 @@ def _field_type(name: str, dataclass_type: type = CashConfig) -> Any:
 # TOML loader
 # ---------------------------------------------------------------------------
 
+#: One notice per process. A config file is read on every ``get_config()``.
+_TOML_NOTICE_GIVEN = False
+
+
+def _warn_toml_unreadable(path: Path) -> None:
+    """Say that a config file was found and is being ignored."""
+    global _TOML_NOTICE_GIVEN
+    if _TOML_NOTICE_GIVEN:
+        return
+    _TOML_NOTICE_GIVEN = True
+    try:
+        from .diagnostics import warn_diagnostic
+        from .exceptions import CashCacheIneffectiveWarning
+        warn_diagnostic(
+            CashCacheIneffectiveWarning,
+            "CONFIG-TOML-UNREADABLE",
+            f"cash found {path} but cannot read it: this is Python "
+            f"{sys.version_info.major}.{sys.version_info.minor}, whose standard "
+            f"library has no TOML parser, and `tomli` is not installed. Every "
+            f"setting in that file is being ignored, including cache_dir -- so "
+            f"cash is running on defaults that the file was written to change.",
+            "pip install tomli (cash keeps no required dependencies, so it "
+            "cannot install one for you), or set the values through CASH_* "
+            "environment variables instead, or run on Python 3.11+ where the "
+            "parser is in the standard library.",
+        )
+    except Exception:  # noqa: BLE001 - a notice must never break a config load
+        logger.debug("Could not emit the unreadable-TOML notice", exc_info=True)
+
+
 def _load_toml_config(path: Path) -> dict[str, Any]:
     """Load configuration from a TOML file.
 
@@ -443,7 +473,13 @@ def _load_toml_config(path: Path) -> dict[str, Any]:
         try:
             import tomli as tomllib  # type: ignore[no-redef]
         except ImportError:
-            logger.debug("Neither tomllib nor tomli available, skipping TOML config")
+            # ``tomllib`` is 3.11+, and cash has no required dependencies by
+            # design, so on 3.10 without ``tomli`` there is nothing that can
+            # read this file. That used to be a debug line: the config existed,
+            # was found, and was silently ignored -- every setting in it, on
+            # the oldest Python cash supports. Reached only when a config file
+            # is actually there, so it cannot become background noise.
+            _warn_toml_unreadable(path)
             return {}
 
     try:

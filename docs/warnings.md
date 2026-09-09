@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @db0353c0, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @071f2744, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -457,6 +457,41 @@ are getting in-process hits at all, because on default caps you usually are not.
 `f.cache_info()` on the decorated function is the quickest answer — if the hits
 are not climbing, the entry is being evicted as fast as it is written and the
 decorator is buying you nothing.
+
+## CONFIG-TOML-UNREADABLE {#config-toml-unreadable}
+
+<!-- claim: cash/config.py:_load_toml_config @9a81ff06, cash/config.py:_warn_toml_unreadable @d0af8e40 -->
+**What happened.** Cash found a config file — `pyproject.toml` with a
+`[tool.cash]` section, or the XDG user config — and has nothing that can parse
+it. A TOML parser entered the standard library in **Python 3.11** (`tomllib`);
+on 3.10 the job falls to `tomli`, and cash cannot depend on it, because cash
+has no required dependencies at all.
+
+**Why it matters.** Every setting in that file is ignored — `cache_dir` among
+them — so cash runs on the defaults the file was written to change. Nothing
+fails and nothing looks wrong: you get a working cache in the wrong place, with
+the wrong caps, and a `[tool.cash] cache_dir` that appears to do nothing. This
+was a debug-level log line until 0.10.1, which is to say it had no symptom at
+all.
+
+**What to do.** Any one of:
+
+```bash
+pip install tomli          # the parser 3.10 is missing
+```
+
+or set the same values through the environment, which needs no parser:
+
+```bash
+export CASH_CACHE_DIR=/srv/cache
+```
+
+or run on Python 3.11 or newer, where the parser ships with the interpreter.
+
+**When it is safe to ignore.** When the file is not meant for this environment
+— a `pyproject.toml` that carries `[tool.cash]` for a different deployment, say.
+The warning fires once per process, and only when a config file is actually
+there.
 
 ## CACHE-WRITE-ABANDONED {#cache-write-abandoned}
 

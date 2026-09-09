@@ -12,7 +12,11 @@ import pytest
 from cash.diagnostics import DIAGNOSTIC_CODES, doc_url
 
 SLUG = re.compile(r"^[A-Z]+(?:-[A-Z]+)+$")
-AREAS = {"CACHE", "KEY", "STORE", "IMPURE", "REMOTE", "RANDOM", "NOTEBOOK", "ANNOT"}
+#: The area a code may start with. Closed on purpose -- a typo ("CHACE-")
+#: or a one-off prefix nobody else uses should fail here rather than ship.
+#: Adding an area is a deliberate act; adding one by accident is not.
+AREAS = {"ANNOT", "CACHE", "CONFIG", "IMPURE", "KEY", "NOTEBOOK", "RANDOM",
+         "REMOTE", "STORE"}
 
 
 def test_the_registry_is_not_empty():
