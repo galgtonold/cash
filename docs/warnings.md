@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @2e6767ef, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @f34d9bb0, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -369,11 +369,20 @@ roomier volume.
 
 ## CACHE-VALUE-TOO-BIG {#cache-value-too-big}
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @2bde4795 -->
-**What happened.** A single value is larger than a safe fraction of every
-persistent tier's cap, so Cash offered it to the RAM tier instead of writing it
-to disk. Writing it would immediately push the cache past its cap and evict it
-again. The message names the value's size.
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend._warn_oversize_not_persisted @c198bb89, cash/backends/file_backend.py:FileBackend._promotion_size_cap @cc93a731 -->
+**What happened.** A single value is larger than every persistent tier's whole
+cap, so there is nowhere durable to put it and Cash offered it to the RAM tier
+instead. The message names the value's size and the cap it was measured
+against.
+
+The size named is the **serialized** one — the same number `cash inspect`
+reports in its SIZE column, so the two agree. It did not always: the gate
+compared the value's in-memory footprint, which for a frame of strings is two
+or more times larger, so a cap that looked generous next to `inspect`'s numbers
+refused entries anyway. And the threshold used to be *half* the cap, which
+meant a 500 MB cap cached nothing at all for a 263 MB working set. It is the
+whole cap now, measured on the serialized bytes, so a value that fits is stored
+and LRU eviction does the rest.
 
 <!-- claim: cash/backends/memory_backend.py:InMemoryBackend._evict_to_byte_cap @9dbcf959 -->
 **Why it matters.** Usually you get no caching at all, not RAM-only caching.
@@ -389,9 +398,9 @@ measured on one machine, a 4.0 GiB RAM cap against an 18.7 GiB per-object
 refusal threshold on disk, so every value that can reach this warning is over
 four times the RAM cap.
 
-**What to do.** Raise `max_cache_size` to a comfortable multiple of the value's
-size — that is the lever the message names, and it moves the disk tier's
-threshold so the value is written durably rather than juggled in RAM. If that
+**What to do.** Raise `max_cache_size` above the size the message names — a
+comfortable multiple of it, so the cache can hold more than that one entry —
+and the value is written durably rather than juggled in RAM. If that
 room is not available, cache something smaller — the aggregate, the sample, or
 the columns you actually use rather than the whole object. Smaller is the fix
 that works on both tiers at once.

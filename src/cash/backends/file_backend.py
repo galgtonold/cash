@@ -1263,19 +1263,30 @@ class FileBackend(CacheBackend):
             self._warn_evict_after_write(n_evicted)
 
     def _promotion_size_cap(self) -> int | None:
-        """Refuse (skip) any single object larger than half this tier's cap.
+        """Refuse (skip) any single object larger than this tier's WHOLE cap.
 
-        The file tier's LRU cap is adaptive (a fraction of free disk,
-), so its per-object refusal threshold is derived from the
-        instance cap rather than a static class attr. Storing something bigger
-        than half the cap would leave under half the cap for everything else
-        and invite a write-and-evict treadmill; a clean skip (the value stays
-        in RAM, and ``TieredBackend`` warns) beats the thrash. Falls back to
-        the class-level hint when no cap is configured (a bare, unbounded
-        FileBackend accepts anything).
+        The threshold was half the cap, to keep one big entry from leaving less
+        than half the cache for everything else and starting a write-and-evict
+        treadmill (CAS-142). A round-15 tester showed what that costs in the
+        field: ``CASH_MAX_CACHE_SIZE=500MB`` on a job whose working set is
+        263 MB cached **nothing at all** -- three of four stages recomputed
+        every night, the directory held 29 KB, and the operator's reading of
+        their own setting ("cap it, so it evicts") was the opposite of what
+        happened. 5/5, and silent apart from one warning that named neither the
+        cap nor the threshold.
+
+        Refusing an entry that cannot fit is defensible; refusing one that
+        fits comfortably is not. The user asked for "keep at most N bytes", and
+        the least surprising reading of that is to store what fits and evict
+        the rest. The treadmill is still detected when it actually happens --
+        ``_warn_if_thrashing`` fires ``CACHE-THRASH`` on eviction within a
+        couple of writes -- rather than pre-empted by refusing everything large.
+
+        Falls back to the class-level hint when no cap is configured (a bare,
+        unbounded FileBackend accepts anything).
         """
         if self._max_size_bytes:
-            return self._max_size_bytes // 2
+            return self._max_size_bytes
         return type(self).max_size_bytes
 
     #: Below roughly this many entries fitting the cap, the cache is holding a

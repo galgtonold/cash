@@ -3,9 +3,9 @@
 Two guards keep a too-small cap from silently making cash *slower* than no
 cache (the write-and-evict treadmill from the friction log):
 
-* **oversize refusal** — a single object larger than half a persistent
-  tier's cap is skipped (kept in RAM) rather than written-then-evicted, and
-  the tiered backend warns once with an actionable message;
+* **oversize refusal** — a single object larger than a persistent tier's whole
+  cap is skipped (kept in RAM) rather than written-then-evicted, and the tiered
+  backend warns once with an actionable message naming both numbers;
 * **evict-after-write** — if the disk backend evicts an entry within a couple
   of writes of storing it, the cache can't retain the working set, so it
   warns once/session.
@@ -30,19 +30,34 @@ from cash.exceptions import CashCacheIneffectiveWarning
 # ---------------------------------------------------------------------------
 
 class TestOversizeRefusal:
-    def test_object_over_half_cap_is_refused_and_warns_once(self, tmp_path):
+    """The threshold is the WHOLE cap, and it moved there deliberately.
+
+    It was half the cap, so that one big entry could not leave less than half
+    the cache for everything else. A round-15 tester measured what that costs:
+    ``CASH_MAX_CACHE_SIZE=500MB`` on a job with a 263 MB working set cached
+    nothing at all -- three of four stages recomputed every night and the
+    directory held 29 KB. Their reading of their own setting ("cap it, so it
+    evicts") was the opposite of what happened, and nothing said so.
+
+    Refusing an entry that cannot fit is defensible; refusing one that fits
+    comfortably is not. The treadmill is still detected when it actually
+    happens -- see ``TestEvictAfterWrite`` below, which is the guard that makes
+    this trade safe.
+    """
+
+    def test_object_over_the_whole_cap_is_refused_and_warns_once(self, tmp_path):
         disk = FileBackend(str(tmp_path / "c"), max_size_bytes=8000, flush_interval=0)
         tiered = TieredBackend(
             [InMemoryBackend(), disk],
             promotion_policy=lambda exec_t, size: True,  # clear the compute floor
         )
-        big = "x" * 5000  # > 4000 = half the 8000-byte cap → must be refused
+        big = "x" * 9000  # > the whole 8000-byte cap -> nowhere to put it
         meta = {"execution_time": 2.0, "size": len(big)}
 
         with pytest.warns(CashCacheIneffectiveWarning) as rec:
             tiered.set("big", big, meta)
             # A second, distinct oversize object must NOT emit a second warning.
-            tiered.set("big2", "y" * 6000, {"execution_time": 2.0, "size": 6000})
+            tiered.set("big2", "y" * 12000, {"execution_time": 2.0, "size": 12000})
 
         # Refused: it never reached disk, only RAM.
         assert meta["storage"] == ["RAM"]
@@ -51,7 +66,31 @@ class TestOversizeRefusal:
 
         oversize = [w for w in rec if issubclass(w.category, CashCacheIneffectiveWarning)]
         assert len(oversize) == 1, "warn once/session, not per object"
-        assert "max_cache_size" in str(oversize[0].message)  # actionable
+        message = str(oversize[0].message)
+        assert "max_cache_size" in message                     # actionable
+        assert "7.8 KiB" in message, f"the cap it was measured against: {message}"
+        assert "8.8 KiB" in message, f"the size that was measured: {message}"
+
+        disk.shutdown()
+
+    def test_an_object_over_half_the_cap_now_persists(self, tmp_path):
+        """The reported case, scaled down: it fits, so it is stored.
+
+        This arm asserted the opposite until a tester showed a 500 MB cap
+        caching nothing for a 263 MB working set.
+        """
+        disk = FileBackend(str(tmp_path / "c"), max_size_bytes=8000, flush_interval=0)
+        tiered = TieredBackend(
+            [InMemoryBackend(), disk],
+            promotion_policy=lambda exec_t, size: True,
+        )
+        big = "x" * 5000  # over half the cap, comfortably inside it
+        meta = {"execution_time": 2.0, "size": len(big)}
+        tiered.set("big", big, meta)
+        disk._writes.wait_all()
+
+        assert "DISK" in meta["storage"]
+        assert disk.get("big")[1] == big
         disk.shutdown()
 
     def test_object_under_half_cap_still_persists(self, tmp_path):
@@ -60,7 +99,7 @@ class TestOversizeRefusal:
             [InMemoryBackend(), disk],
             promotion_policy=lambda exec_t, size: True,
         )
-        ok = "x" * 3000  # < 4000 half-cap → persists normally
+        ok = "x" * 3000
         meta = {"execution_time": 2.0, "size": len(ok)}
         tiered.set("ok", ok, meta)
         disk._writes.wait_all()

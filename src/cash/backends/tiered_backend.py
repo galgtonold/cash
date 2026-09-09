@@ -8,11 +8,20 @@ from typing import Any
 
 from ._base import CacheBackend, MetadataDict
 from .cascading_backend import _MultiBackendMixin
-from .serialization import Serializer
+from .serialization import PickleSerializer, Serializer
 
 logger = logging.getLogger(__name__)
 
 __all__ = ["TieredBackend"]
+
+def _cap_list(caps: list[int] | None) -> str:
+    """" (its cap is 512.0 MiB)" / " (their caps are ...)" / "" when unknown."""
+    if not caps:
+        return ""
+    from .adaptive_caps import human_bytes
+    rendered = ", ".join(human_bytes(c) for c in caps)
+    return f" (cap: {rendered})" if len(caps) == 1 else f" (caps: {rendered})"
+
 
 class TieredBackend(_MultiBackendMixin, CacheBackend):
     """
@@ -102,13 +111,43 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             "", size_bytes, execution_time, self._promotion_backend_kind()
         )
 
-    def _warn_oversize_not_persisted(self, key: str, size_bytes: int) -> None:
+    @staticmethod
+    def _serialized_size(value: Any, serializer: Serializer | None) -> int | None:
+        """Bytes this value takes once serialized, or None if it cannot be.
+
+        The number a disk cap is actually about, and the one ``cash inspect``
+        reports -- unlike the in-memory footprint the RAM tier measures, which
+        is what the size gate had been comparing.
+
+        Called only on the refusal path (see the caller), so the cost lands on
+        values that were about to be thrown away. Returns None when the value
+        cannot be serialized at all: the write would fail anyway, and the
+        caller then falls back to the memory estimate rather than guessing.
+        """
+        try:
+            ser = serializer if serializer is not None else PickleSerializer()
+            return len(ser.serialize(value))
+        except Exception:  # noqa: BLE001 - a sizing probe must never raise
+            logger.debug("Could not measure the serialized size", exc_info=True)
+            return None
+
+    def _warn_oversize_not_persisted(
+        self, key: str, size_bytes: int, caps: list[int] | None = None,
+    ) -> None:
         """Warn once/session that a worth-persisting value fit no disk tier.
 
-        The object is larger than a safe fraction (half) of every persistent
-        tier's cap, so persisting it would thrash. Cash offers it to the RAM
-        tier rather than write-and-evict forever, and tells the user how to
-        actually cache it. Deduped to once per session.
+        The object is larger than every persistent tier's whole cap, so there
+        is nowhere durable to put it. Cash offers it to the RAM tier rather
+        than write-and-evict forever, and tells the user how to actually cache
+        it. Deduped to once per session.
+
+        *caps* is what the size was compared against, so the message can name
+        the number the user set instead of alluding to it. A tester capped a
+        cache at 500 MB, watched a 263 MB working set never get stored, and had
+        no way to work out why from either the warning or ``cash inspect`` --
+        the gate was comparing the value's in-memory footprint against a disk
+        cap, while the SIZE column showed serialized bytes. Both numbers now
+        appear here, and the one compared is the serialized one.
 
         "Offers", not "keeps": the RAM tier applies its own byte cap, which is
         machine-scaled and independent of ``max_cache_size``. That cap is
@@ -136,14 +175,16 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # RAM cap 100 MiB -> 2 calls, 1 execution; RAM cap 1 MiB -> 2 calls,
             # 2 executions. Keep this and docs/warnings.md#cache-value-too-big
             # saying the same thing.
-            f"cached value {key!r} ({human_bytes(size_bytes)}) exceeds a safe "
-            f"fraction of every persistent cache tier's cap, so only the RAM "
-            f"tier was offered it -- it will not survive a kernel restart, and "
-            f"if it is over the RAM tier's own cap too it is evicted at once "
-            f"and nothing is cached.",
-            "raise max_cache_size to a comfortable multiple of that size, or "
-            "cache something smaller -- the aggregate, the sample, or the "
-            "columns you actually use.",
+            f"cached value {key!r} is {human_bytes(size_bytes)} serialized, "
+            f"which is more than every persistent cache tier's whole cap"
+            f"{_cap_list(caps)}, so only the RAM tier was offered it -- it will "
+            f"not survive a kernel restart, and if it is over the RAM tier's "
+            f"own cap too it is evicted at once and nothing is cached.",
+            f"raise max_cache_size above {human_bytes(size_bytes)} (a "
+            f"comfortable multiple of it, so the cache can hold more than this "
+            f"one entry), or cache something smaller -- the aggregate, the "
+            f"sample, or the columns you actually use. The size named here is "
+            f"the serialized one, the same number `cash inspect` reports.",
         )
 
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
@@ -229,6 +270,8 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             cap_size = size or metadata.get('cost_model_size_bytes', 0)
 
             size_refused = False  # a tier skipped this object because it's too big
+            refusing_caps: list[int] = []   # the caps it was measured against
+            refused_size = cap_size         # the size that was actually compared
             for i in range(1, len(self.backends)):
                 backend = self.backends[i]
                 if not past_compute_floor:
@@ -239,15 +282,32 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
                 if isinstance(cap, bool) or not isinstance(cap, (int, float)):
                     cap = None
                 if cap is not None and cap_size and cap_size > cap:
-                    # This tier doesn't want objects this large. For the disk
-                    # tier that means "bigger than half my cap" — storing it
-                    # would thrash, so a clean skip beats the treadmill.
-                    logger.debug(
-                        "[TIERED] Skipping %s for key %r: size %d > cap %d",
-                        type(backend).__name__, key, cap_size, cap,
-                    )
-                    size_refused = True
-                    continue
+                    # About to refuse. `cap_size` is the value's IN-MEMORY
+                    # footprint (the RAM tier measures it on the way past), and
+                    # what this tier stores is the SERIALIZED form -- for a
+                    # frame of strings, two or more times smaller. Refusing on
+                    # the memory number cost a tester their whole cache: a
+                    # 160 MB entry, under their 500 MB cap by any measure they
+                    # could see, was never stored because it took more than
+                    # that in RAM, and `cash inspect` showed them the 160.
+                    #
+                    # So measure properly before refusing. Serializing is
+                    # expensive, which is why it happens HERE and not on every
+                    # write: this branch is reached only when the value was
+                    # about to be dropped, and the alternative to the cost is a
+                    # wrong answer to "will this fit".
+                    true_size = self._serialized_size(value, serializer)
+                    if true_size is not None and true_size <= cap:
+                        cap_size = true_size
+                    else:
+                        logger.debug(
+                            "[TIERED] Skipping %s for key %r: size %d > cap %d",
+                            type(backend).__name__, key, true_size or cap_size, cap,
+                        )
+                        size_refused = True
+                        refused_size = true_size or cap_size
+                        refusing_caps.append(int(cap))
+                        continue
                 try:
                     backend.set(key, value, metadata, serializer)
                     _label = getattr(type(backend), 'source_label', None) or type(backend).__name__
@@ -261,7 +321,7 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
             # no-op beats a treadmill, but the user should know why nothing
             # durable was written and how to fix it.
             if size_refused and not any(d != "RAM" for d in stored_destinations):
-                self._warn_oversize_not_persisted(key, cap_size)
+                self._warn_oversize_not_persisted(key, refused_size, refusing_caps)
 
         # Update metadata with storage info so UI can see it immediately
         if metadata is not None:

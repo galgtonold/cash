@@ -45,6 +45,14 @@ def reset_cash_state(tmp_path, monkeypatch):
     import cash
     monkeypatch.setenv("CASH_CACHE_DIR", str(tmp_path / ".cash"))
     cash.reset_session()
+    # And again through the live singleton. The env var only reaches an
+    # instance built AFTER it is set, and the magics can hold one that was
+    # registered earlier -- whose config was resolved wherever pytest started.
+    # That instance used to be harmless because the default cache_dir was the
+    # relative ".cash", so its lazily-built backend landed in whatever
+    # directory the page had chdir'd into; with the default anchored to the
+    # project it lands in the repo's own .cash and pages start sharing a cache.
+    cash.configure(cache_dir=str(tmp_path / ".cash"))
     yield
     cash.reset_session()
 
