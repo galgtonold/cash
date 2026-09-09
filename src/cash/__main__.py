@@ -25,6 +25,29 @@ def get_version() -> str:
         return "unknown"
 
 
+def resolved_cache_dir() -> str:
+    """The cache directory the LIBRARY would use, for commands that act on it.
+
+    ``inspect`` and ``clear`` used to assume ``./.cash`` while ``info`` read
+    the merged config, so the two commands whose whole job is to act on the
+    cache acted on a different one from the library that wrote it. Setting
+    ``CASH_CACHE_DIR`` and then running ``cash inspect`` reported on nothing,
+    and ``cash clear --all`` reported success having deleted a directory the
+    user did not mean (CAS-83, reproduced by a round-16 tester).
+
+    Going through ``get_config()`` means one merge order for everyone --
+    defaults, user TOML, project TOML, environment -- so the CLI cannot drift
+    from the library again. It also follows the project anchor, which is what
+    makes the CLI usable at all now that the default is not relative to the
+    directory you are standing in.
+    """
+    try:
+        from cash.config import get_config
+        return str(get_config().cache_dir)
+    except Exception:  # noqa: BLE001 - a broken config must not break `clear`
+        return ".cash"
+
+
 def cmd_version(args: argparse.Namespace) -> None:
     """Show cash version."""
     print(f"cash {get_version()}")
@@ -223,10 +246,13 @@ def cmd_inspect(args: argparse.Namespace) -> None:
         _inspect_notebook(target)
         return
 
-    cache_dir = target if (target and os.path.isdir(target)) else ".cash"
+    cache_dir = target if (target and os.path.isdir(target)) else resolved_cache_dir()
     if not os.path.isdir(cache_dir):
-        print("No cache found. Specify a notebook or cache directory.")
+        print(f"No cache found at {os.path.abspath(cache_dir)}.")
+        print("Specify a notebook or cache directory, or set CASH_CACHE_DIR.")
         sys.exit(1)
+    if not target:
+        print(f"Cache dir: {os.path.abspath(cache_dir)}")
     _inspect_cache_dir(cache_dir, only_function=only_function)
 
 
@@ -390,28 +416,67 @@ def _clear_entry(cache_dir: str, wanted: str) -> None:
           f"({_format_bytes(entry.size)} freed)")
 
 
+def _looks_like_a_cache(cache_dir: str) -> bool:
+    """Does this directory hold a cash cache, or something else entirely?
+
+    ``clear --all`` now deletes a directory the user did not type -- whatever
+    the config resolved to. That is the point of the fix, and it is also a
+    reason to look before recursively removing: a mistyped ``CASH_CACHE_DIR``
+    used to cost the user nothing because the CLI ignored it.
+    """
+    if os.path.exists(os.path.join(cache_dir, "CACHE_VERSION")):
+        return True
+    try:
+        entries = os.listdir(cache_dir)
+    except OSError:
+        return False
+    return not entries or any(e.endswith(ENTRY_SUFFIX) for e in entries)
+
+
+def _rmtree_cache(cache_dir: str) -> None:
+    """Remove a resolved cache directory, having checked that it is one."""
+    resolved = os.path.abspath(cache_dir)
+    if not _looks_like_a_cache(resolved):
+        print(f"Refusing to clear {resolved}: it does not look like a cash "
+              f"cache (no CACHE_VERSION and no {ENTRY_SUFFIX} files).")
+        print("Check CASH_CACHE_DIR and [tool.cash] cache_dir, or name the "
+              "directory explicitly.")
+        sys.exit(1)
+    shutil.rmtree(resolved)
+    print(f"Cleared: {resolved}")
+
+
 def cmd_clear(args: argparse.Namespace) -> None:
     """Clear cache."""
+    if args.all and args.path:
+        # "everything" and "this one directory" are two different requests and
+        # the flag reads as neither. It used to accept both and silently drop
+        # the path, clearing a cache the user had not named -- the one
+        # behaviour that cannot be right (CAS-83).
+        print("cash clear: --all and a path are mutually exclusive.")
+        print(f"  To clear that directory:   cash clear {args.path}")
+        print(f"  To clear the cache in use: cash clear --all "
+              f"  ({os.path.abspath(resolved_cache_dir())})")
+        sys.exit(2)
+
     only_entry = getattr(args, "entry", None)
     if only_entry:
-        target = args.path if (args.path and os.path.isdir(args.path)) else ".cash"
+        target = args.path if (args.path and os.path.isdir(args.path)) else resolved_cache_dir()
         _clear_entry(target, only_entry)
         return
 
     only_function = getattr(args, "function", None)
     if only_function:
-        target = args.path if (args.path and os.path.isdir(args.path)) else ".cash"
+        target = args.path if (args.path and os.path.isdir(args.path)) else resolved_cache_dir()
         _clear_function(target, only_function)
         return
 
     if args.all:
-        # Clear default .cash directory
-        cache_dir = ".cash"
+        cache_dir = resolved_cache_dir()
         if os.path.isdir(cache_dir):
-            shutil.rmtree(cache_dir)
-            print(f"Cleared: {os.path.abspath(cache_dir)}")
+            _rmtree_cache(cache_dir)
         else:
-            print("No .cash directory found in current directory")
+            print(f"No cache directory found at {os.path.abspath(cache_dir)}")
         return
 
     target = args.path
@@ -560,7 +625,9 @@ def main() -> None:
 
     # inspect
     sub_inspect = subparsers.add_parser('inspect', help='Inspect cache for a notebook or directory')
-    sub_inspect.add_argument('path', nargs='?', default=None, help='Notebook (.ipynb) or cache directory path')
+    sub_inspect.add_argument('path', nargs='?', default=None,
+                             help='Notebook (.ipynb) or cache directory path. '
+                                  'Defaults to the cache the library is using.')
     sub_inspect.add_argument('--function', default=None, metavar='NAME',
                              help="List one function's entries, with what each one saves. An unambiguous "
                                   'trailing segment is enough ("work" finds "__main__.work").')
@@ -569,7 +636,10 @@ def main() -> None:
     # clear
     sub_clear = subparsers.add_parser('clear', help='Clear cache')
     sub_clear.add_argument('path', nargs='?', default=None, help='Notebook or cache directory to clear')
-    sub_clear.add_argument('--all', action='store_true', help='Clear all caches in current directory')
+    sub_clear.add_argument('--all', action='store_true',
+                           help='Clear the cache the library is using -- the same '
+                                'directory `cash info` reports. Cannot be combined '
+                                'with a path.')
     sub_clear.add_argument('--function', default=None, metavar='NAME',
                            help="Clear only this function's entries, leaving the rest "
                                 'of the cache intact. "notebook" selects the '

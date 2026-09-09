@@ -10,7 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @88959c97 broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @5b1fa8a2 broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
@@ -194,7 +194,7 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
-<!-- claim: cash/__main__.py:cmd_inspect @f70de23e, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @e86c72e6, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -211,15 +211,18 @@ directory.
       any).
     - **A directory.** Treated as a cache directory; cash walks it
       recursively.
-    - **Omitted.** Defaults to `./.cash` in the current working directory. If
-      that directory does not exist, prints
-      `No cache found. Specify a notebook or cache directory.` and exits 1.
+    - **Omitted.** Defaults to **the cache the library is using** — the same
+      directory `cash info` reports, resolved through the same merge
+      (defaults, user config, project config, `CASH_CACHE_DIR`), so it follows
+      the [project anchor](getting-started/configuration.md#what-paths-are-relative-to)
+      rather than your current directory. The path is printed above the table.
+      If it does not exist, cash names it and exits 1.
 
 **Examples:**
 
 ```bash
-cash inspect                           # inspect ./.cash
-cash inspect ./.cash                   # explicit
+cash inspect                           # inspect the cache in use
+cash inspect ./.cash                   # a specific directory
 cash inspect ./notebooks/analysis.ipynb
 cash inspect /tmp/some-cache-dir
 ```
@@ -292,7 +295,7 @@ REPL, `python -c`, or a notebook kernel.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @f0272005 -->
+<!-- claim: cash/__main__.py:cmd_clear @9a154a1c -->
 ### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
@@ -313,9 +316,15 @@ Delete a cache directory, or just one function's entries.
       to the notebook (if any). If there's no sibling cache, prints
       `No cache found for <path>` and exits 0.
     - **Anything else.** Prints `Not found: <path>` and exits 1.
-- `--all` — *Optional.* Clear `./.cash` in the current working directory.
-  When set, any `path` argument is ignored. If `./.cash` doesn't exist,
-  prints `No .cash directory found in current directory` and exits 0.
+- `--all` — *Optional.* Clear **the cache the library is using** — the same
+  directory `cash info` reports, not `./.cash` unless that is where it
+  resolves. Combining it with a `path` is **refused** (exit 2): "all of the
+  cache" and "this one directory" are two different requests, and it used to
+  accept both and silently clear the one you did not name. If the resolved
+  directory doesn't exist, cash names it and exits 0. If it exists but holds
+  no `CACHE_VERSION` and no `.entry` files, cash refuses to remove it and
+  exits 1 — a mistyped `CASH_CACHE_DIR` cost nothing while the CLI ignored the
+  variable, and costs a recursive delete now that it doesn't.
 - `--function NAME` — *Optional.* Delete only that function's entries and
   leave the rest of the cache intact — the alternative to keeping a cache you
   cannot afford or deleting work you still want. Resolves names exactly as
@@ -332,7 +341,7 @@ Delete a cache directory, or just one function's entries.
 cash clear --entry a1b2c3              # drop one entry
 cash clear --function ray.build_grid   # drop one function, keep the rest
 cash clear --function notebook         # drop the notebook statements only
-cash clear --all                       # nuke ./.cash
+cash clear --all                       # nuke the cache in use
 cash clear ./.cash                     # same thing, explicit
 cash clear ./notebooks/analysis.ipynb  # nuke the sibling .cash next to the notebook
 cash clear /tmp/some-cache-dir         # nuke any directory
@@ -342,8 +351,10 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 
 - If none of `path`, `--all` or `--function` is supplied, cash prints the
   `cash clear` help and exits 2 without touching anything.
-- The no-op "nothing to clear" message paths (no `./.cash`, no sibling cache)
-  exit 0; they're treated as success, not failure.
+- `--all` together with a `path` also exits 2, naming both commands you might
+  have meant.
+- The no-op "nothing to clear" message paths (no resolved cache, no sibling
+  cache) exit 0; they're treated as success, not failure.
 
 ---
 
@@ -353,6 +364,6 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 | Code | When |
 |---|---|
 | `0` | The command succeeded, including no-op outcomes ("nothing to clear", "autoload not installed at ..."). |
-| `1` | User-error refusals: `cash inspect` with no `./.cash` and no path; `cash clear <missing-path>`; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
-| `2` | `cash clear` with none of `path`, `--all` or `--function` — argparse's own "bad invocation" code. The subcommand's help is printed and nothing is touched. |
+| `1` | User-error refusals: `cash inspect` when the resolved cache directory does not exist and no path was given; `cash clear <missing-path>`; `cash clear --all` pointed at a directory that is not a cash cache; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
+| `2` | `cash clear` with none of `path`, `--all` or `--function`, or with `--all` *and* a path — argparse's own "bad invocation" code. Nothing is touched. |
 | traceback | Uncaught exceptions bubble up as Python tracebacks — `main()` does not wrap dispatch in `try/except`. If you see one, treat it as a bug and please file an issue. |
