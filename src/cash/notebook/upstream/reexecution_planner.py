@@ -163,6 +163,10 @@ class ReexecutionPlanner:
             stmts_to_run_indices, simulation_trace, restored_statements_info,
         )
 
+        stmts_to_run_indices, restored_statements_info = self._guard_unfilled_figure_writes(
+            stmts_to_run_indices, simulation_trace, restored_statements_info,
+        )
+
         skipped_metrics = self._virtual_lineage._collect_skipped_statement_metrics(
             simulation_trace, stmts_to_run_indices, restored_statements_info,
             virtual_modules, stmt_lookup_times,
@@ -603,6 +607,116 @@ class ReexecutionPlanner:
         remaining = [i for i in stmts_to_run_indices if i not in refused]
         # A refused write must not linger in the restored set either -- it is not
         # being run at all this pass.
+        refused_codes = {simulation_trace[i][0] for i in refused}
+        restored_statements_info = [
+            info for info in restored_statements_info
+            if info.get('code') not in refused_codes
+        ]
+        return remaining, restored_statements_info
+
+    @staticmethod
+    def _receiver_bound_figure_write(code: str) -> str | None:
+        """Receiver name for a ``fig.savefig(...)``, or ``None``.
+
+        The module-level ``plt.savefig()`` twin lives in ``cacheability`` and is
+        handled by :meth:`_guard_global_figure_writes`; this is the form that
+        one deliberately does not flag.
+        """
+        if 'savefig' not in code:
+            return None
+        try:
+            tree = ast.parse(textwrap.dedent(code))
+        except (SyntaxError, ValueError):
+            return None
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Attribute)
+                    and node.func.attr == 'savefig'
+                    and isinstance(node.func.value, ast.Name)):
+                return node.func.value.id
+        return None
+
+    def _guard_unfilled_figure_writes(
+        self,
+        stmts_to_run_indices: list[int],
+        simulation_trace: list,
+        restored_statements_info: list[dict],
+    ) -> tuple[list[int], list[dict]]:
+        """Refuse a ``fig.savefig()`` whose figure is rebuilt but never drawn.
+
+        ``statement_saves_current_pyplot_figure`` says of the receiver-bound
+        form: "NOT flagged: it is defended by the carrier-history pass (its
+        input ``fig`` is a tracked carrier)". That defence has a hole, and it
+        opens exactly where it matters most.
+
+        :meth:`_complete_stateful_carrier_history` classifies a carrier from the
+        LIVE object -- ``stateful_carrier_kind(user_ns.get(v))`` -- and
+        ``stateful_carrier_kind(None)`` is ``None``. After a kernel restart
+        ``fig`` is not in ``user_ns``, so the pass silently does nothing, and a
+        plan may schedule ``fig, ax = plt.subplots(...)`` and
+        ``fig.savefig(path)`` while leaving ``ax.plot(...)`` behind. The write
+        then flushes a freshly-created, EMPTY figure over the user's chart.
+
+        Measured end to end, asking for an unrelated downstream cell after a
+        restart: the real chart (1502 purple pixels, 1974 saturated) became 0
+        and 0 at the user's own 800x400 geometry -- an empty axes frame, no
+        error, no badge, and the good bytes gone. A restart cannot undo it.
+
+        The remedy is the one the sibling guard already applies, and its
+        governing principle is the same: cash must never write a figure the
+        user did not draw -- either the real one, or a loud refusal. Refusing
+        costs a re-save the user can redo by running the cell; writing costs
+        them the chart.
+
+        Deliberately structural, not liveness-based -- reading the trace rather
+        than the namespace is the whole point, since the namespace is what is
+        missing after a restart. Fires only when the producer IS scheduled (so a
+        blank figure is genuinely about to be built) and some statement between
+        it and the write that touches a co-produced name is NOT. When the
+        carrier is live, the carrier-history pass owns the case and this is a
+        no-op.
+        """
+        user_ns = getattr(getattr(self._virtual_lineage, 'shell', None), 'user_ns', None)
+        scheduled = set(stmts_to_run_indices)
+        refused: set[int] = set()
+
+        for w in sorted(scheduled):
+            code = simulation_trace[w][0]
+            receiver = self._receiver_bound_figure_write(code)
+            if receiver is None:
+                continue
+            # `plt.savefig(...)` matches the same shape but belongs to
+            # `_guard_global_figure_writes`, which ran first. Letting both own it
+            # would refuse a legitimate write twice and, worse, treat the MODULE
+            # `plt` as a figure whose "fills" are every statement that touched
+            # it. That detector falls back to the conventional alias, so it is
+            # still right after a restart, when `plt` is not in the namespace.
+            if statement_saves_current_pyplot_figure(code, user_ns):
+                continue
+            if user_ns is not None:
+                try:
+                    if stateful_carrier_kind(user_ns.get(receiver)) is not None:
+                        continue  # live carrier: the history pass has it
+                except (TypeError, ValueError, AttributeError, RecursionError):
+                    pass
+            producer = self._latest_producer(simulation_trace, receiver, w)
+            if producer is None or producer not in scheduled:
+                continue  # the figure is not being rebuilt here
+            sibling_names = set(simulation_trace[producer][1])
+            fills = [
+                j for j in range(producer + 1, w)
+                if (set(simulation_trace[j][1]) & sibling_names
+                    or _control_body_touches(simulation_trace[j][0], sibling_names))
+            ]
+            if all(j in scheduled for j in fills):
+                continue  # rebuilt coherently -- allow
+            refused.add(w)
+            self._warn_orphaned_figure_write(code, producer, w)
+
+        if not refused:
+            return stmts_to_run_indices, restored_statements_info
+
+        remaining = [i for i in stmts_to_run_indices if i not in refused]
         refused_codes = {simulation_trace[i][0] for i in refused}
         restored_statements_info = [
             info for info in restored_statements_info
