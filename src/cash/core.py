@@ -5012,9 +5012,25 @@ class Cash:
         and dtype are folded in so a reshape or retype of the same bytes does
         not collide. Uses a zero-copy ``memoryview`` for contiguous arrays and
         falls back to ``tobytes()`` (C-order copy) otherwise.
+
+        ``strides`` is folded in for the same reason, and it is the layout the
+        C-order fallback above erases. Without it a C-ordered and an
+        F-ordered array holding equal values hash identically, and a
+        layout-sensitive callee is served the other one's result: measured,
+        ``np.ravel(x, order='A')`` returned ``[0, 1, 2, …]`` for an F-ordered
+        input whose true answer is ``[0, 4, 8, 1, …]``. Normalising to C-order
+        is right for value EQUALITY and wrong for a KEY, because ``order='A'``,
+        ``reshape``, ``.flags`` and any compiled callee expecting a layout all
+        read it.
+
+        Nearly free, and narrow by construction: for a contiguous array the
+        strides are determined by shape and dtype, so this adds no
+        discrimination on the common path — it separates exactly the F-ordered
+        and non-contiguous arrays that need separating.
         """
         try:
-            h = hashlib.sha256(f"{value.shape}:{value.dtype}:".encode())
+            h = hashlib.sha256(
+                f"{value.shape}:{value.dtype}:{value.strides}:".encode())
             if getattr(value.dtype, "hasobject", False):
                 # object-dtype arrays: the buffer holds raw PyObject *pointers*,
                 # not content, so tobytes() hashes memory addresses - identical

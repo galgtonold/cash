@@ -59,7 +59,25 @@ def test_equal_numpy_arrays_still_hit(tmp_path):
     assert calls["n"] == 1
 
 
-def test_numpy_contiguity_invariant(tmp_path):
+def test_numpy_layout_is_part_of_the_key(tmp_path):
+    """Layout DISCRIMINATES; it used to be invariant, and that was a wrong answer.
+
+    This test previously asserted the opposite — that a C-ordered array and an
+    F-ordered array of the same values share a cache key — because the
+    ``tobytes()`` fallback normalises to C-order. That is right for value
+    equality and wrong for a key: a round-15 tester showed a layout-sensitive
+    kernel being served the other layout's result, with
+    ``np.ravel(x, order='A')`` returning ``[0, 1, 2, …]`` for an F-ordered input
+    whose true answer is ``[0, 4, 8, 1, …]``, 5/5 across separate processes.
+    ``order='A'``, ``reshape``, ``.flags`` and any compiled callee expecting a
+    layout all read what the normalisation erased.
+
+    Changed deliberately, by owner decision: correctness over the hit rate. The
+    cost is that same-values-different-layout inputs now miss instead of hit,
+    and existing ndarray entries invalidate once on upgrade. See the
+    layout-insensitive sibling below, which is the control that this did not
+    simply stop caching.
+    """
     c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
 
     @c.cache
@@ -68,7 +86,20 @@ def test_numpy_contiguity_invariant(tmp_path):
 
     A = np.arange(20.0).reshape(4, 5)
     non_contig = np.ascontiguousarray(A.T).T   # same values, non-C-contiguous
-    assert s.explain(A).cache_key == s.explain(non_contig).cache_key
+    assert np.array_equal(A, non_contig)
+    assert s.explain(A).cache_key != s.explain(non_contig).cache_key
+
+
+def test_same_layout_same_values_still_share_a_key(tmp_path):
+    """The control for the above: discrimination must not mean never hitting."""
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
+
+    @c.cache
+    def s(a):
+        return float(a.sum())
+
+    A = np.arange(20.0).reshape(4, 5)
+    assert s.explain(A).cache_key == s.explain(A.copy()).cache_key
 
 
 def test_large_pyarrow_different_data_does_not_collide(tmp_path):

@@ -147,14 +147,14 @@ The decorator path's built-in type hashers (`Cash._try_builtin_type_hash`) cover
 | Type | Module | Hashing strategy |
 |------|--------|------------------|
 | `DataFrame`, `Series` | pandas | schema labels + `pd.util.hash_pandas_object()` |
-| `ndarray` | numpy | shape + dtype + **all** bytes (object arrays: stable repr) |
+| `ndarray` | numpy | shape + dtype + **strides** + **all** bytes (object arrays: stable repr) |
 | `DataFrame`, `Series` | polars | `hash_rows()` / `hash()` |
 | `LazyFrame` | polars | `serialize()` — the plan **and** the data it closes over. Not `explain()`: two frames over different in-memory data print the same plan, so they collided into a wrong hit. A plan reading from a file still serializes the *path*, not the contents — see [known limitations](../known-limitations.md). |
 | `Table`, `RecordBatch` | PyArrow | schema + row count + every column buffer |
 | `DataFrame`, `Series` | modin | convert to pandas, then hash |
 | any collection | dask | `__dask_keys__()` task-graph key hash |
 
-Numpy arrays are hashed in **full**, not sampled: two large arrays differing only outside a sampled window would otherwise collide and return a wrong result. The schema prefix on pandas is there because `hash_pandas_object` covers values and index values but not column names, so `df.rename(columns=...)` used to collide with the original.
+Numpy arrays are hashed in **full**, not sampled: two large arrays differing only outside a sampled window would otherwise collide and return a wrong result. `strides` is in the key because memory **layout** is part of what an array is to its caller: the byte-hashing fallback normalises to C-order, so without it a C-ordered and an F-ordered array of equal values hashed identically and a layout-sensitive callee — `np.ravel(x, order='A')`, `reshape`, anything reading `.flags`, or compiled code expecting a layout — was served the other one's result. The cost is that two arrays with equal values but different layout do **not** share an entry; for contiguous arrays strides follow from shape and dtype, so nothing changes there. The schema prefix on pandas is there because `hash_pandas_object` covers values and index values but not column names, so `df.rename(columns=...)` used to collide with the original.
 
 For any type not listed above you can register a custom hasher with `register_hasher()`:
 
