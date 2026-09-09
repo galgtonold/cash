@@ -272,6 +272,9 @@ class FileBackend(CacheBackend):
         # and background thread to first actual use.
         self._initialized = False
         self._init_lock = threading.Lock()
+        #: Set when the cache directory turned out to be unusable. Every public
+        #: operation then answers as an empty cache would: a miss, a no-op write.
+        self._unusable = False
 
     def _ensure_initialized(self) -> None:
         """Lazily create cache directory, check the format stamp, start the flusher.
@@ -289,7 +292,22 @@ class FileBackend(CacheBackend):
         with self._init_lock:
             if self._initialized:
                 return
-            os.makedirs(self.cache_dir, exist_ok=True)
+            try:
+                os.makedirs(self.cache_dir, exist_ok=True)
+            except OSError as exc:
+                # The directory cannot even be CREATED: a read-only volume, a
+                # drive that did not mount, a path that is a file, a locked-down
+                # host. This used to raise straight out of ``get()`` and kill
+                # the caller's program before its own work ran -- exit 1, no
+                # result, from a component whose entire contract is
+                # best-effort. Measured on three shapes, 3/3: "cash cannot
+                # cache" became "your job does not run".
+                #
+                # So the tier turns itself off instead, loudly, and the process
+                # carries on computing uncached. In a tiered stack the RAM tier
+                # is unaffected, so an in-process repeat still hits.
+                self._disable(exc)
+                return
             self._check_format_version()
             self._warn_if_unwritable()
             if self._flush_interval > 0:
@@ -298,6 +316,27 @@ class FileBackend(CacheBackend):
                 )
                 self._flusher_thread.start()
             self._initialized = True
+
+    def _disable(self, exc: BaseException) -> None:
+        """Turn this tier off for the rest of the process, and say why once."""
+        self._unusable = True
+        self._initialized = True          # never retried; the answer will not change
+        from cash.diagnostics import warn_diagnostic
+        from cash.exceptions import CashCacheStoreFailedWarning
+        try:
+            warn_diagnostic(
+                CashCacheStoreFailedWarning,
+                "CACHE-DIR-UNWRITABLE",
+                f"cash cannot use its cache directory {self.cache_dir} "
+                f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
+                f"this run, so every call recomputes -- but the run itself "
+                f"continues normally.",
+                "point cash somewhere it can write -- cash.configure(cache_dir=...), "
+                "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
+                "user write permission on that path.",
+            )
+        except Exception:  # noqa: BLE001 - a diagnostic must not become the failure
+            logger.warning("Cash disabled its file tier at %s: %s", self.cache_dir, exc)
 
     def _warn_if_unwritable(self) -> None:
         """Say at once, and at the path, if this directory cannot be written.
@@ -546,6 +585,8 @@ class FileBackend(CacheBackend):
             Metadata dict if key exists, None otherwise.
         """
         self._ensure_initialized()
+        if self._unusable:
+            return None
         # Wait for any in-flight write so the metadata we report reflects
         # the most recent ``set()`` for this key.
         self._writes.wait(key)
@@ -579,6 +620,8 @@ class FileBackend(CacheBackend):
             return None
     def get(self, key: str) -> tuple[MetadataDict | None, Any | None]:
         self._ensure_initialized()
+        if self._unusable:
+            return None, None
         # Wait for any in-flight write for this key so we never return
         # stale-or-missing data when get() races set().
         self._wait_for_writes(key)
@@ -870,6 +913,8 @@ class FileBackend(CacheBackend):
         in the background. ``set()`` returns once the bytes are captured;
         a subsequent ``get(key)`` waits for the write."""
         self._ensure_initialized()
+        if self._unusable:
+            return
         path = self._get_path(key)
 
         metadata = self._init_metadata(metadata, key)
@@ -937,6 +982,8 @@ class FileBackend(CacheBackend):
         since that entry is more valuable.
         """
         self._ensure_initialized()
+        if self._unusable:
+            return
         # Wait for any in-flight async set() for this key to land first —
         # otherwise the check below races a not-yet-flushed full write, sees
         # nothing, and clobbers the (more valuable) full entry with a
@@ -969,6 +1016,8 @@ class FileBackend(CacheBackend):
 
     def delete(self, key: str) -> None:
         self._ensure_initialized()
+        if self._unusable:
+            return
         # Drain any pending write for this key — otherwise the write
         # could fire after the delete and leave a ghost entry.
         self._writes.drain(key)
@@ -1392,6 +1441,8 @@ class FileBackend(CacheBackend):
 
     def clear(self) -> None:
         self._ensure_initialized()
+        if self._unusable:
+            return
         # Drain pending writes so they don't fire after the clear and
         # resurrect entries we just removed from disk.
         self._writes.wait_all()
@@ -1424,6 +1475,8 @@ class FileBackend(CacheBackend):
 
     def list_entries(self) -> list[dict[str, Any]]:
         self._ensure_initialized()
+        if self._unusable:
+            return []
         # Drain pending writes so the listing reflects everything the
         # caller has already set() — otherwise async writes still in
         # flight would be invisible.
@@ -1439,6 +1492,8 @@ class FileBackend(CacheBackend):
 
     def cleanup_expired(self, is_expired: Callable[[dict[str, Any]], bool]) -> int:
         self._ensure_initialized()
+        if self._unusable:
+            return 0
         self._writes.wait_all()
         count = 0
         for path in glob.glob(os.path.join(self.cache_dir, _ENTRY_GLOB)):
