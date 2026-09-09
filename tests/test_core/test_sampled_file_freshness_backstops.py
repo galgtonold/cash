@@ -36,6 +36,7 @@ from cash.notebook.file_dep_snapshot import (
     snapshot_file_deps,
 )
 
+
 def _big_csv(path, mib=9):
     """A file above the sampling threshold, with a known interior field."""
     row = b"1,alpha,10.00\n"
