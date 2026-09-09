@@ -732,6 +732,46 @@ Two large objects that differ only outside the sampled region therefore hash ide
 
 ---
 
+## A very large file, edited in place, with its timestamp put back
+
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864 -->
+Files up to `file_hash_full_max_bytes` (**64 MiB** by default) are hashed in
+full, so their content decides and none of this applies. Above that, the hash
+covers three 256 KiB regions — head, middle and tail — and the file's
+timestamps stand in for the bytes it never reads.
+
+One shape gets through all of it, and it takes every one of these at once:
+
+1. the file is **larger than 64 MiB**, so it is sampled;
+2. the edit leaves the **size unchanged**;
+3. it lands **outside all three sampled regions**;
+4. its **mtime is restored afterwards at full nanosecond precision**;
+5. you are on **Windows**, where `st_ctime` is the creation time and does not
+   move on a write.
+
+Condition 4 is narrower than it sounds. `cp -p`, `shutil.copystat` and
+`robocopy /COPY:T` restore the exact nanoseconds. `tar`, `rsync -a` and any
+script that round-trips the value through `st_mtime` restore whole seconds or a
+rounded float, which cannot reproduce the original and **is** caught. On Linux
+and macOS condition 5 fails too: the inode change time moves on any write and
+no ordinary tool puts it back, so the edit is caught there regardless.
+
+**What to do:** raise the threshold above the file, and content decides again
+on every platform:
+
+<!-- test:skip reason="illustrative: the point is the setting, not a value" -->
+```python
+cash.configure(file_hash_full_max_bytes=512 * 1024 * 1024)   # or CASH_FILE_HASH_FULL_MAX_BYTES
+```
+
+The price is a full read of the file the first time each process checks it —
+about 0.72 ms per MiB, so 370 ms for a 512 MiB input — and a `stat` on every
+check after that, because digests are memoized per process. If that trade goes
+bad, [`CACHE-FRESHNESS-COST`](warnings.md#cache-freshness-cost) says so with
+both numbers.
+
+---
+
 ## Code passed as an argument
 
 A `@cash.cache` function that takes one of *your* classes or functions as an

@@ -87,18 +87,22 @@ Several independent signals can cause a miss. The first four feed the [cache key
     reprinting a cached value.
 
 === "Files"
-<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @029207de -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144, cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa -->
     A file you read (CSV, parquet, …) is snapshotted as mtime, size **and a content
     hash**. On every lookup the size is compared first, and when it matches, the
     content hash decides — so a bare `touch` no longer invalidates, and a same-size
     edit within the same second no longer slips through. Files over 64 MiB are hashed
     by sampling three size-derived regions rather than in full; since that partial
     hash can't see an edit *outside* those regions, sampled files additionally
-    require the timestamps to match, so a real in-place edit is still caught —
-    with one gap, measured: an edit that restores the mtime afterwards (`cp -p`,
-    `rsync -a`, `tar -x`, a restore from backup) is invisible to both. Linux and
-    macOS catch it anyway through the inode change time; Windows has no second
-    timestamp to fall back on, and `file_hash_full_max_bytes` is the way to buy
+    require the timestamps to match — to the **nanosecond**, not to a tolerance,
+    because here the timestamp stands in for bytes the hash never read. That
+    narrows the remaining gap to one shape, measured: an edit whose mtime is
+    afterwards restored *at full nanosecond precision*, which `cp -p` and
+    `shutil.copystat` do. A tool that puts back whole seconds — `tar`,
+    `rsync -a`, a script round-tripping the float — cannot reproduce the
+    original nanoseconds and is caught. Linux and macOS catch even the exact
+    case through the inode change time; Windows has no second timestamp to fall
+    back on, and `file_hash_full_max_bytes` is the way to buy
     certainty there — it costs about 0.72 ms per MiB, paid once per file per
     process because the digest is memoized. The check runs
     against the file deps of the statement itself *and* those inherited from its

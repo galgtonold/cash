@@ -242,6 +242,11 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
         content_hash = file_content_hash(f, st.st_size, full_hash_max)
         if content_hash is not None:
             entry["hash"] = content_hash
+        # The integer nanoseconds alongside the float. ``st_mtime`` is derived
+        # FROM this by CPython, not the other way round, so the float is the
+        # lossy one -- and the sampled comparison below is an equality test
+        # where every lost digit is a window an edit can hide in.
+        entry["mtime_ns"] = st.st_mtime_ns
         if st.st_size > full_hash_max:
             # Sampled regime only, where mtime is load-bearing rather than a
             # convenience -- see ``file_dep_is_fresh``. On POSIX ``st_ctime``
@@ -251,6 +256,7 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
             # creation time and this buys nothing, which is why it is recorded
             # as an extra signal rather than relied on.
             entry["ctime"] = st.st_ctime
+            entry["ctime_ns"] = getattr(st, "st_ctime_ns", 0)
         snapshot[f] = entry
     return snapshot
 
@@ -377,6 +383,52 @@ def split_file_dep_value(value: dict[str, Any]) -> tuple[float, int | None]:
     return float(value.get('mtime', 0.0)), value.get('size')
 
 
+#: How far two timestamps may differ and still count as the same one, for a
+#: snapshot that recorded only the float seconds. Inherited from the
+#: pre-content-hash check, where it absorbed storage jitter across a whole
+#: comparison; it is FOUR ORDERS OF MAGNITUDE wider than any filesystem's
+#: resolution, so a snapshot carrying integer nanoseconds does not use it.
+_LEGACY_TIMESTAMP_TOLERANCE_SECONDS = 0.01
+
+
+def _timestamps_match(st: os.stat_result, stored: Any, field: str) -> bool:
+    """Did *field* (``mtime`` / ``ctime``) stay put since the snapshot?
+
+    Exact on the integer nanoseconds when the snapshot recorded them, because
+    this is the SAMPLED regime's backstop: the hash covers three regions of
+    the file, so an interior edit is caught by the timestamp or not at all,
+    and a tolerance is a window the edit can sit inside. Measured on a 65 MiB
+    file, one byte rewritten in place outside every sampled region: an edit
+    landing 8.02 ms after the recorded mtime was served FRESH under the old
+    0.01 s tolerance, and the boundary sat exactly where the constant says
+    (9.50 ms missed, 11.03 ms caught).
+
+    The tolerance is unreachable in practice on any filesystem worth the name.
+    Measured, 400 one-byte appends: ext4 and tmpfs gave all 400 writes a
+    distinct timestamp (smallest gap 3.2 us), NTFS 54 distinct (0.389 ms), a
+    9p translated mount 1.6 ms. Only the 1-2 second tier (FAT32, ext3, HFS+)
+    is coarser than 10 ms, and there no comparison at any resolution helps --
+    the answer there is to stay under ``file_hash_full_max_bytes`` so the
+    content hash decides and timestamps are never consulted.
+
+    Falls back to the tolerance for a snapshot written before this was
+    recorded, so existing entries keep their meaning rather than invalidating
+    en masse on upgrade.
+    """
+    if not isinstance(stored, dict):
+        return True
+    stored_ns = stored.get(f"{field}_ns")
+    if stored_ns is not None:
+        live_ns = getattr(st, f"st_{field}_ns", None)
+        if live_ns is not None:
+            return live_ns == stored_ns
+    stored_seconds = stored.get(field)
+    if stored_seconds is None:
+        return True
+    live = getattr(st, f"st_{field}")
+    return abs(live - stored_seconds) <= _LEGACY_TIMESTAMP_TOLERANCE_SECONDS
+
+
 def file_dep_is_fresh(
     resolved_path: str, stored: dict[str, Any], full_hash_max: int | None = None,
 ) -> tuple[bool, str | None]:
@@ -454,13 +506,12 @@ def file_dep_is_fresh(
         # Windows case is documented, and ``file_hash_full_max_bytes`` closes it
         # on any platform at the cost of hashing the whole file on every check
         # (measured ~0.72 ms/MiB).
-        if abs(st.st_mtime - stored_mtime) > 0.01:
+        if not _timestamps_match(st, stored, "mtime"):
             return False, "mtime-sampled"
-        stored_ctime = stored.get("ctime") if isinstance(stored, dict) else None
-        if stored_ctime is not None and abs(st.st_ctime - stored_ctime) > 0.01:
+        if not _timestamps_match(st, stored, "ctime"):
             return False, "ctime-sampled"
         return True, None
     # Legacy snapshot with no content hash: fall back to the mtime tolerance.
-    if abs(st.st_mtime - stored_mtime) > 0.01:
+    if abs(st.st_mtime - stored_mtime) > _LEGACY_TIMESTAMP_TOLERANCE_SECONDS:
         return False, "mtime"
     return True, None

@@ -19,9 +19,14 @@ Three things came out of it:
   platform. A full hash costs about 0.72 ms per MiB, but the digest is
   memoized per process, so only the first check of a file pays it.
 
-Above 64 MiB the sampled regime is still the sampled regime, and on Windows it
-is still blind to a mtime-restoring in-place edit. That is characterised here
-too, at a lowered threshold rather than with a 130 MiB fixture.
+Above 64 MiB the sampled regime is still the sampled regime, and the timestamp
+comparison is what stands in for the bytes the hash never reads. It compares
+the integer nanoseconds exactly now, which splits the mtime-restoring family
+in two: a tool that puts back whole seconds (``tar``, ``rsync -a``) cannot
+reproduce the original nanoseconds and is caught, while one that puts back the
+exact nanoseconds (``cp -p``, ``shutil.copystat``) still is not -- on Windows,
+where there is no inode change time. Both arms are characterised here, at a
+lowered threshold rather than with a 130 MiB fixture.
 """
 from __future__ import annotations
 
@@ -66,8 +71,20 @@ def _big_csv(path, mib=9):
 _EDITS = iter(range(11, 99))
 
 
-def _edit_in_place_preserving_mtime(path):
+def _edit_in_place_preserving_mtime(path, exact_ns=True):
     """Rewrite one interior row and put the timestamps back.
+
+    *exact_ns* is the difference between the two families of restoring tool,
+    and since the timestamp comparison became exact it is also the difference
+    between missed and caught:
+
+    * ``True`` puts back the integer nanoseconds -- ``cp -p`` (``utimensat``
+      with the source's full precision), ``shutil.copystat``,
+      ``robocopy /COPY:T``. Indistinguishable from no edit at all.
+    * ``False`` puts back the float seconds -- plain ``tar`` (ustar headers
+      carry whole seconds), ``rsync -a`` (whole seconds), and any script that
+      round-trips the value through ``st_mtime``. Measured, that lands 200 ns
+      off the original, which the exact comparison sees.
 
     A DIFFERENT value every call: two arms editing the same offset with the
     same bytes leave the file unchanged, and the second arm then "misses" an
@@ -81,7 +98,10 @@ def _edit_in_place_preserving_mtime(path):
         fh.seek(size // 4)
         fh.seek(-(size // 4) % 14, 1)      # land on a row boundary
         fh.write(row)
-    os.utime(path, (before.st_atime, before.st_mtime))
+    if exact_ns:
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+    else:
+        os.utime(path, (before.st_atime, before.st_mtime))
     return before
 
 
@@ -153,19 +173,43 @@ def test_the_default_catches_the_stealth_edit(tmp_path):
     assert len(runs) == 2
 
 
-def test_above_the_threshold_windows_is_still_blind(sampled_regime, tmp_path):
-    """The characterisation of what remains, at a lowered threshold.
+def test_a_coarse_timestamp_restore_is_caught_anywhere(sampled_regime, tmp_path):
+    """The half of the mtime-restoring family that the exact comparison sees.
 
-    A file larger than ``file_hash_full_max_bytes`` is sampled, and on Windows
-    there is no second timestamp to fall back on. If this ever starts
-    recomputing, the hole is closed and this file should say so.
+    A tool that puts the timestamp back from whole seconds -- ``tar``,
+    ``rsync -a``, a script round-tripping ``st_mtime`` -- cannot reproduce the
+    original nanoseconds, so the restored value differs and the edit is caught
+    on every platform, sampled or not. Before the comparison became exact, a
+    10 ms tolerance swallowed the difference (measured: 200 ns).
     """
     path = _big_csv(str(tmp_path / "big.csv"))
     read_total, runs = _reader(str(tmp_path / "cache"))
 
     first = read_total(path)
     time.sleep(1.1)
-    _edit_in_place_preserving_mtime(path)
+    _edit_in_place_preserving_mtime(path, exact_ns=False)
+
+    assert read_total(path) != first, "a coarse timestamp restore hid an edit"
+    assert len(runs) == 2
+
+
+def test_a_nanosecond_exact_restore_is_still_blind_on_windows(sampled_regime,
+                                                              tmp_path):
+    """The characterisation of what remains, at a lowered threshold.
+
+    A file above ``file_hash_full_max_bytes`` is sampled, and a tool that puts
+    back the exact nanoseconds -- ``cp -p``, ``shutil.copystat`` -- leaves
+    nothing for the mtime comparison to see. POSIX still catches it through
+    the inode change time; Windows has no second timestamp to fall back on.
+    If this ever starts recomputing, the hole is closed and this file should
+    say so.
+    """
+    path = _big_csv(str(tmp_path / "big.csv"))
+    read_total, runs = _reader(str(tmp_path / "cache"))
+
+    first = read_total(path)
+    time.sleep(1.1)
+    _edit_in_place_preserving_mtime(path, exact_ns=True)
     second = read_total(path)
 
     if sys.platform == "win32":

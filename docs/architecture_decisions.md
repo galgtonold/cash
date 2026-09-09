@@ -79,7 +79,10 @@ check runs first, so the "hashing a 2 GB parquet on every lookup" objection is
 answered by never hashing when the size already proves staleness, and by sampling
 files over `file_hash_full_max_bytes` (head/middle/tail) rather than reading them
 whole. The residual tradeoff is a narrow one: a same-size edit confined to
-unsampled interior bytes of a file above that threshold is not detected. The
+unsampled interior bytes of a file above that threshold, whose mtime is then
+restored at full nanosecond precision, is not detected -- and only on Windows,
+where there is no inode change time. The timestamp comparison is exact on the
+integer nanoseconds, so a tool restoring whole seconds does not reach it. The
 threshold defaults to 64 MiB — above the ordinary CSV or parquet — because the
 digest is memoized per process, so a full hash is paid once rather than on every
 lookup.

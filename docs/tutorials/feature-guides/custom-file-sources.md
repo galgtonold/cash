@@ -297,7 +297,7 @@ A matching size *and* a matching content hash is fresh, **regardless of the mtim
 
 ### Large files are sampled, not fully hashed
 
-<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @029207de, cash/notebook/file_dep_snapshot.py:file_content_hash @d0e0c875, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:file_content_hash @d0e0c875, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864, cash/notebook/file_dep_snapshot.py:_HASH_SAMPLE_REGION_BYTES == 262144 -->
 Hashing a multi-GB parquet on every lookup would defeat the point of caching, so the hash is size-bounded (`file_content_hash`), at a threshold you can move (`file_hash_full_max_bytes`):
 
 - Files **≤ 64 MiB** (`_HASH_FULL_MAX_BYTES`) are hashed **in full**.
@@ -305,7 +305,9 @@ Hashing a multi-GB parquet on every lookup would defeat the point of caching, so
 
 A full hash costs about 0.72 ms per MiB, and the digest is memoized per process against the file's stat fields, so a file that nothing has touched is hashed once and then costs a `stat()`.
 
-A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry an mtime backstop**: above the cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.
+A sampled hash on its own would miss an edit that changes only unsampled interior bytes while preserving the exact size. **It doesn't, because sampled files carry a timestamp backstop**: above the cap a matching hash is trusted only when the mtime *also* matches, so any real in-place write is caught (`stale_reason` reads `'mtime-sampled'`). Below the cap the hash is authoritative and mtime is ignored, which is what makes a content-preserving `touch` free.
+
+That comparison is **exact on the integer nanoseconds**, not a tolerance — here the timestamp stands in for bytes the hash never read, and a tolerance is a window an edit can sit inside. It also decides how much of the mtime-restoring family gets through: `tar` and `rsync -a` restore whole seconds and cannot reproduce the original nanoseconds, so they are caught; `cp -p` and `shutil.copystat` restore the exact value and are not. See [known limitations](../../known-limitations.md#a-very-large-file-edited-in-place-with-its-timestamp-put-back).
 
 The tradeoff therefore inverted rather than disappearing. What you pay for a large file is the opposite error: **touching** it — `touch`, a re-checkout that rewrites identical bytes, an rsync that resets timestamps — forces one spurious recompute. That is the safe direction to be wrong in, and it is why the two regimes differ:
 
