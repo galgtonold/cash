@@ -41,6 +41,7 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "snapshot_file_deps",
     "snapshot_remote_deps",
+    "snapshot_absent_deps",
     "snapshot_dependencies",
     "existing_file_deps",
     "split_file_dep_value",
@@ -54,6 +55,16 @@ __all__ = [
 # already routes that question through ``file_dep_is_fresh``, so one dict with
 # one branch beats a parallel channel each consumer would have to learn.
 _REMOTE_MARKER = "remote"
+
+# Marks a snapshot entry as a path that was NOT there when the call ran. The
+# absence of a file is an input like any other -- an optional config that is
+# missing means "use the defaults" -- and it was the one input cash could not
+# see, because a file that is never opened produces no read to track. A
+# round-16 tester found what that costs: a cached function reading `cfg.txt`
+# by relative name in directory A, then in B (which has no such file), then in
+# A again, was served B's answer in A as a hit, with no warning. The B run
+# recorded NO dependencies at all, so its entry looked valid everywhere.
+_ABSENT_MARKER = "absent"
 
 # Files up to this size are hashed in full; larger files are sampled
 # deterministically (head / middle / tail) so hashing a multi-GB parquet on
@@ -123,6 +134,26 @@ def snapshot_file_deps(paths: set[str]) -> dict[str, dict[str, Any]]:
     return snapshot
 
 
+def snapshot_absent_deps(paths: Iterable[str]) -> dict[str, dict[str, Any]]:
+    """Return ``{path: {'absent': True}}`` for paths that were looked for and
+    were not there.
+
+    Recorded for paths that STILL do not exist at snapshot time: one that
+    appeared between the probe and the snapshot is about to be recorded
+    properly by whatever read it, and claiming it absent would invalidate the
+    entry on every later run.
+    """
+    snapshot: dict[str, dict[str, Any]] = {}
+    for path in paths:
+        try:
+            if os.path.exists(path):
+                continue
+        except (OSError, ValueError):
+            continue
+        snapshot[path] = {_ABSENT_MARKER: True}
+    return snapshot
+
+
 def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
     """Return ``{url: {'remote': True, 'hash': token}}`` for remote reads.
 
@@ -153,7 +184,9 @@ def snapshot_remote_deps(urls: Iterable[str]) -> dict[str, dict[str, Any]]:
 
 
 def snapshot_dependencies(
-    paths: Iterable[str], urls: Iterable[str] | None = None
+    paths: Iterable[str],
+    urls: Iterable[str] | None = None,
+    absent: Iterable[str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Snapshot everything a call read — local files and remote objects — as one dict.
 
@@ -167,6 +200,11 @@ def snapshot_dependencies(
     snapshot = snapshot_file_deps(set(paths)) if paths else {}
     if urls:
         snapshot.update(snapshot_remote_deps(urls))
+    if absent:
+        # After the present ones, and never over them: a path both probed and
+        # read is present, and the read is the stronger record.
+        for path, entry in snapshot_absent_deps(absent).items():
+            snapshot.setdefault(path, entry)
     return snapshot
 
 
@@ -251,6 +289,15 @@ def file_dep_is_fresh(resolved_path: str, stored: dict[str, Any]) -> tuple[bool,
     """
     if isinstance(stored, dict) and stored.get(_REMOTE_MARKER):
         return remote_dep_is_fresh(resolved_path, stored)
+    if isinstance(stored, dict) and stored.get(_ABSENT_MARKER):
+        # The call ran with this path missing. It is fresh for exactly as long
+        # as the path is still missing; a file that has appeared is a changed
+        # input, whether it appeared because someone created it or because the
+        # same relative name now resolves into a different directory.
+        try:
+            return (not os.path.exists(resolved_path)), "appeared"
+        except (OSError, ValueError):
+            return False, "appeared"
     stored_mtime, stored_size = split_file_dep_value(stored)
     stored_hash = stored.get("hash") if isinstance(stored, dict) else None
     try:

@@ -365,6 +365,19 @@ class FileDependencyRegistry:
         self.register('os', 'listdir', self._create_listdir_handler)
         self.register('os', 'scandir', self._create_listdir_handler)
 
+        # Existence probes: "is there a config here?" The ABSENCE of a file is
+        # an input -- it selects the defaults branch -- and it was the only
+        # input cash could not see, because a file that is never opened
+        # produces no read to track. An entry written by a run that found
+        # nothing recorded no dependencies at all, so it looked valid
+        # everywhere: a round-16 tester got directory B's answer in directory
+        # A, silently, 4/4. Only a NEGATIVE result is recorded; a probe that
+        # says yes is followed by the read that tracks it properly.
+        self.register('os.path', 'exists', self._create_exists_handler)
+        self.register('os.path', 'isfile', self._create_exists_handler)
+        self.register('genericpath', 'exists', self._create_exists_handler)
+        self.register('genericpath', 'isfile', self._create_exists_handler)
+
     def register(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]):
         """
         Register a file tracking handler for a specific function.
@@ -448,6 +461,27 @@ class FileDependencyRegistry:
                 break
             base.append(p)
         return '/'.join(base) or '.'
+
+    @staticmethod
+    def _create_exists_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
+        """Record a path that was looked for and was NOT there.
+
+        Only the negative case. A probe that finds the file is followed by the
+        read that records it properly, and recording it here as well would add
+        a second, weaker entry for the same path.
+
+        This one wraps a genuinely hot function, so it does the cheapest thing
+        that can work: call through first, and only consult the tracker when
+        the answer was False.
+        """
+        def tracked_exists(path, *args, **kwargs):
+            result = original_func(path, *args, **kwargs)
+            if not result:
+                _tracker = _active_tracker.get()
+                if _tracker is not None and isinstance(path, (str, bytes, os.PathLike)):
+                    _tracker._track_absent(path)
+            return result
+        return tracked_exists
 
     @staticmethod
     def _create_glob_dir_handler(original_func: Callable[..., Any], track_callback: Callable[..., Any]):
@@ -575,6 +609,12 @@ class FileAccessTracker:
         # every consumer of that set stats/hashes its members, and a URL is not
         # a path. They are re-joined downstream as remote dependency entries.
         self.accessed_remote: set[str] = set()
+        # Paths this block looked for and did not find. Recorded as their own
+        # kind of dependency (``{'absent': True}``) so an entry computed
+        # WITHOUT an optional file stops being valid once that file appears --
+        # including when the same relative name resolves into a directory that
+        # has one. See ``_track_absent``.
+        self.absent_files: set[str] = set()
         self.user_ns = user_ns or {}
         self.registry = FileDependencyRegistry()
         # Stack of ContextVar tokens, one per active __enter__. Supports
@@ -636,6 +676,10 @@ class FileAccessTracker:
         """Remote URLs read in this block, tracked by store validator instead."""
         return self.accessed_remote
 
+    def get_absent_files(self) -> set[str]:
+        """Paths this block looked for and did not find."""
+        return self.absent_files
+
     def _track_path(self, path):
         raw_path = str(path)
         if _is_pseudo_fs(raw_path):
@@ -696,6 +740,51 @@ class FileAccessTracker:
         parent = self._parent_stack[-1] if self._parent_stack else None
         if parent is not None and parent is not self:
             parent._add_tracked(abs_path)
+
+    def _track_absent(self, path) -> None:
+        """Record *path* as looked-for-and-missing.
+
+        Kept as WRITTEN, not resolved: a relative probe is about "a file with
+        this name, here", and that is exactly the thing that must be
+        re-evaluated against the live cwd on the next run. Resolving it would
+        freeze the directory the probe happened to run in -- which is the bug
+        this exists to close, in mirror image.
+
+        The same filters as ``_track_path``: kernel pseudo-filesystems and
+        cash's own storage are not user dependencies.
+        """
+        try:
+            raw = str(path)
+        except (TypeError, ValueError):
+            return
+        if not raw or _is_pseudo_fs(raw):
+            return
+        try:
+            normalized = normalize_path(raw)
+        except (TypeError, ValueError):
+            return
+        if _is_cash_internal(normalized):
+            return
+        if os.path.isabs(raw):
+            # An absolute probe is about one fixed file, so record it resolved
+            # the way a read of it would be -- otherwise the two spellings of
+            # the same path would not match.
+            try:
+                normalized = normalize_path(os.path.realpath(raw))
+            except (TypeError, ValueError, OSError):
+                pass
+            if _is_pseudo_fs(normalized) or _is_cash_internal(normalized):
+                return
+        self._add_tracked_absent(normalized)
+
+    def _add_tracked_absent(self, path: str) -> None:
+        """Record an absent path here and, when propagating, on the parents."""
+        self.absent_files.add(path)
+        if not self._propagate_to_parent:
+            return
+        parent = self._parent_stack[-1] if self._parent_stack else None
+        if parent is not None and parent is not self:
+            parent._add_tracked_absent(path)
 
     def _add_tracked_remote(self, url: str) -> None:
         """Record a remote *url* read, propagating to the enclosing tracker."""

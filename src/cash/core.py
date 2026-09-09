@@ -2263,7 +2263,9 @@ class Cash:
         """
         from cash.notebook.file_dep_snapshot import snapshot_dependencies
         deps = snapshot_dependencies(
-            tracker.get_accessed_files(), tracker.get_accessed_remote_urls()
+            tracker.get_accessed_files(),
+            tracker.get_accessed_remote_urls(),
+            tracker.get_absent_files(),
         )
         return deps or None
 
