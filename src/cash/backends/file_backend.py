@@ -7,7 +7,6 @@ import gzip
 import logging
 import os
 import pickle
-import tempfile
 import threading
 import time
 import weakref
@@ -45,6 +44,57 @@ logger = logging.getLogger(__name__)
 # alive, and must stop being waited on.
 _WRITERS_BY_DIR: dict[str, weakref.WeakSet] = {}
 _WRITERS_LOCK = threading.Lock()
+
+
+#: How many names ``_create_temp_file`` will try before giving up. Each attempt
+#: costs one ``os.open``; the only reason a fresh 96-bit random name collides is
+#: a name we just created, so more than a handful means something is wrong that
+#: retrying cannot fix.
+_TEMP_NAME_ATTEMPTS = 8
+
+
+def _create_temp_file(
+    directory: str, prefix: str = '.tmp-', suffix: str = '.part',
+) -> tuple[int, str]:
+    """Create a new file in *directory* and return ``(fd, path)``.
+
+    This is ``tempfile.mkstemp`` minus one behaviour that turns an unwritable
+    cache directory into a hung process. CPython's ``_mkstemp_inner`` SWALLOWS
+    ``PermissionError`` and tries the next name -- a deliberate workaround for a
+    Windows directory-deletion race -- guarded by ``os.access(dir, W_OK)``,
+    which on Windows reports only the read-only attribute and knows nothing
+    about ACLs. Against a directory denied by ACL (a read-only mount, a service
+    account without write permission, a container volume) the guard says
+    "writable", every attempt raises, and the loop runs ``TMP_MAX`` = 10,000
+    times per write. Measured: a job whose work took 24s was still running at
+    420s, in a background writer thread the interpreter then waits on at exit --
+    the work done and printed, the process never returning. Round-15 gate, 5/5.
+
+    A cache write is best-effort by design in this codebase: a failure warns
+    (``CashCacheStoreFailedWarning``) and the value the user already computed is
+    returned. Retrying a permission error thousands of times cannot reach that
+    contract, so this does not retry it at all -- ``PermissionError`` propagates
+    on the first attempt and takes the ordinary failed-write path.
+
+    ``FileExistsError`` IS retried, because that is the one failure another name
+    can fix, and bounded because nothing else should be producing our names.
+    ``os.urandom`` rather than the ``random`` module: cash watches the process
+    RNG to decide whether a cached statement drew from it, and drawing from it
+    here to name a file would be cash poisoning its own instrument.
+    """
+    flags = os.O_CREAT | os.O_EXCL | os.O_RDWR | getattr(os, 'O_BINARY', 0)
+    last: OSError | None = None
+    for _ in range(_TEMP_NAME_ATTEMPTS):
+        candidate = os.path.join(directory, f"{prefix}{os.urandom(12).hex()}{suffix}")
+        try:
+            return os.open(candidate, flags, 0o600), candidate
+        except FileExistsError as exc:
+            last = exc
+            continue
+    raise FileExistsError(
+        f"could not find an unused temporary name in {directory!r} after "
+        f"{_TEMP_NAME_ATTEMPTS} attempts"
+    ) from last
 
 
 def _write_all(fd: int, data: bytes) -> None:
@@ -236,12 +286,50 @@ class FileBackend(CacheBackend):
                 return
             os.makedirs(self.cache_dir, exist_ok=True)
             self._check_format_version()
+            self._warn_if_unwritable()
             if self._flush_interval > 0:
                 self._flusher_thread = threading.Thread(
                     target=self._flush_periodically, daemon=True,
                 )
                 self._flusher_thread.start()
             self._initialized = True
+
+    def _warn_if_unwritable(self) -> None:
+        """Say at once, and at the path, if this directory cannot be written.
+
+        Every write here is asynchronous and best-effort, so an unwritable cache
+        directory otherwise produces *no symptom at all*: every call recomputes,
+        every run is slow, and nothing anywhere names the directory. A tester hit
+        this as an eleven-minute mystery, and the operator's version is worse --
+        a nightly job that never gets faster and never says why.
+
+        One create-and-delete at init, on the caller's first cache operation.
+        Cheap enough not to think about (~200us) next to the ``scandir`` this
+        object already does, and it answers the question for a directory that is
+        merely READ-only too -- one already stamped with the current format
+        writes nothing else at startup, so nothing else would find out.
+        """
+        try:
+            fd, probe = _create_temp_file(self.cache_dir, prefix='.probe-', suffix='.tmp')
+        except OSError as exc:
+            from cash.diagnostics import warn_diagnostic
+            from cash.exceptions import CashCacheStoreFailedWarning
+            warn_diagnostic(
+                CashCacheStoreFailedWarning,
+                "CACHE-DIR-UNWRITABLE",
+                f"cash cannot write to its cache directory {self.cache_dir} "
+                f"({type(exc).__name__}: {exc}). Nothing will be cached to disk "
+                f"this run, so every call recomputes.",
+                "point cash somewhere writable -- cash.configure(cache_dir=...), "
+                "CASH_CACHE_DIR, or the cache_dir= argument -- or grant this "
+                "user write permission on that path.",
+            )
+            return
+        os.close(fd)
+        try:
+            os.remove(probe)
+        except OSError:
+            logger.debug("Could not remove writability probe %s", probe, exc_info=True)
 
     def _check_format_version(self) -> None:
         """Enforce on-disk cache-format compatibility.
@@ -627,9 +715,9 @@ class FileBackend(CacheBackend):
         decompress the value it exists to avoid touching.
         """
         directory = os.path.dirname(path) or '.'
-        # mkstemp in the target directory; the leading dot keeps the partial
-        # out of the ``*.entry`` glob the backend scans.
-        fd, tmp_path = tempfile.mkstemp(dir=directory, prefix='.tmp-', suffix='.part')
+        # A temp file in the target directory; the leading dot keeps the
+        # partial out of the ``*.entry`` glob the backend scans.
+        fd, tmp_path = _create_temp_file(directory)
         os.close(fd)
         try:
             with open(tmp_path, 'wb') as f:

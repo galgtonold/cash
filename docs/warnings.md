@@ -161,6 +161,36 @@ It is worth acting on only when the function does real work before it plots —
 that work is being repeated on every call, and splitting the function recovers
 the caching.
 
+## CACHE-DIR-UNWRITABLE {#cache-dir-unwritable}
+
+<!-- claim: cash/backends/file_backend.py:FileBackend._warn_if_unwritable @82b4ab5b -->
+**What happened.** On its first cache operation, cash tried to create a file in
+its cache directory and could not: a read-only mount, a directory this account
+has no write permission on, a container volume, a path owned by another user
+after a deployment. The warning names the exact directory and the OS error.
+
+**Why it matters.** Nothing will be cached to disk for the rest of the run, so
+every call recomputes. Your results are correct -- they are computed the normal
+way -- but the cache is doing nothing at all, and without this warning that has
+no symptom you could see. The job is simply always slow, and nothing names the
+directory responsible.
+
+**What to do.** Point cash somewhere writable, or grant this account write
+permission on the path it named:
+
+```python
+cash.configure(cache_dir="/var/tmp/cash")   # or CASH_CACHE_DIR=... in the env
+```
+
+In a container, check that the cache path is on a writable volume rather than
+the image's read-only layer. Under a service account, check that the account --
+not your user -- owns or can write the directory.
+
+**When it is safe to ignore.** When the directory is read-only deliberately (a
+shared, pre-populated cache you only ever read from). Cash still reads it; only
+new entries are lost. If that is the intent, the warning is telling you the
+truth and there is nothing to fix.
+
 ## CACHE-IF-BYPASSED {#cache-if-bypassed}
 
 **What happened.** You passed `cache_if=` to decide whether a result is worth
@@ -339,6 +369,43 @@ are getting in-process hits at all, because on default caps you usually are not.
 `f.cache_info()` on the decorated function is the quickest answer — if the hits
 are not climbing, the entry is being evicted as fast as it is written and the
 decorator is buying you nothing.
+
+## CACHE-WRITE-ABANDONED {#cache-write-abandoned}
+
+<!-- claim: cash/config.py:CashConfig.shutdown_write_timeout @5ac9f606, cash/backends/_base.py:PendingWrites.shutdown @a2c42b01, cash/backends/_base.py:_DaemonWriterPool.shutdown @a6534a5d -->
+**What happened.** Your program finished, and cash was still writing cache
+entries in the background. It waits for them at exit -- for 60 seconds by
+default -- and this time the deadline expired with writes still running. The
+process exited anyway; the warning says how many entries were dropped.
+
+**Why it matters.** Only for speed: those keys were not stored, so the next run
+recomputes that work. Nothing about the results you already got is affected --
+they were computed, returned and used normally.
+
+What the deadline buys is the opposite failure. Cash's writer threads are
+daemons and this wait is bounded on purpose, because a cache write that cannot
+finish must never keep a finished process alive. A job that prints its answer
+and then hangs forever is an outage, and a hard one to diagnose: the logs show
+a healthy run, and the scheduler's next tick piles up behind a process that
+looks busy.
+
+**What to do.** Look at the cache directory first -- this almost always means
+storage that cannot accept the write rather than storage that is merely slow: a
+read-only mount, a service account without write permission, a container volume,
+a directory owned by another user after a deployment, a network mount that has
+stalled. `cash.configure(cache_dir=...)` and `CASH_CACHE_DIR` name the path
+cash is using.
+
+If the storage really is that slow and the entries are worth waiting for, raise
+the deadline:
+
+```bash
+CASH_SHUTDOWN_WRITE_TIMEOUT=300 python nightly_job.py
+```
+
+**When it is safe to ignore.** A one-off at the end of a run that wrote an
+unusually large result to a slow disk. If it fires every run, the entries it
+names are never being stored, and the cache is doing less than it appears to.
 
 ## IMPURE-OBSERVED-EFFECTS {#impure-observed-effects}
 

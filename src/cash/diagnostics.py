@@ -100,7 +100,11 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
                                # object, costing the sum of every snapshot
     "CACHE-NET-LOSS",          # key hashing has cost more than it has saved
     "CACHE-THRASH",            # at the cap, evicting within writes of storing
+    "CACHE-DIR-UNWRITABLE",    # the cache directory cannot be written at all,
+                               # so nothing reaches disk this run
     "CACHE-VALUE-TOO-BIG",     # too large for any persistent tier; RAM only
+    "CACHE-WRITE-ABANDONED",   # a write was still running at the exit deadline,
+                               # so the process exited without storing it
 
     # -- IMPURE: the function does something a cache hit will not repeat ----
     "IMPURE-OBSERVED-EFFECTS", # watching the first call caught effects static

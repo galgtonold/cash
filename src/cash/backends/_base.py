@@ -5,6 +5,7 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import logging
+import queue
 import threading
 import time
 import weakref
@@ -91,6 +92,121 @@ def reset_discarded_writes(keep: int = 0) -> None:
 MetadataDict = dict[str, Any]
 
 
+def _shutdown_write_timeout() -> float:
+    """Seconds a finished process will wait for its cache writes.
+
+    Resolved per call rather than at import, so it follows the ordinary
+    configuration path -- ``cash.configure(shutdown_write_timeout=...)``,
+    ``CASH_SHUTDOWN_WRITE_TIMEOUT``, ``[tool.cash]`` -- including a value set
+    after this module was imported. Falls back to the default if the config
+    layer is unavailable: this runs from an ``atexit`` handler, where imports
+    can fail during interpreter teardown, and a bounded wait with a plain
+    default is still better than an unbounded one.
+    """
+    try:
+        from ..config import get_config
+        value = float(get_config().shutdown_write_timeout)
+    except Exception:  # noqa: BLE001 - teardown, or a config that cannot load
+        return _DEFAULT_SHUTDOWN_WRITE_TIMEOUT
+    return value if value > 0 else 0.0
+
+
+#: Fallback for :func:`_shutdown_write_timeout`; the configured default lives on
+#: ``CashConfig.shutdown_write_timeout`` and is what users actually change.
+_DEFAULT_SHUTDOWN_WRITE_TIMEOUT = 60.0
+
+
+class _DaemonWriterPool:
+    """The little thread pool ``PendingWrites`` runs its writes on.
+
+    It exists for one property ``ThreadPoolExecutor`` cannot give: **its threads
+    are daemons, so a stuck write cannot keep a finished process alive.**
+    ``concurrent.futures.thread`` registers an ``atexit`` hook that joins every
+    worker it ever started, unconditionally and with no timeout, so a task
+    blocked in the OS holds the interpreter open however the caller spelled
+    ``shutdown(wait=...)``. Round-15 measured exactly that: an unwritable cache
+    directory left a writer spinning, and a 24-second job was still running at
+    420 seconds with its result already printed.
+
+    Deliberately smaller than an executor: ``submit`` and ``shutdown``, no
+    ``map``, no ``initializer``, no work stealing. Writes are serialized per
+    backend (one worker), so this is a queue with a thread on the end of it.
+
+    A daemon thread is stopped wherever it happens to be if the interpreter
+    finalizes first. That is safe here for the same reason a power cut is:
+    entries are written to a temp file and renamed into place, so a half-written
+    entry is never visible under its real name.
+    """
+
+    def __init__(self, max_workers: int = 1) -> None:
+        self._max_workers = max(1, max_workers)
+        self._queue: queue.SimpleQueue = queue.SimpleQueue()
+        self._threads: list[threading.Thread] = []
+        self._lock = threading.Lock()
+        self._shutdown = False
+
+    def submit(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> concurrent.futures.Future:
+        future: concurrent.futures.Future = concurrent.futures.Future()
+        with self._lock:
+            if self._shutdown:
+                raise RuntimeError("cannot schedule new futures after shutdown")
+            self._queue.put((future, fn, args, kwargs))
+            self._grow_if_needed()
+        return future
+
+    def _grow_if_needed(self) -> None:
+        """Start another worker if every one we have may be busy.
+
+        Called under ``_lock``. Threads are started lazily, like an executor's:
+        a backend that never writes never starts one.
+        """
+        if len(self._threads) >= self._max_workers:
+            return
+        thread = threading.Thread(
+            target=self._work, name="cash-cache-writer", daemon=True,
+        )
+        self._threads.append(thread)
+        thread.start()
+
+    def _work(self) -> None:
+        while True:
+            item = self._queue.get()
+            if item is None:                      # shutdown sentinel
+                return
+            future, fn, args, kwargs = item
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(fn(*args, **kwargs))
+            except BaseException as exc:  # noqa: BLE001 - reported via the future
+                future.set_exception(exc)
+
+    def shutdown(self, wait: bool = True, timeout: float | None = None) -> bool:
+        """Stop the workers. Returns True if they all finished in time.
+
+        ``False`` means the deadline expired with a write still running: the
+        thread is a daemon, so the process exits anyway and the caller says so.
+        """
+        with self._lock:
+            already = self._shutdown
+            self._shutdown = True
+            threads = list(self._threads)
+        if not already:
+            for _ in threads:
+                self._queue.put(None)
+        if not wait:
+            return True
+        deadline = None if timeout is None else time.monotonic() + timeout
+        for thread in threads:
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                return False
+            thread.join(timeout=remaining)
+            if thread.is_alive():
+                return False
+        return True
+
+
 class PendingWrites:
     """Per-backend background-write scheduler.
 
@@ -119,13 +235,15 @@ class PendingWrites:
       future dropped -- never re-raised. See ``wait`` for why: the value was
       computed successfully, and a cache that destroys it because a write
       failed is worse than no cache at all.
-    * ``shutdown(wait=True)`` blocks until every in-flight write
-      completes — called by ``CacheBackend.shutdown()`` (which itself
-      runs from Cash's ``atexit`` handler).
+    * ``shutdown(wait=True)`` waits for every in-flight write, but only
+      until a deadline (``config.shutdown_write_timeout``) — called by
+      ``CacheBackend.shutdown()``, which itself runs from Cash's ``atexit``
+      handler, where an unbounded wait means a finished process that never
+      exits. Expiry is reported, not swallowed.
     """
 
     def __init__(self, max_workers: int = 1) -> None:
-        self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=max_workers)
+        self._executor = _DaemonWriterPool(max_workers=max_workers)
         self._pending: dict[str, concurrent.futures.Future] = {}
         self._lock = threading.Lock()
         self._shutdown = False
@@ -413,15 +531,57 @@ class PendingWrites:
         for key, exc in failed:
             logger.debug("  failed write key=%r: %s: %s", key, type(exc).__name__, exc)
 
-    def shutdown(self, wait: bool = True) -> None:
-        """Block (when ``wait=True``) until every in-flight write finishes."""
+    def shutdown(self, wait: bool = True, timeout: float | None = None) -> None:
+        """Stop accepting writes; when *wait*, give the in-flight ones until
+        *timeout* seconds to finish (default ``config.shutdown_write_timeout``).
+
+        The wait is BOUNDED, and the pool's threads are daemons, because this
+        runs from an ``atexit`` handler: a write that cannot finish must not be
+        able to keep a finished process alive. Losing a cache entry costs a
+        recompute; a job that never exits is an outage, and a peculiarly bad one
+        -- the work succeeded, the result printed, the scheduler's next tick
+        piles up behind a process that looks healthy.
+
+        The timeout expiring is loud (``CACHE-WRITE-ABANDONED``) and names how
+        many writes were dropped: silence here would be a cache quietly storing
+        less than it appears to.
+        """
         with self._lock:
             if self._shutdown:
                 return
             self._shutdown = True
-        self._executor.shutdown(wait=wait)
+        if timeout is None:
+            timeout = _shutdown_write_timeout()
+        finished = self._executor.shutdown(wait=wait, timeout=timeout)
         if wait:
+            if not finished:
+                self._warn_abandoned_writes(timeout)
             self._report_failed_writes()
+
+    def _warn_abandoned_writes(self, timeout: float) -> None:
+        """Say that the exit deadline expired with writes still running."""
+        with self._lock:
+            unfinished = sum(1 for f in self._pending.values() if not f.done())
+        from ..diagnostics import warn_diagnostic
+        from ..exceptions import CashCacheStoreFailedWarning
+        try:
+            warn_diagnostic(
+                CashCacheStoreFailedWarning,
+                "CACHE-WRITE-ABANDONED",
+                f"cash gave up waiting for {unfinished} cache write(s) after "
+                f"{timeout:g}s and let the process exit; those entries were not "
+                f"stored, so that work will be recomputed next run.",
+                "a write this slow usually means the cache directory is "
+                "unwritable or on a stalled mount -- check the path in "
+                "cash.configure(cache_dir=...) or CASH_CACHE_DIR. Raise the "
+                "deadline with CASH_SHUTDOWN_WRITE_TIMEOUT=<seconds> if the "
+                "storage really is that slow.",
+            )
+        except Exception:  # noqa: BLE001 - never raise out of an atexit path
+            logger.warning(
+                "Cash abandoned %d cache write(s) after %gs at shutdown.",
+                unfinished, timeout,
+            )
 
 
 @dataclass(frozen=True)

@@ -183,6 +183,18 @@ class CashConfig:
     values reduce data loss on crash but increase disk I/O. Set to
     0 to flush after every write (slowest, safest)."""
 
+    shutdown_write_timeout: float = 60.0
+    """Seconds a finishing process waits for its background cache
+    writes before exiting without them.
+
+    Generous, because dropping a large result still on its way to
+    disk wastes real compute — but FINITE, because a cache write
+    that cannot complete must never keep a finished process alive.
+    An unwritable cache directory once left a 24-second job still
+    running at 420 seconds, its answer already printed. Expiry is
+    reported as ``CACHE-WRITE-ABANDONED``; raise this only when the
+    storage really is that slow."""
+
     # --- Cost-aware caching policy ---
     persist_all: bool = False
     """When True, cache **every** notebook statement, bypassing the

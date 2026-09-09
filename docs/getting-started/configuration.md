@@ -53,6 +53,7 @@ the `CASH_*` binding; the TOML key matches the field name.
 | `max_cache_size` | `CASH_MAX_CACHE_SIZE` | `null` (**auto**) | Disk-tier LRU eviction threshold, in bytes. `null` scales the cap to the machine — a fraction of free disk for the disk tier, a fraction of RAM for the memory tier — instead of a flat 1 GiB that capped every tier and thrashed persist-heavy workloads. Set an integer to pin the disk cap. |
 | `max_memory_entries` | `CASH_MAX_MEMORY_ENTRIES` | `null` (unlimited) | Cap on `InMemoryBackend` entries — LRU eviction when exceeded. |
 | `flush_interval` | `CASH_FLUSH_INTERVAL` | `5` | Seconds between `FileBackend`'s background metadata-flush cycles. |
+| `shutdown_write_timeout` | `CASH_SHUTDOWN_WRITE_TIMEOUT` | `60.0` | Seconds a finishing process waits for background cache writes before exiting without them. Finite on purpose: a write that cannot complete (an unwritable directory, a stalled mount) must never keep a finished process alive. Expiry warns [`CACHE-WRITE-ABANDONED`](../warnings.md#cache-write-abandoned). |
 
 ### Cost-aware caching policy
 
