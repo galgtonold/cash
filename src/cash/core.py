@@ -5349,41 +5349,31 @@ class Cash:
                 CacheMetadata.from_dict(raw_locked_metadata)
                 if raw_locked_metadata is not None else None
             )
-            # Use metadata presence (not data presence) as the existence test -
-            # see _try_get_cached for rationale.
+            # The SAME validity test as the unlocked path, by calling the same
+            # function -- not a hand-rolled subset of it.
             #
-            # ``_chunks_are_intact`` is applied here for the same reason it is
-            # applied there, and the omission was a real defect: a chunked
-            # manifest can outlive its chunks (eviction reaches them
-            # separately), and the reader terminates quietly on the first
-            # missing one. Without this check the double-checked re-read went
-            # straight to ``_wrap_iterator_hit`` and handed back a SHORT
-            # iterator -- measured at 3 of 10 items when a later chunk was
-            # gone, and 0 items when the first one was -- with no recompute, no
-            # error and no warning. Truncated data is worse than a slow answer,
-            # so a manifest that cannot be fully resolved is treated as absent
-            # and falls through to ``compute_and_store`` below, exactly as it
-            # does on the default path.
-            if locked_metadata is not None and self._chunks_are_intact(
-                cache_key, locked_metadata
-            ):
-                try:
-                    self._validate_ttl(locked_metadata, ttl)
-                    self._attach_lineage(
-                        locked_data, cache_key, locked_metadata.auto_file_deps,
-                        ttl=ttl,
-                    )
-                    self._log_decorator_call(
-                        func_name, cache_hit=True,
-                        execution_time=time.perf_counter() - call_start,
-                        args_hash=args_hash, cache_key=cache_key,
-                        time_saved=locked_metadata.execution_time or 0.0,
-                    )
-                    return self._wrap_iterator_hit(cache_key, locked_metadata, locked_data)
-                except CacheExpiredError:
-                    pass
-                except (TypeError, KeyError) as e:
-                    self._warn_metadata_invalid(func_name, e)
+            # This block used to re-implement the checks, and it kept losing
+            # one. First ``_chunks_are_intact``: a chunked manifest can outlive
+            # its chunks, and the reader terminates quietly on the first
+            # missing one, so the re-read handed back a SHORT iterator -- 3 of
+            # 10 items when a later chunk was gone, 0 when the first one was,
+            # with no recompute, no error and no warning. Then, found by a
+            # round-16 tester, ``_auto_file_deps_fresh``: under
+            # ``use_locking=True`` a file the cached function reads could be
+            # edited and the next process would serve the answer computed from
+            # the old contents. The unlocked read at the top of the wrapper
+            # caught the stale file and reported a miss -- and then this
+            # re-read, which never asked, handed the entry back anyway. 5/5,
+            # against 0/5 for the same edit without the flag.
+            #
+            # That is twice, so the duplication is the defect. One function
+            # decides whether an entry may be served.
+            hit = self._try_get_cached(
+                cache_key, locked_metadata, locked_data, call_start,
+                args_hash, func_name, ttl,
+            )
+            if hit is not _CACHE_MISS:
+                return self._wrap_iterator_hit(cache_key, locked_metadata, hit)
             return compute_and_store()
         finally:
             try:
