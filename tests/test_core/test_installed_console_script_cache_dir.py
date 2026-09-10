@@ -30,7 +30,12 @@ import textwrap
 
 import pytest
 
-pytestmark = [pytest.mark.core, pytest.mark.slow]
+# The module fixture builds cash from source and pip-installs it into a fresh
+# venv, and pytest-timeout charges that to whichever test asks first. ~20 s
+# locally, but the suite-wide 30 s budget killed the worker outright on a slow
+# Windows runner ("node down: Not properly terminated"), on every retry --
+# each retry repeats the install.
+pytestmark = [pytest.mark.core, pytest.mark.slow, pytest.mark.timeout(600)]
 
 _PKG = "cashprobe"
 
