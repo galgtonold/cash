@@ -12,6 +12,7 @@ import dataclasses
 import functools
 import hashlib
 import inspect
+import json
 import logging
 import os
 import pickle
@@ -2824,7 +2825,16 @@ class Cash:
         self._last_key[func_name] = cache_key
 
     def _absent_entry_reason(self, func_name: str, cache_key: str) -> tuple[str, str]:
-        """Why there is no entry for *cache_key*. Reads state; changes none."""
+        """Why there is no entry for *cache_key*. Reads state; changes none.
+
+        This process's own history first. With none -- the first call of a
+        function in a fresh process, which is where a script's misses are --
+        the keys earlier runs stored for this function, recorded beside the
+        cache (`_record_stored_key`). Without them every such miss read "no
+        earlier run left one on disk", including after a code edit and a TTL
+        expiry, whose entries were in fact on disk (round 18, all five
+        testers).
+        """
         outcome = self._store_outcomes.get(cache_key)
         if outcome is not None:
             if outcome.get("not_stored"):
@@ -2836,9 +2846,24 @@ class Cash:
             return MISS_GONE, ("stored earlier in this process and since "
                                "evicted or cleared")
         previous = self._last_key.get(func_name)
+        since = "since the last call"
         if previous is None or previous == cache_key:
-            return MISS_FIRST, ("the first call with these arguments in this "
-                                "process, and no earlier run left one on disk")
+            record = self._stored_keys(func_name)
+            if cache_key in record:
+                stored_at, written_ttl = record[cache_key]
+                age = time.time() - stored_at
+                if written_ttl is not None and age > written_ttl:
+                    return MISS_TTL, (f"stored {age:.0f}s ago by an earlier run, "
+                                      f"with ttl={written_ttl}s")
+                return MISS_GONE, ("an earlier run stored it; it has since been "
+                                   "evicted or cleared")
+            others = [key for key in record if key != cache_key]
+            if previous is None and others:
+                previous = others[-1]
+                since = "since an earlier run stored it"
+            if previous is None or previous == cache_key:
+                return MISS_FIRST, ("the first call with these arguments in this "
+                                    "process, and no earlier run stored one")
         # Keys are `func:state:dynamic:args`; the parts that moved say why.
         old = previous.rsplit(":", 3)
         new = cache_key.rsplit(":", 3)
@@ -2847,11 +2872,13 @@ class Cash:
         moved = []
         if old[1] != new[1]:
             moved.append((MISS_CODE, "the function's code, a helper it calls, or "
-                                     "a value it reads changed since the last call"))
+                                     f"a value it reads changed {since}"))
         if old[2] != new[2]:
             moved.append((MISS_DYNAMIC, "a dynamic_depends_on source changed"))
         if old[3] != new[3]:
-            moved.append((MISS_ARGS, "called with arguments not seen on the last call"))
+            moved.append((MISS_ARGS, "called with arguments not seen "
+                                     + ("on the last call" if since == "since the last call"
+                                        else "in the last run")))
         if not moved:
             return MISS_FIRST, "no entry for this key"
         return moved[0][0], "; and ".join(detail for _, detail in moved)
@@ -2882,6 +2909,68 @@ class Cash:
         path, why = next(iter(stale.items()))
         more = f" and {len(stale) - 1} more" if len(stale) > 1 else ""
         return f"{path} ({why}){more}"
+
+    #: Keys remembered per function beside the cache, most recent last.
+    _STORED_KEYS_MAX = 64
+
+    def _stored_keys_path(self, func_name: str) -> str | None:
+        """Where this function's recently stored keys are recorded, or None.
+
+        Beside the entries, in the directory of the backend actually built --
+        never a configured path, so reading a miss reason cannot create a
+        cache directory -- and only for a backend that has a local directory.
+        """
+        backend = self._backend
+        for candidate in (backend, *getattr(backend, "backends", ())):
+            path = getattr(candidate, "cache_dir", None)
+            if isinstance(path, str) and path:
+                name = hashlib.sha256(func_name.encode("utf-8")).hexdigest()[:32]
+                return os.path.join(path, ".keys", f"{name}.json")
+        return None
+
+    def _stored_keys(self, func_name: str) -> dict[str, list]:
+        """``{cache_key: [stored_at, ttl]}`` earlier runs recorded, oldest first."""
+        path = self._stored_keys_path(func_name)
+        if path is None:
+            return {}
+        from cash.notebook.file_tracker import untracked
+        try:
+            # Cash's own bookkeeping: a nested call reads this while the OUTER
+            # call's file tracker is live, and it must not become that entry's
+            # dependency.
+            with untracked(), open(path, encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return {}
+        keys = data.get("keys") if isinstance(data, dict) else None
+        return keys if isinstance(keys, dict) else {}
+
+    def _record_stored_key(self, func_name: str, cache_key: str, ttl: int | None) -> None:
+        """Remember that *cache_key* reached disk, for the next process's reasons.
+
+        One small file per function, rewritten on each persisted store (the
+        compute that just ran dwarfs it). Concurrent writers race to the last
+        rename; the loser's key is missing from the record, which costs a
+        vaguer reason, never a wrong answer. Never raises.
+        """
+        path = self._stored_keys_path(func_name)
+        if path is None:
+            return
+        try:
+            keys = self._stored_keys(func_name)
+            keys.pop(cache_key, None)
+            keys[cache_key] = [time.time(), ttl]
+            while len(keys) > self._STORED_KEYS_MAX:
+                keys.pop(next(iter(keys)))
+            from cash.notebook.file_tracker import untracked
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+            with untracked():
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump({"func": func_name, "keys": keys}, fh)
+                os.replace(tmp, path)
+        except Exception:  # noqa: BLE001 - a diagnostic aid; the store succeeded
+            logger.debug("could not record the stored key for %s", func_name, exc_info=True)
 
     def _remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
         outcome.setdefault("at", time.time())
@@ -7725,11 +7814,14 @@ class Cash:
             # landed, and "RAM only" is the answer to the next process's miss.
             meta_dict = meta.to_dict()
             self.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            not_persisted = self._not_persisted_reason(meta_dict, execution_time)
             self._remember_outcome(cache_key, {
                 "stored_at": time.time(),
                 "ttl": ttl,
-                "not_persisted": self._not_persisted_reason(meta_dict, execution_time),
+                "not_persisted": not_persisted,
             })
+            if not_persisted is None:
+                self._record_stored_key(func_name, cache_key, ttl)
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
             self._note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self.backend).__name__

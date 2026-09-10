@@ -66,12 +66,16 @@ class untracked:
     ContextVar swap, not a generator.
     """
 
-    __slots__ = ("_token",)
+    __slots__ = ("_token", "_observer_token")
 
     def __enter__(self) -> None:
         self._token = _active_tracker.set(None)
+        # Nor anyone's observed side effect: cash writing its own bookkeeping
+        # file inside a nested call is not the OUTER function writing a file.
+        self._observer_token = _active_effect_observer.set(None)
 
     def __exit__(self, *exc: Any) -> None:
+        _active_effect_observer.reset(self._observer_token)
         _active_tracker.reset(self._token)
 
 # Per-target install lock: the dispatcher wrappers are installed once

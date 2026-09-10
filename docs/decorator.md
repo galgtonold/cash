@@ -185,12 +185,19 @@ directly, its `miss_reasons` included.
 line per call to stderr — a hit, or a miss and why:
 
 ```
-cash.calls: MISS model.build_grid  no entry yet: the first call with these arguments in this process, and no earlier run left one on disk  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
+cash.calls: MISS model.build_grid  no entry yet: the first call with these arguments in this process, and no earlier run stored one  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
 cash.calls: HIT  model.build_grid  (saved 0.05s)
 cash.calls: MISS model.build_grid  new arguments: called with arguments not seen on the last call  (ran 0.05s)
+cash.calls: MISS model.ray_component  code or state changed: the function's code, a helper it calls, or a value it reads changed since an earlier run stored it  (ran 9.8s)
 ```
 
-along with cash's other debug records. If your program configures `logging`
+A reason is not limited to what this process saw: each function's recently
+stored keys are recorded beside the cache (in `.keys/`), so the first call of a
+new run can still say that the code changed, that the arguments are new, that
+an earlier run's entry expired under its `ttl`, or that it was evicted or
+cleared.
+
+The lines come with cash's other debug records. If your program configures `logging`
 itself, those records go to your handlers in your format instead, and no
 stderr handler is added. `Cash(verbose=True)` gives the per-call lines alone.
 
