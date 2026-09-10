@@ -186,7 +186,7 @@ def normalize_source_for_hash(source: str) -> str:
 _CACHE_DECORATOR_PARAMS = frozenset({
     "depends_on", "dynamic_depends_on", "file_depends_on", "ttl", "cache_if",
     "chunk_max_items", "chunk_max_bytes", "strict", "assume_safe",
-    "allow_random",
+    "allow_random", "frozen",
 })
 _CACHE_DECORATOR_NAME = "cache"
 

@@ -19,9 +19,12 @@ def _cash() -> Cash:
 
 
 def _df(vals, lineage=None):
+    """A frame tagged the way the notebook's statement layer tags one: the tag
+    plus who wrote it. A decorator-written tag is not trusted (round 18)."""
     d = pd.DataFrame({"a": vals})
     if lineage is not None:
         d._cash_lineage_hash = lineage
+        d._cash_lineage_src = "statement"
     return d
 
 
@@ -75,7 +78,11 @@ def test_memoised_key_equals_plain_content_hash():
     assert with_lineage == plain
 
 
-def test_no_lineage_still_content_hashes_every_call():
+def test_no_lineage_still_content_hashes_every_call(monkeypatch):
+    # Pins the LINEAGE memo only. pandas copy-on-write adds a memo of its own
+    # for untagged frames, validated by an exact change check
+    # (test_mutated_cached_result.py); switched off here.
+    monkeypatch.setattr("cash.core._COW_PANDAS", False)
     c = _cash()
     calls = _count_hashes(c)
     df = _df(range(100))                   # no lineage attribute

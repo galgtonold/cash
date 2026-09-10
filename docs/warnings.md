@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @0eaac88e, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @17f7cb28, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -115,7 +115,7 @@ switched off.
 
 ## CACHE-ASYNC-GENERATOR {#cache-async-generator}
 
-<!-- claim: cash/core.py:Cash.cache @fd8e83f6 -->
+<!-- claim: cash/core.py:Cash.cache @2431dc44 -->
 **What happened.** You put `@cash.cache` on an async generator — an `async def`
 function that `yield`s. Cash does not cache those in this release, so the
 decorator handed your function straight back, unwrapped.
@@ -376,7 +376,7 @@ by registering a hasher for the expensive argument's type:
 
     cash.register_hasher(pd.DataFrame, lambda df: df.attrs["version"], override=True)
 
-<!-- claim: cash/core.py:Cash.register_hasher @df6d03da -->
+<!-- claim: cash/core.py:Cash.register_hasher @eed1ca57 -->
 `override=True` is not decoration. For the types Cash fingerprints itself —
 numpy arrays, pandas / polars / PyArrow / modin frames, dask collections — its
 own content hasher runs first, and a plain registration for one of those types
@@ -791,7 +791,7 @@ it every time is fine. Nothing on this path can hand you a wrong result.
 or partial passed to any cached function in the process belongs to. Cash warns
 when you register it; the registration still takes effect.
 
-<!-- claim: cash/core.py:Cash.register_hasher @df6d03da -->
+<!-- claim: cash/core.py:Cash.register_hasher @eed1ca57 -->
 **Why it matters.** What the hasher returns becomes that argument's identity in
 the key. Cash still folds in each function's code, so two functions with
 different bodies stay apart — but closures one factory makes have the same
@@ -869,6 +869,29 @@ possibly stale, and clear its entries after changing the source data.
 change. If the thing it tracked has since become static, the right response is
 to delete the `dynamic_depends_on=` argument, not to filter the warning — a
 silent declaration that does nothing is worse than no declaration.
+
+## KEY-FROZEN-MUTATED {#key-frozen-mutated}
+
+<!-- claim: cash/core.py:Cash._audit_frozen @0f673f82 -->
+**What happened.** A function is decorated `@cash.cache(frozen=True)` — a
+promise that its result is not modified after it is returned — and one of its
+results was modified anyway: a later audit found it had changed since cash
+first saw it. The message names the function that produced it.
+
+**Why it matters.** A frozen result is keyed downstream by the call that
+produced it, not by its contents; that is what makes passing it on cheap. While
+it was modified and not yet audited, a cached function receiving it could be
+served the result it computed for the unmodified object. From the audit on,
+that object is keyed by its contents, so later calls are correct. The audit
+runs at the object's 8th use as an argument and every 64th after that, and at
+every use under `CASH_DEBUG=1` — so the window can be wide.
+
+**What to do.** Find what modifies it — `model.fit(...)` on a model a frozen
+step trained is the usual one — and either take `frozen=True` off the producer
+or modify a copy (`copy.deepcopy(obj)`). While looking, `CASH_DEBUG=1` audits
+every use, so the warning points at the first call after the change.
+
+**When it is safe to ignore.** Never: the promise the key relies on was broken.
 
 ## KEY-INSTANCE-STATE {#key-instance-state}
 

@@ -52,7 +52,7 @@ def register_hasher(
 ) -> None: ...
 ```
 
-<!-- claim: cash/core.py:Cash._hash_callable_source @6c6f2db6, cash/core.py:Cash.register_hasher @df6d03da -->
+<!-- claim: cash/core.py:Cash._hash_callable_source @6c6f2db6, cash/core.py:Cash.register_hasher @eed1ca57 -->
 Two things happen on registration — once it is accepted, which for a type Cash
 content-hashes itself means passing `override=True` (see
 [below](#overriding-a-built-in-content-hasher)):
@@ -62,12 +62,12 @@ content-hashes itself means passing `override=True` (see
 
 Registering for `types.FunctionType`, `types.MethodType` or `functools.partial` is accepted but warns ([KEY-CALLABLE-HASHER](../../warnings.md#key-callable-hasher)): the hasher then covers every function passed to any cached function, and one keyed on the name gives every closure a factory makes the same cache entry. Pass what the closure captures as a plain argument instead.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @8be5a896, cash/core.py:Cash._try_builtin_type_hash @9c5166b5 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6d705865, cash/core.py:Cash._try_builtin_type_hash @9c5166b5 -->
 When a cached function runs, `_serialize_args` calls `_hash_arg_payload`, which walks each argument in this order — **the order matters, and it is not the one you might expect**:
 
 0. **Hashers registered with `override=True`.** Nothing else is consulted for a type you have explicitly taken over — see [overriding a built-in](#overriding-a-built-in-content-hasher).
 1. **Built-in content hashers.** `_try_builtin_type_hash` handles pandas / numpy / polars / PyArrow / modin / dask. These are *content*-derived and therefore byte-stable across processes and kernel restarts, which is what lets a persisted entry survive a restart. They are not a fallback — they take precedence over everything below.
-2. **Notebook lineage hash.** If the value carries `_cash_lineage_hash` (the output of an upstream cached statement) *and* no built-in content hasher claimed it, that hash is used directly. It sits here rather than first because it is recomputed per session and would not survive a restart.
+2. **Notebook lineage hash.** If the value carries `_cash_lineage_hash` (the output of an upstream cached statement) *and* no built-in content hasher claimed it, that hash is used directly. It sits here rather than first because it is recomputed per session and would not survive a restart. Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place.
 3. **Registered type hashers.** Cash iterates `self._type_hashers.items()` in insertion order and tests each with `isinstance(arg, type_)`. First match wins, and `isinstance` makes the dispatch MRO-aware: register on `BaseModel` and every subclass uses it.
 4. **Pickle fallback.** Anything left goes through `pickle.dumps`, and those bytes feed the SHA-256 that yields the args hash.
 

@@ -64,6 +64,9 @@ class LineageStore:
         if value is not None:
             try:
                 value._cash_lineage_hash = hash_
+                # This layer re-tags the value whenever it changes, which is
+                # what lets the decorator trust the tag for its content.
+                value._cash_lineage_src = "statement"
             except (AttributeError, TypeError):
                 # Builtins (int / str / ...) and slotted types reject attribute
                 # writes. The dict is still authoritative.

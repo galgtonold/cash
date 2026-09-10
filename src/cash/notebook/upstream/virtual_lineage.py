@@ -2210,6 +2210,7 @@ class VirtualLineage:
                     # computation finds it via the ladder fallback.
                     try:
                         val._cash_lineage_hash = new_lineage
+                        val._cash_lineage_src = "statement"
                     except (AttributeError, TypeError):
                         logger.debug(
                             "Cannot attach _cash_lineage_hash to restored variable %s",

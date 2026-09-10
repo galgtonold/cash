@@ -71,7 +71,7 @@ Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is
 skipped rather than silently pretending it doesn't exist.
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @8be5a896 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6d705865 -->
 The `args` segment resolves each argument through its own ladder, and the order
 is deliberate:
 
@@ -79,8 +79,10 @@ is deliberate:
    taken over from Cash, so nothing below is consulted for it.
 2. **Built-in content hashers** — pandas, numpy, polars, pyarrow, modin, dask.
    These hash the argument's *content*, which is byte-stable across processes.
+   A pandas 3 frame's hash is reused while copy-on-write shows the frame
+   unchanged; a `frozen=True` numpy result's is computed once.
 3. **A lineage-tracked `_cash_lineage_hash`**, for values that carry no content
-   hasher (custom objects).
+   hasher (custom objects). Only a tag something keeps current counts: one the notebook's statement layer wrote (it re-tags a variable on every change), or one from a function declared `frozen=True`. The tag a plain `@cash.cache` call puts on its result is not used, because nothing moves it when the object is modified in place.
 4. **Registered hashers** from `cash.register_hasher(...)`.
 5. **A pickle fallback** over the value itself.
 

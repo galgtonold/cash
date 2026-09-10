@@ -45,7 +45,7 @@ field(np.linspace(0.0, 1.0, 240))     # refined from 200 — recompute
 assert CALLS == [240]                 # all 240 recomputed
 ```
 
-<!-- claim: cash/core.py:Cash._hash_arg_payload @8be5a896 -->
+<!-- claim: cash/core.py:Cash._hash_arg_payload @6d705865 -->
 The axis is a *single argument*. Ask for 240 points instead of 200 and every
 value in the array is different, so there is no earlier result that corresponds
 to any part of it. Cash isn't declining to reuse the old work; there is no old

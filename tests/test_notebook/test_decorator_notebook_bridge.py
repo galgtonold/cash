@@ -237,6 +237,9 @@ class TestTypeHasherRegistry:
             def __init__(self, value):
                 self.value = value
                 self._cash_lineage_hash = "fixed_hash"
+                # Written by the statement layer, which keeps it current; a
+                # tag the decorator wrote is not trusted (round 18).
+                self._cash_lineage_src = "statement"
 
         c.register_hasher(MyData, lambda d: hashlib.sha256(str(d.value).encode()).hexdigest())
 

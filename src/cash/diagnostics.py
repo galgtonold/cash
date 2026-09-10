@@ -134,6 +134,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "KEY-DEPENDS-ON-OPAQUE",   # a declared depends_on= target has no readable
                                # source, so editing it invalidates nothing
     "KEY-DYNAMIC-DEP-FAILED",  # a dynamic_depends_on resolver raised
+    "KEY-FROZEN-MUTATED",      # a result declared frozen=True was modified
+                               # after it was returned; keyed by content now
     "KEY-INSTANCE-STATE",      # a bound method's instance could not be hashed;
                                # falling back to its process-local identity
     "KEY-OPAQUE-CALLABLE",     # a callable reached the call but its code could

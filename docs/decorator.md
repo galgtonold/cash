@@ -605,7 +605,7 @@ parameters below. And when a miss (or a suspicious hit) mystifies you,
 For the cases the automatic model above can't see — plus
 expiry, opt-outs, and the purity gates. All keyword-only and optional.
 
-<!-- claim: cash/core.py:Cash.cache @fd8e83f6 -->
+<!-- claim: cash/core.py:Cash.cache @2431dc44 -->
 | Param | What it does |
 |---|---|
 | `depends_on=` | List of `Callable` or `DataSource` that contributes to the cache key |
@@ -617,6 +617,7 @@ expiry, opt-outs, and the purity gates. All keyword-only and optional.
 | `strict=` | Raise `CashImpureFunctionError` at first call if purity analyzer finds issues |
 | `assume_safe=` | Silence the purity warning; you've audited and know caching is safe |
 | `allow_random=` | Silence the unseeded-randomness warning; you know the result is frozen |
+| `frozen=` | Promise the result is not modified after it is returned, so a cached function receiving it keys it without hashing it ([below](#passing-large-objects-between-cached-functions)) |
 
 Mutually exclusive: `strict` and `assume_safe` — pass both and the
 decorator raises `ValueError` immediately.
@@ -1025,7 +1026,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @d080afe9 -->
+<!-- claim: cash/core.py:Cash._explain_call @95e6fe06 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
@@ -1071,6 +1072,81 @@ Safe to call from sync code even on async-wrapped functions.
 
 The original undecorated function. Useful for testing — call it to
 bypass caching entirely.
+
+---
+
+## Passing large objects between cached functions
+
+<!-- claim: cash/core.py:Cash._frame_signature @5a1b17a7, cash/core.py:Cash._frame_memo_store @99f98c8a -->
+An argument is keyed by what it holds **at the time of the call**, so a result
+you mutate in place and pass on is keyed by its new contents:
+
+```python
+import pandas as pd
+
+@cash.cache
+def load_frame():
+    return pd.DataFrame({"a": [1, 2, 3]})
+
+@cash.cache
+def column_total(df):
+    return int(df["a"].sum())
+
+df = load_frame()
+column_total(df)       # 6
+df.loc[0, "a"] = 100   # in place
+column_total(df)       # 105 — recomputes, keyed by what df holds now
+```
+
+That costs a hash of the argument, and for a large one the hash is the cost that
+shows — measured, about 150 ms for a 100 MB numeric frame (more with string
+columns), 50 ms for a 100 MB numpy array. What cash does about it:
+
+- **pandas 3 frames and series are hashed once.** Under copy-on-write, a frame
+  can only be changed in place by giving it new data blocks, so cash remembers a
+  frame's hash together with the identity of its blocks and axes and reuses it
+  while they are the same — microseconds per call, exact rather than sampled.
+  The cost: after cash has seen a frame, the first in-place write to each of its
+  blocks copies that block, once. (pandas 2 with copy-on-write switched on is
+  treated the same way; without it, every call hashes.)
+- **In a notebook**, `%cash_on` tracks every assignment and mutation, and cash
+  uses that instead of hashing a tracked object again.
+- **Everything else** — numpy arrays, models, your own objects — is hashed on
+  every call it is passed to. [`CACHE-NET-LOSS`](warnings.md#cache-net-loss)
+  tells you when that is costing more than it saves.
+
+When the object comes from another cached function and nothing modifies it
+afterwards — a trained model, a lookup table, a feature matrix — say so on the
+function that makes it:
+
+<!-- claim: cash/core.py:Cash._audit_frozen @0f673f82, cash/core.py:Cash._frozen_array_hash @5352bc8e -->
+```python
+@cash.cache(frozen=True)
+def train(data):
+    return fit_model(data)          # not modified by anything downstream
+
+@cash.cache
+def score(model, batch):            # keys `model` by train()'s identity:
+    return model.predict(batch)     # no hash per call, same key in every process
+```
+
+A cached function receiving a frozen result keys it by the call that produced
+it: microseconds, the same in every process, and it works for an object that
+cannot be pickled. A numpy array result comes back **read-only**, so a write
+raises instead of going stale. Other objects are **audited**: cash re-hashes one
+at an occasional use (every use under `CASH_DEBUG=1`), and if it has changed —
+say `model.fit(...)` was called on it downstream —
+[`KEY-FROZEN-MUTATED`](warnings.md#key-frozen-mutated) names the producer and
+the object is keyed by its contents from then on. A result with a `ttl=` is
+never treated as frozen: its value changes while its key does not.
+
+Without `frozen=`, give cash a cheaper identity for a type yourself:
+`cash.register_hasher(T, fn, override=True)` (return something that changes
+whenever the data does, such as a version).
+
+An object that can't be pickled and has no hasher can't be keyed unless it is
+frozen, so a call receiving one runs uncached
+([`KEY-UNHASHABLE-ARG`](warnings.md#key-unhashable-arg)).
 
 ---
 

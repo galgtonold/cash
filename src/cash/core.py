@@ -827,6 +827,44 @@ def _unhashable_arg_fix(value: Any, type_name: str) -> str:
     )
 
 
+#: Who wrote a value's ``_cash_lineage_hash``, in ``_cash_lineage_src``. Only the
+#: notebook's statement layer keeps the tag current as the value changes, so
+#: only its tag stands in for the value's content (see `_hash_arg_payload`).
+LINEAGE_SRC_STATEMENT = "statement"
+LINEAGE_SRC_DECORATOR = "decorator"
+#: Written for a function decorated ``frozen=True``: the user's promise that the
+#: result is not modified afterwards, trusted like the statement layer's tag and
+#: audited now and then (`_audit_frozen`).
+LINEAGE_SRC_FROZEN = "frozen"
+
+#: A frozen object is re-hashed at its 8th use as an argument and every 64th
+#: after that (every use under CASH_DEBUG), and compared with the first audit.
+_FROZEN_AUDIT_FIRST = 8
+_FROZEN_AUDIT_EVERY = 64
+
+_COW_PANDAS: bool | None = None
+
+
+def _is_cow_pandas(value: Any) -> bool:
+    """Is *value* a pandas DataFrame/Series under copy-on-write?
+
+    Copy-on-write is the only mode in pandas 3 and opt-in before. Checked
+    without importing pandas: a pandas object means it is already loaded.
+    """
+    global _COW_PANDAS
+    t = type(value)
+    if t.__name__ not in ("DataFrame", "Series") or not (t.__module__ or "").startswith("pandas"):
+        return False
+    if _COW_PANDAS is None:
+        try:
+            import pandas as pd
+            major = int(pd.__version__.split(".", 1)[0])
+            _COW_PANDAS = major >= 3 or pd.options.mode.copy_on_write is True
+        except Exception:  # noqa: BLE001 - unknown pandas: no memo, hash every time
+            _COW_PANDAS = False
+    return _COW_PANDAS
+
+
 def _warn_source_changed_since_load(fn: Callable) -> None:
     """Say, once per file, that a helper is keyed by its loaded code."""
     code = getattr(fn, "__code__", None)
@@ -974,6 +1012,16 @@ class Cash:
         # skip re-hashing a possibly-huge input. See ``_hash_arg_payload`` for
         # the read-side validation (weakref identity + lineage). Bounded below.
         self._arg_hash_memo: dict[int, tuple] = {}
+        # id(frame) -> (weakref, shallow copy, signature, content hash): the
+        # pandas copy-on-write memo, see `_frame_memo_store`.
+        self._frame_memo: dict[int, tuple] = {}
+        # Functions decorated frozen=True, by key.
+        self._frozen_funcs: set[str] = set()
+        # id(ndarray) -> [weakref, producer, content hash or None]: numpy
+        # results of frozen functions, which cannot carry a tag.
+        self._frozen_arrays: dict[int, list] = {}
+        # id(obj) -> [weakref, uses, audit baseline or None], see `_audit_frozen`.
+        self._frozen_uses: dict[int, list] = {}
         # Running account of what caching cost vs what it saved, per function.
         # The decorator always caches by design -- this only ever informs.
         from cash.effectiveness import EffectivenessLedger
@@ -1809,6 +1857,7 @@ class Cash:
         strict: bool = ...,
         assume_safe: bool = ...,
         allow_random: bool = ...,
+        frozen: bool = ...,
     ) -> Callable[[Callable[P, T]], Callable[P, T]]: ...
 
     def cache(
@@ -1825,6 +1874,7 @@ class Cash:
         strict: bool = False,
         assume_safe: bool = False,
         allow_random: bool = False,
+        frozen: bool = False,
     ) -> Callable[P, T] | Callable[[Callable[P, T]], Callable[P, T]]:
         """Decorator to cache a function's return value.
 
@@ -1909,6 +1959,17 @@ class Cash:
                 frozen and replayed. Seeding the RNG silences the
                 warning on its own, because a seeded draw is
                 reproducible.
+            frozen: When ``True``, declare that the result is not
+                modified after it is returned. A cached function
+                receiving it as an argument then keys it by this
+                call's identity instead of hashing its contents: no
+                hash per call, the same key in every process, and it
+                works for objects that cannot be pickled. A numpy
+                result is returned read-only. Other objects are
+                audited -- re-hashed at an occasional use, every use
+                under ``CASH_DEBUG`` -- and a change warns
+                KEY-FROZEN-MUTATED and falls back to content hashing
+                for that object.
 
         Returns:
             The decorated function with caching behavior.
@@ -1932,10 +1993,15 @@ class Cash:
                 file_depends_on=file_depends_on, ttl=ttl, cache_if=cache_if,
                 chunk_max_items=chunk_max_items, chunk_max_bytes=chunk_max_bytes,
                 strict=strict, assume_safe=assume_safe, allow_random=allow_random,
+                frozen=frozen,
             )
 
         func_name = self._register_func(func, depends_on, file_depends_on)
         self._pin_own_source(func, self.source_hashes[func_name])
+        if frozen:
+            self._frozen_funcs.add(func_name)
+        else:
+            self._frozen_funcs.discard(func_name)
         self._purity_modes[func_name] =("strict" if strict else "silent" if assume_safe else "warn")
         # Record the declared TTL so a downstream that depends on this function
         # can inherit it (effective TTL = min over the dependency closure).
@@ -2471,6 +2537,7 @@ class Cash:
         cache_key = self._compute_cache_key(
             func_name, current_state_hash, dynamic_state_hash, args_hash,
         )
+        frozen_args = self._frozen_arg_names(normalized_args)
 
         raw_metadata, _data = self.backend.get(cache_key)
         if raw_metadata is None:
@@ -2509,6 +2576,8 @@ class Cash:
             details['why'] = f"{kind}: {why}"
             if kind != MISS_FIRST and 'dynamic_dependencies' not in details:
                 del details['hint']     # the generic guess, now that we know
+            if frozen_args:
+                details['frozen_args'] = frozen_args
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_NO_ENTRY,
@@ -2562,6 +2631,8 @@ class Cash:
         }
         if metadata.auto_file_deps:
             details['file_deps'] = _describe_file_deps(metadata.auto_file_deps)
+        if frozen_args:
+            details['frozen_args'] = frozen_args
         return CacheExplanation(
             would_hit=True,
             reason=EXPLAIN_HIT,
@@ -2569,6 +2640,18 @@ class Cash:
             cache_key=cache_key,
             details=details,
         )
+
+    def _frozen_arg_names(self, normalized_args: tuple[tuple, dict]) -> list[str]:
+        """`explain()`'s list of arguments keyed by a frozen=True producer."""
+        args, kwargs = normalized_args
+        names = []
+        for name, value in [*((f"#{i}", v) for i, v in enumerate(args)), *kwargs.items()]:
+            if getattr(value, "_cash_lineage_src", None) == LINEAGE_SRC_FROZEN or (
+                    self._frozen_arrays and id(value) in self._frozen_arrays):
+                producer = getattr(value, "_cash_lineage_producer", None) or (
+                    self._frozen_arrays.get(id(value), [None, None])[1])
+                names.append(f"{name} (the result of {producer}, declared frozen)")
+        return names
 
     def _resolve_dynamic_dependencies_silent(
         self,
@@ -2695,7 +2778,8 @@ class Cash:
             # key than when the upstream was freshly computed, recomputing
             # needlessly. The hash is deterministic from (cache_key,
             # auto_file_deps), both available here.
-            self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl)
+            self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl,
+                                 func_name=func_name)
             self._last_key[func_name] = cache_key
             self._log_decorator_call(
                 func_name, cache_hit=True,
@@ -3229,7 +3313,7 @@ class Cash:
                     # lineage hash points downstream at THIS cache entry, so a
                     # cache_if-rejected (uncached) value must not carry one - it
                     # would reference an entry that was never written.
-                    self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
+                    self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl, func_name=func_name)
                     self._store_in_cache(
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
@@ -3415,7 +3499,7 @@ class Cash:
                     # Attach lineage only when actually stored (see sync path):
                     # a cache_if-rejected value must not reference an entry that
                     # was never written.
-                    self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl)
+                    self._attach_lineage(res, cache_key, auto_file_deps, ttl=ttl, func_name=func_name)
                     self._store_in_cache(
                         cache_key, func_name, res, metadata, ttl,
                         current_state_hash, args_hash, execution_time,
@@ -5967,6 +6051,141 @@ class Cash:
             memo.clear()
         memo[id(arg)] = (wref, lineage, content_hash)
 
+    _FRAME_MEMO_CAP = 256
+
+    def _frozen_array_hash(self, arr: Any) -> str | None:
+        """The content hash of a frozen function's numpy result, computed once.
+
+        Valid while the array is still that object and still read-only; an
+        array made writeable again (``a.flags.writeable = True``) is keyed by
+        content from then on.
+        """
+        entry = self._frozen_arrays.get(id(arr))
+        if entry is None:
+            return None
+        wref, _producer, content_hash = entry
+        if wref() is not arr or getattr(arr, "flags", None) is None or arr.flags.writeable:
+            self._frozen_arrays.pop(id(arr), None)
+            return None
+        if content_hash is None:
+            content_hash = self._try_builtin_type_hash(arr)
+            entry[2] = content_hash
+        return content_hash
+
+    def _audit_frozen(self, obj: Any) -> bool:
+        """Is a frozen=True result still what it was? False once it is not.
+
+        The declaration is trusted, and checked now and then: at the object's
+        8th use as an argument and every 64th after that, and at every use
+        under CASH_DEBUG. The first check records a baseline -- the content
+        hash for a type cash content-hashes, a digest of the pickle otherwise
+        -- and each later one compares. On a change, KEY-FROZEN-MUTATED names
+        the producer, the object's tag stops being trusted, and it is keyed by
+        its content from then on. An object that cannot be pickled cannot be
+        audited, and stays trusted.
+        """
+        key = id(obj)
+        entry = self._frozen_uses.get(key)
+        if entry is None or entry[0]() is not obj:
+            try:
+                wref = weakref.ref(obj, lambda _r, k=key, m=self._frozen_uses: m.pop(k, None))
+            except TypeError:
+                return True
+            entry = [wref, 0, None]
+            if len(self._frozen_uses) >= 4096:
+                self._frozen_uses.clear()
+            self._frozen_uses[key] = entry
+        entry[1] += 1
+        uses = entry[1]
+        due = (self.debug or os.environ.get("CASH_DEBUG")) or uses == _FROZEN_AUDIT_FIRST or (
+            uses > _FROZEN_AUDIT_FIRST and uses % _FROZEN_AUDIT_EVERY == 0)
+        if not due:
+            return True
+        try:
+            digest = self._try_builtin_type_hash(obj)
+            if digest is None:
+                digest = hashlib.sha256(pickle.dumps(obj)).hexdigest()
+        except Exception:  # noqa: BLE001 - cannot audit: the declaration stands
+            return True
+        if entry[2] is None:
+            entry[2] = digest
+            return True
+        if entry[2] == digest:
+            return True
+        producer = getattr(obj, "_cash_lineage_producer", None) or "a frozen=True function"
+        try:
+            obj._cash_lineage_src = LINEAGE_SRC_DECORATOR
+        except (AttributeError, TypeError):
+            pass
+        self._frozen_uses.pop(key, None)
+        warn_diagnostic(
+            CashImpurityWarning, "KEY-FROZEN-MUTATED",
+            f"a {type(obj).__name__} returned by {producer}, which is declared "
+            f"@cash.cache(frozen=True), has been modified since it was returned. "
+            f"Calls that received it before the change may have been served "
+            f"results for the unmodified object; from now on it is keyed by its "
+            f"contents.",
+            f"take frozen=True off {producer} if its result is meant to be "
+            f"modified, or modify a copy (`obj = copy.deepcopy(obj)`) instead.",
+        )
+        return False
+
+    @staticmethod
+    def _frame_signature(obj: Any) -> tuple:
+        """What must stay the same for a pandas object's content hash to hold.
+
+        Under copy-on-write, a frame whose data another frame also references
+        cannot be written in place: every write path (``loc``/``iloc``/``at``,
+        column assignment, ``inplace=True`` methods, ``update``, ``insert``,
+        ``pop``) first gives the written frame NEW block arrays, and writes
+        through ``.values`` / ``to_numpy()`` raise (the arrays are read-only).
+        So the identities of the block arrays, the manager and the axes are an
+        exact change signal -- measured on 17 mutation forms, pandas 3.0.3. The
+        axis NAMES are compared by value, because ``df.index.name = ...``
+        renames the same Index object and the content hash includes them.
+        """
+        mgr = obj._mgr
+        blocks = tuple(id(block.values) for block in mgr.blocks)
+        if hasattr(obj, "columns"):
+            return (id(mgr), blocks, id(obj.columns), tuple(obj.columns.names),
+                    id(obj.index), tuple(obj.index.names))
+        return (id(mgr), blocks, id(obj.index), tuple(obj.index.names), obj.name)
+
+    def _frame_memo_lookup(self, obj: Any) -> str | None:
+        """The content hash recorded for *obj*, if *obj* has not changed since."""
+        entry = self._frame_memo.get(id(obj))
+        if entry is None:
+            return None
+        wref, _held, signature, content_hash = entry
+        try:
+            if wref() is obj and self._frame_signature(obj) == signature:
+                return content_hash
+        except Exception:  # noqa: BLE001 - a pandas internals change: just re-hash
+            pass
+        self._frame_memo.pop(id(obj), None)
+        return None
+
+    def _frame_memo_store(self, obj: Any, content_hash: str) -> None:
+        """Remember *obj*'s content hash, and hold a shallow copy of it.
+
+        The shallow copy shares the data and is what makes the signature
+        exact: while cash references the blocks, pandas must copy before any
+        write. Cost: the first in-place write to each block afterwards copies
+        that block, once. The entry, copy included, goes when *obj* is
+        collected, or when the memo fills.
+        """
+        try:
+            held = obj.copy(deep=False)
+            signature = self._frame_signature(obj)
+            memo = self._frame_memo
+            key = id(obj)
+            wref = weakref.ref(obj, lambda _ref, key=key, memo=memo: memo.pop(key, None))
+        except Exception:  # noqa: BLE001 - the memo is a speedup; hash every time
+            return
+        if len(self._frame_memo) >= self._FRAME_MEMO_CAP:
+            self._frame_memo.clear()
+        self._frame_memo[key] = (wref, held, signature, content_hash)
+
     def _hash_arg_payload(self, args: tuple, kwargs: dict) -> str:
         """Hash one concrete ``(args, kwargs)`` form. May raise on unpicklable
         values; the caller decides whether to retry with a different form."""
@@ -5997,13 +6216,39 @@ class Cash:
             # stored value is still the reproducible content hash, so the cache
             # key is byte-identical and restart-safe; the memo is a pure
             # within-session speedup, empty after a restart.
+            #
+            # Trusted only where something KEEPS it current: the notebook's
+            # statement layer re-tags a variable on every assignment and
+            # mutation. The decorator also tags what it returns, and nothing
+            # ever moves that tag -- in a script, `q.F = 0.03; run(q)` or
+            # `df.loc[0, "a"] = 100` left it as it was, and both the memo below
+            # and the tag-as-identity shortcut further down served the result
+            # for the unmutated object (rounds 17-18).
             lineage = getattr(arg, '_cash_lineage_hash', None)
+            if lineage is not None:
+                src = getattr(arg, '_cash_lineage_src', None)
+                if src == LINEAGE_SRC_FROZEN:
+                    if not self._audit_frozen(arg):
+                        lineage = None
+                elif src != LINEAGE_SRC_STATEMENT:
+                    lineage = None
+            if self._frozen_arrays and id(arg) in self._frozen_arrays:
+                frozen_hash = self._frozen_array_hash(arg)
+                if frozen_hash is not None:
+                    return frozen_hash
             if lineage is not None:
                 entry = self._arg_hash_memo.get(id(arg))
                 if entry is not None:
                     wref, memo_lineage, content_hash = entry
                     if memo_lineage == lineage and wref() is arg:
                         return content_hash
+            # pandas >= 3 copy-on-write: an exact "has this frame changed?"
+            # check instead of a trusted tag. See `_frame_memo_lookup`.
+            frame_memo = lineage is None and _is_cow_pandas(arg)
+            if frame_memo:
+                content_hash = self._frame_memo_lookup(arg)
+                if content_hash is not None:
+                    return content_hash
 
             # Overriding hashers, ahead of everything cash would do itself.
             # The user has said their identity for this type beats content
@@ -6019,6 +6264,8 @@ class Cash:
             if builtin_hash is not None:
                 if lineage is not None:
                     self._memo_arg_hash(arg, lineage, builtin_hash)
+                elif frame_memo:
+                    self._frame_memo_store(arg, builtin_hash)
                 return builtin_hash
             # Notebook lineage hash: the authoritative, cheap identity for
             # values that carry NO content hasher (custom objects). Kept ahead
@@ -6453,7 +6700,8 @@ class Cash:
 
     def _attach_lineage(self, result: Any, cache_key: str,
                         auto_file_deps: dict | None = None,
-                        ttl: int | None = None) -> None:
+                        ttl: int | None = None,
+                        func_name: str | None = None) -> None:
         """Attach lineage hash to result if it supports attribute setting.
 
         Works with pandas DataFrame/Series, polars DataFrame/Series, PyArrow
@@ -6468,8 +6716,30 @@ class Cash:
         """
         if ttl is not None:
             return
+        frozen = func_name is not None and func_name in self._frozen_funcs
+        if frozen and type(result).__name__ == "ndarray" and \
+                (type(result).__module__ or "").startswith("numpy"):
+            # An array cannot carry a tag, and read-only is a promise numpy
+            # enforces: a write raises instead of going stale.
+            try:
+                result.flags.writeable = False
+                self._frozen_arrays[id(result)] = [
+                    weakref.ref(result, lambda _r, k=id(result), m=self._frozen_arrays: m.pop(k, None)),
+                    func_name, None]
+            except (AttributeError, TypeError, ValueError):
+                pass
+            return
         lineage = self._lineage_hash(cache_key, auto_file_deps)
         try:
+            # Say who wrote it: nothing will move this tag when the value is
+            # mutated, so `_hash_arg_payload` must not take it for the content
+            # -- unless the function was declared frozen=True.
+            try:
+                result._cash_lineage_src = LINEAGE_SRC_FROZEN if frozen else LINEAGE_SRC_DECORATOR
+                if frozen:
+                    result._cash_lineage_producer = func_name
+            except (AttributeError, TypeError):
+                pass
             type_name = type(result).__name__
             module = type(result).__module__ or ''
 
@@ -7124,6 +7394,7 @@ class Cash:
         # before this call; drop them so the new registration is not shadowed
         # for objects already seen.
         self._arg_hash_memo.clear()
+        self._frame_memo.clear()
 
     #: Types whose code must not participate in any cache key. Process-wide,
     #: not per-instance: a marker is a property of the type, and a user who

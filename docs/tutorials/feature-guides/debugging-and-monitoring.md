@@ -47,7 +47,7 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-<!-- claim: cash/core.py:CacheExplanation @fe7c1264 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @d080afe9 -->
+<!-- claim: cash/core.py:CacheExplanation @fe7c1264 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @95e6fe06 -->
 The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`) with five fields and one of six reason codes:
 
 | `reason` | Meaning | Key `details` |

@@ -63,7 +63,7 @@ If the caller abandons the iterator, or the producer raises, step 5 never runs: 
 
 On exhaust, Cash writes a **manifest entry** at the canonical `cache_key` carrying `iterator_storage="chunked"`, `n_chunks`, and `total_items`. The manifest is what the hit path reads first.
 
-<!-- claim: cash/core.py:Cash.cache @fd8e83f6 broad="the defaults are keyword arguments of the decorator itself" -->
+<!-- claim: cash/core.py:Cash.cache @2431dc44 broad="the defaults are keyword arguments of the decorator itself" -->
 Defaults:
 
 - `chunk_max_items = 1_000_000`
@@ -221,8 +221,8 @@ Tuning notes:
 
 - **Partial consumption on a miss caches nothing.** The miss path produces only what the caller consumes, so stopping after ten of a thousand items leaves no complete result to store and the next call recomputes. Storing the ten under the full result's key would be a wrong answer rather than a slow one. On a *hit* partial consumption is free — only the chunks the caller reaches are loaded. Test reference: `test_chunked_iterator_partial_consumption_caches_nothing` in `tests/test_core/test_iterator_caching.py`.
 - **`cache_if` is bypassed on multi-chunk results.** As described above, the predicate cannot run without re-materializing chunks. The bypass warning is keyed per-function and fires once per process. To keep `cache_if` gating in effect, **raise** the thresholds until the whole result fits one chunk, so the single-chunk path stays in play — lowering them produces *more* chunks and so guarantees the bypass.
-<!-- claim: cash/core.py:Cash._attach_lineage @8145e913 -->
-- **No `_cash_lineage_hash` on iterator returns.** Cash's lineage-tracking optimization attaches a `_cash_lineage_hash` attribute to non-iterator return values so downstream `@cash.cache` calls can short-circuit the args hash (via `Cash._attach_lineage`). Iterator wrappers don't get this attribute — passing a cached iterator to another `@cash.cache` function will re-hash its contents the normal way. Materialize to a list if you want the lineage short-circuit.
+<!-- claim: cash/core.py:Cash._attach_lineage @100a4efe -->
+- **No lineage tag on iterator returns.** A non-iterator result is tagged with the call that produced it (`Cash._attach_lineage`), which is what lets a [`frozen=True`](../../decorator.md#passing-large-objects-between-cached-functions) result be keyed downstream without hashing it. Iterator wrappers are not tagged, so `frozen=True` does not reach them: passing a cached iterator to another `@cash.cache` function hashes its contents the normal way. Materialize to a list if you want the frozen short-circuit.
 - **Purity analysis treats generator bodies like any function.** A generator that calls `time.time()`, mutates module-level state, or reads `os.environ` inside the loop still triggers `CashImpurityWarning`. Apply `@cash.pure` / `assume_safe` / `strict` exactly as you would for a non-generator function. See [Purity Decorators](purity-decorators.md).
 - **Backend store failures are per-chunk.** If a chunk write raises, the wrapper emits `CashCacheStoreFailedWarning` and continues to the next chunk; the manifest is still written at the end. A later read that hits the missing chunk terminates iteration early (the same path as eviction). To detect this, watch for the warning rather than relying on the iterator length matching `total_items`.
 - **`use_locking=True` is supported.** The locked hit path dispatches through `_wrap_iterator_hit` like the unlocked path, so a re-read after lock acquisition correctly returns a fresh iterator wrapper rather than the raw manifest dict. Test reference: `test_use_locking_dispatches_chunked_on_locked_hit` in `tests/test_core/test_iterator_caching.py`.

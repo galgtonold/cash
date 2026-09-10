@@ -29,8 +29,12 @@ def _cash() -> Cash:
 
 
 def _set_lineage(obj, value: str) -> None:
-    """Attach a notebook-style lineage hash without pandas' set-attr warning."""
+    """Attach a notebook-style lineage hash without pandas' set-attr warning.
+
+    As the notebook's statement layer does: the tag plus who wrote it. A tag
+    the decorator wrote is not trusted for the content (round 18)."""
     object.__setattr__(obj, "_cash_lineage_hash", value)
+    object.__setattr__(obj, "_cash_lineage_src", "statement")
 
 
 # ---------------------------------------------------------------------------

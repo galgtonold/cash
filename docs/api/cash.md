@@ -24,7 +24,7 @@ directives. The rendered reference is at
 offline, `help(cash.Cash)` prints the same text. The two signatures you
 reach for most:
 
-<!-- claim: cash/core.py:Cash.__init__ @dde532ee, cash/core.py:Cash.cache @fd8e83f6 -->
+<!-- claim: cash/core.py:Cash.__init__ @9cde6b4c, cash/core.py:Cash.cache @2431dc44 -->
 ```text
 Cash(backend=None, cache_dir=None, backends=None, compress=None,
      register_magic=None, debug=None, use_locking=False, config_path=None,
@@ -33,7 +33,7 @@ Cash(backend=None, cache_dir=None, backends=None, compress=None,
 Cash.cache(func=None, *, depends_on=None, dynamic_depends_on=None,
            file_depends_on=None, ttl=None, cache_if=None,
            chunk_max_items=1_000_000, chunk_max_bytes=1_000_000_000,
-           strict=False, assume_safe=False, allow_random=False)
+           strict=False, assume_safe=False, allow_random=False, frozen=False)
 ```
 
 `**config_overrides` takes any [configuration](config.md) field by name —

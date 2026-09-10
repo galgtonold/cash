@@ -22,9 +22,9 @@ spread over <!-- docnum:test_files -->~1,280<!-- /docnum --> files:
 
 | Suite | Size | What it covers |
 |---|---|---|
-| Unit | <!-- docnum:tests_unit -->~4,870<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
+| Unit | <!-- docnum:tests_unit -->~4,900<!-- /docnum --> | The engine: cache keys, lineage, hashing, backends, invalidation |
 | Notebook integration | <!-- docnum:tests_integration -->~4,200<!-- /docnum --> | Real kernels executing real notebooks, cell by cell |
-| Docs | <!-- docnum:tests_docs -->~360<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
+| Docs | <!-- docnum:tests_docs -->~370<!-- /docnum --> | The documentation itself — see [below](#the-docs-are-tested-too) |
 
 Every one runs on **<!-- docnum:platforms -->15<!-- /docnum --> platform combinations** — Python
 3.10 through 3.14, on Linux, Windows and macOS — on every push. The matrix is deliberately kept in
@@ -88,7 +88,7 @@ through a real harness. There is no whitelist to maintain, so a new page is
 covered the day it lands. Sample output in the docs is checked against what the
 code actually prints.
 
-**Prose is pinned to source.** Around **<!-- docnum:claims -->~320<!-- /docnum --> claims** across
+**Prose is pinned to source.** Around **<!-- docnum:claims -->~330<!-- /docnum --> claims** across
 the documentation carry an anchor naming the function that decides them, plus a
 fingerprint of that function's normalized source:
 
