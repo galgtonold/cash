@@ -164,9 +164,22 @@ class PurityReport:
             re-resolve the helper from ``sys.modules`` on each
             call and re-hash its source, so in-process
             redefinitions (notebook cells, REPL) invalidate the
-            parent's cache key. ``attr_chain`` is the
-            dot-separated ``__qualname__`` of the helper inside
-            its module (e.g. ``("Klass", "method")`` for a method).
+            parent's cache key. The path is the one its CALLER uses:
+            the caller's module and the name or attribute chain written
+            at the call site (``("app", ("_sieve",))`` for
+            ``from sievelib import sieve as _sieve``), so rebinding that
+            name -- ``monkeypatch``, ``mock.patch`` -- reaches the key.
+            Only a helper reached some other way (a class body's calls)
+            falls back to its own home: ``(module, qualname chain)``.
+        helper_bindings: ``(module_name, attr_chain, ref)`` for every
+            call-site binding the walk followed -- helpers, cached callees
+            and mocks alike -- where ``ref()`` is the object it held when
+            analysed. ``bindings_changed`` compares them per call; a
+            binding that no longer holds that object means the tree below
+            it is not the one analysed.
+        unkeyable: One description per binding that held a mock when
+            analysed. A mock has no code to key and its answer is whatever
+            the test configured, so a call reaching one runs uncached.
         opaque_callees: Qualified names of callees we encountered
             but couldn't read source for (C extensions, missing source,
             partial application). Treated as pure by default; strict
@@ -190,6 +203,8 @@ class PurityReport:
     #: weak reference lets the per-call rehash reach the live object.
     helper_objects: dict[str, Any] = field(default_factory=dict)
     opaque_callees: tuple[str, ...] = ()
+    helper_bindings: tuple[tuple[str, tuple[str, ...], Any], ...] = ()
+    unkeyable: tuple[str, ...] = ()
 
     @property
     def is_clean(self) -> bool:
@@ -891,6 +906,87 @@ def _resolve_callee(node: ast.AST, namespace: dict[str, Any]) -> Any | None:
     return None
 
 
+def _callee_chain(node: ast.AST) -> tuple[str, ...] | None:
+    """The name chain a call site uses: ``_sieve`` -> ``("_sieve",)``,
+    ``mod.sub.f`` -> ``("mod", "sub", "f")``; None for anything else."""
+    parts: list[str] = []
+    cur = node
+    while isinstance(cur, ast.Attribute):
+        parts.append(cur.attr)
+        cur = cur.value
+    if not isinstance(cur, ast.Name):
+        return None
+    parts.append(cur.id)
+    return tuple(reversed(parts))
+
+
+def is_mock(obj: Any) -> bool:
+    """A ``unittest.mock`` object (``pytest-mock`` uses the same classes).
+
+    Checked before anything reads an attribute from a callee: a mock answers
+    every attribute truthily, so ``_cash_cached`` or a purity marker would
+    read as set. Never imports ``unittest.mock`` itself.
+    """
+    module = sys.modules.get("unittest.mock")
+    return module is not None and isinstance(obj, module.NonCallableMock)
+
+
+def _binding_path(caller: Any, chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
+    """``(module_name, chain)`` when *chain* starts at a name *caller* looks up
+    in its module's globals, so ``sys.modules[module_name]`` + the chain finds
+    what the call site finds. None for a closure cell or a namespace that is
+    not a registered module (``exec``, a class body)."""
+    if not chain:
+        return None
+    code = getattr(caller, "__code__", None)
+    if code is not None and chain[0] in (getattr(code, "co_freevars", ()) or ()):
+        return None
+    module_name = getattr(caller, "__module__", None)
+    module = sys.modules.get(module_name or "")
+    if module is None or getattr(module, "__dict__", None) is not getattr(caller, "__globals__", None):
+        return None
+    return module_name, chain
+
+
+def _ref(obj: Any) -> Callable[[], Any]:
+    """A weak reference where the object allows one, a strong one otherwise."""
+    try:
+        return weakref.ref(obj)
+    except TypeError:
+        return lambda: obj
+
+
+_UNRESOLVED = object()
+
+
+def resolve_binding(module_name: str, chain: tuple[str, ...]) -> Any:
+    """What ``sys.modules[module_name]`` + *chain* holds now, or ``_UNRESOLVED``."""
+    obj: Any = sys.modules.get(module_name)
+    if obj is None:
+        return _UNRESOLVED
+    for attr in chain:
+        obj = getattr(obj, attr, _UNRESOLVED)
+        if obj is _UNRESOLVED:
+            return _UNRESOLVED
+    return obj
+
+
+def bindings_changed(report: PurityReport) -> bool:
+    """Does any call-site binding the report followed hold a different object now?
+
+    A module that has left ``sys.modules`` proves nothing either way and is
+    skipped. Identity, not equality: a re-created function with the same
+    code is still a different object, whose globals may differ.
+    """
+    for module_name, chain, ref in report.helper_bindings:
+        live = resolve_binding(module_name, chain)
+        if live is _UNRESOLVED:
+            continue
+        if live is not ref():
+            return True
+    return False
+
+
 def _called_names_in_tree(tree: ast.AST) -> list[str]:
     """Bare names called anywhere in *tree*, including inside lambdas.
 
@@ -1037,10 +1133,19 @@ class PurityAnalyzer:
 
         source_hash = _try_source_hash(func)
         if source_hash is not None:
+            # Keyed by the namespace the names resolve in as well as the text:
+            # `def run(): return step()` written identically in two modules
+            # calls two different `step`s, and sharing one report handed the
+            # second module the first one's helpers -- editing its own `step`
+            # then changed nothing its key could see.
+            source_hash = f"{source_hash}:{id(getattr(func, '__globals__', None))}"
             with self._cache_lock:
                 cached = self._cache.get(source_hash)
-                if cached is not None:
-                    return cached
+            # The source is the same, but a name it calls through may hold a
+            # different object now (a patched helper, or a real one restored):
+            # the tree below that binding is not the one this report walked.
+            if cached is not None and not bindings_changed(cached):
+                return cached
 
         report = self._analyze_uncached(func)
 
@@ -1062,16 +1167,31 @@ class PurityAnalyzer:
         helper_objects: dict[str, Any] = {}
         opaque: list[str] = []
         visited: set[str] = set()
+        bindings: list[tuple[str, tuple[str, ...], Any]] = []
+        seen_bindings: set[tuple[str, tuple[str, ...]]] = set()
+        unkeyable: list[str] = []
+        # qualname -> the first call-site binding that reached it
+        caller_paths: dict[str, tuple[str, tuple[str, ...]]] = {}
+
+        def _note_binding(callee: Any, path: tuple[str, tuple[str, ...]] | None) -> None:
+            if path is None or path in seen_bindings:
+                return
+            seen_bindings.add(path)
+            bindings.append((path[0], path[1], _ref(callee)))
 
         def _record_resolution_path(func: Callable[..., Any], qualname: str) -> None:
             """Note where to re-resolve *func* from ``sys.modules`` per call.
 
             Lets the decorator pick up in-process redefinitions (notebook
-            cells, REPL). The attr_chain is the helper's ``__qualname__``
-            split on '.' so methods like ``Klass.method`` resolve. The root
-            function is skipped -- it is not a "helper" and the decorator
-            holds its own reference.
+            cells, REPL) and rebinding (``monkeypatch``, ``mock.patch``).
+            Preferably through the name the CALLER uses; otherwise the
+            helper's own ``__qualname__`` split on '.', so methods like
+            ``Klass.method`` resolve. The root function is skipped -- it is
+            not a "helper" and the decorator holds its own reference.
             """
+            if func is not root_func and qualname in caller_paths:
+                helper_paths[qualname] = caller_paths[qualname]
+                return
             helper_module = getattr(func, "__module__", None)
             helper_inner_qualname = getattr(func, "__qualname__", None)
             if (
@@ -1246,8 +1366,18 @@ class PurityAnalyzer:
             # for recursion.
             namespace = _build_namespace(func)
 
-            def _queue_helper(callee: Any, line: int) -> None:
+            def _queue_helper(callee: Any, line: int,
+                              path: tuple[str, tuple[str, ...]] | None = None) -> None:
                 if callee is None or not callable(callee):
+                    return
+                # First, before any attribute read: a mock answers every
+                # attribute truthily, so it would pass for a cached function
+                # or a @pure one below. It has no code to key and returns
+                # whatever the test configured -- the call runs uncached.
+                if is_mock(callee):
+                    _note_binding(callee, path)
+                    where = f"{path[0]}.{'.'.join(path[1])}" if path else "a callee"
+                    unkeyable.append(f"{where} is a {type(callee).__name__}")
                     return
                 # A call to another @cash.cache-decorated function is a
                 # dependency-graph edge, not a helper to walk: its own source
@@ -1255,7 +1385,11 @@ class PurityAnalyzer:
                 # would read cash's wrapper machinery (which ``functools.wraps``
                 # makes look like same-package user code) and flag cash's own
                 # internal mutations as the user's (finding #9).
+                #
+                # Its binding is still noted: rebinding the name the caller
+                # calls it by (``app.inner = fake``) replaces the edge.
                 if getattr(callee, "_cash_cached", False):
+                    _note_binding(callee, path)
                     return
                 if is_pure(callee):
                     return
@@ -1269,12 +1403,16 @@ class PurityAnalyzer:
                     return
                 if not _is_user_code(callee, root_module):
                     return
+                _note_binding(callee, path)
+                if path is not None:
+                    caller_paths.setdefault(_qualname_of(callee), path)
                 stack.append((callee, depth + 1, False))  # noqa: B023 - same
 
             for call_node in visitor.called_callable_nodes:
                 _queue_helper(
                     _resolve_callee(call_node.func, namespace),
                     getattr(call_node, "lineno", 0),
+                    _binding_path(func, _callee_chain(call_node.func)),
                 )
 
             # A helper referenced by NAME but reached through a value -- not in
@@ -1290,7 +1428,7 @@ class PurityAnalyzer:
             for _name in visitor.read_names:
                 _val = namespace.get(_name)
                 if inspect.isfunction(_val) or inspect.ismethod(_val):
-                    _queue_helper(_val, 0)
+                    _queue_helper(_val, 0, _binding_path(func, (_name,)))
 
         # Stable order: by where (insertion) then line then kind.
         all_issues_sorted = tuple(sorted(
@@ -1303,6 +1441,8 @@ class PurityAnalyzer:
             helper_objects=helper_objects,
             helper_resolution_paths=helper_paths,
             opaque_callees=tuple(sorted(set(opaque))),
+            helper_bindings=tuple(bindings),
+            unkeyable=tuple(unkeyable),
         )
 
     def _flag_mutable_global_reads(

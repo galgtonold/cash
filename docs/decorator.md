@@ -267,6 +267,15 @@ both cross-process edits and in-process redefinitions (notebook cell rerun, REPL
 are picked up automatically. Overhead is ~3μs *per helper*, paid once for each helper in the
 transitive call graph on every call.
 
+<!-- claim: cash/core.py:Cash._refresh_helper_bindings @b357a2d1 -->
+Each helper is looked up through the name its *caller* uses — `_sieve` in
+`from sievelib import sieve as _sieve` — at every level of the call graph. So
+rebinding that name at runtime (`monkeypatch.setattr(app, "_sieve", fake)`,
+`mock.patch.object(...)`, a plugin swapping an implementation) changes the key
+as well, and putting the original back returns to the original entry. A binding
+to a `unittest.mock` object has no code to key, so a call that reaches one runs
+uncached. See [mocking in tests](tutorials/feature-guides/testing-your-code.md#mocking-and-monkeypatching).
+
 **The boundary is your code, not your module.** A helper imported from another
 file in your project is followed like any other — edit it and the entry
 invalidates, verified end to end. What the analyzer stops at is *other people's*
@@ -986,7 +995,7 @@ dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @94a9d132 -->
+<!-- claim: cash/core.py:Cash._explain_call @d080afe9 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 

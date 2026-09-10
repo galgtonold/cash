@@ -94,6 +94,41 @@ CASH_CACHE_DIR="$(mktemp -d)" pytest
 written anywhere, and each test process — every xdist worker is one — starts
 empty.
 
+## Mocking and monkeypatching
+
+Patching a helper that a cached function calls works the way the test expects:
+the helper is looked up through the name the cached function's module uses, so
+the patched call gets its own entry and the real one comes back when the patch
+is undone.
+
+<!-- test:skip reason="needs importable modules; exercised by tests/test_core/test_patched_helper_binding.py" -->
+```python
+# primes.py
+from sievelib import sieve as _sieve
+
+@cash.cache
+def count(n):
+    return len(_sieve(n))
+
+# test_primes.py
+def test_count_uses_the_sieve(monkeypatch):
+    monkeypatch.setattr(primes, "_sieve", lambda n: [2, 3])   # patch where it is USED
+    assert primes.count(10) == 2
+
+def test_real_count():
+    assert primes.count(10**6) == 78498                        # not the patched answer
+```
+
+Patch the name where it is **used** (`primes._sieve`), as with any mocking.
+Patching `sievelib.sieve` after `primes` imported it changes nothing `count`
+runs, and so nothing about its key. That holds at any depth: a helper's own
+helpers are looked up in the helper's module.
+
+A `unittest.mock` object (`mock.patch(..., return_value=...)`, `MagicMock`,
+`pytest-mock`'s `mocker`) has no code for cash to key, and its answer is
+whatever the test configured, so a call that reaches one **runs uncached**.
+That is usually what a test with a mock wants.
+
 ## Which to use
 
 | You want | Use |

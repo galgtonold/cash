@@ -248,6 +248,29 @@ def test_an_edit_elsewhere_in_the_same_file_still_hits_after_the_restart(tmp_pat
     assert "COMPUTE" not in b.stderr, "an unchanged function stopped hitting"
 
 
+def test_a_closure_in_an_edited_file_is_compared_without_raising(tmp_path, monkeypatch):
+    """The comparison built a function from each candidate code object with
+    `types.FunctionType(code, {})`, which raises for a nested function with
+    free variables -- so a cached closure whose file changed after import
+    failed its key build (KEY-BUILD-FAILED) instead of being compared."""
+    import importlib
+
+    from cash.source_norm import loaded_code_matches_disk
+
+    src = "def make(k):\n    def inner(x):\n        return x * k\n    return inner\n"
+    (tmp_path / "closmod_r18.py").write_text(src, encoding="utf-8")
+    monkeypatch.syspath_prepend(str(tmp_path))
+    mod = importlib.import_module("closmod_r18")
+    try:
+        inner = mod.make(3)
+        _edit(tmp_path / "closmod_r18.py", src + "\nOTHER = 1\n")    # inner unchanged
+        assert loaded_code_matches_disk(inner) is True
+        _edit(tmp_path / "closmod_r18.py", src.replace("x * k", "x + k"))
+        assert loaded_code_matches_disk(inner) is False
+    finally:
+        sys.modules.pop("closmod_r18", None)
+
+
 def test_an_unedited_cached_function_hits_across_processes(tmp_path):
     """Control: decoration-time pinning keeps the key byte-stable run to run."""
     proj, _ = _own_project(tmp_path, "module")

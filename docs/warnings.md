@@ -769,7 +769,7 @@ somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
 returned its real result; only the caching was skipped.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @fb043b17 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @691debf2 -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -951,7 +951,7 @@ is exactly backwards here: a library callable would not have warned.
 
 ## KEY-SOURCE-CHANGED {#key-source-changed}
 
-<!-- claim: cash/source_norm.py:loaded_code_matches_disk @c9f1ae94, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
+<!-- claim: cash/source_norm.py:loaded_code_matches_disk @cb3b7996, cash/core.py:_warn_source_changed_since_load @02d3e452 -->
 **What happened.** A file holding your cached function, or a helper it calls,
 was edited after this process imported it. The process is still running the
 *old* code; the file now holds the *new* code. cash noticed the difference the
@@ -990,7 +990,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @fb043b17 -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @691debf2 -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.

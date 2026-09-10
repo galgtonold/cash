@@ -137,7 +137,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/core.py:Cash._log_decorator_call @bfc78cc4 -->
+<!-- claim: cash/core.py:Cash._log_decorator_call @778db02f -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`:
 
 <!-- test:skip reason="illustrative dict literal at top level" -->

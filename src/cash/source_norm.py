@@ -530,7 +530,10 @@ def loaded_code_matches_disk(fn: object) -> bool:
                 continue
         elif candidate.co_name != code.co_name:
             continue
-        probe = types.FunctionType(candidate, {})
+        # Not ``types.FunctionType(candidate, {})``: that raises for a nested
+        # function with free variables (it needs a closure), and only the
+        # code is read anyway.
+        probe = types.SimpleNamespace(__code__=candidate)
         if bytecode_identity(probe) == live:
             return True
     return False

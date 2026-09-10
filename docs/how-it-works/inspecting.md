@@ -196,7 +196,7 @@ keep. `show` displays the last 50. Full flag reference in
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @94a9d132 -->
+<!-- claim: cash/core.py:Cash._explain_call @d080afe9 -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -228,7 +228,7 @@ caching is switched off — each carrying its own `details` (which files changed
 which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @253593ac, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @bfc78cc4 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @253593ac, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @778db02f -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was

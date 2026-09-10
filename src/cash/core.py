@@ -64,7 +64,7 @@ from .notebook.randomness import (
     RandomnessDetector,
     describe_random_call,
 )
-from .purity_analyzer import PurityReport, get_analyzer
+from .purity_analyzer import PurityReport, bindings_changed, get_analyzer
 from .source_norm import (
     bytecode_identity,
     loaded_class_identity,
@@ -677,6 +677,7 @@ MISS_GONE = "entry gone"
 MISS_INCOMPLETE = "entry incomplete"
 MISS_UNHASHABLE = "unhashable argument"
 MISS_KEY_FAILED = "key could not be built"
+MISS_MOCKED = "a helper is a mock"
 
 #: `_store_refusal` was not handed a capture watch (the streaming path).
 _NO_WATCH = object()
@@ -2122,6 +2123,18 @@ class Cash:
         # One reset per key build: both _fold_closure and
         # _fold_read_globals contribute, so neither may clear it.
         self._pending_capture_watch = {}
+        # Outside the try below, which catches TypeError/ValueError from key
+        # building: an exception from the user's own body must not be caught
+        # there and the body run a second time.
+        unkeyable = self._refresh_helper_bindings(func, func_name)
+        if unkeyable is not None:
+            result = func(*args, **kwargs)
+            self._log_decorator_call(
+                func_name, cache_hit=False,
+                execution_time=time.perf_counter() - call_start,
+                args_hash='unkeyable', cache_key='', miss_detail=unkeyable,
+            )
+            return (_CACHE_MISS, result, 'unkeyable')
         try:
             current_state_hash = self._state_hasher.compute(
                 func_name, own_source_override=self._pin_own_source(func),
@@ -2251,6 +2264,20 @@ class Cash:
         # analysis caches; it does not warn, run the function, or touch the
         # backend.
         self._ensure_closure_analyzed(func)
+        # Same binding check a real call makes first: a patched helper
+        # changes the key, and a mock means the call would run uncached.
+        unkeyable = self._refresh_helper_bindings(func, func_name)
+        if unkeyable is not None:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_KEY_UNCOMPUTABLE,
+                func_name=func_name,
+                details={
+                    'error': MISS_MOCKED,
+                    'hint': f"{unkeyable}, which has no code to key, so the call "
+                            f"would run uncached.",
+                },
+            )
 
         # Build cache key (silently - explain() does not warn).
         try:
@@ -6250,6 +6277,7 @@ class Cash:
         args_hash: str,
         cache_key: str,
         time_saved: float = 0.0,
+        miss_detail: str = "",
     ) -> None:
         """Record a decorator call event for notebook integration.
 
@@ -6282,6 +6310,9 @@ class Cash:
                                            "there is no key to look up")
             elif args_hash == 'error':
                 reason = (MISS_KEY_FAILED, "building the key raised")
+            elif args_hash == 'unkeyable':
+                reason = (MISS_MOCKED, f"{miss_detail}, which has no code to key, "
+                                       f"so the call ran uncached")
             else:
                 reason = self._pending_miss.pop(cache_key, None) or (MISS_FIRST, "")
             entry['miss_reason'] = reason
@@ -7619,6 +7650,50 @@ class Cash:
                 dep_func = self.functions.get(dep)
                 if dep_func is not None:
                     stack.append(dep_func)
+
+    def _refresh_helper_bindings(self, func: Callable[..., Any], func_name: str) -> str | None:
+        """Re-analyse any report whose call-site bindings moved; name a mock.
+
+        Walks *func* and its cached-dependency closure. A report is built once
+        per function, from whatever its call sites' names held at that moment,
+        so a helper patched before the first call stayed "the helper" after
+        the real one came back, and the helpers below a patched one were never
+        walked. When a binding no longer holds the object analysed, that
+        function is analysed again from the current bindings (the analyzer's
+        own cache applies the same check).
+
+        Returns a description when the tree reaches a mock -- there is no code
+        to key and its answer is whatever the test configured, so the caller
+        runs this call uncached -- and None otherwise. Never raises: a failure
+        here leaves the reports as they were.
+
+        Per call: one ``sys.modules`` lookup, an attribute chain and an
+        identity test per binding, no hashing.
+        """
+        try:
+            reason: str | None = None
+            stack: list[tuple[Callable[..., Any], str]] = [(func, func_name)]
+            seen: set[str] = set()
+            while stack:
+                f, name = stack.pop()
+                if name in seen:
+                    continue
+                seen.add(name)
+                report = self._purity_reports.get(name)
+                if report is not None and report.helper_bindings and bindings_changed(report):
+                    with self._analysis_lock:
+                        self._populate_analysis(f, name)
+                    report = self._purity_reports.get(name)
+                if report is not None and report.unkeyable and reason is None:
+                    reason = report.unkeyable[0]
+                for dep in self.graph.get_dependencies(name):
+                    dep_func = self.functions.get(dep)
+                    if dep_func is not None:
+                        stack.append((dep_func, dep))
+            return reason
+        except Exception:  # noqa: BLE001 - never break a call over this
+            logger.debug("[CORE] binding refresh failed for %s", func_name, exc_info=True)
+            return None
 
     def _populate_analysis(self, func: Callable[..., Any], func_name: str) -> None:
         """Record *func*'s cached-call graph edges and purity report (no
