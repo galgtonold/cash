@@ -304,8 +304,13 @@ print(pipeline.cache_info())     # {'hits': 1, 'misses': 2, ...}
 
 The answer changed *and* `misses` went up: cash threw the cached result away
 because a function `pipeline` calls indirectly changed. You don't have to
-remember which entries a helper edit reaches. Helpers are resolved within the
-module; for cross-module dependencies, name them with `depends_on=`.
+remember which entries a helper edit reaches.
+
+<!-- claim: cash/core.py:Cash._is_user_module @1b6836eb -->
+That holds across files: a helper imported from another module of your project
+is followed the same way, with nothing to declare. What cash stops at is
+installed code — `site-packages` and the standard library. If a third-party
+function's identity matters to a result, name it with `depends_on=`.
 
 ### File reads are tracked here too
 

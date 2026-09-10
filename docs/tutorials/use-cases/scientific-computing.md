@@ -59,12 +59,20 @@ def simulate(n_steps: int, dt: float, alpha: float, seed: int):
     rng = np.random.default_rng(seed)
     return rng.standard_normal(n_steps)
 
-# Bad — np.random.seed() inside the function bakes the *first* observed state
+# Bad — the value is reproducible, but np.random.seed() reseeds the whole
+# process's RNG, and a cache hit skips that
 @cash.cache
 def simulate_bad(n_steps: int):
     np.random.seed(42)        # don't do this inside a cached function
     return np.random.randn(n_steps)
 ```
+
+`simulate_bad` returns the same array hit or miss. What differs is everything
+after it: on a miss the global RNG has just been reseeded, on a hit it has not,
+so the next `np.random` draw anywhere in the program depends on whether the
+cache was warm. Cash flags the reseed as a side effect
+([IMPURE-SIDE-EFFECTS](../../warnings.md#impure-side-effects)). A local
+generator built from a seed argument has no such reach.
 
 Cash scans your notebook for unseeded RNG calls and warns when it finds them — the warning is the cache telling you that what's saved won't match what a fresh re-run would produce. See [Controlling Cache Behavior](../feature-guides/controlling-cache-behavior.md) for the `# @cash:allow-random` escape hatch and the full list of detected RNG calls.
 

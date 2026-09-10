@@ -106,10 +106,12 @@ The coalescing is keyed on the running event loop, so it dedupes an `asyncio.gat
 
 ## Lock behaviour details
 
+<!-- claim: cash/core.py:Cash._compute_with_lock @b47c9e4c -->
 - **Per cache key, not per function.** The key passed to `backend.lock()` is the full `func_name:state_hash:dynamic_hash:args_hash` cache key, so two different arg-tuples for the same function don't serialize on each other.
 - **Any acquisition failure degrades to an unlocked compute.** `_compute_with_lock` catches `Exception` broadly on `__enter__` — a Redis `LockError` on contention/timeout, a dropped connection, an `OSError` on a file lock — surfaces a `CashCacheIneffectiveWarning` and proceeds without the lock. The user's call never hangs indefinitely and never crashes on a lock problem.
 - **Redis times out gracefully.** The Redis backend passes `timeout=60` (lock TTL — auto-released after 60 s in case the holder crashed) and `blocking_timeout=10` (max 10 s wait to acquire). A failed acquisition lands in the degrade path above.
 - **The lock is held across the user's compute.** This is intentional — it's what makes the redundancy guarantee work — but it means a slow function holds the lock for its full duration. For minutes-long computes against a shared Redis, tune the Redis `timeout=` if you need a longer ceiling.
+- **A compute that raises turns a burst into a queue.** When the lock holder raises, nothing is stored, so the next waiter takes the lock, finds no entry, and computes — and raises — in turn. Measured with four threads on one key and a 1 s function that raises: the bodies started at 0, 1, 2 and 3 s, and the last caller waited 4 s for its exception, where unlocked all four would have failed together after 1 s. N callers on a failing key wait up to N × the compute. Locking a function whose downstream is down (a dead database, an expired token) is where this shows. The async path caps it at two rounds instead: its followers wait for the leader, then all compute concurrently — measured the same way, 1 s for the leader's caller and 2 s for the other three.
 - **Re-entrant on the same thread.** The base lock is an `RLock`, so same-thread recursion into the same key is safe. Cyclic acquisition *across* threads or against a Redis lock can still deadlock; Cash does not detect this. The Redis lock will eventually time out on `blocking_timeout=10`, but you'll see warnings and redundant computes.
 
 ## Debugging concurrency

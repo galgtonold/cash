@@ -15,6 +15,32 @@ also reachable directly on the top-level module — they proxy to a
 lazily-created `Cash()` singleton (see *Module-level convenience*
 below).
 
+## Signatures at a glance
+
+The `:::` blocks on this page are filled in from the docstrings when the
+site is built, so reading this file in the repository shows only the
+directives. The rendered reference is at
+[cash-lib.readthedocs.io](https://cash-lib.readthedocs.io/en/stable/api/cash/);
+offline, `help(cash.Cash)` prints the same text. The two signatures you
+reach for most:
+
+<!-- claim: cash/core.py:Cash.__init__ @ac704971, cash/core.py:Cash.cache @60e3ce9f -->
+```text
+Cash(backend=None, cache_dir=None, backends=None, compress=None,
+     register_magic=None, debug=None, use_locking=False, config_path=None,
+     verbose=False, **config_overrides)
+
+Cash.cache(func=None, *, depends_on=None, dynamic_depends_on=None,
+           file_depends_on=None, ttl=None, cache_if=None,
+           chunk_max_items=1_000_000, chunk_max_bytes=1_000_000_000,
+           strict=False, assume_safe=False, allow_random=False)
+```
+
+`**config_overrides` takes any [configuration](config.md) field by name —
+`Cash(max_cache_size=2 * 1024**3)` — and wins over every file and
+environment variable. What each `cache` parameter does is in the
+[decorator guide](../decorator.md).
+
 ::: cash.Cash
     options:
       members:

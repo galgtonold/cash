@@ -100,7 +100,10 @@ Five common causes, each with the badge you'll see and the one-line fix.
 
 **Why:** Cash tracks files passed to common I/O calls (`pd.read_csv`, `np.load`, `open`, `joblib.load`, `pickle.load`, `json.load`, and others) and records each file's size and a content hash. The file's **contents** differ from what was recorded when the cache was populated. The size is checked first because it proves a change cheaply; when the size matches, the content hash decides.
 
-**Fix:** If you changed the file on purpose, the recompute is correct. A bumped mtime alone will *not* trigger this — a sync tool or a notebook autosave plugin that rewrites the file byte-for-byte leaves the cache valid, so there's nothing to exclude. If you see this badge without having changed the file, the bytes really did move: check for a process rewriting it with different content.
+<!-- claim: cash/notebook/file_dep_snapshot.py:file_dep_is_fresh @6c0592fa, cash/notebook/file_dep_snapshot.py:_HASH_FULL_MAX_BYTES_DEFAULT == 67108864 -->
+**Fix:** If you changed the file on purpose, the recompute is correct. For a file up to 64 MiB (`file_hash_full_max_bytes`), a bumped mtime alone will *not* trigger this — a sync tool or a notebook autosave plugin that rewrites the file byte-for-byte leaves the cache valid, so there's nothing to exclude. If you see this badge for such a file without having changed it, the bytes really did move: check for a process rewriting it with different content.
+
+A larger file is different. Cash hashes three regions of it rather than every byte, and the timestamps are what cover the rest — so touching it, or re-downloading an identical copy, recomputes once. See [large objects are hashed by sampling](known-limitations.md#large-objects-are-hashed-by-sampling); raise `file_hash_full_max_bytes` if a big input is rewritten unchanged often enough to matter.
 
 ### Function source changed
 

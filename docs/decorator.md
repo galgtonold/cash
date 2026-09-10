@@ -800,9 +800,14 @@ replayed forever — later calls never consult the RNG again, so the
 This is the same detector the notebook path uses, so both paths agree on
 what counts as unseeded. Two ways to make it silent:
 
-- **Seed the RNG** — `np.random.seed(0)`, `random.seed(0)`, or
-  `np.random.default_rng(42)`. A seeded draw is reproducible, so no
-  warning fires. This is the real fix.
+- **Seed the RNG** — with a local generator whose seed is an argument,
+  `rng = np.random.default_rng(seed)`. A seeded draw is reproducible, so
+  no warning fires. This is the real fix. Calling the global
+  `np.random.seed(0)` or `random.seed(0)` inside the function also makes
+  the value reproducible, but it reseeds the whole process's RNG as a
+  side effect that a cache hit skips — the next `np.random` draw after
+  the call then differs between a hit and a miss, and cash flags it
+  ([IMPURE-SIDE-EFFECTS](warnings.md#impure-side-effects)).
 - **`allow_random=True`** — acknowledge the freeze and move on.
 
 ```python
@@ -1007,7 +1012,11 @@ type is the culprit. Either:
 
 ### Instance methods — `self` participates in the key
 
-<!-- test:skip reason="Loader instance is unhashable (no register_hasher); cache is ineffective and stats stay 0/0" -->
+`self` is an argument like any other, and it is hashed by its **state**, not
+its identity. Two instances with equal attributes share an entry; change an
+attribute and the key changes with it:
+
+<!-- test:skip reason="illustrative — references missing a.csv" -->
 ```python
 class Loader:
     def __init__(self, path):
@@ -1018,19 +1027,22 @@ class Loader:
         return pd.read_csv(self.path)
 
 Loader("a.csv").load()
-Loader("a.csv").load()   # MISS — different self objects = different args_hash
+Loader("a.csv").load()   # HIT — equal state, same key
+Loader("b.csv").load()   # MISS — different path, different key
 ```
 
-Two `Loader` instances with the same `path` produce two separate cache
-entries because `self` (a different object each time) is part of the
-args. Fix via [`register_hasher`](tutorials/feature-guides/caching-class-methods.md):
+The gotcha is an attribute that cannot be hashed — a lock, a live database
+connection, an open file. Then `self` cannot be hashed either, and the method
+does not cache at all ([KEY-UNHASHABLE-ARG](warnings.md#key-unhashable-arg)).
+Tell cash which attributes identify the instance with
+[`register_hasher`](tutorials/feature-guides/caching-class-methods.md):
 
 <!-- test:skip reason="Loader class defined in skipped previous fence" -->
 ```python
 cash.register_hasher(Loader, lambda l: hashlib.sha256(l.path.encode()).hexdigest())
 ```
 
-Now both instances share the same args_hash and the second call hits.
+Now two instances with the same `path` share an entry, whatever else they hold.
 
 ### C-extension callables and builtins
 

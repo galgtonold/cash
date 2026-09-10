@@ -133,8 +133,8 @@ Edit statement 3 and only it re-runs — statements 1 and 2 stay cached. A plain
 cell cache would recompute all three, because the cell's text changed.
 
 Because the key is the *source*, not the cell text, cash follows your functions:
-edit a function's body — or a helper it calls, transitively within the module —
-and the statements that use it recompute. It's not blind text matching.
+edit a function's body — or a helper it calls, transitively, including helpers in
+your own `.py` modules — and the statements that use it recompute. It's not blind text matching.
 
 ### Loops and branches decompose too
 

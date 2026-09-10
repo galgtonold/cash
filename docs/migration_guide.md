@@ -86,7 +86,7 @@ result = df.apply(complex_transform)
 - **Transitive helper invalidation — the headline difference.** joblib hashes
   only the decorated function's *own* body. Edit a helper it calls and joblib
   keeps serving the old result. Cash folds the source of the functions you call —
-  transitively, within the module — into the cache key, so editing a callee
+  transitively, across your project's own modules — into the cache key, so editing a callee
   (even a few levels down) invalidates the cache.
 - joblib doesn't track upstream state; Cash invalidates on changed files
   (automatically), declared `depends_on=`, and module globals the function reads.
