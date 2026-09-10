@@ -612,8 +612,35 @@ _SEEDING_CALLS = frozenset({
 })
 
 
-def _seed_parameters(src: str) -> dict[str, str]:
-    """``{parameter: call}`` for seeding calls whose seed IS a parameter."""
+def _seed_access_path(node: ast.AST) -> tuple[str, tuple[tuple[str, Any], ...]] | None:
+    """``settings.sim.seed`` -> ``("settings", (("attr", "sim"), ("attr", "seed")))``;
+    ``opts["seed"]`` -> ``("opts", (("item", "seed"),))``; None for anything
+    else (a call, a computed key, an expression)."""
+    path: list[tuple[str, Any]] = []
+    while True:
+        if isinstance(node, ast.Attribute):
+            path.append(("attr", node.attr))
+            node = node.value
+        elif isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
+            path.append(("item", node.slice.value))
+            node = node.value
+        else:
+            break
+    if not isinstance(node, ast.Name):
+        return None
+    return node.id, tuple(reversed(path))
+
+
+def _seed_parameters(src: str) -> dict[str, tuple[str, str, bool, tuple]]:
+    """``{seed expression: (call, root name, root is a parameter, path)}``.
+
+    For seeding calls whose seed is a parameter, or an attribute or
+    constant-key item reached from a parameter or a module global:
+    ``default_rng(seed)``, ``default_rng(settings.seed)``,
+    ``default_rng(opts["seed"])``, ``default_rng(CONFIG.seed)``. A root the
+    function assigns itself is a local, which cannot be read before the call,
+    and is skipped.
+    """
     try:
         tree = ast.parse(src)
     except SyntaxError:
@@ -624,7 +651,9 @@ def _seed_parameters(src: str) -> dict[str, str]:
         return {}
     a = fn.args
     params = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
-    found: dict[str, str] = {}
+    assigned = {n.id for n in ast.walk(fn)
+                if isinstance(n, ast.Name) and isinstance(n.ctx, (ast.Store, ast.Del))}
+    found: dict[str, tuple[str, str, bool, tuple]] = {}
     for node in ast.walk(fn):
         if not isinstance(node, ast.Call):
             continue
@@ -634,9 +663,47 @@ def _seed_parameters(src: str) -> dict[str, str]:
             continue
         seed_arg = node.args[0] if node.args else next(
             (k.value for k in node.keywords if k.arg in ("seed", "x", "a")), None)
-        if isinstance(seed_arg, ast.Name) and seed_arg.id in params:
-            found.setdefault(seed_arg.id, f"{dotted}({seed_arg.id})")
+        if seed_arg is None:
+            continue
+        access = _seed_access_path(seed_arg)
+        if access is None:
+            continue
+        root, path = access
+        is_param = root in params
+        if not is_param and root in assigned:
+            continue
+        expr = ast.unparse(seed_arg)
+        found.setdefault(expr, (f"{dotted}({expr})", root, is_param, path))
     return found
+
+
+_SEED_UNREADABLE = object()
+
+
+def _read_seed(value: Any, path: tuple) -> Any:
+    """Follow *path* from *value* WITHOUT running user code, or `_SEED_UNREADABLE`.
+
+    Attributes through ``inspect.getattr_static``: a plain instance or class
+    attribute is read, a property or other descriptor is not evaluated. Items
+    only from a plain mapping. This runs on every call, so it may not call
+    anything the user wrote.
+    """
+    for kind, key in path:
+        if kind == "attr":
+            try:
+                value = inspect.getattr_static(value, key)
+            except AttributeError:
+                return _SEED_UNREADABLE
+            if hasattr(type(value), "__get__") and not isinstance(
+                    value, (types.FunctionType, types.BuiltinFunctionType)):
+                return _SEED_UNREADABLE          # a property or descriptor
+        elif isinstance(value, (dict, types.MappingProxyType)):
+            value = value.get(key, _SEED_UNREADABLE)
+            if value is _SEED_UNREADABLE:
+                return value
+        else:
+            return _SEED_UNREADABLE
+    return value
 
 
 #: Source files already reported as edited-since-load, one notice per file.
@@ -1036,7 +1103,7 @@ class Cash:
         self._helper_defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
         # func_name -> {parameter: seeding call} for seeding calls fed by a
         # parameter; checked per call by `_warn_if_seed_is_none`.
-        self._seed_params: dict[str, dict[str, str]] = {}
+        self._seed_params: dict[str, dict[str, tuple]] = {}
         # In-process async single-flight registry: cache_key -> (event_loop,
         # asyncio.Event). When use_locking is set, concurrent awaits of the
         # same key coalesce - one coroutine computes, the rest wait on the
@@ -6760,28 +6827,51 @@ class Cash:
 
     def _warn_if_seed_is_none(self, func: Callable, func_name: str,
                               args: tuple, kwargs: dict) -> None:
-        """RANDOM-UNSEEDED for a seed parameter that is None in THIS call."""
-        try:
-            bound = inspect.signature(func).bind(*args, **kwargs)
-            bound.apply_defaults()
-        except (TypeError, ValueError):
+        """RANDOM-UNSEEDED for a seed that is None in THIS call.
+
+        The seed may be a parameter (CAS-116) or read from one or from a module
+        global: ``default_rng(settings.seed)`` with the field None froze one
+        draw across processes and said nothing (round 18), while the bare
+        ``seed=None`` parameter warned.
+        """
+        bound = None
+        g = getattr(func, "__globals__", None) or {}
+        for expr, (call, root, is_param, path) in sorted(
+                self._seed_params.get(func_name, {}).items()):
+            if is_param:
+                if bound is None:
+                    try:
+                        bound = inspect.signature(func).bind(*args, **kwargs)
+                        bound.apply_defaults()
+                    except (TypeError, ValueError):
+                        return
+                if root not in bound.arguments:
+                    continue
+                value = _read_seed(bound.arguments[root], path)
+                origin = f"the parameter '{root}'" if not path else f"'{expr}'"
+            else:
+                if root not in g:
+                    continue
+                value = _read_seed(g[root], path)
+                origin = f"'{expr}'"
+            if value is not None:
+                continue
+            fix = (f"pass a seed: {root}=i per replicate keeps each one reproducible "
+                   f"and cacheable." if is_param and not path else
+                   f"set {expr} to an integer, or pass the seed as an argument.")
+            self._warn_once(
+                CashRandomnessWarning, func_name, f"seed-param:{expr}",
+                f"@cash.cache on {func_name}: {call} is seeded from "
+                f"{origin}, which is None in this call, so the RNG "
+                f"draws from OS entropy. The first call's result is cached and "
+                f"replayed on every later call with the same arguments -- "
+                f"repeated calls return the same 'random' value, and it is "
+                f"not reproducible across a cleared cache.",
+                code="RANDOM-UNSEEDED",
+                fix=f"{fix} Or @cash.cache(allow_random=True) to keep the value "
+                    f"frozen on purpose.",
+            )
             return
-        for name, call in sorted(self._seed_params.get(func_name, {}).items()):
-            if name in bound.arguments and bound.arguments[name] is None:
-                self._warn_once(
-                    CashRandomnessWarning, func_name, f"seed-param:{name}",
-                    f"@cash.cache on {func_name}: {call} is seeded from the "
-                    f"parameter '{name}', which is None in this call, so the RNG "
-                    f"draws from OS entropy. The first call's result is cached and "
-                    f"replayed on every later call with the same arguments -- "
-                    f"repeated calls return the same 'random' value, and it is "
-                    f"not reproducible across a cleared cache.",
-                    code="RANDOM-UNSEEDED",
-                    fix=f"pass a seed: {name}=i per replicate keeps each one "
-                        f"reproducible and cacheable. Or @cash.cache("
-                        f"allow_random=True) to keep the value frozen on purpose.",
-                )
-                return
 
     def _warn_unseeded_estimator_result(
         self, func_name: str, result: Any, allow_random: bool,

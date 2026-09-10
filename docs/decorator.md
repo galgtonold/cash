@@ -902,7 +902,10 @@ time**, so cached calls pay nothing for it. The one exception is a seed
 that is a *parameter* — `def simulate(n, seed=None): rng =
 np.random.default_rng(seed)`. Whether that draw is seeded depends on
 what the caller passed, so each call checks that one argument, and a
-call where it is `None` gets the same warning. Two consequences: a function
+call where it is `None` gets the same warning. The same goes for a seed
+read from a parameter or a module global — `default_rng(settings.seed)`,
+`default_rng(opts["seed"])`, `default_rng(CONFIG.seed)` — read without
+running any of your code (a property is skipped). Two consequences: a function
 with no retrievable source (defined via `exec`, or in a bare REPL) is
 not scanned, and randomness *inside* a compiled library call — an
 unseeded `estimator.fit()`, for example — is invisible to it. Pass an

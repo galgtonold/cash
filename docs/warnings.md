@@ -1311,7 +1311,9 @@ caller passes a seed. Leave it out, or pass `None`, and the generator draws from
 OS entropy, so this warning fires for *that call*. It is the shape Monte Carlo
 replicates usually take, and caching turns `[simulate(p) for _ in range(R)]`
 into R copies of one draw. Pass `seed=i` per replicate: each one is then
-reproducible *and* cacheable.
+reproducible *and* cacheable. The same check covers a seed read from a settings
+object, a dict or a module global — `default_rng(settings.seed)`,
+`default_rng(opts["seed"])` — when that field is `None` in the call.
 
 **This is Cash working as designed, not a defect.** Worth being blunt about,
 because the instinctive reaction — decide the cache is broken and turn caching
