@@ -259,7 +259,22 @@ def _double(v):
     return v * 2
 
 
-def test_an_unhashable_callable_argument_still_reports_itself(tmp_path):
+@pytest.fixture()
+def warned_unhashable():
+    """The KEY-OPAQUE-CALLABLE notice is once per PROCESS, keyed by type name.
+
+    Any earlier test on the same xdist worker that passed a functools.partial
+    consumed it, and this test saw no warning -- on whichever platforms the
+    scheduler happened to put the two together (ubuntu, not Windows).
+    """
+    saved = set(Cash._WARNED_UNHASHABLE)
+    Cash._WARNED_UNHASHABLE.clear()
+    yield
+    Cash._WARNED_UNHASHABLE.clear()
+    Cash._WARNED_UNHASHABLE.update(saved)
+
+
+def test_an_unhashable_callable_argument_still_reports_itself(tmp_path, warned_unhashable):
     """Control arm for the test above: the boundary is still announced.
 
     `functools.partial` caches but cannot be source-hashed, so editing the

@@ -42,7 +42,12 @@ def _messages(rec, code):
 
 @pytest.fixture
 def c(tmp_path):
-    return Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+    # The partial arm trips a once-per-process notice (KEY-OPAQUE-CALLABLE);
+    # hand the dedup set back as it was, so no later test finds it spent.
+    saved = set(Cash._WARNED_UNHASHABLE)
+    yield Cash(cache_dir=str(tmp_path / ".cash"), register_magic=False)
+    Cash._WARNED_UNHASHABLE.clear()
+    Cash._WARNED_UNHASHABLE.update(saved)
 
 
 @pytest.mark.parametrize("arg", [
