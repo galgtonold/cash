@@ -50,6 +50,7 @@ from .exceptions import (
     CashImpurityWarning,
 )
 from .graph import DependencyGraph
+from .notebook.file_dep_snapshot import ACTIVE_CONFIG
 from .notebook.analysis import CodeAnalyzer
 
 # The decorator path reuses the notebook path's randomness detector verbatim
@@ -3382,7 +3383,11 @@ class Cash:
             async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
                 if self.config.disable:
                     return await _bypass(args, kwargs)
-                result = await wrapper(*args, **kwargs)
+                token = ACTIVE_CONFIG.set(self.config)
+                try:
+                    result = await wrapper(*args, **kwargs)
+                finally:
+                    ACTIVE_CONFIG.reset(token)
                 _drain_stats()
                 self._warn_unseeded_estimator_result(
                     func_name, result, allow_random)
@@ -3394,7 +3399,13 @@ class Cash:
                 # nothing of cash's -- no key, no analysis, no lookup, no store.
                 if self.config.disable:
                     return _bypass(args, kwargs)
-                result = wrapper(*args, **kwargs)
+                # This instance's settings for the file checks the call makes
+                # (`file_hash_full_max_bytes`); see ACTIVE_CONFIG.
+                token = ACTIVE_CONFIG.set(self.config)
+                try:
+                    result = wrapper(*args, **kwargs)
+                finally:
+                    ACTIVE_CONFIG.reset(token)
                 _drain_stats()
                 self._warn_unseeded_estimator_result(
                     func_name, result, allow_random)
@@ -3468,9 +3479,13 @@ class Cash:
             or write to the backend. Safe to call from sync code even
             on async-wrapped functions.
             """
-            return self._explain_call(
-                func, func_name, dynamic_depends_on, ttl, args, kwargs,
-            )
+            token = ACTIVE_CONFIG.set(self.config)
+            try:
+                return self._explain_call(
+                    func, func_name, dynamic_depends_on, ttl, args, kwargs,
+                )
+            finally:
+                ACTIVE_CONFIG.reset(token)
 
         stats_wrapper.cache_info = cache_info
         stats_wrapper.cache_clear = cache_clear

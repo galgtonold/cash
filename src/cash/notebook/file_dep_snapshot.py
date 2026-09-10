@@ -30,6 +30,7 @@ size-differs path), and only when the size is equal do we hash to decide.
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import logging
 import os
@@ -79,6 +80,14 @@ _ABSENT_MARKER = "absent"
 _HASH_FULL_MAX_BYTES_DEFAULT = 64 * 1024 * 1024       # 64 MiB
 
 
+#: The config of the `Cash` instance whose call is running, set by its
+#: wrapper. The threshold used to come from the process-wide singleton, or a
+#: fresh `get_config()` when there was none, so `Cash(file_hash_full_max_bytes=
+#: ...)` on an instance of your own was silently ignored.
+ACTIVE_CONFIG: contextvars.ContextVar[Any] = contextvars.ContextVar(
+    "cash_active_config", default=None)
+
+
 def _full_hash_max_bytes() -> int:
     """Largest file hashed IN FULL rather than sampled.
 
@@ -97,9 +106,10 @@ def _full_hash_max_bytes() -> int:
         # config in place, while ``get_config()`` re-merges env and TOML from
         # disk and would not see it. Falls through to the merged one for a
         # process that has not built a Cash yet.
-        import cash
-
-        config = getattr(getattr(cash, "_global_cash", None), "config", None)
+        config = ACTIVE_CONFIG.get()
+        if config is None:
+            import cash
+            config = getattr(getattr(cash, "_global_cash", None), "config", None)
         if config is None:
             from cash.config import get_config
             config = get_config()

@@ -1034,6 +1034,27 @@ def get_config(
     project_config_path: Any = _USE_DEFAULT_PATH,
     overrides: dict[str, Any] | None = None,
 ) -> CashConfig:
+    """Resolve the merged Cash configuration -- see `_resolve_config`.
+
+    Never recorded as a file dependency: this can run inside a cached call
+    (a nested call's bookkeeping), and the files it reads are cash's, not the
+    function's.
+    """
+    from .notebook.file_tracker import untracked
+    with untracked():
+        return _resolve_config(
+            config_path, user_config_path=user_config_path,
+            project_config_path=project_config_path, overrides=overrides,
+        )
+
+
+def _resolve_config(
+    config_path: str | Path | None = None,
+    *,
+    user_config_path: Any = _USE_DEFAULT_PATH,
+    project_config_path: Any = _USE_DEFAULT_PATH,
+    overrides: dict[str, Any] | None = None,
+) -> CashConfig:
     """Resolve the merged Cash configuration.
 
     Args:

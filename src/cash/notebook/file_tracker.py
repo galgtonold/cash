@@ -52,6 +52,28 @@ _active_tracker: contextvars.ContextVar[Optional["FileAccessTracker"]] = (
     contextvars.ContextVar("_active_tracker", default=None)
 )
 
+
+class untracked:
+    """Run cash's OWN I/O without it becoming anyone's dependency.
+
+    A nested cached call does its bookkeeping -- resolving configuration,
+    reading ``pyproject.toml``, walking up for project markers -- while the
+    OUTER call's tracker is live, so those reads were recorded as the outer
+    entry's file dependencies: bump the project's version and every cached
+    function that calls another one recomputed. The storage-path filters
+    (``_is_cash_internal``) cannot help, because a config file is not storage.
+    A class rather than ``contextlib.contextmanager`` so it costs one
+    ContextVar swap, not a generator.
+    """
+
+    __slots__ = ("_token",)
+
+    def __enter__(self) -> None:
+        self._token = _active_tracker.set(None)
+
+    def __exit__(self, *exc: Any) -> None:
+        _active_tracker.reset(self._token)
+
 # Per-target install lock: the dispatcher wrappers are installed once
 # per (module/dict, attr-name) pair for the lifetime of the process.
 # Subsequent ``__enter__`` calls skip already-installed targets (cheap
