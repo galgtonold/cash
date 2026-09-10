@@ -136,10 +136,13 @@ def test_the_env_var_switches_it_on_with_no_code_change(tmp_path):
             env["CASH_SUMMARY"] = env_value
         return subprocess.run([sys.executable, str(script)], capture_output=True,
                               text=True, cwd=str(tmp_path), env=env,
-                              encoding="utf-8", errors="replace").stdout
+                              encoding="utf-8", errors="replace")
 
-    assert "calls restored" not in run(None), "printed without being asked"
-    assert "calls restored" in run("1")
+    assert "calls restored" not in run(None).stderr, "printed without being asked"
+    shown = run("1")
+    # stderr since CAS-120: stdout is the program's own output.
+    assert "calls restored" in shown.stderr
+    assert "calls restored" not in shown.stdout
 
 
 def test_the_summary_never_breaks_a_finished_run(tmp_path, monkeypatch):

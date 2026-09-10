@@ -107,7 +107,7 @@ cash.configure(min_cache_savings_pct=0.10)        # promote when a hit saves >10
 cash.configure(smart_persistence=False)           # fall back to the default policy
 ```
 
-<!-- claim: cash/__init__.py:configure @7169eecd -->
+<!-- claim: cash/__init__.py:configure @e092dd34 -->
 Neither `smart_persistence` nor `min_cache_savings_pct` is in the
 `BACKEND_AFFECTING` set that `cash.configure` consults, so changing either at
 runtime updates the dataclass but does not rebuild the active backend's policy
@@ -118,19 +118,19 @@ so the two paths differ here.)
 
 ## Inspecting where a value actually landed
 
-<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @9b5ed308, cash/backends/tiered_backend.py:TieredBackend.get @5413e4ec -->
+<!-- claim: cash/backends/tiered_backend.py:TieredBackend.set @f8cb4832, cash/backends/tiered_backend.py:TieredBackend.get @5413e4ec -->
 The `TieredBackend.set` path records which tiers accepted the write in `metadata['storage']`. This is a list of source labels — `"RAM"`, the file backend's `source_label`, etc. On a hit, `metadata['source']` records which tier served the read (set in `TieredBackend.get`).
 
-For debugging, enable verbose logging:
+When it went no further than RAM, `metadata['persist_skipped']` says why: `"compute"` (the compute floor or the cost model) or `"size"` (a tier's size cap).
+
+For debugging, turn on debug output — `CASH_DEBUG=1`, or:
 
 ```python
 import cash
-import logging
-logging.basicConfig(level=logging.DEBUG)
 cash.configure(debug=True)
 ```
 
-The TieredBackend logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (logged at the end of `TieredBackend.set`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in:
+Each decorated call then logs a line to stderr, and a result held back from disk says so and why: `kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it`. `CASH_SUMMARY=1` counts the same thing per function at exit. The TieredBackend also logs `[STORAGE] Stored in: RAM` for skipped-disk entries and `[STORAGE] Stored in: RAM, FileBackend` for promoted ones (logged at the end of `TieredBackend.set`). For per-call introspection use `f.explain(*args, **kwargs)` — it tells you whether the next call would hit and which tier the entry currently lives in:
 
 ```python
 @cash.cache

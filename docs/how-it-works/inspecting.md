@@ -196,7 +196,7 @@ keep. `show` displays the last 50. Full flag reference in
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @72575ea8 -->
+<!-- claim: cash/core.py:Cash._explain_call @e8917dd2 -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -215,6 +215,7 @@ print(load.explain(1000))
 ```
 [HIT] __main__.load - hit
   cache_key: __main__.load:ca32787f...::0bba688a...
+  entry_id: 5d0e9a1c44b7
   cached_at: 1784739785.759226
   cache_age_seconds: 0.0006113052368164062
   execution_time_saved: 0.0020235000120010227
@@ -226,7 +227,7 @@ print(load.explain(1000))
 own `details` (which files changed, which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @ff7bcb33, cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b, cash/core.py:Cash._log_decorator_call @55a1f795 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @b97009db, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @bfc78cc4 -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was
@@ -298,7 +299,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
+<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @2252ac91 -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from

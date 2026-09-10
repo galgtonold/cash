@@ -137,7 +137,7 @@ flowchart TD
     STMT --> SP --> WRAP --> DRAIN --> MERGE
 ```
 
-<!-- claim: cash/core.py:Cash._log_decorator_call @55a1f795 -->
+<!-- claim: cash/core.py:Cash._log_decorator_call @bfc78cc4 -->
 Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`:
 
 <!-- test:skip reason="illustrative dict literal at top level" -->
@@ -150,6 +150,10 @@ Every `@cash.cache` call appends an entry to `Cash._decorator_call_log`:
     'args_hash': 'abc123...',             # hash of arguments
     'cache_key': 'my_module.process:...', # full four-segment key
     'timestamp': 1718000000.0,
+    # on a miss only:
+    'miss_reason': ('new arguments', 'called with arguments not seen ...'),
+    'not_stored': None,                   # why the result was not stored
+    'not_persisted': None,                # why it was kept in RAM only
 }
 ```
 

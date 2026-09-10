@@ -198,7 +198,7 @@ cash info
   `[tool.cash]` and XDG user config — see
   [Configuration](getting-started/configuration.md#file-locations)).
 
-<!-- claim: cash/__main__.py:cmd_inspect @426ecc1d, cash/__main__.py:_inspect_cache_dir @24ec3843, cash/__main__.py:_inspect_notebook @06ba3efe -->
+<!-- claim: cash/__main__.py:cmd_inspect @426ecc1d, cash/__main__.py:_inspect_cache_dir @2252ac91, cash/__main__.py:_inspect_notebook @06ba3efe -->
 ### `cash inspect [path] [--function NAME]` { #cash-inspect-path }
 
 Summarise a cache directory, or report on a notebook and its sibling `.cash`
@@ -252,7 +252,17 @@ cash inspect /tmp/some-cache-dir
   `SAVES` is the recorded execution time — what you lose by deleting it —
   which together with `SIZE` and `USES` is the whole trade. `PRODUCES` names
   the variables a notebook statement produced, and is omitted when no entry
-  in the group has any.
+  in the group has any. An entry computed from files gets a `reads:` line
+  under it naming them — the first three, then a count:
+
+  ```
+  ENTRY             SAVES       SIZE   USES   LAST USED
+  94babd0e07b7       0.2s      898 B     0x   2s ago
+        reads: /srv/etl/data/prices.csv
+  ```
+
+  The `ENTRY` id is the one `f.explain(...).entry_id` reports, so an
+  explanation leads straight to the entry to drop.
 
 **Output for a cache directory:**
 

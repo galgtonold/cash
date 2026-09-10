@@ -6,7 +6,7 @@ Cash caches `async def` functions with the same TTL, file-dependency tracking, p
 
 The natural cached unit for `async def` is the *awaited result*, not the coroutine object. A naive `functools.cache` on a coroutine function would return the same exhausted coroutine on every hit — awaitable exactly once. Cash unwraps the await inside the wrapper, stores the awaited value under the same cache-key scheme used for sync functions, and on a hit returns the value directly so the caller's `await` resolves immediately without re-running the coroutine body.
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @ab8fc91e, cash/core.py:Cash._make_wrapper @8ce03ba0 -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @302a01c3, cash/core.py:Cash._make_wrapper @4ad06890 -->
 The dispatch happens at decoration time: `inspect.iscoroutinefunction(func)` selects `_make_async_wrapper`, everything else falls through to `_make_wrapper`. Both wrappers share the helpers (`_resolve_cache_key`, `_try_get_cached`, `_store_in_cache`, `_wrap_iterator_hit`, `_stream_and_store`), so the storage layout and metadata shape are identical.
 
 ## Quick start
@@ -61,7 +61,7 @@ The pattern matches `test_async_function_caches` and `test_async_cache_info` in 
 
 ## What works on async wrappers
 
-<!-- claim: cash/core.py:Cash._make_async_wrapper @ab8fc91e broad="the parity list is a claim about the whole async wrapper body" -->
+<!-- claim: cash/core.py:Cash._make_async_wrapper @302a01c3 broad="the parity list is a claim about the whole async wrapper body" -->
 The async wrapper mirrors the sync wrapper feature-for-feature with the following confirmed parity:
 
 - **TTL and freshness.** `_validate_ttl` on the hit path is shared between wrappers; `ttl=` works identically.

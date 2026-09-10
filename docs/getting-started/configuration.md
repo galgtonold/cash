@@ -153,8 +153,8 @@ cash tracked automatically, where there is no source object on which to set
 
 | Field | Env var | Default | Description |
 |---|---|---|---|
-| `debug` | `CASH_DEBUG` | `false` | Verbose `[CACHE]` / `[UPSTREAM_DEBUG]` / `[LINEAGE_DEBUG]` log lines. |
-| `summary` | `CASH_SUMMARY` | `false` | Print a per-function hit/miss table when the process exits. The one spelling that needs no edit to the script you are running: `CASH_SUMMARY=1 python model.py`. A notebook shows this per statement in the badge; a script otherwise shows nothing. |
+| `debug` | `CASH_DEBUG` | `false` | One log line per `@cash.cache` call — a hit, or a miss and why — plus cash's other debug records. They go to stderr unless your program configures `logging`, in which case they go to your handlers and nothing is added. (The notebook's `[UPSTREAM_DEBUG]`-style lines come from `%cash_on --debug`, not this field.) |
+| `summary` | `CASH_SUMMARY` | `false` | Print a per-function hit/miss table to stderr when the process exits, with why each function missed and which results were kept in RAM only. The one spelling that needs no edit to the script you are running: `CASH_SUMMARY=1 python model.py`. A notebook shows this per statement in the badge; a script otherwise shows nothing. |
 
 ### Backend selection — simple mode
 
@@ -300,7 +300,7 @@ cash = Cash(config_path="./my_special_config.toml")
 Loads the named TOML as the user-level layer (so env vars and
 constructor kwargs still override it).
 
-<!-- claim: cash/__init__.py:configure @7169eecd -->
+<!-- claim: cash/__init__.py:configure @e092dd34 -->
 ## Runtime mutation: `cash.configure()`
 
 Change the active configuration of the default singleton at runtime

@@ -140,21 +140,32 @@ recomputes once.
 
 A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
-there are three ways to look.
+there are several ways to look.
 
-**What recomputed just now?** Set `CASH_SUMMARY=1` and a per-function table
-prints when the process exits. No code change, which is the point:
+<!-- claim: cash/core.py:Cash.run_summary @df5af823, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @a3c76b3b -->
+**What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
+per-function table prints to **stderr** when the process exits — stderr, so it
+never lands in a report, a pipe or a JSON response your program writes to
+stdout. No code change, which is the point:
 
 ```bash
 CASH_SUMMARY=1 python model.py
 ```
 
 ```
-cash: 4 of 5 calls restored, 41.2s saved
+cash: 4 of 6 calls restored, 41.2s saved
   cache: /srv/etl/.cash
   model.ray_component   3 hits,   1 miss     41.2s saved
-  model.build_grid      1 hit,    0 misses    0.3s saved
+      missed: 1 file changed
+  model.build_grid      1 hit,    1 miss      0.3s saved
+      missed: 1 no entry yet
+      kept in RAM only (1x): under the 0.1s persistence floor; a new process recomputes it
 ```
+
+Under each row: why its calls missed, and anything that was computed but not
+kept — a `cache_if` that said no, or a result so quick to compute that it was
+held in memory only ([why](cost-model.md)), so the *next* run will miss it
+too. The run that causes that is the one that can tell you.
 
 The `cache:` line is the directory this run actually used. Check it first when
 a run that should have been warm was not: a job started from a different
@@ -162,9 +173,26 @@ directory, a path with a typo in it, a container volume that is not the one you
 meant — each of those looks exactly like "caching is broken" until you see
 where the entries were going.
 
+The summary prints on a normal exit, on `sys.exit()` with any code, and after
+an uncaught exception or Ctrl-C. It cannot print when the process is killed
+outright — `SIGKILL`, a default `SIGTERM`, `os._exit()`.
+
 `cash.configure(summary=True)`, `Cash(summary=True)` and a `summary = true`
 TOML key do the same thing; `f.cache_info()` gives one function's numbers
-directly.
+directly, its `miss_reasons` included.
+
+**Every call as it happens.** `CASH_DEBUG=1` (or `Cash(debug=True)`) logs one
+line per call to stderr — a hit, or a miss and why:
+
+```
+cash.calls: MISS model.build_grid  no entry yet: the first call with these arguments in this process, and no earlier run left one on disk  (ran 0.05s; kept in RAM only -- under the 0.1s persistence floor -- so another process will recompute it)
+cash.calls: HIT  model.build_grid  (saved 0.05s)
+cash.calls: MISS model.build_grid  new arguments: called with arguments not seen on the last call  (ran 0.05s)
+```
+
+along with cash's other debug records. If your program configures `logging`
+itself, those records go to your handlers in your format instead, and no
+stderr handler is added. `Cash(verbose=True)` gives the per-call lines alone.
 
 **What is on disk, and what is it costing me?**
 
@@ -587,9 +615,17 @@ def stock_price(symbol):
 ```
 
 <!-- claim: cash/core.py:Cash._validate_ttl @98fd97a4, cash/core.py:Cash.cleanup @ba377011 -->
-After the TTL elapses, the next call recomputes. Expired entries are
-not removed from the backend automatically — call `cash.cleanup()` to
-reclaim space, or run `python -m cash clear` from the CLI.
+After the TTL elapses, the next call recomputes and replaces the entry.
+Entries whose calls never come back stay on disk until you reclaim them —
+call `cash.cleanup()`, or run `python -m cash clear` from the CLI.
+
+An entry remembers the `ttl` it was written with, and the decorator's
+current `ttl` applies too, so the **shorter** of the two wins. Lengthening
+`ttl=60` to `ttl=3600` does not rescue entries already written under 60 s:
+they expire at 60 s and are rewritten under the new value.
+`explain()` reports either case as `ttl_expired` when this process wrote the
+entry; an entry a previous process wrote under a shorter ttl reads as
+`no_entry`, because the backend drops it on read.
 
 ### `file_depends_on=` — name a file explicitly
 
@@ -903,12 +939,15 @@ f.cache_info()
 #  'warnings': []}
 ```
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192 -->
 Keys:
 
 - **`hits`**, **`misses`**, **`hit_rate`** — counters since the wrapper
   was created.
 - **`total_time_saved`** — sum of execution times avoided on hits.
+- **`miss_reasons`** — the misses counted by why: `no entry yet`,
+  `new arguments`, `code or state changed`, `file changed`, `ttl expired`,
+  `not stored last time`, and the rest.
 - **`warnings`** — rolling log (last 20) of recent `CashWarning`
   emissions for this function. Lets you discover silent misbehavior
   after the fact even when `warnings.simplefilter` swallowed the
@@ -940,14 +979,14 @@ Keys:
 
 ### `func.cache_clear()`
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @0e34e346 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @33633f80 -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @72575ea8 -->
+<!-- claim: cash/core.py:Cash._explain_call @e8917dd2 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
@@ -955,21 +994,35 @@ the next call with these args would hit or miss the cache, and why:
 f.explain(5)
 # [MISS] __main__.f — no_entry
 #   cache_key: __main__.f:9a3c...:...
+#   entry_id: 4be1c09d7a21
 #   hint: No matching cache entry. First call with these arguments, or...
+#   why: no entry yet: the first call with these arguments in this process, ...
 
 f(5)  # compute
 f.explain(5)
 # [HIT] __main__.f — hit
 #   cache_key: __main__.f:9a3c...:...
+#   entry_id: 4be1c09d7a21
 #   cached_at: 1779637032.79
 #   cache_age_seconds: 0.05
 #   execution_time_saved: 0.0008
+
+f.explain(6)
+# [MISS] __main__.f — no_entry
+#   ...
+#   why: new arguments: called with arguments not seen on the last call
 ```
 
 `reason` is one of `hit`, `key_uncomputable` (unhashable arg),
-`no_entry` (first call / cache cleared / source changed),
-`ttl_expired`, `file_changed`. `details` carries reason-specific
-extras — see [`CacheExplanation`](api/cash.md#cash.CacheExplanation).
+`no_entry`, `ttl_expired`, `file_changed`. On `no_entry`, `details['why']`
+says what this process knows: which part of the key moved since the last
+call (`new arguments`, `code or state changed`, `dynamic dependency changed`),
+that the last result was never stored and why (`cache_if`, a file that
+changed mid-call), or that it was stored and has since been evicted. On a
+`hit` or `file_changed`, `details['file_deps']` lists every file the entry
+was computed from, with the fingerprint it is checked against. `entry_id` is
+the id `cash inspect --function NAME` lists and `cash clear --entry` takes.
+See [`CacheExplanation`](api/cash.md#cash.CacheExplanation) for all of it.
 
 Does NOT call your function, mutate stats, or write to the backend.
 Safe to call from sync code even on async-wrapped functions.

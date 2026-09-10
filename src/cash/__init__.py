@@ -283,6 +283,12 @@ def configure(**overrides: Any) -> None:
     # statement_processor reads it from there in some paths.
     if "debug" in overrides:
         c.debug = bool(overrides["debug"])
+        if c.debug:
+            # Same as the constructor: asking for debug output produces some.
+            import logging
+
+            from .core import _enable_cash_logging
+            _enable_cash_logging(logging.DEBUG)
 
     if needs_rebuild:
         from .backends.factory import build_backend_from_config

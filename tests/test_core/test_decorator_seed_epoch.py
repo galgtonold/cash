@@ -175,3 +175,28 @@ def test_no_entry_is_left_under_the_epoch_free_key(_isolated_epochs, inst):
     assert under_b == pytest.approx(float(np.random.rand(3).sum())), (
         "recomputed, but not on the new seed's stream"
     )
+
+
+def test_cache_if_does_not_write_the_epoch_free_entry(_isolated_epochs, inst):
+    """The same rule, with a cache_if that approves every result.
+
+    The store decision let ``cache_if`` overrule the skip: it assigned
+    ``should_cache = bool(cache_if(res))`` after ``should_cache = not rng_new``,
+    so an approving predicate wrote the epoch-free entry anyway. It is kept
+    from serving only by the separate persisted "this function draws" marker;
+    lose that marker and the entry answers for any seed. Found while
+    consolidating the three copies of the store decision into one (CAS-120).
+    """
+    calls = []
+
+    @inst.cache(cache_if=lambda r: True)
+    def draw(n):
+        calls.append(n)
+        return float(np.random.rand(n).sum())
+
+    np.random.seed(4242)
+    _isolated_epochs["numpy.random"] = "epoch-A"
+    draw(3)
+
+    results = [e for e in inst.backend.list_entries() if e.get("func_name")]
+    assert results == [], "the call that revealed the draw stored its result"

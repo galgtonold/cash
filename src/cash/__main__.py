@@ -163,6 +163,9 @@ class _Entry:
     saves: float = 0.0
     uses: int = 0
     outputs: tuple[str, ...] = ()
+    # The files the entry was computed from: the question behind most "why
+    # did this recompute?" and "why did this NOT recompute?" reports.
+    reads: tuple[str, ...] = ()
 
 
 # What a user may type instead of the literal ``(notebook statements)`` group
@@ -213,6 +216,7 @@ def _scan_entries(cache_path: Path) -> list[_Entry]:
             saves=float(metadata.get('execution_time') or 0.0),
             uses=int(metadata.get('access_count') or 0),
             outputs=tuple(str(o) for o in outputs),
+            reads=tuple(str(p) for p in (metadata.get('auto_file_deps') or {})),
         ))
     return entries
 
@@ -384,6 +388,10 @@ def _inspect_cache_dir(cache_dir: str, only_function: str | None = None) -> None
                    f"{_format_bytes(entry.size):>11}{str(entry.uses) + 'x':>7}"
                    f"   {_age(entry.mtime):<12}{produces}")
             print(row.rstrip())
+            if entry.reads:
+                shown = ", ".join(entry.reads[:3])
+                more = f" and {len(entry.reads) - 3} more" if len(entry.reads) > 3 else ""
+                print(f"      reads: {shown}{more}")
         print("\n  cash clear --entry ID   to drop one of these "
               "(any unambiguous prefix)")
         return

@@ -330,6 +330,13 @@ class TieredBackend(_MultiBackendMixin, CacheBackend):
         # Propagate storage info back to the caller's original metadata dict
         if original_metadata is not None:
             original_metadata['storage'] = stored_destinations
+            # And why it went no further, so "why did the next process miss?"
+            # has an answer: the compute floor / cost model, or a size cap.
+            if len(self.backends) > 1 and not any(d != "RAM" for d in stored_destinations):
+                if size_refused:
+                    original_metadata['persist_skipped'] = 'size'
+                elif not past_compute_floor:
+                    original_metadata['persist_skipped'] = 'compute'
 
         # Log visibility
         if stored_destinations:

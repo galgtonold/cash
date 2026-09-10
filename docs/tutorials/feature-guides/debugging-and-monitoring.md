@@ -47,15 +47,15 @@ fetch_user(42)                      # compute and store
 fetch_user.explain(42)              # hit
 ```
 
-<!-- claim: cash/core.py:CacheExplanation @28df5e84 broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @72575ea8 -->
+<!-- claim: cash/core.py:CacheExplanation @3a27c35e broad="the field list and reason set are a claim about the whole dataclass", cash/core.py:Cash._explain_call @e8917dd2 -->
 The return value is a `CacheExplanation` dataclass (`would_hit`, `reason`, `func_name`, `cache_key`, `details`) with five fields and one of five reason codes:
 
 | `reason` | Meaning | Key `details` |
 |---|---|---|
-| `hit` | Next call returns cached value. | `cached_at`, `cache_age_seconds`, `execution_time_saved` |
-| `no_entry` | No matching cache entry — first call with these args, the cache was cleared, or the function source / a tracked dependency changed since the last write. | `hint` |
-| `ttl_expired` | Entry exists but the configured `ttl` has elapsed. | `ttl_seconds`, `age_seconds`, `cached_at` |
-| `file_changed` | An auto-tracked file dependency changed. Invalidation is decided by **content**: size first, then a content hash when the size matches — a touch alone is not a change. | `changed_files: {path: reason}` |
+| `hit` | Next call returns cached value. | `cached_at`, `cache_age_seconds`, `execution_time_saved`, `file_deps` |
+| `no_entry` | No matching cache entry — first call with these args, the cache was cleared, or the function source / a tracked dependency changed since the last write. `why` says which, as far as this process knows: the part of the key that moved since the last call, a result that was never stored and why, or one that was stored and since evicted. | `hint`, `why` |
+| `ttl_expired` | The configured `ttl` has elapsed, or the entry expired under the `ttl` it was written with. | `ttl_seconds`, `age_seconds`, `cached_at`, or `why` |
+| `file_changed` | An auto-tracked file dependency changed. Invalidation is decided by **content**: size first, then a content hash when the size matches — a touch alone is not a change. | `changed_files: {path: reason}`, `file_deps` |
 | `key_uncomputable` | The args couldn't be hashed (unpicklable type, custom hasher needed). | `arg_type`, `error`, `hint` |
 
 `Cash._explain_call` walks the same code path as a real call up to "would I get a hit?", then returns the verdict instead of executing. Its file-dependency arm delegates to the shared content-authoritative `file_dep_is_fresh`, the same helper the real lookup uses, so the explanation and the call cannot disagree — a **touch** (identical bytes, bumped mtime) explains as `hit`. The `changed_files` values are short human-readable strings: `'content changed'`, `'size changed'`, `'file missing'`, `'mtime changed'` and `'mtime changed (sampled file)'`, `'the file was written (sampled file)'`, `'a file the call looked for and did not find now exists'`, or — for a remote source — `'remote object changed'` / `'remote object could not be checked'`.
@@ -172,7 +172,7 @@ cash clear ./notebooks/analysis.ipynb # nuke the sibling .cash
 
 ### "Hit rate is low"
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @b3cd263b -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192 -->
 Start with `cache_info()['warnings']` (decorator) or `%cash_stats` (notebook) — `cache_info()` returns a plain dict, so subscript it; `.warnings` raises `AttributeError`. Look for:
 
 - `CashRandomnessWarning` — unseeded RNG; pass `random_state=42` (or whatever) to make calls reproducible.
@@ -195,7 +195,7 @@ The opposite mystery: you edited code, but Cash is serving a stale value. Call `
 cash inspect ./.cash
 ```
 
-<!-- claim: cash/__main__.py:_inspect_cache_dir @24ec3843 -->
+<!-- claim: cash/__main__.py:_inspect_cache_dir @2252ac91 -->
 The output gives the entry count, the total size, and a **per-function table sorted by size** — so the thing filling your disk is the first row, not something you have to work out. Drill into one with `cash inspect --function NAME` — each row shows what that entry *saves* alongside its size, so you can tell a cheap 5 MB entry from a 900-byte one worth 41 seconds — and drop what you no longer want with `cash clear --function NAME` or `cash clear --entry ID`. If a single statement rather than a function is responsible, consider `# @cash:no-cache` on cheap statements you don't need to cache, or pick a different backend (`SQLiteBackend` is more efficient for thousands of small entries — see [Choosing a backend](choosing-a-backend.md)).
 
 <!-- claim: cash/analytics.py:AnalyticsManager.__init__ @db5dc0e8 -->

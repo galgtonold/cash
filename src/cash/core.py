@@ -21,6 +21,7 @@ import threading
 import time
 import types
 import weakref
+from collections import Counter, OrderedDict
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ParamSpec, TypeVar, overload
@@ -350,9 +351,20 @@ class CacheExplanation:
               ``cache_age_seconds``.
             * ``key_uncomputable``: ``arg_type`` (qualname or ``"<unknown>"``),
               ``error`` (exception type+message), ``hint``.
-            * ``no_entry``: ``hint``.
-            * ``ttl_expired``: ``ttl_seconds``, ``age_seconds``, ``cached_at``.
-            * ``file_changed``: ``changed_files`` (dict of path -> reason).
+            * ``no_entry``: ``hint``, and ``why`` -- what this process
+              knows about the key: never stored and why, stored and since
+              evicted, or which part of the key moved since the last call
+              (``new arguments``, ``code or state changed``, ...).
+            * ``ttl_expired``: ``ttl_seconds``, ``age_seconds``, ``cached_at``
+              when the decorator's ttl ran out; ``why`` when the entry
+              expired under the ttl it was written with.
+            * ``file_changed``: ``changed_files`` (dict of path -> reason),
+              ``file_deps``.
+            * ``file_deps`` (on ``hit`` and ``file_changed``): every file the
+              entry recorded, with the fingerprint it was checked against.
+
+    ``entry_id`` is the id ``cash inspect --function`` lists and
+    ``cash clear --entry`` accepts.
     """
 
     would_hit: bool
@@ -361,11 +373,17 @@ class CacheExplanation:
     cache_key: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def entry_id(self) -> str | None:
+        """The id `cash inspect` lists and `cash clear --entry` takes."""
+        return entry_id_of(self.cache_key) if self.cache_key else None
+
     def __str__(self) -> str:
         verdict = "HIT" if self.would_hit else "MISS"
         lines = [f"[{verdict}] {self.func_name} - {self.reason}"]
         if self.cache_key:
             lines.append(f"  cache_key: {self.cache_key}")
+            lines.append(f"  entry_id: {self.entry_id}")
         for k, v in self.details.items():
             if isinstance(v, dict):
                 lines.append(f"  {k}:")
@@ -610,6 +628,92 @@ def _seed_parameters(src: str) -> dict[str, str]:
 
 #: Source files already reported as edited-since-load, one notice per file.
 _SOURCE_CHANGED_WARNED: set[str] = set()
+
+#: One line per decorated call -- hit or miss, and why -- when `debug=True` /
+#: `CASH_DEBUG=1` or `verbose=True` asks for it.
+_calls_logger = logging.getLogger("cash.calls")
+
+#: The stderr handler `_enable_cash_logging` installed, if it installed one.
+_CASH_STDERR_HANDLER: logging.Handler | None = None
+
+
+def _enable_cash_logging(level: int) -> None:
+    """Make `cash` log records at *level* reach the user.
+
+    Lowers the `cash` logger's level, and -- only when nothing anywhere would
+    print a record, which is a script's default -- attaches one stderr handler.
+    An application that configured logging keeps its own handlers and format;
+    it just starts receiving cash's records. stderr, not stdout: stdout is
+    often the program's output (a report, a pipe, a JSON response).
+    """
+    global _CASH_STDERR_HANDLER
+    cash_logger = logging.getLogger("cash")
+    if cash_logger.level == logging.NOTSET or cash_logger.level > level:
+        cash_logger.setLevel(level)
+    if _CASH_STDERR_HANDLER is None and not cash_logger.hasHandlers():
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(name)s: %(message)s"))
+        cash_logger.addHandler(handler)
+        _CASH_STDERR_HANDLER = handler
+
+
+# Why a call missed. The KIND is what the summary counts; the detail goes to
+# the per-call debug line and to explain().
+MISS_FIRST = "no entry yet"
+MISS_ARGS = "new arguments"
+MISS_CODE = "code or state changed"
+MISS_DYNAMIC = "dynamic dependency changed"
+MISS_FILE = "file changed"
+MISS_TTL = "ttl expired"
+MISS_NOT_STORED = "not stored last time"
+MISS_GONE = "entry gone"
+MISS_INCOMPLETE = "entry incomplete"
+MISS_UNHASHABLE = "unhashable argument"
+MISS_KEY_FAILED = "key could not be built"
+
+#: `_store_refusal` was not handed a capture watch (the streaming path).
+_NO_WATCH = object()
+
+#: `file_dep_is_fresh` reason codes, as the miss reason and explain() say them.
+_STALE_REASON_TEXT = {
+    'unreadable': 'file missing',
+    'size': 'size changed',
+    'content': 'content changed',
+    'mtime': 'mtime changed',
+    'mtime-sampled': 'mtime changed (sampled file)',
+    'ctime-sampled': 'the file was written (sampled file)',
+    'appeared': 'a file the call looked for and did not find now exists',
+    'remote-changed': 'remote object changed',
+    'remote-unresolved': 'remote object could not be checked',
+}
+
+#: How many keys' store outcomes to remember. It explains the recent past;
+#: a long-running service does not need the whole history to do that.
+_STORE_OUTCOMES_MAX = 4096
+
+
+def _describe_file_deps(deps: dict[str, Any] | None) -> dict[str, str]:
+    """``{path: fingerprint}`` for the files an entry recorded, readably."""
+    out: dict[str, str] = {}
+    for path, rec in (deps or {}).items():
+        if not isinstance(rec, dict):
+            out[path] = str(rec)
+            continue
+        if rec.get("absent"):
+            out[path] = "absent when read"
+            continue
+        parts = ["remote"] if rec.get("remote") else []
+        if rec.get("size") is not None:
+            parts.append(f"{rec['size']} bytes")
+        if rec.get("hash"):
+            parts.append(f"hash {str(rec['hash'])[:12]}")
+        out[path] = ", ".join(parts) or "recorded"
+    return out
+
+
+def entry_id_of(cache_key: str) -> str:
+    """The id `cash inspect` and `cash clear --entry` use for *cache_key*."""
+    return hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:12]
 
 #: Values whose identity is code plus what it captures. A hasher registered for
 #: one of these types covers every such value in the process, and the obvious
@@ -922,6 +1026,22 @@ class Cash:
         self.debug = debug  # Debug mode flag
         self.use_locking = use_locking
         self.verbose = verbose
+        # Asking for debug output has to produce some. The flag used to set
+        # nothing but this attribute, and a script has no logging configured,
+        # so `CASH_DEBUG=1` printed not one line (round 17, three testers).
+        if debug or verbose:
+            _enable_cash_logging(logging.DEBUG if debug else logging.INFO)
+
+        # What a miss was, for the people asking "why did that recompute?".
+        # All three are in-process memory only, and bounded: they explain,
+        # they never decide anything.
+        #: func_name -> the last cache key it looked up.
+        self._last_key: dict[str, str] = {}
+        #: cache_key -> what happened when it was last computed here.
+        self._store_outcomes: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        #: cache_key -> (kind, detail) for a lookup that just missed, taken
+        #: by the `_log_decorator_call` that reports it.
+        self._pending_miss: dict[str, tuple[str, str]] = {}
 
         # Decorator call log for notebook integration.
         # Each entry is a dict with: func_name, cache_hit (bool), execution_time,
@@ -2219,6 +2339,22 @@ class Cash:
                     'shows up here as no_entry, not file_changed. Tracked '
                     'dynamic dependencies: ' + ', '.join(dyn_ids) + '.'
                 )
+            # What this process knows about the key says more than "first call
+            # or cleared": that it was never stored, why, or that it expired
+            # under the ttl it was WRITTEN with -- which a backend drops on
+            # read, so the entry looks absent (round 17).
+            kind, why = self._absent_entry_reason(func_name, cache_key)
+            if kind == MISS_TTL:
+                return CacheExplanation(
+                    would_hit=False,
+                    reason=EXPLAIN_TTL_EXPIRED,
+                    func_name=func_name,
+                    cache_key=cache_key,
+                    details={'why': why},
+                )
+            details['why'] = f"{kind}: {why}"
+            if kind != MISS_FIRST and 'dynamic_dependencies' not in details:
+                del details['hint']     # the generic guess, now that we know
             return CacheExplanation(
                 would_hit=False,
                 reason=EXPLAIN_NO_ENTRY,
@@ -2252,47 +2388,32 @@ class Cash:
         # raw mtime/size here made explain() report file_changed / 'mtime
         # changed' after a touch while the actual call hit. A diagnostic that
         # contradicts the behavior it describes is worse than none.
-        snap = metadata.auto_file_deps or {}
-        if snap:
-            from cash.notebook.file_dep_snapshot import file_dep_is_fresh
-            _REASON_TEXT = {
-                'unreadable': 'file missing',
-                'size': 'size changed',
-                'content': 'content changed',
-                'mtime': 'mtime changed',
-                'mtime-sampled': 'mtime changed (sampled file)',
-                'ctime-sampled': 'the file was written (sampled file)',
-                'appeared': 'a file the call looked for and did not find now exists',
-                'remote-changed': 'remote object changed',
-                'remote-unresolved': 'remote object could not be checked',
-            }
-            stale: dict[str, str] = {}
-            from cash.notebook.file_dep_snapshot import dep_path_for_this_process
-            for path, recorded in snap.items():
-                here = dep_path_for_this_process(path, recorded)
-                is_fresh, reason = file_dep_is_fresh(here, recorded)
-                if not is_fresh:
-                    stale[here] = _REASON_TEXT.get(reason or '', 'changed')
+        if metadata.auto_file_deps:
+            stale = self._stale_file_deps(metadata)
             if stale:
                 return CacheExplanation(
                     would_hit=False,
                     reason=EXPLAIN_FILE_CHANGED,
                     func_name=func_name,
                     cache_key=cache_key,
-                    details={'changed_files': stale},
+                    details={'changed_files': stale,
+                             'file_deps': _describe_file_deps(metadata.auto_file_deps)},
                 )
 
         timestamp = metadata.timestamp or 0
+        details = {
+            'cached_at': timestamp,
+            'cache_age_seconds': time.time() - timestamp if timestamp else None,
+            'execution_time_saved': metadata.execution_time or 0.0,
+        }
+        if metadata.auto_file_deps:
+            details['file_deps'] = _describe_file_deps(metadata.auto_file_deps)
         return CacheExplanation(
             would_hit=True,
             reason=EXPLAIN_HIT,
             func_name=func_name,
             cache_key=cache_key,
-            details={
-                'cached_at': timestamp,
-                'cache_age_seconds': time.time() - timestamp if timestamp else None,
-                'execution_time_saved': metadata.execution_time or 0.0,
-            },
+            details=details,
         )
 
     def _resolve_dynamic_dependencies_silent(
@@ -2393,40 +2514,188 @@ class Cash:
         content differs from what was recorded forces a miss so the
         function re-reads the changed file.
         """
-        if metadata is not None:
-            try:
-                self._validate_ttl(metadata, ttl)
-                if not self._auto_file_deps_fresh(metadata):
-                    return _CACHE_MISS
-                if not self._chunks_are_intact(cache_key, metadata):
-                    return _CACHE_MISS
-                # If this hit happens *inside* another cached function's
-                # computation, replay the files this entry depends on into the
-                # enclosing tracker, so the outer function records them too.
-                # Without this, a dependency that was already cached before the
-                # consumer's first run hides its file deps behind a cache hit
-                # and the consumer never invalidates when that file changes.
-                self._propagate_file_deps_to_active_tracker(metadata)
-                # Re-attach the lineage hash to the restored value. It's a plain
-                # attribute that doesn't survive pickling, so a value restored
-                # from disk would otherwise lose it - and a downstream cached
-                # function would fall back to content-hashing under a DIFFERENT
-                # key than when the upstream was freshly computed, recomputing
-                # needlessly. The hash is deterministic from (cache_key,
-                # auto_file_deps), both available here.
-                self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl)
-                self._log_decorator_call(
-                    func_name, cache_hit=True,
-                    execution_time=time.perf_counter() - call_start,
-                    args_hash=args_hash, cache_key=cache_key,
-                    time_saved=metadata.execution_time or 0.0,
-                )
-                return cached_data
-            except CacheExpiredError:
-                pass
-            except (TypeError, KeyError) as e:
-                self._warn_metadata_invalid(func_name, e)
+        if metadata is None:
+            self._note_miss(func_name, cache_key, self._absent_entry_reason(func_name, cache_key))
+            return _CACHE_MISS
+        try:
+            self._validate_ttl(metadata, ttl)
+            if not self._auto_file_deps_fresh(metadata):
+                self._note_miss(func_name, cache_key, (
+                    MISS_FILE, self._describe_stale_files(metadata)))
+                return _CACHE_MISS
+            if not self._chunks_are_intact(cache_key, metadata):
+                self._note_miss(func_name, cache_key, (
+                    MISS_INCOMPLETE, "a chunk of the stored result is missing"))
+                return _CACHE_MISS
+            # If this hit happens *inside* another cached function's
+            # computation, replay the files this entry depends on into the
+            # enclosing tracker, so the outer function records them too.
+            # Without this, a dependency that was already cached before the
+            # consumer's first run hides its file deps behind a cache hit
+            # and the consumer never invalidates when that file changes.
+            self._propagate_file_deps_to_active_tracker(metadata)
+            # Re-attach the lineage hash to the restored value. It's a plain
+            # attribute that doesn't survive pickling, so a value restored
+            # from disk would otherwise lose it - and a downstream cached
+            # function would fall back to content-hashing under a DIFFERENT
+            # key than when the upstream was freshly computed, recomputing
+            # needlessly. The hash is deterministic from (cache_key,
+            # auto_file_deps), both available here.
+            self._attach_lineage(cached_data, cache_key, metadata.auto_file_deps, ttl=ttl)
+            self._last_key[func_name] = cache_key
+            self._log_decorator_call(
+                func_name, cache_hit=True,
+                execution_time=time.perf_counter() - call_start,
+                args_hash=args_hash, cache_key=cache_key,
+                time_saved=metadata.execution_time or 0.0,
+            )
+            return cached_data
+        except CacheExpiredError:
+            age = time.time() - (metadata.timestamp or 0)
+            self._note_miss(func_name, cache_key, (
+                MISS_TTL, f"the entry is {age:.1f}s old and ttl={ttl}s"))
+        except (TypeError, KeyError) as e:
+            self._warn_metadata_invalid(func_name, e)
+            self._note_miss(func_name, cache_key, (
+                MISS_INCOMPLETE, "the stored entry's metadata did not validate"))
         return _CACHE_MISS
+
+    # -- why a call missed ---------------------------------------------------
+    #
+    # Round 17: four of five testers could not find out why a call recomputed.
+    # The reasons below are decided where the lookup fails, from what that
+    # lookup saw plus what this process remembers about the key -- never by
+    # re-deriving the key, which would cost every call to explain a few.
+
+    def _note_miss(self, func_name: str, cache_key: str, reason: tuple[str, str]) -> None:
+        """Hold *reason* for the `_log_decorator_call` that reports this miss."""
+        if len(self._pending_miss) > _STORE_OUTCOMES_MAX:
+            # Only a call that raised leaves one behind; never let those pile up.
+            self._pending_miss.clear()
+        self._pending_miss[cache_key] = reason
+        self._last_key[func_name] = cache_key
+
+    def _absent_entry_reason(self, func_name: str, cache_key: str) -> tuple[str, str]:
+        """Why there is no entry for *cache_key*. Reads state; changes none."""
+        outcome = self._store_outcomes.get(cache_key)
+        if outcome is not None:
+            if outcome.get("not_stored"):
+                return MISS_NOT_STORED, outcome["not_stored"]
+            written_ttl = outcome.get("ttl")
+            age = time.time() - outcome.get("stored_at", 0)
+            if written_ttl is not None and age > written_ttl:
+                return MISS_TTL, f"written {age:.1f}s ago with ttl={written_ttl}s"
+            return MISS_GONE, ("stored earlier in this process and since "
+                               "evicted or cleared")
+        previous = self._last_key.get(func_name)
+        if previous is None or previous == cache_key:
+            return MISS_FIRST, ("the first call with these arguments in this "
+                                "process, and no earlier run left one on disk")
+        # Keys are `func:state:dynamic:args`; the parts that moved say why.
+        old = previous.rsplit(":", 3)
+        new = cache_key.rsplit(":", 3)
+        if len(old) != 4 or len(new) != 4:
+            return MISS_FIRST, "no entry for this key"
+        moved = []
+        if old[1] != new[1]:
+            moved.append((MISS_CODE, "the function's code, a helper it calls, or "
+                                     "a value it reads changed since the last call"))
+        if old[2] != new[2]:
+            moved.append((MISS_DYNAMIC, "a dynamic_depends_on source changed"))
+        if old[3] != new[3]:
+            moved.append((MISS_ARGS, "called with arguments not seen on the last call"))
+        if not moved:
+            return MISS_FIRST, "no entry for this key"
+        return moved[0][0], "; and ".join(detail for _, detail in moved)
+
+    @staticmethod
+    def _stale_file_deps(metadata: CacheMetadata) -> dict[str, str]:
+        """``{path: what changed}`` for each recorded dependency that moved.
+
+        The same freshness check a lookup makes, so the answer cannot
+        contradict the behaviour it explains.
+        """
+        from cash.notebook.file_dep_snapshot import (
+            dep_path_for_this_process,
+            file_dep_is_fresh,
+        )
+        stale: dict[str, str] = {}
+        for path, recorded in (metadata.auto_file_deps or {}).items():
+            here = dep_path_for_this_process(path, recorded)
+            is_fresh, why = file_dep_is_fresh(here, recorded)
+            if not is_fresh:
+                stale[here] = _STALE_REASON_TEXT.get(why or "", "changed")
+        return stale
+
+    def _describe_stale_files(self, metadata: CacheMetadata) -> str:
+        stale = self._stale_file_deps(metadata)
+        if not stale:
+            return "a file it read"
+        path, why = next(iter(stale.items()))
+        more = f" and {len(stale) - 1} more" if len(stale) > 1 else ""
+        return f"{path} ({why}){more}"
+
+    def _remember_outcome(self, cache_key: str, outcome: dict[str, Any]) -> None:
+        outcome.setdefault("at", time.time())
+        self._store_outcomes[cache_key] = outcome
+        self._store_outcomes.move_to_end(cache_key)
+        while len(self._store_outcomes) > _STORE_OUTCOMES_MAX:
+            self._store_outcomes.popitem(last=False)
+
+    def _store_refusal(
+        self, func: Callable, func_name: str, res: Any, rng_new: bool,
+        cache_if: Callable[[Any], bool] | None, tracker: Any,
+        capture_watch: Any = _NO_WATCH,
+    ) -> str | None:
+        """Why *res* must not be stored, or ``None`` to store it.
+
+        One decision for the sync, async and streaming paths, which used to
+        carry three copies of it -- and it now says WHY, because "not stored"
+        is the answer to the next call's "why did that miss?".
+        """
+        # Skip the write exactly once when THIS call revealed that the
+        # function draws: its key was built before we knew, so an entry stored
+        # now carries no seed epoch and would be rebuilt and matched forever --
+        # serving a result computed under a seed the user has since changed.
+        # The next call keys it correctly.
+        refusal = ("its first call drew random numbers the key did not yet "
+                   "cover; the next call keys them" if rng_new else None)
+        if refusal is None and cache_if is not None:
+            try:
+                refusal = None if cache_if(res) else "cache_if returned False"
+            except Exception as e:  # noqa: BLE001 - user predicate
+                self._warn_cache_if_raised(func_name, e)
+                refusal = "cache_if raised"
+        # After the body ran, before deciding to store: a provisional global
+        # this call moved must stop being folded (CAS-270).
+        if capture_watch is not _NO_WATCH:
+            self._learn_mutating_captures(func, func_name, capture_watch)
+        if refusal is None and self._refuses_identity_coupled(func_name, res):
+            refusal = "the result is tied to the identity of an object in memory"
+        if refusal is None and self._inputs_moved_during_call(func_name, tracker):
+            refusal = "a file it read changed while it ran"
+        return refusal
+
+    def _note_not_stored(self, cache_key: str, refusal: str) -> None:
+        self._remember_outcome(cache_key, {"not_stored": refusal})
+
+    @staticmethod
+    def _not_persisted_reason(stored_meta: dict[str, Any], execution_time: float) -> str | None:
+        """Why a stored value reached only RAM, or ``None`` if it went further.
+
+        Only a tiered backend says where a value landed; anything else reports
+        nothing, and nothing is claimed.
+        """
+        tiers = stored_meta.get("storage")
+        skipped = stored_meta.get("persist_skipped")
+        if not isinstance(tiers, list) or skipped is None or any(t != "RAM" for t in tiers):
+            return None
+        if skipped == "size":
+            return "too big for the persistent tier's size cap"
+        from cash.backends.factory import _SMART_PERSIST_COMPUTE_FLOOR_S as floor
+        if execution_time < floor:
+            return f"under the {floor:g}s persistence floor"
+        return "the cost model judged restoring it no cheaper than recomputing it"
 
     @staticmethod
     def _snapshot_tracked_deps(tracker: Any,
@@ -2797,26 +3066,11 @@ class Cash:
                 # Non-iterator return: existing single-blob path.
                 execution_time = time.perf_counter() - call_start
 
-                # Skip the write exactly once when THIS call revealed that the function draws:
-                # its key was built before we knew, so an entry stored now carries no seed
-                # epoch and would be rebuilt and matched forever -- serving a result computed
-                # under a seed the user has since changed. Next call keys it correctly.
-                should_cache = not rng_new
-                if cache_if is not None:
-                    try:
-                        should_cache = bool(cache_if(res))
-                    except Exception as e:
-                        self._warn_cache_if_raised(func_name, e)
-                        should_cache = False
-                # After the body ran, before deciding to store: a provisional
-                # global this call moved must stop being folded (CAS-270).
-                self._learn_mutating_captures(func, func_name, capture_watch)
-                if should_cache and self._refuses_identity_coupled(func_name, res):
-                    should_cache = False
-                if should_cache and self._inputs_moved_during_call(func_name, tracker):
-                    should_cache = False
-
-                if should_cache:
+                refusal = self._store_refusal(
+                    func, func_name, res, rng_new, cache_if, tracker, capture_watch)
+                if refusal is not None:
+                    self._note_not_stored(cache_key, refusal)
+                else:
                     # Attach lineage only when the value is actually stored: a
                     # lineage hash points downstream at THIS cache entry, so a
                     # cache_if-rejected (uncached) value must not carry one - it
@@ -2999,25 +3253,11 @@ class Cash:
                 # Non-iterator return: single-blob path (unchanged).
                 execution_time = time.perf_counter() - call_start
 
-                # Skip the write exactly once when THIS call revealed that the function draws:
-                # its key was built before we knew, so an entry stored now carries no seed
-                # epoch and would be rebuilt and matched forever -- serving a result computed
-                # under a seed the user has since changed. Next call keys it correctly.
-                should_cache = not rng_new
-                if cache_if is not None:
-                    try:
-                        should_cache = bool(cache_if(res))
-                    except Exception as e:
-                        self._warn_cache_if_raised(func_name, e)
-                        should_cache = False
-                # See the sync path.
-                self._learn_mutating_captures(func, func_name, capture_watch)
-                if should_cache and self._refuses_identity_coupled(func_name, res):
-                    should_cache = False
-                if should_cache and self._inputs_moved_during_call(func_name, tracker):
-                    should_cache = False
-
-                if should_cache:
+                refusal = self._store_refusal(
+                    func, func_name, res, rng_new, cache_if, tracker, capture_watch)
+                if refusal is not None:
+                    self._note_not_stored(cache_key, refusal)
+                else:
                     # Attach lineage only when actually stored (see sync path):
                     # a cache_if-rejected value must not reference an entry that
                     # was never written.
@@ -3086,7 +3326,11 @@ class Cash:
         * ``explain(*args, **kwargs)`` - return a `CacheExplanation`
           for that specific call (sync, even on async wrappers).
         """
-        _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0}
+        _stats = {'hits': 0, 'misses': 0, 'total_time_saved': 0.0,
+                  # What the misses were, and which results did not reach
+                  # disk: the two things "1 miss" alone could not tell anyone.
+                  'miss_reasons': Counter(), 'not_persisted': Counter(),
+                  'not_stored': Counter()}
         # Shared by reference with the end-of-run summary, which otherwise has
         # no way to reach a per-wrapper closure. Last registration wins for a
         # redefined function, which matches what `cache_info()` reports.
@@ -3101,6 +3345,12 @@ class Cash:
                             _stats['total_time_saved'] += call.get('time_saved', 0.0)
                         else:
                             _stats['misses'] += 1
+                            kind = (call.get('miss_reason') or (MISS_FIRST, ""))[0]
+                            _stats['miss_reasons'][kind] += 1
+                            if call.get('not_stored'):
+                                _stats['not_stored'][call['not_stored']] += 1
+                            elif call.get('not_persisted'):
+                                _stats['not_persisted'][call['not_persisted']] += 1
                         break
 
         if inspect.iscoroutinefunction(func):
@@ -3132,6 +3382,10 @@ class Cash:
                 * ``hit_rate`` (float) - ``hits / (hits + misses)``, or 0.0.
                 * ``total_time_saved`` (float) - sum of execution times that
                   were avoided by serving from cache.
+                * ``miss_reasons`` (dict[str, int]) - the misses by why:
+                  ``"no entry yet"``, ``"new arguments"``, ``"code or state
+                  changed"``, ``"file changed"``, ``"ttl expired"``,
+                  ``"not stored last time"`` and so on.
                 * ``warnings`` (list[dict]) - rolling log of recent warning
                   emissions for this function. Each entry has ``category``,
                   ``message``, ``timestamp``. Capped at the last
@@ -3149,6 +3403,7 @@ class Cash:
                 'misses': _stats['misses'],
                 'hit_rate': hit_rate,
                 'total_time_saved': _stats['total_time_saved'],
+                'miss_reasons': dict(_stats['miss_reasons']),
                 'warnings': warnings_log,
             }
 
@@ -3163,6 +3418,8 @@ class Cash:
             _stats['hits'] = 0
             _stats['misses'] = 0
             _stats['total_time_saved'] = 0.0
+            for tally in ('miss_reasons', 'not_persisted', 'not_stored'):
+                _stats[tally].clear()
             self._delete_backend_entries(func_name)
             with self._decorator_call_log_lock:
                 self._func_warnings.pop(func_name, None)
@@ -5912,11 +6169,46 @@ class Cash:
             'cache_key': cache_key,
             'timestamp': time.time(),
         }
+        outcome: dict[str, Any] = {}
+        if not cache_hit:
+            if args_hash == 'unhashable':
+                reason = (MISS_UNHASHABLE, "an argument could not be hashed, so "
+                                           "there is no key to look up")
+            elif args_hash == 'error':
+                reason = (MISS_KEY_FAILED, "building the key raised")
+            else:
+                reason = self._pending_miss.pop(cache_key, None) or (MISS_FIRST, "")
+            entry['miss_reason'] = reason
+            outcome = self._store_outcomes.get(cache_key) or {}
+            # Only this call's own outcome. A streamed result is logged before
+            # it is stored, and must not borrow the previous call's verdict.
+            if outcome.get('at', 0) < entry['timestamp'] - execution_time:
+                outcome = {}
+            entry['not_persisted'] = outcome.get('not_persisted')
+            entry['not_stored'] = outcome.get('not_stored')
         with self._decorator_call_log_lock:
             self._decorator_call_log.append(entry)
-        if self.verbose:
-            status = 'hit' if cache_hit else 'miss'
-            logger.info('cash %s: %s (%.3fs)', status, func_name, execution_time)
+        # Asked for, not merely permitted: an application that turned the
+        # `cash` logger up to INFO did not ask for a line per call.
+        if (self.verbose or self.debug) and _calls_logger.isEnabledFor(logging.INFO):
+            _calls_logger.info("%s", self._describe_call(entry))
+
+    @staticmethod
+    def _describe_call(entry: dict[str, Any]) -> str:
+        """One line for the per-call log: what happened, and on a miss, why."""
+        name = entry['func_name']
+        if entry['cache_hit']:
+            saved = entry.get('time_saved') or 0.0
+            return f"HIT  {name}  (saved {saved:.2f}s)"
+        kind, detail = entry.get('miss_reason') or (MISS_FIRST, "")
+        line = f"MISS {name}  {kind}" + (f": {detail}" if detail else "")
+        line += f"  (ran {entry['execution_time']:.2f}s"
+        if entry.get('not_stored'):
+            line += f"; not stored: {entry['not_stored']}"
+        elif entry.get('not_persisted'):
+            line += (f"; kept in RAM only -- {entry['not_persisted']} -- so "
+                     f"another process will recompute it")
+        return line + ")"
 
     def _warn_cache_if_raised(
         self, func_name: str, error: BaseException, *, stacklevel: int | None = None,
@@ -6689,8 +6981,17 @@ class Cash:
                 auto_file_deps=auto_file_deps or None,
             )
 
-            self.backend.set(cache_key, result, meta.to_dict(), serializer=serializer)
+            # Kept, not a temporary: TieredBackend writes back where the value
+            # landed, and "RAM only" is the answer to the next process's miss.
+            meta_dict = meta.to_dict()
+            self.backend.set(cache_key, result, meta_dict, serializer=serializer)
+            self._remember_outcome(cache_key, {
+                "stored_at": time.time(),
+                "ttl": ttl,
+                "not_persisted": self._not_persisted_reason(meta_dict, execution_time),
+            })
         except (OSError, TypeError, pickle.PicklingError, RuntimeError) as e:
+            self._note_not_stored(cache_key, "the backend refused the write")
             backend_name = type(self.backend).__name__
             self._warn_once(
                 CashCacheStoreFailedWarning,
@@ -6815,18 +7116,11 @@ class Cash:
                 # Everything fit in one chunk, so cache_if can still see the
                 # whole result -- it gates STORAGE, never what the caller
                 # already received.
-                should_cache = not rng_new
-                if cache_if is not None:
-                    try:
-                        should_cache = bool(cache_if(buffer))
-                    except Exception as e:  # noqa: BLE001 - user predicate
-                        self._warn_cache_if_raised(func_name, e)
-                        should_cache = False
-                if should_cache and self._refuses_identity_coupled(func_name, buffer):
-                    should_cache = False
-                if should_cache and self._inputs_moved_during_call(func_name, tracker):
-                    should_cache = False
-                if should_cache:
+                refusal = self._store_refusal(
+                    None, func_name, buffer, rng_new, cache_if, tracker)
+                if refusal is not None:
+                    self._note_not_stored(cache_key, refusal)
+                else:
                     if buffer:
                         self._write_one_chunk(cache_key, 0, buffer, ttl=ttl,
                                               execution_time=produced_seconds)
@@ -7048,7 +7342,28 @@ class Cash:
                          if stat['total_time_saved'] else "-")
             lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}"
                          f"{miss_col:<12}{saved_col}")
+            lines.extend(self._summary_reasons(stat))
         return "\n".join(lines)
+
+    @staticmethod
+    def _summary_reasons(stat: dict[str, Any]) -> list[str]:
+        """The indented lines under a summary row: why it missed, what stayed.
+
+        "1 miss" was the whole story before, and it hid the common surprise:
+        a result computed in 0.05 s is never written to disk, so every new
+        process misses it. The run that CAUSES that is the one that can say so.
+        """
+        out = []
+        reasons = stat.get('miss_reasons') or {}
+        if reasons:
+            out.append("      missed: " + ", ".join(
+                f"{n} {kind}" for kind, n in sorted(reasons.items(), key=lambda r: -r[1])))
+        for why, n in (stat.get('not_stored') or {}).items():
+            out.append(f"      not stored ({n}x): {why}")
+        for why, n in (stat.get('not_persisted') or {}).items():
+            out.append(f"      kept in RAM only ({n}x): {why}; "
+                       f"a new process recomputes it")
+        return out
 
     def _summary_cache_dir(self) -> str | None:
         """The cache directory this instance is using, for the summary header.
@@ -7076,7 +7391,10 @@ class Cash:
         try:
             text = self.run_summary()
             if text:
-                print(text)
+                # stderr: stdout is the program's output -- a report, a pipe, a
+                # JSON response -- and a summary landing in it broke all three
+                # for round-17 testers.
+                print(text, file=sys.stderr)
         except Exception:  # noqa: BLE001 - a summary must not fail a finished run
             pass
 
