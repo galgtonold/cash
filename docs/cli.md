@@ -10,7 +10,7 @@ canonical reference.
 as `cash = "cash.__main__:main"` in `pyproject.toml`). Running `cash` with no
 subcommand prints help and exits 0.
 
-<!-- claim: cash/__main__.py:main @e7075a02 broad="the quick-reference table is a claim about the whole subcommand set" -->
+<!-- claim: cash/__main__.py:main @92b1b60e broad="the quick-reference table is a claim about the whole subcommand set" -->
 ## Quick reference
 
 | Subcommand | Purpose | Destructive? |
@@ -302,23 +302,33 @@ REPL, `python -c`, or a notebook kernel.
 
 ## Clearing caches
 
-<!-- claim: cash/__main__.py:cmd_clear @3527ba39 -->
+<!-- claim: cash/__main__.py:cmd_clear @39776b43 -->
 ### `cash clear [path] [--all] [--function NAME]` { #cash-clear-path-all }
 
 Delete a cache directory, or just one function's entries.
 
 !!! warning "Destructive without confirmation"
     `cash clear` calls `shutil.rmtree()` immediately on the resolved
-    directory. There is **no confirmation prompt** and **no `--force` flag**
-    — running the command deletes the cache as soon as you press enter. Be
-    sure of the target before you run it, especially in CI.
+    directory. There is **no confirmation prompt** — running the command
+    deletes the cache as soon as you press enter. Be sure of the target
+    before you run it, especially in CI.
+
+    What it will **not** delete is something that isn't a cache. Every
+    directory it removes — named explicitly, resolved by `--all` or
+    `--tool`, or found next to a notebook — must hold a `CACHE_VERSION` stamp
+    or `.entry` files, or it is refused (exit 1). `--force` overrides that
+    for a cache that lost its stamp. The current directory, and any
+    directory containing it, is refused always, `--force` or not: an
+    explicit path used to go straight to `rmtree`, and `cash clear .` in a
+    project deleted the project's files.
 
 **Usage:** `cash clear [path] [--all] [--function NAME]`
 
 **Arguments:**
 
 - `path` — *Optional.* One of:
-    - **A directory.** Removed in full via `shutil.rmtree`.
+    - **A directory.** Removed in full via `shutil.rmtree` — if it looks like
+      a cache (see the warning above); otherwise refused unless `--force`.
     - **A `.ipynb` file.** Cash removes the sibling `.cash/` directory next
       to the notebook (if any). If there's no sibling cache, prints
       `No cache found for <path>` and exits 0.
@@ -337,6 +347,9 @@ Delete a cache directory, or just one function's entries.
   cannot afford or deleting work you still want. Resolves names exactly as
   `cash inspect --function` does, including `notebook`. Takes precedence over
   `--all`.
+- `--force` — *Optional.* Clear a directory even though it holds no
+  `CACHE_VERSION` and no `.entry` files. Never clears the current directory
+  or one that contains it.
 - `--entry ID` — *Optional.* Delete a single entry, using an id from
   `cash inspect --function NAME`. Any unambiguous prefix works, like a short
   commit hash; an ambiguous one lists the matches and deletes nothing. Takes
@@ -375,6 +388,6 @@ cash clear /tmp/some-cache-dir         # nuke any directory
 | Code | When |
 |---|---|
 | `0` | The command succeeded, including no-op outcomes ("nothing to clear", "autoload not installed at ..."). |
-| `1` | User-error refusals: `cash inspect` when the resolved cache directory does not exist and no path was given; `cash clear <missing-path>`; `cash clear --all` pointed at a directory that is not a cash cache; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
+| `1` | User-error refusals: `cash inspect` when the resolved cache directory does not exist and no path was given; `cash clear <missing-path>`; `cash clear` asked to remove a directory that is not a cash cache (without `--force`), or the current directory or one containing it; `cash autoload on` refusing to overwrite without `--force`; `cash autoload off` refusing to delete a non-cash file without `--force`. |
 | `2` | `cash clear` with none of `path`, `--all` or `--function`, or with `--all` *and* a path — argparse's own "bad invocation" code. Nothing is touched. |
 | traceback | Uncaught exceptions bubble up as Python tracebacks — `main()` does not wrap dispatch in `try/except`. If you see one, treat it as a bug and please file an issue. |

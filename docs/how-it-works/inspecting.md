@@ -298,7 +298,7 @@ and entry counts it points you at `cash info` in a terminal.
 Anything that requires touching the cache directory itself lives in the CLI, not
 in a magic. These five subcommands are the whole surface:
 
-<!-- claim: cash/__main__.py:main @e7075a02, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
+<!-- claim: cash/__main__.py:main @92b1b60e, cash/__main__.py:cmd_info @eb48d766, cash/__main__.py:_inspect_cache_dir @24ec3843 -->
 ```bash
 cash version            # installed version
 cash info               # resolved config + where it came from
@@ -307,7 +307,7 @@ cash clear [path]       # delete a cache directory (see below)
 cash autoload on|off    # load cash in every new kernel via an IPython startup hook
 ```
 
-<!-- claim: cash/__main__.py:cmd_clear @3527ba39 -->
+<!-- claim: cash/__main__.py:cmd_clear @39776b43 -->
 !!! warning "`cash clear` deletes a whole directory"
     `cash clear` is directory-granular, not notebook-granular. Pointing it at a
     notebook (`cash clear analysis.ipynb`) removes the entire `.cash/` folder

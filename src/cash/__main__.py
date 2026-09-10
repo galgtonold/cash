@@ -485,14 +485,40 @@ def _looks_like_a_cache(cache_dir: str) -> bool:
     return not entries or any(e.endswith(ENTRY_SUFFIX) for e in entries)
 
 
-def _rmtree_cache(cache_dir: str) -> None:
-    """Remove a resolved cache directory, having checked that it is one."""
+def _contains_cwd(path: str) -> bool:
+    """Is *path* the current directory, or one of its ancestors?"""
+    try:
+        here = os.path.normcase(os.path.realpath(os.getcwd()))
+        there = os.path.normcase(os.path.realpath(path))
+    except OSError:
+        return False
+    return here == there or here.startswith(there.rstrip(os.sep) + os.sep)
+
+
+def _rmtree_cache(cache_dir: str, force: bool = False) -> None:
+    """Remove a cache directory, having checked that it is one.
+
+    Every removal goes through here -- an explicit path, ``--all``, ``--tool``,
+    a notebook's sibling ``.cash``. The explicit path used to go straight to
+    ``shutil.rmtree``: round 17 ran ``cash clear .`` in a project, which
+    deleted the project's files and then crashed trying to remove the
+    directory it was standing in (CAS-107). "Destructive without confirmation"
+    covered deleting a cache you meant to delete; it never covered deleting
+    something that was not a cache at all.
+    """
     resolved = os.path.abspath(cache_dir)
-    if not _looks_like_a_cache(resolved):
+    if _contains_cwd(resolved):
+        # Never, even with --force: nobody means to delete the directory they
+        # are standing in or anything above it, and on Windows the removal
+        # cannot even complete -- it deletes the contents, then fails.
+        print(f"Refusing to clear {resolved}: it is the current directory or "
+              f"contains it. Change to another directory first.")
+        sys.exit(1)
+    if not force and not _looks_like_a_cache(resolved):
         print(f"Refusing to clear {resolved}: it does not look like a cash "
               f"cache (no CACHE_VERSION and no {ENTRY_SUFFIX} files).")
-        print("Check CASH_CACHE_DIR and [tool.cash] cache_dir, or name the "
-              "directory explicitly.")
+        print("Check the path, CASH_CACHE_DIR and [tool.cash] cache_dir. If it "
+              "really is a cache that lost its marker, clear it with --force.")
         sys.exit(1)
     shutil.rmtree(resolved)
     print(f"Cleared: {resolved}")
@@ -528,10 +554,11 @@ def cmd_clear(args: argparse.Namespace) -> None:
         _clear_function(target, only_function)
         return
 
+    force = bool(getattr(args, "force", False))
     if args.all or tool:
         cache_dir = _target_dir(args)
         if os.path.isdir(cache_dir):
-            _rmtree_cache(cache_dir)
+            _rmtree_cache(cache_dir, force=force)
         else:
             print(f"No cache directory found at {os.path.abspath(cache_dir)}")
         return
@@ -548,14 +575,12 @@ def cmd_clear(args: argparse.Namespace) -> None:
         sys.exit(2)
 
     if os.path.isdir(target):
-        shutil.rmtree(target)
-        print(f"Cleared: {target}")
+        _rmtree_cache(target, force=force)
     elif os.path.isfile(target) and target.endswith('.ipynb'):
         nb_dir = os.path.dirname(os.path.abspath(target))
         cache_dir = os.path.join(nb_dir, ".cash")
         if os.path.isdir(cache_dir):
-            shutil.rmtree(cache_dir)
-            print(f"Cleared: {cache_dir}")
+            _rmtree_cache(cache_dir, force=force)
         else:
             print(f"No cache found for {target}")
     else:
@@ -713,6 +738,10 @@ def main() -> None:
                                 'script NAME instead of the cache in use. On its own it '
                                 'clears that whole cache; with --function or --entry, '
                                 'just those entries.')
+    sub_clear.add_argument('--force', action='store_true',
+                           help='Clear a directory even though it holds no CACHE_VERSION '
+                                'and no .entry files. Never clears the current directory '
+                                'or one that contains it.')
     sub_clear.set_defaults(func=cmd_clear, clear_parser=sub_clear)
 
     # autoload on|off

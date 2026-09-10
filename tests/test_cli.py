@@ -96,9 +96,15 @@ class TestCLIClear:
     """Test clear command."""
 
     def test_clear_directory(self, tmp_path, capsys):
-        """Clear should remove a directory."""
+        """Clear should remove a cache directory named explicitly.
+
+        It needs to LOOK like one (a CACHE_VERSION stamp, as every real cache
+        has): an explicit path used to go straight to rmtree, and round 17 ran
+        `cash clear .` in a project and lost its files (CAS-107).
+        """
         cache_dir = tmp_path / "to_clear"
         cache_dir.mkdir()
+        (cache_dir / "CACHE_VERSION").write_text("1")
         (cache_dir / "file.data").write_bytes(b"data")
 
         from types import SimpleNamespace
@@ -154,6 +160,7 @@ class TestCLIClear:
         nb_path.write_text('{"cells":[]}')
         cache_dir = tmp_path / ".cash"
         cache_dir.mkdir()
+        (cache_dir / "CACHE_VERSION").write_text("1")
         (cache_dir / "data.meta").write_bytes(b"data")
 
         from types import SimpleNamespace
