@@ -477,6 +477,15 @@ class CashMagics(CashAdminMagicsMixin, Magics):
                 print("   Valid forms: %cash_on | %cash_on ttl=<seconds>")
                 return
 
+        # CASH_DISABLE / disable=True switches off BOTH paths: a CI job that
+        # executes notebooks with it set means "run everything, cache nothing".
+        # An autoload hook calls this in every kernel, so it must say why it
+        # did nothing rather than fail quietly.
+        if getattr(getattr(self._cash_instance, 'config', None), 'disable', False):
+            print("[cash] caching is disabled (disable=True / CASH_DISABLE), so "
+                  "%cash_on did nothing: cells run uncached.")
+            return
+
         # Invalidate notebook path cache so we re-discover the current notebook
         # (fixes Issue 23: switching notebooks within the same kernel session)
         from ..server_discovery import invalidate_notebook_path_cache

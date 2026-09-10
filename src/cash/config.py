@@ -239,6 +239,17 @@ class CashConfig:
     ``cash.toml``. The env var matters most -- it is the only one that needs
     no edit to the code you are already running."""
 
+    disable: bool = False
+    """Run every ``@cash.cache`` function uncached: no key, no lookup, no
+    store, no analysis -- the call goes straight through, and ``%cash_on``
+    declines to switch the notebook path on.
+
+    What a test suite needs to prove the code rather than the cache: a test
+    that calls a cached function twice and compares the results is comparing
+    one result with itself, and passes even when the function ignores its
+    seed. ``CASH_DISABLE=1 pytest`` is the run that catches that. Read per
+    call, so ``cash.configure(disable=True)`` takes effect immediately."""
+
     smart_persistence: bool = True
     """When True (default), the tiered backend decides per-entry
     whether to persist past RAM based on compute time vs storage

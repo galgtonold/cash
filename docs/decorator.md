@@ -142,7 +142,7 @@ A notebook shows a badge on every statement. A script shows nothing by
 default, which makes it easy to assume caching is working when it isn't — so
 there are several ways to look.
 
-<!-- claim: cash/core.py:Cash.run_summary @df5af823, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @a3c76b3b -->
+<!-- claim: cash/core.py:Cash.run_summary @8ff9b5a3, cash/core.py:Cash._summary_reasons @edbfd060, cash/core.py:Cash._print_run_summary @a3c76b3b -->
 **What recomputed just now, and why?** Set `CASH_SUMMARY=1` and a
 per-function table prints to **stderr** when the process exits — stderr, so it
 never lands in a report, a pipe or a JSON response your program writes to
@@ -979,14 +979,14 @@ Keys:
 
 ### `func.cache_clear()`
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @33633f80 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats.cache_clear @ab3f1cfc -->
 Wipe backend entries whose key starts with this function's name. Also
 resets stats, drops the warnings log, and forgets the `_warn_once`
 dedup marks (so the next misbehavior re-warns instead of being silent).
 
 ### `func.explain(*args, **kwargs)`
 
-<!-- claim: cash/core.py:Cash._explain_call @e8917dd2 -->
+<!-- claim: cash/core.py:Cash._explain_call @94a9d132 -->
 Pure introspection — returns a `CacheExplanation` describing whether
 the next call with these args would hit or miss the cache, and why:
 
@@ -1014,7 +1014,8 @@ f.explain(6)
 ```
 
 `reason` is one of `hit`, `key_uncomputable` (unhashable arg),
-`no_entry`, `ttl_expired`, `file_changed`. On `no_entry`, `details['why']`
+`no_entry`, `ttl_expired`, `file_changed`, or `disabled` (caching switched off
+with [`CASH_DISABLE`](tutorials/feature-guides/testing-your-code.md)). On `no_entry`, `details['why']`
 says what this process knows: which part of the key moved since the last
 call (`new arguments`, `code or state changed`, `dynamic dependency changed`),
 that the last result was never stored and why (`cache_if`, a file that

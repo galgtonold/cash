@@ -141,6 +141,7 @@ nav:
       - Sharing a Cache: tutorials/feature-guides/sharing-caches.md
       - Controlling Cache Behavior: tutorials/feature-guides/controlling-cache-behavior.md
       - Troubleshooting & Debugging: tutorials/feature-guides/debugging-and-monitoring.md
+      - Testing Your Code: tutorials/feature-guides/testing-your-code.md
       - Custom File Sources: tutorials/feature-guides/custom-file-sources.md
       - Custom Hashers: tutorials/feature-guides/custom-hashers.md
       - Dynamic Dependencies: tutorials/feature-guides/dynamic-dependencies.md

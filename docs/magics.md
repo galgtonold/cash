@@ -43,7 +43,7 @@ parsed flag, and a working example. Behaviour is derived directly from
 ## Enabling and configuring (user-facing)
 
 ### `%cash_on`
-<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @e19353cf -->
+<!-- claim: cash/notebook/ipython/magics.py:CashMagics.cash_on @f8bb5921 -->
 
 Enable automatic caching for every subsequent cell.
 
@@ -54,6 +54,10 @@ Enable automatic caching for every subsequent cell.
 - `ttl=N` — *Optional.* Default TTL in seconds applied to every cached
   statement. Must be an integer; an invalid value — or any argument other than
   `ttl` — prints an error and the command returns **without** enabling caching.
+
+With caching disabled (`CASH_DISABLE=1` or `disable=True`), `%cash_on` prints
+that it did nothing and leaves every cell running uncached — see
+[testing your code](tutorials/feature-guides/testing-your-code.md).
 
 **Side effects:**
 

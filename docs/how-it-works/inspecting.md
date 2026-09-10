@@ -196,7 +196,7 @@ keep. `show` displays the last 50. Full flag reference in
 
 ## Asking a decorated function directly
 
-<!-- claim: cash/core.py:Cash._explain_call @e8917dd2 -->
+<!-- claim: cash/core.py:Cash._explain_call @94a9d132 -->
 For a `@cash.cache`-wrapped function, `explain()` answers "would the next call
 with these arguments hit, and why?" without calling the function, mutating
 stats, or writing anything:
@@ -221,13 +221,14 @@ print(load.explain(1000))
   execution_time_saved: 0.0020235000120010227
 ```
 
-<!-- claim: cash/core.py:EXPLAIN_NO_ENTRY == "no_entry", cash/core.py:EXPLAIN_TTL_EXPIRED == "ttl_expired", cash/core.py:EXPLAIN_FILE_CHANGED == "file_changed", cash/core.py:EXPLAIN_KEY_UNCOMPUTABLE == "key_uncomputable" -->
-`reason` is a short stable string: `hit`, or one of the four ways a call misses —
-`no_entry`, `ttl_expired`, `file_changed`, `key_uncomputable` — each carrying its
-own `details` (which files changed, which argument type couldn't be hashed). The
+<!-- claim: cash/core.py:EXPLAIN_NO_ENTRY == "no_entry", cash/core.py:EXPLAIN_TTL_EXPIRED == "ttl_expired", cash/core.py:EXPLAIN_FILE_CHANGED == "file_changed", cash/core.py:EXPLAIN_KEY_UNCOMPUTABLE == "key_uncomputable", cash/core.py:EXPLAIN_DISABLED == "disabled" -->
+`reason` is a short stable string: `hit`, or one of the ways a call misses —
+`no_entry`, `ttl_expired`, `file_changed`, `key_uncomputable`, or `disabled` when
+caching is switched off — each carrying its own `details` (which files changed,
+which argument type couldn't be hashed). The
 full shape is in the [`CacheExplanation`](../api/cash.md) reference.
 
-<!-- claim: cash/core.py:Cash._wrap_with_stats @b97009db, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @bfc78cc4 -->
+<!-- claim: cash/core.py:Cash._wrap_with_stats @3025ea40, cash/core.py:Cash._wrap_with_stats.cache_info @5ecbb192, cash/core.py:Cash._log_decorator_call @bfc78cc4 -->
 !!! warning "`cache_info()` is not the surface to trust in a notebook"
     The wrapper also exposes `cache_info()`, but its `hits` / `misses` counters
     live on the **wrapper object** and count only since that wrapper was

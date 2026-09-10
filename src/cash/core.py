@@ -325,6 +325,7 @@ EXPLAIN_KEY_UNCOMPUTABLE = "key_uncomputable"
 EXPLAIN_NO_ENTRY = "no_entry"
 EXPLAIN_TTL_EXPIRED = "ttl_expired"
 EXPLAIN_FILE_CHANGED = "file_changed"
+EXPLAIN_DISABLED = "disabled"
 
 
 @dataclass(frozen=True)
@@ -341,7 +342,7 @@ class CacheExplanation:
             cached value (without recomputing).
         reason: Short stable string identifying the outcome. One of:
             ``"hit"``, ``"key_uncomputable"``, ``"no_entry"``,
-            ``"ttl_expired"``, ``"file_changed"``.
+            ``"ttl_expired"``, ``"file_changed"``, ``"disabled"``.
         func_name: Module-qualified name of the cached function.
         cache_key: The cache key computed for these args, or ``None``
             when key generation failed (``reason == "key_uncomputable"``).
@@ -2202,6 +2203,14 @@ class Cash:
 
         See `CacheExplanation` for the return shape.
         """
+        if self.config.disable:
+            return CacheExplanation(
+                would_hit=False,
+                reason=EXPLAIN_DISABLED,
+                func_name=func_name,
+                details={'hint': 'Caching is disabled (disable=True / '
+                                 'CASH_DISABLE): every call runs the function.'},
+            )
         # Populate the dependency closure first so the state hash matches what
         # a real call computes (otherwise explain() reports a stale pre-analysis
         # key and a false `no_entry` - finding #7). This only fills internal
@@ -3330,7 +3339,9 @@ class Cash:
                   # What the misses were, and which results did not reach
                   # disk: the two things "1 miss" alone could not tell anyone.
                   'miss_reasons': Counter(), 'not_persisted': Counter(),
-                  'not_stored': Counter()}
+                  'not_stored': Counter(),
+                  # Calls that went straight through because caching is off.
+                  'bypassed': 0}
         # Shared by reference with the end-of-run summary, which otherwise has
         # no way to reach a per-wrapper closure. Last registration wins for a
         # redefined function, which matches what `cache_info()` reports.
@@ -3353,9 +3364,19 @@ class Cash:
                                 _stats['not_persisted'][call['not_persisted']] += 1
                         break
 
+        def _bypass(args: tuple, kwargs: dict) -> Any:
+            # A helper, not inline: a caller that captures this wrapper in a
+            # closure has the wrapper's own captures folded into ITS key, and
+            # `_stats` read directly there is content-hashed -- so every call
+            # moved the caller's key (tests/test_core/test_cold_process_key_stability).
+            _stats['bypassed'] += 1
+            return func(*args, **kwargs)
+
         if inspect.iscoroutinefunction(func):
             @functools.wraps(func)
             async def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
+                if self.config.disable:
+                    return await _bypass(args, kwargs)
                 result = await wrapper(*args, **kwargs)
                 _drain_stats()
                 self._warn_unseeded_estimator_result(
@@ -3364,6 +3385,10 @@ class Cash:
         else:
             @functools.wraps(func)
             def stats_wrapper(*args: Any, **kwargs: Any) -> Any:
+                # Before anything else: disabled means the function, and
+                # nothing of cash's -- no key, no analysis, no lookup, no store.
+                if self.config.disable:
+                    return _bypass(args, kwargs)
                 result = wrapper(*args, **kwargs)
                 _drain_stats()
                 self._warn_unseeded_estimator_result(
@@ -3418,6 +3443,7 @@ class Cash:
             _stats['hits'] = 0
             _stats['misses'] = 0
             _stats['total_time_saved'] = 0.0
+            _stats['bypassed'] = 0
             for tally in ('miss_reasons', 'not_persisted', 'not_stored'):
                 _stats[tally].clear()
             self._delete_backend_entries(func_name)
@@ -7306,8 +7332,12 @@ class Cash:
         """
         rows = [(name, s) for name, s in self._function_stats.items()
                 if s['hits'] or s['misses']]
+        bypassed = sum(s.get('bypassed', 0) for s in self._function_stats.values())
+        disabled_line = (
+            f"cash: caching disabled (disable=True / CASH_DISABLE) -- {bypassed} "
+            f"call{'' if bypassed == 1 else 's'} ran uncached" if bypassed else "")
         if not rows:
-            return ""
+            return disabled_line
         rows.sort(key=lambda r: r[1]['total_time_saved'], reverse=True)
 
         hits = sum(s['hits'] for _, s in rows)
@@ -7343,6 +7373,8 @@ class Cash:
             lines.append(f"  {_fit(name):<{width}}  {hit_col:<10}"
                          f"{miss_col:<12}{saved_col}")
             lines.extend(self._summary_reasons(stat))
+        if disabled_line:
+            lines.append("  " + disabled_line)
         return "\n".join(lines)
 
     @staticmethod

@@ -87,7 +87,7 @@ cash = Cash(cache_dir="/tmp/scratch", debug=True)
 configure(debug=True, min_cache_savings_pct=0.30)
 ```
 
-<!-- claim: cash/config.py:CashConfig @36ee68e1 broad="the field table is a claim about every field of the dataclass" -->
+<!-- claim: cash/config.py:CashConfig @d3f04090 broad="the field table is a claim about every field of the dataclass" -->
 ## All `CashConfig` fields
 
 Every field below is settable via every layer. The env-var column shows
@@ -154,6 +154,7 @@ cash tracked automatically, where there is no source object on which to set
 | Field | Env var | Default | Description |
 |---|---|---|---|
 | `debug` | `CASH_DEBUG` | `false` | One log line per `@cash.cache` call — a hit, or a miss and why — plus cash's other debug records. They go to stderr unless your program configures `logging`, in which case they go to your handlers and nothing is added. (The notebook's `[UPSTREAM_DEBUG]`-style lines come from `%cash_on --debug`, not this field.) |
+| `disable` | `CASH_DISABLE` | `false` | Run every `@cash.cache` call uncached — no key, no lookup, no store — and have `%cash_on` decline. For test suites: `CASH_DISABLE=1 pytest` proves the tests pass without the cache. See [testing your code](../tutorials/feature-guides/testing-your-code.md). |
 | `summary` | `CASH_SUMMARY` | `false` | Print a per-function hit/miss table to stderr when the process exits, with why each function missed and which results were kept in RAM only. The one spelling that needs no edit to the script you are running: `CASH_SUMMARY=1 python model.py`. A notebook shows this per statement in the badge; a script otherwise shows nothing. |
 
 ### Backend selection — simple mode
