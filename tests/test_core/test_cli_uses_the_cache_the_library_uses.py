@@ -144,3 +144,23 @@ def test_clear_all_refuses_a_directory_that_is_not_a_cache(tmp_path):
     assert result.returncode == 1
     assert "does not look like a cash cache" in result.stdout
     assert (precious / "thesis.txt").exists()
+
+
+def test_python_m_cash_targets_the_project_you_stand_in(tmp_path):
+    """Not the project cash's own source lives in.
+
+    From an editable checkout `python -m cash` looked like a local script, so
+    it anchored to cash's repository: `python -m cash clear --all` run inside
+    another project cleared the cash checkout's cache (found while reproducing
+    CAS-125). An installed wheel was unaffected, which is why only a developer
+    could see it -- and why this is checked through the real CLI.
+    """
+    project = tmp_path / "proj"
+    (project / "sub").mkdir(parents=True)
+    (project / "pyproject.toml").write_text('[project]\nname="p"\nversion="0"\n')
+    out = _run("info", cwd=str(project / "sub"))
+    assert out.returncode == 0, out.stderr
+    line = next(ln for ln in out.stdout.splitlines() if "Cache dir" in ln)
+    shown = line.split(":", 1)[1].strip()
+    assert os.path.normcase(os.path.realpath(shown)) == \
+        os.path.normcase(os.path.realpath(project / ".cash")), line

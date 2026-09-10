@@ -20,6 +20,7 @@ from cash.utils import replace_with_retry
 from ._base import CacheBackend, MetadataDict, PendingWrites
 from .entry_format import (
     ENTRY_SUFFIX,
+    MAGIC,
     metadata_span,
     pack_entry,
     read_entry,
@@ -406,6 +407,11 @@ class FileBackend(CacheBackend):
                 for pattern in _ALL_ENTRY_GLOBS
                 for f in glob.glob(os.path.join(self.cache_dir, pattern))
             ]
+            if stored is None and self._entries_are_current_format(entry_files):
+                # Unstamped, but the entries say what they are. A directory
+                # cleared under a live process and refilled by it is exactly
+                # this; so is one whose stamp was deleted by hand. Keep them.
+                entry_files = []
             if entry_files:
                 logger.warning(
                     "Cash cache at %s was written in format v%s but this build "
@@ -424,14 +430,43 @@ class FileBackend(CacheBackend):
                             "Could not remove stale cache file %s during format "
                             "migration", f, exc_info=True,
                         )
+            self._stamp_format_version()
+
+    #: How many entries `_entries_are_current_format` reads. A sample, because
+    #: init must stay O(1)-ish in the number of entries; an old-format cache
+    #: fails on its first entry, so the sample is not what keeps it out.
+    _FORMAT_SAMPLE = 16
+
+    @classmethod
+    def _entries_are_current_format(cls, entry_files: list[str]) -> bool:
+        """Do these unstamped entries carry the current format's magic?
+
+        Only ``*.entry`` files count: the legacy ``.meta``/``.data`` pair is by
+        definition an older format. Relies on a format change also changing
+        ``entry_format.MAGIC`` -- bump both together.
+        """
+        if not entry_files or any(not f.endswith(ENTRY_SUFFIX) for f in entry_files):
+            return False
+        for path in entry_files[: cls._FORMAT_SAMPLE]:
             try:
-                with open(version_path, "w", encoding="utf-8") as fh:
-                    fh.write(str(CACHE_FORMAT_VERSION))
+                with open(path, "rb") as fh:
+                    if fh.read(len(MAGIC)) != MAGIC:
+                        return False
             except OSError:
-                logger.debug(
-                    "Could not write cache format marker at %s", version_path,
-                    exc_info=True,
-                )
+                return False
+        return True
+
+    def _stamp_format_version(self) -> None:
+        """Write the current format stamp into the cache directory."""
+        version_path = os.path.join(self.cache_dir, _VERSION_FILENAME)
+        try:
+            with open(version_path, "w", encoding="utf-8") as fh:
+                fh.write(str(CACHE_FORMAT_VERSION))
+        except OSError:
+            logger.debug(
+                "Could not write cache format marker at %s", version_path,
+                exc_info=True,
+            )
 
     def _scan_size_bytes(self) -> int:
         """Total the directory's bytes with ``scandir`` + ``stat``.
@@ -895,6 +930,11 @@ class FileBackend(CacheBackend):
             # instead of simply recreating the directory. Recreate + retry once;
             # costs nothing on the normal path.
             os.makedirs(self.cache_dir, exist_ok=True)
+            # Stamp it first. `cash clear` against a live process removes the
+            # stamp with the directory, and entries written into an unstamped
+            # directory used to be discarded by the next process as an
+            # unknown format -- with a message that read like corruption.
+            self._stamp_format_version()
             if not self._write_new_in_place(path, blob):
                 self._atomic_write(path, blob)
 

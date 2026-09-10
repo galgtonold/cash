@@ -637,6 +637,18 @@ def _interactive_shell_is_running() -> bool:
         return False
 
 
+def _running_cash_cli() -> bool:
+    """Is ``__main__`` cash's own command line (``python -m cash``)?
+
+    It is a tool acting on the project you are standing in, wherever its
+    source lives. From an editable checkout it looked like a local script,
+    anchored to cash's own repository, and ``python -m cash clear --all`` run
+    inside another project cleared the cash checkout's cache instead.
+    """
+    spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+    return getattr(spec, "name", None) == "cash.__main__"
+
+
 def _running_script_dir() -> Path | None:
     """The directory of the script being run, or None if that is meaningless.
 
@@ -647,7 +659,7 @@ def _running_script_dir() -> Path | None:
     site-packages, and anchoring a user's cache inside their virtualenv because
     they ran an installed tool would be a worse answer than the cwd.
     """
-    if _interactive_shell_is_running():
+    if _interactive_shell_is_running() or _running_cash_cli():
         return None
     main = sys.modules.get("__main__")
     raw = getattr(main, "__file__", None)
@@ -700,6 +712,8 @@ def _running_installed_module() -> bool:
     main = sys.modules.get("__main__")
     if getattr(main, "__spec__", None) is None:
         return False
+    if _running_cash_cli():
+        return True
     raw = getattr(main, "__file__", None)
     if not raw:
         return False

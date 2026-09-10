@@ -110,3 +110,45 @@ def test_clear_preserves_version_marker(tmp_path):
     backend.clear()
     assert (tmp_path / VERSION_FILENAME).exists()
     assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+
+
+# -- CAS-125: a cache cleared under a live process ---------------------------
+
+def test_a_directory_recreated_by_a_live_backend_is_stamped(tmp_path):
+    """`cash clear` removes the stamp with the directory; the live process
+    recreated the directory for its next write but did not re-stamp it, and
+    the next process discarded everything it had written as unknown format."""
+    import shutil
+    cache = tmp_path / "c"
+    live = FileBackend(str(cache))
+    live.set("before", {"v": 1})
+    live.get("before")                      # the write has landed
+    shutil.rmtree(cache)                    # what `cash clear` does to it
+    live.set("after", {"v": 2})
+    live.get("after")
+    live.shutdown()
+
+    assert (cache / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+    fresh = FileBackend(str(cache))
+    assert fresh.get("after")[1] == {"v": 2}, "the next process threw it away"
+
+
+def test_unstamped_entries_in_the_current_format_are_kept(tmp_path):
+    """The entries say what they are; a missing stamp alone is not corruption."""
+    b1 = FileBackend(str(tmp_path))
+    b1.set("k", {"v": 1})
+    b1.get("k")
+    b1.shutdown()
+    (tmp_path / VERSION_FILENAME).unlink()
+
+    b2 = FileBackend(str(tmp_path))
+    assert b2.get("k")[1] == {"v": 1}
+    assert (tmp_path / VERSION_FILENAME).read_text().strip() == str(CACHE_FORMAT_VERSION)
+
+
+def test_unstamped_entries_that_are_not_the_current_format_are_still_wiped(tmp_path):
+    """The control: an .entry file without the current magic is not adopted."""
+    (tmp_path / f"{'0' * 64}{ENTRY_SUFFIX}").write_bytes(b"CSH1" + b"\x00" * 32)
+    b = FileBackend(str(tmp_path))
+    b.get("anything")                       # initialises
+    assert not _entry_files(str(tmp_path))

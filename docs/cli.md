@@ -389,6 +389,14 @@ cash clear /tmp/some-cache-dir         # nuke any directory
   have meant.
 - The no-op "nothing to clear" message paths (no resolved cache, no sibling
   cache) exit 0; they're treated as success, not failure.
+<!-- claim: cash/backends/file_backend.py:FileBackend._check_format_version @46ebcae7, cash/backends/file_backend.py:FileBackend._entries_are_current_format @a4172379 -->
+- **Clearing the cache of a process that is still running** empties the disk
+  only. The running process keeps serving what it holds in memory until it
+  restarts, and whatever it writes after the clear goes into a freshly
+  re-created directory — which it stamps with the format version, so the next
+  process keeps those entries rather than discarding them. To drop the
+  in-memory copies too, restart the process (or call `f.cache_clear()` inside
+  it).
 
 ---
 
