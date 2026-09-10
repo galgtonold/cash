@@ -615,7 +615,7 @@ it is rarely what you want.
 
 ## IMPURE-SIDE-EFFECTS {#impure-side-effects}
 
-<!-- claim: cash/core.py:Cash._surface_purity @454b1632 -->
+<!-- claim: cash/core.py:Cash._surface_purity @44c13b02 -->
 **What happened.** Before the first call, Cash reads the source of your function
 and of the helpers it calls, looking for shapes that make a cached result
 questionable. It found some. The message lists each one with its line number and
@@ -628,7 +628,11 @@ much to care:
   function did not create itself — `df.to_csv(...)`, `fig.savefig(...)`,
   `session.post(...)`, `cursor.execute(...)`, `RESULTS.append(...)`. The
   "did not create itself" part matters: `rows.append(x)` on a list the function
-  built a line earlier is not flagged.
+  built a line earlier is not flagged, and neither is `a, b = [], []` followed
+  by `a.append(...)`, a view of a local array (`inner = u[1:-1]; inner[m] = 0`),
+  or a frame rebound to a copy before it is changed
+  (`df = load(p); df = df[mask]; df["x"] = ...`). The same frame changed
+  *before* the copy is still flagged: it may be the helper's own object.
 - `scope_mutation` — a `global` or `nonlocal` statement, or an assignment to
   someone else's attribute or subscript: `obj.attr = ...`, `d[k] = ...`.
 - `discarded_call` — a method call whose return value is thrown away, which
@@ -647,6 +651,10 @@ is missing from the cache key, so an edit to it will not invalidate and you get
 the old answer back. None of it is proof of anything: this is a reading of the
 source, and it recognises shapes rather than observing behaviour.
 
+Each line number is the line in the file that defines the function, and each
+group names that file — so a finding in a helper points at the helper's
+module, not at the call that surfaced it.
+
 **What to do.** Go down the list one line at a time and fix the ones that are
 real. For each one you have read and decided is fine, put `# @cash:assume-safe`
 on that line:
@@ -658,6 +666,10 @@ on that line:
 On a line of its own the comment waives the statement below it as well as
 itself; on the `def` line it waives the findings that belong to the whole body
 rather than to any single line, which is where a `mutable_global` lands.
+
+Adding the first annotation recomputes the function once. `# @cash:` comments
+are directives — several of them change how a result is cached — so unlike an
+ordinary comment they are part of the function's source identity.
 
 Reach for `@cash.cache(assume_safe=True)` only when you mean the whole function
 for good. It silences the check for everything in the body *including code added
@@ -676,12 +688,17 @@ stale-result kinds, and nothing else will tell you when they bite.
 
 ## KEY-AMBIENT-READ {#key-ambient-read}
 
-<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @23eb97e5, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @06a7232f -->
+<!-- claim: cash/notebook/purity.py:_AMBIENT_READ_CALLS @23eb97e5, cash/purity_analyzer.py:_PurityVisitor.visit_Subscript @c9ab46b9 -->
 **What happened.** Reading the source of the function you decorated found a
 call that asks the world what time it is, what the environment says, where the
 process is running, or for a fresh UUID: `datetime.now()`, `date.today()`,
 `time.time()`, `os.getenv(...)`, `os.environ["..."]`, `os.getcwd()`,
 `uuid.uuid4()`. The named line ran, and the result was cached as normal.
+
+A read whose value goes only into a `print`, a `logging` call or
+`warnings.warn` — `t = time.perf_counter()` feeding an elapsed-time line — is
+not reported: it cannot reach the result. Once the value is returned, stored,
+tested in a condition or passed to any other call, it is.
 
 **Why it matters.** That value is an *input* to your result, and it is not one
 Cash can see: it does not arrive as an argument, so it is not in the cache key.
@@ -1099,7 +1116,7 @@ actually read. If the cell is not really code — pasted output, a traceback,
 notes you were half-way through typing — delete it or turn it into a markdown
 cell. Markdown cells are not parsed and never trip this.
 
-<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @f75af35b -->
+<!-- claim: cash/notebook/upstream/checker.py:UpstreamChecker._warn_broken_upstream_cells @f225e598 -->
 The warning repeats when the break changes and stays quiet while it does not, so
 re-running cells *below* the broken one will not spam you; fixing it and later
 breaking it again will warn again. One gap in that promise: the scan only looks
@@ -1130,7 +1147,7 @@ goes top to bottom once, that costs nothing, because everything runs in order
 anyway. It matters in the edit-and-re-run-one-cell loop, where a downstream cell
 can be handed a value computed from the previous version of the cell above.
 
-<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @486a93e9 -->
+<!-- claim: cash/notebook/server_discovery.py:warn_notebook_not_found_once @7cabb93c -->
 **What to do.** Under papermill, nbconvert or a CI job there is no live Jupyter
 Server to ask, so this is expected and there is nothing to fix. In JupyterLab or
 VS Code it usually means a stale runtime: restart the kernel, and if it persists

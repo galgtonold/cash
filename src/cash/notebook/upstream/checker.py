@@ -8,7 +8,7 @@ import types
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, NamedTuple
 
-from ...diagnostics import format_diagnostic, warn_diagnostic_explicit
+from ...diagnostics import log_diagnostic, warn_diagnostic_explicit
 from ...exceptions import AmbiguousCellError, CashUpstreamSyntaxWarning, UpstreamStateError
 from ..server_discovery import get_notebook_cells, get_notebook_cells_with_ids
 from .._protocols import CashInstanceProtocol, ShellProtocol, TrackingState
@@ -1268,7 +1268,7 @@ class UpstreamChecker:
                 "below that use its output; if it is not really code, delete it "
                 "or make it a markdown cell."
             )
-            logger.warning(format_diagnostic("NOTEBOOK-CELL-SYNTAX", what, fix))
+            log_diagnostic(logger, "NOTEBOOK-CELL-SYNTAX", what, fix)
             # warn_explicit with registry=None bypasses the "once per location"
             # __warningregistry__ dedupe (every break is raised from this one
             # line); our own per-(idx, hash) ledger supplies the dedupe we

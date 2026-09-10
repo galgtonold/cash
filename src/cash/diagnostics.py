@@ -25,6 +25,7 @@ prose, with one piece of advice, serves every site that emits it.
 """
 from __future__ import annotations
 
+import logging
 import os
 import sys
 
@@ -206,6 +207,18 @@ def format_diagnostic(code: str, what: str, fix: str) -> str:
     message used to carry a paragraph because it had nowhere to point.
     """
     return f"[{code}] {what}\n  Fix: {fix}\n  {doc_url(code)}"
+
+
+def log_diagnostic(log: logging.Logger, code: str, what: str, fix: str) -> None:
+    """Also send a diagnostic to logging -- when logging is configured.
+
+    For the few advisories that should reach a log-only reader too. With no
+    handler anywhere, which is every plain script, the record would go to
+    logging's last-resort stderr handler and print the same text a second
+    time right above the warning (round 17, KEY-OPAQUE-CALLABLE).
+    """
+    if log.hasHandlers():
+        log.warning(format_diagnostic(code, what, fix))
 
 
 def warn_diagnostic(

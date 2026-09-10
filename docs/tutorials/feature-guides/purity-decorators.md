@@ -442,7 +442,7 @@ what to cache based on purity). The same machinery now runs on
 cleanly to "I want a warning", "I want it silent", and "I want it to
 fail CI".
 
-<!-- claim: cash/core.py:Cash._surface_purity @454b1632, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
+<!-- claim: cash/core.py:Cash._surface_purity @44c13b02, cash/purity_analyzer.py:ISSUE_UNTRACKABLE_DEP == "untrackable_dep" -->
 ### Default: warn at first call
 
 <!-- test:expect-warning reason="this section exists to demonstrate the first-call impurity warning" -->
@@ -457,11 +457,13 @@ fetch_user(42)
 # CashImpurityWarning: [IMPURE-SIDE-EFFECTS] @cash.cache on
 # __main__.fetch_user: reading the source found likely side effects or scope
 # mutations, so cached results may not reflect what the body does.
-#   in __main__.fetch_user:
-#     line 2: [impure_call] requests.get() — known I/O / side-effecting
+#   in __main__.fetch_user (/home/me/app.py):
+#     line 5: [impure_call] requests.get() — known I/O / side-effecting
 #   Fix: go down the list and put `# @cash:assume-safe` on each line you have
 #   audited, or refactor; @cash.cache(assume_safe=True) waives the whole
-#   function instead, including anything added to it later.
+#   function instead, including anything added to it later. The first
+#   annotation changes the function's key once: @cash: directives are part of
+#   its source identity.
 #   https://cash-lib.readthedocs.io/en/stable/warnings/#impure-side-effects
 ```
 
@@ -603,8 +605,8 @@ fetch_user(42)
 # cash.CashImpureFunctionError: @cash.cache(strict=True) on
 # __main__.fetch_user: purity issues detected. Either fix the function,
 # mark callees with @pure / @stateful, or relax to assume_safe=True.
-#   in __main__.fetch_user:
-#     line 2: [impure_call] requests.get() — known I/O / side-effecting
+#   in __main__.fetch_user (/home/me/app.py):
+#     line 3: [impure_call] requests.get() — known I/O / side-effecting
 ```
 
 In strict mode, opaque callees (functions whose source we can't read)
@@ -710,7 +712,7 @@ won't flag on it, and any function whose body calls
 
 ### What the analyzer looks at
 
-<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @d0589603 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
+<!-- claim: cash/purity_analyzer.py:_PurityVisitor._record_call @a82b5767 broad="the flag list is a claim about every branch of the call rule", cash/purity_analyzer.py:_PurityVisitor.finalize_taint @25beed4f, cash/purity_analyzer.py:_PurityVisitor._table_is_reachable_from_the_key @f40e5656 -->
 The decorator-side analyzer walks the function body AND
 **module-bounded helpers** (functions defined in the same top-level
 package, or any non-installed-library code) and any **closure-bound
@@ -747,7 +749,9 @@ it flags:
   the value is not part of the cache key, so the first call's answer is what
   every later call gets back. Pass it in as an argument
   (`f(now=datetime.now())`) so it reaches the key, or accept the freeze with
-  `# @cash:assume-safe` on that line.
+  `# @cash:assume-safe` on that line. A read that only feeds a `print`, a
+  `logging` call or `warnings.warn` — a timer for an elapsed-time line — is
+  not flagged: it cannot reach the result.
 - **Discarded calls** — `f(x)` as a statement (return thrown away)
   when `f` isn't known-pure
 - **Scope mutations** — `global`/`nonlocal`, attribute/subscript
@@ -762,13 +766,27 @@ it flags:
   it via `depends_on=`/`dynamic_depends_on=`. The detection is scope-aware: a
   local that merely shares a name with a global doesn't trip it.
 
-In-place mutation of a **fresh local** is *not* flagged. A name bound only
-to a freshly-allocated mutable object — a list/dict/set literal or
-comprehension, or a known constructor like `[]`, `dict()`, `np.zeros(...)`,
-`pd.DataFrame(...)`, `.copy()` — cannot alias the caller's state, so
-`pos = np.zeros(n); pos[i] = ...` and `lines = []; lines.append(...)` are
-pure. Mutating a parameter, an alias of one (`x = data; x.append(...)`), or
-module/enclosing state still flags.
+<!-- claim: cash/purity_flow.py:fresh_name_nodes @4d3c37b6, cash/purity_flow.py:_fresh @07e37614 -->
+In-place mutation of a **fresh local** is *not* flagged. An object the
+function made itself — a list/dict/set literal or comprehension, a known
+constructor or reader like `[]`, `dict()`, `np.zeros(...)`,
+`pd.DataFrame(...)`, `pd.read_csv(...)`, `.copy()` — cannot alias the caller's
+state, so `pos = np.zeros(n); pos[i] = ...` and `lines = []; lines.append(...)`
+are pure. The question is asked at the point of the mutation, walking the body
+in order, so these are recognised too:
+
+- `a, b = [], []` followed by `a.append(...)`;
+- a view of a local array: `inner = u[1:-1, 1:-1]; inner[mask] = 0`;
+- a name rebound to a new object before it is changed:
+  `df = load(p); df = df[df.qty > 0]; df = df.merge(ref); df["x"] = ...` —
+  a boolean filter and pandas methods like `merge`, `dropna` and `assign`
+  return new frames.
+
+Mutating a parameter, an alias or a view of one (`x = data; x.append(...)`,
+`inner = arr[1:]`), a helper's result *before* it is copied, an element of a
+container (`d["k"].append(...)` — the element may be anyone's), or
+module/enclosing state still flags. So does anything bound by a `for` loop or a
+`with` block, and `model = model.fit(x)`: `fit` returns `self`.
 
 Stops at library boundaries (anything under `site-packages` /
 stdlib) — those are trusted unless you `mark_stateful` them

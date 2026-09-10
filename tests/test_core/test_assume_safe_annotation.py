@@ -22,6 +22,7 @@ It is honoured in ``strict=True`` too: a line you audited is audited.
 """
 from __future__ import annotations
 
+import inspect
 import os
 import warnings
 
@@ -113,7 +114,10 @@ def test_a_statement_added_later_is_reported_again(tmp_path):
 
     issues = PurityAnalyzer().analyze(audited_then_extended).issues
     assert len(issues) == 1, [i.description for i in issues]
-    assert issues[0].line == 3, "the second statement, not the annotated first"
+    # File line numbers since CAS-122 (they were counted from the `def`).
+    lines, first = inspect.getsourcelines(audited_then_extended)
+    second = first + next(i for i, ln in enumerate(lines) if '"added"' in ln)
+    assert issues[0].line == second, "the second statement, not the annotated first"
     assert _run(audited_then_extended, 1, tmp_path=tmp_path) == "warned"
 
 

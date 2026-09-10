@@ -37,6 +37,7 @@ from .data_source import DataSource
 from .dependency_state import DependencyStateHasher, SysModulesHelperResolver
 from .diagnostics import (
     format_diagnostic,
+    log_diagnostic,
     warn_diagnostic,
     warn_diagnostic_message,
 )
@@ -544,7 +545,11 @@ def _format_issues_summary(func_name: str, issues: list[Any]) -> str:
         by_where.setdefault(i.where, []).append(i)
     lines = []
     for where in sorted(by_where):
-        lines.append(f"  in {where}:")
+        # The defining file, so a finding in a helper names the helper's
+        # module -- the warning's own header names the CALL site's file.
+        filename = next((getattr(i, "filename", "") for i in by_where[where]
+                         if getattr(i, "filename", "")), "")
+        lines.append(f"  in {where} ({filename}):" if filename else f"  in {where}:")
         for issue in by_where[where]:
             line_part = f"line {issue.line}: " if issue.line else ""
             lines.append(f"    {line_part}[{issue.kind}] {issue.description}")
@@ -1400,7 +1405,7 @@ class Cash:
         )
         # The log carries the same rendered text as the warning, code and all,
         # so a log-only reader is not the one person without a handle to search.
-        logger.warning(format_diagnostic("KEY-OPAQUE-CALLABLE", what, fix))
+        log_diagnostic(logger, "KEY-OPAQUE-CALLABLE", what, fix)
         warn_diagnostic(
             CashImpurityWarning, "KEY-OPAQUE-CALLABLE", what, fix,
         )
@@ -7761,7 +7766,8 @@ class Cash:
             fix="go down the list and put `# @cash:assume-safe` on each line "
                 "you have audited, or refactor; @cash.cache(assume_safe=True) "
                 "waives the whole function instead, including anything added "
-                "to it later.",
+                "to it later. The first annotation changes the function's key "
+                "once: @cash: directives are part of its source identity.",
         )
 
     def register_file_handler(self, module_name: str, func_name: str, handler_factory: Callable[..., Any]) -> None:

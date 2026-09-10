@@ -25,7 +25,7 @@ import warnings
 from pathlib import Path
 from urllib.parse import unquote
 
-from ..diagnostics import format_diagnostic, warn_diagnostic
+from ..diagnostics import log_diagnostic, warn_diagnostic
 from ..exceptions import CashWarning
 
 logger = logging.getLogger(__name__)
@@ -153,7 +153,7 @@ def warn_notebook_not_found_once() -> None:
     )
     # The log carries the rendered text, code and all, so a reader who only has
     # the log is not the one person without a handle to look up.
-    logger.warning(format_diagnostic("NOTEBOOK-NOT-FOUND", what, fix))
+    log_diagnostic(logger, "NOTEBOOK-NOT-FOUND", what, fix)
     warn_diagnostic(
         CashNotebookDiscoveryWarning, "NOTEBOOK-NOT-FOUND", what, fix,
     )

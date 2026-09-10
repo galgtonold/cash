@@ -56,6 +56,7 @@ from .notebook.cacheability import (
     _is_open_write_mode,
 )
 from .notebook.function_tracker import is_local_module
+from .purity_flow import LogOnlyFlow, fresh_name_nodes, receiver_is_fresh
 from .notebook.purity import (
     _AMBIENT_READ_CALLS,
     _IMPURE_FUNCTION_CALLS,
@@ -130,13 +131,18 @@ class PurityIssue:
             issue. For helpers, this is the helper's qualname so the
             user can fix the source of the problem, not just the
             outermost decorator.
-        line: Source line of the issue in its containing function.
+        line: Line of the issue in the FILE that defines the function --
+            what an editor's go-to-line takes. 0 for a finding about the
+            whole function.
+        filename: That file, so a finding in a helper names the helper's
+            module rather than the file of the call that surfaced it.
     """
 
     kind: str
     description: str
     where: str
     line: int = 0
+    filename: str = ""
 
 
 @dataclass(frozen=True)
@@ -199,10 +205,16 @@ class PurityReport:
             by_where.setdefault(issue.where, []).append(issue)
         lines = []
         for where, issues in by_where.items():
-            lines.append(f"  in {where}:")
+            lines.append(f"  in {where}{_file_part(issues)}:")
             for i in issues:
                 lines.append(f"    line {i.line}: [{i.kind}] {i.description}")
         return "\n".join(lines)
+
+
+def _file_part(issues: list[PurityIssue]) -> str:
+    """`` (path/to/file.py)`` for a group of issues, or nothing."""
+    name = next((i.filename for i in issues if i.filename), "")
+    return f" ({name})" if name else ""
 
 
 # Names of constructors/methods that return a *freshly-allocated* mutable
@@ -282,6 +294,27 @@ def _compute_local_owned(func_def: ast.AST, param_names: frozenset[str]) -> froz
                 fresh = _is_fresh_alloc(node.value)
                 bound[node.target.id] = bound.get(node.target.id, True) and fresh
 
+    # Every OTHER way to bind a name hands it an object the function did not
+    # make: a loop's elements, a context manager's value, an unpacked tuple's
+    # parts, a walrus. `x = []` followed by `for x in groups: x.append(1)`
+    # counted as a fresh local and hid a mutation of the caller's lists.
+    # (Tuple unpacking of fresh literals is recognised by the flow pass in
+    # `purity_flow`, which is per point rather than per name.)
+    for node in _iter_scope_statements(func_def):
+        bound_elsewhere: set[str] = set()
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.comprehension)):
+            _collect_bound_names(node.target, bound_elsewhere)
+        elif isinstance(node, ast.withitem) and node.optional_vars is not None:
+            _collect_bound_names(node.optional_vars, bound_elsewhere)
+        elif isinstance(node, ast.Assign):
+            for tgt in node.targets:
+                if not isinstance(tgt, ast.Name):
+                    _collect_bound_names(tgt, bound_elsewhere)
+        elif isinstance(node, ast.NamedExpr):
+            _collect_bound_names(node.target, bound_elsewhere)
+        for name in bound_elsewhere:
+            bound[name] = False
+
     return frozenset(
         name for name, all_fresh in bound.items()
         if all_fresh and name not in param_names and name not in escaped
@@ -300,11 +333,14 @@ class _PurityVisitor(ast.NodeVisitor):
         "issues", "called_callable_nodes", "_param_names",
         "_qualname", "_line_offset", "_local_owned", "read_names",
         "_assign_kinds", "_name_call_nodes", "_subscript_call_nodes",
+        "_fresh_nodes", "_log_only",
     )
 
     def __init__(self, qualname: str, param_names: frozenset[str],
                  line_offset: int = 0,
-                 local_owned: frozenset[str] = frozenset()) -> None:
+                 local_owned: frozenset[str] = frozenset(),
+                 fresh_nodes: frozenset[int] = frozenset(),
+                 log_only: frozenset[int] = frozenset()) -> None:
         self.issues: list[PurityIssue] = []
         self.called_callable_nodes: list[ast.AST] = []
         # Bare names read (Load context) in this body - used to detect reads of
@@ -331,6 +367,11 @@ class _PurityVisitor(ast.NodeVisitor):
         self._line_offset = line_offset
         # Fresh locals: in-place mutation of these is pure (escape analysis).
         self._local_owned = local_owned
+        # The same question per POINT (`purity_flow.fresh_name_nodes`): ids of
+        # the Name nodes that hold an object this function made, where read.
+        self._fresh_nodes = fresh_nodes
+        # Ambient reads (by node id) whose value reaches only a log line.
+        self._log_only = log_only
 
     # --- impure / dynamic / called-name detection on Call nodes ---
 
@@ -355,7 +396,8 @@ class _PurityVisitor(ast.NodeVisitor):
         Load context only. ``os.environ["KEY"] = ...`` is a side effect rather
         than a frozen input, a different issue with a different fix.
         """
-        if isinstance(node.ctx, ast.Load) and _get_base_name(node.value) in _ENVIRON_NAMES:
+        if (isinstance(node.ctx, ast.Load) and _get_base_name(node.value) in _ENVIRON_NAMES
+                and id(node) not in self._log_only):
             self.issues.append(PurityIssue(
                 kind=ISSUE_AMBIENT_READ,
                 description=(
@@ -568,6 +610,8 @@ class _PurityVisitor(ast.NodeVisitor):
             # Ambient reads (datetime.now, os.getenv, uuid4, ...). Only ever
             # matched DOTTED: every entry carries its module, so a method named
             # `now` on the user's own object is not this.
+            if dotted in _AMBIENT_READ_CALLS and id(node) in self._log_only:
+                return          # only ever printed or logged: cannot reach a result
             if dotted in _AMBIENT_READ_CALLS:
                 self.issues.append(PurityIssue(
                     kind=ISSUE_AMBIENT_READ,
@@ -723,9 +767,17 @@ class _PurityVisitor(ast.NodeVisitor):
         self.generic_visit(node)
 
     def _receiver_is_local_owned(self, value: ast.AST) -> bool:
-        """True when *value* is a bare name that is a fresh local of this
-        function (escape analysis) - mutating it in place is pure."""
-        return isinstance(value, ast.Name) and value.id in self._local_owned
+        """True when *value* holds an object this function made -- mutating
+        it in place is pure (escape analysis).
+
+        A bare fresh local, or anything the flow pass shows is fresh at this
+        point: a view of one (``inner = u[1:-1]``), a name rebound to a copy
+        (``df = df.merge(...)``), an unpacked fresh literal. An ELEMENT of a
+        fresh container is not: ``d["k"]`` may be anyone's object.
+        """
+        if isinstance(value, ast.Name) and value.id in self._local_owned:
+            return True
+        return receiver_is_fresh(value, self._fresh_nodes)
 
     def _maybe_flag_mutation_target(self, target: ast.AST, line: int) -> None:
         # Mutating a fresh local (``pos[i] = ...`` where ``pos = np.zeros(n)``)
@@ -1161,6 +1213,8 @@ class PurityAnalyzer:
             own_issues_from = len(all_issues)
             visitor = _PurityVisitor(
                 qualname=qualname, param_names=param_names, local_owned=local_owned,
+                fresh_nodes=fresh_name_nodes(func_def),
+                log_only=_log_only_ambient_reads(func_def),
             )
             visitor.visit(func_def)
             visitor.finalize_taint()
@@ -1178,6 +1232,10 @@ class PurityAnalyzer:
             # Filtered per function, against that function's own source, so a
             # waiver written in a helper covers the helper and nothing else.
             _drop_audited(all_issues, own_issues_from, src)
+            # Only now, after the waivers matched against the function's own
+            # source: report lines as the FILE numbers them. Relative to the
+            # decorator line, "line 4" sent three testers to the wrong line.
+            _anchor_issue_lines(all_issues, own_issues_from, func)
 
             if depth >= self._MAX_DEPTH:
                 continue
@@ -1370,6 +1428,40 @@ def _drop_audited(issues: list[PurityIssue], start: int, src: str) -> None:
     ]
     del issues[start:]
     issues.extend(kept)
+
+
+def _anchor_issue_lines(issues: list[PurityIssue], start: int, func: Any) -> None:
+    """Rewrite ``issues[start:]`` in the defining file's line numbers, in place."""
+    try:
+        first = inspect.getsourcelines(func)[1]
+        filename = inspect.getsourcefile(func) or ""
+    except SOURCE_RETRIEVAL_ERRORS:
+        return
+    for index in range(start, len(issues)):
+        issue = issues[index]
+        issues[index] = dataclasses.replace(
+            issue,
+            line=issue.line + first - 1 if issue.line else 0,
+            filename=filename,
+        )
+
+
+def _log_only_ambient_reads(func_def: ast.AST) -> frozenset[int]:
+    """ids of the ambient reads in *func_def* whose value is only logged."""
+    candidates = []
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Call):
+            name = _get_call_name(node.func)
+            module = _get_call_module(node.func)
+            if name and (f"{module}.{name}" if module else name) in _AMBIENT_READ_CALLS:
+                candidates.append(node)
+        elif (isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load)
+                and _get_base_name(node.value) in _ENVIRON_NAMES):
+            candidates.append(node)
+    if not candidates:
+        return frozenset()          # the common case pays for no parent map
+    flow = LogOnlyFlow(func_def)
+    return frozenset(id(n) for n in candidates if flow.only_logged(n))
 
 
 def _describe_subscript(node: ast.Subscript) -> str:
