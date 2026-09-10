@@ -5,7 +5,9 @@ from __future__ import annotations
 import concurrent.futures
 import contextlib
 import logging
+import os
 import queue
+import sys
 import threading
 import time
 import weakref
@@ -114,6 +116,30 @@ def _shutdown_write_timeout() -> float:
 #: Fallback for :func:`_shutdown_write_timeout`; the configured default lives on
 #: ``CashConfig.shutdown_write_timeout`` and is what users actually change.
 _DEFAULT_SHUTDOWN_WRITE_TIMEOUT = 60.0
+
+
+#: ``(pid, answer)`` for `_in_multiprocessing_child`. Keyed by pid because a
+#: forked child inherits the parent's module state, answer included.
+_CHILD_ANSWER: tuple[int, bool] = (-1, False)
+
+
+def _in_multiprocessing_child() -> bool:
+    """Is this process a ``multiprocessing`` worker (Pool, Process, executor)?
+
+    Never imports ``multiprocessing``: a process it did not start has no
+    reason to have it loaded, and ``import cash`` pays for everything here.
+    """
+    global _CHILD_ANSWER
+    pid = os.getpid()
+    if _CHILD_ANSWER[0] == pid:
+        return _CHILD_ANSWER[1]
+    mp = sys.modules.get("multiprocessing")
+    try:
+        answer = mp is not None and mp.parent_process() is not None
+    except Exception:  # noqa: BLE001 - an odd embedding must not break writes
+        answer = False
+    _CHILD_ANSWER = (pid, answer)
+    return answer
 
 
 class _DaemonWriterPool:
@@ -307,6 +333,26 @@ class PendingWrites:
                 prev.result()
             except Exception:  # noqa: BLE001 — surfaces later via wait(key)
                 pass
+        if _in_multiprocessing_child():
+            # In a worker process the write is part of the task, done before
+            # the result goes back. A background write there does not survive
+            # the idiom everyone uses: `with Pool() as p:` TERMINATES its
+            # workers on exit, and under the fork start method a worker leaves
+            # through os._exit, which skips the exit-time drain anyway. Each
+            # worker's last write was lost on every run (round 17: two of six
+            # tasks recomputed, forever).
+            with self._lock:
+                if self._shutdown:
+                    raise RuntimeError("PendingWrites: executor has been shut down")
+            future: concurrent.futures.Future = concurrent.futures.Future()
+            future.set_running_or_notify_cancel()
+            try:
+                future.set_result(self._run_task(key, fn, args, kwargs))
+            except BaseException as exc:  # noqa: BLE001 - reported via wait(), as below
+                future.set_exception(exc)
+                with self._lock:
+                    self._pending[key] = future
+            return future
         with self._lock:
             if self._shutdown:
                 raise RuntimeError("PendingWrites: executor has been shut down")
