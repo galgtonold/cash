@@ -17,7 +17,7 @@ are the part that does not change.
 
 ## The shape of the suite
 
-**<!-- docnum:tests_total -->~9,400<!-- /docnum --> tests** across three suites,
+**<!-- docnum:tests_total -->~9,450<!-- /docnum --> tests** across three suites,
 spread over <!-- docnum:test_files -->~1,280<!-- /docnum --> files:
 
 | Suite | Size | What it covers |

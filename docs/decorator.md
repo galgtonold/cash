@@ -302,6 +302,13 @@ cached function counts as your code even after `pip install .`, so a changed
 checkout. If you do need a third-party function's identity in the key, name it
 with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
+<!-- claim: cash/purity_analyzer.py:_resolve_local_import @e82fd5a2 -->
+An import written **inside** the function (`from .models import auc`, the usual
+way out of an import cycle) is followed the same way as one at the top of the
+file. If the first call reaches cash before the body has made that import, cash
+imports a module of *yours* itself to read it; a library you deliberately import
+inside a function to defer its cost is never imported early.
+
 ### File reads are tracked automatically
 
 <!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @db1cd112 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->

@@ -37,6 +37,8 @@ import ast
 import dataclasses
 import functools
 import hashlib
+import importlib
+import importlib.util
 import inspect
 import logging
 import re
@@ -1033,6 +1035,90 @@ def _resolve_callee(node: ast.AST, namespace: dict[str, Any]) -> Any | None:
     return None
 
 
+def _local_import_map(func_def: ast.AST, func: Any) -> dict[str, tuple[str, tuple[str, ...]]]:
+    """``local name -> (module, attribute prefix)`` for imports in a function body.
+
+    ``from helpmod import scale`` inside the body binds a LOCAL, so the helper
+    walk, which resolves names in the module's globals, found nothing and an
+    edit to ``scale`` was served stale (round 18) -- in the common shape of an
+    import moved into the function to break an import cycle. Each import runs
+    on every call, so the binding it makes is ``helpmod.scale`` as the module
+    holds it at call time: that is the path recorded for the per-call check.
+    """
+    package = None
+    g = getattr(func, "__globals__", None)
+    if isinstance(g, dict):
+        package = g.get("__package__")
+    if package is None:
+        package = (getattr(func, "__module__", "") or "").rpartition(".")[0]
+    found: dict[str, tuple[str, tuple[str, ...]]] = {}
+    for node in ast.walk(func_def):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    found[alias.asname] = (alias.name, ())
+                else:
+                    top = alias.name.split(".")[0]
+                    found[top] = (top, ())
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                try:
+                    module = importlib.util.resolve_name(
+                        "." * node.level + (node.module or ""), package or None)
+                except (ImportError, ValueError):
+                    continue
+            else:
+                module = node.module or ""
+            if not module:
+                continue
+            for alias in node.names:
+                if alias.name != "*":
+                    found[alias.asname or alias.name] = (module, (alias.name,))
+    return found
+
+
+def _module_is_user_code(module_name: str, root_module: str | None) -> bool:
+    """Is *module_name* user code, decided WITHOUT importing it?
+
+    The top-level package is checked first, with a spec lookup that imports
+    nothing, so a library imported inside a function to defer its cost
+    (``import torch``) is never imported early on its behalf.
+    """
+    top = module_name.split(".")[0]
+    if root_module and root_module.split(".")[0] == top:
+        return True
+    try:
+        spec = importlib.util.find_spec(top)
+    except (ImportError, ValueError):
+        return False
+    origin = getattr(spec, "origin", None) if spec is not None else None
+    if not origin or origin in ("built-in", "frozen"):
+        return False
+    return is_local_module(types.SimpleNamespace(__file__=origin))
+
+
+def _resolve_local_import(module_name: str, prefix: tuple[str, ...],
+                          root_module: str | None) -> Any:
+    """The object a function-body import binds, importing a USER module if the
+    body has not run yet. That import is the one the body is about to make;
+    doing it now is what lets the first call's key see the helper. A library
+    module is only read if it is already loaded."""
+    module = sys.modules.get(module_name)
+    if module is None:
+        if not _module_is_user_code(module_name, root_module):
+            return None
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:  # noqa: BLE001 - the body will raise it, not the analysis
+            return None
+    obj: Any = module
+    for attr in prefix:
+        obj = getattr(obj, attr, None)
+        if obj is None:
+            return None
+    return obj
+
+
 def own_source(func: Any) -> str:
     """``inspect.getsource``, without following ``__wrapped__`` for a function.
 
@@ -1532,6 +1618,19 @@ class PurityAnalyzer:
             # helpers (defined inside another function) are visible
             # for recursion.
             namespace = _build_namespace(func)
+            # Imports written inside the body bind locals the module's globals
+            # never see; a local shadows a global of the same name.
+            local_imports = _local_import_map(func_def, func)
+            for _local, (_mod, _prefix) in local_imports.items():
+                _obj = _resolve_local_import(_mod, _prefix, root_module)
+                if _obj is not None:
+                    namespace[_local] = _obj
+
+            def _call_site_path(chain: tuple[str, ...] | None) -> tuple[str, tuple[str, ...]] | None:
+                if chain and chain[0] in local_imports:  # noqa: B023 - loop var, used within iteration
+                    module_name, prefix = local_imports[chain[0]]  # noqa: B023
+                    return (module_name, prefix + chain[1:]) if module_name in sys.modules else None
+                return _binding_path(func, chain)  # noqa: B023
 
             def _queue_helper(callee: Any, line: int,
                               path: tuple[str, tuple[str, ...]] | None = None) -> None:
@@ -1593,7 +1692,7 @@ class PurityAnalyzer:
                 _queue_helper(
                     _resolve_callee(call_node.func, namespace),
                     getattr(call_node, "lineno", 0),
-                    _binding_path(func, _callee_chain(call_node.func)),
+                    _call_site_path(_callee_chain(call_node.func)),
                 )
 
             # A helper referenced by NAME but reached through a value -- not in
@@ -1609,7 +1708,7 @@ class PurityAnalyzer:
             for _name in visitor.read_names:
                 _val = namespace.get(_name)
                 if inspect.isfunction(_val) or inspect.ismethod(_val):
-                    _queue_helper(_val, 0, _binding_path(func, (_name,)))
+                    _queue_helper(_val, 0, _call_site_path((_name,)))
 
         # Stable order: by where (insertion) then line then kind.
         all_issues_sorted = tuple(sorted(
