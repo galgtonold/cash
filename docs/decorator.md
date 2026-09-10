@@ -205,7 +205,7 @@ change:
 | The **function's own source** | Edit the body and old entries stop matching |
 | The source of a **helper it calls** | Followed **transitively**, across your own modules and your own installed package — other people's libraries are where it stops |
 | A helper's **parameter defaults** | Folded by value: `def shrink(v, alpha=ALPHA)` invalidates when `ALPHA` changes, though the helper's source reads the same — including a closure's defaults set by a factory |
-| A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, … are intercepted |
+| A **file it reads** | `pd.read_csv`, `open()`, `np.load`, `joblib.load`, polars and pyarrow readers are intercepted — [the full list](tutorials/feature-guides/custom-file-sources.md#whats-automatically-tracked) |
 | A **module global it reads** | A config constant, a threshold, a dispatch dict — including one read by a **helper**, or by another cached function it calls, rather than by itself |
 | A **class its code reaches** | Followed transitively, so editing a class that a folded class constructs invalidates too |
 | A **class passed as an argument** | Keyed by its declaration, not its name — so an output specification handed to a call (`extract(doc, InvoiceFields)`) invalidates when a field or a field description changes. Works for plain classes, `@dataclass`, and pydantic `BaseModel` |
@@ -253,7 +253,7 @@ with [`depends_on=`](#depends_on-explicit-dependency-graph).
 
 ### File reads are tracked automatically
 
-<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @116d1850 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
+<!-- claim: cash/notebook/file_tracker.py:_install_module_patches @4cabaa21, cash/notebook/file_tracker.py:FileDependencyRegistry @db1cd112 broad="the claim is that a family of reader calls is intercepted, which is the registry's whole job" -->
 You usually don't need to declare files at all: cash intercepts file reads
 *inside* a cached function — `pd.read_csv`, `np.load`, `open()`, `joblib.load`,
 … — and folds each file's fingerprint into the entry, so changing the file on

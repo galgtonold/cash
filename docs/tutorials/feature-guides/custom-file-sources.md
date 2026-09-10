@@ -33,7 +33,7 @@ No decorator argument, no manual registration. Cash sees the `read_csv` call, re
 
 ## What's automatically tracked
 
-<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @53a0d8fb, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
+<!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._initialize_defaults @87710919, cash/notebook/file_tracker.py:_find_patch_targets @720455ed -->
 The default handler set is registered in `FileDependencyRegistry._initialize_defaults`:
 
 | Module | Functions |
@@ -42,6 +42,7 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | `io` | `open()` (alias of the built-in `open`) |
 | `pandas` | `read_*` — every reader: `read_csv`, `read_parquet`, `read_excel`, `read_json`, `read_pickle`, `read_feather`, `read_hdf`, `read_orc`, `read_sas`, `read_spss`, `read_stata`, `read_table`, `read_xml`, `read_html`, `read_fwf`, `read_clipboard`, `read_sql*` |
 | `polars` | `read_csv`, `read_parquet`, `read_json`, `read_ndjson`, `read_ipc`, `read_avro`, `read_excel`, plus the lazy variants `scan_csv`, `scan_parquet`, `scan_ipc`, `scan_ndjson` |
+| `pyarrow` | `csv.read_csv`, `csv.open_csv`, `parquet.read_table`, `parquet.read_pandas`, `feather.read_table`, `feather.read_feather`, `json.read_json` |
 | `numpy` | `load`, `loadtxt`, `genfromtxt`, `fromfile` |
 | `joblib` | `load` |
 | `pickle` | `load` |
@@ -51,6 +52,8 @@ The default handler set is registered in `FileDependencyRegistry._initialize_def
 | `os.path` | `exists`, `isfile` (and their `genericpath` originals) — records a path that was looked for and was **not** there (see below) |
 
 The pandas entry is the glob `read_*`, expanded by `_find_patch_targets` against the live `pandas` module — so any reader pandas adds in a future release is picked up too. Both top-level reads (`pd.read_csv`) and submodule reads (`pd.read_csv` via the `pandas.io.parsers` shim) flow through the patched attribute.
+
+A reader may be given its path positionally or by keyword — `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)`, `pq.read_table(source=p)` — and both are tracked. pyarrow reads files in C++, so none of its reads pass through `open()`; before its readers were registered, a function that switched to `pyarrow.csv` for speed recorded no dependency at all and kept returning the old file's answer. `pyarrow.parquet.ParquetFile` and `pyarrow.dataset` are not wrapped (one is a class, the other enumerates directories); read through them and name the files with `file_depends_on=`.
 
 <!-- claim: cash/notebook/file_tracker.py:FileDependencyRegistry._create_open_handler @1da1f7d2 -->
 For `open()`, the wrapper records the path as a *dependency* only when the mode contains `'r'` or `'+'` (read or read/write) — see `_create_open_handler`. An `open(path, 'w')` for output does **not** become a dependency, which is what you want: folding a file the function writes into its own cache key would invalidate the entry on its own output.

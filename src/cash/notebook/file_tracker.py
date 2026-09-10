@@ -83,6 +83,14 @@ _install_lock = threading.Lock()
 _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
 
 
+#: Keyword names a reader may take its path under, first match wins. Covers
+#: pandas (`filepath_or_buffer`, `path_or_buf`, `io` for read_excel, `path`),
+#: numpy (`file`, `fname`), joblib (`filename`), pyarrow (`source`,
+#: `input_file`) and polars (`source`).
+_PATH_KWARGS = ("filepath_or_buffer", "path_or_buf", "source", "input_file",
+                "path", "file", "fname", "filename", "io")
+
+
 def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
     """``(size, mtime_ns, ctime_ns)`` for a regular file, None otherwise.
 
@@ -358,6 +366,20 @@ class FileDependencyRegistry:
         self.register('polars', 'scan_ndjson', self._create_path_arg_handler)
 
         # Numpy
+        # pyarrow reads in C++, so nothing passes through a patched open(): a
+        # cached function that switched to pyarrow.csv for speed recorded no
+        # file dependency at all, and a whole new export returned yesterday's
+        # numbers (CAS-115). Path-taking readers only -- a class such as
+        # ParquetFile is left alone, since replacing it with a function would
+        # break isinstance checks.
+        self.register('pyarrow.csv', 'read_csv', self._create_path_arg_handler)
+        self.register('pyarrow.csv', 'open_csv', self._create_path_arg_handler)
+        self.register('pyarrow.parquet', 'read_table', self._create_path_arg_handler)
+        self.register('pyarrow.parquet', 'read_pandas', self._create_path_arg_handler)
+        self.register('pyarrow.feather', 'read_table', self._create_path_arg_handler)
+        self.register('pyarrow.feather', 'read_feather', self._create_path_arg_handler)
+        self.register('pyarrow.json', 'read_json', self._create_path_arg_handler)
+
         self.register('numpy', 'load', self._create_path_arg_handler)
         self.register('numpy', 'loadtxt', self._create_path_arg_handler)
         self.register('numpy', 'genfromtxt', self._create_path_arg_handler)
@@ -453,12 +475,20 @@ class FileDependencyRegistry:
         — see :meth:`_create_open_handler`. The built-in wrapper
         consults ``_active_tracker`` directly.
         """
-        def tracked_func(path_or_buf, *args, **kwargs):
-            if isinstance(path_or_buf, (str, bytes, os.PathLike)):
+        # Positional OR keyword. The wrapper used to demand the path as its
+        # first positional parameter, and these wrappers are installed once,
+        # process-wide, on the first cached call -- so from then on
+        # `pd.read_csv(filepath_or_buffer=p)`, `np.load(file=p)` or
+        # `pq.read_table(source=p)` raised TypeError EVERYWHERE in the process,
+        # inside cached code or not. Measured while adding the pyarrow readers.
+        def tracked_func(*args, **kwargs):
+            target = args[0] if args else next(
+                (kwargs[k] for k in _PATH_KWARGS if k in kwargs), None)
+            if isinstance(target, (str, bytes, os.PathLike)):
                 _tracker = _active_tracker.get()
                 if _tracker is not None:
-                    _tracker._track_path(path_or_buf)
-            return original_func(path_or_buf, *args, **kwargs)
+                    _tracker._track_path(target)
+            return original_func(*args, **kwargs)
         return tracked_func
 
     @staticmethod
