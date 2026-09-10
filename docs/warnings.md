@@ -1,6 +1,6 @@
 # Warnings
 
-<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @071f2744, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
+<!-- claim: cash/diagnostics.py:DIAGNOSTIC_CODES @edfb13d9, cash/experimental/__init__.py:_warn_experimental @5dcce1c0 -->
 Every warning in the `CashWarning` hierarchy carries a code in square brackets
 and a link to its section here. To look one up, search this page for the code.
 The one exception is the import-time notice from `cash.experimental`: it is a
@@ -1449,6 +1449,49 @@ The failure is contained, nothing on disk is corrupt, and the next call simply
 writes the entry again. Stop ignoring it the moment it repeats — a persistently
 failing write means you are paying the full cost of a cache and getting none of
 the benefit.
+
+## STORE-INPUT-CHANGED {#store-input-changed}
+
+<!-- claim: cash/core.py:Cash._inputs_moved_during_call @4e525f0b, cash/notebook/file_tracker.py:FileAccessTracker.inputs_changed_since_read @faa17b34 -->
+**What happened.** A file the cached function read changed before the function
+returned — its size or timestamps moved between the moment it was read and the
+moment the result was about to be stored. The warning names the file. The
+result was returned to you, but it was **not cached**.
+
+**Why it matters.** Cash fingerprints a function's input files to know later
+whether they changed. If it fingerprinted the file *after* the change, the entry
+would match the new file while holding a result computed from the old one, and
+every later call would be a cache hit with the old answer — silently, for as
+long as the entry lived. Not caching is the only honest option: nothing can say
+which version of the file the result came from.
+
+Two shapes produce it:
+
+* **Something else writes the file while your function runs** — a sync job, a
+  download, another process. The next call reads the settled file and caches
+  normally, so this usually needs no action.
+* **An outer cached function**, whose inner cached call read the file, and the
+  file changed between that inner call finishing and the outer one returning.
+  Same outcome: the outer result is returned and not stored.
+
+**What to do.** Usually nothing. If it fires on every run, your function is most
+likely **writing a file it also reads** — appending to a log it parsed, updating
+a state file in place. Split the read and the write, so the cached part only
+reads:
+
+<!-- test:skip reason="illustrative: the point is the split, not a value" -->
+```python
+@cash.cache
+def summarise(path):
+    return build_summary(pd.read_csv(path))      # reads only
+
+summary = summarise("state.csv")
+summary.to_csv("state.csv")                      # the write happens outside
+```
+
+**When it is safe to ignore.** When the writer is something you expected to be
+running, and it has finished by the next call. The warning fires once per
+function per session.
 
 ## STORE-LOCK-FAILED {#store-lock-failed}
 

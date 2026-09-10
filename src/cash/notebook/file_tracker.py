@@ -83,6 +83,24 @@ _install_lock = threading.Lock()
 _PSEUDO_FS_PREFIXES: tuple[str, ...] = ("/proc/", "/sys/", "/dev/")
 
 
+def _regular_file_stat(path: str) -> tuple[int, int, int] | None:
+    """``(size, mtime_ns, ctime_ns)`` for a regular file, None otherwise.
+
+    ``ctime_ns`` is the inode change time on POSIX, so an edit that restores
+    the mtime still moves this tuple there; on Windows it is the creation
+    time and adds nothing, which is the residual the NTFS change-time ticket
+    (CAS-114) is about.
+    """
+    import stat as _stat
+    try:
+        st = os.stat(path)
+    except (OSError, ValueError):
+        return None
+    if not _stat.S_ISREG(st.st_mode):
+        return None
+    return (st.st_size, st.st_mtime_ns, getattr(st, "st_ctime_ns", 0))
+
+
 def _is_pseudo_fs(path: str) -> bool:
     """True for kernel pseudo-filesystem paths, which are machine state rather
     than data and must never become cache dependencies.
@@ -615,6 +633,12 @@ class FileAccessTracker:
         # including when the same relative name resolves into a directory that
         # has one. See ``_track_absent``.
         self.absent_files: set[str] = set()
+        # The stat of each regular file WHEN IT WAS FIRST READ. The entry's
+        # fingerprint is taken when it is stored, after the body has finished,
+        # so a file that changed in between was fingerprinted as if it were
+        # what the body read -- and served, stale, forever after (CAS-109).
+        # Comparing against this is what lets the store step refuse instead.
+        self.read_stats: dict[str, tuple[int, int, int]] = {}
         self.user_ns = user_ns or {}
         self.registry = FileDependencyRegistry()
         # Stack of ContextVar tokens, one per active __enter__. Supports
@@ -671,6 +695,21 @@ class FileAccessTracker:
 
     def get_accessed_files(self) -> set[str]:
         return self.accessed_files
+
+    def inputs_changed_since_read(self) -> list[str]:
+        """Regular files whose stat moved between their first read and now.
+
+        Directories are left out on purpose: a function that lists a directory
+        and writes its output into it moves the directory's mtime itself, and
+        refusing to cache every such function would be a regression for no
+        gain -- a new entry appearing mid-call is a smaller hole than a file
+        rewritten under the reader.
+        """
+        moved = []
+        for path, before in self.read_stats.items():
+            if _regular_file_stat(path) != before:
+                moved.append(path)
+        return moved
 
     def get_accessed_remote_urls(self) -> set[str]:
         """Remote URLs read in this block, tracked by store validator instead."""
@@ -748,6 +787,13 @@ class FileAccessTracker:
         on the enclosing tracker(s) too - so nested cached reads count as the
         outer cached function's deps. Manual tracker nesting stays isolated."""
         self.accessed_files.add(abs_path)
+        if abs_path not in self.read_stats and os.path.isabs(abs_path):
+            # Absolute paths only: a relative twin is re-resolved against the
+            # cwd at check time, and a chdir during the call would make its
+            # stat look like a change that never happened.
+            st = _regular_file_stat(abs_path)
+            if st is not None:
+                self.read_stats[abs_path] = st
         if not self._propagate_to_parent:
             return
         parent = self._parent_stack[-1] if self._parent_stack else None

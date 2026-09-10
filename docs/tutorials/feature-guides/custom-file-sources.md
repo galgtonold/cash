@@ -318,7 +318,11 @@ The tradeoff therefore inverted rather than disappearing. What you pay for a lar
 
 If a spurious recompute on a multi-GB input is itself too expensive, write a `DataSource` subclass whose `state_token()` returns whatever cheap, authoritative version marker your data already has (a manifest hash, an ETag, a build id) and pass it via `depends_on=`.
 
-Race condition to be aware of: if a file is rewritten *while* a cached function is running, the snapshot captures the post-write content. On the next call Cash sees a matching hash and returns the cached value — which now reflects half-old, half-new data. The window is small and rarely matters, but for high-churn pipelines wrap the write in a tempfile-then-rename so each run sees a consistent snapshot.
+**A file that changes while the call is running.** Cash records the size and timestamps of each file when the function first reads it, and checks them again before storing the result. If a file moved in between — a sync job landing mid-run, or an input rewritten after an inner cached call had already read it — the result is still returned, but **not cached**, with a [`STORE-INPUT-CHANGED`](../../warnings.md#store-input-changed) warning: there is no way to tell which version of the file it was computed from. The next call reads the settled file and caches normally.
+
+It used to be cached. The fingerprint was taken at store time, so it described the *new* file while the result came from the old one, and every later call was a hit with the old answer — for as long as the entry lived. Writing the file via a temp file and a rename did not help, because the rename lands before the store.
+
+One residual: a same-size edit that also puts the file's mtime back, landing during the call, leaves the size and timestamps identical on Windows. See [known limitations](../../known-limitations.md#a-very-large-file-edited-in-place-with-its-timestamp-put-back).
 
 ## Caveats
 

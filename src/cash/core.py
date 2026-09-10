@@ -2639,6 +2639,8 @@ class Cash:
                 self._learn_mutating_captures(func, func_name, capture_watch)
                 if should_cache and self._refuses_identity_coupled(func_name, res):
                     should_cache = False
+                if should_cache and self._inputs_moved_during_call(func_name, tracker):
+                    should_cache = False
 
                 if should_cache:
                     # Attach lineage only when the value is actually stored: a
@@ -2837,6 +2839,8 @@ class Cash:
                 # See the sync path.
                 self._learn_mutating_captures(func, func_name, capture_watch)
                 if should_cache and self._refuses_identity_coupled(func_name, res):
+                    should_cache = False
+                if should_cache and self._inputs_moved_during_call(func_name, tracker):
                     should_cache = False
 
                 if should_cache:
@@ -5724,6 +5728,47 @@ class Cash:
             stacklevel=stacklevel,
         )
 
+    def _inputs_moved_during_call(self, func_name: str, tracker: Any) -> bool:
+        """Did a file this call read change before the call returned?
+
+        The entry's file fingerprints are taken when it is STORED. A file
+        rewritten after the body read it but before it returned was
+        fingerprinted in its new state, so the entry matched the new file
+        and served the old answer on every later call (CAS-109, round 17:
+        a sync job overlapping a long pipeline; and, one level up, an outer
+        aggregate re-fingerprinting a file its inner call had already read).
+        The documented mitigation -- write to a temp file and rename -- did
+        not help, because the rename lands before the store.
+
+        The result is still returned: it is what the body computed. It is
+        only not cached, because nothing can say which content it came from.
+        """
+        moved_fn = getattr(tracker, "inputs_changed_since_read", None)
+        if moved_fn is None:
+            return False
+        try:
+            moved = moved_fn()
+        except Exception:  # noqa: BLE001 - never let the check break a call
+            return False
+        if not moved:
+            return False
+        shown = ", ".join(moved[:3]) + (f" and {len(moved) - 3} more" if len(moved) > 3 else "")
+        self._warn_once(
+            CashCacheStoreFailedWarning,
+            func_name,
+            "input_changed",
+            f"@cash.cache on {func_name}: {shown} changed while the call was "
+            f"running, after it had been read. The result was returned but not "
+            f"cached, because it cannot be told which version of the file it "
+            f"was computed from.",
+            code="STORE-INPUT-CHANGED",
+            fix="nothing, if something else writes these files while this runs "
+                "-- the next call reads the settled file and caches normally. If "
+                "the function writes a file it also reads, that is why: split the "
+                "read and the write.",
+        )
+        return True
+
     def _warn_unseeded_randomness(
         self,
         func: Callable,
@@ -6464,6 +6509,8 @@ class Cash:
                         self._warn_cache_if_raised(func_name, e)
                         should_cache = False
                 if should_cache and self._refuses_identity_coupled(func_name, buffer):
+                    should_cache = False
+                if should_cache and self._inputs_moved_during_call(func_name, tracker):
                     should_cache = False
                 if should_cache:
                     if buffer:

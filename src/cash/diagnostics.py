@@ -165,6 +165,8 @@ DIAGNOSTIC_CODES: frozenset[str] = frozenset({
     "STORE-CHUNK-FAILED",      # a chunked write failed partway; the entry is
                                # incomplete on retrieval
     "STORE-FAILED",            # the backend refused the write
+    "STORE-INPUT-CHANGED",     # a file the call read changed before it
+                               # returned, so the result was not stored
     "STORE-LOCK-FAILED",       # lock acquisition failed; proceeding unlocked
     "STORE-METADATA-INVALID",  # a stored entry's metadata did not validate
 })
