@@ -65,6 +65,7 @@ answer:
 | Class-level code a cached **method** reaches, transitively | Editing a method or class-body helper the cached method calls left its result stale |
 | Class constants read via `ClassName.ATTR` / `type(self).ATTR` | Changing a class-level constant the body reads didn't move the key |
 | A helper reached through a **value**, not a bare name (`fn = mod.f; fn(x)`) | A value-indirected call used to slip past the plain-helper source hash |
+| What a callable global or default was **built with**: a factory closure's captured values, a `functools.partial`'s arguments and the function it wraps, a pre-built bound method's instance | `CLIP = make_clipper(-3, 3)`, `F = partial(base, k=2)` and `F = S(2).f` were keyed by their code alone, so changing what they were built with kept the key |
 
 Modules, plain callables (already tracked as helpers) and classes are excluded
 from the globals fold. A capture or global that can't be hashed warns once and is

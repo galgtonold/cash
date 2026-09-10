@@ -192,17 +192,16 @@ def test_key_opaque_callable_prints_once_in_a_plain_script(tmp_path):
     """It went to logging's last-resort handler AND to warnings: twice."""
     script = tmp_path / "job.py"
     script.write_text(textwrap.dedent("""
-        import functools
         import cash
 
-        def double(v):
-            return v * 2
+        class Opaque:
+            __call__ = staticmethod(abs)   # no Python code to hash
 
         @cash.cache
         def f(cb, x):
             return cb(x)
 
-        f(functools.partial(double), 5)
+        f(Opaque(), -5)
     """), encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
     env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")

@@ -64,7 +64,13 @@ from .notebook.randomness import (
     RandomnessDetector,
     describe_random_call,
 )
-from .purity_analyzer import PurityReport, bindings_changed, get_analyzer
+from .purity_analyzer import (
+    PurityReport,
+    bindings_changed,
+    get_analyzer,
+    is_mock,
+    resolve_binding,
+)
 from .source_norm import (
     bytecode_identity,
     loaded_class_identity,
@@ -4152,8 +4158,8 @@ class Cash:
             # cacheable, which a bare refuse-to-cache would not.
             try:
                 digest = self._hash_arg_payload(
-                    tuple(self._fingerprint_default(v) for v in pos),
-                    {k: self._fingerprint_default(v) for k, v in kwd.items()},
+                    tuple(self._fingerprint_callable_default(v) for v in pos),
+                    {k: self._fingerprint_callable_default(v) for k, v in kwd.items()},
                 )
             except (TypeError, pickle.PicklingError, AttributeError, OverflowError) as e:
                 return self._defaults_unhashable(func_name, pos, kwd, e, warn)
@@ -4203,6 +4209,20 @@ class Cash:
         if inspect.isfunction(v) or inspect.ismethod(v) or inspect.isbuiltin(v):
             return f"__cash_callable__:{Cash._hash_callable_source(v)}"
         return v
+
+    def _fingerprint_callable_default(self, v: Any) -> Any:
+        """`_fingerprint_default`, plus what a FUNCTION default carries.
+
+        A factory-built callable as a default (`def run(xs, fn=make(3))`)
+        shares its source with every other one the factory makes; the value it
+        was built with lives in its closure, and was not keyed -- `make(3)` ->
+        `make(1)` served the old result (round 18). `_hash_helper_identity`
+        adds its immutable captures and its own defaults; a plain function
+        with neither gets exactly the old fingerprint.
+        """
+        if inspect.isfunction(v):
+            return f"__cash_callable__:{self._hash_helper_identity(v)}"
+        return self._fingerprint_default(v)
 
     def _defaults_unhashable(
         self, func_name: str, pos: tuple, kwd: dict, e: Exception, warn: bool,
@@ -4617,6 +4637,15 @@ class Cash:
         key, so the memo cannot serve a stale entry. Keying on ``id()`` would
         be a correctness bug, since CPython recycles addresses.
         """
+        # A `functools.partial` is its function plus arguments. The arguments
+        # already reach the key (a partial pickles them, by value); its code is
+        # the wrapped function's, which pickle names only by reference -- so an
+        # edit to that function's body kept the key, and the partial was
+        # reported as uncomputable code instead (KEY-OPAQUE-CALLABLE).
+        depth = 0
+        while isinstance(obj, functools.partial) and depth < 8:
+            obj = obj.func
+            depth += 1
         try:
             # Dispatch FIRST, memo read second. Every argument to a cached
             # function passes through here (Task 4), and most are not a
@@ -5363,6 +5392,23 @@ class Cash:
             state_hash = self._fold_read_globals(
                 target, func_name, state_hash, owner_code=owner_code, seen=seen
             )
+        # A callable bound at a call site carries DATA besides its code: a
+        # partial's arguments, a bound method's instance, a callable
+        # instance's attributes. Its code is followed as a helper; this is the
+        # rest (round 18: `F = partial(base, k=2)` -> `k=3`, and `F = S(2).f`,
+        # were both served stale).
+        carried: list[str] = []
+        for module_name, chain, _ref in report.helper_bindings:
+            live = resolve_binding(module_name, chain)
+            if live is func:
+                continue
+            digest = self._carried_state_digest(live)
+            if digest is not None:
+                carried.append(f"{module_name}.{'.'.join(chain)}={digest}")
+        if carried:
+            state_hash = hashlib.sha256(
+                f"{state_hash}:carried:{':'.join(sorted(carried))}".encode("utf-8")
+            ).hexdigest()
         # Helpers with no path of their own -- the function inside a decorator,
         # a closure from a factory -- are held by reference. What THEY read
         # counts as much: `@add1 def h(x): return x * K` computes with K, and
@@ -5378,6 +5424,37 @@ class Cash:
                 extra_names=self._decorator_global_names(target),
             )
         return state_hash
+
+    def _carried_state_digest(self, value: Any) -> str | None:
+        """Digest of the data a callable carries besides its code, or None.
+
+        A partial's arguments; a bound method's instance (any class -- the
+        same as that instance read as a global); a callable instance's own
+        state, for USER classes only: a library's callable instance
+        (`np.vectorize`) keeps lazy caches that change after its first call,
+        which would make every call miss. Silent on failure: the code is
+        still keyed, and a warning here would fire on every class-based
+        decorator whose state is just the function it wraps.
+        """
+        if isinstance(value, functools.partial):
+            payload: Any = (value.args, dict(value.keywords))
+        elif isinstance(value, types.MethodType):
+            owner = value.__self__
+            if isinstance(owner, (type, types.ModuleType)):
+                return None
+            payload = owner
+        elif (callable(value) and not isinstance(
+                value, (types.FunctionType, types.BuiltinFunctionType, type, types.ModuleType))
+              and not is_mock(value)
+              and self._is_user_class(type(value), self._own_package(type(value)))):
+            payload = value
+        else:
+            return None
+        try:
+            stabilized = self._stabilize_for_global_hash(payload, self._hash_callable_source)
+            return self._hash_arg_payload((stabilized,), {})
+        except Exception:  # noqa: BLE001 - never break a call over this
+            return None
 
     def _decorator_global_names(self, fn: Callable) -> tuple[str, ...]:
         """Names the decorator expressions on *fn*'s ``def`` read from its module.
@@ -7007,6 +7084,13 @@ class Cash:
         that breaks an otherwise-cacheable call.
         """
         try:
+            if isinstance(obj, functools.partial):
+                # A partial is the function it wraps plus arguments, both of
+                # which are keyed now. `mark_opaque(functools.partial)` was the
+                # old advice for silencing KEY-OPAQUE-CALLABLE, and it silenced
+                # EVERY partial in the process, including ones over code the
+                # user then edited (round 18).
+                return False
             target = obj if isinstance(obj, type) else type(obj)
             if target in Cash._OPAQUE_TYPES:
                 return True

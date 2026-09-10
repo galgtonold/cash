@@ -454,24 +454,50 @@ def test_explain_agrees_with_a_real_call_for_a_code_argument(c):
     assert takes.explain(_define(nb, _V2)).would_hit is False
 
 
-def test_a_partial_argument_warns_at_most_once_across_distinct_partials(c, warned_unhashable):
-    """``repr(functools.partial(...))`` embeds a memory address, so keying the
+class _OpaqueCallable:
+    """User code whose behaviour has no Python code to hash: its ``__call__``
+    is a builtin. The stand-in for "could not be hashed" since a
+    ``functools.partial`` stopped being one (round 18: it is keyed by the
+    function it wraps)."""
+
+    __call__ = staticmethod(abs)
+
+
+def test_an_opaque_callable_argument_warns_at_most_once_across_instances(c, warned_unhashable):
+    """``repr()`` of a callable object embeds a memory address, so keying the
     once-per-type dedup on ``repr()`` -- as the task brief's fallback did --
-    warns for EVERY partial ever constructed and grows a class-global set
+    warns for EVERY instance ever constructed and grows a class-global set
     without bound. ``assert == 1`` is two-sided: 0 would mean the advisory
     never fires (dead code), 3 would mean the dedup does not dedup.
     """
     takes, _calls = _counting(c)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        takes(_OpaqueCallable())
+        takes(_OpaqueCallable())
+        takes(_OpaqueCallable())
+    advisories = _code_advisories(rec)
+    assert len(advisories) == 1, advisories
+    assert "0x" not in advisories[0], "the advisory leaked an address"
+
+
+def test_distinct_partials_over_user_code_are_keyed_not_reported(c, warned_unhashable):
+    """What the test above used to pin with partials. A partial is its function
+    plus arguments, and both reach the key now: three partials, three entries,
+    no advisory -- and editing the wrapped function invalidates."""
+    takes, calls = _counting(c)
     nb = _nb_module()
     _define(nb, "def scale(k, x): return k * x\n", name="scale")
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
         takes(functools.partial(nb.scale, 2))
         takes(functools.partial(nb.scale, 3))
-        takes(functools.partial(nb.scale, 4))
-    advisories = _code_advisories(rec)
-    assert len(advisories) == 1, advisories
-    assert "0x" not in advisories[0], "the advisory leaked an address"
+        takes(functools.partial(nb.scale, 3))
+    assert _code_advisories(rec) == []
+    assert len(calls) == 2
+    _define(nb, "def scale(k, x): return k * x + 1\n", name="scale")
+    takes(functools.partial(nb.scale, 3))
+    assert len(calls) == 3, "an edit to the wrapped function was served stale"
 
 
 def test_ordinary_arguments_still_hit_warm_and_stay_silent(c):
@@ -619,15 +645,14 @@ def test_the_advisory_ignores_a_stdlib_callable_object(c, warned_unhashable):
     reported as un-hashable user code.
 
     The second arm is the control, and it is what stops this test from passing
-    by simply disabling the advisory: a partial over a USER function must still
-    warn, because that function's body genuinely is absent from the key.
+    by simply disabling the advisory: user code with no hashable body must
+    still warn. (It used to be a partial over a user function; a partial is
+    keyed by the function it wraps now, so it has nothing to report.)
     """
     import json
     import weakref
 
     takes, _calls = _counting(c, name="advisory_takes")
-    nb = _nb_module()
-    _define(nb, "def user_scale(k, x): return k * x\n", name="user_scale")
 
     class Holder:
         pass
@@ -641,8 +666,8 @@ def test_the_advisory_ignores_a_stdlib_callable_object(c, warned_unhashable):
 
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        takes(functools.partial(nb.user_scale, 3))
-    assert len(_code_advisories(rec)) == 1, "control: a partial over USER code must warn"
+        takes(_OpaqueCallable())
+    assert len(_code_advisories(rec)) == 1, "control: unhashable USER code must warn"
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,8 @@ import textwrap
 
 import pytest
 
-pytestmark = pytest.mark.core
+# Several fresh interpreters per case: past the suite-wide 30 s on a loaded runner.
+pytestmark = [pytest.mark.core, pytest.mark.timeout(300)]
 
 D = textwrap.dedent
 

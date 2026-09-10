@@ -274,16 +274,22 @@ def warned_unhashable():
     Cash._WARNED_UNHASHABLE.update(saved)
 
 
+class _OpaqueCallable:
+    """A callable whose behaviour has no Python code (its ``__call__`` is a
+    builtin). It used to be a ``functools.partial``; since round 18 a partial is
+    keyed by the function it wraps and has nothing left to report."""
+
+    __call__ = staticmethod(abs)
+
+
 def test_an_unhashable_callable_argument_still_reports_itself(tmp_path, warned_unhashable):
     """Control arm for the test above: the boundary is still announced.
 
-    `functools.partial` caches but cannot be source-hashed, so editing the
-    function it wraps will NOT invalidate. Cash reports exactly that, naming
-    the remedy -- which is why the blanket per-call warning is redundant
-    rather than merely inconvenient.
+    A callable whose code cannot be hashed still caches, but editing it will
+    NOT invalidate. Cash reports exactly that, naming the remedy -- which is
+    why the blanket per-call warning is redundant rather than merely
+    inconvenient.
     """
-    import functools
-
     c = Cash(cache_dir=str(tmp_path), register_magic=False)
 
     @c.cache
@@ -292,10 +298,10 @@ def test_an_unhashable_callable_argument_still_reports_itself(tmp_path, warned_u
 
     with warnings.catch_warnings(record=True) as captured:
         warnings.simplefilter("always")
-        f(functools.partial(_double), 5)
+        f(_OpaqueCallable(), -5)
 
     messages = [str(w.message) for w in captured]
-    assert any("could not be hashed" in m and "partial" in m for m in messages), messages
+    assert any("could not be hashed" in m and "_OpaqueCallable" in m for m in messages), messages
 
 
 def test_warning_message_includes_line_numbers(tmp_path):

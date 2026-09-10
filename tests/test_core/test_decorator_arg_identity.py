@@ -165,7 +165,14 @@ def test_source_that_will_not_parse_falls_back_to_itself():
 
 
 def test_an_undecorated_function_is_returned_untouched():
-    """The common case must not pay for a parse."""
+    """The common case must not pay for a parse.
+
+    The function is memoized, and an ``lru_cache`` hit for an EQUAL string hands
+    back the object from the earlier call -- so any earlier test on the same
+    worker that hashed a function with this exact text made the identity check
+    fail. Clear it first; the identity is the proxy for "returned unchanged".
+    """
+    strip_cache_decorator.cache_clear()
     plain = "def helper(n):\n    return n + 1\n"
     assert strip_cache_decorator(plain) is plain
 

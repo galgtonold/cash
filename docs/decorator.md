@@ -499,15 +499,16 @@ edit does *not* invalidate (bytecode carries neither — though a docstring, cla
 or method, does), and a Python-version upgrade re-keys every entry that passes
 code, once.
 
-Where cash is handed code of yours it cannot hash — a `functools.partial` around
-one of your functions is the case you are most likely to meet — it says so once
-rather than silently keying on the name. Library code is deliberately **not**
+Where cash is handed code of yours it cannot hash — a compiled wrapper such as
+`numpy.frompyfunc(my_fn, 1, 1)` — it says so once rather than silently keying on
+the name. A `functools.partial` is keyed by the function it wraps and by its
+arguments, like the function itself. Library code is deliberately **not**
 folded, and rightly gets no warning — with one edge where cash cannot tell:
 see [known limitations](known-limitations.md#code-passed-as-an-argument).
 
 #### `cash.mark_opaque(T)` / `@cash.opaque` — opt a type out
 
-<!-- claim: cash/core.py:Cash._is_opaque @7af6c0fc, cash/__init__.py:opaque @3e1ca111 -->
+<!-- claim: cash/core.py:Cash._is_opaque @d25796c2, cash/__init__.py:opaque @3e1ca111 -->
 For a marker class you pass but do not depend on, or one whose code churns for
 reasons that never change the result:
 
@@ -525,6 +526,11 @@ cash.mark_opaque(VendorWidget)                # one you can't decorate — same 
 identity comparisons are unaffected. Neither spelling is inherited: a subclass
 of an opaque class is *not* opaque, because it may carry freshly written methods
 of its own. Mark the subclass too if you want the same treatment.
+
+A `functools.partial` cannot be marked: it is the function it wraps plus
+arguments, and both are keyed. `cash.mark_opaque(functools.partial)` used to be
+the way to silence KEY-OPAQUE-CALLABLE for one, and it exempted every partial in
+the process — including ones over code you were still editing.
 
 ### How a call decides hit vs miss
 

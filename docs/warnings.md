@@ -902,8 +902,8 @@ cache looks healthy and is silently doing nothing.
 ## KEY-OPAQUE-CALLABLE {#key-opaque-callable}
 
 <!-- claim: cash/core.py:Cash._is_user_code_carrier @a334d114, cash/core.py:Cash._is_user_module @1b6836eb -->
-**What happened.** A function, a class, a `functools.partial`, or an object
-whose class carries code reached a cached call — as an argument you passed, or
+**What happened.** A function, a class, or an object whose class carries code
+reached a cached call — as an argument you passed, or
 as a parameter default you never typed — and Cash could not fingerprint its
 body. Cash normally folds the code of such things into the key, so that editing
 them invalidates. This one it could not.
@@ -913,12 +913,12 @@ excludes anything defined under `site-packages`, `dist-packages` or the stdlib
 paths. Passing a library callable straight in does not reach this warning at
 all — measured, none of `json.dumps`, `operator.itemgetter(0)`, `len`,
 `numpy.sum`, `functools.reduce` or `functools.partial(json.dumps)` produce it.
-The shapes that do are narrow, and all three are things built out of your own
-code: a `functools.partial` wrapping one of your functions or bound methods, a
-compiled wrapper around one of them (`numpy.frompyfunc(my_fn, 1, 1)`), and a
-bound method of a C-implemented object whose class Cash cannot re-resolve from
-the module it claims — `re.compile(p).match` is the one you are most likely to
-meet.
+The shapes that do are narrow, and both are things built out of your own code:
+a compiled wrapper around one of your functions (`numpy.frompyfunc(my_fn, 1, 1)`),
+and a bound method of a C-implemented object whose class Cash cannot re-resolve
+from the module it claims — `re.compile(p).match` is the one you are most likely
+to meet. A `functools.partial` is not one of them: it is keyed by the function it
+wraps and by its arguments, so editing either invalidates.
 
 **Why it matters.** The result depends on what that callable does, and the key
 does not. Edit the callable, run again, and you get the old answer back with
@@ -927,12 +927,14 @@ cannot work the answer out, which is why it says so rather than staying quiet.
 
 **What to do.** If the result really does depend on that implementation, name
 the *wrapped* function explicitly with `@cash.cache(depends_on=[the_function])`
-— for a `partial`, that is the function it wraps, not the partial. That closes
+— for a `frompyfunc`, that is the function it wraps. That closes
 the invalidation gap; it does not silence the warning, because the carrier
 itself is still unhashable. If the result does not depend on it — the identity
 is already covered by another argument, or the carrier is library code Cash
 misjudged — say so deliberately: `cash.mark_opaque(TheType)`, which does silence
-it, or `@cash.opaque` on a class you own. Both record the decision in the code,
+it, or `@cash.opaque` on a class you own. (`cash.mark_opaque(functools.partial)`,
+once the advice for partials, no longer applies to them: it silenced every partial
+in the process, including ones over code you were still editing.) Both record the decision in the code,
 which is what makes them better than a warning filter.
 
 **When it is safe to ignore.** In the one case where the carrier only *looks*
@@ -942,8 +944,8 @@ to it from `re` — not because you can edit it. Nothing will change under you
 there, so the missing fingerprint costs nothing.
 
 It is *not* safe in the cases the gate is actually designed to catch, which are
-the common ones: a `partial` or a `frompyfunc` over a function of your own that
-you are still editing. Editing the wrapped body will not invalidate anything,
+the common one: a `frompyfunc` over a function of your own that you are still
+editing. Editing the wrapped body will not invalidate anything,
 and you will be served the old answer with nothing to indicate it — the "why is
 my cache serving me the old version" problem, with this warning as the only
 notice you get. The instinct to read "it's a library callable, it can't change"

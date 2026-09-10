@@ -841,29 +841,6 @@ on a library upgrade. Measured on a class planted under a `site-packages` path:
 That is a recompute, never a wrong answer. `cash.mark_opaque(TheClass)` stops it
 if the churn matters.
 
-### A `functools.partial` hides the function it wraps
-
-Reaching a cached call as an argument — or as a parameter default the caller
-left out — a `partial` contributes nothing: it has no `__code__` of its own, and
-the function inside it pickles by reference like any other. Editing that
-function's body does not invalidate. This is the one case where cash tells you
-the edit will not invalidate — once, the first time a `partial` reaches a cached
-call in this process (a long-lived kernel will not repeat it):
-
-```text
-[KEY-OPAQUE-CALLABLE] partial reached a cached call as an argument or a
-parameter default, but its code could not be hashed, so editing it will NOT
-invalidate the cache.
-  Fix: name it with @cash.cache(depends_on=[...]) if the result depends on its
-  implementation, or record that it does not with cash.mark_opaque(partial).
-  https://cash-lib.readthedocs.io/en/stable/warnings/#key-opaque-callable
-```
-
-**What to do:** exactly what the warning says — name the wrapped function in
-`depends_on=[...]`, or pass it plainly and bind its arguments inside the cached
-function. The advisory stays quiet for stdlib and third-party objects
-(`functools.partial(json.dumps)`, a `weakref.ref`), which are not yours to edit.
-
 ### A closure or `lambda` passed as an argument stops the call caching entirely
 
 A nested function's qualified name is `make_scaler.<locals>.scale`, and pickle
