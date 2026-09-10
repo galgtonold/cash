@@ -31,7 +31,7 @@ field(np.linspace(0.0, 1.0, 200))     # back to 200 — cache hit
 assert CALLS == []                    # nothing ran
 ```
 
-<!-- claim: cash/core.py:Cash._try_hash_numpy @937a72f9 -->
+<!-- claim: cash/core.py:Cash._try_hash_numpy @b6b247ba -->
 `np.linspace(0.0, 1.0, 200)` reproduces the same array bit for bit every time,
 so the third call is a plain cache hit. Sweeping a resolution downward until
 accuracy breaks, then stepping back to the last good one, is exactly this

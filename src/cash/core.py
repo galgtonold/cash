@@ -5802,6 +5802,45 @@ class Cash:
             return None
 
     @staticmethod
+    def _array_layout(value: Any) -> str:
+        """The order *value*'s axes are laid out in memory: ``C``, ``F`` or ``K…``.
+
+        The key used to fold in the raw strides (0fd2cb5), which separated C-
+        from F-ordered arrays -- the point -- but also a strided VIEW from its
+        contiguous copy. Those hold the same values in the same memory order,
+        so no order-reading callee (``ravel(order='A'/'K')``, ``reshape``) tells
+        them apart -- only ``.flags`` does, and a result computed FROM
+        contiguity now shares an entry between the two, knowingly. What did
+        tell them apart, on every run, was the cache itself. A function that
+        returned ``arr[:, 0]`` handed its caller a view on the computing run and
+        a contiguous copy on every restored one, so the caller's key changed
+        between the two and its expensive step ran twice after every upstream
+        edit (round 17, measured 1 then 1 then 0 executions).
+
+        So: the axes of length > 1, ordered by |stride| from outermost in, with
+        a broadcast (zero-stride) axis outermost. Identity is ``C``, reversed is
+        ``F``; anything else spells the permutation. Stride MAGNITUDE and sign
+        do not change what a memory-order read returns, so they stay out.
+
+        One case still re-keys once: an F-like but non-contiguous view is stored
+        by pickle as a C-ordered copy, and it genuinely ravels differently from
+        one, so the restored value must key apart. Safe direction.
+        """
+        axes = [(axis, stride) for axis, (n, stride)
+                in enumerate(zip(value.shape, value.strides)) if n > 1]
+        if len(axes) <= 1:
+            return "C"
+        outer_first = sorted(
+            axes, key=lambda a: (-abs(a[1]) if a[1] else float("-inf"), a[0]))
+        perm = tuple(axis for axis, _ in outer_first)
+        natural = tuple(axis for axis, _ in axes)
+        if perm == natural:
+            return "C"
+        if perm == natural[::-1]:
+            return "F"
+        return "K" + ",".join(map(str, perm))
+
+    @staticmethod
     def _try_hash_numpy(value: Any) -> str | None:
         """Hash a numpy ndarray over its FULL contents.
 
@@ -5813,24 +5852,17 @@ class Cash:
         not collide. Uses a zero-copy ``memoryview`` for contiguous arrays and
         falls back to ``tobytes()`` (C-order copy) otherwise.
 
-        ``strides`` is folded in for the same reason, and it is the layout the
-        C-order fallback above erases. Without it a C-ordered and an
-        F-ordered array holding equal values hash identically, and a
-        layout-sensitive callee is served the other one's result: measured,
-        ``np.ravel(x, order='A')`` returned ``[0, 1, 2, …]`` for an F-ordered
-        input whose true answer is ``[0, 4, 8, 1, …]``. Normalising to C-order
-        is right for value EQUALITY and wrong for a KEY, because ``order='A'``,
-        ``reshape``, ``.flags`` and any compiled callee expecting a layout all
-        read it.
-
-        Nearly free, and narrow by construction: for a contiguous array the
-        strides are determined by shape and dtype, so this adds no
-        discrimination on the common path — it separates exactly the F-ordered
-        and non-contiguous arrays that need separating.
+        The LAYOUT is folded in too -- the order the axes sit in memory, see
+        `_array_layout` -- because the C-order fallback above erases it.
+        Without it a C-ordered and an F-ordered array holding equal values hash
+        identically, and a layout-sensitive callee is served the other one's
+        result: measured, ``np.ravel(x, order='A')`` returned ``[0, 1, 2, …]``
+        for an F-ordered input whose true answer is ``[0, 4, 8, 1, …]``.
+        Normalising to C-order is right for value EQUALITY and wrong for a KEY.
         """
         try:
             h = hashlib.sha256(
-                f"{value.shape}:{value.dtype}:{value.strides}:".encode())
+                f"{value.shape}:{value.dtype}:{Cash._array_layout(value)}:".encode())
             if getattr(value.dtype, "hasobject", False):
                 # object-dtype arrays: the buffer holds raw PyObject *pointers*,
                 # not content, so tobytes() hashes memory addresses - identical

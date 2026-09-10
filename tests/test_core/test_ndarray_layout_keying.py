@@ -16,9 +16,10 @@ is hashed as though it were C-ordered. That normalisation is right for value
 equality and wrong for a key, because `order='A'`, `reshape`, `.flags` and any
 compiled callee that expects a layout all read it.
 
-`strides` is the fix and it is nearly free: for the common contiguous case it is
-determined by shape and dtype, so it adds no discrimination there; it differs
-exactly for the F-ordered and non-contiguous arrays that need distinguishing.
+The fix folds in the MEMORY ORDER (C, F, or a permutation of axes). It first
+folded in raw strides, which also split a strided view from its contiguous
+copy -- same values, same memory order, only `.flags` differs -- and made a
+function returning a view re-run its caller after every restore (CAS-123).
 """
 from __future__ import annotations
 
@@ -84,22 +85,48 @@ def test_the_collision_is_symmetric(cash_instance):
     assert len(ran) == 2
 
 
-def test_a_noncontiguous_view_and_its_copy_are_distinguished(cash_instance):
-    """Same values, different layout -- the same hazard by another route."""
+def test_a_c_like_view_and_its_copy_share_an_entry_correctly(cash_instance):
+    """A strided view and its contiguous copy read identically in any order.
+
+    This used to assert they key APART, with a kernel whose answer is the same
+    for both -- so it pinned a distinction with no wrong answer behind it, and
+    that distinction is what made a function returning ``arr[:, 0]`` re-run its
+    caller after every restore (CAS-123: a cached array comes back as a
+    contiguous copy). The oracle below is exact for BOTH inputs.
+    """
     ran: list[str] = []
 
     @cash_instance.cache(assume_safe=True)
     def kernel(x):
         ran.append("call")
-        return np.ravel(x, order="A")
+        return np.ravel(x, order="K")
 
     base = np.arange(24, dtype=np.float64).reshape(4, 6)
     view = base[:, ::2]
     copy = view.copy()
     assert np.array_equal(view, copy) and not view.flags["C_CONTIGUOUS"]
 
-    kernel(view)
-    kernel(copy)
+    assert np.array_equal(kernel(view), np.ravel(view, order="K"))
+    assert np.array_equal(kernel(copy), np.ravel(copy, order="K"))
+    assert len(ran) == 1
+
+
+def test_an_f_like_view_and_its_c_copy_are_distinguished(cash_instance):
+    """The layout that DOES read differently: memory order, even when strided."""
+    ran: list[str] = []
+
+    @cash_instance.cache(assume_safe=True)
+    def kernel(x):
+        ran.append("call")
+        return np.ravel(x, order="K")
+
+    view = np.asfortranarray(np.arange(24, dtype=np.float64).reshape(4, 6))[:, ::2]
+    copy = view.copy()                          # C-ordered
+    assert not np.array_equal(np.ravel(view, order="K"), np.ravel(copy, order="K"))
+
+    assert np.array_equal(kernel(view), np.ravel(view, order="K"))
+    assert np.array_equal(kernel(copy), np.ravel(copy, order="K")), (
+        "the C-ordered copy was served the F-like view's result")
     assert len(ran) == 2
 
 

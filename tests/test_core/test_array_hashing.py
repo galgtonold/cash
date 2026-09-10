@@ -118,3 +118,78 @@ def test_large_pyarrow_different_data_does_not_collide(tmp_path):
     rows(t1)
     rows(t2)
     assert calls["n"] == 2, "tables with different data must not collide"
+
+
+# -- CAS-123: the layout that keys is memory ORDER, not stride size ----------
+
+def _key(c, value):
+    @c.cache
+    def s(a):
+        return float(a.sum())
+    return s.explain(value).cache_key
+
+
+@pytest.mark.parametrize("make_view", [
+    lambda a: a[:, 0],                      # a column: 1-D, strided
+    lambda a: a[::2, :],                    # every other row
+    lambda a: a[:, ::-1],                   # reversed columns
+    lambda a: np.broadcast_to(a[0], a.shape),   # zero-stride axis
+], ids=["column", "row-step", "reversed", "broadcast"])
+def test_a_view_and_its_restored_copy_share_a_key(tmp_path, make_view):
+    """A cached function returning a view hands its caller a view once and a
+    contiguous copy on every restore. Keying on raw strides made the caller's
+    key differ between the two: its expensive step ran twice after every
+    upstream edit (round 17, 1 then 1 then 0 executions)."""
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
+    view = make_view(np.arange(20.0).reshape(4, 5))
+    import pickle
+    restored = pickle.loads(pickle.dumps(view))
+    assert np.array_equal(view, restored)
+    assert _key(c, view) == _key(c, restored)
+
+
+def test_a_permuted_layout_still_keys_apart(tmp_path):
+    """The control: a genuinely different memory order reads differently
+    (`ravel(order='K')`), so it must not share the C-ordered entry."""
+    c = Cash(backend=FileBackend(cache_dir=str(tmp_path)))
+    a = np.arange(24.0).reshape(2, 3, 4)
+    permuted = np.ascontiguousarray(a.transpose(1, 0, 2)).transpose(1, 0, 2)
+    assert np.array_equal(a, permuted)
+    assert not np.array_equal(np.ravel(a, order="K"), np.ravel(permuted, order="K"))
+    assert _key(c, a) != _key(c, permuted)
+
+
+def test_a_returned_view_does_not_rerun_its_caller(tmp_path):
+    """r17s4's shape, across three fresh processes: 1, 0, 0 executions."""
+    import os
+    import subprocess
+    import sys
+    import textwrap
+    (tmp_path / "job.py").write_text(textwrap.dedent("""
+        import sys, time
+        import numpy as np
+        import cash
+
+        @cash.cache
+        def upstream(n):
+            time.sleep(0.2)                       # @cash:assume-safe
+            arr = np.arange(2 * n, dtype=float).reshape(n, 2)
+            return arr[:, 0], arr[:, 1]
+
+        @cash.cache
+        def downstream(t, v):
+            print("RAN", file=sys.stderr)        # @cash:assume-safe
+            time.sleep(0.2)                       # @cash:assume-safe
+            return float(t @ v)
+
+        downstream(*upstream(1000))
+    """), encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if not k.startswith("CASH_")}
+    env["CASH_CACHE_DIR"] = str(tmp_path / ".cash")
+    runs = []
+    for _ in range(3):
+        out = subprocess.run([sys.executable, "-W", "ignore", str(tmp_path / "job.py")],
+                             capture_output=True, text=True, env=env)
+        assert out.returncode == 0, out.stderr
+        runs.append(out.stderr.count("RAN"))
+    assert runs == [1, 0, 0], runs
