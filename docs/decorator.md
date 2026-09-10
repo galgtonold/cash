@@ -777,7 +777,7 @@ callables.
 
 ### `allow_random=` — unseeded randomness
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @90f4a751 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @b0a31134 -->
 At decoration time, `@cash.cache` scans the function's source for draws
 from an unseeded RNG and emits a one-shot `CashRandomnessWarning`:
 
@@ -821,7 +821,11 @@ comment is also honoured inside a decorated function's body.
     decorator if you want a fresh draw every call.
 
 Detection is source-based and runs **once per function at decoration
-time**, so cached calls pay nothing for it. Two consequences: a function
+time**, so cached calls pay nothing for it. The one exception is a seed
+that is a *parameter* — `def simulate(n, seed=None): rng =
+np.random.default_rng(seed)`. Whether that draw is seeded depends on
+what the caller passed, so each call checks that one argument, and a
+call where it is `None` gets the same warning. Two consequences: a function
 with no retrievable source (defined via `exec`, or in a bare REPL) is
 not scanned, and randomness *inside* a compiled library call — an
 unseeded `estimator.fit()`, for example — is invisible to it. Pass an

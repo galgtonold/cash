@@ -748,7 +748,7 @@ somewhere it did not anticipate. The message names the exception and, where it
 can identify one, the argument type most likely responsible. Your call ran and
 returned its real result; only the caching was skipped.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @f8fbbade -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @6e25d9e5 -->
 **Why it matters.** That call did not cache. Correctness is not at risk — with
 no key, nothing is written and nothing is read, so this cannot produce a stale
 answer — but you are paying full compute every time it happens.
@@ -927,7 +927,7 @@ type when it can identify one; when the offending value is nested inside a
 container it says so instead, because it cannot see which element is to blame.
 The call ran and returned normally.
 
-<!-- claim: cash/core.py:Cash._resolve_cache_key @f8fbbade -->
+<!-- claim: cash/core.py:Cash._resolve_cache_key @6e25d9e5 -->
 **Why it matters.** That call did not cache, and calls like it will not cache
 either — this is not first-call warm-up. Every call passing that argument pays
 full compute. Nothing can go stale, because nothing is being stored.
@@ -1232,6 +1232,14 @@ is frozen. The message either names the call and its line — `np.random.normal(
 `rng.choice()` — or names an estimator you fitted with `random_state=None`,
 where the randomness is inside the library and only the live object reveals it.
 
+A third form names a **seed parameter**: `def simulate(params, seed=None)` with
+`np.random.default_rng(seed)` inside. The source looks seeded, and is — when the
+caller passes a seed. Leave it out, or pass `None`, and the generator draws from
+OS entropy, so this warning fires for *that call*. It is the shape Monte Carlo
+replicates usually take, and caching turns `[simulate(p) for _ in range(R)]`
+into R copies of one draw. Pass `seed=i` per replicate: each one is then
+reproducible *and* cacheable.
+
 **This is Cash working as designed, not a defect.** Worth being blunt about,
 because the instinctive reaction — decide the cache is broken and turn caching
 off — is the worst outcome available here. Unseeded randomness is everywhere in
@@ -1290,7 +1298,7 @@ Whichever you pick, pick it per statement or per function. Switching caching off
 across the board to "fix" this trades a known frozen value for a slow notebook
 and gains nothing.
 
-<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @90f4a751 -->
+<!-- claim: cash/core.py:Cash._warn_unseeded_randomness @b0a31134 -->
 The decorator form is checked when the decorator is applied rather than when the
 function runs, so it appears at import time, before the function has been called
 once, and once per decorated function. It reads that function's source alone: a

@@ -573,6 +573,41 @@ def _is_one_shot_iterator(value: Any) -> bool:
 _SOURCE_HASH_MEMO: dict = {}
 _SOURCE_HASH_MEMO_MAX = 4096
 
+#: Seeding calls, by the last segment of their dotted name. ``seed`` alone is
+#: too common a method name, so it only counts under a ``random`` prefix.
+_SEEDING_CALLS = frozenset({
+    "default_rng", "RandomState", "Random", "manual_seed", "SeedSequence",
+    "PCG64", "PCG64DXSM", "MT19937", "Philox", "SFC64",
+})
+
+
+def _seed_parameters(src: str) -> dict[str, str]:
+    """``{parameter: call}`` for seeding calls whose seed IS a parameter."""
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return {}
+    fn = next((n for n in tree.body
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))), None)
+    if fn is None:
+        return {}
+    a = fn.args
+    params = {x.arg for x in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+    found: dict[str, str] = {}
+    for node in ast.walk(fn):
+        if not isinstance(node, ast.Call):
+            continue
+        dotted = ast.unparse(node.func)
+        last = dotted.rsplit(".", 1)[-1]
+        if not (last in _SEEDING_CALLS or (last == "seed" and "random" in dotted)):
+            continue
+        seed_arg = node.args[0] if node.args else next(
+            (k.value for k in node.keywords if k.arg in ("seed", "x", "a")), None)
+        if isinstance(seed_arg, ast.Name) and seed_arg.id in params:
+            found.setdefault(seed_arg.id, f"{dotted}({seed_arg.id})")
+    return found
+
+
 #: Source files already reported as edited-since-load, one notice per file.
 _SOURCE_CHANGED_WARNED: set[str] = set()
 
@@ -846,6 +881,9 @@ class Cash:
         # `_hash_helper_identity`. Holding the helper keeps its id from being
         # recycled while the entry lives.
         self._helper_defaults_memo: dict[int, tuple[Any, Any, Any, str]] = {}
+        # func_name -> {parameter: seeding call} for seeding calls fed by a
+        # parameter; checked per call by `_warn_if_seed_is_none`.
+        self._seed_params: dict[str, dict[str, str]] = {}
         # In-process async single-flight registry: cache_key -> (event_loop,
         # asyncio.Event). When use_locking is set, concurrent awaits of the
         # same key coalesce - one coroutine computes, the rest wait on the
@@ -1929,6 +1967,8 @@ class Cash:
             # class. Measured: 2 executions before, 1 after, with a primitive
             # default (`add(k=7)`) as the control that always was 1.
             normalized_args = self._normalize_call_args(func_name, args, kwargs)
+            if func_name in self._seed_params:
+                self._warn_if_seed_is_none(func, func_name, args, kwargs)
             current_state_hash = self._fold_code_args(
                 *normalized_args, current_state_hash, func_name=func_name)
             dynamic_state_hash = self._resolve_dynamic_dependencies(func_name, dynamic_depends_on, args, kwargs)
@@ -6010,6 +6050,16 @@ class Cash:
             if ann is not None and ann.allow_random:
                 return
 
+        # A seeding call fed by a PARAMETER -- `default_rng(seed)` -- counts as
+        # seeded to the detector, but whether it is depends on the call:
+        # `def simulate(params, seed=None)` draws from OS entropy whenever the
+        # caller leaves the seed out, and R Monte Carlo replicates came back
+        # identical with nothing said (CAS-116). Note which parameters, and
+        # check their bound value per call.
+        seed_params = _seed_parameters(src)
+        if seed_params:
+            self._seed_params[func_name] = seed_params
+
         try:
             unseeded, _messages, _has_seed = RandomnessDetector().analyze_code(src)
         except Exception:  # pragma: no cover - detector must never break caching
@@ -6056,6 +6106,31 @@ class Cash:
             # points into Cash cannot act on it, which is the whole point of
             # this diagnostic. Single caller, so the depth is fixed.,
         )
+
+    def _warn_if_seed_is_none(self, func: Callable, func_name: str,
+                              args: tuple, kwargs: dict) -> None:
+        """RANDOM-UNSEEDED for a seed parameter that is None in THIS call."""
+        try:
+            bound = inspect.signature(func).bind(*args, **kwargs)
+            bound.apply_defaults()
+        except (TypeError, ValueError):
+            return
+        for name, call in sorted(self._seed_params.get(func_name, {}).items()):
+            if name in bound.arguments and bound.arguments[name] is None:
+                self._warn_once(
+                    CashRandomnessWarning, func_name, f"seed-param:{name}",
+                    f"@cash.cache on {func_name}: {call} is seeded from the "
+                    f"parameter '{name}', which is None in this call, so the RNG "
+                    f"draws from OS entropy. The first call's result is cached and "
+                    f"replayed on every later call with the same arguments -- "
+                    f"repeated calls return the same 'random' value, and it is "
+                    f"not reproducible across a cleared cache.",
+                    code="RANDOM-UNSEEDED",
+                    fix=f"pass a seed: {name}=i per replicate keeps each one "
+                        f"reproducible and cacheable. Or @cash.cache("
+                        f"allow_random=True) to keep the value frozen on purpose.",
+                )
+                return
 
     def _warn_unseeded_estimator_result(
         self, func_name: str, result: Any, allow_random: bool,
